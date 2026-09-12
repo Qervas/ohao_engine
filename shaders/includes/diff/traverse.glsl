@@ -492,6 +492,26 @@ layout(std430, binding = 12) readonly buffer AdjointSeed {
     float v[];
 } adjointSeed;
 
+// SENSITIVITY MAP (spec 10.2), binding 13. d(film[p])/d(theta) per PIXEL,
+// which is the same quantity the gradient arena holds and a different
+// BINNING of it: the replay hook already computes one scalar per vertex,
+// sums it into one arena slot, and knows the pixel that vertex belongs to.
+// Writing it to sensitivity[pixelIndex] as well costs one extra atomicAdd
+// and turns "how much does the loss depend on theta" into "WHERE does it".
+//
+// SO THE MAP AND THE GRADIENT ARE TIED BY CONSTRUCTION: sum over pixels of
+// the map is the arena's scalar, term for term, differing only by the order
+// two atomicAdds accumulated the same numbers. That identity is the gate
+// (check 73), and it is worth more than any tolerance, because it makes the
+// map inherit every check that already gates the gradient.
+//
+// CALLER-OWNED and read-modify-written, like the film. `pc.sensitivityFloats
+// == 0` means "no map requested" and is the default -- the FORWARD
+// instantiation is always pushed 0, exactly as it is for the arena.
+layout(std430, binding = 13) buffer SensitivityMap {
+    float v[];
+} sensitivity;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -685,6 +705,11 @@ layout(push_constant) uniform Push {
     // Stage 1 check measures. Named a float COUNT rather than a pixel count
     // so that the bounds guard in `diffAdjointSeed` compares like with like.
     uint adjointSeedFloats;
+    // Spec 10.2. The LENGTH of the binding-13 map, in floats -- 0 meaning
+    // "no map requested". A float count rather than a pixel count so the
+    // bounds guard compares like with like, exactly as adjointSeedFloats
+    // does. MUST STAY LAST; see ScatterPush's note.
+    uint sensitivityFloats;
 } pc;
 
 /// dL/d(film[pixelIndex]) as a vec3, or vec3(1.0) when no seed is bound.

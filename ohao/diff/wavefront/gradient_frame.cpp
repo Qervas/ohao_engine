@@ -41,6 +41,9 @@ WavefrontLoop::Config loopConfigFor(const GradientFrame& frame, GradientRun run)
     // Likewise the adjoint seed: a property of the OBJECTIVE, not of the
     // scene, and the forward hook has no use for it.
     config.adjointSeedFloats = isReplay ? frame.adjointSeedFloats : 0u;
+    // And the sensitivity map, for the same reason: a map is a derivative,
+    // and the forward pass does not compute one.
+    config.sensitivityFloats = isReplay ? frame.sensitivityFloats : 0u;
 
     // Everything below goes to BOTH runs. Every one of these steers the
     // traversal or defines the film the replay run is the derivative of, and

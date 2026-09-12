@@ -418,6 +418,25 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         }
     }
 
+    // Spec 10.2's map, when the caller wants one. A one-float placeholder
+    // otherwise -- binding 13 is statically used by the one traversal source,
+    // so both instantiations need a descriptor for it whether or not anything
+    // writes it.
+    const bool wantsSensitivity = (options.outSensitivity != nullptr);
+    const std::uint32_t sensitivityFloats = wantsSensitivity ? filmPixelCount : 0u;
+    GpuBuffer sensitivityBuffer;
+    if (ok) {
+        const std::vector<float> zeros(wantsSensitivity ? filmPixelCount : 1u, 0.0f);
+        sensitivityBuffer = m_allocator.createBufferFromSpan<float>(
+            std::span<const float>(zeros),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        if (!sensitivityBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: sensitivity map "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+
     const std::vector<float> kEmissionTexPlaceholder{0.0f};
     GpuBuffer emissionTexBuffer;
     if (ok) {
@@ -471,7 +490,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         // pipelines that are reusable and not the bindings.
         const GradientStages::Scene sceneHandles{sceneTlas, sceneVertexBuffer, sceneIndexBuffer};
         const GradientStages::Attachments attachments{arena.buffer(), emissionTexBuffer.buffer,
-                                                      adjointSeedBuffer.buffer};
+                                                      adjointSeedBuffer.buffer,
+                                                      sensitivityBuffer.buffer};
         ok = st.bindAll(m_device, buffers, sceneHandles, sinks, attachments);
     }
 
@@ -504,6 +524,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             frame.emissionUvBiasU = options.emissionUvBiasU;
             frame.emissionUvBiasV = options.emissionUvBiasV;
         }
+        frame.sensitivityFloats = sensitivityFloats;
         frame.freezeSampling = options.freezeSampling;
         frame.samplingAlbedo = options.samplingAlbedo;
         frame.samplingMaterial = options.samplingMaterial;
@@ -519,6 +540,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         resources.scene = GradientStages::Scene{sceneTlas, sceneVertexBuffer, sceneIndexBuffer};
         resources.emissionTexture = emissionTexBuffer.buffer;
         resources.adjointSeed = adjointSeedBuffer.buffer;
+        resources.sensitivity = sensitivityBuffer.buffer;
 
         for (int variant = 0; ok && variant < 2; ++variant) {
             const bool isReplay = (variant == 1);
@@ -542,9 +564,13 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                 // vkQueueWaitIdle does not make writes visible in the host
                 // domain, and a VkBufferMemoryBarrier's memory scope covers
                 // only the buffers it lists.
-                VkBuffer hostRead[3] = {s.film.buffer, VK_NULL_HANDLE, VK_NULL_HANDLE};
+                VkBuffer hostRead[4] = {s.film.buffer, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                        VK_NULL_HANDLE};
                 std::size_t hostReadCount = 1u;
                 if (isReplay) hostRead[hostReadCount++] = arena.buffer();
+                if (isReplay && wantsSensitivity) {
+                    hostRead[hostReadCount++] = sensitivityBuffer.buffer;
+                }
                 if (!isReplay && options.outForwardTrace != nullptr) {
                     hostRead[hostReadCount++] = s.trace.buffer;
                 }
@@ -556,6 +582,21 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                              "refused the %s run; its own message above says why\n",
                              isReplay ? "replay" : "forward");
                 break;
+            }
+
+            if (isReplay && wantsSensitivity) {
+                // Spec 10.2's map, read off the REPLAY run because that is
+                // the only run that writes it.
+                m_allocator.invalidateBuffer(sensitivityBuffer);
+                const auto* mappedMap =
+                    static_cast<const float*>(sensitivityBuffer.getMappedData());
+                if (mappedMap == nullptr) {
+                    std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: "
+                                          "sensitivity buffer not mapped, cannot read back\n");
+                    ok = false;
+                    break;
+                }
+                options.outSensitivity->assign(mappedMap, mappedMap + filmPixelCount);
             }
 
             if (!isReplay) {
@@ -601,6 +642,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     sinks.destroy(m_allocator);
     if (emissionTexBuffer.isValid()) m_allocator.destroyBuffer(emissionTexBuffer);
     if (adjointSeedBuffer.isValid()) m_allocator.destroyBuffer(adjointSeedBuffer);
+    if (sensitivityBuffer.isValid()) m_allocator.destroyBuffer(sensitivityBuffer);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 

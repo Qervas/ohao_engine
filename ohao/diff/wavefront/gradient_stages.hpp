@@ -79,9 +79,15 @@ public:
         VkBuffer gradientArena{VK_NULL_HANDLE};
         VkBuffer emissionTexture{VK_NULL_HANDLE};
         VkBuffer adjointSeed{VK_NULL_HANDLE};
+        /// Binding 13, the spec-10.2 sensitivity map. Bound for BOTH
+        /// instantiations for the same reason the arena is: the binding is
+        /// statically used by the one traversal source, so it needs a
+        /// descriptor in both even though the forward run is pushed
+        /// sensitivityFloats = 0 and never writes it.
+        VkBuffer sensitivity{VK_NULL_HANDLE};
         [[nodiscard]] bool valid() const noexcept {
             return gradientArena != VK_NULL_HANDLE && emissionTexture != VK_NULL_HANDLE &&
-                   adjointSeed != VK_NULL_HANDLE;
+                   adjointSeed != VK_NULL_HANDLE && sensitivity != VK_NULL_HANDLE;
         }
     };
 

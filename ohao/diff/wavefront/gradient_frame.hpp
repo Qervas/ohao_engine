@@ -140,6 +140,21 @@ struct GradientFrame {
     /// traversal reads as the sum-of-film objective.
     std::uint32_t adjointSeedFloats{0};
 
+    /// Spec 10.2's sensitivity map, as a float COUNT; 0 requests none.
+    ///
+    /// ONE FLOAT PER PIXEL, not three: the replay hook sums the three
+    /// channels of its contribution before scattering, so what a map cell
+    /// holds is d(sum over this pixel's channels)/d(theta) -- the same
+    /// scalar the arena receives, and the same convention check 37's
+    /// finite difference uses.
+    ///
+    /// FOR A MAP TO MEAN "dpixel/dtheta" THE SEED MUST BE ABSENT. The hook
+    /// multiplies by dL/dpixel before scattering, so with a seed bound the
+    /// map holds seed[p] * d(film[p])/d(theta), which is a perfectly good
+    /// per-pixel decomposition of the loss gradient but is not the
+    /// sensitivity image. The check that gates this leaves the seed unbound.
+    std::uint32_t sensitivityFloats{0};
+
     /// Pixels in the caller-owned film buffer; 0 disables accumulation.
     std::uint32_t filmPixelCount{0};
 

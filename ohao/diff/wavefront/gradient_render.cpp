@@ -12,7 +12,8 @@ namespace ohao::diff {
 
 bool GradientResources::valid() const noexcept {
     return buffers != nullptr && stages != nullptr && sinks != nullptr && scene.valid() &&
-           emissionTexture != VK_NULL_HANDLE && adjointSeed != VK_NULL_HANDLE;
+           emissionTexture != VK_NULL_HANDLE && adjointSeed != VK_NULL_HANDLE &&
+           sensitivity != VK_NULL_HANDLE;
 }
 
 void recordHostReadBarrier(VkCommandBuffer cmd, std::span<const VkBuffer> buffers) {
@@ -142,6 +143,28 @@ bool recordGradientRun(VkCommandBuffer cmd, GradientRun run, const GradientFrame
     filmZero.size = VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 1, &filmZero, 0, nullptr);
+
+    // THE SENSITIVITY MAP IS ZEROED TOO, for the film's reason: it is
+    // caller-owned and read-modify-written by atomicAdd, so a map left from a
+    // previous run would be added to rather than replaced. Only when one is
+    // requested -- the placeholder buffer a caller binds when it wants no map
+    // may be a single float, and filling it would be a write to a buffer
+    // nothing reads.
+    //
+    // NOT GATED ON `zeroArena`. Accumulating gradients across views is a
+    // deliberate multi-view sum into ONE parameter slot; a sensitivity map is
+    // an image of one view, and silently summing several views' images
+    // together would be a different picture with no name. A caller that wants
+    // an accumulated map can bind the same buffer and say so by passing a
+    // frame with no map on the runs it does not want counted.
+    if (frame.sensitivityFloats > 0u) {
+        vkCmdFillBuffer(cmd, resources.sensitivity, 0, VK_WHOLE_SIZE, 0u);
+        VkBufferMemoryBarrier mapZero = filmZero;
+        mapZero.buffer = resources.sensitivity;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &mapZero, 0,
+                             nullptr);
+    }
 
     // The arena is zeroed on BOTH runs, in the same command buffer as the
     // loop that follows -- which is exactly the configuration

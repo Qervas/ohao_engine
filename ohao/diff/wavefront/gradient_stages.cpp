@@ -19,12 +19,15 @@ bool GradientStages::build(VkDevice device, const PushSizes& sizes) {
     const std::array<VkDescriptorType, 1> kCounterOnly = {kBuf};
     // ... plus the scene's vertex and index buffers, and the TLAS at 5.
     const std::array<VkDescriptorType, 6> kIntersect = {kBuf, kBuf, kBuf, kBuf, kBuf, kAccel};
-    // BOTH INSTANTIATIONS DECLARE THE SAME THIRTEEN, because both include the
+    // BOTH INSTANTIATIONS DECLARE THE SAME FOURTEEN, because both include the
     // same traverse.glsl. 8 is the TLAS, 10 the gradient arena, 11 the
-    // emission-texture primal, 12 the adjoint seed.
-    const std::array<VkDescriptorType, 13> kScatter = {kBuf,   kBuf, kBuf, kBuf, kBuf,
-                                                      kBuf,   kBuf, kBuf, kAccel, kBuf,
-                                                      kBuf,   kBuf, kBuf};
+    // emission-texture primal, 12 the adjoint seed, 13 the sensitivity map.
+    // The forward one writes neither 10 nor 13 -- it is pushed 0 for both
+    // lengths -- and still needs descriptors for them, because a
+    // statically-used binding needs one whether or not its branch runs.
+    const std::array<VkDescriptorType, 14> kScatter = {kBuf, kBuf, kBuf, kBuf,   kBuf,
+                                                       kBuf, kBuf, kBuf, kAccel, kBuf,
+                                                       kBuf, kBuf, kBuf, kBuf};
 
     const bool ok =
         m_generate.build(device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -77,7 +80,8 @@ bool GradientStages::bindAll(VkDevice device, WavefrontBuffers& buffers, const S
              stage.bindStorageBuffer(device, 9, s.film.buffer) &&
              stage.bindStorageBuffer(device, 10, attachments.gradientArena) &&
              stage.bindStorageBuffer(device, 11, attachments.emissionTexture) &&
-             stage.bindStorageBuffer(device, 12, attachments.adjointSeed);
+             stage.bindStorageBuffer(device, 12, attachments.adjointSeed) &&
+             stage.bindStorageBuffer(device, 13, attachments.sensitivity);
     }
     if (!ok) std::fprintf(stderr, "[GradientStages] descriptor binding failed\n");
     return ok;

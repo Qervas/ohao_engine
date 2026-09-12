@@ -140,6 +140,21 @@ struct WavefrontGradientOptions {
     /// hit distance the traversal read out of path state, so two renders whose
     /// paths did not move produce bit-identical values there.
     std::vector<float>* outForwardTrace{nullptr};
+    /// Spec 10.2: optional, receives the REPLAY run's binding-13 sensitivity
+    /// map -- one float per pixel, `width * height` of them.
+    ///
+    /// WHAT IT HOLDS is d(sum of this pixel's three channels)/d(theta), which
+    /// is the same scalar the arena receives and a different BINNING of it:
+    /// summing the map gives the arena's number term for term. Check 73
+    /// gates exactly that, which is what lets a map inherit every check that
+    /// already gates the gradient.
+    ///
+    /// LEAVE `adjointSeed` EMPTY for the map to mean dpixel/dtheta. The
+    /// replay hook multiplies by dL/dpixel before scattering, so with a seed
+    /// bound the map holds seed[p] * d(film[p])/d(theta) -- a per-pixel
+    /// decomposition of the LOSS gradient, which is a useful picture but is
+    /// not the sensitivity image spec 10.2 asks for.
+    std::vector<float>* outSensitivity{nullptr};
     /// Stage 1 Task 4. The uniform self-emission scalar, pushed to BOTH the
     /// forward and replay runs verbatim (`WavefrontLoop::Config::emission`),
     /// exactly as `albedo` is. Not part of `WavefrontScatterMaterial` because

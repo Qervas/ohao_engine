@@ -41,6 +41,11 @@ struct GradientResources {
     VkBuffer emissionTexture{VK_NULL_HANDLE};
     /// Binding 12's dL/dpixel. Same placeholder rule.
     VkBuffer adjointSeed{VK_NULL_HANDLE};
+    /// Binding 13's spec-10.2 sensitivity map. Same placeholder rule, and
+    /// the same reason: the binding is statically used by the one traversal
+    /// source, so both instantiations need a descriptor for it even though
+    /// the forward one is pushed sensitivityFloats = 0 and never writes it.
+    VkBuffer sensitivity{VK_NULL_HANDLE};
     [[nodiscard]] bool valid() const noexcept;
 };
 

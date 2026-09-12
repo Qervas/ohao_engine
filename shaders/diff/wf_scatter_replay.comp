@@ -373,11 +373,34 @@ void diffVertexHook(inout DiffVertex v) {
     // between the two shapes; the per-element bound stays inside each.
     const bool mayScatter = arenaConfigured && baseInRange && pixelInFilm;
 
+    const float scalarContribution = contribution.x + contribution.y + contribution.z;
+
     if (pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE) {
         diffScatterEmissionTexture(v, contribution, mayScatter);
     } else if (mayScatter && elementInRange) {
-        atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement],
-                  contribution.x + contribution.y + contribution.z);
+        atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement], scalarContribution);
+    }
+
+    // THE SENSITIVITY MAP (spec 10.2), binding 13: the SAME scalar, binned by
+    // the pixel this vertex belongs to instead of summed into one slot.
+    //
+    // NOT GATED ON `elementInRange`, deliberately, and not inside the branch
+    // above. The arena guard is about where a PARAMETER's element lands; the
+    // map's index is the pixel, which `pixelInFilm` has already bounded. Two
+    // different questions, and folding them together would make a map
+    // silently empty for the emission-texture parameter -- whose per-texel
+    // scatter takes the other branch and would have skipped this entirely.
+    //
+    // STILL OWED, and said here rather than left to be assumed: no check
+    // runs a sensitivity map with DIFF_PARAM_EMISSION_TEXTURE. Check 73 uses
+    // DIFF_PARAM_BASECOLOR, so the paragraph above is the REASON for this
+    // line's placement and not a measured fact about that parameter. The map
+    // reaching it is by construction; that construction is untested.
+    //
+    // `mayScatter` is still required: it carries `pixelInFilm`, and a vertex
+    // whose pixel index is out of the film's range has no cell to add to.
+    if (pc.sensitivityFloats > 0u && mayScatter && v.pixelIndex < pc.sensitivityFloats) {
+        atomicAdd(sensitivity.v[v.pixelIndex], scalarContribution);
     }
     // NOTE ON THE THREE-CHANNEL SUM for the Task 3 parameters. J sums the
     // film's channels, and roughness and metallic are ONE scalar each feeding

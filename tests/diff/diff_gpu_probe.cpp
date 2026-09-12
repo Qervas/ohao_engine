@@ -232,6 +232,7 @@
 #include "probe/checks_shaded_order.hpp"
 #include "probe/checks_pixel_seam.hpp"
 #include "probe/checks_mitsuba_scale.hpp"
+#include "probe/checks_sensitivity.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -313,6 +314,7 @@ using ohao::diff::probe::checkTracedJump;
 using ohao::diff::probe::checkShadedOrder;
 using ohao::diff::probe::checkPixelSeam;
 using ohao::diff::probe::checkMitsubaScale;
+using ohao::diff::probe::checkSensitivityMap;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -566,6 +568,12 @@ int main() {
     // class every other check here is blind to, because they all
     // compare this renderer against itself.
     if (!checkMitsubaScale(ctx)) return 1;
+
+    // 73. SPEC 10.2: dpixel/dtheta as an IMAGE, gated by an identity --
+    // summing the map must give the arena's scalar, because they are
+    // the same terms binned two ways -- plus a null test over a set of
+    // pixels derived from the camera before the render.
+    if (!checkSensitivityMap(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

@@ -514,6 +514,21 @@ struct Config {
         /// binding 12; the shader guards the read but cannot verify the
         /// LENGTH claim, exactly as it cannot for the film or the arena.
         std::uint32_t adjointSeedFloats{0};
+
+        /// Spec 10.2. Floats in the caller's binding-13 sensitivity map, or 0
+        /// for "no map requested".
+        ///
+        /// THE MAP IS THE GRADIENT, BINNED BY PIXEL. The replay hook computes
+        /// one scalar per vertex and sums it into a single arena slot; with a
+        /// map bound it also adds that scalar at the vertex's own pixel. So
+        /// the sum over the map is the arena's number, term for term -- which
+        /// is what lets a sensitivity map inherit every check that gates the
+        /// gradient, instead of needing an oracle of its own.
+        ///
+        /// REPLAY ONLY, like the arena and the adjoint seed: the forward run
+        /// is pushed 0. A map is a derivative, and the forward pass does not
+        /// compute one.
+        std::uint32_t sensitivityFloats{0};
     };
 
     /// One end of the ping-pong: a queue ring's element base and the
@@ -676,6 +691,9 @@ struct Config {
         float emissionUvBiasV{0.0f};
         // Stage 2 Task 1. See Config::adjointSeedFloats.
         std::uint32_t adjointSeedFloats{0};
+        // Spec 10.2. See Config::sensitivityFloats. THE VERY LAST FIELD now;
+        // traverse.glsl's Push block ends with the same one.
+        std::uint32_t sensitivityFloats{0};
     };
 
     WavefrontLoop() = default;

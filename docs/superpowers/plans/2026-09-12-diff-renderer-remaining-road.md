@@ -17,7 +17,7 @@ a gap in memory.
 | # | Item | State |
 |---|---|---|
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
-| 2 | Sensitivity maps | not started |
+| 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
 | 3 | Renderer fitting | not started; the differentiability decision below is still owed |
 | 4 | SVBRDF as a client | not started |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
@@ -210,20 +210,48 @@ lifetime, and a GDExtension surface.
 
 ---
 
-### 2. Sensitivity maps (spec §10.2) — ≈ ¼ stage
+### 2. Sensitivity maps (spec §10.2) — **DONE**
 
-**Goal:** `dpixel/dtheta` as a visualisation. Which light dominates this pixel;
-which approximation costs the most error, and where.
+`shaders/includes/diff/traverse.glsl` binding 13, one push field
+(`sensitivityFloats`), one extra `atomicAdd` in the replay hook, and check 73
+(`tests/diff/probe/checks_sensitivity.cpp`).
 
-**Gate:** a sensitivity image for a known scene whose bright regions are
-*predicted on paper first* — a parameter that only affects one object must
-produce a map that is zero away from it, asserted as an exact zero, in the
-manner of check 59's null test.
+**THIS SECTION WAS WRONG about the cost, and the correction is the useful
+part.** It said "nearly free… this is display". It is not display: the
+backward pass scatters `sum_p (dL/dpixel_p) * d(film_p)/d(theta)` into ONE
+arena slot, and a per-pixel image is not recoverable from a scalar. Getting
+one needs either W·H one-hot backward passes (absurd) or forward-mode AD for
+every pixel at once (a second derivative machinery).
 
-Nearly free once item 1 exists: the gradient already exists and is already
-gated; this is display. **That is exactly why it goes second** — it exercises
-the integration on something whose correctness is already established, so a
-failure is attributable to the integration rather than to the quantity.
+**The third way is what was built, and it is cheaper than either.** The replay
+hook already computes one scalar per hit vertex and already knows which pixel
+that vertex belongs to. The map is those same scalars **binned by pixel
+instead of summed** — one extra `atomicAdd` at `sensitivity[v.pixelIndex]`.
+
+**Which makes the gate an IDENTITY rather than a comparison:** summing the map
+must give the arena's scalar, term for term. Measured 531.214239 against
+531.214111, relative 2.4e-07 — the difference is two float summation orders.
+That is worth more than any tolerance against a hand-derived expectation,
+because it makes the map inherit **every check that already gates the
+gradient**, check 37's finite difference above all.
+
+**Plus the null test this section asked for**, because the identity cannot see
+a uniformly wrong map — every cell holding the same 1/N of the total satisfies
+the sum exactly. So 42 of the 64 columns have primary rays that miss the plate
+entirely and their 336 cells are required to be EXACTLY `0.0f`, compared as
+floats. **The miss set is derived from the camera basis and the plate's edge
+before the render**, never read off the map: a check whose expectation comes
+from the same source as its measurement cannot fail, which is the defect class
+this subsystem has now hit three times. The nearest column clears that edge by
+0.025 (half a column pitch, the most any framing can offer), asserted against
+a pre-registered 0.02 so the split is geometry and not floating-point luck.
+The 176 lit cells are each separately required to be strictly positive,
+without which an all-zero map would pass the null test perfectly.
+
+**Still owed:** no check runs a map with `DIFF_PARAM_EMISSION_TEXTURE`. The
+map reaching that parameter is by construction — the scatter sits outside the
+per-texel branch — and that construction is untested; the shader says so where
+it matters.
 
 ---
 
