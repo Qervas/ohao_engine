@@ -21,11 +21,14 @@
 // stops this header guessing at it.
 #pragma once
 
+#include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 
 #include <cstdint>
 
 namespace ohao::diff {
+
+class WavefrontBuffers;
 
 class GradientStages {
 public:
@@ -57,6 +60,45 @@ public:
     void destroy(VkDevice device);
 
     [[nodiscard]] bool built() const noexcept { return m_built; }
+
+    /// The scene, as handles the caller already owns. An engine has a
+    /// persistent acceleration structure and a vertex buffer it is not going
+    /// to hand over as a span of floats.
+    struct Scene {
+        VkAccelerationStructureKHR tlas{VK_NULL_HANDLE};
+        VkBuffer vertexBuffer{VK_NULL_HANDLE};
+        VkBuffer indexBuffer{VK_NULL_HANDLE};
+        [[nodiscard]] bool valid() const noexcept {
+            return tlas != VK_NULL_HANDLE && vertexBuffer != VK_NULL_HANDLE &&
+                   indexBuffer != VK_NULL_HANDLE;
+        }
+    };
+
+    /// The three buffers that are neither the wavefront's own nor a sink.
+    struct Attachments {
+        VkBuffer gradientArena{VK_NULL_HANDLE};
+        VkBuffer emissionTexture{VK_NULL_HANDLE};
+        VkBuffer adjointSeed{VK_NULL_HANDLE};
+        [[nodiscard]] bool valid() const noexcept {
+            return gradientArena != VK_NULL_HANDLE && emissionTexture != VK_NULL_HANDLE &&
+                   adjointSeed != VK_NULL_HANDLE;
+        }
+    };
+
+    /// Write every descriptor all five stages declare.
+    ///
+    /// CALLED EVERY DISPATCH, not once: the adjoint-seed and emission-texture
+    /// buffers are genuinely new each time, so it is the pipelines that are
+    /// reusable and not the bindings.
+    ///
+    /// THE ARENA GOES TO BOTH INSTANTIATIONS, and the forward one never writes
+    /// it -- its hook is the film write, and it is pushed gradArenaFloats = 0
+    /// besides. The emission texture is the SAME buffer for both,
+    /// deliberately: it is read-only, and the forward read and the replay
+    /// scatter must be looking at ONE array for the gradient to be the
+    /// derivative of the film that was actually rendered.
+    [[nodiscard]] bool bindAll(VkDevice device, WavefrontBuffers& buffers, const Scene& scene,
+                               ScatterSinks& sinks, const Attachments& attachments);
 
     [[nodiscard]] WavefrontStage& generate() noexcept { return m_generate; }
     [[nodiscard]] WavefrontStage& prepareIndirect() noexcept { return m_prepareIndirect; }

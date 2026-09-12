@@ -475,45 +475,14 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // they are what shaders/diff/ requires of anyone who dispatches it.
 
     if (ok) {
-        const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                               buffers.counterBuffer()};
-        const VkBuffer counterOnly[1] = {buffers.counterBuffer()};
-        const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                              buffers.counterBuffer(), sceneVertexBuffer,
-                                              sceneIndexBuffer};
-        ok = generate.bindBuffers(m_device, stateQueueCounter) &&
-             prepareIndirect.bindBuffers(m_device, counterOnly) &&
-             intersect.bindBuffers(m_device, intersectBuffers) &&
-             intersect.bindAccelerationStructure(m_device, 5, sceneTlas);
-        for (int i = 0; ok && i < 2; ++i) {
-            ScatterSinkSet& s = *sinkSets[i];
-            const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),
-                                                buffers.queueBuffer(),
-                                                buffers.counterBuffer(),
-                                                s.trace.buffer,
-                                                buffers.envMarginalBuffer(),
-                                                buffers.envConditionalBuffer(),
-                                                s.env.buffer,
-                                                s.nee.buffer};
-            ok = scatterStages[i]->bindBuffers(m_device, scatterBuffers) &&
-                 scatterStages[i]->bindAccelerationStructure(m_device, 8, sceneTlas) &&
-                 scatterStages[i]->bindStorageBuffer(m_device, 9, s.film.buffer) &&
-                 // The REAL gradient arena, bound to BOTH instantiations. The
-                 // forward one never writes it (its hook is the film write)
-                 // and is pushed gradArenaFloats = 0 below besides.
-                 scatterStages[i]->bindStorageBuffer(m_device, 10, arena.buffer()) &&
-                 // BINDING 11, the emission-texture primal (Stage 1 Task 5).
-                 // The SAME buffer for both instantiations, deliberately: it
-                 // is read-only, and the forward read and the replay scatter
-                 // must be looking at ONE array for the gradient to be the
-                 // derivative of the film that was actually rendered.
-                 scatterStages[i]->bindStorageBuffer(m_device, 11, emissionTexBuffer.buffer) &&
-                 scatterStages[i]->bindStorageBuffer(m_device, 12, adjointSeedBuffer.buffer);
-        }
-        if (!ok) {
-            std::fprintf(stderr,
-                         "[GpuProbeContext] runWavefrontGradientProbe: descriptor binding\n");
-        }
+        // Every descriptor the five stages declare, written by the library.
+        // Called every dispatch rather than once: the adjoint-seed and
+        // emission-texture buffers are genuinely new each time, so it is the
+        // pipelines that are reusable and not the bindings.
+        const GradientStages::Scene sceneHandles{sceneTlas, sceneVertexBuffer, sceneIndexBuffer};
+        const GradientStages::Attachments attachments{arena.buffer(), emissionTexBuffer.buffer,
+                                                      adjointSeedBuffer.buffer};
+        ok = st.bindAll(m_device, buffers, sceneHandles, sinks, attachments);
     }
 
     if (ok) {

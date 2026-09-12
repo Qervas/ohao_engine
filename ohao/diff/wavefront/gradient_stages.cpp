@@ -1,5 +1,7 @@
 #include "diff/wavefront/gradient_stages.hpp"
 
+#include "diff/wavefront/wavefront_buffers.hpp"
+
 #include <array>
 #include <cstdio>
 
@@ -43,6 +45,42 @@ bool GradientStages::build(VkDevice device, const PushSizes& sizes) {
     }
     m_built = true;
     return true;
+}
+
+bool GradientStages::bindAll(VkDevice device, WavefrontBuffers& buffers, const Scene& scene,
+                             ScatterSinks& sinks, const Attachments& attachments) {
+    if (!m_built || device == VK_NULL_HANDLE) return false;
+    if (!scene.valid() || !attachments.valid() || !sinks.valid()) return false;
+
+    const std::array<VkBuffer, 3> stateQueueCounter = {
+        buffers.stateBuffer(), buffers.queueBuffer(), buffers.counterBuffer()};
+    const std::array<VkBuffer, 1> counterOnly = {buffers.counterBuffer()};
+    const std::array<VkBuffer, 5> intersectBuffers = {
+        buffers.stateBuffer(), buffers.queueBuffer(), buffers.counterBuffer(),
+        scene.vertexBuffer, scene.indexBuffer};
+
+    bool ok = m_generate.bindBuffers(device, stateQueueCounter) &&
+              m_prepareIndirect.bindBuffers(device, counterOnly) &&
+              m_intersect.bindBuffers(device, intersectBuffers) &&
+              m_intersect.bindAccelerationStructure(device, 5, scene.tlas);
+
+    for (std::uint32_t variant = 0; ok && variant < 2u; ++variant) {
+        ScatterSinkSet& s = (variant == 0u) ? sinks.forward() : sinks.replay();
+        WavefrontStage& stage = scatter(variant);
+        const std::array<VkBuffer, 8> scatterBuffers = {
+            buffers.stateBuffer(),       buffers.queueBuffer(),
+            buffers.counterBuffer(),     s.trace.buffer,
+            buffers.envMarginalBuffer(), buffers.envConditionalBuffer(),
+            s.env.buffer,                s.nee.buffer};
+        ok = stage.bindBuffers(device, scatterBuffers) &&
+             stage.bindAccelerationStructure(device, 8, scene.tlas) &&
+             stage.bindStorageBuffer(device, 9, s.film.buffer) &&
+             stage.bindStorageBuffer(device, 10, attachments.gradientArena) &&
+             stage.bindStorageBuffer(device, 11, attachments.emissionTexture) &&
+             stage.bindStorageBuffer(device, 12, attachments.adjointSeed);
+    }
+    if (!ok) std::fprintf(stderr, "[GradientStages] descriptor binding failed\n");
+    return ok;
 }
 
 void GradientStages::destroy(VkDevice device) {
