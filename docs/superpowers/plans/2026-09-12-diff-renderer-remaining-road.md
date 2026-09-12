@@ -18,7 +18,7 @@ a gap in memory.
 |---|---|---|
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
-| 3 | Renderer fitting | not started — the FD-vs-differentiable decision is RESOLVED (FD), but the bulk is an engine-harness job, measured below |
+| 3 | Renderer fitting | not started, but **UNBLOCKED and measured**: the deferred pipeline initialises headless (engine_tests 48/48), FD decided; the path-tracer reference is next |
 | 4 | SVBRDF as a client | **its differentiable half is DONE** — the environment is a parameter (binding 14, checks 74–75); the client rewrite itself has no client in version control |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
@@ -120,9 +120,11 @@ four reasons, and none of them is "not got to yet":
    `pt_raygen.rgen` (item 7) — fixing it changes every highlight on a smooth
    material in the production path tracer. And the
    `feat/diff-stage0b2a` + `0b-2b` merge to master, which must go together.
-2. **Engine-harness work, not differentiable-renderer work.** Item 3's bulk: a
-   headless deferred pipeline and a `PathTracer` that stands up, in a binary
-   that links the engine. Measured, not guessed — see item 3.
+2. **Engine-harness work, not differentiable-renderer work.** Item 3. NO
+   LONGER BLOCKED: the deferred pipeline is now shown to initialise on a bare
+   headless device, and that is pinned by a test. What is left is a device
+   with the RT extensions, a scene, a readback, and `PathTracer` as the
+   reference — ordinary work, measured rather than guessed. See item 3.
 3. **No caller.** Item 4's remaining half (environment texels as parameters).
    The client it would serve is not in version control.
 4. **Not ready by its own criterion.** Warped-area reparameterisation: this
@@ -272,25 +274,44 @@ it matters.
 
 ### 3. Renderer fitting (spec §10.1) — ≈ 1 stage, and MOST OF IT IS NOT THIS MODULE
 
-**MEASURED, not estimated.** Standing the deferred pipeline up headlessly was
-tried: `DeferredRenderer::initialize(device, physicalDevice)` takes bare
-handles and builds its passes with no swapchain, which is promising — but
-linking it into `diff_gpu_probe` fails at link time, because `DeferredRenderer`
-drags in `ohao_scene` → `PhysicsComponent` → `ohao_physics` → Jolt. A
-differentiable-renderer probe cannot acquire a physics backend to render an
-image.
+**THE PIPELINE STANDS UP HEADLESS. This entry said otherwise and was wrong —
+twice — and both corrections are worth more than the original claim.**
 
-**So the harness belongs in a binary that already links the engine.**
-`tests/engine/engine_tests` links `ohao_renderer`, `ohao_scene`, `ohao_physics`
-and Jolt already; what it lacks is a Vulkan *device* (it now creates an
-instance, for the availability suite). That is the natural home, and standing
-it up — device with the right features, a Scene with geometry and materials, a
-bindless texture manager, a light, render targets, an image readback, and then
-`PathTracer` as the reference target, which check 66 notes has never been stood
-up either — **is the bulk of this item and is engine-harness work, not
-differentiable-renderer work.**
+Two attempts to establish reachability both stopped at the LINKER, and each
+time the conclusion drawn was "blocked". Each was right about its own failure
+and wrong about what it implied:
 
-Budget it as such. The FD-over-knobs optimiser on top of it is the small half.
+1. Linking `DeferredRenderer` into `tests/diff/diff_gpu_probe` fails: it drags
+   in `ohao_scene` to `PhysicsComponent` to `ohao_physics` to Jolt. True, and
+   the right response is that a differentiable-renderer probe has no business
+   acquiring a physics backend — not that the pipeline cannot run.
+2. Linking it into `tests/engine/engine_tests`, which already has all of
+   those, fails on `stb_image` being defined in both `ohao_gpu_vulkan` and
+   `ohao_scene`. Also true — and a **known engine-wide condition with a known
+   engine-wide answer**, `/FORCE:MULTIPLE`, which the GDExtension build has
+   always used. Applying it is not a workaround invented for a test.
+
+With that applied: **`DeferredRenderer::initialize` returns TRUE on a bare
+device with no swapchain, no window and no surface, and hands back a usable
+final-output image view, in 0.46 s.** That is not a given — a renderer sizing
+its targets from a swapchain, or wanting a present queue, could not do it.
+Pinned by `runHeadlessDeferredTests` in `tests/engine/engine_tests.cpp`
+(48/48), which skips cleanly on a machine with no Vulkan device.
+
+**So item 3 is a stage of ordinary work, not a blocked one.** What the
+standing-up measured, which is what the next step needs:
+
+* **Shaders resolve relative to the working directory** (`bin/shaders/...`), so
+  a pass whose SPIR-V is not found there fails *non-fatally* — ParticleSystem
+  did. Rendering from a test needs the CWD set or the path made absolute.
+* **The RT function pointers do not load** on a device created without the
+  ray-tracing extensions, so the **path-tracer half needs a device built like
+  `GpuProbeContext`s**, not like this one. That is the reference image item 3
+  fits against, so it is the next thing to stand up.
+
+Still to do, in order: a device with the RT extensions; a Scene with geometry,
+materials and a light; a render and an image readback; `PathTracer` as the
+reference; then the FD-over-knobs optimiser, which remains the small half.
 
 The spec calls this "the distinctive one": register the deferred pipeline's
 hand-tuned knobs — SSAO radius and bias, SSR thickness and step count, the

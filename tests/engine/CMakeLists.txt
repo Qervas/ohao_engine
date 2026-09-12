@@ -13,6 +13,10 @@ target_include_directories(engine_tests PRIVATE
 target_compile_features(engine_tests PRIVATE cxx_std_20)
 
 if(MSVC)
+    target_link_options(engine_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+
+if(MSVC)
     target_link_libraries(engine_tests PRIVATE
         ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
 else()

@@ -26,6 +26,7 @@
 #include "render/deferred/post_processing_pipeline.hpp"
 #include "render/graph/resource_handle.hpp"
 #include "render/diff/diff_availability.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "scene/scene_module.hpp"
@@ -773,6 +774,152 @@ static void runDiffAvailabilityTests() {
 }
 
 // =============================================================================
+// SECTION 6 — THE DEFERRED PIPELINE, HEADLESS
+// =============================================================================
+//
+// ROADMAP ITEM 3 (spec §10.1, renderer fitting) NEEDS TO RENDER THE DEFERRED
+// PIPELINE AND THE PATH TRACER AND DIFFERENCE THEM. Two earlier attempts to
+// establish whether that is reachable both stopped at the LINKER, and the
+// plan recorded item 3 as blocked on that basis. Both were right about their
+// own failure and wrong about the conclusion:
+//
+//   1. Linking DeferredRenderer into tests/diff's diff_gpu_probe fails: it
+//      drags in ohao_scene -> PhysicsComponent -> ohao_physics -> Jolt, which
+//      a differentiable-renderer probe has no business acquiring.
+//   2. Linking it into THIS binary, which already has all of those, fails on
+//      stb_image being defined in both ohao_gpu_vulkan and ohao_scene.
+//
+// The second is a known engine-wide condition with a known engine-wide answer
+// -- /FORCE:MULTIPLE, which the GDExtension build has always used -- and once
+// it is applied the pipeline stands up. So the blocker was the link, twice,
+// and never the pipeline.
+//
+// WHAT THIS TEST PINS, and it is the foundation the rest of item 3 stands on:
+// DeferredRenderer::initialize succeeds on a BARE device with no swapchain,
+// no window and no surface, and hands back a usable final-output image view.
+// That is not obvious -- a renderer that sized its targets from a swapchain,
+// or wanted a present queue, could not do it -- and it is the difference
+// between item 3 being "a stage of engine-harness work" and "impossible from
+// a test binary".
+//
+// TWO THINGS IT ALSO MEASURES, because they are what the NEXT step needs:
+//   * Shaders are resolved relative to the working directory ("bin/shaders/
+//     ..."), so a pass whose SPIR-V is not found there fails non-fatally.
+//     Rendering from a test will need the CWD set or the path made absolute.
+//   * The RT function pointers do NOT load, because this device is created
+//     without the ray-tracing extensions. The PATH TRACER half of item 3
+//     therefore needs a device built like GpuProbeContext's, not like this
+//     one.
+//
+// IT DOES NOT RENDER. Standing up is not rendering, and this test claims only
+// what it does.
+
+namespace {
+
+struct HeadlessDevice {
+    VkInstance instance{VK_NULL_HANDLE};
+    VkPhysicalDevice physical{VK_NULL_HANDLE};
+    VkDevice device{VK_NULL_HANDLE};
+
+    bool create() {
+        VkApplicationInfo app{};
+        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.pApplicationName = "ohao_engine_tests";
+        app.apiVersion = VK_API_VERSION_1_3;
+        VkInstanceCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        ci.pApplicationInfo = &app;
+        if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS) return false;
+
+        uint32_t n = 0;
+        vkEnumeratePhysicalDevices(instance, &n, nullptr);
+        if (n == 0) return false;
+        std::vector<VkPhysicalDevice> devs(n);
+        vkEnumeratePhysicalDevices(instance, &n, devs.data());
+        physical = devs[0];
+
+        uint32_t qn = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, nullptr);
+        std::vector<VkQueueFamilyProperties> qs(qn);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, qs.data());
+        uint32_t family = 0;
+        bool found = false;
+        for (uint32_t i = 0; i < qn; ++i) {
+            if (qs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                family = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+
+        const float prio = 1.0f;
+        VkDeviceQueueCreateInfo qci{};
+        qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qci.queueFamilyIndex = family;
+        qci.queueCount = 1;
+        qci.pQueuePriorities = &prio;
+        VkPhysicalDeviceFeatures feats{};
+        vkGetPhysicalDeviceFeatures(physical, &feats);
+        VkDeviceCreateInfo dci{};
+        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        dci.queueCreateInfoCount = 1;
+        dci.pQueueCreateInfos = &qci;
+        dci.pEnabledFeatures = &feats;
+        return vkCreateDevice(physical, &dci, nullptr, &device) == VK_SUCCESS;
+    }
+
+    void destroy() {
+        if (device != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device);
+            vkDestroyDevice(device, nullptr);
+            device = VK_NULL_HANDLE;
+        }
+        if (instance != VK_NULL_HANDLE) {
+            vkDestroyInstance(instance, nullptr);
+            instance = VK_NULL_HANDLE;
+        }
+    }
+};
+
+}  // namespace
+
+static void runHeadlessDeferredTests() {
+    std::cout << "\n[Deferred pipeline, headless]\n";
+
+    TEST_BEGIN("the deferred pipeline stands up with no swapchain");
+    {
+        HeadlessDevice dev;
+        if (!dev.create()) {
+            // SKIPPED, not failed. A machine without a Vulkan device is not a
+            // defect in this pipeline.
+            dev.destroy();
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+
+        bool initialised = false;
+        VkImageView finalOutput = VK_NULL_HANDLE;
+        {
+            // SCOPED so the renderer is destroyed BEFORE the device it was
+            // built on. Destroying a device with live objects on it is what
+            // the validation layers report ten times and then stop reporting.
+            ohao::DeferredRenderer renderer;
+            initialised = renderer.initialize(dev.device, dev.physical);
+            if (initialised) finalOutput = renderer.getFinalOutput();
+            renderer.cleanup();
+        }
+        dev.destroy();
+
+        EXPECT(initialised, "DeferredRenderer::initialize on a bare device");
+        EXPECT(finalOutput != VK_NULL_HANDLE,
+               "a pipeline that initialised must hand back a final-output view");
+        TEST_PASS();
+    }
+}
+
+// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -786,6 +933,7 @@ int main() {
     runSceneTests();
     runMetaTests();
     runDiffAvailabilityTests();
+    runHeadlessDeferredTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";
