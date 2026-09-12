@@ -244,17 +244,45 @@ float tracedRadianceAt(vec2 probePoint, vec2 shadePoint) {
     return emission.v[prim] * (1.0 + pc.shadeAmp * sin(pc.shadeFreq * shadeWorld.x));
 }
 
-/// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
+/// Liang-Barsky clip of the segment to the pixel, in the segment's parameter.
 /// Returns false when the edge misses the pixel entirely.
+///
+/// THE PIXEL IS HALF-OPEN: [0,1) on both axes, so it owns its LOWER and LEFT
+/// boundaries and not its upper and right ones.
+///
+/// Without that, an edge lying exactly along a pixel seam is a valid chord
+/// for BOTH neighbours -- local x = 1 for the pixel on one side, local x = 0
+/// for the pixel on the other -- and its contribution is scattered twice, so
+/// the gradient comes out at exactly double. Check 70's supersampled oracle
+/// measured precisely that: 2.00007, 1.99987, 1.99773 times the truth on
+/// every component.
+///
+/// The case is measure-zero for a general edge and unmissable for an
+/// axis-aligned one on integer coordinates, which is exactly what a test
+/// scene tends to be. It went unseen because the checks that compare two
+/// forms of this kernel against EACH OTHER share the doubling and cancel it;
+/// only an oracle with no pixel clip in it could see past that.
+///
+/// Only the PARALLEL case changes. A segment not parallel to a boundary has
+/// p[i] != 0 and never reaches this branch, so every non-degenerate chord is
+/// clipped exactly as before -- which is why every existing check reproduces
+/// byte for byte.
 bool clipToPixel(vec2 p0, vec2 p1, out float uA, out float uB) {
     const vec2 d = p1 - p0;
     uA = 0.0;
     uB = 1.0;
     const float p[4] = float[4](-d.x, d.x, -d.y, d.y);
     const float q[4] = float[4](p0.x, 1.0 - p0.x, p0.y, 1.0 - p0.y);
+    // Which of the four half-planes are the pixel's UPPER bounds: q[1] is
+    // 1 - x and q[3] is 1 - y, so those are the ones the half-open interval
+    // excludes.
+    const bool upper[4] = bool[4](false, true, false, true);
     for (int i = 0; i < 4; ++i) {
         if (p[i] == 0.0) {
-            if (q[i] < 0.0) return false;
+            // Parallel to this boundary. q[i] == 0 means the segment lies
+            // ON it: the pixel below/left of the seam keeps it, the one
+            // above/right rejects it, so it is counted once.
+            if (q[i] < 0.0 || (upper[i] && q[i] == 0.0)) return false;
             continue;
         }
         const float t = q[i] / p[i];
