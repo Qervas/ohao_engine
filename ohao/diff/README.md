@@ -38,8 +38,8 @@ generator) in `build/Release/`.
 
 | Binary | Needs a GPU | What it is |
 |---|---|---|
-| `diff_unit_tests` | no (bare-instance device queries only) | GoogleTest, 58 tests. CPU-side logic: edge adjacency, the silhouette invariant, the boundary integrand's closed form, the parameterisation and projection pullbacks. |
-| `diff_gpu_probe` | **yes** | A standalone executable, 69 numbered checks, exit 0 or 1. Every GPU claim in the module is one of these. |
+| `diff_unit_tests` | no (bare-instance device queries only) | GoogleTest, 69 tests. CPU-side logic: edge adjacency, the silhouette invariant, the boundary integrand's closed form, the parameterisation and projection pullbacks. |
+| `diff_gpu_probe` | **yes** | A standalone executable, 76 `OK:` lines with checks numbered to 71, exit 0 or 1. Every GPU claim in the module is one of these. |
 
 `diff_gpu_probe` requires `VK_KHR_ray_query` and
 `shaderBufferFloat32AtomicAdd`; it checks both at init and says so if they

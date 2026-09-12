@@ -20,9 +20,9 @@ a gap in memory.
 | 2 | Sensitivity maps | not started |
 | 3 | Renderer fitting | not started; the differentiability decision below is still owed |
 | 4 | SVBRDF as a client | not started |
-| 5 | Mitsuba oracle | not started |
+| 5 | Mitsuba oracle | not started — **needs a decision**: `mitsuba` is not installed and installing it changes a Python environment, not this repo |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
-| 7 | Stage 4 — scale | not started |
+| 7 | Stage 4 — scale | **partial** — camera translation as a parameter (2 unit tests); edge importance sampling, BSDF unification and warped-area remain |
 | 8 | Laplacian preconditioning | **DONE** — `LaplacianVertexParameterisation`, 5 unit tests, check 68 |
 
 Item 8 went first among the independent ones because it was the best ratio:
@@ -62,6 +62,49 @@ at the bottom of this file:
   byte-identical *through the new path* with it on.
 - **Release hides asserts, and 94% of the probe's output was setup chatter.**
   Both were found by looking at a diff that seemed to say something else.
+- **A FIX NO CHECK CAN DISTINGUISH FROM ITS ABSENCE IS NOT FIXED.** The
+  pixel-seam doubling was repaired by making `clipToPixel` half-open, and
+  because the scenes had been moved off integer coordinates once the bug was
+  understood, the entire suite then reproduced byte for byte either way. Check
+  71 is degenerate on purpose so that it can tell. Reverting the clip makes it
+  report a ratio of exactly 2.
+- **A criterion that is a ratio to a nearly-converged denominator is fragile.**
+  Check 68's fit bound sat at 1.463 against 1.5; an unrelated TLAS binding
+  moved the control's loss by 4.6% and it crossed. The bound was not raised --
+  the sweep grid was widened, which is a statement about the experiment rather
+  than about what counts as success. Scaling against the INITIAL loss would be
+  better formed and is still owed.
+
+## WHERE TO PICK THIS UP, and why it stops here
+
+The three categories the remaining work falls into, which is more useful than
+a list:
+
+**Blocked on a decision.** Item 5 is the only unblocked item left and it is
+owed — Gate 4 has never run at any stage. It needs `pip install mitsuba`,
+which changes a Python environment rather than this repository, so it is not
+a call to make unilaterally.
+
+**Blocked on item 1's remainder**, which is items 2, 3 and 4 — half of what
+is left. Two things close it: moving the render orchestration into the library
+(`runWavefrontGradientProbe` is 640 lines in the test harness and IS the
+sequence), and one engine call site so `ohao_diff` is linked by something that
+is not a test. Three slices of that move are already done and gated — the
+scene, the pipelines, and the arena-driven optimiser — and each was verified
+twice over: byte-identical with the new path unused, and byte-identical
+*through* it.
+
+**Not ready by its own criterion.** Warped-area reparameterisation: this file
+already says to give it its own plan and its own oracle first, and that if the
+oracle is not identified the implementation is not ready to begin. It still
+is not.
+
+What is deliberately NOT being done, and why, so nobody repeats the reasoning:
+edge importance sampling would convert an estimator that is currently EXACT
+into a sampled one, adding variance whose benefit only appears at a scale this
+harness does not reach. Uniform-first was the right order (spec 7.2); the
+uniform version being exact rather than sampled is what makes the optimisation
+premature rather than merely unstarted.
 
 ## Where this starts
 
