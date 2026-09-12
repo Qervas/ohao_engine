@@ -60,16 +60,10 @@ leaving a solid-angle density proportional to luminance alone. Note what is
 
 {{cite shaders/includes/rt/env_sampling.glsl "void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,"}}
 
-It is not dead weight. Four callers now pass it: the three raygen profiles hand
-over `pc.tuning.z`, and the differentiable renderer's scatter traversal hands
-over its own `pc.envIntegral`. (That traversal used to live in
-`wf_scatter.comp`; Stage 1 moved it into a shared include so that the forward
-and replay kernels compile one identical copy of it.)
-
-{{cite shaders/includes/diff/traverse.glsl "sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);"}}
-
-The fourth caller has a consumer for it, and inverting the chain above is
-exactly what that consumer does. Rearranging p_ω = P·WH / (2π²sinθ_y) with
+It is not dead weight. The three raygen profiles hand over `pc.tuning.z`, and
+it is kept in the signature because inverting the chain above needs it — a
+next-event estimator that wants RADIANCE rather than a density has to undo the
+normalisation the builder applied. Rearranging p_ω = P·WH / (2π²sinθ_y) with
 P = w/T and w = L·sinθ_y gives L back from the density alone, provided T is
 known:
 
@@ -77,11 +71,14 @@ $$L \;=\; p_\omega \cdot \frac{2\pi^{2}\,T}{W H}$$
 
 Here T is the grand total the builder accumulated — the `envIntegral` argument —
 and the sinθ_y that the build-time weight and the sample-time Jacobian cancelled
-against each other never appears. `nee.glsl` writes that one line, and it is the
-only thing in either pipeline whose answer depends on the integral reaching the
-GPU intact:
+against each other never appears. That inversion is the only thing whose answer
+depends on the integral reaching the GPU intact, which is why the argument
+survives in a signature that does not read it.
 
-{{cite shaders/includes/diff/nee.glsl "return pdf * envIntegral * DIFF_NEE_TWO_PI_SQUARED / (float(W) * float(H));"}}
+> The estimator that used this lived in the differentiable renderer, which now
+> has [its own repository](https://github.com/Qervas). This file is **vendored**
+> there: an edit here changes both, and that repository's
+> `tools/check_vendor_drift.sh` is what reports the divergence.
 
 ## Two binary searches per sample
 

@@ -100,7 +100,7 @@ Two pipelines, one scene. Both consume the same bindless texture array, the same
             VK_KHR_ray_tracing_pipeline      G-buffer + lighting
             NEE + MIS + env-map IS           CSM, SSAO, SSR, SSS
             Sobol + Owen scramble            TAA, bloom, ACES
-            OIDN / OptiX / NRD denoise       (RT shadow + RT GI plug in here)
+            OIDN / NRD / DLSS-RR denoise     (RT shadow + RT GI plug in here)
                   |                                   |
                   +----------------+------------------+
                                    |
@@ -118,17 +118,19 @@ Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `p
 - Adaptive sampling: per-pixel variance estimated from a 3x3 neighborhood in `pt_raygen.rgen`, sample budget steered by noise level
 - Cook-Torrance GGX BRDF, bindless PBR textures (diffuse, normal, rough/metal, emissive)
 - Alpha transparency via any-hit shader for foliage and hair cards
-- Animated geometry: `animated_rt_manager.cpp` does GPU skinning into a vertex buffer that feeds BLAS rebuilds
 
-### Denoising (three backends, runtime switchable)
+### Denoising (four backends, runtime switchable)
+
+All live in `ohao/render/rt/denoise/`.
 
 | Backend | Files | Use |
 |---|---|---|
-| Intel OIDN 2.x | `oidn_denoise.cpp/.hpp` | CPU post-process for offline reference |
-| NVIDIA OptiX 9.1 | `optix_denoise.cpp/.hpp` | GPU denoise via CUDA interop, optional |
-| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp`, `nrd_tonemap.cpp` | Realtime REBLUR diffuse + specular for the interactive viewer |
+| Intel OIDN 2.x | `oidn_denoise.cpp` | CPU post-process for offline reference |
+| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp`, `nrd_cinematic.cpp` | Realtime REBLUR diffuse + specular for the interactive viewer |
+| NVIDIA DLSS-RR | `dlss_rr.cpp` | Ray Reconstruction, the real-time path's default |
+| built-in à-trous | `atrous_denoise.cpp` | SVGF-style, no external dependency |
 
-OptiX is optional. If the SDK isn't found, the OptiX backend compiles as a no-op stub and `--denoise=optix` falls back to OIDN at runtime.
+`--denoise=optix` is still parsed and falls back to OIDN with a warning; that backend was removed in `0873766`.
 
 ### Deferred raster
 
@@ -145,7 +147,7 @@ OptiX is optional. If the SDK isn't found, the OptiX backend compiles as a no-op
 
 ### Acceleration structures
 
-`rt_acceleration_structure.cpp` handles BLAS/TLAS lifecycle. Animated meshes go through `animated_rt_manager.cpp` which skins on the GPU then rebuilds the BLAS, so RT GI and RT shadows stay correct under animation. The path tracer currently uses static BLAS for animated meshes (known gap).
+`rt_acceleration_structure.cpp` handles BLAS/TLAS lifecycle.
 
 ### Subsystem map
 
@@ -205,18 +207,16 @@ See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, go
 **Moved out or removed**, listed because the README described some of it long
 after the fact:
 
-- The **differentiable renderer** now lives in its own repository,
-  `ohao_diff` — a Vulkan-compute path tracer with Path Replay
-  Backpropagation and an explicit boundary term, gated by 83 unit tests, 75 GPU
-  checks and a three-way comparison against Mitsuba 3. It **vendors** four
-  shader includes from here (`material/ggx_aniso.glsl`, `rt/env_sampling.glsl`,
-  `rt/mis.glsl`, `pbr_unpack.glsl`) plus `EnvCDF` and
-  `RTAccelerationStructure`, deliberately, so the two renderers cannot
-  disagree about their surface physics. **If you change any of those, run
+- **Differentiable and inverse rendering are not part of this engine.** The
+  differentiable renderer moved to its own repository, `ohao_diff`; the
+  inverse-rendering lab was removed in `e0a260b`.
+
+  One coupling survives and is worth knowing about: `ohao_diff` **vendors**
+  `shaders/includes/material/ggx_aniso.glsl`, `rt/env_sampling.glsl`,
+  `rt/mis.glsl` and `pbr_unpack.glsl` from here, so the two renderers cannot
+  disagree about their surface physics. **Change any of those and run
   `ohao_diff/tools/check_vendor_drift.sh`** — the split removed the compiler's
   enforcement of that coupling, not the coupling itself.
-- The **inverse-rendering lab** (`inverse_fit`, the Diff-IR deferred sibling)
-  was removed in `e0a260b`.
 - **Animation, the OptiX denoiser, the tscn loader and scene serialization**
   were removed in `0873766`. `--denoise=optix` is still accepted on the command
   line and falls back to OIDN with a warning.

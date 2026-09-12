@@ -98,9 +98,8 @@ short-circuits to `glm::vec2(0.0f)` while it stays off:
 {{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_taaEnabled{false};"}}
 
 The only site in the tree that enables it is `examples/model_viewer.cpp` on the
-`--deferred` path; four others — the three dense inverse-rendering fits and the
-differentiable forward pass — disable it explicitly, and `cornell_box`, `interactive`,
-`env_demo` and `turntable` never touch it. When jitter *is* live it is added to two
+`--deferred` path; `cornell_box`, `interactive`, `env_demo` and `turntable` never
+touch it. (Four callers that disabled it explicitly have since been removed.) When jitter *is* live it is added to two
 entries of the projection's third column:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "jitteredProj[2][1] += jitter.y;"}}

@@ -9,24 +9,18 @@
 //   layout(std430, ...) readonly buffer EnvConditionalCDF { float data[]; } envCond;
 //
 // The binding indices are the caller's to choose. The RT pipeline's raygen
-// and miss shaders use set=0 bindings 17 and 18; shaders/diff/wf_scatter.comp
-// uses 4 and 5 in its own set. Nothing here depends on which.
+// and miss shaders use set=0 bindings 17 and 18. Nothing here depends on
+// which.
 //
 // The map's dimensions and integral are ORDINARY ARGUMENTS of the entry
 // points below, not push-constant reads, so a caller supplies them from
 // wherever it keeps them. The RT shaders pass (pc.control.w,
-// uint(pc.tuning.y), pc.tuning.z); wf_scatter.comp passes its own
-// (pc.envWidth, pc.envHeight, pc.envIntegral). Note that `envIntegral` is
-// currently accepted by sampleEnvMap and then unused -- the solid-angle pdf
-// is recovered from CDF differences, which are already normalised, and
-// pdfEnvMap does not take it at all. It is kept in the signature because
-// callers pass it and a next-event estimator needs it to convert the CDF's
-// density into radiance. That consumer now exists:
-// shaders/includes/diff/nee.glsl inverts the relation below to recover grey
-// radiance as pdf * integral * 2*pi^2 / (W*H), and diff_gpu_probe.cpp check
-// 31 asserts the result against the environment image -- which is the first
-// thing anywhere to verify that a caller-supplied integral reaches the GPU
-// intact.
+// uint(pc.tuning.y), pc.tuning.z). Note that `envIntegral` is currently
+// accepted by sampleEnvMap and then unused -- the solid-angle pdf is
+// recovered from CDF differences, which are already normalised, and
+// pdfEnvMap does not take it at all. It is kept in the signature because a
+// next-event estimator needs it to convert the CDF's density into radiance:
+// L = pdf * integral * 2*pi^2 / (W*H).
 //
 // pdfEnvMap IS NOT EXACTLY sampleEnvMap S DENSITY OFF A TEXEL CENTRE. Its
 // condDiff*margDiff already carries sin(theta) of the texel CENTRE (that is
@@ -43,9 +37,8 @@
 // pole case to a factor of 7.7 between the two sides of one weight for a
 // 2048-high map, and records that sampleEnvMap emits texel centres so the
 // environment strategy s expectation is a midpoint quadrature rather than
-// the integral. diff_gpu_probe.cpp check 31 is the first thing to ASSERT
-// the relation on a GPU run -- pdfEnvMap had no caller under test anywhere
-// in this repository before it -- but the behaviour was documented first.
+// the integral. Note that pdfEnvMap has no caller under test in this
+// repository, so the behaviour below is documented rather than gated here.
 //
 // WHICH OF THE TWO A CALLER WANTS depends entirely on what it does with the
 // answer, and getting that wrong is a bias, not a nicety:
@@ -54,15 +47,14 @@
 //     partition unity pointwise, and both halves of one partition are
 //     formed from the same density pair, so the sin ratio cancels out of
 //     the weight entirely.
-//   * RECOVERING RADIANCE by inverting the density (shaders/includes/diff/
-//     nee.glsl s diffEnvRadianceFromPdf) wants pdfEnvMapTexel. That
-//     inversion is only valid for the TEXEL density: feeding it pdfEnvMap s
-//     answer at an off-centre direction recovers
+//   * RECOVERING RADIANCE by inverting the density wants pdfEnvMapTexel.
+//     That inversion is only valid for the TEXEL density: feeding it
+//     pdfEnvMap s answer at an off-centre direction recovers
 //     L * sin(theta_centre)/sin(theta_query), not L -- an energy error that
 //     reaches several times L near the poles and a firefly source once the
-//     result is accumulated into a film. shaders/diff/wf_scatter.comp did
-//     exactly that for one commit; pdfEnvMapTexel exists so no caller has
-//     to reconstruct sin(theta_centre) from the binning by hand.
+//     result is accumulated into a film. A consumer did exactly that for one
+//     commit; pdfEnvMapTexel exists so no caller has to reconstruct
+//     sin(theta_centre) from the binning by hand.
 //
 // CDF CONVENTION, which the host-side builder must match exactly
 // (ohao/render/rt/env_cdf.cpp is the one this repository uses):

@@ -55,7 +55,7 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
     // guarding it compiles out in Release/NDEBUG builds), and any later
     // vkGetBufferDeviceAddress() call on such a buffer is validation-layer
     // invalid. First load-bearing user: RTAccelerationStructure's BLAS/TLAS
-    // build inputs (Task 6, differentiable-renderer visibility probe).
+    // build inputs.
     //
     // Caller contract: `device` must have been created with
     // VkPhysicalDeviceVulkan12Features::bufferDeviceAddress = VK_TRUE (or the

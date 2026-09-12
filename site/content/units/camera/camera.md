@@ -197,8 +197,9 @@ frustum depth the projection cannot draw.
 
 ## A second camera model, with the opposite yaw
 
-The differentiable renderer does not use this class. `DiffCamera` re-derives its own
-forward vector with a different convention:
+A second camera that once lived beside this one re-derived its forward vector with
+a different convention — kept here because the mismatch is the interesting part,
+and because a future second camera will be tempted into the same one:
 
 {{cite ohao/render/diff/diff_camera.hpp@223ff7f "const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),"}}
 

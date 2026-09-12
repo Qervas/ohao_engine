@@ -1,25 +1,56 @@
-# Render pipelines — multi-pipeline Vulkan foundation
+# Render pipelines — one Vulkan host, four modes
 
 ## North star
 
-One Vulkan host, many image-formation pipelines. Inverse rendering picks a **fit backend** and an **eval backend** (often Diff fit → PathTrace eval).
+One Vulkan foundation — device, upload, bindless textures, offscreen targets,
+seed — with several image-formation paths on top of it sharing scene,
+materials and acceleration structures. Switching mode does not rebuild the
+scene.
 
 ```
-Scene / θ / cameras
+Scene / cameras / lights
         │
  Vulkan foundation (device, upload, bindless, offscreen, seed)
         │
- ┌──────┼──────────┬─────────────┐
- ▼      ▼          ▼             ▼
-Forward Deferred  Diff-IR      PathTrace
-        (raster)  (fwd+grads)  (oracle / FD)
+ ┌──────┼────────────┬──────────────┐
+ ▼      ▼            ▼              ▼
+Forward Deferred   RTRealtime    RTOffline
+        (raster)   (path trace)  (path trace)
 ```
+
+`RenderMode` (`ohao/gpu/vulkan/renderer.hpp`):
 
 | Mode | Role |
 |------|------|
-| **Deferred** | Realtime / offline raster, GBuffer |
-| **PathTrace (RTOffline)** | Physical stills, inverse FD, lab relight oracle |
-| **Diff-IR** | Vulkan Deferred studio-mesh raster; tile θ → dense map → bindless GBuffer albedo SoT (`--backend diff`); map PNG export |
+| **Forward** | Legacy forward raster, 8-light limit. Kept for comparison |
+| **Deferred** | G-buffer raster: CSM, SSAO, post-processing. The interactive default |
+| **RTRealtime** | KHR path tracing tuned for interactive use — 1 spp, DLSS-RR / NRD denoised, ReSTIR GI |
+| **RTOffline** | KHR path tracing tuned for reference stills — high spp, OIDN |
+
+`isRTRenderMode` and `isRasterRenderMode` are the predicates to branch on
+rather than comparing enumerators by hand.
+
+## Hybrid
+
+The hybrid path is not a fifth mode: it is **Deferred** with RT shadows and
+one-bounce RT GI composited on top of the G-buffer. That is why the two
+pipelines must agree about materials and the TLAS — they are looking at the
+same surfaces in the same frame.
+
+## Denoising
+
+Runtime-switchable through `--denoise=` on every example:
+
+| Value | Backend |
+|-------|---------|
+| `none` | raw path-traced output |
+| `oidn` | Intel OpenImageDenoise 2.x — the offline default |
+| `nrd` | NVIDIA NRD REBLUR_DIFFUSE_SPECULAR + cinematic post — the interactive one |
+| `atrous` | built-in à-trous / SVGF, no external dependency |
+| `dlss` | NVIDIA DLSS Ray Reconstruction (`dlssrr`, `dlssd` also accepted) |
+
+`optix` is still parsed and falls back to OIDN with a warning; the OptiX
+backend was removed in `0873766`.
 
 ## Art of the code (LOC law)
 
@@ -30,40 +61,8 @@ Forward Deferred  Diff-IR      PathTrace
 | Ban | No new **1k+** files |
 | Host | `renderer.cpp` — **wiring only** for new pipelines |
 
-Diff lives under `ohao/render/diff/` as many small C++20 units. Inverse backends under `ohao/inverse/backend/`.
-
-## Inverse backends
-
-| `--backend` | Formation | Grads |
-|-------------|-----------|-------|
-| `pt` (default) | Path tracer via `RenderSession` | Finite differences |
-| `diff` | Diff-IR (`ohao/render/diff/*`) | Tile θ → dense map → Deferred bindless SoT + FD |
-| `hybrid` | Diff fit → PT eval | Same as diff for fit; capture-gated holdout/relight under PT |
-
-### Showcase commands
-
-```bash
-# Diff-IR albedo inverse (DIFFTEST)
-./build/inverse_fit --backend diff --preset lantern --quality draft \
-  --show-width 320 --show-height 180 --iters 40 --out-dir renders/diff_demo
-
-# Hybrid: Diff fit → PT capture-gated holdout/relight (DIFFTEST + LABTEST)
-./build/inverse_fit --backend hybrid --preset lantern --quality draft \
-  --lab-bundle renders/inverse_lab/lantern_frontier/capture \
-  --show-width 640 --show-height 360 --show-spp 128 \
-  --out-dir renders/inverse_lab/lantern_hybrid
-
-# Capture-gated PT lab plate (LABTEST)
-./build/inverse_fit --backend pt --lab-bundle renders/inverse_lab/lantern_frontier/capture \
-  --preset lantern --quality draft --show-width 640 --show-height 360 --show-spp 128 \
-  --iters 28 --multi-start 5 --visual-polish --out-dir renders/inverse_lab/lantern_frontier_fit
-```
-
-Lab protocol (capture-gated PSNR/SSIM) is backend-agnostic: see `docs/inverse_lab.md`.
-
 ## Related
 
-- `docs/inverse.md` — inverse product overview  
-- `docs/inverse_lab.md` — multi-view / holdout / relight bar  
-- `docs/inverse_lab_roadmap.md` — long-run phases H0–H5 / milestones M0–M6  
-- Renovation Phase 0 — determinism contract for offline stills  
+- `README.md` — build, run, and the path-tracing write-up
+- `docs/bugs_solved/` — the failures worth keeping
+- `site/` — the monograph, unit by unit

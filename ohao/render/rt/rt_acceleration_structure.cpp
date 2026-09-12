@@ -57,9 +57,9 @@ bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDev
     // ONCE, not per init. These are properties of the DEVICE, not of this
     // acceleration structure, so the second printing says nothing the first
     // did not -- and a caller that builds many structures says it many times.
-    // diff_gpu_probe builds several hundred: these three lines were 94% of
-    // its entire output, and probe_normalise.py compares runs line by line,
-    // so that was 94% of a regression diff carrying no information.
+    // A test harness that built several hundred had these three lines as 94%
+    // of its entire output, which is 94% of a regression diff carrying no
+    // information.
     static std::once_flag rtPropertiesReported;
     std::call_once(rtPropertiesReported, [this]() {
         std::cout << "[RT] Ray tracing supported!" << std::endl;

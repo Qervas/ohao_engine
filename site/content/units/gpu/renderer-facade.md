@@ -155,9 +155,9 @@ Below that sits the bulk of the translation unit — more than half of `renderer
 
 - On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
-- `resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale — the inverse-rendering session forces a full scene rebind after resizing for exactly this reason.
+- `resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale: any caller holding bound descriptors must force a full scene rebind afterwards.
 - Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.
 - `getPixels()` is not reentrant with GPU work in flight: on the NRD and OIDN branches it allocates a command buffer, submits and waits on the graphics queue. It skips that whenever `m_denoiseCacheValid` still holds, so only the first call after each `render()` costs the stall.
-- `getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for sibling differentiable-rendering pipelines.
+- `getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for out-of-tree consumers.
 
 {{cite ohao/gpu/vulkan/renderer.hpp "VkDevice getDevice() const noexcept { return m_device; }"}}

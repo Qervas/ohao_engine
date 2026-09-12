@@ -13,10 +13,10 @@ standard: v2
 `material_sampling.glsl` pulling in `material_types.glsl`. The fourth,
 `ggx_aniso.glsl`, is included by the three path-tracer raygens — not by
 `rt_gi.rgen` or `rt_shadow.rgen`, which are separate live pipelines — and ships
-in every path-traced frame. It has a fourth includer outside that pipeline:
-`includes/diff/bsdf.glsl`, the differentiable renderer's BSDF, which takes its
-`ggxDiso` and `smithLambdaGGX` from here so the two paths cannot drift apart on
-the masking model.
+in every path-traced frame. It also has a reader outside this repository: the
+differentiable renderer **vendors** this file rather than re-implementing it, so
+the two paths cannot drift apart on the masking model. That coupling survived
+the repository split; only the compiler's enforcement of it did not.
 
 {{cite shaders/rt/pt_raygen.rgen "includes/material/ggx_aniso.glsl"}}
 

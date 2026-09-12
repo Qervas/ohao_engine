@@ -72,8 +72,8 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // so the epsilon suppressed D by around a percent exactly where the lobe is
 // sharpest. That showed up as a measured 0.9% disagreement between this
 // function and an independent double-precision GGX written from Walter et
-// al. 2007 Eq. 33 (diff_gpu_probe.cpp's check 20, conductor at roughness
-// 0.15), which is a real inaccuracy in the D term rather than float noise.
+// al. 2007 Eq. 33, at a conductor at roughness 0.15 -- which is a real
+// inaccuracy in the D term rather than float noise.
 //
 // The floor is safe without an epsilon because denom = (N.H)^2(a^2-1)+1 is
 // bounded below by a^2 for every a <= 1 and by 1 for a >= 1, so with
@@ -115,12 +115,18 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // pt_raygen_offline.rgen, which contains no ggxDiso call at all; that test
 // also asserts nothing about pixels (it writes a PNG and returns 0
 // unconditionally) and falls back silently when RT is unavailable. The golden-image corpus (tests/golden/manifest.json) also
-// renders RTOffline only. The only automated coverage of this function is
-// the wavefront differentiable path -- shaders/includes/diff/bsdf.glsl via
-// tests/diff/diff_gpu_probe.cpp's checks 20-23 -- which shares the formula
-// but not the raygen. A change here at roughness in [0.02, ~0.155] is
-// therefore exercised by nothing on the RT side: verify it by eye or with a
-// new test, never by a green renderer_test.
+// renders RTOffline only.
+//
+// SO THIS FUNCTION HAS NO AUTOMATED COVERAGE IN THIS REPOSITORY AT ALL, and
+// that is worth knowing before you touch it. What used to cover it was a
+// separate wavefront path that shared the formula but not the raygen; that
+// moved out and took the coverage with it. A change here at roughness in
+// [0.02, ~0.155] is exercised by nothing: verify it by eye or with a new
+// test, never by a green renderer_test.
+//
+// This file is also VENDORED by ohao_diff, which reads it rather than owning
+// it, so an edit here changes two renderers. That repository's
+// tools/check_vendor_drift.sh reports the divergence.
 float ggxDiso(float NdotH, float alpha) {
     float a2    = max(alpha * alpha, 1e-8);
     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;

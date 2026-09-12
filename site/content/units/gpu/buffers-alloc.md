@@ -86,7 +86,7 @@ allocation size, the same quantity the debit uses:
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "const VkDeviceSize accountedSize = result.allocation.getSize();"}}
 
-What forced it was `tests/diff/diff_gpu_probe.exe`, whose 290 small allocations made
+What forced it was a test harness whose 290 small allocations made
 the warning print on every *passing* run — `18446744073709536560 bytes still
 allocated` directly above `Allocations: 290 == Frees: 290`. A false leak warning on a
 green run is how a real one gets ignored.

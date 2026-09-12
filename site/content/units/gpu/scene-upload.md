@@ -242,8 +242,8 @@ gate above.
 
 The loader is guarded by a path cache, and the comment explaining why is the most useful
 line in the file: re-decoding the HDR on every `updateSceneBuffers` leaked whole images until
-it crashed. The re-entrant caller that makes that matter is the differentiable-rendering
-forward pass: `forwardStudioDeferred` calls `updateSceneBuffers` on every single render.
+it crashed. What made that matter was a re-entrant caller that called
+`updateSceneBuffers` on every single render:
 
 {{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
 

@@ -36,7 +36,7 @@ endif()
 
 # renderer_test does not copy shader SPVs itself -- the shaders target owns
 # that copy (shaders/CMakeLists.txt) once, so that this target and
-# diff_gpu_probe don't race two independent copy_directory commands into
+# a second consumer don't race two independent copy_directory commands into
 # the same destination under a parallel (-j8) build (Task 5). The explicit
 # dependency also fixes a pre-existing ordering gap: previously nothing
 # guaranteed renderer_test's own copy ran after shaders had been (re)built,

@@ -233,7 +233,7 @@ void VulkanRenderer::uploadLightBuffer() {
                     gl.extra = glm::vec4(0);
                     gl.extra2 = glm::vec4(0);
                     gpuLights.push_back(gl);
-                    // Avoid spamming inverse_fit (called every FD eval).
+                    // Avoid spamming a caller that re-uploads every frame.
                     static bool s_loggedEmissive = false;
                     if (!s_loggedEmissive) {
                         std::cout << "[RT] Emissive mesh light: " << actor->getName()

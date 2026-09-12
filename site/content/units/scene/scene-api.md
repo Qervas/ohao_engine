@@ -90,7 +90,7 @@ The mesh hooks maintain their vector and raise `needsBufferUpdate`; `MeshCompone
 
 {{cite ohao/scene/scene.cpp "// GPU buffer updates are handled by VulkanRenderer::updateSceneBuffers()"}}
 
-The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test and each of `diff_fit`, `dense_map_fit`, `dense_orm_fit` and `dense_metal_fit` re-upload by hand immediately after `setScene`, and `ohao::diff::forwardStudioDeferred` re-uploads on *every* forward render, which is what puts a full scene upload inside `diff_fit`'s finite-difference gradient loop:
+The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test re-uploads by hand immediately after `setScene`. A since-removed fitting path went further and re-uploaded on *every* forward render, which put a full scene upload inside a finite-difference gradient loop:
 
 {{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
 

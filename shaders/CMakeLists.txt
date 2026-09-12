@@ -56,9 +56,9 @@ add_custom_target(shaders
     COMMENT "Compiling all shaders"
 )
 
-# Task 5: copy compiled SPVs into the runtime output directory ONCE, here,
-# instead of each consuming test target (diff_gpu_probe, renderer_test)
-# attaching its own POST_BUILD copy_directory into the same destination.
+# Copy compiled SPVs into the runtime output directory ONCE, here, instead of
+# each consuming test target attaching its own POST_BUILD copy_directory into
+# the same destination.
 # Two independent copies into the same directory race under a parallel
 # (-j8) build and can fail with "Error copying directory ...
 # build/Release/bin/shaders". Test targets should add_dependencies(<tgt>

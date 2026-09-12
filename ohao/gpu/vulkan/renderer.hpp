@@ -132,7 +132,7 @@ public:
     [[nodiscard]] Camera& getCamera() { return *m_camera; }
     [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
 
-    // Vulkan handles for sibling pipelines (Diff-IR, etc.) — wiring only.
+    // Vulkan handles for out-of-tree consumers — wiring only, no callers here.
     [[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }
     [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
 

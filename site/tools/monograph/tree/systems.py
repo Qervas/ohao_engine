@@ -36,12 +36,5 @@ MODULE = {
             files=['STATUS.md@223ff7f', 'docs/bugs_solved'],
             design=['STATUS.md was the source of truth for what is proven vs experimental; removed at 2bd0bac, cited here at 223ff7f.', 'docs/bugs_solved archives root-cause writeups (NRD pack, OOM, etc.).'],
         ),
-        page(
-            'public-scope',
-            'Public scope note',
-            'What the monograph deliberately omits.',
-            topics=['Private research trees under ohao/ (not listed as product chapters)', 'ohao/render/diff/** — experimental differentiable helpers', 'Research-only example binaries', 'shaders/_disabled/** — retired experiments'],
-            design=['Everything else under ohao/ and active shaders/ is mapped in this tree.', 'Keep non-product research documentation offline; this site is the public engine face.'],
-        ),
     ],
 }

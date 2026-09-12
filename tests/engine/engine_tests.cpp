@@ -708,9 +708,9 @@ void runMetaTests() {
 // plan recorded item 3 as blocked on that basis. Both were right about their
 // own failure and wrong about the conclusion:
 //
-//   1. Linking DeferredRenderer into tests/diff's diff_gpu_probe fails: it
-//      drags in ohao_scene -> PhysicsComponent -> ohao_physics -> Jolt, which
-//      a differentiable-renderer probe has no business acquiring.
+//   1. Linking DeferredRenderer into a focused GPU test binary fails: it drags
+//      in ohao_scene -> PhysicsComponent -> ohao_physics -> Jolt, which such a
+//      binary has no business acquiring.
 //   2. Linking it into THIS binary, which already has all of those, fails on
 //      stb_image being defined in both ohao_gpu_vulkan and ohao_scene.
 //
@@ -851,13 +851,12 @@ static void runHeadlessDeferredTests() {
 // ...AND THE PATH TRACER, which is the reference image item 3 fits against
 // -----------------------------------------------------------------------------
 //
-// Spec §10.1 optimises the deferred pipeline to minimise its difference from
-// the PATH TRACER, so the path tracer is half the harness and the half that
-// had never been stood up anywhere: check 66 in diff_gpu_probe says it gates
-// the ownership protocol "against a faithful reproduction of
-// setMaterialData's map-and-memcpy, not against PathTracer itself, which
-// needs its images and pipelines to stand up". This is those images and
-// pipelines standing up.
+// Any harness that fits the deferred pipeline against the PATH TRACER needs
+// the path tracer standing up, and that half had never been stood up anywhere:
+// every prior test touching PathTracer's ownership protocol did so against a
+// faithful reproduction of setMaterialData's map-and-memcpy, never against
+// PathTracer itself, which needs its images and pipelines alive. This is those
+// images and pipelines standing up.
 //
 // THE DEVICE IS THE WHOLE DIFFICULTY, and it is a different device from the
 // one the deferred pipeline needs. Three things had to be right:

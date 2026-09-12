@@ -154,11 +154,8 @@ if(BUILD_ENGINE_TESTS)
     add_subdirectory(tests/engine)
 endif()
 
-# The differentiable renderer lives in its own repository now (../ohao_diff).
-# It vendors a handful of files from here -- the allocator, EnvCDF,
-# RTAccelerationStructure and four shader includes carrying the shared
-# microfacet and environment-sampling math. Those copies are checked against
-# this tree by ohao_diff's tools/check_vendor_drift.sh; if you change
-# shaders/includes/material/ggx_aniso.glsl, shaders/includes/rt/*.glsl or
-# shaders/includes/pbr_unpack.glsl, run it there.
+# NOTE: ohao_diff (a separate repository) VENDORS four shader includes from
+# here -- material/ggx_aniso.glsl, rt/env_sampling.glsl, rt/mis.glsl and
+# pbr_unpack.glsl -- plus the allocator, EnvCDF and RTAccelerationStructure.
+# Change any of those and run ohao_diff's tools/check_vendor_drift.sh.
 
