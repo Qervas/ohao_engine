@@ -29,6 +29,12 @@ target_include_directories(ohao_renderer PUBLIC
 target_compile_features(ohao_renderer PUBLIC cxx_std_20)
 
 target_link_libraries(ohao_renderer PUBLIC
+    # The differentiable renderer. Linked by the ENGINE and not only by its
+    # own tests -- render/diff/diff_availability.cpp is the call site, and
+    # until it existed nothing that ships resolved a symbol from ohao_diff.
+    # ohao_diff links only ohao_gpu_vulkan, so this is a leaf dependency and
+    # not a cycle.
+    ohao_diff
     ohao_gpu_vulkan
     ohao_scene
     ohao_core

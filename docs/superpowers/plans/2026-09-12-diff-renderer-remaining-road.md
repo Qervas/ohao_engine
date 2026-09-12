@@ -16,7 +16,7 @@ a gap in memory.
 
 | # | Item | State |
 |---|---|---|
-| 1 | Engine integration | **partial** — facade, ownership contract and optimiser gated (checks 65–67); the render orchestration and a real call site remain |
+| 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | not started |
 | 3 | Renderer fitting | not started; the differentiability decision below is still owed |
 | 4 | SVBRDF as a client | not started |
@@ -87,14 +87,28 @@ install --target build/mitsuba-pkgs mitsuba` puts mitsuba 3.9.1 and drjit
 so no Python environment is touched at all. Deferring that to the user was
 more caution than the situation needed.
 
-**Blocked on item 1's remainder**, which is items 2, 3 and 4 — half of what
-is left. Two things close it: moving the render orchestration into the library
-(`runWavefrontGradientProbe` is 640 lines in the test harness and IS the
-sequence), and one engine call site so `ohao_diff` is linked by something that
-is not a test. Three slices of that move are already done and gated — the
-scene, the pipelines, and the arena-driven optimiser — and each was verified
-twice over: byte-identical with the new path unused, and byte-identical
-*through* it.
+**Items 2, 3 and 4 are unblocked.** Item 1 is closed. The orchestration move
+finished in five slices — the scene, the sinks, the pipelines and their
+bindings, the push constants and both loop configurations, and finally the
+recording itself — each verified the same way: byte-identical with the new
+path unused, and byte-identical *through* it, against a measured run-to-run
+baseline rather than an assumed one.
+
+The slice that mattered was the last, and not for its size. `recordGradientRun`
+**records into a command buffer the caller owns and returns**; the probe's
+`runWavefrontGradientProbe` submitted inside the call and read the film back
+before returning, which is what a test wants and the opposite of what an
+engine can use. An engine has one command buffer per frame and submits once;
+a library that submits for you cannot go in that frame at all. No amount of
+moving code would have fixed that while the submit stayed welded on.
+
+And `ohao_renderer` now links `ohao_diff`, through
+`ohao/render/diff/diff_availability.{hpp,cpp}` — the engine asking whether
+this device has ray query and buffer float atomics, reported in
+`DeferredRenderer::getPipelineInfo()` alongside the passes. Deliberately NOT
+a DiffRenderer the engine owns with nothing to render: that plumbing arrives
+with the feature that needs it. What this closes is the link itself, which no
+number of passing tests inside `tests/diff` could establish.
 
 **Not ready by its own criterion.** Warped-area reparameterisation: this file
 already says to give it its own plan and its own oracle first, and that if the
