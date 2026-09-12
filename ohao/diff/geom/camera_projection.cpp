@@ -118,6 +118,58 @@ std::vector<double> PinholeProjection::jacobian(double wx, double wy, double wz)
     return j;
 }
 
+std::vector<float> PinholeProjection::pullbackToEyeRotation(
+    const std::vector<float>& worldPositions, const std::vector<float>& screenGradients) const {
+    if (!valid() || worldPositions.empty() || worldPositions.size() % 3u != 0u) return {};
+    const std::size_t vertices = worldPositions.size() / 3u;
+    if (screenGradients.size() != vertices * 2u) return {};
+
+    std::vector<float> out(3, 0.0f);
+    std::array<double, 3> acc{0.0, 0.0, 0.0};
+    for (std::size_t v = 0; v < vertices; ++v) {
+        // The world-space offset the rotation acts on. The eye does not move.
+        const std::array<double, 3> d = {
+            static_cast<double>(worldPositions[v * 3u + 0u]) - m_eye[0],
+            static_cast<double>(worldPositions[v * 3u + 1u]) - m_eye[1],
+            static_cast<double>(worldPositions[v * 3u + 2u]) - m_eye[2]};
+        const std::array<double, 3> p = {m_r[0] * d[0] + m_r[1] * d[1] + m_r[2] * d[2],
+                                        m_r[3] * d[0] + m_r[4] * d[1] + m_r[5] * d[2],
+                                        m_r[6] * d[0] + m_r[7] * d[1] + m_r[8] * d[2]};
+        // Same refusal as project() and jacobian(), for the same reason: one
+        // vertex behind the near plane makes the whole pullback meaningless,
+        // because the shape it belongs to has no projection.
+        if (!(p[2] <= -kNearMargin)) return {};
+
+        const double invZ = 1.0 / p[2];
+        const double invZ2 = invZ * invZ;
+        // d(u,v)/d(CAMERA space) -- NOT the world Jacobian this time. The
+        // rotation's derivative is naturally expressed in camera space (it is
+        // -R times a world cross product), so composing with R here would
+        // apply R twice.
+        const double du[3] = {-m_fx * invZ, 0.0, m_fx * p[0] * invZ2};
+        const double dv[3] = {0.0, -m_fy * invZ, m_fy * p[1] * invZ2};
+        const double gu = screenGradients[v * 2u + 0u];
+        const double gv = screenGradients[v * 2u + 1u];
+        // The adjoint of this vertex's camera position, as a row vector.
+        const std::array<double, 3> a = {gu * du[0] + gv * dv[0], gu * du[1] + gv * dv[1],
+                                         gu * du[2] + gv * dv[2]};
+
+        for (std::size_t k = 0; k < 3u; ++k) {
+            std::array<double, 3> e{0.0, 0.0, 0.0};
+            e[k] = 1.0;
+            const std::array<double, 3> c = cross(e, d);
+            // d(p_c)/d(theta_k) = -R (e_k x d).
+            const std::array<double, 3> t = {
+                -(m_r[0] * c[0] + m_r[1] * c[1] + m_r[2] * c[2]),
+                -(m_r[3] * c[0] + m_r[4] * c[1] + m_r[5] * c[2]),
+                -(m_r[6] * c[0] + m_r[7] * c[1] + m_r[8] * c[2])};
+            acc[k] += a[0] * t[0] + a[1] * t[1] + a[2] * t[2];
+        }
+    }
+    for (std::size_t k = 0; k < 3u; ++k) out[k] = static_cast<float>(acc[k]);
+    return out;
+}
+
 std::vector<float> PinholeProjection::pullbackToEyeTranslation(
     const std::vector<float>& worldPositions, const std::vector<float>& screenGradients) const {
     const std::vector<float> perVertex = pullback(worldPositions, screenGradients);

@@ -109,6 +109,38 @@ public:
         const std::vector<float>& worldPositions,
         const std::vector<float>& screenGradients) const;
 
+    /// dL/d(camera ORIENTATION) from dL/d(screen), for a rotation of the
+    /// camera's basis about the WORLD axes through the eye. 3 floats; empty
+    /// on a length mismatch or a vertex behind the near plane.
+    ///
+    /// THIS IS THE SECOND TERM pullbackToEyeTranslation says it does not
+    /// carry. Together the two cover a rigid camera pose: translation moves
+    /// the eye with R fixed, rotation turns R with the eye fixed, and a
+    /// look-at camera that moves its target does both at once.
+    ///
+    /// THE PARAMETERISATION, stated because there are several and they
+    /// disagree by signs. `theta` rotates the camera's basis vectors about
+    /// the world axes, right-handed, through the eye:
+    ///
+    ///     R(theta) = R * exp(-[theta]_x),   so   p_c(theta) = R exp(-[theta]_x) (p_w - eye)
+    ///
+    /// and therefore d(p_c)/d(theta_k) = -R (e_k x (p_w - eye)). The eye does
+    /// not move, because that offset is what the rotation acts on.
+    ///
+    /// WORLD AXES RATHER THAN THE CAMERA'S OWN, which is the less obvious
+    /// choice (a user steering a camera thinks in pan/tilt/roll about its own
+    /// axes). The reason is the ORACLE: `setLookAt` is the only way to set a
+    /// basis, so the finite-difference test has to build the perturbed camera
+    /// by rotating the target and the up hint -- and those are world vectors.
+    /// A world-axis parameterisation lets the test CONSTRUCT the perturbation
+    /// exactly; a camera-axis one would have it convert between frames first,
+    /// which is a second piece of untested arithmetic standing between the
+    /// oracle and the thing it checks. Pan/tilt/roll is this composed with
+    /// R^T, and that composition belongs to whoever wants those names.
+    [[nodiscard]] std::vector<float> pullbackToEyeRotation(
+        const std::vector<float>& worldPositions,
+        const std::vector<float>& screenGradients) const;
+
     /// The 2x3 Jacobian at one world point, row-major (du/dx du/dy du/dz,
     /// then dv/...). Empty if the point is not in front of the eye. Exposed
     /// so a test can look at the third column directly -- the one that

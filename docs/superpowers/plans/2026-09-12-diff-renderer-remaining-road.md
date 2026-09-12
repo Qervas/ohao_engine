@@ -22,7 +22,7 @@ a gap in memory.
 | 4 | SVBRDF as a client | not started |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
-| 7 | Stage 4 — scale | **partial** — camera translation as a parameter (2 unit tests); edge importance sampling, BSDF unification and warped-area remain |
+| 7 | Stage 4 — scale | **partial** — camera pose complete (translation + rotation, 5 unit tests); BSDF unification investigated and deliberately not done; edge importance sampling premature; warped-area not ready |
 | 8 | Laplacian preconditioning | **DONE** — `LaplacianVertexParameterisation`, 5 unit tests, check 68 |
 
 Item 8 went first among the independent ones because it was the best ratio:
@@ -413,10 +413,32 @@ Four items, and they are not alike:
       uniform version already exists to check it against, which was the whole
       reason for doing uniform first — a sampler is only checkable against a
       correct estimator of the same integral.
-- [ ] **Camera and pose parameters.** Ordinary, and **cheaper than it looks now**:
-      `PinholeProjection` already provides the projection Jacobian and its
-      pullback, gated by an FD oracle. A camera parameter is that pullback with
-      the camera's own parameters in place of the vertex's.
+- [x] **Camera and pose parameters. DONE.** `pullbackToEyeTranslation` already
+      carried the translation half; `pullbackToEyeRotation` is the second term
+      its header said it did not have, so a rigid camera pose is now complete —
+      translation moves the eye with R fixed, rotation turns R with the eye
+      fixed, and a look-at camera that moves its target does both at once.
+
+      **The parameterisation is in WORLD axes**, which is the less obvious
+      choice (a user steering a camera thinks pan/tilt/roll about its own
+      axes) and the choice was made by the ORACLE: `setLookAt` is the only way
+      to set a basis, so the FD test has to build the perturbed camera by
+      rotating the target and the up hint — and those are world vectors. World
+      axes let the test **construct** the perturbation exactly, by Rodrigues
+      rather than by a linearisation; a camera-axis parameterisation would put
+      a frame conversion between the oracle and the thing it checks.
+      Pan/tilt/roll is this composed with R^T, and that belongs to whoever
+      wants those names.
+
+      Three unit tests, and they cover different failures. The FD comparison
+      agrees to 3.2e-4 on all three axes against a 2e-3 bound, with a
+      per-component non-vacuity floor so a zero derivative cannot pass.
+      **Mutation-tested:** flipping the sign of the pullback makes all three
+      axes fail at relative error 2.0000 — the signature the failure message
+      names. The null test (a vertex whose offset from the eye lies ALONG the
+      rotation axis contributes EXACTLY 0, compared as a float) does **not**
+      catch that mutation, correctly — zero stays zero under negation — which
+      is why both exist.
 - [x] **Unify the BSDF includes with the production path tracer.** **INVESTIGATED,
       AND IT IS NOT A TIDYING JOB. Not done, on purpose — see below.**
 

@@ -2111,3 +2111,172 @@ TEST(DiffGgxPipelineTie, TheTwoAgreeOnRoughMaterials) {
                               << "; the two forms are supposed to differ only by an epsilon that "
                                  "is negligible there";
 }
+
+// ===========================================================================
+// THE CAMERA'S ORIENTATION AS A PARAMETER (spec §9, item 7)
+// ===========================================================================
+//
+// pullbackToEyeTranslation carries the first half of a rigid camera pose and
+// its header says so: "a look-at camera that moves also ROTATES, and its
+// derivative carries a second term this does not." This is that second term.
+
+namespace {
+
+/// Rotate `v` about the world axis `axis` by `angle`, exactly --
+/// Rodrigues, not a first-order approximation.
+///
+/// EXACTLY MATTERS HERE. The finite difference below is a difference of two
+/// TRUE projections, so the perturbed camera must be a real camera: a camera
+/// built from linearised basis vectors is not orthonormal, setLookAt would
+/// re-orthonormalise it differently than intended, and the "finite
+/// difference" would then be measuring the re-orthonormalisation as well as
+/// the rotation.
+std::array<float, 3> rotateAboutAxis(const std::array<float, 3>& v, int axis, double angle) {
+    std::array<double, 3> k{0.0, 0.0, 0.0};
+    k[static_cast<std::size_t>(axis)] = 1.0;
+    const std::array<double, 3> p{v[0], v[1], v[2]};
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const std::array<double, 3> kxp{k[1] * p[2] - k[2] * p[1], k[2] * p[0] - k[0] * p[2],
+                                    k[0] * p[1] - k[1] * p[0]};
+    const double kdotp = k[0] * p[0] + k[1] * p[1] + k[2] * p[2];
+    std::array<float, 3> out{};
+    for (std::size_t i = 0; i < 3u; ++i) {
+        out[i] = static_cast<float>(p[i] * c + kxp[i] * s + k[i] * kdotp * (1.0 - c));
+    }
+    return out;
+}
+
+/// A camera whose basis has been rotated about world axis `axis` by `angle`,
+/// through the eye.
+///
+/// BUILT, NOT APPROXIMATED. `setLookAt` derives the basis from (target - eye)
+/// and the up hint, so rotating BOTH of those by the same rotation rotates
+/// every row of R by it -- which is exactly the parameterisation
+/// pullbackToEyeRotation differentiates, and why that parameterisation is in
+/// world axes. The eye is untouched, so this is a pure rotation.
+bool rotatedCamera(const std::array<float, 3>& eye, const std::array<float, 3>& target,
+                   const std::array<float, 3>& up, int axis, double angle, float fx, float fy,
+                   float cx, float cy, ohao::diff::PinholeProjection& out) {
+    const std::array<float, 3> view{target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
+    const std::array<float, 3> rotView = rotateAboutAxis(view, axis, angle);
+    const std::array<float, 3> rotUp = rotateAboutAxis(up, axis, angle);
+    const std::array<float, 3> newTarget{eye[0] + rotView[0], eye[1] + rotView[1],
+                                         eye[2] + rotView[2]};
+    return out.setLookAt(eye, newTarget, rotUp) && out.setIntrinsics(fx, fy, cx, cy);
+}
+
+}  // namespace
+
+TEST(DiffCameraProjection, RotationPullbackAgainstFiniteDifferences) {
+    const std::array<float, 3> eye{1.0f, 2.0f, 6.0f};
+    const std::array<float, 3> target{0.25f, -0.5f, 0.0f};
+    const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    const float fx = 140.0f, fy = 125.0f, cx = 32.0f, cy = 24.0f;
+
+    // OFF-AXIS AND ASYMMETRIC on purpose: a shape centred on the view axis
+    // contributes almost nothing to two of the three components, and a
+    // symmetric one cancels. Both would let a wrong sign pass.
+    const std::vector<float> world{0.4f, 0.9f, 0.2f, -1.1f, 0.3f, -0.6f,
+                                   0.7f, -0.8f, 1.3f, 1.6f, 1.2f, -1.9f};
+    // A loss with DIFFERENT weights per component, so a transposed or summed
+    // pullback does not coincide with the right answer.
+    const std::vector<float> screenGrad{1.0f, -0.5f, 0.25f, 2.0f, -1.5f, 0.75f, 0.5f, -2.5f};
+
+    ohao::diff::PinholeProjection base;
+    ASSERT_TRUE(rotatedCamera(eye, target, up, 0, 0.0, fx, fy, cx, cy, base));
+
+    const std::vector<float> analytic = base.pullbackToEyeRotation(world, screenGrad);
+    ASSERT_EQ(analytic.size(), 3u);
+
+    // A central difference of the SAME scalar loss the gradients define:
+    // L = sum over vertices of (gu * u + gv * v).
+    auto loss = [&](const ohao::diff::PinholeProjection& cam, double& outLoss) -> bool {
+        std::vector<float> screen;
+        if (!cam.project(world, screen)) return false;
+        if (screen.size() != screenGrad.size()) return false;
+        double total = 0.0;
+        for (std::size_t i = 0; i < screen.size(); ++i) {
+            total += static_cast<double>(screenGrad[i]) * static_cast<double>(screen[i]);
+        }
+        outLoss = total;
+        return true;
+    };
+
+    const double h = 1e-4;  // radians
+    double worstRel = 0.0;
+    for (int axis = 0; axis < 3; ++axis) {
+        ohao::diff::PinholeProjection plus, minus;
+        ASSERT_TRUE(rotatedCamera(eye, target, up, axis, h, fx, fy, cx, cy, plus));
+        ASSERT_TRUE(rotatedCamera(eye, target, up, axis, -h, fx, fy, cx, cy, minus));
+        double lp = 0.0, lm = 0.0;
+        ASSERT_TRUE(loss(plus, lp));
+        ASSERT_TRUE(loss(minus, lm));
+        const double fd = (lp - lm) / (2.0 * h);
+        const double a = static_cast<double>(analytic[static_cast<std::size_t>(axis)]);
+        // NON-VACUITY per component: a zero derivative would make any
+        // relative comparison meaningless, and all three are nonzero for
+        // this deliberately off-axis shape.
+        ASSERT_GT(std::fabs(fd), 1.0) << "axis " << axis << " finite difference is " << fd
+                                      << ", too small for the comparison below to mean anything";
+        const double rel = std::fabs(fd - a) / std::fabs(fd);
+        worstRel = std::fmax(worstRel, rel);
+        EXPECT_LT(rel, 2e-3) << "axis " << axis << ": finite difference " << fd << " vs analytic "
+                             << a << " (relative " << rel
+                             << "). A factor of -1 is the parameterisation's sign; a factor near "
+                                "the ratio of two focal lengths is u and v swapped; agreement on "
+                                "one axis only is a cross-product index error.";
+    }
+    EXPECT_LT(worstRel, 2e-3);
+}
+
+TEST(DiffCameraProjection, RotatingAboutAnAxisAVertexLiesOnMovesItNotAtAll) {
+    // THE NULL TEST, and it is a property of the geometry rather than of this
+    // class: a point whose offset from the eye is PARALLEL to the world axis
+    // being rotated about does not move at all, so it contributes EXACTLY
+    // nothing to that component.
+    //
+    // Why this is worth having beside the finite difference: that comparison
+    // is between two numbers both derived from this class's own projection.
+    // This one is true for reasons outside it.
+    //
+    // A camera looking down world +X, so a vertex on the +X ray from the eye
+    // is both ON the rotation axis and IN FRONT of the camera. Those two have
+    // to hold together, which is what picks this camera rather than the
+    // down-the-z-axis one every other test here uses.
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(cam.setIntrinsics(100.0f, 100.0f, 0.0f, 0.0f));
+
+    const std::vector<float> onAxis{4.0f, 0.0f, 0.0f};  // (p_w - eye) = (4, 0, 0)
+    const std::vector<float> grad{1.0f, 1.0f};
+    const std::vector<float> pull = cam.pullbackToEyeRotation(onAxis, grad);
+    ASSERT_EQ(pull.size(), 3u);
+    // e_x x (4,0,0) = 0, so this is exactly zero and not merely small.
+    EXPECT_EQ(pull[0], 0.0f) << "a vertex whose offset from the eye lies along the rotation axis "
+                                "cannot move under that rotation, so its contribution is exactly "
+                                "0 -- compared as a float, in the manner of check 59's null test";
+    // AND AT LEAST ONE OF THE OTHER TWO MUST NOT BE, or the vertex
+    // contributes nothing at all and the zero above says nothing about the
+    // axis. Rotating about +Y swings this vertex across the view; about +Z it
+    // swings it up and down. Both move it.
+    EXPECT_NE(pull[1], 0.0f) << "rotating about world +Y must move a vertex on the +X ray";
+    EXPECT_NE(pull[2], 0.0f) << "rotating about world +Z must move a vertex on the +X ray";
+}
+
+TEST(DiffCameraProjection, RotationPullbackRefusesWhatItCannotProject) {
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt({0.0f, 0.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(cam.setIntrinsics(100.0f, 100.0f, 0.0f, 0.0f));
+
+    // Behind the eye: the same refusal project() and jacobian() make, because
+    // one vertex without a projection makes the whole shape's pullback
+    // meaningless.
+    const std::vector<float> behind{0.0f, 0.0f, 9.0f};
+    EXPECT_TRUE(cam.pullbackToEyeRotation(behind, {1.0f, 1.0f}).empty());
+    // A gradient of the wrong length is a caller error, not something to
+    // truncate.
+    const std::vector<float> front{0.0f, 0.0f, 0.0f};
+    EXPECT_TRUE(cam.pullbackToEyeRotation(front, {1.0f}).empty());
+    EXPECT_FALSE(cam.pullbackToEyeRotation(front, {1.0f, 1.0f}).empty());
+}
