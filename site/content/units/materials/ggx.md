@@ -8,20 +8,35 @@ figures: [materials-ggx-ndf-energy]
 
 ## The α convention every copy shares
 
-This tree writes the isotropic GGX distribution out twenty-four times. Four of
-those copies sit behind a function name: `distributionGGX` in `brdf_ggx.glsl`,
+This tree writes the isotropic GGX distribution out **four** times, and every one
+of the four sits behind a function name: `distributionGGX` in `brdf_ggx.glsl`,
 which only `deferred_lighting.frag` and `forward.frag` reach — through
-`evaluateBRDF`; `ggxD_anisoOrIso`'s isotropic branch and `ggxDiso` in
-`ggx_aniso.glsl`, `#include`d by the three path-tracer raygens — and **vendored**
-by the differentiable renderer, which calls `ggxDiso` for its specular lobe from
-its own repository;
-and `D_ClearCoat` in `advanced_brdf.glsl`, a file no shader `#include`s. The other
-twenty are inline. Past bounce 0 the raygens stop calling `ggx_aniso.glsl` and
-paste the algebra straight into each NEE, env-MIS and pdf branch — six copies in
-`pt_raygen.rgen`, six in `pt_raygen_offline.rgen`, eight in
-`pt_raygen_realtime.rgen`.
+`evaluateBRDF`; `ggxDisoShaded` and `ggxDiso` in `ggx_aniso.glsl`, `#include`d by
+the three path-tracer raygens — and **vendored** by the differentiable renderer,
+which calls `ggxDiso` for its specular lobe from its own repository;
+and `D_ClearCoat` in `advanced_brdf.glsl`, a file no shader `#include`s.
+`ggxD_anisoOrIso`'s isotropic branch is no longer a fifth copy: it delegates to
+`ggxDisoShaded`.
 
-The one thing all twenty-four agree on without qualification is the width
+:::why
+Until `ggxDisoShaded` existed, twenty-one further copies were **inline**: past
+bounce 0 the raygens stopped calling `ggx_aniso.glsl` and pasted the algebra
+straight into each NEE, env-MIS and pdf branch — six in `pt_raygen.rgen`, seven
+in `pt_raygen_offline.rgen`, eight in `pt_raygen_realtime.rgen`. They had drifted
+into four spellings, differing in the name of the temporary, in whether the
+epsilon was written `0.0001` or `1e-4` (the same float32), and in the constant
+used for π: thirteen wrote `OHAO_PI` and eight wrote `3.14159`, which is *not*
+the same float32 — `db0f4940` against `d00f4940`, 8.3 × 10⁻⁷ apart.
+
+An earlier revision of this page said *twenty* inline copies, six of them in
+`pt_raygen_offline.rgen`. That was wrong by one: the skin specular lobe at
+`pt_raygen_offline.rgen`'s subsurface branch is a twenty-first copy, written
+with its own `rSkin`/`aSkin`/`denomSk` temporaries and so invisible to a grep for
+the usual names. It is recorded here because a count arrived at by grepping one
+spelling is exactly the failure this page warns about at the bottom.
+:::
+
+The one thing all four agree on without qualification is the width
 parameter. Every one of them resolves the artist's perceptual roughness to
 α = roughness² — `ggxDiso` at its call site, the rest internally — and then squares
 α again inside the Trowbridge-Reitz denominator:
@@ -37,8 +52,7 @@ copy:
 
 {{cite shaders/includes/brdf/brdf_ggx.glsl "return a2 / max(denom, EPSILON);"}}
 
-and the copy the raygens call at bounce 0 and then re-type by hand at every bounce
-after:
+and the copy the raygens call at every bounce:
 
 {{cite shaders/includes/material/ggx_aniso.glsl "return a2 / (3.14159265 * denom * denom + 0.0001);"}}
 
@@ -162,13 +176,14 @@ is dimmer in the deferred preview than in the path-traced frame.
 
 ## The epsilon that eats the highlight
 
-Those twenty-four D expressions guard against a vanishing denominator in four
+Those four D expressions guard against a vanishing denominator in four
 different ways, and only two of them are floors. `distributionGGX` floors the
 finished denominator, `max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.
 
 {{cite shaders/includes/common/constants.glsl "#define EPSILON       1e-6"}}
 
-`ggxD_anisoOrIso`'s isotropic branch and all twenty inline raygen copies *add*
+`ggxDisoShaded` — which is both `ggxD_anisoOrIso`'s isotropic branch and every
+D the three raygens compute — *adds*
 10⁻⁴. `ggxDiso` adds nothing — it floors α upstream instead, which is the one
 arrangement that costs no mass. `D_ClearCoat` guards nothing at all — harmless
 only because nothing includes the file it sits in.
@@ -309,14 +324,16 @@ call: `getRoughnessMipLevel` as a literal `roughness * 9.0`,
 
 {{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0;"}}
 
-Prune by grepping the formula, not only the name — the twenty-four-copy count at
-the top of this page is what that grep returns.
+Prune by grepping the formula, not only the name. That grep is what found the
+twenty-one inline D copies the raygens used to carry, and it is also what missed
+one of them for as long as it was run for a single spelling of the temporaries.
 
 ## Contracts
 
 - `geometrySmithCorrelated` returns a visibility term with $1/4(n\cdot\omega_o)(n\cdot\omega_i)$ folded in, so `evaluateSpecularBRDF` must return `D * V * F` with no denominator. Adding one divides twice.
 - Both stacks floor roughness at 0.04 before shading. Lowering that floor does not sharpen the highlight — it drives D further into its epsilon guard.
-- `ggxD_anisoOrIso`, `ggxDiso` and `smithG1GGX` must all keep α = roughness². Changing one without the others biases the MIS estimator silently.
+- `ggxDisoShaded`, `ggxDiso` and `smithG1GGX` must all keep α = roughness². Changing one without the others biases the MIS estimator silently.
+- `ggxDisoShaded` is the *shaded* D and `ggxDiso` the *density*. Six raygen call sites nonetheless feed `ggxDisoShaded`'s value into `pdf_spec = D·n·ω_h / 4(ω_o·ω_h)` and on into `specLastBsdfPdf`. That predates the deduplication — collecting the copies into one function is what made it visible — and changing it moves pixels.
 - `ggxD_anisoOrIso` and `ggxDiso` are *not* the same D, and have not been since `9e2d0b4`. Anywhere one quantity is computed on both sides of a MIS weight, the same one must be called on both sides — `pt_raygen_realtime.rgen`'s env-IS `pdfSpecMIS` and its VNDF `specLastBsdfPdf` are exactly that pair, and both call `ggxDiso`.
 - The three *shipped* isotropic D guards — 10⁻⁶ floored on the denominator, 10⁻⁴ added to it, and an α floor that adds nothing — normalise at roughness 0.16, 0.4, and everywhere, respectively. They are not interchangeable, and editing one changes which existing renders it matches.
 - The anisotropic branch is not energy-matched to its own isotropic branch and is off by default. `--aniso=` renders are not radiometrically comparable to isotropic ones.

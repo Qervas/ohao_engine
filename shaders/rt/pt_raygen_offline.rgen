@@ -420,10 +420,7 @@ void main() {
                     // matching skin index of refraction 1.4.
                     if (pc.tuning.w > 0.001 && metallic < 0.5) {
                         float rSkin   = 0.3;
-                        float aSkin   = rSkin * rSkin;
-                        float a2Skin  = aSkin * aSkin;
-                        float denomSk = NdotH * NdotH * (a2Skin - 1.0) + 1.0;
-                        float DSkin   = a2Skin / (3.14159 * denomSk * denomSk + 1e-4);
+                        float DSkin   = ggxDisoShaded(NdotH, rSkin);
                         float kSkin   = (rSkin + 1.0) * (rSkin + 1.0) / 8.0;
                         float GSkin   = (NdotL / (NdotL * (1.0 - kSkin) + kSkin))
                                       * (NdotV / (NdotV * (1.0 - kSkin) + kSkin));
@@ -746,10 +743,7 @@ void main() {
                         float NdotV = max(dot(bN, V), 0.001);
                         float VdotH = max(dot(V, H), 0.001);
 
-                        float a = bRoughness * bRoughness;
-                        float a2 = a * a;
-                        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                        float D = a2 / (3.14159 * denom * denom + 0.0001);
+                        float D = ggxDisoShaded(NdotH, bRoughness);
 
                         vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
 
@@ -796,10 +790,7 @@ void main() {
                         float NdotH = max(dot(bN, H), 0.001);
                         float NdotV = max(dot(bN, V), 0.001);
                         float VdotH = max(dot(V, H), 0.001);
-                        float a = bRoughness * bRoughness;
-                        float a2 = a * a;
-                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        float D = ggxDisoShaded(NdotH, bRoughness);
                         vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
                         float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
                         float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
@@ -871,10 +862,7 @@ void main() {
                         vec3 Hspec = normalize(-inDir + specRayDir);
                         float NdotH_s = max(dot(bN, Hspec), 0.001);
                         float VdotH_s = max(dot(-inDir, Hspec), 0.001);
-                        float as = bRoughness * bRoughness;
-                        float as2 = as * as;
-                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
-                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float D_s = ggxDisoShaded(NdotH_s, bRoughness);
                         float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
                         specLastBsdfPdf = specProb * pdf_spec;
                         specLastBounceWasDelta = false;
@@ -1054,10 +1042,7 @@ void main() {
                         float NdotV = max(dot(bN, V), 0.001);
                         float VdotH = max(dot(V, H), 0.001);
 
-                        float a = bRoughness * bRoughness;
-                        float a2 = a * a;
-                        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                        float D = a2 / (3.14159 * denom * denom + 0.0001);
+                        float D = ggxDisoShaded(NdotH, bRoughness);
 
                         vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
 
@@ -1104,10 +1089,7 @@ void main() {
                         float NdotH = max(dot(bN, H), 0.001);
                         float NdotV = max(dot(bN, V), 0.001);
                         float VdotH = max(dot(V, H), 0.001);
-                        float a = bRoughness * bRoughness;
-                        float a2 = a * a;
-                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        float D = ggxDisoShaded(NdotH, bRoughness);
                         vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
                         float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
                         float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
@@ -1179,10 +1161,7 @@ void main() {
                         vec3 Hspec = normalize(-inDir + diffRayDir);
                         float NdotH_s = max(dot(bN, Hspec), 0.001);
                         float VdotH_s = max(dot(-inDir, Hspec), 0.001);
-                        float as = bRoughness * bRoughness;
-                        float as2 = as * as;
-                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
-                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float D_s = ggxDisoShaded(NdotH_s, bRoughness);
                         float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
                         diffLastBsdfPdf = specProb * pdf_spec;
                         diffLastBounceWasDelta = false;

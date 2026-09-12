@@ -28,13 +28,46 @@ void worldUpTangent(vec3 n, out vec3 t, out vec3 b) {
     b = cross(n, t);
 }
 
+// The epsilon-clamped isotropic GGX D. THIS IS THE SHADED VALUE, NOT A DENSITY
+// -- see the long note above ggxDiso below for why the two are not
+// interchangeable and what happens when one MIS partition uses both.
+//
+// It is a separate function only because it had been hand-inlined twenty-two
+// times: once here, as ggxD_anisoOrIso's isotropic branch, and twenty-one
+// times across shaders/rt/pt_raygen{,_offline,_realtime}.rgen (6, 7 and 8
+// copies respectively), in four spellings
+// that differed in the name of the temporary (`denom` vs `denomGGX` vs
+// `denomSk`), in the epsilon's spelling (`0.0001` vs `1e-4` -- the same
+// float32), and in the constant used for pi. Thirteen of those copies wrote
+// `OHAO_PI` (3.14159265358979) and eight wrote `3.14159`, which is NOT the
+// same float32: db0f4940 against d00f4940, 8.3e-7 apart relatively. Routing
+// all of them here leaves the thirteen bit-identical and moves the eight onto
+// the more accurate constant -- a change of at most 8.3e-7 relative in D,
+// which is ~1/4700th of an 8-bit quantisation step at mid-grey.
+//
+// `alpha` here is roughness^2, matching ggxDiso's convention, so this is
+// exactly `ggxDiso(NdotH, roughness*roughness)` except for the clamp: this
+// adds 0.0001 to the denominator where ggxDiso floors alpha^2 at 1e-8 and adds
+// nothing. At roughness 0.15 that epsilon suppresses the result by ~125x.
+//
+// KNOWN, AND DELIBERATELY NOT CHANGED HERE: six of the twenty-one raygen call
+// sites use the value this returns as a PROBABILITY DENSITY --
+// `pdf_spec = D_s * NdotH_s / (4 * VdotH_s + 1e-4)`, which becomes
+// `specLastBsdfPdf`, one side of a balance heuristic. That is the exact
+// mistake the note above ggxDiso describes, and it predates this
+// deduplication; collecting the copies here is what makes it visible. Fixing
+// it changes pixels and needs its own golden-image pass.
+float ggxDisoShaded(float NdotH, float roughness) {
+    float a     = roughness * roughness;
+    float a2    = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265 * denom * denom + 0.0001);
+}
+
 float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
                       float anisotropy, float rotation) {
     if (anisotropy < 0.001) {
-        float a     = roughness * roughness;
-        float a2    = a * a;
-        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-        return a2 / (3.14159265 * denom * denom + 0.0001);
+        return ggxDisoShaded(NdotH, roughness);
     }
     vec3 T, B;
     worldUpTangent(N, T, B);
