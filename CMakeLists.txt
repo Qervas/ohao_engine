@@ -154,10 +154,11 @@ if(BUILD_ENGINE_TESTS)
     add_subdirectory(tests/engine)
 endif()
 
-# Differentiable renderer tests
-option(BUILD_DIFF_TESTS "Build differentiable renderer tests" ON)
-if(BUILD_DIFF_TESTS)
-    message(STATUS "Building differentiable renderer tests")
-    add_subdirectory(tests/diff)
-endif()
+# The differentiable renderer lives in its own repository now (../ohao_diff).
+# It vendors a handful of files from here -- the allocator, EnvCDF,
+# RTAccelerationStructure and four shader includes carrying the shared
+# microfacet and environment-sampling math. Those copies are checked against
+# this tree by ohao_diff's tools/check_vendor_drift.sh; if you change
+# shaders/includes/material/ggx_aniso.glsl, shaders/includes/rt/*.glsl or
+# shaders/includes/pbr_unpack.glsl, run it there.
 

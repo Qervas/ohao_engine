@@ -98,3 +98,4 @@ tools/inverse_c1/checkpoints/**/history.json
 # Shelved local work (SVBRDF lab, render outputs, Godot-era editor).
 # Not part of the engine; kept out of git deliberately.
 _backup/
+smoke_test.png

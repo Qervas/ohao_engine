@@ -1,6 +1,5 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
-#include "render/diff/diff_availability.hpp"
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "scene/actor/actor.hpp"
@@ -1077,25 +1076,12 @@ nlohmann::json DeferredRenderer::getPipelineInfo() const {
     passes.push_back(passEntry("PostProcessing",    "graphics", 7,  m_postProcessing != nullptr, true));
     passes.push_back(passEntry("GizmoPass",         "graphics", 8,  m_gizmoPass != nullptr,      m_gizmoEnabled));
 
-    // The differentiable renderer's device requirements, reported alongside
-    // the passes because it is the same question a caller is already asking
-    // here: what can this build actually run? Cheap -- two feature queries --
-    // and it is the engine's one call into ohao_diff, which is what makes
-    // that library linked by something that is not a test.
-    const DiffAvailability diff = queryDiffAvailability(m_physicalDevice);
-
     return {
         {"pass_count",  passes.size()},
         {"passes",      passes},
         {"resolution",  {m_width, m_height}},
         {"delta_time",  m_deltaTime},
         {"total_time",  m_totalTime},
-        {"differentiable", {
-            {"available",                  diff.available},
-            {"ray_query",                  diff.rayQuery},
-            {"buffer_float32_atomic_add",  diff.bufferFloat32AtomicAdd},
-            {"reason",                     diff.reason},
-        }},
     };
 }
 

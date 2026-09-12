@@ -4,6 +4,5 @@ add_subdirectory(gpu)
 add_subdirectory(render)
 add_subdirectory(audio)
 add_subdirectory(physics)
-add_subdirectory(diff)
 
 # Engine builds as static libraries. Link against them from examples/ or tests/.

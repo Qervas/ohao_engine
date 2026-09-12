@@ -26,7 +26,6 @@
 #include "physics/world/physics_world.hpp"
 #include "render/deferred/post_processing_pipeline.hpp"
 #include "render/graph/resource_handle.hpp"
-#include "render/diff/diff_availability.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_meta.hpp"
@@ -700,83 +699,7 @@ void runMetaTests() {
 }
 
 // =============================================================================
-// SECTION 5 — DIFFERENTIABLE RENDERER AVAILABILITY
-// =============================================================================
-//
-// THE ENGINE'S ONE CALL INTO ohao_diff, tested from the engine's side. What
-// this is really gating is the LINK: until render/diff/diff_availability.cpp
-// existed, every line of the differentiable renderer was reached only by its
-// own tests, and a subsystem in that state is not integrated however good
-// those tests are. If ohao_renderer ever stops linking ohao_diff, this file
-// stops compiling.
-
-static void runDiffAvailabilityTests() {
-    std::cout << "\n[Differentiable renderer]\n";
-
-    TEST_BEGIN("availability on a null device reports rather than crashes");
-    {
-        // An engine may well ask before it has picked a device, and a
-        // capability probe that requires the thing it is probing for is not
-        // much of a probe.
-        const ohao::DiffAvailability none = ohao::queryDiffAvailability(VK_NULL_HANDLE);
-        EXPECT(!none.available, "null device must not report available");
-        EXPECT(!none.rayQuery && !none.bufferFloat32AtomicAdd, "no features from no device");
-        EXPECT(!none.reason.empty(), "an unavailable answer must say why");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("availability on this machine's devices is self-consistent");
-    {
-        // A REAL DEVICE, when there is one. The assertion is deliberately NOT
-        // "the differentiable renderer is available here" -- that is a fact
-        // about this machine and would make the suite fail on a laptop rather
-        // than on a defect. What must hold everywhere is that the answer is
-        // internally consistent: available exactly when both features are
-        // present, and a reason given exactly when it is not.
-        VkApplicationInfo app{};
-        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        app.pApplicationName = "ohao_engine_tests";
-        app.apiVersion = VK_API_VERSION_1_2;
-        VkInstanceCreateInfo create{};
-        create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        create.pApplicationInfo = &app;
-
-        VkInstance instance = VK_NULL_HANDLE;
-        if (vkCreateInstance(&create, nullptr, &instance) != VK_SUCCESS) {
-            std::cout << "(no Vulkan instance on this machine -- skipped) ";
-            TEST_PASS();
-            return;
-        }
-
-        uint32_t deviceCount = 0;
-        vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
-        if (deviceCount == 0) {
-            std::cout << "(no Vulkan devices -- skipped) ";
-            vkDestroyInstance(instance, nullptr);
-            TEST_PASS();
-            return;
-        }
-        std::vector<VkPhysicalDevice> devices(deviceCount);
-        vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-
-        bool consistent = true;
-        int availableCount = 0;
-        for (VkPhysicalDevice device : devices) {
-            const ohao::DiffAvailability a = ohao::queryDiffAvailability(device);
-            if (a.available != (a.rayQuery && a.bufferFloat32AtomicAdd)) consistent = false;
-            if (a.available != a.reason.empty()) consistent = false;
-            if (a.available) ++availableCount;
-        }
-        vkDestroyInstance(instance, nullptr);
-
-        std::cout << "(" << availableCount << " of " << deviceCount << " device(s) can run it) ";
-        EXPECT(consistent, "available must equal both features, and a reason given iff not");
-        TEST_PASS();
-    }
-}
-
-// =============================================================================
-// SECTION 6 — THE DEFERRED PIPELINE, HEADLESS
+// SECTION 5 — THE DEFERRED PIPELINE, HEADLESS
 // =============================================================================
 //
 // ROADMAP ITEM 3 (spec §10.1, renderer fitting) NEEDS TO RENDER THE DEFERRED
@@ -1346,7 +1269,6 @@ int main() {
     runCommandHistoryTests();
     runSceneTests();
     runMetaTests();
-    runDiffAvailabilityTests();
     runHeadlessDeferredTests();
     runHeadlessPathTracerTests();
     runHeadlessDeferredRenderTests();

@@ -185,15 +185,21 @@ bool VulkanRenderer::createLogicalDevice() {
     }
 #endif
 
-    // --- Differentiable renderer subsystem (Stage 0a): optional capabilities ---
-    // Probed inline rather than by calling ohao::diff::queryDeviceCaps():
-    // ohao_diff links PUBLIC against ohao_gpu_vulkan (this target), so calling
-    // into ohao_diff from here would create a target_link_libraries cycle
-    // (ohao_gpu_vulkan -> ohao_diff -> ohao_gpu_vulkan). This block duplicates
-    // the same extension+feature check as ohao::diff::queryDeviceCaps() in
-    // ohao/diff/device_caps.cpp -- keep the two in sync if either changes.
-    // A device lacking these still creates successfully; it simply cannot run
-    // the differentiable renderer.
+    // --- Ray query + buffer float atomics: optional capabilities ---
+    //
+    // Enabled when present because the RT path and any compute consumer that
+    // scatters by atomicAdd want them; a device lacking either still creates
+    // successfully and simply cannot run those.
+    //
+    // THIS USED TO SAY it duplicated ohao::diff::queryDeviceCaps() and to
+    // keep the two in sync, because calling into ohao_diff from here would
+    // have made a link cycle (ohao_gpu_vulkan -> ohao_diff ->
+    // ohao_gpu_vulkan). The differentiable renderer now lives in its own
+    // repository (../ohao_diff) and still carries that check, so the
+    // duplication is real but is no longer something this file can be kept in
+    // sync with by editing both in one commit. If the extension or feature
+    // names below change, ohao_diff's device_caps.cpp is the other place that
+    // reads them.
     bool diffRayQuerySupported = false;
     bool diffBufferAtomicAddSupported = false;
     {
