@@ -42,9 +42,45 @@ def downscale(im):
     return im
 
 
+# Manifests name the binary the way a single-config generator lays it out
+# (./build/cornell_box). A multi-config generator (Visual Studio, Xcode) puts it
+# under a per-configuration subdirectory with a platform suffix instead, so the
+# literal path in the manifest does not exist and subprocess raises
+# FileNotFoundError before any comparison happens. Resolving here keeps the
+# manifest generator-agnostic rather than encoding one layout into the corpus.
+_CONFIG_DIRS = ("", "Release", "RelWithDebInfo", "Debug")
+_SUFFIXES = ("", ".exe")
+
+
+def resolve_exe(argv0):
+    if os.path.exists(argv0):
+        return argv0
+    head, tail = os.path.split(argv0)
+    for cfg in _CONFIG_DIRS:
+        for sfx in _SUFFIXES:
+            cand = os.path.join(head, cfg, tail + sfx)
+            if os.path.exists(cand):
+                return cand
+    return argv0          # let subprocess report it, with the manifest's own spelling
+
+
 def render(command, out_path):
-    cmd = command.replace("{out}", out_path)
-    r = subprocess.run(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Split FIRST, substitute after. shlex.split defaults to POSIX mode, where a
+    # backslash is an escape character: passing an already-substituted Windows
+    # path through it silently turns
+    #   C:\Users\me\Temp\x.png  ->  C:UsersmeTempx.png
+    # and the renderer then writes that as a relative filename in the current
+    # directory. The harness saw no file at the path it asked for and reported
+    # "render produced no output", which reads like a renderer failure and is
+    # not one -- it left two stray PNGs in the repository root instead. Keeping
+    # the path out of shlex entirely is the fix.
+    argv = [a.replace("{out}", out_path) for a in shlex.split(command)]
+    cmd = " ".join(argv)
+    argv[0] = resolve_exe(argv[0])
+    try:
+        r = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        return f"could not launch {argv[0]!r}: {e}"
     if r.returncode != 0:
         return f"render command failed (exit {r.returncode}): {cmd}"
     if not os.path.exists(out_path):

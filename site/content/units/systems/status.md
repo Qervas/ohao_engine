@@ -235,13 +235,26 @@ it names what it cannot verify.
   {{cite examples/model_viewer.cpp "at 4K OOMs on 8 GiB cards"}}
 - Manifest commands are not shell strings. They are `shlex`-tokenised into an
   argv vector and spawned with no shell, so a pipe, glob, redirect or `$VAR`
-  written into a manifest command reaches the binary as a literal argument.
-  {{cite tests/golden/render_golden.py "subprocess.run(shlex.split(cmd)"}}
-- Nor does the harness ever `chdir`: the manifest's relative `./build/cornell_box` and
+  written into a manifest command reaches the binary as a literal argument. The
+  tokenisation runs on the manifest's own template and `{out}` is substituted
+  into the resulting *tokens*, never before them — `shlex` defaults to POSIX
+  mode, where a backslash is an escape character, so substituting a Windows temp
+  path first turned `C:\Users\…\x.png` into `C:Users…x.png`. The renderer then
+  wrote that as a relative filename in the current directory, the harness found
+  nothing at the path it had asked for, and every scene reported *"render
+  produced no output"* — which reads as a renderer failure and was not one. It
+  also left two mis-named PNGs in the repository root.
+  {{cite tests/golden/render_golden.py "for a in shlex.split(command)"}}
+- The harness never `chdir`s: the manifest's relative `./build/cornell_box` and
   `tests/golden/*.png` resolve against the caller's cwd, and repo-root comes from
-  the hook `cd`-ing to the worktree top first. Invoke the harness by hand from
-  anywhere else and the missing executable escapes `render()` as an uncaught
-  `FileNotFoundError`, not a scene FAIL.
+  the hook `cd`-ing to the worktree top first. The executable itself is resolved
+  rather than taken literally — a multi-config generator (Visual Studio, Xcode)
+  writes `build/Release/cornell_box.exe`, which no manifest spelling of
+  `./build/cornell_box` will ever name — so the corpus stays generator-agnostic
+  instead of encoding one layout into it. A binary that genuinely is absent now
+  escapes as a scene FAIL naming the path it tried, not as an uncaught
+  `FileNotFoundError` out of `render()`.
+  {{cite tests/golden/render_golden.py "def resolve_exe(argv0):"}}
   {{cite .githooks/pre-push "git rev-parse --show-toplevel"}}
 - No `STATUS.md` claim outside the two golden scenes is guarded by anything that
   runs unprompted. Read ✅ on those rows as exactly what the header promises —
