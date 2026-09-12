@@ -10,6 +10,7 @@
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
 #include "diff/wavefront/gradient_frame.hpp"
+#include "diff/wavefront/gradient_render.hpp"
 #include "diff/wavefront/path_state_layout.hpp"
 
 #include <gtest/gtest.h>
@@ -1901,4 +1902,60 @@ TEST(DiffGradientFrame, SamplingOverrideIsLeftAtItsSentinelWhenNotFrozen) {
     // 6.3's fixed-direction adjoint.
     EXPECT_FLOAT_EQ(frozen.albedo, 0.625f);
     EXPECT_FLOAT_EQ(frozen.roughness, 0.75f);
+}
+
+// ===========================================================================
+// GradientResources -- the completeness check, without a device
+// ===========================================================================
+
+TEST(DiffGradientRender, ResourcesAreIncompleteUntilEveryHandleIsPresent) {
+    ohao::diff::WavefrontBuffers buffers;
+    ohao::diff::GradientStages stages;
+    ohao::diff::ScatterSinks sinks;
+
+    ohao::diff::GradientResources r;
+    EXPECT_FALSE(r.valid()) << "a default-constructed GradientResources must not be usable";
+
+    // Filled one at a time, and NOT valid until the last one lands. A check
+    // that only tested the complete case would pass for `return true;`.
+    r.buffers = &buffers;
+    EXPECT_FALSE(r.valid());
+    r.stages = &stages;
+    EXPECT_FALSE(r.valid());
+    r.sinks = &sinks;
+    EXPECT_FALSE(r.valid());
+    // Non-null handles, as plain integers cast to the dispatchable-handle
+    // type. Nothing dereferences them here: valid() is a presence check, and
+    // the point of the test is that presence is what it checks.
+    r.scene.tlas = reinterpret_cast<VkAccelerationStructureKHR>(static_cast<std::uintptr_t>(1));
+    EXPECT_FALSE(r.valid());
+    r.scene.vertexBuffer = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(2));
+    EXPECT_FALSE(r.valid());
+    r.scene.indexBuffer = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(3));
+    EXPECT_FALSE(r.valid()) << "the two attachment buffers are still missing";
+    // BOTH ATTACHMENTS ARE REQUIRED even when the scene uses neither. A
+    // statically-used binding needs a descriptor whether or not the branch
+    // that reads it ever runs, so "no emission texture" is a one-float
+    // placeholder buffer and not a null handle.
+    r.emissionTexture = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(4));
+    EXPECT_FALSE(r.valid());
+    r.adjointSeed = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(5));
+    EXPECT_TRUE(r.valid());
+}
+
+TEST(DiffGradientRender, RecordingRefusesRatherThanRecordingHalfARun) {
+    // THE REFUSALS COME BEFORE ANY vkCmd CALL, which is what makes them
+    // testable with no device at all -- and is also the property that
+    // matters: a function that recorded the buffer zero and then discovered
+    // its pipelines were missing would leave a command buffer that is
+    // neither a run nor empty.
+    ohao::diff::GradientArena arena;
+    ohao::diff::GradientFrame frame;
+    frame.width = 64u;
+    frame.height = 8u;
+    frame.bounces = 1u;
+
+    const ohao::diff::GradientResources empty;
+    EXPECT_FALSE(ohao::diff::recordGradientRun(VK_NULL_HANDLE, ohao::diff::GradientRun::Forward,
+                                               frame, empty, arena));
 }

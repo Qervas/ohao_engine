@@ -14,6 +14,8 @@
 // citations now name this file.
 #pragma once
 
+#include "diff/wavefront/gradient_frame.hpp"
+
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -30,18 +32,16 @@ namespace ohao::diff::probe_scene {
 /// done here because this probe's expected values (throughput, per-bounce
 /// PathRng parity, live counts) are all calibrated to 512 paths at the
 /// current resolution.
-constexpr uint32_t kFusedLoopGenerateLocalY = 8;
+constexpr uint32_t kFusedLoopGenerateLocalY = ohao::diff::kGenerateLocalY;
 
 /// wf_generate.comp's local_size_X, which is a DIFFERENT number from
-/// local_size_y even though both are 8 today. The two were one constant
-/// until a review pointed out that `kFusedLoopGenerateLocalY` was being used
-/// as the group-count divisor for the X axis (`width / ...`) as well as the
-/// height requirement -- so a change to local_size_x alone would have left
-/// the dispatch covering fewer pixel columns than the image has, silently,
-/// with the uncovered paths never generated and every downstream count
-/// quietly short. Split so that each axis's constant is used only for its
-/// own axis.
-constexpr uint32_t kFusedLoopGenerateLocalX = 8;
+/// local_size_y even though both are 8 today -- the split, and the review
+/// finding behind it, are now written up at kGenerateLocalX in
+/// ohao/diff/wavefront/gradient_frame.hpp. BOTH constants alias the
+/// library's: they describe the SHADER's workgroup, which every caller needs
+/// and not only this probe, and two independent spellings of one shader fact
+/// is the drift this file spent a review learning to avoid.
+constexpr uint32_t kFusedLoopGenerateLocalX = ohao::diff::kGenerateLocalX;
 
 /// Half-extent of the closed box the loop bounces inside. Small enough that
 /// its space diagonal is far inside wf_intersect.comp's tMax, large enough

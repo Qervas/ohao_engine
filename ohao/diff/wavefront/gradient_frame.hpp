@@ -58,6 +58,25 @@ struct WavefrontScatterMaterial {
     float specularWeight{0.0f};
 };
 
+/// wf_generate.comp's workgroup size. TWO CONSTANTS, not one, even though
+/// both are 8 today: they were a single constant until a review found the Y
+/// one being used as the group-count divisor for the X axis as well as for
+/// the height requirement, so a change to local_size_x alone would have left
+/// the dispatch covering fewer pixel columns than the image has -- silently,
+/// with the uncovered paths never generated and every downstream count
+/// quietly short. Split so each axis's constant is used only for its own
+/// axis.
+inline constexpr std::uint32_t kGenerateLocalX = 8u;
+inline constexpr std::uint32_t kGenerateLocalY = 8u;
+
+/// The X group count for a film `width` wide. The dispatch is
+/// (groupCountX, 1, 1) -- wf_generate.comp covers kGenerateLocalY rows per
+/// group in Y, which is why the film height is pinned to that number rather
+/// than being a second group count.
+[[nodiscard]] constexpr std::uint32_t generateGroupCountX(std::uint32_t width) noexcept {
+    return width / kGenerateLocalX;
+}
+
 /// wf_generate.comp's Push block, 80 bytes.
 ///
 /// The padding is explicit rather than implied by alignment: std430 pads a

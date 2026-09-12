@@ -8,6 +8,7 @@
 
 #include "diff/wavefront/compute_pipeline.hpp"
 #include "diff/wavefront/gradient_frame.hpp"
+#include "diff/wavefront/gradient_render.hpp"
 #include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_loop.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
@@ -507,112 +508,55 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         frame.samplingAlbedo = options.samplingAlbedo;
         frame.samplingMaterial = options.samplingMaterial;
 
-        const GenerateCameraPush genPush = generatePush(frame, capacity);
-        generate.setPushConstants(&genPush, sizeof(genPush));
-        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalX});
-
-        WavefrontLoop loop;
-        loop.setGenerate(generate);
-        loop.setPrepareIndirect(prepareIndirect);
-        loop.setIntersect(intersect);
+        // The stage configuration, both loop configurations and the whole
+        // recorded body are ohao::diff::recordGradientRun's now. What is
+        // left here is what a TEST does and an ENGINE does not: submit each
+        // run on its own and read the result back before the next.
+        GradientResources resources;
+        resources.buffers = &buffers;
+        resources.stages = &st;
+        resources.sinks = &sinks;
+        resources.scene = GradientStages::Scene{sceneTlas, sceneVertexBuffer, sceneIndexBuffer};
+        resources.emissionTexture = emissionTexBuffer.buffer;
+        resources.adjointSeed = adjointSeedBuffer.buffer;
 
         for (int variant = 0; ok && variant < 2; ++variant) {
             const bool isReplay = (variant == 1);
             ScatterSinkSet& s = *sinkSets[variant];
-            loop.setScatter(*scatterStages[variant]);
+            const GradientRun run = isReplay ? GradientRun::Replay : GradientRun::Forward;
 
-            // BOTH configurations, and the assertion that they differ only
-            // where they are meant to. steeringFieldsAgree is cheap and is
-            // checked HERE rather than only in the unit tests because this is
-            // where a future edit would introduce the split: a field pushed
-            // to one run and not the other makes the replay run the
-            // derivative of a path the forward run did not take, and every
-            // check that compares the two against each other would still
-            // pass, because both sides would move.
-            const WavefrontLoop::Config loopConfig =
-                loopConfigFor(frame, isReplay ? GradientRun::Replay : GradientRun::Forward);
-            if (!steeringFieldsAgree(loopConfigFor(frame, GradientRun::Forward),
-                                     loopConfigFor(frame, GradientRun::Replay))) {
+            // ONE SUBMIT PER RUN, which is this function's shape and not the
+            // library's: the film has to be read back between them, because
+            // several callers derive the replay run's adjoint seed from it on
+            // the host. An engine records both into one frame's command
+            // buffer and submits once -- which is exactly why the recording
+            // moved out and the submitting did not.
+            runImmediate([&](VkCommandBuffer cmd) {
+                if (!recordGradientRun(cmd, run, frame, resources, arena, !options.accumulate)) {
+                    ok = false;
+                    return;
+                }
+                // Host-read availability for exactly what THIS function maps:
+                // the film, the arena on the replay run, and the vertex trace
+                // when the caller asked for it. Each must be NAMED --
+                // vkQueueWaitIdle does not make writes visible in the host
+                // domain, and a VkBufferMemoryBarrier's memory scope covers
+                // only the buffers it lists.
+                VkBuffer hostRead[3] = {s.film.buffer, VK_NULL_HANDLE, VK_NULL_HANDLE};
+                std::size_t hostReadCount = 1u;
+                if (isReplay) hostRead[hostReadCount++] = arena.buffer();
+                if (!isReplay && options.outForwardTrace != nullptr) {
+                    hostRead[hostReadCount++] = s.trace.buffer;
+                }
+                recordHostReadBarrier(cmd, std::span<const VkBuffer>(hostRead, hostReadCount));
+            });
+            if (!ok) {
                 std::fprintf(stderr,
-                             "[GpuProbeContext] runWavefrontGradientProbe: the forward and replay "
-                             "loop configurations disagree on a field that STEERS THE "
-                             "TRAVERSAL, so the two instantiations would not walk one path and "
-                             "the gradient would be the derivative of a render that did not "
-                             "happen. See loopConfigFor in ohao/diff/wavefront/gradient_frame.cpp\n");
-                ok = false;
+                             "[GpuProbeContext] runWavefrontGradientProbe: recordGradientRun "
+                             "refused the %s run; its own message above says why\n",
+                             isReplay ? "replay" : "forward");
                 break;
             }
-            loop.setConfig(loopConfig);
-
-            runImmediate([&](VkCommandBuffer cmd) {
-                buffers.zero(cmd);
-
-                // The film is caller-owned and read-modify-written, so it is
-                // zeroed here with its own TRANSFER_WRITE ->
-                // SHADER_READ|SHADER_WRITE barrier.
-                vkCmdFillBuffer(cmd, s.film.buffer, 0, VK_WHOLE_SIZE, 0u);
-                VkBufferMemoryBarrier filmZero{};
-                filmZero.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-                filmZero.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                filmZero.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-                filmZero.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                filmZero.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                filmZero.buffer = s.film.buffer;
-                filmZero.offset = 0;
-                filmZero.size = VK_WHOLE_SIZE;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                                     &filmZero, 0, nullptr);
-
-                // The arena is zeroed on BOTH runs, in the same command
-                // buffer as the loop that follows -- GradientArena::zero
-                // records the fill AND its TRANSFER_WRITE ->
-                // SHADER_READ|SHADER_WRITE barrier, which is exactly the
-                // configuration its own comment says that barrier becomes
-                // load-bearing in.
-                // STAGE 2 TASK 4: skipped when the caller is accumulating a
-                // multi-view batch. The barrier this call also records is
-                // then not recorded either -- which is correct, because
-                // there is no TRANSFER_WRITE to order against: the previous
-                // run's SHADER_WRITE was already ordered to HOST_READ by its
-                // own readback barrier, and this run's atomicAdd is
-                // read-modify-write on the same queue.
-                if (!options.accumulate) arena.zero(cmd);
-
-                const VkBuffer loopExtras[5] = {s.trace.buffer, s.env.buffer, s.nee.buffer,
-                                                s.film.buffer, arena.buffer()};
-                loop.record(cmd, buffers, bounces, loopExtras);
-
-                // Host-read availability for exactly what this function reads
-                // back: the film (mapped) and, on the replay run, the arena
-                // (mapped, through GradientArena::readback). vkQueueWaitIdle
-                // does not make writes visible in the host domain and
-                // vmaInvalidateAllocation covers only the CPU cache side.
-                VkBufferMemoryBarrier toHost[3]{};
-                VkBuffer hostRead[3] = {s.film.buffer, arena.buffer(), VK_NULL_HANDLE};
-                uint32_t hostReadCount = isReplay ? 2u : 1u;
-                // Any host readback must be NAMED in this barrier, not merely
-                // waited for: vkQueueWaitIdle does not make writes visible in
-                // the host domain, and a VkBufferMemoryBarrier's memory scope
-                // covers only the buffers it lists.
-                if (!isReplay && options.outForwardTrace != nullptr) {
-                    hostRead[hostReadCount] = s.trace.buffer;
-                    ++hostReadCount;
-                }
-                for (uint32_t i = 0; i < hostReadCount; ++i) {
-                    toHost[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-                    toHost[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                    toHost[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-                    toHost[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toHost[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toHost[i].buffer = hostRead[i];
-                    toHost[i].offset = 0;
-                    toHost[i].size = VK_WHOLE_SIZE;
-                }
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                     VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, hostReadCount,
-                                     toHost, 0, nullptr);
-            });
 
             if (!isReplay) {
                 m_allocator.invalidateBuffer(s.film);

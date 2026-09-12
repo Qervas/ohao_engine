@@ -54,6 +54,7 @@
 
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/param/param_registry.hpp"
+#include "diff/wavefront/gradient_render.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 
 #include <vulkan/vulkan.h>
@@ -154,6 +155,24 @@ public:
     /// is not. This class deliberately does not choose for you.
     [[nodiscard]] bool recordAdamStep(VkCommandBuffer cmd, ParamId id, VkBuffer values,
                                       const AdamSettings& settings, std::uint32_t stepIndex);
+
+    /// RECORDS one instantiation of the gradient render into `cmd`, against
+    /// THIS renderer's arena. Does not submit.
+    ///
+    /// A thin forward to ohao::diff::recordGradientRun plus the state check:
+    /// the recording needs the ARENA, not the registry or the optimiser, so
+    /// it is a free function that a caller holding a bare GradientArena can
+    /// also reach -- every probe here does. What this method adds is the
+    /// refusal to record against an arena that does not exist yet, which is
+    /// the facade's job and not the free function's.
+    ///
+    /// See ohao/diff/wavefront/gradient_render.hpp for what is recorded, for
+    /// why `zeroArena` false is the multi-view batch, and for the
+    /// requirement that GradientStages::bindAll has already run.
+    [[nodiscard]] bool recordGradientRun(VkCommandBuffer cmd, GradientRun run,
+                                         const GradientFrame& frame,
+                                         const GradientResources& resources,
+                                         bool zeroArena = true);
 
     [[nodiscard]] State state() const noexcept { return m_state; }
     [[nodiscard]] bool ready() const noexcept { return m_state == State::Ready; }

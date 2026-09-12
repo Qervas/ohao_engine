@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <string>
 
 namespace ohao::diff {
@@ -186,6 +187,19 @@ bool DiffRenderer::recordAdamStep(VkCommandBuffer cmd, ParamId id, VkBuffer valu
     m_adamStage.setGroupCount(WavefrontStage::Fixed{(param->floatCount + 63u) / 64u});
     m_adamStage.record(cmd);
     return true;
+}
+
+bool DiffRenderer::recordGradientRun(VkCommandBuffer cmd, GradientRun run,
+                                     const GradientFrame& frame,
+                                     const GradientResources& resources, bool zeroArena) {
+    if (m_state != State::Ready) {
+        std::fprintf(stderr,
+                     "[DiffRenderer] recordGradientRun refused: state is %s, not Ready. The arena "
+                     "this run scatters into does not exist until build() has run\n",
+                     stateName(m_state));
+        return false;
+    }
+    return ohao::diff::recordGradientRun(cmd, run, frame, resources, m_arena, zeroArena);
 }
 
 bool DiffRenderer::zeroGradients(VkCommandBuffer cmd) {
