@@ -1967,3 +1967,147 @@ TEST(DiffGradientRender, RecordingRefusesRatherThanRecordingHalfARun) {
     EXPECT_FALSE(ohao::diff::recordGradientRun(VK_NULL_HANDLE, ohao::diff::GradientRun::Forward,
                                                frame, empty, arena));
 }
+
+// ===========================================================================
+// THE GGX NORMAL DISTRIBUTION, AS TWO PIPELINES COMPUTE IT
+// ===========================================================================
+//
+// Item 7's "unify the BSDF includes with the production path tracer" turned
+// out not to be a tidying job, and this test is what that investigation left
+// behind so the finding cannot be lost.
+//
+// WHAT IS ALREADY UNIFIED. shaders/includes/diff/bsdf.glsl does not
+// re-implement the microfacet terms: D, the Smith auxiliaries, the VNDF
+// sampler and the tangent basis all come from
+// shaders/includes/material/ggx_aniso.glsl. That claim was in its header and
+// it holds -- `ggxDiso`, `smithG1GGX`, `ggxBuildBasis` and `sampleGGXVNDF`
+// are called by name.
+//
+// WHAT IS NOT. shaders/rt/pt_raygen.rgen INCLUDES the same header, calls
+// `ggxD_anisoOrIso` in three places, and then writes D out by hand in four
+// others:
+//
+//     float a = roughness * roughness;  float a2 = a * a;
+//     float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+//     float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+//
+// THE ALPHA CONVENTION MATCHES -- both reach a2 = roughness^4 -- so at a
+// glance this is the same formula and the substitution looks free. IT IS NOT.
+// The hand-written form adds 0.0001 to the DENOMINATOR, and at N.H = 1 the
+// denominator is a2 itself, so the epsilon dominates the moment a2^2 falls
+// below it. That is not a guard against division by zero; it is a ceiling on
+// the specular peak, and it bites exactly where a highlight lives.
+//
+// So the two pipelines disagree about D for every material smoother than
+// roughly roughness 0.3, and THIS TEST PINS THAT, in both directions: the
+// agreement where they agree, and the divergence where they do not. Neither
+// half is assumed.
+//
+// WHY THIS IS THE DIFFERENTIABLE RENDERER'S PROBLEM and not just the path
+// tracer's: spec 10.1's renderer fitting optimises the deferred pipeline to
+// match the PATH TRACER. If the path tracer's own D is peak-clamped, the
+// target is not the model anyone thinks it is, and a fit that succeeds has
+// fitted the clamp.
+//
+// NOT FIXED HERE, deliberately. Substituting `ggxDiso` into those four sites
+// would brighten and tighten every highlight on a smooth material in the
+// production path tracer -- arguably the correct image, and a large visual
+// change that needs a golden-image regression this module cannot run. It is
+// the renderer's call, not this module's.
+
+namespace {
+
+constexpr double kGgxPi = 3.14159265358979;
+
+/// shaders/includes/material/ggx_aniso.glsl's `ggxDiso`, transcribed.
+/// `alpha` is roughness^2, the convention that file shares with
+/// sampleGGXVNDF and that diff/bsdf.glsl's header states.
+double ggxDisoTranscribed(double nDotH, double alpha) {
+    const double a2 = std::fmax(alpha * alpha, 1e-8);
+    const double denom = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    return a2 / (kGgxPi * denom * denom);
+}
+
+/// shaders/rt/pt_raygen.rgen's four hand-written copies, transcribed. Takes
+/// ROUGHNESS rather than alpha, because that is what those sites have in
+/// hand -- and squaring it twice is how they reach the same a2.
+double ptRaygenInlinedD(double nDotH, double roughness) {
+    const double a = roughness * roughness;
+    const double a2 = a * a;
+    const double denom = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    return a2 / (kGgxPi * denom * denom + 0.0001);
+}
+
+}  // namespace
+
+TEST(DiffGgxPipelineTie, TheAlphaConventionIsTheSameInBoth) {
+    // FIRST, the part that IS shared, because if the alpha convention
+    // differed the divergence below would have a different cause and the
+    // conclusion would be wrong. Both reach a2 = roughness^4: the helper by
+    // squaring an alpha that is already roughness^2, the inlined form by
+    // squaring roughness twice. So feeding the helper alpha = roughness^2
+    // must reproduce the inlined form wherever the epsilon is negligible.
+    for (double roughness : {0.5, 0.7, 0.85, 1.0}) {
+        for (double nDotH : {1.0, 0.99, 0.9, 0.7, 0.5}) {
+            const double helper = ggxDisoTranscribed(nDotH, roughness * roughness);
+            const double inlined = ptRaygenInlinedD(nDotH, roughness);
+            // 1% at these roughnesses. A convention mismatch would be a
+            // factor of roughness^2 or worse, not a percent.
+            EXPECT_NEAR(helper, inlined, 0.01 * helper)
+                << "roughness " << roughness << ", N.H " << nDotH
+                << ": the two pipelines' GGX D disagree where the epsilon cannot matter, so the "
+                   "ALPHA CONVENTION has drifted -- which is a different and worse problem than "
+                   "the epsilon this test is really about";
+        }
+    }
+}
+
+TEST(DiffGgxPipelineTie, TheInlinedCopiesClampTheSpecularPeak) {
+    // THE FINDING, pinned. At N.H = 1 the denominator IS a2, so the 0.0001
+    // the inlined form adds dominates as soon as a2^2 falls below it --
+    // which is roughness^8 < 1e-4, i.e. roughness < 0.32. Below that the
+    // hand-written D is a ceiling rather than a distribution.
+    struct Point {
+        double roughness;
+        double minRatio;  // helper / inlined, at N.H = 1
+    };
+    // PRE-REGISTERED from the derivation, not fitted to the measurement:
+    // at N.H = 1, helper = a2/(pi a2^2) = 1/(pi a2) and inlined ->
+    // a2/1e-4 for small a2, so the ratio -> 1e4/(pi a2^2) = 1e4/(pi r^8).
+    // r = 0.1 gives 3.2e3; r = 0.05 gives 8.1e5; r = 0.2 gives 13.
+    const Point points[3] = {{0.05, 1.0e5}, {0.1, 1.0e3}, {0.2, 5.0}};
+    for (const Point& p : points) {
+        const double helper = ggxDisoTranscribed(1.0, p.roughness * p.roughness);
+        const double inlined = ptRaygenInlinedD(1.0, p.roughness);
+        ASSERT_GT(inlined, 0.0);
+        const double ratio = helper / inlined;
+        EXPECT_GT(ratio, p.minRatio)
+            << "at roughness " << p.roughness << " and N.H = 1, ggxDiso gives " << helper
+            << " and pt_raygen.rgen's inlined form gives " << inlined << " (ratio " << ratio
+            << ").\n"
+               "IF THIS TEST NOW FAILS BECAUSE THE RATIO IS ~1, the four inlined copies in "
+               "shaders/rt/pt_raygen.rgen have been replaced by the shared helper -- which is the "
+               "right end state. Delete this test rather than loosening it, and make sure the "
+               "path tracer's appearance was re-gated: smooth materials get much brighter, "
+               "tighter highlights, and no check in THIS module can see that.";
+    }
+}
+
+TEST(DiffGgxPipelineTie, TheTwoAgreeOnRoughMaterials) {
+    // AND THE OTHER DIRECTION, without which the test above would be
+    // satisfied by the two forms being unrelated. Above roughness 0.4 the
+    // epsilon is negligible and they agree closely -- so the divergence is
+    // localised to smooth materials rather than being a blanket mismatch,
+    // and THAT is what makes "the epsilon is the cause" a measurement.
+    double worstRel = 0.0;
+    for (double roughness : {0.4, 0.5, 0.6, 0.8, 1.0}) {
+        for (double nDotH : {1.0, 0.999, 0.99, 0.95, 0.9, 0.8}) {
+            const double helper = ggxDisoTranscribed(nDotH, roughness * roughness);
+            const double inlined = ptRaygenInlinedD(nDotH, roughness);
+            worstRel = std::fmax(worstRel, std::fabs(helper - inlined) / helper);
+        }
+    }
+    EXPECT_LT(worstRel, 0.06) << "worst relative disagreement at roughness >= 0.4 is " << worstRel
+                              << "; the two forms are supposed to differ only by an epsilon that "
+                                 "is negligible there";
+}

@@ -255,7 +255,27 @@ it matters.
 
 ---
 
-### 3. Renderer fitting (spec §10.1) — ≈ 1 stage
+### 3. Renderer fitting (spec §10.1) — ≈ 1 stage, and MOST OF IT IS NOT THIS MODULE
+
+**MEASURED, not estimated.** Standing the deferred pipeline up headlessly was
+tried: `DeferredRenderer::initialize(device, physicalDevice)` takes bare
+handles and builds its passes with no swapchain, which is promising — but
+linking it into `diff_gpu_probe` fails at link time, because `DeferredRenderer`
+drags in `ohao_scene` → `PhysicsComponent` → `ohao_physics` → Jolt. A
+differentiable-renderer probe cannot acquire a physics backend to render an
+image.
+
+**So the harness belongs in a binary that already links the engine.**
+`tests/engine/engine_tests` links `ohao_renderer`, `ohao_scene`, `ohao_physics`
+and Jolt already; what it lacks is a Vulkan *device* (it now creates an
+instance, for the availability suite). That is the natural home, and standing
+it up — device with the right features, a Scene with geometry and materials, a
+bindless texture manager, a light, render targets, an image readback, and then
+`PathTracer` as the reference target, which check 66 notes has never been stood
+up either — **is the bulk of this item and is engine-harness work, not
+differentiable-renderer work.**
+
+Budget it as such. The FD-over-knobs optimiser on top of it is the small half.
 
 The spec calls this "the distinctive one": register the deferred pipeline's
 hand-tuned knobs — SSAO radius and bias, SSR thickness and step count, the
@@ -397,12 +417,60 @@ Four items, and they are not alike:
       `PinholeProjection` already provides the projection Jacobian and its
       pullback, gated by an FD oracle. A camera parameter is that pullback with
       the camera's own parameters in place of the vertex's.
-- [ ] **Unify the BSDF includes with the production path tracer.** Ordinary, and
-      the riskiest to the existing gates: the differentiable and production BSDF
-      code currently agree by construction because one was written from the
-      other. Unifying them means every interior-gradient check is now testing
-      shared code, so **run the full regression through `probe_normalise.py`
-      before and after**, and expect this to be where a silent drift shows up.
+- [x] **Unify the BSDF includes with the production path tracer.** **INVESTIGATED,
+      AND IT IS NOT A TIDYING JOB. Not done, on purpose — see below.**
+
+      This entry was wrong twice over, and the corrections matter more than the
+      task did.
+
+      **First: the differentiable side is already unified.**
+      `shaders/includes/diff/bsdf.glsl` does not re-implement the microfacet
+      terms — D, the Smith auxiliaries, the VNDF sampler and the tangent basis
+      all come from `shaders/includes/material/ggx_aniso.glsl`, the same file
+      the RT raygen shaders include. Its header claimed that; the claim holds
+      (`ggxDiso`, `smithG1GGX`, `ggxBuildBasis`, `sampleGGXVNDF` are called by
+      name). So "every interior-gradient check is now testing shared code" was
+      already true, and the regression this entry warned about had already
+      happened without incident.
+
+      **Second: the duplication is on the PRODUCTION side, and it is not a
+      duplicate.** `shaders/rt/pt_raygen.rgen` includes `ggx_aniso.glsl`, calls
+      `ggxD_anisoOrIso` in three places, and then writes D out by hand in four
+      others as `a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001)`. The alpha
+      convention matches — both reach `a2 = roughness^4` — so the substitution
+      looks free. **It is not.** At `N·H = 1` the denominator *is* `a2`, so that
+      0.0001 dominates the moment `a2²` drops below it. It is not a
+      division-by-zero guard, it is a **ceiling on the specular peak**, and it
+      bites exactly where a highlight lives:
+
+      | roughness | `ggxDiso` at N·H=1 | inlined | ratio |
+      |---|---|---|---|
+      | 0.05 | 50929.6 | 0.0625 | **815 000** |
+      | 0.10 | 3183.1 | 0.99969 | **3184** |
+      | 0.20 | 198.94 | 14.809 | **13.4** |
+      | 0.40 | 12.434 | 11.858 | 1.05 |
+      | 0.70 | 1.3257 | 1.3250 | 1.001 |
+
+      So the two pipelines disagree about D for **every material smoother than
+      about roughness 0.3**.
+
+      **WHY THIS IS THIS MODULE'S PROBLEM.** Item 3 fits the deferred pipeline
+      to the **path tracer**. If the path tracer's own D is peak-clamped, the
+      target is not the model anyone thinks it is, and a fit that succeeds has
+      fitted the clamp.
+
+      **WHY IT IS NOT FIXED HERE.** Substituting the shared helper would
+      brighten and tighten every highlight on a smooth material in the
+      production path tracer. That is probably the correct image and it is
+      certainly a large visual change, and it needs a golden-image regression
+      this module cannot run — the feasibility probe below shows why. It is the
+      renderer's call, not the differentiable renderer's.
+
+      **PINNED INSTEAD**, so the finding cannot be lost: `DiffGgxPipelineTie`
+      (3 unit tests) asserts the alpha convention IS shared, that the two forms
+      agree to 6% above roughness 0.4, and that they diverge by the derived
+      factors below it. Its failure message says what to do when someone does
+      unify them — delete the test, and re-gate the path tracer's appearance.
 
 ---
 
