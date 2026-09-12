@@ -18,7 +18,7 @@ a gap in memory.
 |---|---|---|
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
-| 3 | Renderer fitting | not started, but **UNBLOCKED and measured**: the deferred pipeline initialises headless (engine_tests 48/48), FD decided; the path-tracer reference is next |
+| 3 | Renderer fitting | not started, but **UNBLOCKED and measured**: BOTH pipelines initialise headless (engine_tests 49/49), FD decided; a scene, a TLAS and a readback remain |
 | 4 | SVBRDF as a client | **its differentiable half is DONE** — the environment is a parameter (binding 14, checks 74–75); the client rewrite itself has no client in version control |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
@@ -305,13 +305,34 @@ standing-up measured, which is what the next step needs:
   a pass whose SPIR-V is not found there fails *non-fatally* — ParticleSystem
   did. Rendering from a test needs the CWD set or the path made absolute.
 * **The RT function pointers do not load** on a device created without the
-  ray-tracing extensions, so the **path-tracer half needs a device built like
-  `GpuProbeContext`s**, not like this one. That is the reference image item 3
-  fits against, so it is the next thing to stand up.
+  ray-tracing extensions, so the path-tracer half needs its own device.
 
-Still to do, in order: a device with the RT extensions; a Scene with geometry,
-materials and a light; a render and an image readback; `PathTracer` as the
-reference; then the FD-over-knobs optimiser, which remains the small half.
+**AND THE PATH TRACER STANDS UP TOO** — `PathTracer::init(256x256)` returns
+TRUE on a bare RT device, with a valid output view and image, and NRD, SVGF
+and the cinematic stack all come up with it. Pinned by
+`runHeadlessPathTracerTests` (engine_tests 49/49, 0.62 s total). That is the
+half check 66 said had never been stood up anywhere.
+
+**Three things had to be right about that device, and the third is a trap:**
+
+1. **Select the physical device by CAPABILITY, not by index** — take the first
+   advertising `VK_KHR_ray_tracing_pipeline` rather than `devices[0]`.
+2. **The extension list and feature chain**, taken from
+   `ohao/gpu/vulkan/device_setup.cpp` rather than guessed.
+3. **`VK_KHR_push_descriptor`.** Without it `PathTracer::init` still returns
+   **TRUE** — the RT pipeline and SBT build fine — and then NRD's NRI wrapper
+   **aborts the process** from `ResolveDispatchTable()`, which resolves
+   `vkCmdPushDescriptorSet` eagerly and treats absence as fatal (observed:
+   exit 3). A test checking only the return value would have reported success
+   from a process that then died. `device_setup.cpp` adds this under its DLSS
+   block, so an engine build gets it incidentally and never sees this.
+
+**What is left of item 3, in order:** a Scene with geometry, materials and a
+light; an `RTAccelerationStructure` (which `render()` requires and which
+`diff_gpu_probe` already builds routinely); a render and an image readback
+from each pipeline; then the FD-over-knobs optimiser, which remains the small
+half. Both pipelines existing headless was the uncertain part, and it is now
+measured rather than assumed.
 
 The spec calls this "the distinctive one": register the deferred pipeline's
 hand-tuned knobs — SSAO radius and bias, SSR thickness and step count, the

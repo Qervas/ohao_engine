@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 #include <cmath>
+#include <cstring>
 
 #include "core/core.hpp"
 #include "gpu/layout_meta.hpp"
@@ -27,6 +28,7 @@
 #include "render/graph/resource_handle.hpp"
 #include "render/diff/diff_availability.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "scene/scene_module.hpp"
@@ -919,6 +921,216 @@ static void runHeadlessDeferredTests() {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+// ...AND THE PATH TRACER, which is the reference image item 3 fits against
+// -----------------------------------------------------------------------------
+//
+// Spec §10.1 optimises the deferred pipeline to minimise its difference from
+// the PATH TRACER, so the path tracer is half the harness and the half that
+// had never been stood up anywhere: check 66 in diff_gpu_probe says it gates
+// the ownership protocol "against a faithful reproduction of
+// setMaterialData's map-and-memcpy, not against PathTracer itself, which
+// needs its images and pipelines to stand up". This is those images and
+// pipelines standing up.
+//
+// THE DEVICE IS THE WHOLE DIFFICULTY, and it is a different device from the
+// one the deferred pipeline needs. Three things had to be right:
+//
+//   1. THE PHYSICAL DEVICE. This machine has two, and the selection must be
+//      by CAPABILITY rather than by index -- so the probe takes the first
+//      that advertises VK_KHR_ray_tracing_pipeline instead of devices[0].
+//   2. THE EXTENSION LIST AND FEATURE CHAIN, taken from
+//      ohao/gpu/vulkan/device_setup.cpp rather than guessed: acceleration
+//      structure, ray tracing pipeline, deferred host operations, buffer
+//      device address, descriptor indexing, SPIR-V 1.4, shader float
+//      controls.
+//   3. VK_KHR_push_descriptor, AND THIS ONE IS THE TRAP. Without it
+//      `PathTracer::init` still returns TRUE -- the RT pipeline and the SBT
+//      are built fine -- and then NRD's NRI device wrapper ABORTS the process
+//      from `ResolveDispatchTable()`, because it resolves
+//      vkCmdPushDescriptorSet eagerly and treats absence as fatal. A test
+//      that only checked the return value would have reported success from a
+//      process that then died with exit 3. device_setup.cpp adds this
+//      extension under its DLSS block, so an engine build gets it
+//      incidentally and never sees the failure.
+//
+// THE SPIR-V IS FOUND relative to the working directory: path_tracer_pipeline
+// searches "build/shaders/<name>" among others, so this test must run from
+// the repository root. If it is ever run from elsewhere the pipeline creation
+// fails and this test says so rather than silently rendering nothing.
+//
+// IT DOES NOT RENDER. `render()` wants an RTAccelerationStructure, which
+// wants a scene -- and a scene is the next thing item 3 needs. This claims
+// only that the pipelines and images exist.
+
+namespace {
+
+struct RtHeadlessDevice {
+    VkInstance instance{VK_NULL_HANDLE};
+    VkPhysicalDevice physical{VK_NULL_HANDLE};
+    VkDevice device{VK_NULL_HANDLE};
+    uint32_t family{0};
+    std::vector<const char*> deviceExts;
+    std::string deviceName;
+
+    bool create() {
+        VkApplicationInfo app{};
+        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.pApplicationName = "ohao_engine_tests";
+        app.apiVersion = VK_API_VERSION_1_3;
+        VkInstanceCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        ci.pApplicationInfo = &app;
+        if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS) return false;
+
+        uint32_t n = 0;
+        vkEnumeratePhysicalDevices(instance, &n, nullptr);
+        if (n == 0) return false;
+        std::vector<VkPhysicalDevice> devs(n);
+        vkEnumeratePhysicalDevices(instance, &n, devs.data());
+
+        // BY CAPABILITY, not by index: devices[0] need not be the one that can
+        // ray trace.
+        for (VkPhysicalDevice d : devs) {
+            uint32_t ec = 0;
+            vkEnumerateDeviceExtensionProperties(d, nullptr, &ec, nullptr);
+            std::vector<VkExtensionProperties> exts(ec);
+            vkEnumerateDeviceExtensionProperties(d, nullptr, &ec, exts.data());
+            bool rtPipeline = false, pushDesc = false;
+            for (const auto& e : exts) {
+                if (std::strcmp(e.extensionName, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) == 0)
+                    rtPipeline = true;
+                if (std::strcmp(e.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0)
+                    pushDesc = true;
+            }
+            if (rtPipeline && pushDesc) {
+                physical = d;
+                break;
+            }
+        }
+        if (physical == VK_NULL_HANDLE) return false;
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physical, &props);
+        deviceName = props.deviceName;
+
+        uint32_t qn = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, nullptr);
+        std::vector<VkQueueFamilyProperties> qs(qn);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, qs.data());
+        bool found = false;
+        for (uint32_t i = 0; i < qn; ++i) {
+            if (qs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                family = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+
+        // device_setup.cpp's RT list, minus the CUDA-interop entries nothing
+        // here uses, plus push_descriptor -- see this section's header for why
+        // that last one is not optional.
+        deviceExts = {
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+            VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+            VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+            VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+            VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+            VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+        };
+
+        const float prio = 1.0f;
+        VkDeviceQueueCreateInfo qci{};
+        qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qci.queueFamilyIndex = family;
+        qci.queueCount = 1;
+        qci.pQueuePriorities = &prio;
+
+        VkPhysicalDeviceVulkan12Features f12{};
+        f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        f12.bufferDeviceAddress = VK_TRUE;
+        f12.descriptorIndexing = VK_TRUE;
+        f12.runtimeDescriptorArray = VK_TRUE;
+        f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        f12.scalarBlockLayout = VK_TRUE;
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR as{};
+        as.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+        as.accelerationStructure = VK_TRUE;
+        as.pNext = &f12;
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR rt{};
+        rt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+        rt.rayTracingPipeline = VK_TRUE;
+        rt.pNext = &as;
+        VkPhysicalDeviceFeatures2 f2{};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &rt;
+        vkGetPhysicalDeviceFeatures(physical, &f2.features);
+
+        VkDeviceCreateInfo dci{};
+        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        dci.queueCreateInfoCount = 1;
+        dci.pQueueCreateInfos = &qci;
+        dci.enabledExtensionCount = static_cast<uint32_t>(deviceExts.size());
+        dci.ppEnabledExtensionNames = deviceExts.data();
+        dci.pNext = &f2;
+        return vkCreateDevice(physical, &dci, nullptr, &device) == VK_SUCCESS;
+    }
+
+    void destroy() {
+        if (device != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device);
+            vkDestroyDevice(device, nullptr);
+            device = VK_NULL_HANDLE;
+        }
+        if (instance != VK_NULL_HANDLE) {
+            vkDestroyInstance(instance, nullptr);
+            instance = VK_NULL_HANDLE;
+        }
+    }
+};
+
+}  // namespace
+
+static void runHeadlessPathTracerTests() {
+    std::cout << "\n[Path tracer, headless]\n";
+
+    TEST_BEGIN("the path tracer stands up on an RT device with no swapchain");
+    {
+        RtHeadlessDevice dev;
+        if (!dev.create()) {
+            dev.destroy();
+            std::cout << "(no device with ray tracing + push descriptor -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+
+        bool initialised = false;
+        VkImageView outView = VK_NULL_HANDLE;
+        VkImage outImage = VK_NULL_HANDLE;
+        {
+            // SCOPED, so the path tracer releases its images and pipelines
+            // before the device they live on is destroyed.
+            ohao::PathTracer pt;
+            initialised = pt.init(dev.device, dev.physical, 256, 256, dev.instance, dev.family, {},
+                                  dev.deviceExts);
+            if (initialised) {
+                outView = pt.getOutputView();
+                outImage = pt.getOutputImage();
+            }
+        }
+        dev.destroy();
+
+        std::cout << "(" << dev.deviceName << ") ";
+        EXPECT(initialised, "PathTracer::init on a bare RT device");
+        EXPECT(outView != VK_NULL_HANDLE, "an initialised path tracer must have an output view");
+        EXPECT(outImage != VK_NULL_HANDLE, "an initialised path tracer must have an output image");
+        TEST_PASS();
+    }
+}
+
 // =============================================================================
 // MAIN
 // =============================================================================
@@ -934,6 +1146,7 @@ int main() {
     runMetaTests();
     runDiffAvailabilityTests();
     runHeadlessDeferredTests();
+    runHeadlessPathTracerTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";
