@@ -2,6 +2,7 @@
 
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
+#include "diff/wavefront/gradient_frame.hpp"
 #include "diff/wavefront/gradient_stages.hpp"
 #include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
@@ -17,17 +18,13 @@
 
 namespace ohao::diff {
 
-/// Camera basis for runWavefrontGenerateProbe, byte-layout-matched to
-/// wf_generate.comp's Push block (see gpu_probe_context.cpp). Kept as plain
-/// float arrays rather than glm::vec3 so this header does not need to pull
-/// in glm just for a POD parameter block.
-struct WavefrontGenerateCamera {
-    float origin[3]{0.0f, 0.0f, 0.0f};
-    float forward[3]{0.0f, 0.0f, -1.0f};
-    float right[3]{1.0f, 0.0f, 0.0f};
-    float up[3]{0.0f, 1.0f, 0.0f};
-    float tanHalfFov{0.2f};
-};
+// WavefrontGenerateCamera and WavefrontScatterMaterial now live in
+// ohao/diff/wavefront/gradient_frame.hpp, included above. They describe what
+// shaders/diff/ requires of any caller -- a camera basis byte-matched to
+// wf_generate.comp's Push block, and the surface parameters byte-matched to
+// the tail of ScatterPush -- so they are library types that happened to be
+// written here first. Every use below is unchanged: they kept their names
+// and their namespace.
 
 /// One BSDF configuration for runBsdfProbe. Byte-layout-matched to
 /// shaders/diff/bsdf_probe.comp's Push block: four vec4s followed by
@@ -55,22 +52,6 @@ struct BsdfProbeCase {
 };
 static_assert(sizeof(BsdfProbeCase) == 80,
               "BsdfProbeCase must match bsdf_probe.comp's Push block layout");
-
-/// The material parameters wf_scatter.comp's BSDF needs beyond the base
-/// colour (`albedo`), byte-matched to the tail of
-/// WavefrontLoop::ScatterPush.
-///
-/// The defaults are the PURE LAMBERTIAN configuration: `specularWeight` 0
-/// removes the specular lobe entirely (both from f and from the lobe
-/// selection probability), leaving f = albedo/pi sampled by a cosine
-/// hemisphere, whose estimator weight f*cos/pdf is exactly `albedo` -- which
-/// is what keeps the pre-existing constant-albedo throughput checks (14, 17)
-/// asserting exactly what they asserted before, bit for bit.
-struct WavefrontScatterMaterial {
-    float roughness{1.0f};
-    float metallic{0.0f};
-    float specularWeight{0.0f};
-};
 
 /// Stage 1 Task 3 -- what a gradient run differentiates, and whether it holds
 /// its sampled directions still while doing it.

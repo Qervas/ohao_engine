@@ -9,6 +9,7 @@
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
+#include "diff/wavefront/gradient_frame.hpp"
 #include "diff/wavefront/path_state_layout.hpp"
 
 #include <gtest/gtest.h>
@@ -1671,4 +1672,233 @@ TEST(DiffPathStateLayout, ZeroCapacityIsRejected) {
     EXPECT_EQ(layout.arena().blockCount(), 0u);
     EXPECT_EQ(layout.block(ohao::diff::PathStateField::OriginX),
               ohao::diff::ArenaLayout::kInvalidBlock);
+}
+
+// ===========================================================================
+// GradientFrame -- the push-constant assembly, without a device
+// ===========================================================================
+//
+// WHY THESE ARE UNIT TESTS AND NOT PROBE CHECKS. Everything below is pure
+// data: a frame in, two configurations out. It needs no Vulkan, no shader
+// and no GPU, and the properties it asserts are exactly the ones a rendered
+// image cannot show you. A gradient computed for a path the forward run did
+// not take still looks like a gradient; a film rendered with the adjoint
+// seed pushed to it still looks like a film.
+
+namespace {
+
+/// A frame with every field set to something DISTINCT and non-default, so
+/// that a copy landing in the wrong slot moves a value rather than leaving
+/// one zero equal to another zero.
+ohao::diff::GradientFrame distinctFrame() {
+    ohao::diff::GradientFrame f;
+    f.camera.origin[0] = 1.5f;
+    f.camera.origin[1] = 2.5f;
+    f.camera.origin[2] = 3.5f;
+    f.camera.forward[0] = 0.0f;
+    f.camera.forward[1] = -1.0f;
+    f.camera.forward[2] = 0.0f;
+    f.camera.right[0] = 1.0f;
+    f.camera.right[1] = 0.0f;
+    f.camera.right[2] = 0.0f;
+    f.camera.up[0] = 0.0f;
+    f.camera.up[1] = 0.0f;
+    f.camera.up[2] = -1.0f;
+    f.camera.tanHalfFov = 0.375f;
+    f.width = 64u;
+    f.height = 8u;
+    f.bounces = 3u;
+    f.iterationSeed = 987654321u;
+    f.albedo = 0.625f;
+    f.material.roughness = 0.75f;
+    f.material.metallic = 0.0f;
+    f.material.specularWeight = 0.0f;
+    f.diffParam = 1u;
+    f.gradArenaFloats = 256u;
+    f.gradParamOffset = 128u;
+    f.adjointSeedFloats = 1536u;
+    f.filmPixelCount = 512u;
+    f.emission = 2.25f;
+    f.emissionTexWidth = 4u;
+    f.emissionTexHeight = 3u;
+    f.emissionTexChannels = 3u;
+    f.emissionUvScaleU = 1.25f;
+    f.emissionUvScaleV = 1.75f;
+    f.emissionUvBiasU = 0.125f;
+    f.emissionUvBiasV = 0.375f;
+    return f;
+}
+
+}  // namespace
+
+TEST(DiffGradientFrame, CameraPushCarriesTheBasisAndTheFilm) {
+    const ohao::diff::GradientFrame f = distinctFrame();
+    const ohao::diff::GenerateCameraPush push = ohao::diff::generatePush(f, 512u);
+
+    EXPECT_FLOAT_EQ(push.origin[0], 1.5f);
+    EXPECT_FLOAT_EQ(push.origin[1], 2.5f);
+    EXPECT_FLOAT_EQ(push.origin[2], 3.5f);
+    EXPECT_FLOAT_EQ(push.forward[1], -1.0f);
+    EXPECT_FLOAT_EQ(push.right[0], 1.0f);
+    EXPECT_FLOAT_EQ(push.up[2], -1.0f);
+    EXPECT_FLOAT_EQ(push.tanHalfFov, 0.375f);
+    EXPECT_EQ(push.width, 64u);
+    EXPECT_EQ(push.height, 8u);
+    // THE CAPACITY IS THE BUFFER'S, not the film's. They are equal for the
+    // one-sample-per-pixel renders this subsystem does, which is exactly why
+    // deriving one from the other would be untestable: a wrong derivation
+    // would be right on every scene here.
+    EXPECT_EQ(push.capacity, 512u);
+
+    // The padding is written, not merely reserved. std430 pads a vec3 to 16
+    // bytes and the shader reads those slots as part of the vec3s above; a
+    // struct that left them uninitialised would push whatever the stack held.
+    EXPECT_FLOAT_EQ(push.pad0, 0.0f);
+    EXPECT_FLOAT_EQ(push.pad1, 0.0f);
+    EXPECT_FLOAT_EQ(push.pad2, 0.0f);
+    EXPECT_FLOAT_EQ(push.pad3, 0.0f);
+}
+
+TEST(DiffGradientFrame, ForwardRunIsGivenNoArenaAndNoAdjointSeed) {
+    const ohao::diff::GradientFrame f = distinctFrame();
+    const ohao::diff::WavefrontLoop::Config fwd =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Forward);
+
+    // The frame HAS an arena and a seed -- so these zeros are the split
+    // doing its job, not the frame being empty.
+    ASSERT_NE(f.gradArenaFloats, 0u);
+    ASSERT_NE(f.adjointSeedFloats, 0u);
+    EXPECT_EQ(fwd.gradArenaFloats, 0u);
+    EXPECT_EQ(fwd.gradAlbedoOffset, 0u);
+    EXPECT_EQ(fwd.adjointSeedFloats, 0u);
+
+    // But the scene reaches it in full: the forward run renders the film the
+    // replay run is the derivative OF, so it must see the same emission.
+    EXPECT_FLOAT_EQ(fwd.emission, 2.25f);
+    EXPECT_EQ(fwd.emissionTexWidth, 4u);
+    EXPECT_EQ(fwd.filmPixelCount, 512u);
+}
+
+TEST(DiffGradientFrame, ReplayRunIsGivenBoth) {
+    const ohao::diff::GradientFrame f = distinctFrame();
+    const ohao::diff::WavefrontLoop::Config rep =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Replay);
+
+    EXPECT_EQ(rep.gradArenaFloats, 256u);
+    EXPECT_EQ(rep.gradAlbedoOffset, 128u);
+    EXPECT_EQ(rep.adjointSeedFloats, 1536u);
+}
+
+TEST(DiffGradientFrame, BothRunsAgreeOnEveryFieldThatSteersTheTraversal) {
+    const ohao::diff::GradientFrame f = distinctFrame();
+    const ohao::diff::WavefrontLoop::Config fwd =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Forward);
+    const ohao::diff::WavefrontLoop::Config rep =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Replay);
+    EXPECT_TRUE(ohao::diff::steeringFieldsAgree(fwd, rep));
+}
+
+TEST(DiffGradientFrame, SteeringAgreementIsNotVacuous) {
+    // THE CONTROL. A predicate that returned true unconditionally would pass
+    // the test above, so each steering field is split in turn and the
+    // predicate must notice every one. Without this, "the two runs agree"
+    // would be a statement about the function's return value and not about
+    // the configurations.
+    const ohao::diff::GradientFrame f = distinctFrame();
+    const ohao::diff::WavefrontLoop::Config base =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Forward);
+
+    struct Split {
+        const char* what;
+        ohao::diff::WavefrontLoop::Config other;
+    };
+    std::vector<Split> splits;
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.diffParam = base.diffParam + 1u;
+        splits.push_back({"diffParam", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.iterationSeed = base.iterationSeed + 1u;
+        splits.push_back({"iterationSeed", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.emission = base.emission + 1.0f;
+        splits.push_back({"emission", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.emissionTexWidth = base.emissionTexWidth + 1u;
+        splits.push_back({"emissionTexWidth", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.emissionUvScaleU = base.emissionUvScaleU + 1.0f;
+        splits.push_back({"emissionUvScaleU", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.samplingRoughness = 0.25f;
+        splits.push_back({"samplingRoughness", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.albedo = base.albedo + 0.1f;
+        splits.push_back({"albedo", c});
+    }
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.roughness = base.roughness + 0.1f;
+        splits.push_back({"roughness", c});
+    }
+    for (const Split& s : splits) {
+        EXPECT_FALSE(ohao::diff::steeringFieldsAgree(base, s.other))
+            << "splitting " << s.what << " between the two runs went unnoticed";
+    }
+
+    // And the fields that are SUPPOSED to differ must not trip it, or the
+    // predicate would reject every legitimate pair and the assertion in
+    // runWavefrontGradientProbe would fire on a correct render.
+    {
+        ohao::diff::WavefrontLoop::Config c = base;
+        c.gradArenaFloats = 256u;
+        c.gradAlbedoOffset = 128u;
+        c.adjointSeedFloats = 1536u;
+        EXPECT_TRUE(ohao::diff::steeringFieldsAgree(base, c));
+    }
+}
+
+TEST(DiffGradientFrame, SamplingOverrideIsLeftAtItsSentinelWhenNotFrozen) {
+    // THE SENTINEL TRAP. Config::samplingRoughness defaults to -1, which is
+    // what the shader reads as "no override". A frame that is not freezing
+    // its sampling must leave the whole group ALONE -- writing the frame's
+    // own zeros into it would push roughness 0, a perfectly valid mirror,
+    // and every subsequent render would sample from a material the caller
+    // never asked for. The frame's samplingMaterial defaults to roughness 1,
+    // so a naive unconditional copy would be caught by this too.
+    ohao::diff::GradientFrame f = distinctFrame();
+    ASSERT_FALSE(f.freezeSampling);
+    const ohao::diff::WavefrontLoop::Config loose =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Replay);
+    EXPECT_FLOAT_EQ(loose.samplingRoughness, -1.0f);
+
+    f.freezeSampling = true;
+    f.samplingAlbedo = 0.3125f;
+    f.samplingMaterial.roughness = 0.5f;
+    f.samplingMaterial.metallic = 0.25f;
+    f.samplingMaterial.specularWeight = 0.125f;
+    const ohao::diff::WavefrontLoop::Config frozen =
+        ohao::diff::loopConfigFor(f, ohao::diff::GradientRun::Replay);
+    EXPECT_FLOAT_EQ(frozen.samplingAlbedo, 0.3125f);
+    EXPECT_FLOAT_EQ(frozen.samplingRoughness, 0.5f);
+    EXPECT_FLOAT_EQ(frozen.samplingMetallic, 0.25f);
+    EXPECT_FLOAT_EQ(frozen.samplingSpecularWeight, 0.125f);
+
+    // The freeze is a SAMPLING override, so the evaluated material is
+    // untouched by it -- that separation is the whole instrument of spec
+    // 6.3's fixed-direction adjoint.
+    EXPECT_FLOAT_EQ(frozen.albedo, 0.625f);
+    EXPECT_FLOAT_EQ(frozen.roughness, 0.75f);
 }

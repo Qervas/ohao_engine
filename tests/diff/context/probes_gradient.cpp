@@ -7,6 +7,7 @@
 #include "context/probe_scene.hpp"
 
 #include "diff/wavefront/compute_pipeline.hpp"
+#include "diff/wavefront/gradient_frame.hpp"
 #include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_loop.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
@@ -111,24 +112,12 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     uint32_t iterationSeed, GradientArena& arena, uint32_t gradArenaFloats,
     uint32_t gradAlbedoOffset, std::vector<float>& outFilm,
     const WavefrontGradientOptions& options) {
-    // Byte-identical to runWavefrontGenerateProbe's (80 bytes).
-    struct GeneratePush {
-        float origin[3];
-        float pad0;
-        float forward[3];
-        float pad1;
-        float right[3];
-        float pad2;
-        float up[3];
-        float pad3;
-        uint32_t width;
-        uint32_t height;
-        float tanHalfFov;
-        uint32_t capacity;
-    };
-    static_assert(sizeof(GeneratePush) == 80,
-                  "GeneratePush must match wf_generate.comp's Push block layout");
-
+    // The camera push block and both loop configurations are assembled by
+    // ohao/diff/wavefront/gradient_frame.{hpp,cpp} now. What used to be
+    // seventy lines of field-by-field copying here -- with the reasoning for
+    // which field goes to which run written as comments a test file owned --
+    // is a GradientFrame and two calls, and diff_unit_tests asserts the split
+    // that reasoning describes.
     outFilm.clear();
 
     const uint32_t capacity = buffers.layout().capacity();
@@ -451,11 +440,11 @@ bool GpuProbeContext::runWavefrontGradientProbe(
 
     // The binding tables and the build now live in GradientStages. The push
     // SIZES are still the caller's, because the caller fills the blocks --
-    // three of the four are library types already and GeneratePush is this
-    // function's own.
+    // and all four are library types now that GenerateCameraPush has moved
+    // into gradient_frame.hpp.
     if (ok) {
         const GradientStages::PushSizes pushSizes{
-            static_cast<std::uint32_t>(sizeof(GeneratePush)),
+            static_cast<std::uint32_t>(sizeof(GenerateCameraPush)),
             static_cast<std::uint32_t>(sizeof(WavefrontLoop::PrepareIndirectPush)),
             static_cast<std::uint32_t>(sizeof(WavefrontLoop::IntersectPush)),
             static_cast<std::uint32_t>(sizeof(WavefrontLoop::ScatterPush))};
@@ -486,17 +475,39 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     }
 
     if (ok) {
-        GeneratePush genPush{};
-        for (int i = 0; i < 3; ++i) {
-            genPush.origin[i] = camera.origin[i];
-            genPush.forward[i] = camera.forward[i];
-            genPush.right[i] = camera.right[i];
-            genPush.up[i] = camera.up[i];
+        // ONE description of this render, from which both instantiations'
+        // configurations are derived. Assembled here rather than taken as an
+        // argument because this function's signature predates it; an engine
+        // call site builds a GradientFrame directly.
+        GradientFrame frame;
+        frame.camera = camera;
+        frame.width = width;
+        frame.height = height;
+        frame.bounces = bounces;
+        frame.iterationSeed = iterationSeed;
+        frame.albedo = albedo;
+        frame.material = material;
+        frame.diffParam = options.diffParam;
+        frame.gradArenaFloats = gradArenaFloats;
+        frame.gradParamOffset = gradAlbedoOffset;
+        frame.adjointSeedFloats =
+            hasAdjointSeed ? static_cast<std::uint32_t>(options.adjointSeed.size()) : 0u;
+        frame.filmPixelCount = filmPixelCount;
+        frame.emission = options.emission;
+        if (hasEmissionTexture) {
+            frame.emissionTexWidth = options.emissionTexWidth;
+            frame.emissionTexHeight = options.emissionTexHeight;
+            frame.emissionTexChannels = options.emissionTexChannels;
+            frame.emissionUvScaleU = options.emissionUvScaleU;
+            frame.emissionUvScaleV = options.emissionUvScaleV;
+            frame.emissionUvBiasU = options.emissionUvBiasU;
+            frame.emissionUvBiasV = options.emissionUvBiasV;
         }
-        genPush.width = width;
-        genPush.height = height;
-        genPush.tanHalfFov = camera.tanHalfFov;
-        genPush.capacity = capacity;
+        frame.freezeSampling = options.freezeSampling;
+        frame.samplingAlbedo = options.samplingAlbedo;
+        frame.samplingMaterial = options.samplingMaterial;
+
+        const GenerateCameraPush genPush = generatePush(frame, capacity);
         generate.setPushConstants(&genPush, sizeof(genPush));
         generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalX});
 
@@ -510,66 +521,27 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             ScatterSinkSet& s = *sinkSets[variant];
             loop.setScatter(*scatterStages[variant]);
 
-            WavefrontLoop::Config loopConfig;
-            loopConfig.albedo = albedo;
-            loopConfig.roughness = material.roughness;
-            loopConfig.metallic = material.metallic;
-            loopConfig.specularWeight = material.specularWeight;
-            loopConfig.filmPixelCount = filmPixelCount;
-            // ONLY the replay run is given an arena. The forward run's
-            // gradArenaFloats stays 0, which disables every gradient write in
-            // its traversal -- so "the forward pass wrote no gradient" is
-            // enforced by a push constant as well as by its hook being the
-            // film write.
-            loopConfig.gradArenaFloats = isReplay ? gradArenaFloats : 0u;
-            loopConfig.gradAlbedoOffset = isReplay ? gradAlbedoOffset : 0u;
-            // Both runs are pushed the SAME diffParam and the SAME sampling
-            // material. They must be: the two instantiations walk one path
-            // only while every push-constant field that steers the traversal
-            // agrees, and both of these steer it -- diffParam gates the
-            // tangent update in path state, and the sampling material gates
-            // every direction.
-            loopConfig.diffParam = options.diffParam;
-            // STAGE 2 TASK 1. Pushed to the REPLAY run only -- unlike the
-            // emission, which is a property of the scene, dL/dpixel is a
-            // property of the OBJECTIVE and the forward hook has no use for
-            // it: its job is to write the film, and the film does not depend
-            // on what will later be differentiated. Pushing it to both would
-            // be harmless today (the forward hook never calls
-            // diffAdjointSeed) and would be a standing invitation to make the
-            // film depend on the loss, which spec 4.6 forbids in that exact
-            // direction.
-            loopConfig.adjointSeedFloats =
-                (isReplay && hasAdjointSeed)
-                    ? static_cast<std::uint32_t>(options.adjointSeed.size())
-                    : 0u;
-            // Stage 1 Task 4. Pushed to BOTH runs, unconditionally, like
-            // `albedo` above and unlike the arena offset: the emission is a
-            // property of the SCENE this loop renders (what the FORWARD
-            // hook adds to the film), not a property of which run this is,
-            // so both the forward film and the replay run's material context
-            // must agree on it.
-            loopConfig.emission = options.emission;
-            // Stage 1 Task 5, pushed to BOTH runs for `emission`'s reason:
-            // the emitted radiance is a property of the SCENE this loop
-            // renders. A zero width/height (the default) leaves the
-            // traversal reading the scalar above, exactly as before.
-            if (hasEmissionTexture) {
-                loopConfig.emissionTexWidth = options.emissionTexWidth;
-                loopConfig.emissionTexHeight = options.emissionTexHeight;
-                loopConfig.emissionTexChannels = options.emissionTexChannels;
-                loopConfig.emissionUvScaleU = options.emissionUvScaleU;
-                loopConfig.emissionUvScaleV = options.emissionUvScaleV;
-                loopConfig.emissionUvBiasU = options.emissionUvBiasU;
-                loopConfig.emissionUvBiasV = options.emissionUvBiasV;
+            // BOTH configurations, and the assertion that they differ only
+            // where they are meant to. steeringFieldsAgree is cheap and is
+            // checked HERE rather than only in the unit tests because this is
+            // where a future edit would introduce the split: a field pushed
+            // to one run and not the other makes the replay run the
+            // derivative of a path the forward run did not take, and every
+            // check that compares the two against each other would still
+            // pass, because both sides would move.
+            const WavefrontLoop::Config loopConfig =
+                loopConfigFor(frame, isReplay ? GradientRun::Replay : GradientRun::Forward);
+            if (!steeringFieldsAgree(loopConfigFor(frame, GradientRun::Forward),
+                                     loopConfigFor(frame, GradientRun::Replay))) {
+                std::fprintf(stderr,
+                             "[GpuProbeContext] runWavefrontGradientProbe: the forward and replay "
+                             "loop configurations disagree on a field that STEERS THE "
+                             "TRAVERSAL, so the two instantiations would not walk one path and "
+                             "the gradient would be the derivative of a render that did not "
+                             "happen. See loopConfigFor in ohao/diff/wavefront/gradient_frame.cpp\n");
+                ok = false;
+                break;
             }
-            if (options.freezeSampling) {
-                loopConfig.samplingAlbedo = options.samplingAlbedo;
-                loopConfig.samplingRoughness = options.samplingMaterial.roughness;
-                loopConfig.samplingMetallic = options.samplingMaterial.metallic;
-                loopConfig.samplingSpecularWeight = options.samplingMaterial.specularWeight;
-            }
-            loopConfig.iterationSeed = iterationSeed;
             loop.setConfig(loopConfig);
 
             runImmediate([&](VkCommandBuffer cmd) {
