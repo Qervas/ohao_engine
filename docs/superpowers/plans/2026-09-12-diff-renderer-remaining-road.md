@@ -19,7 +19,7 @@ a gap in memory.
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
 | 3 | Renderer fitting | not started — the FD-vs-differentiable decision is RESOLVED (FD), but the bulk is an engine-harness job, measured below |
-| 4 | SVBRDF as a client | **GATE UNREACHABLE FROM THIS REPOSITORY** — the client it rewrites was never in version control |
+| 4 | SVBRDF as a client | **its differentiable half is DONE** — the environment is a parameter (binding 14, checks 74–75); the client rewrite itself has no client in version control |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
 | 7 | Stage 4 — scale | **partial** — camera pose complete (translation + rotation, 5 unit tests); BSDF unification investigated and deliberately not done; edge importance sampling premature; warped-area not ready |
@@ -357,11 +357,38 @@ emission TEXTURE parameter already does per-texel scatter with bilinear
 weights, gated by check 45 and by check 55's 17-element recovery — so it is
 assembly rather than invention.
 
-**It is not built, on purpose.** It has no caller. Building a parameter kind
-for a client that is not in the repository is the same mistake as giving the
-engine a `DiffRenderer` with nothing to render, and that was declined under
-item 1 for the same reason. Whoever brings an SVBRDF client back should
-register environment texels as part of doing so, with that client as the gate.
+**IT IS NOW BUILT** — and on reflection, calling it caller-less was the wrong
+call. A parameter kind's gate *is* its caller: the base colour, roughness,
+metallic and both emission forms are each gated by a Gate-5 recovery and
+nothing else, and an environment parameter is gated the same way. That is
+quite different from giving the engine a `DiffRenderer` with nothing to
+render, which has no gate at all.
+
+`DIFF_PARAM_ENV_IMAGE` (=5), binding 14, checks 74 and 75.
+
+**The binding is what makes it possible, for a reason sharper than the chroma
+one `nee.glsl` gives.** Inverting the CDF's density to get radiance is exact —
+check 31 asserts it texel by texel — but it makes the radiance and the
+SAMPLING DISTRIBUTION the same array. Spec §6.3 differentiates the estimator
+at FIXED directions, so an environment parameter needs the radiance to move
+while the density stays put, and through the CDF it cannot. Binding the image
+separates them.
+
+**The first parameter that is not a property of a surface.** Everything gated
+before it is read at a hit point; the environment is read along a DIRECTION,
+by two strategies sampling two different ones, so the adjoint scatters TWICE
+per vertex at generally different texels. Crediting both to one would put the
+BSDF strategy's contribution in the light sampler's bin.
+
+Check 75: **19 of 32 texels carry gradient, worst finished 2.86e-05 from
+θ\* = 1.5 against a pre-registered 0.15 (3·α), having started 1.0 away; loss
+0.300 → 2.3e-10 over 200 Adam iterations.** The 13 unreachable texels — a
+floor-only scene sends no ray below the horizon — are required to be EXACTLY
+unmoved, compared as floats.
+
+**What remains of this item is the client itself**, and that still has nothing
+in version control to rewrite or to beat. Whoever brings one back now finds
+the environment parameter waiting for it.
 
 ---
 

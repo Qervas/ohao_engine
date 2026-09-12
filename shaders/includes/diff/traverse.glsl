@@ -759,8 +759,19 @@ layout(push_constant) uniform Push {
 /// diffEnvRadianceFromPdf. A sentinel rather than 0.0, because 0.0 is a
 /// legitimate radiance for a black texel and would silently become "no
 /// image" for a caller that forgot to check.
-float diffEnvImageRadiance(vec3 dir) {
-    if (pc.envImageTexels == 0u || pc.envWidth == 0u || pc.envHeight == 0u) return -1.0;
+/// Which environment texel `dir` falls in, as a flat row-major index, or
+/// 0xffffffff when there is no image or the index is out of its claimed
+/// length.
+///
+/// ONE SPELLING, used by the radiance read below AND by the environment
+/// parameter's scatter (bsdf_adjoint.glsl's diffScatterEnvImage). The two
+/// MUST agree: the adjoint credits the texel whose radiance the forward pass
+/// read, and a scatter that landed one texel away would be a gradient for a
+/// parameter the film does not depend on -- which an optimiser would happily
+/// descend. Two hand-maintained copies of this arithmetic is exactly the
+/// duplication this project has been bitten by three times.
+uint diffEnvTexelIndex(vec3 dir) {
+    if (pc.envImageTexels == 0u || pc.envWidth == 0u || pc.envHeight == 0u) return 0xffffffffu;
     const float theta = acos(clamp(dir.y, -1.0, 1.0));
     const float phi = atan(dir.z, dir.x);
     const float u = phi / 6.28318530717959 + 0.5;
@@ -771,8 +782,12 @@ float diffEnvImageRadiance(vec3 dir) {
     // The caller-owned length claim is checked, exactly as the film's and the
     // arena's are: a short buffer would read past its end, which is not a
     // validation error because the binding's range is the whole buffer.
-    if (idx >= pc.envImageTexels) return -1.0;
-    return envImage.v[idx];
+    return (idx < pc.envImageTexels) ? idx : 0xffffffffu;
+}
+
+float diffEnvImageRadiance(vec3 dir) {
+    const uint idx = diffEnvTexelIndex(dir);
+    return (idx == 0xffffffffu) ? -1.0 : envImage.v[idx];
 }
 
 /// dL/d(film[pixelIndex]) as a vec3, or vec3(1.0) when no seed is bound.

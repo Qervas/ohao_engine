@@ -72,6 +72,7 @@ add_executable(diff_gpu_probe
     probe/checks_mitsuba_scale.cpp
     probe/checks_sensitivity.cpp
     probe/checks_env_image.cpp
+    probe/checks_env_recovery.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

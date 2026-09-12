@@ -162,19 +162,38 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // reaches the arena at all (`mayScatter` false writes nothing), and what
     // it reports is "the gradient is not finite" rather than the name of the
     // cause. Refusing here says the cause, before any Vulkan work happens.
-    constexpr std::uint32_t kMaxKnownDiffParam = 4u;  // DIFF_PARAM_EMISSION_TEXTURE
+    constexpr std::uint32_t kMaxKnownDiffParam = 5u;  // DIFF_PARAM_ENV_IMAGE
     if (options.diffParam > kMaxKnownDiffParam) {
         std::fprintf(stderr,
                      "[GpuProbeContext] runWavefrontGradientProbe: refuses to run with diffParam "
-                     "%u. shaders/includes/diff/bsdf_adjoint.glsl defines exactly five, and they "
+                     "%u. shaders/includes/diff/bsdf_adjoint.glsl defines exactly six, and they "
                      "are contiguous: 0 DIFF_PARAM_BASECOLOR, 1 DIFF_PARAM_ROUGHNESS, 2 "
-                     "DIFF_PARAM_METALLIC, 3 DIFF_PARAM_EMISSION, 4 DIFF_PARAM_EMISSION_TEXTURE. "
-                     "A sixth parameter needs a branch in wf_scatter_replay.comp's diffVertexHook "
-                     "AND its own preconditions here -- raising this bound alone would buy it "
-                     "nothing but a NaN gradient from the shader's fallthrough sentinel\n",
+                     "DIFF_PARAM_METALLIC, 3 DIFF_PARAM_EMISSION, 4 DIFF_PARAM_EMISSION_TEXTURE, "
+                     "5 DIFF_PARAM_ENV_IMAGE. A seventh needs a branch in "
+                     "wf_scatter_replay.comp's diffVertexHook AND its own preconditions here -- "
+                     "raising this bound alone would buy it nothing but a NaN gradient from the "
+                     "shader's fallthrough sentinel\n",
                      options.diffParam);
         return false;
     }
+    // THE ENVIRONMENT-PARAMETER PRECONDITION. DIFF_PARAM_ENV_IMAGE
+    // differentiates the binding-14 image, and with no image bound every
+    // radiance read falls back to inverting the CDF -- whose dependence on
+    // the texels this adjoint does NOT carry, because spec 6.3 differentiates
+    // at fixed directions and through the CDF the density and the radiance
+    // are one array. The gradient would then be scattered for a parameter the
+    // film does not read, which is a silently wrong answer rather than an
+    // absent one.
+    if (options.diffParam == 5u && options.envImage.empty()) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: refuses to run "
+                     "DIFF_PARAM_ENV_IMAGE with no environment image. Set options.envImage to the "
+                     "grey radiance the CDF was built from: without it the traversal inverts the "
+                     "CDF for its radiance, and this parameter's adjoint is the derivative of an "
+                     "IMAGE READ\n");
+        return false;
+    }
+
     // THE MATERIAL REFUSAL. See the doc comment: bsdf_adjoint.glsl's
     // derivative is exact only at metallic == 0 (where F0 and the lobe
     // probability q stop depending on the base colour) and its throughput

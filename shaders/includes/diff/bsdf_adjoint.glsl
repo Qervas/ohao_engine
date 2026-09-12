@@ -537,6 +537,17 @@ const uint DIFF_PARAM_ROUGHNESS = 1u;
 const uint DIFF_PARAM_METALLIC = 2u;
 const uint DIFF_PARAM_EMISSION = 3u;
 const uint DIFF_PARAM_EMISSION_TEXTURE = 4u;
+/// The ENVIRONMENT's radiance, one grey float per texel of the binding-14
+/// image. Like DIFF_PARAM_EMISSION it is ADDITIVE and never sampled from, so
+/// it needs no forward-mode tangent -- see diffParamNeedsForwardTangent,
+/// whose allow-list this deliberately does not join.
+///
+/// IT IS ALSO THE FIRST PARAMETER THAT IS NOT A PROPERTY OF A SURFACE, which
+/// is why its scatter does not go through the bilinear footprint the emission
+/// texture uses: the texel is chosen by a DIRECTION, binned exactly as
+/// env_sampling.glsl bins it, and NEAREST rather than bilinear because the
+/// density the estimator divides by is piecewise constant per texel.
+const uint DIFF_PARAM_ENV_IMAGE = 5u;
 
 /// WHICH PARAMETERS NEED THE FORWARD-MODE THROUGHPUT TANGENT (Stage 1 Task 3,
 /// traverse.glsl's `psSetTangent` gate), stated as an ALLOW-LIST rather than
@@ -1316,6 +1327,55 @@ void diffScatterEmissionTexture(in DiffVertex v, vec3 dL, bool mayScatter) {
                 atomicAdd(grad.v[pc.gradAlbedoOffset + k], ws[i] * dL[c]);
             }
         }
+    }
+}
+
+/// d(film)/d(environment radiance) at this vertex, SUMMED over texels --
+/// equivalently, the derivative with respect to a uniform scaling of the
+/// whole environment.
+///
+/// Returned for the hook's scalar path so that a SENSITIVITY MAP of this
+/// parameter means something: "where does this pixel depend on the
+/// environment at all". The per-texel scatter below is the gradient proper.
+vec3 diffVertexEnvImageTotal(in DiffVertex v) {
+    if (!v.hit) return vec3(0.0);
+    // diffMisTerm's unweighted value is fCosine * L * V / pOwn, so the
+    // coefficient multiplying L is what traverse.glsl recorded as
+    // env/bsdfRadianceCoeff. The MIS weights apply on top, exactly as they do
+    // in the film write this is the derivative of.
+    return v.throughput * (v.wEnv * v.envRadianceCoeff + v.wBsdf * v.bsdfRadianceCoeff);
+}
+
+/// Scatter d(film)/d(L_t) into the texels the two strategies actually
+/// sampled. `seed` is dL/d(film) for this vertex's pixel.
+///
+/// TWO SCATTERS, NOT ONE, and at two generally DIFFERENT texels: strategy E
+/// sampled the environment's own distribution and strategy B sampled the
+/// BSDF, so their directions agree only by coincidence. Crediting both to one
+/// texel would put the BSDF strategy's contribution in the light sampler's
+/// bin, which is a gradient for a texel the film does not depend on through
+/// that term -- and an optimiser descends that happily.
+///
+/// THE TEXEL COMES FROM diffEnvTexelIndex, the same function the forward
+/// radiance read used. That is the whole of the correctness here: the adjoint
+/// must credit the texel whose value the film actually read.
+void diffScatterEnvImage(in DiffVertex v, vec3 seed, bool mayScatter) {
+    if (!mayScatter || !v.hit) return;
+    if (pc.envImageTexels == 0u) return;
+    const uint span = pc.gradArenaFloats - pc.gradAlbedoOffset;
+
+    // Grey parameter, grey gradient: the three channels of the adjoint are
+    // summed, exactly as the scalar path does for every other parameter,
+    // because one float per texel is what the image holds.
+    const uint envIdx = diffEnvTexelIndex(v.envDir);
+    if (envIdx != 0xffffffffu && envIdx < span) {
+        const vec3 dE = seed * v.throughput * v.wEnv * v.envRadianceCoeff;
+        atomicAdd(grad.v[pc.gradAlbedoOffset + envIdx], dE.x + dE.y + dE.z);
+    }
+    const uint bsdfIdx = diffEnvTexelIndex(v.bsdfDir);
+    if (bsdfIdx != 0xffffffffu && bsdfIdx < span) {
+        const vec3 dB = seed * v.throughput * v.wBsdf * v.bsdfRadianceCoeff;
+        atomicAdd(grad.v[pc.gradAlbedoOffset + bsdfIdx], dB.x + dB.y + dB.z);
     }
 }
 

@@ -234,6 +234,7 @@
 #include "probe/checks_mitsuba_scale.hpp"
 #include "probe/checks_sensitivity.hpp"
 #include "probe/checks_env_image.hpp"
+#include "probe/checks_env_recovery.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -317,6 +318,7 @@ using ohao::diff::probe::checkPixelSeam;
 using ohao::diff::probe::checkMitsubaScale;
 using ohao::diff::probe::checkSensitivityMap;
 using ohao::diff::probe::checkEnvImageRadiance;
+using ohao::diff::probe::checkEnvRecovery;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -582,6 +584,11 @@ int main() {
     // the radiance move while the density stays put, and so what makes
     // an environment parameter differentiable at fixed directions.
     if (!checkEnvImageRadiance(ctx)) return 1;
+
+    // 75. GATE 5 FOR THE ENVIRONMENT (spec 10.3): its radiance
+    // recovered texel by texel, with the sampling distribution held
+    // FIXED -- the first parameter that is not a property of a surface.
+    if (!checkEnvRecovery(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

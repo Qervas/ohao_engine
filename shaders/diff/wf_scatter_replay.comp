@@ -316,6 +316,12 @@ void diffVertexHook(inout DiffVertex v) {
     } else if (pc.diffParam == DIFF_PARAM_EMISSION ||
                pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE) {
         contribution = diffVertexEmissionScatter(v);
+    } else if (pc.diffParam == DIFF_PARAM_ENV_IMAGE) {
+        // The derivative with respect to a UNIFORM scaling of the whole
+        // environment. It is the per-texel gradient summed, so it is what the
+        // sensitivity map wants; the gradient proper is scattered per texel
+        // below, by diffScatterEnvImage.
+        contribution = diffVertexEnvImageTotal(v);
     } else {
         contribution = vec3(uintBitsToFloat(0x7fc00000u));  // quiet NaN
     }
@@ -377,6 +383,12 @@ void diffVertexHook(inout DiffVertex v) {
 
     if (pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE) {
         diffScatterEmissionTexture(v, contribution, mayScatter);
+    } else if (pc.diffParam == DIFF_PARAM_ENV_IMAGE) {
+        // The seed is passed in rather than folded into `contribution` first,
+        // because the two strategies scatter to DIFFERENT texels and each
+        // needs its own share -- a pre-multiplied total cannot be split back
+        // apart.
+        diffScatterEnvImage(v, diffAdjointSeed(v.pixelIndex), mayScatter);
     } else if (mayScatter && elementInRange) {
         atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement], scalarContribution);
     }
