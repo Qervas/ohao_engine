@@ -113,7 +113,7 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
     // AND THE PIPELINES ONCE. Five compute pipelines per render, 402 renders.
     // Built on first use and kept; the descriptor bindings are still written
     // every call, because the adjoint seed really is a new buffer each time.
-    ohao::diff::WavefrontGradientOptions::OwnedStages stages;
+    ohao::diff::GradientStages stages;
 
     auto render = [&](float albedo, const std::vector<float>& seed,
                       std::vector<float>& outFilm) -> bool {

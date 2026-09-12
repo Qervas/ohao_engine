@@ -2,6 +2,8 @@
 
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
+#include "diff/wavefront/gradient_stages.hpp"
+#include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
@@ -143,17 +145,12 @@ struct WavefrontGradientOptions {
     ///
     /// Null builds them locally and tears them down at return, which is what
     /// every check written before this does.
-    /// Non-copyable and non-movable, because WavefrontStage is; a caller
-    /// holds one by value and passes its address.
-    struct OwnedStages {
-        WavefrontStage generate;
-        WavefrontStage prepareIndirect;
-        WavefrontStage intersect;
-        WavefrontStage scatterForward;
-        WavefrontStage scatterReplay;
-        bool built{false};
-    };
-    OwnedStages* stages{nullptr};
+    /// `ohao::diff::GradientStages` -- the five pipelines and the binding
+    /// tables, which moved into the library because they are not test-side
+    /// knowledge: they are what the shaders in shaders/diff/ require of
+    /// anyone who dispatches them, and an engine caller would otherwise have
+    /// to restate them.
+    GradientStages* stages{nullptr};
 
     /// Optional: receives the FORWARD run's binding-3 vertex trace as it stood
     /// after the LAST bounce (`capacity * kDebugDrawFloats` floats). It is how
@@ -1207,9 +1204,9 @@ public:
     [[nodiscard]] VkBuffer nullEmissionBuffer();
 
     /// Release the five pipelines a caller kept across calls. They are built
-    /// on first use by `runWavefrontGradientProbe`, so there is no matching
-    /// build entry point -- one piece of code knows the binding tables.
-    void destroyOwnedStages(WavefrontGradientOptions::OwnedStages& stages);
+    /// on first use by `runWavefrontGradientProbe`; `GradientStages::build` is
+    /// idempotent, which is what makes that safe to call every time.
+    void destroyOwnedStages(GradientStages& stages);
 
     /// Upload a triangle soup and build its BLAS and TLAS, once.
     [[nodiscard]] bool buildOwnedScene(std::span<const float> positions,

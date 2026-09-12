@@ -42,13 +42,8 @@ using namespace probe_scene;  // NOLINT(google-build-using-namespace)
 // realisation -- a second seed would be a second measurement, not a better
 // one. Generalising the parity probe would have put its calibrated
 // non-vacuity gates one parameter default away from a different question.
-void GpuProbeContext::destroyOwnedStages(WavefrontGradientOptions::OwnedStages& stages) {
-    stages.scatterReplay.destroy(m_device);
-    stages.scatterForward.destroy(m_device);
-    stages.intersect.destroy(m_device);
-    stages.prepareIndirect.destroy(m_device);
-    stages.generate.destroy(m_device);
-    stages.built = false;
+void GpuProbeContext::destroyOwnedStages(GradientStages& stages) {
+    stages.destroy(m_device);
 }
 
 bool GpuProbeContext::buildOwnedScene(std::span<const float> positions,
@@ -450,78 +445,34 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // The pipelines: the caller's if it brought some, otherwise ours for the
     // duration of this call. The references mean everything below is unaware
     // of which, and `st.built` is what makes a caller's set build once.
-    WavefrontGradientOptions::OwnedStages localStages;
-    WavefrontGradientOptions::OwnedStages& st =
-        (options.stages != nullptr) ? *options.stages : localStages;
+    GradientStages localStages;
+    GradientStages& st = (options.stages != nullptr) ? *options.stages : localStages;
     const bool ownStages = (options.stages == nullptr);
 
-    WavefrontStage& generate = st.generate;
-    WavefrontStage& prepareIndirect = st.prepareIndirect;
-    WavefrontStage& intersect = st.intersect;
-    WavefrontStage& scatterForward = st.scatterForward;
-    WavefrontStage& scatterReplay = st.scatterReplay;
-    WavefrontStage* const scatterStages[2] = {&scatterForward, &scatterReplay};
-
-    const VkDescriptorType kStateQueueCounter[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    const VkDescriptorType kCounterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    const VkDescriptorType kIntersectBindings[6] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
-    // Both instantiations declare the same eleven bindings, because both
-    // include the same traverse.glsl. Binding 10 is the gradient arena and is
-    // bound to the REAL arena for both -- unlike every other probe here,
-    // which has none and re-binds its film there.
-    const VkDescriptorType kScatterBindings[13] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                   // 12: the Stage 2 Task 1 adjoint seed.
-                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-
-    const bool buildStages = ok && !st.built;
-    if (buildStages && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
-                              sizeof(GeneratePush))) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: generate build\n");
-        ok = false;
-    }
-    if (buildStages && ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", kCounterOnly,
-                                     sizeof(WavefrontLoop::PrepareIndirectPush))) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: prepare_indirect "
-                              "build\n");
-        ok = false;
-    }
-    if (buildStages && ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", kIntersectBindings,
-                               sizeof(WavefrontLoop::IntersectPush))) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: intersect build\n");
-        ok = false;
-    }
-    if (buildStages && ok && !scatterForward.build(m_device, "diff_wf_scatter.comp.spv", kScatterBindings,
-                                    sizeof(WavefrontLoop::ScatterPush))) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: forward scatter "
-                              "build\n");
-        ok = false;
-    }
-    if (buildStages && ok && !scatterReplay.build(m_device, "diff_wf_scatter_replay.comp.spv", kScatterBindings,
-                                   sizeof(WavefrontLoop::ScatterPush))) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: REPLAY scatter build "
-                              "failed (diff_wf_scatter_replay.comp.spv)\n");
-        ok = false;
+    // The binding tables and the build now live in GradientStages. The push
+    // SIZES are still the caller's, because the caller fills the blocks --
+    // three of the four are library types already and GeneratePush is this
+    // function's own.
+    if (ok) {
+        const GradientStages::PushSizes pushSizes{
+            static_cast<std::uint32_t>(sizeof(GeneratePush)),
+            static_cast<std::uint32_t>(sizeof(WavefrontLoop::PrepareIndirectPush)),
+            static_cast<std::uint32_t>(sizeof(WavefrontLoop::IntersectPush)),
+            static_cast<std::uint32_t>(sizeof(WavefrontLoop::ScatterPush))};
+        ok = st.build(m_device, pushSizes);
+        if (!ok) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: stage build\n");
+        }
     }
 
-    if (buildStages && ok) st.built = true;
+    WavefrontStage& generate = st.generate();
+    WavefrontStage& prepareIndirect = st.prepareIndirect();
+    WavefrontStage& intersect = st.intersect();
+    WavefrontStage* const scatterStages[2] = {&st.scatter(0u), &st.scatter(1u)};
+
+    // The binding tables and the five build calls that used to sit here are now
+    // GradientStages::build, in the library. They are not test-side knowledge:
+    // they are what shaders/diff/ requires of anyone who dispatches it.
 
     if (ok) {
         const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
