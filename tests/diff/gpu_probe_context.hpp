@@ -155,6 +155,20 @@ struct WavefrontGradientOptions {
     /// decomposition of the LOSS gradient, which is a useful picture but is
     /// not the sensitivity image spec 10.2 asks for.
     std::vector<float>* outSensitivity{nullptr};
+
+    /// The binding-14 environment RADIANCE image: grey, one float per texel,
+    /// row major over the SAME W x H grid the CDF was built on. Empty means
+    /// no image, and then radiance is inverted out of the CDF exactly as
+    /// every render before this binding existed did.
+    ///
+    /// BIND IT AND THE CDF TOGETHER OR NOT AT ALL. Nothing forces the two to
+    /// describe the same environment, and if they disagree the estimator
+    /// divides by one environment's density while evaluating another's
+    /// radiance -- still unbiased for the density it uses, but an image of
+    /// neither. Check 74 renders a grey environment both ways and requires
+    /// the films to agree, which is the assertion that they DO describe the
+    /// same thing here.
+    std::vector<float> envImage;
     /// Stage 1 Task 4. The uniform self-emission scalar, pushed to BOTH the
     /// forward and replay runs verbatim (`WavefrontLoop::Config::emission`),
     /// exactly as `albedo` is. Not part of `WavefrontScatterMaterial` because

@@ -44,6 +44,10 @@ WavefrontLoop::Config loopConfigFor(const GradientFrame& frame, GradientRun run)
     // And the sensitivity map, for the same reason: a map is a derivative,
     // and the forward pass does not compute one.
     config.sensitivityFloats = isReplay ? frame.sensitivityFloats : 0u;
+    // The environment image goes to BOTH, unlike the two above: it describes
+    // the scene the forward run renders, not the derivative the replay run
+    // takes. Same reasoning as the emission texture.
+    config.envImageTexels = frame.envImageTexels;
 
     // Everything below goes to BOTH runs. Every one of these steers the
     // traversal or defines the film the replay run is the derivative of, and
@@ -86,6 +90,7 @@ bool steeringFieldsAgree(const WavefrontLoop::Config& a, const WavefrontLoop::Co
            a.emissionTexChannels == b.emissionTexChannels &&
            a.emissionUvScaleU == b.emissionUvScaleU && a.emissionUvScaleV == b.emissionUvScaleV &&
            a.emissionUvBiasU == b.emissionUvBiasU && a.emissionUvBiasV == b.emissionUvBiasV &&
+           a.envImageTexels == b.envImageTexels &&
            a.samplingAlbedo == b.samplingAlbedo && a.samplingRoughness == b.samplingRoughness &&
            a.samplingMetallic == b.samplingMetallic &&
            a.samplingSpecularWeight == b.samplingSpecularWeight &&

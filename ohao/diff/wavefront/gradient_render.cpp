@@ -13,7 +13,7 @@ namespace ohao::diff {
 bool GradientResources::valid() const noexcept {
     return buffers != nullptr && stages != nullptr && sinks != nullptr && scene.valid() &&
            emissionTexture != VK_NULL_HANDLE && adjointSeed != VK_NULL_HANDLE &&
-           sensitivity != VK_NULL_HANDLE;
+           sensitivity != VK_NULL_HANDLE && envImage != VK_NULL_HANDLE;
 }
 
 void recordHostReadBarrier(VkCommandBuffer cmd, std::span<const VkBuffer> buffers) {

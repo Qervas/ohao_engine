@@ -1942,13 +1942,18 @@ TEST(DiffGradientRender, ResourcesAreIncompleteUntilEveryHandleIsPresent) {
     r.adjointSeed = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(5));
     EXPECT_FALSE(r.valid()) << "the spec-10.2 sensitivity map is still missing";
     r.sensitivity = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(6));
+    EXPECT_FALSE(r.valid()) << "the binding-14 environment radiance image is still missing";
+    r.envImage = reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(7));
     EXPECT_TRUE(r.valid());
 
-    // THIS LADDER EARNED ITS KEEP THE FIRST TIME IT WAS EXTENDED. Binding 13
-    // was added for the sensitivity map and `valid()` grew a ninth term; this
-    // test failed at once, on the final EXPECT_TRUE, because the ladder had
+    // THIS LADDER HAS NOW EARNED ITS KEEP TWICE, on consecutive additions.
+    // Binding 13 (the sensitivity map) took valid() to nine terms and binding
+    // 14 (the environment radiance image) to ten, and on BOTH occasions this
+    // test failed immediately on its final EXPECT_TRUE, because the ladder had
     // not been told about the new handle. A test of the complete case alone
-    // would have gone green with the new handle left null in every caller.
+    // would have gone green each time with the new handle left null in every
+    // caller -- which for a descriptor means an unbound binding, and an
+    // unbound binding is undefined reads rather than a validation error.
 }
 
 TEST(DiffGradientRender, RecordingRefusesRatherThanRecordingHalfARun) {

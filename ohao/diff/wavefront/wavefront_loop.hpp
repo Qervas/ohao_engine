@@ -529,6 +529,21 @@ struct Config {
         /// is pushed 0. A map is a derivative, and the forward pass does not
         /// compute one.
         std::uint32_t sensitivityFloats{0};
+
+        /// Texels in the caller's binding-14 environment RADIANCE image, or
+        /// 0 for "no image bound".
+        ///
+        /// WHEN 0, every radiance read falls back to inverting the CDF's
+        /// density, which is what every check written before this did and is
+        /// bit-identical to it. When nonzero, the radiance comes from the
+        /// image and the CDF is a pure SAMPLING distribution.
+        ///
+        /// THAT SEPARATION IS THE POINT, not the chroma. Spec 6.3
+        /// differentiates the estimator at fixed directions, so an
+        /// environment parameter needs the radiance to move while the density
+        /// stays put -- and through the CDF it cannot, because one array is
+        /// both. Pushed to BOTH runs: it describes the SCENE.
+        std::uint32_t envImageTexels{0};
     };
 
     /// One end of the ping-pong: a queue ring's element base and the
@@ -691,9 +706,11 @@ struct Config {
         float emissionUvBiasV{0.0f};
         // Stage 2 Task 1. See Config::adjointSeedFloats.
         std::uint32_t adjointSeedFloats{0};
-        // Spec 10.2. See Config::sensitivityFloats. THE VERY LAST FIELD now;
-        // traverse.glsl's Push block ends with the same one.
+        // Spec 10.2. See Config::sensitivityFloats.
         std::uint32_t sensitivityFloats{0};
+        // See Config::envImageTexels. THE VERY LAST FIELD now; traverse.glsl's
+        // Push block ends with the same one.
+        std::uint32_t envImageTexels{0};
     };
 
     WavefrontLoop() = default;

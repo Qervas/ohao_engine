@@ -155,6 +155,12 @@ struct GradientFrame {
     /// sensitivity image. The check that gates this leaves the seed unbound.
     std::uint32_t sensitivityFloats{0};
 
+    /// Texels in the binding-14 environment RADIANCE image; 0 falls back to
+    /// inverting the CDF's density, which is bit-identical to every render
+    /// made before this binding existed. A property of the SCENE, so BOTH
+    /// runs get it.
+    std::uint32_t envImageTexels{0};
+
     /// Pixels in the caller-owned film buffer; 0 disables accumulation.
     std::uint32_t filmPixelCount{0};
 

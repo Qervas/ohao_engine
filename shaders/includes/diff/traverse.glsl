@@ -512,6 +512,32 @@ layout(std430, binding = 13) buffer SensitivityMap {
     float v[];
 } sensitivity;
 
+// THE ENVIRONMENT'S RADIANCE, as an IMAGE rather than as something inverted
+// out of its sampling density. Binding 14, grey, one float per texel, row
+// major, the same W x H grid the CDF is built on.
+//
+// WHY THIS EXISTS, and the reason is sharper than the chroma one nee.glsl
+// gives. Recovering L by inverting the CDF's density is exact (check 31
+// asserts it texel by texel) but it makes the radiance and the SAMPLING
+// DISTRIBUTION the same data. That is fatal to differentiating with respect
+// to the environment: spec 6.3 differentiates the estimator at FIXED
+// directions, so an environment parameter needs the radiance to move while
+// the density stays put -- and through the CDF it cannot, because one array
+// is both. Binding the image separates them.
+//
+// It also fixes what nee.glsl's header calls out: the CDF carries only the
+// grey channel, so the inversion returns the correct luminance and the wrong
+// chroma for a coloured environment. This binding is still grey -- one float
+// per texel -- so that is not fixed YET, but the plumbing that would fix it
+// is now here rather than absent.
+//
+// `pc.envImageTexels == 0` means "no image bound", and then every radiance
+// read falls back to the inversion exactly as before. That is the default,
+// and it is why adding this binding changes no existing check's film.
+layout(std430, binding = 14) readonly buffer EnvImage {
+    float v[];
+} envImage;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -710,7 +736,44 @@ layout(push_constant) uniform Push {
     // bounds guard compares like with like, exactly as adjointSeedFloats
     // does. MUST STAY LAST; see ScatterPush's note.
     uint sensitivityFloats;
+    // The LENGTH of the binding-14 environment image, in floats -- which for
+    // a grey image is its texel count. 0 means "no image bound" and sends
+    // every radiance read back to diffEnvRadianceFromPdf. MUST STAY LAST;
+    // see ScatterPush's note.
+    uint envImageTexels;
 } pc;
+
+/// Grey environment radiance at `dir`, read from the binding-14 IMAGE.
+///
+/// THE BINNING IS env_sampling.glsl's, transcribed rather than approximated:
+/// acos of dir.y for theta, atan2(z, x) for phi, then the same floor-and-
+/// clamp into [0,W) x [0,H). It has to be the same, because the density the
+/// estimator divides by is that texel's, and a radiance read from a
+/// different texel than the density describes is a mismatch no check of
+/// either alone would see.
+///
+/// NEAREST, not bilinear, for the same reason: the CDF's density is
+/// piecewise constant per texel, so the radiance that pairs with it is too.
+///
+/// Returns -1.0 when no image is bound, which callers use to fall back to
+/// diffEnvRadianceFromPdf. A sentinel rather than 0.0, because 0.0 is a
+/// legitimate radiance for a black texel and would silently become "no
+/// image" for a caller that forgot to check.
+float diffEnvImageRadiance(vec3 dir) {
+    if (pc.envImageTexels == 0u || pc.envWidth == 0u || pc.envHeight == 0u) return -1.0;
+    const float theta = acos(clamp(dir.y, -1.0, 1.0));
+    const float phi = atan(dir.z, dir.x);
+    const float u = phi / 6.28318530717959 + 0.5;
+    const float v = theta / 3.14159265358979;
+    const int x = clamp(int(u * float(pc.envWidth)), 0, int(pc.envWidth) - 1);
+    const int y = clamp(int(v * float(pc.envHeight)), 0, int(pc.envHeight) - 1);
+    const uint idx = uint(y) * pc.envWidth + uint(x);
+    // The caller-owned length claim is checked, exactly as the film's and the
+    // arena's are: a short buffer would read past its end, which is not a
+    // validation error because the binding's range is the whole buffer.
+    if (idx >= pc.envImageTexels) return -1.0;
+    return envImage.v[idx];
+}
 
 /// dL/d(film[pixelIndex]) as a vec3, or vec3(1.0) when no seed is bound.
 /// ONE spelling, used by whichever instantiation needs it, so the guard and
@@ -1131,6 +1194,14 @@ struct DiffVertex {
     float pdfEnvAtBsdfDir;   // s=B: p_E at bsdfDir, the partner of wBsdf
     vec3 envUnweighted;      // s=E: f*cos*L*V/p_E, no MIS weight applied
     vec3 bsdfUnweighted;     // s=B: f*cos*L*V/p_B, no MIS weight applied
+    // d(unweighted)/dL for each strategy -- the coefficient the environment's
+    // radiance is MULTIPLIED BY, which is what an environment parameter's
+    // adjoint needs. RECORDED RATHER THAN RECONSTRUCTED: unweighted/L would
+    // give the same number wherever L > 0 and would be a division by zero at
+    // a black texel, which is exactly the texel an optimiser is most likely
+    // to be moving away from.
+    vec3 envRadianceCoeff;   // s=E: f*cos*V/p_E
+    vec3 bsdfRadianceCoeff;  // s=B: f*cos*V/p_B, which simplifies to weight*V
 
     // --- Material. NOTE THE TWO SPACES -- see the note above. ----------
     vec3 baseColor;        // RAW pushed value
@@ -1360,6 +1431,8 @@ void diffTraverse() {
     vtx.pdfEnvAtBsdfDir = 0.0;
     vtx.envUnweighted = vec3(0.0);
     vtx.bsdfUnweighted = vec3(0.0);
+    vtx.envRadianceCoeff = vec3(0.0);
+    vtx.bsdfRadianceCoeff = vec3(0.0);
     // baseColor, specularWeight and the two raw PBR values are RAW pushed
     // values -- there is no unpacking between the Push block and the field,
     // so they are as valid on the miss path as anywhere and are set here
@@ -1391,6 +1464,8 @@ void diffTraverse() {
     neeTerm.wOther = 0.0;
     DiffMisTerm bsdfTerm = neeTerm;
     float envRadiance = 0.0;
+    vec3 envRadianceCoeff = vec3(0.0);
+    vec3 bsdfRadianceCoeff = vec3(0.0);
     float bsdfRadiance = 0.0;
     float pdfEnvAtBsdfDir = 0.0;
     float pdfEnvTexelAtBsdfDir = 0.0;
@@ -1563,8 +1638,24 @@ void diffTraverse() {
         if (envPdf > 0.0 && nDotLEnv > 0.0) {
             visEnv = diffShadowVisibility(shadowOrigin, envDir);
         }
-        envRadiance = diffEnvRadianceFromPdf(envPdf, pc.envWidth, pc.envHeight, pc.envIntegral);
+        // THE IMAGE WINS WHEN ONE IS BOUND. Both forms return the same
+        // number for a grey environment -- the inversion is exact, which
+        // check 31 asserts texel by texel, and check 74 asserts the two
+        // AGREE on a rendered film. What the image adds is that the radiance
+        // and the sampling density stop being the same array, which is what
+        // makes an environment PARAMETER differentiable at fixed directions.
+        const float envImageL = diffEnvImageRadiance(envDir);
+        envRadiance = (envImageL >= 0.0)
+                          ? envImageL
+                          : diffEnvRadianceFromPdf(envPdf, pc.envWidth, pc.envHeight,
+                                                   pc.envIntegral);
         neeTerm = diffMisTerm(fEnv * nDotLEnv, vec3(envRadiance), visEnv, envPdf, pdfBsdfAtEnvDir);
+        // THE COEFFICIENT THE RADIANCE IS MULTIPLIED BY, recorded rather than
+        // reconstructed. diffMisTerm's unweighted term is fCosine*L*V/pOwn,
+        // so d(term)/dL is fCosine*V/pOwn -- and dividing the term by L to
+        // recover it would be wrong exactly where L is 0, which is a texel
+        // this parameter is most likely to be optimised AWAY from.
+        envRadianceCoeff = (envPdf > 0.0) ? (fEnv * nDotLEnv * visEnv / envPdf) : vec3(0.0);
 
         // Strategy B -- BSDF sampling. pdfEnvMap is the other half of
         // env_sampling.glsl's pair and, until this call, had no caller under
@@ -1611,9 +1702,16 @@ void diffTraverse() {
         if (pdf > 0.0) {
             visBsdf = diffShadowVisibility(shadowOrigin, bsdfDir);
         }
-        bsdfRadiance = diffEnvRadianceFromPdf(pdfEnvTexelAtBsdfDir, pc.envWidth, pc.envHeight,
-                                              pc.envIntegral);
+        const float bsdfImageL = diffEnvImageRadiance(bsdfDir);
+        bsdfRadiance = (bsdfImageL >= 0.0) ? bsdfImageL
+                                           : diffEnvRadianceFromPdf(pdfEnvTexelAtBsdfDir,
+                                                                    pc.envWidth, pc.envHeight,
+                                                                    pc.envIntegral);
         bsdfTerm = diffMisTerm(weight * pdf, vec3(bsdfRadiance), visBsdf, pdf, pdfEnvAtBsdfDir);
+        // The same coefficient for strategy B, where the density CANCELS:
+        // fCosine is weight*pdf and pOwn is pdf, so the coefficient is
+        // weight*visBsdf and carries no division at all.
+        bsdfRadianceCoeff = weight * visBsdf;
 
         // 1. Throughput decay by the BSDF estimator weight f*cos/pdf.
         // `pathThroughput` was read above, before the trace record, and is
@@ -1757,6 +1855,8 @@ void diffTraverse() {
         vtx.pdfEnvAtBsdfDir = pdfEnvAtBsdfDir;
         vtx.envUnweighted = neeTerm.unweighted;
         vtx.bsdfUnweighted = bsdfTerm.unweighted;
+        vtx.envRadianceCoeff = envRadianceCoeff;
+        vtx.bsdfRadianceCoeff = bsdfRadianceCoeff;
         // The tangent on ARRIVAL -- before the update above, exactly as
         // `throughput` is the throughput before its decay -- and the two
         // derivatives the update had to compute anyway.

@@ -437,6 +437,22 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         }
     }
 
+    // Binding 14's environment radiance, when the caller supplies one.
+    const bool hasEnvImage = !options.envImage.empty();
+    const std::vector<float> kEnvImagePlaceholder{0.0f};
+    GpuBuffer envImageBuffer;
+    if (ok) {
+        envImageBuffer = m_allocator.createBufferFromSpan<float>(
+            hasEnvImage ? std::span<const float>(options.envImage)
+                        : std::span<const float>(kEnvImagePlaceholder),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!envImageBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: environment image "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+
     const std::vector<float> kEmissionTexPlaceholder{0.0f};
     GpuBuffer emissionTexBuffer;
     if (ok) {
@@ -491,7 +507,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         const GradientStages::Scene sceneHandles{sceneTlas, sceneVertexBuffer, sceneIndexBuffer};
         const GradientStages::Attachments attachments{arena.buffer(), emissionTexBuffer.buffer,
                                                       adjointSeedBuffer.buffer,
-                                                      sensitivityBuffer.buffer};
+                                                      sensitivityBuffer.buffer,
+                                                      envImageBuffer.buffer};
         ok = st.bindAll(m_device, buffers, sceneHandles, sinks, attachments);
     }
 
@@ -525,6 +542,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             frame.emissionUvBiasV = options.emissionUvBiasV;
         }
         frame.sensitivityFloats = sensitivityFloats;
+        frame.envImageTexels =
+            hasEnvImage ? static_cast<std::uint32_t>(options.envImage.size()) : 0u;
         frame.freezeSampling = options.freezeSampling;
         frame.samplingAlbedo = options.samplingAlbedo;
         frame.samplingMaterial = options.samplingMaterial;
@@ -541,6 +560,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         resources.emissionTexture = emissionTexBuffer.buffer;
         resources.adjointSeed = adjointSeedBuffer.buffer;
         resources.sensitivity = sensitivityBuffer.buffer;
+        resources.envImage = envImageBuffer.buffer;
 
         for (int variant = 0; ok && variant < 2; ++variant) {
             const bool isReplay = (variant == 1);
@@ -643,6 +663,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     if (emissionTexBuffer.isValid()) m_allocator.destroyBuffer(emissionTexBuffer);
     if (adjointSeedBuffer.isValid()) m_allocator.destroyBuffer(adjointSeedBuffer);
     if (sensitivityBuffer.isValid()) m_allocator.destroyBuffer(sensitivityBuffer);
+    if (envImageBuffer.isValid()) m_allocator.destroyBuffer(envImageBuffer);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 

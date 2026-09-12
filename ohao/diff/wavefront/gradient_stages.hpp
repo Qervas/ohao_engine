@@ -85,9 +85,15 @@ public:
         /// descriptor in both even though the forward run is pushed
         /// sensitivityFloats = 0 and never writes it.
         VkBuffer sensitivity{VK_NULL_HANDLE};
+        /// Binding 14, the environment RADIANCE image. Bound for both
+        /// instantiations, placeholder when unused, for the reason every
+        /// other attachment here is: a statically-used binding needs a
+        /// descriptor whether or not its branch runs.
+        VkBuffer envImage{VK_NULL_HANDLE};
         [[nodiscard]] bool valid() const noexcept {
             return gradientArena != VK_NULL_HANDLE && emissionTexture != VK_NULL_HANDLE &&
-                   adjointSeed != VK_NULL_HANDLE && sensitivity != VK_NULL_HANDLE;
+                   adjointSeed != VK_NULL_HANDLE && sensitivity != VK_NULL_HANDLE &&
+                   envImage != VK_NULL_HANDLE;
         }
     };
 

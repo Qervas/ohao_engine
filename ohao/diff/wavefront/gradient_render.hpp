@@ -46,6 +46,8 @@ struct GradientResources {
     /// source, so both instantiations need a descriptor for it even though
     /// the forward one is pushed sensitivityFloats = 0 and never writes it.
     VkBuffer sensitivity{VK_NULL_HANDLE};
+    /// Binding 14's environment RADIANCE image. Same placeholder rule.
+    VkBuffer envImage{VK_NULL_HANDLE};
     [[nodiscard]] bool valid() const noexcept;
 };
 

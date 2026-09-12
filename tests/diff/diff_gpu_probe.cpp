@@ -233,6 +233,7 @@
 #include "probe/checks_pixel_seam.hpp"
 #include "probe/checks_mitsuba_scale.hpp"
 #include "probe/checks_sensitivity.hpp"
+#include "probe/checks_env_image.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -315,6 +316,7 @@ using ohao::diff::probe::checkShadedOrder;
 using ohao::diff::probe::checkPixelSeam;
 using ohao::diff::probe::checkMitsubaScale;
 using ohao::diff::probe::checkSensitivityMap;
+using ohao::diff::probe::checkEnvImageRadiance;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -574,6 +576,12 @@ int main() {
     // the same terms binned two ways -- plus a null test over a set of
     // pixels derived from the camera before the render.
     if (!checkSensitivityMap(ctx)) return 1;
+
+    // 74. The environment's radiance read from an IMAGE rather than
+    // inverted out of its own sampling density -- which is what lets
+    // the radiance move while the density stays put, and so what makes
+    // an environment parameter differentiable at fixed directions.
+    if (!checkEnvImageRadiance(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
