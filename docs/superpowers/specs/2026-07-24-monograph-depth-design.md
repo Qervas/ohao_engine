@@ -224,9 +224,9 @@ never a padded fake.
 
 Every claim must survive `grep` against the current tree. No circular validation,
 no invented numbers, no aspirational features. When a figure or sentence asserts a
-measurement, it cites its source. This directly honors the project's
-`inverse_rendering_honesty` and `feedback_bias_in_offline` principles: the docs
-describe what the code does, not what we wish it did. Where the code contains a
+measurement, it cites its source. This directly honors the project's standing
+honesty principles: the docs describe what the code does, not what we wish it
+did, and a measurement reported without its method is not a measurement. Where the code contains a
 known limitation (e.g. RT static-BLAS shows bind pose for animated meshes), the page
 says so.
 

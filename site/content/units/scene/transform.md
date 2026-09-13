@@ -221,14 +221,13 @@ reports a confident wrong vector rather than a conspicuous zero.
 
 {{cite shaders/core/gbuffer.frag "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
 
-Actor transforms do move in this tree. The inverse-rendering dataset exporter
-jitters three light actors' positions and re-yaws the hero between samples, and
-its caller has to throw away the entire GPU binding because of it:
+Actor transforms have moved in this tree. A since-removed dataset exporter
+jittered light actors' positions and re-yawed the hero between samples, and had to
+throw away the entire GPU binding to do it — the binding does not survive a
+transform edit.
 
-{{cite ohao/inverse/export_dataset.hpp@223ff7f "session.bound = false; // transforms changed — full rebind"}}
-
-That is an edit *between* renders, though — each sample resets accumulation and
-runs its own frame batch at fixed transforms — and no shipping example moves an
+That was an edit *between* renders, though — each sample reset accumulation and
+ran its own frame batch at fixed transforms — and no shipping example moves an
 actor at all: all five set their transforms during scene build and thereafter
 only fly the camera. So the wrong velocity stays invisible until someone
 animates a transform, and the fix is in the transform system (store last frame's

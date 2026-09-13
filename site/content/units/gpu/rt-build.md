@@ -68,9 +68,10 @@ The obvious alternative is to fill the material and texture tables inside the lo
 that lays out geometry, or to key them by actor id and resolve at build time. Nothing
 in the call graph argues for the split as it stands, because the material and texture
 walks only ever run as part of a full rebuild. The one geometry-free material update
-is `updateRTMaterialParams`, a fourth function that exists so the inverse-rendering
-session can re-shade a scene without touching a BLAS — it patches existing rows in
-place and uses neither fill walk. What the split costs is that a whole-scene
+is `updateRTMaterialParams`, a fourth function for re-shading a scene without
+touching a BLAS — it patches existing rows in place and uses neither fill walk. It
+has **no caller left in the tree**: the module that re-shaded scenes this way was
+removed, and the entry point outlived it. What the split costs is that a whole-scene
 correctness invariant now lives in four filter predicates that nothing relates to
 each other.
 :::
@@ -172,9 +173,9 @@ sampler state can recover.
 The vertex and index copies are the only device-local RT *buffers* here; the normal,
 UV, material-ID and material-color buffers are all `HOST_VISIBLE | HOST_COHERENT` and
 written by `vkMapMemory` plus `memcpy`. That is what makes `updateRTMaterialParams`
-possible: the inverse-rendering session re-shades a scene by mapping the material
-buffer and rewriting only the fields it owns, deliberately leaving the packed texture
-indices the texture walk wrote into `.a`, `.z`, `.w` and `matColors[i*3+2].x` intact:
+possible: a caller re-shades a scene by mapping the material buffer and rewriting
+only the fields it owns, deliberately leaving the packed texture indices the texture
+walk wrote into `.a`, `.z`, `.w` and `matColors[i*3+2].x` intact:
 
 {{cite ohao/gpu/vulkan/rt_build.cpp "// Keep texture index in .a"}}
 

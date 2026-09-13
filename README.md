@@ -208,15 +208,8 @@ See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, go
 after the fact:
 
 - **Differentiable and inverse rendering are not part of this engine.** The
-  differentiable renderer moved to its own repository, `ohao_diff`; the
-  inverse-rendering lab was removed in `e0a260b`.
-
-  One coupling survives and is worth knowing about: `ohao_diff` **vendors**
-  `shaders/includes/material/ggx_aniso.glsl`, `rt/env_sampling.glsl`,
-  `rt/mis.glsl` and `pbr_unpack.glsl` from here, so the two renderers cannot
-  disagree about their surface physics. **Change any of those and run
-  `ohao_diff/tools/check_vendor_drift.sh`** — the split removed the compiler's
-  enforcement of that coupling, not the coupling itself.
+  differentiable renderer moved out to its own repository; the
+  inverse-rendering lab was removed in `e0a260b`. This is a game engine.
 - **Animation, the OptiX denoiser, the tscn loader and scene serialization**
   were removed in `0873766`. `--denoise=optix` is still accepted on the command
   line and falls back to OIDN with a warning.

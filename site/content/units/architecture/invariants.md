@@ -183,13 +183,8 @@ because the pixel buffer it reads back is the frame submitted three renders ago:
 
 {{cite examples/turntable.cpp "for (int s = 0; s < spp + 3; s++)"}}
 
-Four offline examples spell it that way, and so does the inverse-rendering
-session inside the engine library, which is not an example program at all:
-
-{{cite ohao/inverse/render_session.hpp@223ff7f "const int frames = budget.spp + 3;"}}
-
-Change the named constant and five call sites quietly render the wrong sample
-count. The no-texture sentinel shows the same pattern with the polarity
+Four offline examples spell it that way. Change the named constant and four
+call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity
 reversed: it *has* a canonical name,
 
 {{cite ohao/gpu/layout_meta.hpp "kNoTexture = 0xFFFFFFFFu;"}}
@@ -234,7 +229,7 @@ code, not as something the build guarantees.
 ## Contracts
 
 - The geometry walk and the material-ID walk must admit the same actors in the same order. They currently do not use the same predicate: geometry upload requires `isVisible()`, the material-ID walk does not. One hidden mesh shifts every later instance's material lookup, and no mechanism in the audit above can see it.
-- `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples and `ohao/inverse/render_session.hpp` encode this as a literal `+ 3`; changing the constant without changing all five silently changes sample counts.
+- `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples encode this as a literal `+ 3`; changing the constant without changing all four silently changes sample counts.
 - A lazily created RT profile owns no scene data until `updateSceneBuffers()` is replayed into it. `setScene()` and `updateSceneBuffers()` usually run before any `PathTracer` exists, and `forEachRTRenderer` iterates nothing when no profile is alive, so without the replay the new profile's descriptors are never written at all.
 - The light buffer's header is rewritten on every upload, so the env-map index and intensity scale must be re-stamped even when the HDR is not reloaded — otherwise the environment silently disappears on the next scene change.
 - Adding a descriptor binding numbered above 12 to the RT layout invalidates the variable-count flag on binding 12. Only the validation layer will tell you, and only if `OHAO_VALIDATION` is set in the environment.

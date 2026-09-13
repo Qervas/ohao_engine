@@ -40,7 +40,7 @@
 <div class="prose reveal">
 <p>`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device, command pool and offscreen framebuffer — and never creates a swapchain. Its delivery surface is a `std::vector&lt;uint8_t&gt;` of RGBA8 pixels. That is not a limitation the interactive viewer escapes — the GLFW viewer renders headless too, then blits the CPU buffer into an OpenGL texture every frame.</p>
 <div class="citation-chip"><code class="citation-code">const uint8_t* pixels = renderer.getPixels();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L330" target="_blank" rel="noopener">examples/interactive.cpp:330</a></div>
-<p>So the PNG writers, the golden smoke test, the inverse-rendering fitter and the realtime viewer all drive the identical `render()` → `getPixels()` pair. `gpu_module.hpp` is not a second entry point: it is a seven-include umbrella whose own comment tells you to prefer the specific headers.</p>
+<p>So the PNG writers, the golden smoke test and the realtime viewer all drive the identical `render()` → `getPixels()` pair. `gpu_module.hpp` is not a second entry point: it is a seven-include umbrella whose own comment tells you to prefer the specific headers.</p>
 <div class="citation-chip"><code class="citation-code">* Umbrella for the GPU / Vulkan subsystem (prefer specific headers in production).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/gpu_module.hpp#L4" target="_blank" rel="noopener">ohao/gpu/gpu_module.hpp:4</a></div>
 </div>
 <div class="section-rule"><h2 id="four-modes-three-of-which-can-be-refused">Four modes, three of which can be refused</h2></div>
@@ -97,9 +97,8 @@
 <p>Each `render()` waits on its slot&#x27;s fence, copies that slot&#x27;s staging buffer into `m_pixelBuffer`, and only *then* records and submits this frame&#x27;s work into the same slot. The copy therefore delivers the image submitted three calls ago, not the one just issued.</p>
 <div class="citation-chip"><code class="citation-code">// Read back previous frame&#x27;s pixels</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L138" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:138</a></div>
 <figure class="unit-figure reveal"><img src="../../assets/units/gpu-renderer-facade-ring-lag.svg" alt="Conceptual timing of the read-before-record ordering in render(); slot assignment and the depth of three are read from the code, not measured. The first three calls leave m_pixelBuffer unwritten." loading="lazy" /><figcaption>Conceptual timing of the read-before-record ordering in render(); slot assignment and the depth of three are read from the code, not measured. The first three calls leave m_pixelBuffer unwritten.</figcaption></figure>
-<p>Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell_box, model_viewer, turntable and the inverse-rendering session driver; env_demo drops to `samples + 2` only when `--pan-x` makes it add one final frame after moving the camera.</p>
+<p>Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell_box, model_viewer and turntable; env_demo drops to `samples + 2` only when `--pan-x` makes it add one final frame after moving the camera.</p>
 <div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 10 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/cornell_box.cpp#L164" target="_blank" rel="noopener">examples/cornell_box.cpp:164</a></div>
-<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:58</a></div>
 <p>Under `--denoise=none` that arithmetic lands exactly: after `spp + 3` calls the last copy delivered call `spp - 1`, the frame that had accumulated `spp` samples. No comment at any of those sites ties the `+ 3` to the ring depth, though, and it cannot be the whole story — the default offline configuration is `DenoiseMode::OIDN`, whose `getPixels()` branch never reads `m_pixelBuffer`. There the three extra frames buy three extra samples and compensate no lag.</p>
 <p>The one path without the lag is the legacy forward fallback used when frame resources fail to initialise: it blocks on a fence and maps the staging memory in the same call.</p>
 </div>
@@ -145,7 +144,6 @@
         <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/cornell_box.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/render_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/render/rt/denoise/oidn_denoise.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/renderer/renderer_test.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer_impl.hpp</code><span class="desc"></span></div>

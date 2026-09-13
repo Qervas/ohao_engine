@@ -101,12 +101,11 @@ point with no stratification relative to its predecessors — white noise wearin
 Sobol table. Fixing the seed per pixel and advancing only the index makes
 accumulation progressive, so frame 64 is a genuine 64-point net rather than 64
 unrelated draws — but only when the block is $2^m$-aligned. `resetAccumulation()`
-rewinds the index to `m_renderSeed`, not to zero, and the inverse-rendering
-session sets a different render seed per view; replaying the arithmetic, a block
-starting at 1 or at 9973 is not a net at N = 16, 64 or 256.
+rewinds the index to `m_renderSeed`, not to zero; replaying the arithmetic, a block
+starting at 1 or at 9973 is not a net at N = 16, 64 or 256. Any caller that sets a
+nonzero render seed — per view, per run — pays that.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
-{{cite ohao/inverse/render_session.hpp@223ff7f "setRenderSeed(seed + static_cast<uint32_t>(viewIndex) * 9973u)"}}
 :::
 
 {{figure sampling-sobol-pad0-scramble "Measured: the shader's arithmetic replayed offline for pad 0, dims 0-1, indices 0-15 at pixel (640,360). Left, unscrambled — index 0 sits on the origin. Right, after the Owen scramble — displaced, but still one point per cell of the 4x4 grid. Green marks the points that stay on the diagonal, a consequence of the shared per-pad seed. Not a captured render."}}
@@ -290,7 +289,7 @@ reference.
 ## Contracts
 
 - The Owen seed must stay independent of the sample index. Adding a frame term degrades the sampler to white noise while still passing every test in `sobol_test`.
-- Progressive accumulation is a net only over a $2^m$-aligned block. `resetAccumulation()` rewinds the index to `m_renderSeed`; any nonzero render seed — as the inverse-rendering session sets per view — gives a stratified but non-net block.
+- Progressive accumulation is a net only over a $2^m$-aligned block. `resetAccumulation()` rewinds the index to `m_renderSeed`; any nonzero render seed gives a stratified but non-net block.
 - Only four Sobol dimensions exist. Requesting dimension `d` really means pad `d >> 2`, local dim `d & 3`; reordering the raygen's dimension consumption silently re-pairs which quantities share a pad.
 - At index 0 every dimension of a pad returns the same value. Any consumer that treats a pad's dims as independent gets a degenerate first accumulation frame.
 - `samplerType` is baked into the SPIR-V at `createRTPipeline()`. Changing it on a live `PathTracer` does nothing without a pipeline rebuild.

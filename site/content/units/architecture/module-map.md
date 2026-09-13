@@ -195,8 +195,8 @@ sitting directly in `ohao/gpu/` is a source of anything:
 
 {{cite ohao/gpu/vulkan/CMakeLists.txt "file(GLOB_RECURSE GPU_VK_HEADERS"}}
 
-`layout_meta.hpp` reaches its five consumers the same way `ohao/inverse/` does —
-purely through the repo-wide `-I ohao` path. That is the real ownership boundary,
+`layout_meta.hpp` reaches its five consumers purely through the repo-wide
+`-I ohao` path. That is the real ownership boundary,
 and it is not a module. `GPULight` is declared in `render/rt/` and written by
 `gpu/vulkan/light_upload.cpp`; neither module owns it — the 80-byte constant does,
 and both fail to compile if it drifts.

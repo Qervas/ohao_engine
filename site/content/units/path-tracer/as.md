@@ -206,17 +206,12 @@ unconditionally at the end of every successful upload:
 
 {{cite ohao/gpu/vulkan/scene_upload.cpp "    buildAccelerationStructures();"}}
 
-and two live callers re-enter it with the instance list untouched. `ensureRTRenderer`
+and a live caller re-enters it with the instance list untouched. `ensureRTRenderer`
 re-uploads the same scene when a mode's RT profile is created late:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "re-upload so materials, textures,"}}
 
-and the inverse-rendering forward pass re-uploads on every evaluation, when all that
-changed were albedo tiles on existing actors:
-
-{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
-
-Both are the same-instance-count case a refit exists to serve. It is unreachable
+That is exactly the same-instance-count case a refit exists to serve. It is unreachable
 only because the teardown nulls the handle first — an oversight, not a consequence
 of the lifecycle.
 

@@ -33,7 +33,7 @@
         <p>Offline guided denoise path.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-buffer-oidn-is-actually-handed">The buffer OIDN is actually handed</a></li><li><a href="#why-this-backend-is-the-offline-one">Why this backend is the offline one</a></li><li><a href="#the-guides-and-the-one-that-is-encoded-wrong">The guides, and the one that is encoded wrong</a></li><li><a href="#denoise-in-linear-tonemap-after">Denoise in linear, tonemap after</a></li><li><a href="#where-oidn-is-deliberately-forbidden">Where OIDN is deliberately forbidden</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-buffer-oidn-is-actually-handed">The buffer OIDN is actually handed</a></li><li><a href="#why-this-backend-is-the-offline-one">Why this backend is the offline one</a></li><li><a href="#the-guides-and-the-one-that-is-encoded-wrong">The guides, and the one that is encoded wrong</a></li><li><a href="#denoise-in-linear-tonemap-after">Denoise in linear, tonemap after</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-buffer-oidn-is-actually-handed">The buffer OIDN is actually handed</h2></div>
@@ -102,21 +102,6 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">rgba8[i * 4 + 0] = static_cast&lt;uint8_t&gt;(std::clamp(r * 255.0f, 0.0f, 255.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L85" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:85</a></div>
 <p>That is a uniform sub-LSB downward bias — invisible by eye, but enough to move a per-pixel diff against a `--denoise=none` reference, which matters if you are using such diffs as a regression signal.</p>
 </div>
-<div class="section-rule"><h2 id="where-oidn-is-deliberately-forbidden">Where OIDN is deliberately forbidden</h2></div>
-<div class="prose reveal">
-<p>The inverse-rendering module keeps the denoiser out of the optimizer. Every render whose pixels feed the image loss — and therefore every finite-difference gradient taken of that loss — is rendered with `DenoiseMode::None`, in the synthetic and the lab-capture branch alike.</p>
-<div class="citation-chip"><code class="citation-code">(!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/staged_fit.hpp#L228" target="_blank" rel="noopener">ohao/inverse/staged_fit.hpp@223ff7f:228</a></div>
-<p>Presentation renders are a separate slot, and there the default is *on*: `showDenoise` starts at `DenoiseMode::OIDN`, and the CLI accepts only `none` or `oidn` for it.</p>
-<div class="citation-chip"><code class="citation-code">DenoiseMode showDenoise{DenoiseMode::OIDN};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_config.hpp#L40" target="_blank" rel="noopener">ohao/inverse/fit_config.hpp@223ff7f:40</a></div>
-<div class="citation-chip"><code class="citation-code">if (a.cfg.showDenoise != DenoiseMode::None &amp;&amp; a.cfg.showDenoise != DenoiseMode::OIDN) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_config.hpp#L415" target="_blank" rel="noopener">ohao/inverse/fit_config.hpp@223ff7f:415</a></div>
-<p>That default reaches past presentation. The SHOW RMSE, PSNR and SSIM a run prints as its headline result are computed on the recovered image rendered with `showDenoise`, against a synthetic target rendered through `showDenoise` too — so by default both sides of the comparison have been through the prior.</p>
-<div class="citation-chip"><code class="citation-code">labM.showRmse = rmseRGB(recoveredPrimary, tb.targetsShow[0]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_engine.hpp#L343" target="_blank" rel="noopener">ohao/inverse/fit_engine.hpp@223ff7f:343</a></div>
-<div class="citation-chip"><code class="citation-code">session.render(v, cfg.show, cfg.seed, cfg.showDenoise);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_targets.hpp#L207" target="_blank" rel="noopener">ohao/inverse/fit_targets.hpp@223ff7f:207</a></div>
-<p>Real-photo lab mode is the one configuration that forces the presentation denoiser off, and its holdout and relight evaluations render with `None` as well.</p>
-<div class="citation-chip"><code class="citation-code">cfg.showDenoise = DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_targets.hpp#L59" target="_blank" rel="noopener">ohao/inverse/fit_targets.hpp@223ff7f:59</a></div>
-<div class="citation-chip"><code class="citation-code">constexpr DenoiseMode kLabEvalDenoise = DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/fit_lab_eval.hpp#L85" target="_blank" rel="noopener">ohao/inverse/fit_lab_eval.hpp@223ff7f:85</a></div>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>A neural denoiser is a strong, non-linear, spatially-correlated prior. It makes a converged render look converged, and it makes an unconverged render *also* look converged — so any measurement taken through it is measuring the prior as much as the integrator. OHAO holds that line where a biased signal would corrupt the fit itself — the loss and the finite-difference gradients — and does not hold it for the reported image metrics, which outside lab mode are computed prior-on.</p></div>
-</div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
@@ -139,11 +124,6 @@ $$</div>
         <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/staged_fit.hpp@223ff7f</code><span class="desc">path note</span></div>
-        <div class="row"><code>ohao/inverse/fit_config.hpp@223ff7f</code><span class="desc">path note</span></div>
-        <div class="row"><code>ohao/inverse/fit_engine.hpp@223ff7f</code><span class="desc">path note</span></div>
-        <div class="row"><code>ohao/inverse/fit_targets.hpp@223ff7f</code><span class="desc">path note</span></div>
-        <div class="row"><code>ohao/inverse/fit_lab_eval.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/render/rt/denoise/oidn_denoise.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

@@ -90,9 +90,7 @@ The mesh hooks maintain their vector and raise `needsBufferUpdate`; `MeshCompone
 
 {{cite ohao/scene/scene.cpp "// GPU buffer updates are handled by VulkanRenderer::updateSceneBuffers()"}}
 
-The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test re-uploads by hand immediately after `setScene`. A since-removed fitting path went further and re-uploaded on *every* forward render, which put a full scene upload inside a finite-difference gradient loop:
-
-{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
+The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test re-uploads by hand immediately after `setScene`. A since-removed path went further and re-uploaded on *every* render, putting a full scene upload inside an inner loop; the cost of that mistake is documented under `gpu/scene-upload`.
 
 Scene-side dirty tracking is bookkeeping that no consumer ever polls; if you add one, note that it cannot observe transform edits at all, only component add/remove/model-swap.
 
@@ -122,7 +120,7 @@ which nothing in `examples/`, `tests/` or `ohao/` calls. Even reached, `PhysicsW
 
 ## DefaultSceneFactory, and the scale trap it documents
 
-The factory's three entry points (`createBlenderLikeScene`, `createEmptyScene`, `createPhysicsTestScene`) have no callers in the tree, and unlike a dead *function* whose formula lives on inlined elsewhere, there is no second copy of these layouts: every example and both inverse-rendering builders construct `Scene` directly. They are editor-era scaffolding.
+The factory's three entry points (`createBlenderLikeScene`, `createEmptyScene`, `createPhysicsTestScene`) have no callers in the tree, and unlike a dead *function* whose formula lives on inlined elsewhere, there is no second copy of these layouts: every example constructs `Scene` directly. They are editor-era scaffolding.
 
 What survives them is a hazard worth reading. `ComponentFactory` gives a `Platform` primitive 2.0 × 0.2 × 2.0 half-extents:
 

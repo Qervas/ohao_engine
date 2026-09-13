@@ -6,6 +6,14 @@
 
 ---
 
+> **Superseded north star, kept because the work it justified is still live.**
+> This document opens by aiming the engine at a differentiable, inverse-rendering
+> renderer. That direction was dropped: OHAO is a game engine, and the
+> differentiable renderer moved to a separate repository. Read the section below
+> as the *reason determinism was built*, not as a statement of where this engine
+> is going. What it actually delivered -- the render contract, the golden-image
+> net and the pre-push hook -- is current and shipping.
+
 ## North star (why this phase exists)
 
 The engine is being re-architected toward a **differentiable, inverse-rendering, offline-first**

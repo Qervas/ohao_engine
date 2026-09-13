@@ -96,9 +96,7 @@
 <div class="citation-chip"><code class="citation-code">constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L19" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:19</a></div>
 <p>and then re-typed as a bare `+ 3` wherever a caller drives the render loop itself, because the pixel buffer it reads back is the frame submitted three renders ago:</p>
 <div class="citation-chip"><code class="citation-code">for (int s = 0; s &lt; spp + 3; s++)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L221" target="_blank" rel="noopener">examples/turntable.cpp:221</a></div>
-<p>Four offline examples spell it that way, and so does the inverse-rendering session inside the engine library, which is not an example program at all:</p>
-<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:58</a></div>
-<p>Change the named constant and five call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity reversed: it *has* a canonical name,</p>
+<p>Four offline examples spell it that way. Change the named constant and four call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity reversed: it *has* a canonical name,</p>
 <div class="citation-chip"><code class="citation-code">static constexpr uint32_t    kNoTexture = 0xFFFFFFFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L39" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:39</a></div>
 <p>and no callers. Every producer re-types the value instead — `0xFFFFFFFFu` in the RT material upload, `UINT32_MAX` in the raster push-constant fill, the literal again in each shader that tests it. The value is load-bearing in a dozen places and spelled two ways; the named constant is decoration.</p>
 <p>Two ordering rules round out the set, and both are repaired in code rather than asserted. A path-tracer profile is created lazily, so a scene upload that ran before the profile existed has to be replayed into the new descriptor set:</p>
@@ -112,7 +110,7 @@
 <div class="prose reveal">
 <ul>
 <li>The geometry walk and the material-ID walk must admit the same actors in the same order. They currently do not use the same predicate: geometry upload requires `isVisible()`, the material-ID walk does not. One hidden mesh shifts every later instance&#x27;s material lookup, and no mechanism in the audit above can see it.</li>
-<li>`render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples and `ohao/inverse/render_session.hpp` encode this as a literal `+ 3`; changing the constant without changing all five silently changes sample counts.</li>
+<li>`render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples encode this as a literal `+ 3`; changing the constant without changing all four silently changes sample counts.</li>
 <li>A lazily created RT profile owns no scene data until `updateSceneBuffers()` is replayed into it. `setScene()` and `updateSceneBuffers()` usually run before any `PathTracer` exists, and `forEachRTRenderer` iterates nothing when no profile is alive, so without the replay the new profile&#x27;s descriptors are never written at all.</li>
 <li>The light buffer&#x27;s header is rewritten on every upload, so the env-map index and intensity scale must be re-stamped even when the HDR is not reloaded — otherwise the environment silently disappears on the next scene change.</li>
 <li>Adding a descriptor binding numbered above 12 to the RT layout invalidates the variable-count flag on binding 12. Only the validation layer will tell you, and only if `OHAO_VALIDATION` is set in the environment.</li>
@@ -132,7 +130,6 @@
         <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/turntable.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/render_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>

@@ -33,7 +33,7 @@
         <p>View/proj, FPS/orbit style controls used by examples.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-datum-is-90">The datum is −90°</a></li><li><a href="#why-pitch-stops-at-89-and-not-90">Why pitch stops at 89 and not 90</a></li><li><a href="#the-basis-accessors-nobody-calls">The basis accessors nobody calls</a></li><li><a href="#three-projections-from-one-camera">Three projections from one camera</a></li><li><a href="#the-aspect-ratio-that-is-never-set">The aspect ratio that is never set</a></li><li><a href="#the-near-plane-is-twice-what-it-says">The near plane is twice what it says</a></li><li><a href="#a-second-camera-model-with-the-opposite-yaw">A second camera model, with the opposite yaw</a></li><li><a href="#the-240-bytes-the-forward-shader-never-agreed-to">The 240 bytes the forward shader never agreed to</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-datum-is-90">The datum is −90°</a></li><li><a href="#why-pitch-stops-at-89-and-not-90">Why pitch stops at 89 and not 90</a></li><li><a href="#the-basis-accessors-nobody-calls">The basis accessors nobody calls</a></li><li><a href="#three-projections-from-one-camera">Three projections from one camera</a></li><li><a href="#the-aspect-ratio-that-is-never-set">The aspect ratio that is never set</a></li><li><a href="#the-near-plane-is-twice-what-it-says">The near plane is twice what it says</a></li><li><a href="#the-240-bytes-the-forward-shader-never-agreed-to">The 240 bytes the forward shader never agreed to</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-datum-is-90">The datum is −90°</h2></div>
@@ -44,8 +44,7 @@
 $$</div>
 <p>with $\psi$ yaw and $\theta$ pitch, both stored in degrees and converted per call by `glm::radians`.</p>
 <div class="citation-chip"><code class="citation-code">newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L28" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:28</a></div>
-<p>Measuring from +X means yaw = 0 looks down +X, not down −Z. Every camera in the tree that wants the conventional &quot;into the screen&quot; direction therefore carries a literal −90: the constructor&#x27;s own default, the renderer&#x27;s initial pose, `SceneFramer`, and the three `CameraView`s the inverse-rendering scene builder names `front`. It is a datum rather than a constant — the builder&#x27;s other shipped views are offsets from it (−110 and −70 in `buildCornell`, −48 and −128 in `buildStudio`), and domain randomisation draws yaw as a ±58° excursion around the same origin:</p>
-<div class="citation-chip"><code class="citation-code">const float yaw = -90.0f + n11() * 58.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/scene_builder.hpp#L783" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp@223ff7f:783</a></div>
+<p>Measuring from +X means yaw = 0 looks down +X, not down −Z. Every camera in the tree that wants the conventional &quot;into the screen&quot; direction therefore carries a literal −90: the constructor&#x27;s own default, the renderer&#x27;s initial pose, and `SceneFramer`. It is a datum rather than a constant.</p>
 <p>Right and up are re-orthogonalised from a fixed world up of (0, 1, 0), so roll is not representable at all.</p>
 </div>
 <div class="section-rule"><h2 id="why-pitch-stops-at-89-and-not-90">Why pitch stops at 89 and not 90</h2></div>
@@ -109,22 +108,6 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L485" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:485</a></div>
 <p>Either schedule is anchored at the same 1000, so the outermost cascade is fitted to a frustum depth the projection cannot draw.</p>
 </div>
-<div class="section-rule"><h2 id="a-second-camera-model-with-the-opposite-yaw">A second camera model, with the opposite yaw</h2></div>
-<div class="prose reveal">
-<p>A second camera that once lived beside this one re-derived its forward vector with a different convention — kept here because the mismatch is the interesting part, and because a future second camera will be tempted into the same one:</p>
-<div class="citation-chip"><code class="citation-code">const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_camera.hpp#L24" target="_blank" rel="noopener">ohao/render/diff/diff_camera.hpp@223ff7f:24</a></div>
-<p>that is $\mathbf{f}&#x27; = (\sin\psi\cos\theta,\; \sin\theta,\; -\cos\psi\cos\theta)$. Matching it to `Camera`&#x27;s $(\cos\psi\cos\theta,\; \sin\theta,\; \sin\psi\cos\theta)$ requires $\sin\psi&#x27; = \cos\psi$ *and* $-\cos\psi&#x27; = \sin\psi$ simultaneously, whose only solution is $\psi&#x27; = \psi + 90°$. `DiffCamera` at yaw $\psi$ is `Camera` at yaw $\psi - 90°$: an exact quarter turn about world up.</p>
-<p>Nothing applies that offset. Both are driven from the same `CameraView` list and both read the same field — `InverseScene::applyCamera` hands `v.yawDeg` to `Camera::setRotation`,</p>
-<div class="citation-chip"><code class="citation-code">cam.setRotation(v.pitchDeg, v.yawDeg);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/scene_builder.hpp#L356" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp@223ff7f:356</a></div>
-<p>and `DiffSession::setupFromInverse` copies it across verbatim:</p>
-<div class="citation-chip"><code class="citation-code">c.yawDeg = v.yawDeg;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_session.hpp#L48" target="_blank" rel="noopener">ohao/render/diff/diff_session.hpp@223ff7f:48</a></div>
-<p>With $\psi$ and $\theta$ shared, the two forwards satisfy</p>
-<div class="math-block">$$
-\mathbf{f}\cdot\mathbf{f}' = \sin^2\theta
-$$</div>
-<p>so at level pitch they are exactly perpendicular *for every yaw*, and inside the ±89° pitch clamp — where $\sin^2\theta &lt; 1$ always — they never coincide at any yaw or pitch the engine can reach. At the standard &quot;front&quot; view, yaw −90° and pitch 0, `Camera` looks down −Z and `DiffCamera` looks down −X. The header comment claiming it &quot;matches studio yaw/pitch convention&quot; is not what the arithmetic says. Anything that compares a Vulkan render against a `DiffCamera`-projected quantity — the ground-plane albedo map, in particular — is comparing two viewpoints a quarter turn apart, at every view the builder ships.</p>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`Camera` is a pose, not a lens. Its view matrix is what every Vulkan pipeline reads — forward, deferred and path tracer alike — while `DiffCamera` builds its own from a yaw convention 90° away. Only the deferred pipeline ever renders with its *projection* matrix. Fov, aspect, near and far do not mean one thing engine-wide, so &quot;the camera&#x27;s near plane&quot; is an ambiguous phrase in this codebase — always name the pipeline.</p></div>
-</div>
 <div class="section-rule"><h2 id="the-240-bytes-the-forward-shader-never-agreed-to">The 240 bytes the forward shader never agreed to</h2></div>
 <div class="prose reveal">
 <p>`getViewProjectionMatrix` has exactly one call site, and it is a live layout bug. `renderSceneObjects` fills an `ObjectPushConstants` — `mat4 model`, `mat4 viewProj`, `mat4 prevMVP`, then three `vec4`s of material, 240 bytes in all — and pushes the whole thing through `m_pipelineLayout`:</p>
@@ -139,7 +122,7 @@ $$</div>
 <ul>
 <li>Pitch must stay strictly inside ±90° or `cross(front, worldUp)` degenerates and the view matrix&#x27;s rotation block stops describing the camera. All three writers of `pitch` clamp it — `setRotation`, `rotate`, `focusOnPoint` — and a &quot;cleanup&quot; that widens any of them to ±90 exactly will produce a frame with a randomly rolled camera, not a gimbal-locked one.</li>
 <li>Nothing calls `setAspectRatio`, so a resize changes the render target without changing the projection. Adding a resize hook is the fix; until then the deferred image&#x27;s horizontal fov is that of a 16:10 frame.</li>
-<li>The Y-flip is *not* in this class. Consumers that build a Vulkan clip-space matrix must apply `proj[1][1] *= -1` themselves (deferred does, `DiffCamera` does, the path tracer instead negates Y when forming the ray). Adding the flip inside `Camera` would double-flip two of the three.</li>
+<li>The Y-flip is *not* in this class. Consumers that build a Vulkan clip-space matrix must apply `proj[1][1] *= -1` themselves (deferred does; the path tracer instead negates Y when forming the ray). Adding the flip inside `Camera` would double-flip one of the two.</li>
 <li>`getViewProjectionMatrix()` has a single call site, and the forward shaders do not declare the `viewProj` field it writes — they read view and proj from the uniform buffer at binding 0. The bytes are still consumed, as material data. Fixing the layout on one side only (deleting `viewProj` from the struct, or adding it to the shaders) changes what the forward pass renders; both sides must move together.</li>
 <li>Near and far are immutable after construction (0.1 and 100), because the only two mutators that touch them have no callers. Any geometry beyond 100 units is outside the deferred frustum regardless of what the CSM cascade range claims.</li>
 </ul>
@@ -147,7 +130,6 @@ $$</div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/scene_builder.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
@@ -155,8 +137,6 @@ $$</div>
         <div class="row"><code>ohao/render/camera/camera.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/diff/diff_camera.hpp@223ff7f</code><span class="desc">path note</span></div>
-        <div class="row"><code>ohao/render/diff/diff_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
       </div>

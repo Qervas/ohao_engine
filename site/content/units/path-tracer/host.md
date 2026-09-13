@@ -181,8 +181,8 @@ offset.
 `m_sampleIndex` and `m_historyFrameCount` both advance once per frame and are not
 interchangeable: the first seeds the sampler, the second drives temporal logic. A
 reset sends the history counter to zero but restores the sample index to a
-caller-settable seed rather than zero, so finite-difference and inverse-rendering
-runs replay an identical sample sequence across parameter perturbations.
+caller-settable seed rather than zero, so a caller can replay an identical sample
+sequence across runs that change something else.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
 

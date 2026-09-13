@@ -195,45 +195,6 @@ That is a uniform sub-LSB downward bias — invisible by eye, but enough to move
 per-pixel diff against a `--denoise=none` reference, which matters if you are
 using such diffs as a regression signal.
 
-## Where OIDN is deliberately forbidden
-
-The inverse-rendering module keeps the denoiser out of the optimizer. Every
-render whose pixels feed the image loss — and therefore every finite-difference
-gradient taken of that loss — is rendered with `DenoiseMode::None`, in the
-synthetic and the lab-capture branch alike.
-
-{{cite ohao/inverse/staged_fit.hpp@223ff7f "(!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;"}}
-
-Presentation renders are a separate slot, and there the default is *on*:
-`showDenoise` starts at `DenoiseMode::OIDN`, and the CLI accepts only `none` or
-`oidn` for it.
-
-{{cite ohao/inverse/fit_config.hpp@223ff7f "DenoiseMode showDenoise{DenoiseMode::OIDN};"}}
-{{cite ohao/inverse/fit_config.hpp@223ff7f "a.cfg.showDenoise != DenoiseMode::None && a.cfg.showDenoise != DenoiseMode::OIDN"}}
-
-That default reaches past presentation. The SHOW RMSE, PSNR and SSIM a run prints
-as its headline result are computed on the recovered image rendered with
-`showDenoise`, against a synthetic target rendered through `showDenoise` too — so
-by default both sides of the comparison have been through the prior.
-
-{{cite ohao/inverse/fit_engine.hpp@223ff7f "labM.showRmse = rmseRGB(recoveredPrimary, tb.targetsShow[0]);"}}
-{{cite ohao/inverse/fit_targets.hpp@223ff7f "session.render(v, cfg.show, cfg.seed, cfg.showDenoise);"}}
-
-Real-photo lab mode is the one configuration that forces the presentation
-denoiser off, and its holdout and relight evaluations render with `None` as well.
-
-{{cite ohao/inverse/fit_targets.hpp@223ff7f "cfg.showDenoise = DenoiseMode::None;"}}
-{{cite ohao/inverse/fit_lab_eval.hpp@223ff7f "constexpr DenoiseMode kLabEvalDenoise = DenoiseMode::None;"}}
-
-:::key
-A neural denoiser is a strong, non-linear, spatially-correlated prior. It makes
-a converged render look converged, and it makes an unconverged render *also* look
-converged — so any measurement taken through it is measuring the prior as much as
-the integrator. OHAO holds that line where a biased signal would corrupt the fit
-itself — the loss and the finite-difference gradients — and does not hold it for
-the reported image metrics, which outside lab mode are computed prior-on.
-:::
-
 ## Contracts
 
 - `oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN's HDR filter would see radiance scaled by the sample count.

@@ -12,9 +12,8 @@ This tree writes the isotropic GGX distribution out **four** times, and every on
 of the four sits behind a function name: `distributionGGX` in `brdf_ggx.glsl`,
 which only `deferred_lighting.frag` and `forward.frag` reach — through
 `evaluateBRDF`; `ggxDisoShaded` and `ggxDiso` in `ggx_aniso.glsl`, `#include`d by
-the three path-tracer raygens — and **vendored** by the differentiable renderer,
-which calls `ggxDiso` for its specular lobe from its own repository;
-and `D_ClearCoat` in `advanced_brdf.glsl`, a file no shader `#include`s.
+the three path-tracer raygens; and `D_ClearCoat` in `advanced_brdf.glsl`, a file
+no shader `#include`s.
 `ggxD_anisoOrIso`'s isotropic branch is no longer a fifth copy: it delegates to
 `ggxDisoShaded`.
 

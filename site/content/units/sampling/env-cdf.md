@@ -75,10 +75,8 @@ against each other never appears. That inversion is the only thing whose answer
 depends on the integral reaching the GPU intact, which is why the argument
 survives in a signature that does not read it.
 
-> The estimator that used this lived in the differentiable renderer, which now
-> has [its own repository](https://github.com/Qervas). This file is **vendored**
-> there: an edit here changes both, and that repository's
-> `tools/check_vendor_drift.sh` is what reports the divergence.
+> The estimator that used this was removed from this engine, which is why the
+> parameter survives in a signature that does not read it.
 
 ## Two binary searches per sample
 
@@ -298,5 +296,5 @@ what every shipped example does, never hits this.
 
 - Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `light_upload` allocates is what makes that unreachable.
 - Width, height and integral travel in push constants (`control.w`, `tuning.y`, `tuning.z`), not in the buffers. A `control.w` of 0 means "skip env importance sampling entirely", not "the map is 0 wide".
-- `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. That is a statement about *this* pairing, not about the divergence itself: the wavefront integrator pairs both sides of its weight through the same `pdfEnvMap`, and its weights do sum to one — measured to 1.49e-07 over 49152 samples. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness.
+- `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. The fault is in the *pairing*, not in either function: route both sides of a balance weight through the same `pdfEnvMap` and the weights do sum to one. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness.
 - The CDF is rebuilt only when the environment *path* changes, so `envIntensity` relighting never touches it — correctly, since a uniform scale leaves the normalised distribution identical.

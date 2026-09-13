@@ -47,8 +47,7 @@
 <div class="prose reveal">
 <p>Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a literal: the command-buffer count, the fence loop, the descriptor-set count, the `std::array` of slots, and — outside this file — the descriptor pool, which budgets one extra set for the legacy non-ring path.</p>
 <div class="citation-chip"><code class="citation-code">const uint32_t totalSets = framesInFlight + 1; // +1 for legacy compatibility</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/pipeline.cpp#L90" target="_blank" rel="noopener">ohao/gpu/vulkan/pipeline.cpp:90</a></div>
-<p>The depth leaks back out as a bare `3` wherever a driver flushes the readback lag before saving an image — five sites, none of which reads the constant. Four are the offline examples; the fifth is inside `ohao/`, in the inverse-rendering session.</p>
-<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:58</a></div>
+<p>The depth leaks back out as a bare `3` wherever a driver flushes the readback lag before saving an image — four sites, none of which reads the constant. All four are the offline examples.</p>
 <div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 30 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L334" target="_blank" rel="noopener">examples/model_viewer.cpp:334</a></div>
 <p>`cornell_box` and `model_viewer` write `samples + 3`, `turntable` writes `spp + 3`, and `env_demo` splits its three across the `--pan-x` branch — `samples + 2`, then one more `render()` after the camera moves. Raise the constant to 4 and all five capture an image one accumulation pass earlier than they meant to.</p>
 </div>
@@ -111,8 +110,7 @@
 <div class="citation-chip"><code class="citation-code">// Create new staging buffers with new size</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.cpp#L293" target="_blank" rel="noopener">ohao/render/frame/frame_resources.cpp:293</a></div>
 <p>The caller pairs that with `m_currentFrame = 0`, commented as avoiding a read from an old-size buffer. There is nothing left to avoid: every slot was replaced, so the reset changes which slot runs next and nothing about what any of them holds.</p>
 <div class="citation-chip"><code class="citation-code">m_frameResources.resizeStagingBuffers(width * height * 4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L517" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:517</a></div>
-<p>What this path *does* add is an unguarded route to the `throw`. `resizeStagingBuffers` → `createStagingBuffers` → `createBuffer` → `findMemoryType` is the same chain `initialize()` walks, but `VulkanRenderer::resize` has exactly one caller in the tree — the inverse-rendering render session — and neither it nor anything between it and `main` installs a handler. The failure that returns `false` from `initialize()` calls `std::terminate` here.</p>
-<div class="citation-chip"><code class="citation-code">renderer.resize(budget.width, budget.height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L37" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:37</a></div>
+<p>What this path *does* add is an unguarded route to the `throw`. `resizeStagingBuffers` → `createStagingBuffers` → `createBuffer` → `findMemoryType` is the same chain `initialize()` walks, but nothing between a `VulkanRenderer::resize` call and `main` installs a handler. The failure that returns `false` from `initialize()` calls `std::terminate` here.</p>
 <p>The uniform buffers and descriptor sets survive untouched, correctly: their sizes are resolution-independent, and the shadow-map image view baked into each set at init points at a fixed-size attachment that the framebuffer teardown leaves alone. That descriptor write is hardwired — bindings 0, 1 and 2, two uniform buffers and one combined sampler — regardless of the `VkDescriptorSetLayout` passed in, which is used only to allocate.</p>
 <div class="citation-chip"><code class="citation-code">descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.cpp#L370" target="_blank" rel="noopener">ohao/render/frame/frame_resources.cpp:370</a></div>
 <p>The pool those sets come from stocks exactly those two descriptor types and nothing else, which puts a floor under how wrong the layout can be: one asking for a storage buffer or a storage image cannot allocate at all.</p>
@@ -126,14 +124,13 @@
 <li>`initialize()` must run after the command pool, descriptor pool, layout and shadow image view exist, and before any `render()`. A second call with different sizes returns `true` and does nothing.</li>
 <li>Indices given to `waitForFrame` / `resetFrame` must already lie in `[0, MAX_FRAMES_IN_FLIGHT)`. `getFrame` wraps; those two reject, and the rejection is a skipped synchronisation that this class never reports.</li>
 <li>`resize()` must call `resizeStagingBuffers`, or the next readback copies the new `width * height * 4` bytes out of a buffer still sized for the old dimensions. The `m_currentFrame = 0` beside it is not part of the contract: all three slots are replaced and zeroed, so nothing depends on where the ring restarts.</li>
-<li>Bumping `MAX_FRAMES_IN_FLIGHT` is safe for everything the ring itself builds and wrong for every drain loop that hardcodes 3 — `ohao/inverse/render_session.hpp` plus `cornell_box`, `model_viewer`, `env_demo` and `turntable`. Five hand-copied literals; none of them reads the constant.</li>
+<li>Bumping `MAX_FRAMES_IN_FLIGHT` is safe for everything the ring itself builds and wrong for every drain loop that hardcodes 3 — `cornell_box`, `model_viewer`, `env_demo` and `turntable`. Four hand-copied literals; none of them reads the constant.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/pipeline.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/render_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/frame/frame_resources.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>

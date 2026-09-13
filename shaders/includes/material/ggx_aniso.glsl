@@ -103,10 +103,13 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // guard so much as a bias: for alpha <= ~0.024 (roughness <= ~0.155) the
 // true denominator at the lobe's peak, pi*alpha^4, is itself of order 1e-6,
 // so the epsilon suppressed D by around a percent exactly where the lobe is
-// sharpest. That showed up as a measured 0.9% disagreement between this
-// function and an independent double-precision GGX written from Walter et
-// al. 2007 Eq. 33, at a conductor at roughness 0.15 -- which is a real
-// inaccuracy in the D term rather than float noise.
+// sharpest.
+//
+// Work it out at roughness 0.15 and the claim checks itself, no oracle
+// needed: alpha = 0.0225, a2 = 5.0625e-4, and at N.H = 1 the denominator IS
+// a2, so the true pi*denom^2 is 8.05e-7. A 1e-8 epsilon is 1.24% of that --
+// a real inaccuracy in the D term at the exact roughness where a highlight
+// lives, not float noise.
 //
 // The floor is safe without an epsilon because denom = (N.H)^2(a^2-1)+1 is
 // bounded below by a^2 for every a <= 1 and by 1 for a >= 1, so with
@@ -117,18 +120,17 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // only makes near-mirror lobes fractionally brighter and more accurate for
 // any that did not.
 //
-// NOTE: ggxD_anisoOrIso's isotropic branch above still carries its own
-// `+ 0.0001` and is therefore NO LONGER numerically identical to this
-// function at sharp roughness. That epsilon is deliberately left alone: it
-// is load-bearing for the pre-existing rendered references the RT pipeline
-// is compared against, and nothing in the wavefront integrator calls it.
+// NOTE: ggxDisoShaded above carries its own `+ 0.0001` and is therefore NOT
+// numerically identical to this function at sharp roughness. That epsilon is
+// deliberately left alone: it is load-bearing for the pre-existing rendered
+// references the RT pipeline is compared against.
 //
 // THE TWO ARE NOT INTERCHANGEABLE, AND ONE MIS PARTITION SPANS BOTH. The
-// `+ 0.0001` is far larger than the quantity it guards: at roughness 0.15
-// the true denominator at the lobe peak is 8.05e-7, so the epsilon
-// suppresses D by ~125x there. Integrated over the hemisphere that form
-// retains 37% of the distribution's mass at roughness 0.2 and 2.7% at 0.1,
-// against 100% for the alpha-floored form below (quadrature figures from
+// `+ 0.0001` is far larger than the quantity it guards: against that same
+// 8.05e-7 it is 12 400% of the denominator, suppressing D by 125x at
+// roughness 0.15. Integrated over the hemisphere that form retains 37% of
+// the distribution's mass at roughness 0.2 and 2.7% at 0.1, against 100% for
+// the alpha-floored form above (quadrature figures from
 // site/content/units/materials/ggx.md). Any place that computes the SAME
 // physical quantity on both sides of a MIS weight must therefore use the
 // SAME function on both sides, or the balance heuristic is evaluated with
@@ -151,9 +153,7 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // renders RTOffline only.
 //
 // SO THIS FUNCTION HAS NO AUTOMATED COVERAGE IN THIS REPOSITORY AT ALL, and
-// that is worth knowing before you touch it. What used to cover it was a
-// separate wavefront path that shared the formula but not the raygen; that
-// moved out and took the coverage with it. A change here at roughness in
+// that is worth knowing before you touch it. A change here at roughness in
 // [0.02, ~0.155] is exercised by no test: never read a green renderer_test as
 // covering it.
 //
@@ -169,10 +169,6 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // comparison is a real gate, just not an automatic one. Adding an
 // `rt_realtime` scene to tests/golden/manifest.json would make it one; the
 // manifest's own comment invites exactly that.
-//
-// This file is also VENDORED by ohao_diff, which reads it rather than owning
-// it, so an edit here changes two renderers. That repository's
-// tools/check_vendor_drift.sh reports the divergence.
 float ggxDiso(float NdotH, float alpha) {
     float a2    = max(alpha * alpha, 1e-8);
     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;

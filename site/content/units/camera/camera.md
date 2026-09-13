@@ -20,13 +20,8 @@ with $\psi$ yaw and $\theta$ pitch, both stored in degrees and converted per cal
 
 Measuring from +X means yaw = 0 looks down +X, not down −Z. Every camera in the tree
 that wants the conventional "into the screen" direction therefore carries a literal
-−90: the constructor's own default, the renderer's initial pose, `SceneFramer`, and
-the three `CameraView`s the inverse-rendering scene builder names `front`. It is a
-datum rather than a constant — the builder's other shipped views are offsets from it
-(−110 and −70 in `buildCornell`, −48 and −128 in `buildStudio`), and domain
-randomisation draws yaw as a ±58° excursion around the same origin:
-
-{{cite ohao/inverse/scene_builder.hpp@223ff7f "const float yaw = -90.0f + n11() * 58.0f;"}}
+−90: the constructor's own default, the renderer's initial pose, and `SceneFramer`.
+It is a datum rather than a constant.
 
 Right and up are re-orthogonalised from a fixed world up of (0, 1, 0), so roll is not
 representable at all.
@@ -195,51 +190,6 @@ a linear schedule, weighted by `m_splitLambda`, which defaults to 0.95:
 Either schedule is anchored at the same 1000, so the outermost cascade is fitted to a
 frustum depth the projection cannot draw.
 
-## A second camera model, with the opposite yaw
-
-A second camera that once lived beside this one re-derived its forward vector with
-a different convention — kept here because the mismatch is the interesting part,
-and because a future second camera will be tempted into the same one:
-
-{{cite ohao/render/diff/diff_camera.hpp@223ff7f "const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),"}}
-
-that is $\mathbf{f}' = (\sin\psi\cos\theta,\; \sin\theta,\; -\cos\psi\cos\theta)$.
-Matching it to `Camera`'s $(\cos\psi\cos\theta,\; \sin\theta,\; \sin\psi\cos\theta)$
-requires $\sin\psi' = \cos\psi$ *and* $-\cos\psi' = \sin\psi$ simultaneously, whose
-only solution is $\psi' = \psi + 90°$. `DiffCamera` at yaw $\psi$ is `Camera` at yaw
-$\psi - 90°$: an exact quarter turn about world up.
-
-Nothing applies that offset. Both are driven from the same `CameraView` list and both
-read the same field — `InverseScene::applyCamera` hands `v.yawDeg` to
-`Camera::setRotation`,
-
-{{cite ohao/inverse/scene_builder.hpp@223ff7f "cam.setRotation(v.pitchDeg, v.yawDeg);"}}
-
-and `DiffSession::setupFromInverse` copies it across verbatim:
-
-{{cite ohao/render/diff/diff_session.hpp@223ff7f "c.yawDeg = v.yawDeg;"}}
-
-With $\psi$ and $\theta$ shared, the two forwards satisfy
-
-$$\mathbf{f}\cdot\mathbf{f}' = \sin^2\theta$$
-
-so at level pitch they are exactly perpendicular *for every yaw*, and inside the ±89°
-pitch clamp — where $\sin^2\theta < 1$ always — they never coincide at any yaw or
-pitch the engine can reach. At the standard "front" view, yaw −90° and pitch 0,
-`Camera` looks down −Z and `DiffCamera` looks down −X. The header comment claiming it
-"matches studio yaw/pitch convention" is not what the arithmetic says. Anything that
-compares a Vulkan render against a `DiffCamera`-projected quantity — the ground-plane
-albedo map, in particular — is comparing two viewpoints a quarter turn apart, at every
-view the builder ships.
-
-:::key
-`Camera` is a pose, not a lens. Its view matrix is what every Vulkan pipeline reads —
-forward, deferred and path tracer alike — while `DiffCamera` builds its own from a yaw
-convention 90° away. Only the deferred pipeline ever renders with its *projection*
-matrix. Fov, aspect, near and far do not mean one thing engine-wide, so "the camera's
-near plane" is an ambiguous phrase in this codebase — always name the pipeline.
-:::
-
 ## The 240 bytes the forward shader never agreed to
 
 `getViewProjectionMatrix` has exactly one call site, and it is a live layout bug.
@@ -271,6 +221,6 @@ The shadow path escapes: `renderShadowPass` pushes the same struct through
 
 - Pitch must stay strictly inside ±90° or `cross(front, worldUp)` degenerates and the view matrix's rotation block stops describing the camera. All three writers of `pitch` clamp it — `setRotation`, `rotate`, `focusOnPoint` — and a "cleanup" that widens any of them to ±90 exactly will produce a frame with a randomly rolled camera, not a gimbal-locked one.
 - Nothing calls `setAspectRatio`, so a resize changes the render target without changing the projection. Adding a resize hook is the fix; until then the deferred image's horizontal fov is that of a 16:10 frame.
-- The Y-flip is *not* in this class. Consumers that build a Vulkan clip-space matrix must apply `proj[1][1] *= -1` themselves (deferred does, `DiffCamera` does, the path tracer instead negates Y when forming the ray). Adding the flip inside `Camera` would double-flip two of the three.
+- The Y-flip is *not* in this class. Consumers that build a Vulkan clip-space matrix must apply `proj[1][1] *= -1` themselves (deferred does; the path tracer instead negates Y when forming the ray). Adding the flip inside `Camera` would double-flip one of the two.
 - `getViewProjectionMatrix()` has a single call site, and the forward shaders do not declare the `viewProj` field it writes — they read view and proj from the uniform buffer at binding 0. The bytes are still consumed, as material data. Fixing the layout on one side only (deleting `viewProj` from the struct, or adding it to the shaders) changes what the forward pass renders; both sides must move together.
 - Near and far are immutable after construction (0.1 and 100), because the only two mutators that touch them have no callers. Any geometry beyond 100 units is outside the deferred frustum regardless of what the CSM cascade range claims.

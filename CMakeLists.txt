@@ -154,8 +154,4 @@ if(BUILD_ENGINE_TESTS)
     add_subdirectory(tests/engine)
 endif()
 
-# NOTE: ohao_diff (a separate repository) VENDORS four shader includes from
-# here -- material/ggx_aniso.glsl, rt/env_sampling.glsl, rt/mis.glsl and
-# pbr_unpack.glsl -- plus the allocator, EnvCDF and RTAccelerationStructure.
-# Change any of those and run ohao_diff's tools/check_vendor_drift.sh.
 

@@ -138,8 +138,8 @@ hashes it back to a slot, and packs the index into that draw's push constant. Th
 
 Two actors with the same name therefore share textures, and renaming an actor
 detaches its textures with no error. The indirection buys something real:
-`registerName` aliases many keys onto one handle, which is how the inverse-rendering
-ground-plane bind points every tile actor at a single uploaded image. That aliasing is
+`registerName` aliases many keys onto one handle, which is how `light_upload.cpp`
+points several material slots at a single uploaded image. That aliasing is
 also why unloading cannot just erase by `tex.name` — it must scan both maps for every
 key still pointing at the freed slot.
 
@@ -164,11 +164,12 @@ floor two lines further down clamps that back to `0.04`:
 
 The result is not a fully occluded dielectric but a fully occluded *near-mirror* — the
 zeroed roughness is the more visible artifact of the two, and it is on the adjacent
-source line. Exactly one caller defends against this by comparing the returned handle
-against the known defaults, which is why `BindlessTextureHandle` bothers to default
-its `operator<=>`.
+source line. **Nothing in the tree defends against it.** The defence is available —
+`BindlessTextureHandle` defaults its `operator<=>`, so a caller can compare a
+returned handle against `getDefaultWhiteTexture()` and refuse it — and a since-removed
+caller did exactly that. No current one does.
 
-{{cite ohao/render/diff/diff_map_bind.hpp@223ff7f "if (!handle.valid() || handle == tm->getDefaultWhiteTexture() ||"}}
+{{cite ohao/gpu/vulkan/bindless_texture_manager.hpp "constexpr auto operator<=>(const BindlessTextureHandle&) const noexcept = default;"}}
 
 ## The cost of `updateDescriptorSet`
 
@@ -177,18 +178,16 @@ There is no incremental write path. Each call walks all 4096 slots, builds a
 `vkUpdateDescriptorSets`. Every load path runs it internally before returning, so
 uploading N textures issues O(N²) descriptor writes.
 
-Scene load is not the only time that happens. The inverse-rendering forward evaluation
-re-uploads the ground-plane albedo map every call — unload the previous image,
-`loadTextureFromMemory` the new one, full 4096-slot walk — and it sits one level below
-a loop over views and averaging passes, so it runs once per view per pass, several
-times per loss evaluation of an optimizer step.
-
-{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)bindGroundAlbedoMap(renderer, inv, s_map);"}}
-{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "auto img = forwardStudioDeferred(renderer, inv, tileRgb, v, frames);"}}
-
-The walk is the cheap half of that. After the first pass the `unloadTexture` in front
+Scene load is not the only time that happens. Any caller that swaps a texture
+mid-run pays it — unload the previous image, `loadTextureFromMemory` the new one,
+full 4096-slot walk — and the walk is the cheap half: the `unloadTexture` in front
 of it issues a `vkDeviceWaitIdle` and the upload behind it ends in a
-`vkQueueWaitIdle`: two full drains per re-upload.
+`vkQueueWaitIdle`, two full drains per re-upload.
+
+Nothing in the tree currently does this in a hot loop. Something did — a
+per-evaluation texture swap nested inside a loop over views — which is how the
+cost came to be measured at all. Treat the O(N²) walk plus two drains as the
+price of any future design that swaps textures per frame rather than per scene.
 
 The walk also has a blind spot on the unload side. `unloadTexture` destroys the view
 and then zeroes the slot; the update loop skips every slot whose view is null. So
@@ -288,6 +287,6 @@ is bound here", never as "the texture I asked for is bound here".
 - The layout is set **1** in the forward pipeline and set **0** in the GBuffer pipeline; changing either pipeline's set count requires editing the matching `layout(set = …)` in `forward.frag` or `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
 - `forward.frag`'s push-constant block is not `ObjectPushConstants`: its `albedoTexIdx` and `normalTexIdx` fall inside the pushed `viewProj`. The shader block must be brought into agreement before any bindless sampling on the forward path means anything.
 - `updateDescriptorSet()` never needs an external call — every load path runs it before returning. After an **unload** it is not just unnecessary but ineffective: the loop skips null-view slots, so the freed element still names a destroyed `VkImageView` until a load reuses that slot. An unloaded index must not be sampled.
-- `unloadTexture` issues its own `vkDeviceWaitIdle` before destroying the image and view: nothing else in the manager tracks whether an in-flight submission may still sample them. Dropping that stall to speed up the inverse-rendering loop reintroduces a use-after-free.
+- `unloadTexture` issues its own `vkDeviceWaitIdle` before destroying the image and view: nothing else in the manager tracks whether an in-flight submission may still sample them. Dropping that stall to speed up a texture-swapping loop reintroduces a use-after-free.
 - The `< 4096u` guards in `gbuffer.frag` hard-code the `maxTextures` default. Raising capacity without editing those two lines silently drops rough-metal and emissive textures above slot 4095.
 - Texture identity is the string `<actorName>_<suffix>_<materialIndex>`. Duplicate actor names alias their textures; renaming an actor unbinds them with no diagnostic.

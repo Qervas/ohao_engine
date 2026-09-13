@@ -12,7 +12,7 @@ figures: [gpu-renderer-facade-ring-lag]
 
 {{cite examples/interactive.cpp "const uint8_t* pixels = renderer.getPixels();"}}
 
-So the PNG writers, the golden smoke test, the inverse-rendering fitter and the realtime viewer all drive the identical `render()` → `getPixels()` pair. `gpu_module.hpp` is not a second entry point: it is a seven-include umbrella whose own comment tells you to prefer the specific headers.
+So the PNG writers, the golden smoke test and the realtime viewer all drive the identical `render()` → `getPixels()` pair. `gpu_module.hpp` is not a second entry point: it is a seven-include umbrella whose own comment tells you to prefer the specific headers.
 
 {{cite ohao/gpu/gpu_module.hpp "Umbrella for the GPU / Vulkan subsystem"}}
 
@@ -114,10 +114,9 @@ Each `render()` waits on its slot's fence, copies that slot's staging buffer int
 
 {{figure gpu-renderer-facade-ring-lag "Conceptual timing of the read-before-record ordering in render(); slot assignment and the depth of three are read from the code, not measured. The first three calls leave m_pixelBuffer unwritten."}}
 
-Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell_box, model_viewer, turntable and the inverse-rendering session driver; env_demo drops to `samples + 2` only when `--pan-x` makes it add one final frame after moving the camera.
+Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell_box, model_viewer and turntable; env_demo drops to `samples + 2` only when `--pan-x` makes it add one final frame after moving the camera.
 
 {{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
-{{cite ohao/inverse/render_session.hpp@223ff7f "const int frames = budget.spp + 3;"}}
 
 Under `--denoise=none` that arithmetic lands exactly: after `spp + 3` calls the last copy delivered call `spp - 1`, the frame that had accumulated `spp` samples. No comment at any of those sites ties the `+ 3` to the ring depth, though, and it cannot be the whole story — the default offline configuration is `DenoiseMode::OIDN`, whose `getPixels()` branch never reads `m_pixelBuffer`. There the three extra frames buy three extra samples and compensate no lag.
 
