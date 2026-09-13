@@ -1255,6 +1255,80 @@ static void runHeadlessDeferredRenderTests() {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+// ENTRY POINTS WHOSE ONLY CALLER WAS REMOVED
+// -----------------------------------------------------------------------------
+//
+// VulkanRenderer::resize and VulkanRenderer::updateRTMaterialParams each had
+// exactly one caller -- the inverse-rendering session -- and when that module
+// left this repository both became unreachable from anything that ships.
+//
+// Unreachable is not the same as wrong. Both are ordinary engine API that a game
+// wants: a resized viewport, and a material edit that does not rebuild
+// acceleration structures. What they lost was not their usefulness, it was their
+// only evidence of working. Dead code with no test rots quietly and then fails
+// the first time someone needs it.
+//
+// These are that evidence. They also mean the next person who greps for callers,
+// finds none, and reaches for the delete key has something to read first.
+// -----------------------------------------------------------------------------
+static void runOrphanedEntryPointTests() {
+    std::cout << "\n[Entry points whose only caller was removed]\n";
+
+    TEST_BEGIN("resize() resizes the readback buffer it owns");
+    {
+        ohao::VulkanRenderer renderer(64, 48);
+        // MEASURE getPixelBufferSize(), NOT getPixelSpan().size(). The span
+        // accessor returns an EMPTY span when getPixels() is null, which it is
+        // on a renderer that was never initialized -- so a span-based check
+        // reads 0 before and 0 after and cannot see whether resize did anything.
+        // An earlier version of this test did exactly that and passed against a
+        // deliberately broken resize(). getPixelBufferSize() has no such guard
+        // and is the buffer resize() actually owns.
+        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(64 * 48 * 4),
+                  "constructor must size the pixel buffer to width*height*4");
+        EXPECT_EQ(renderer.getWidth(), 64u, "constructor must record its width");
+        EXPECT_EQ(renderer.getHeight(), 48u, "constructor must record its height");
+
+        // 96x64, NOT 96x32. The first draft of this test resized 64x48 -> 96x32,
+        // which is 3072 pixels either way: the assertion compared 12288 against
+        // 12288 and held perfectly against a resize() that did nothing at all.
+        // An invariant is only as strong as the case it is evaluated on, and a
+        // dimension change that preserves the pixel count is the one case this
+        // particular invariant cannot see.
+        renderer.resize(96, 64);
+        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(96 * 64 * 4),
+                  "resize must re-size the readback buffer, or the next readback "
+                  "copies the new frame's bytes into a buffer sized for the old one");
+        EXPECT_EQ(renderer.getWidth(), 96u, "resize must record the new width");
+        EXPECT_EQ(renderer.getHeight(), 64u, "resize must record the new height");
+
+        // AND SHRINKING, separately: a grow can be satisfied by a vector that
+        // only ever reserves, while the readback length is taken from size().
+        renderer.resize(16, 16);
+        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(16 * 16 * 4),
+                  "resize must shrink the readback buffer too, not just grow it");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("updateRTMaterialParams() refuses, rather than corrupts, without RT state");
+    {
+        ohao::VulkanRenderer renderer(32, 32);
+        // No scene, no RT material buffer, no materials. All three of its
+        // preconditions fail. The contract is a clean false -- NOT a map of a
+        // null VkDeviceMemory, which is what a missing guard would do here.
+        const bool ok = renderer.updateRTMaterialParams();
+        EXPECT(!ok, "updateRTMaterialParams must return false when there is no scene "
+                    "and no RT material buffer to patch");
+
+        renderer.setScene(nullptr);
+        EXPECT(!renderer.updateRTMaterialParams(),
+               "an explicitly null scene must refuse on the same path");
+        TEST_PASS();
+    }
+}
+
 // =============================================================================
 // MAIN
 // =============================================================================
@@ -1271,6 +1345,7 @@ int main() {
     runHeadlessDeferredTests();
     runHeadlessPathTracerTests();
     runHeadlessDeferredRenderTests();
+    runOrphanedEntryPointTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";

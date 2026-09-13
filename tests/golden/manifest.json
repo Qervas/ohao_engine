@@ -1,19 +1,64 @@
 {
-  "_comment": "OHAO golden-image regression corpus (renovation Phase 0). Run from repo root. Tolerance compare absorbs the ~6px@1LSB GPU floating-point floor; any real regression shifts far more. Denoiser OFF (we pin raw deterministic beauty). Grow this list as features land — every fixed bug should add a scene so it can't silently regress.",
+  "_comment": "OHAO golden-image regression corpus. Run from repo root.",
+
+  "_what_this_gate_actually_is": [
+    "Read this before trusting a green run, and before loosening anything.",
+    "",
+    "These scenes are Monte Carlo path traces. The renderer is deterministic for",
+    "a fixed sampler and a fixed build -- two runs are byte-identical -- so this",
+    "corpus is, in practice, a HASH of an unchanged sampler with enough slack for",
+    "the GPU floating-point floor. It is not a tolerance gate in the sense of",
+    "'the image is still about right', and it cannot be made into one by raising",
+    "the sample count. Measured on cornell_box against a 1024 spp reference:",
+    "16 spp is max_abs 88 / rmse 10.8, 64 spp is 47 / 6.9, 256 spp is 34 / 4.1.",
+    "Noise falls as 1/sqrt(N), so a max_abs 4 tolerance is out of reach at any",
+    "sample count anyone will wait for.",
+    "",
+    "WHAT IT CATCHES: a changed shader, a changed material, a broken pass, a",
+    "missing asset -- anything that moves pixels while the sample sequence stays",
+    "put. That is the common case and the gate is genuinely good at it.",
+    "",
+    "WHAT IT CANNOT DISTINGUISH: a real regression from any change that perturbs",
+    "the sample SEQUENCE (a new sampler dimension, a reordered bounce, a changed",
+    "seed). Both reshuffle every pixel by the noise magnitude. When you change",
+    "sampling, this corpus will go red and it cannot tell you whether you also",
+    "broke something. Verify that case by eye or with a converged render.",
+    "",
+    "max_abs_diff 4 is sized for the cross-session GPU floor, not for noise. The",
+    "same SPIR-V on the same machine has been measured drifting 3 channels of",
+    "6.2M by 1 LSB between sessions; 4 covers that with margin."
+  ],
+
+  "_growing": [
+    "Denoiser OFF on every scene: we pin raw deterministic beauty. A denoiser is a large, version-dependent, non-linear prior, and pinning its output pins the denoiser rather than the renderer.",
+    "Grow this list as features land -- every fixed bug should add a scene so it cannot silently regress. A scene costs one entry here and a few seconds a run.",
+    "A scene must load only TRACKED assets, or it is not a gate on a fresh clone. Not a style rule: the scene this replaced pointed at a file nobody had, and its empty render was reported as a pixel regression for two months."
+  ],
+
+  "_regenerating": [
+    "python tests/golden/render_golden.py tests/golden/manifest.json --update",
+    "It overwrites without comparing, so it cannot tell an intentional refresh",
+    "from laundering a regression. Look at what drifted FIRST. The goldens these",
+    "replaced were 78 renderer commits stale and nobody knew, because the harness",
+    "could not run at all on a multi-config generator."
+  ],
+
   "scenes": [
     {
       "name": "cornell_box",
       "command": "./build/cornell_box {out} 16 --denoise=none",
       "golden": "tests/golden/cornell_box.png",
       "max_abs_diff": 4,
-      "max_diff_frac": 0.01
+      "max_diff_frac": 0.01,
+      "_note": "Builds its scene in code and loads no asset, so it runs on a bare clone."
     },
     {
-      "name": "metal_rough_spheres",
-      "command": "./build/model_viewer assets/showcase_objects/MetalRoughSpheres.glb {out} 16 --denoise=none",
-      "golden": "tests/golden/metal_rough_spheres.png",
+      "name": "damaged_helmet",
+      "command": "./build/model_viewer assets/test_models/DamagedHelmet.glb {out} 16 --denoise=none",
+      "golden": "tests/golden/damaged_helmet.png",
       "max_abs_diff": 4,
-      "max_diff_frac": 0.01
+      "max_diff_frac": 0.01,
+      "_note": "Replaces metal_rough_spheres, whose MetalRoughSpheres.glb was never in the repository. model_viewer used to exit 0 after a failed load and render an empty frame, so that scene reported a large pixel difference for two months instead of a missing file. DamagedHelmet.glb IS tracked (3.7 MB) and covers the same ground: a metal/rough glTF under an HDRI."
     }
   ]
 }

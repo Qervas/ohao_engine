@@ -53,7 +53,7 @@ $$</div>
 <div class="section-rule"><h2 id="one-reduction-two-brdfs">One reduction, two BRDFs</h2></div>
 <div class="prose reveal">
 <p>Here is the fact that governs everything else on this page. OHAO&#x27;s path-tracer and its deferred rasteriser do not share a BRDF file. The path-tracer raygen shaders include `ggx_aniso.glsl`:</p>
-<div class="citation-chip"><code class="citation-code">float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L67" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:67</a></div>
+<div class="citation-chip"><code class="citation-code">float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L85" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:85</a></div>
 <p>while the deferred and forward fragment shaders call `evaluateBRDF` in `brdf_ggx.glsl`. They agree on F0 and on being &quot;GGX metallic-roughness,&quot; and they diverge on almost everything expensive: the geometry term, energy compensation, diffuse model, and even how the metallic slider is interpreted. The rest of this page walks each stack, then the gap between them.</p>
 </div>
 <div class="section-rule"><h2 id="the-path-tracer-s-specular">The path tracer&#x27;s specular</h2></div>

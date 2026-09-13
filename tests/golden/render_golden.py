@@ -78,13 +78,40 @@ def render(command, out_path):
     cmd = " ".join(argv)
     argv[0] = resolve_exe(argv[0])
     try:
-        r = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Capture stderr instead of discarding it. It used to go to DEVNULL, so
+        # when a scene failed the harness could say "exit 2" and nothing else,
+        # while the renderer had printed the actual cause -- a missing asset, a
+        # shader that would not compile -- into a pipe nobody read.
+        r = subprocess.run(argv, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True, errors="replace")
     except OSError as e:
         return f"could not launch {argv[0]!r}: {e}"
     if r.returncode != 0:
-        return f"render command failed (exit {r.returncode}): {cmd}"
+        why = (r.stderr or "").strip().splitlines()
+        sep = chr(10) + "        "
+        tail = (sep + sep.join(why[-4:])) if why else ""
+        return f"render command failed (exit {r.returncode}): {cmd}{tail}"
     if not os.path.exists(out_path):
         return f"render produced no output at {out_path}: {cmd}"
+    return None
+
+
+def degenerate(path):
+    """A frame with no spatial structure is not a render of a scene.
+
+    This is a backstop, not the primary defence -- that is the example's exit
+    code, and model_viewer and turntable now return non-zero when a model fails
+    to load. It exists because they did NOT, for a long time: a failed load left
+    them rendering an empty scene, exiting 0 and writing a valid PNG, so the
+    corpus compared a picture of nothing against a golden full of geometry and
+    reported it as a large pixel difference rather than a missing asset. A frame
+    that is uniformly one colour is the loudest version of that failure and
+    costs one std() to catch.
+    """
+    a = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64)
+    sd = float(a.std())
+    if sd < 1.0:
+        return f"rendered frame is nearly uniform (std {sd:.3f} over 0-255) -- not a scene"
     return None
 
 
@@ -127,7 +154,10 @@ def main():
 
             if mode == "--update":
                 full = os.path.join(tmp, name + ".full.png")
-                err = render(sc["command"], full)
+                # Guard --update too, and hardest: writing a golden is the one
+                # operation that cannot be caught later. A blank frame baked in
+                # here becomes the thing every future run is measured against.
+                err = render(sc["command"], full) or degenerate(full)
                 if err:
                     print(f"[update] {name}: FAILED — {err}")
                     all_ok = False
@@ -137,7 +167,7 @@ def main():
                 continue
 
             actual = os.path.join(tmp, name + ".actual.png")
-            err = render(sc["command"], actual)
+            err = render(sc["command"], actual) or degenerate(actual)
             if err:
                 print(f"[FAIL]  {name}: {err}")
                 all_ok = False

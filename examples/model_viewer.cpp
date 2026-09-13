@@ -286,7 +286,18 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << scale << std::endl;
     } else {
-        std::cerr << "Failed to load: " << modelPath << std::endl;
+        // EXIT, do not carry on. Rendering an empty scene after a failed load
+        // writes a perfectly valid PNG of nothing, and a caller that checks the
+        // exit code and the file's existence -- which is exactly what
+        // tests/golden/render_golden.py checks -- sees a successful render.
+        // The metal_rough_spheres golden scene sat in that state undetected:
+        // its .glb was absent, every run produced an empty frame, and the
+        // corpus reported a large pixel difference rather than a missing asset.
+        std::cerr << "Failed to load: " << modelPath << std::endl
+                  << "model_viewer renders nothing without a model; refusing to "
+                     "write an empty image that would read as a successful render."
+                  << std::endl;
+        return 2;
     }
 
     // Environment map

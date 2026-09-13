@@ -131,12 +131,25 @@ compares at, the ghost does not show up here: `--selftest`, which renders each s
 and diffs the two renders against each other, reports `max_abs=0 diff_px=0` on
 both. Two consecutive renders are bit-identical at 640 px.
 
-Which makes the state of the corpus unambiguous: it is red. One run here fails
-both scenes, and not marginally — `cornell_box` at `max_abs=32` against a limit of 4
-with 65 % of compare-resolution pixels differing, `metal_rough_spheres` at
-`max_abs=158` with 93 % differing. The selftest rules out nondeterminism, so this
-is real drift. The goldens were last regenerated when the C++20 RT refactor
-landed; the engine has moved since, and no automation re-ran the check.
+The corpus was red for a long time, and the two scenes were red for completely
+different reasons — which is the part worth keeping.
+
+`cornell_box` was stale. Its golden was written on 2026-07-14 and 78 commits had
+since touched `shaders/` or `ohao/render/`; a run scored `max_abs=101` against a
+limit of 4, with 99.96 % of compare-resolution pixels differing. The selftest ruled
+out nondeterminism, so it was real drift — but putting the old and new goldens side
+by side shows the structure is identical. It is noise reshuffling plus a brighter,
+tighter light spot on the back wall, not a broken renderer.
+
+`metal_rough_spheres` was not drift at all. Its model did not exist, and
+`model_viewer` rendered an empty frame and exited 0, so the harness scored a
+picture of nothing against a golden full of spheres. See `systems/tests` for how
+that stayed invisible and what closes it.
+
+Both are now green at `max_abs=0`, on refreshed goldens and a scene that loads a
+tracked asset. That is a hash of an unchanged sampler rather than a tolerance the
+image has slack inside — the manifest says so at length, and says why no sample
+count fixes it.
 
 ## And nothing starts any of them
 

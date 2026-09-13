@@ -56,7 +56,7 @@
 s_{\text{host}}(N) \;=\; \big((N-1)-F\big) + 1 \;=\; N - F, \qquad F = 3
 $$</div>
 <p>Set $N = \text{spp} + 3$ and $s_{\text{host}}$ is exactly the spp the user asked for. The deferred branch takes the same readback path — it accumulates nothing, but it lags identically — so `cornell_box`&#x27;s ten deferred frames save the seventh and `model_viewer`&#x27;s thirty save the twenty-seventh. Both ignore the spp argument entirely.</p>
-<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 30 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L334" target="_blank" rel="noopener">examples/model_viewer.cpp:334</a></div>
+<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 30 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L345" target="_blank" rel="noopener">examples/model_viewer.cpp:345</a></div>
 </div>
 <div class="section-rule"><h2 id="where-the-formula-actually-holds">Where the formula actually holds</h2></div>
 <div class="prose reveal">
@@ -99,7 +99,7 @@ $$</div>
 <div class="section-rule"><h2 id="the-orbit-reset-and-what-breaks-if-you-tighten-the-loop">The orbit reset, and what breaks if you tighten the loop</h2></div>
 <div class="prose reveal">
 <p>`turntable` moves the camera to the next orbit position, resets accumulation, renders `spp + 3` frames, writes the PNG, repeats.</p>
-<div class="citation-chip"><code class="citation-code">renderer.resetAccumulation();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L219" target="_blank" rel="noopener">examples/turntable.cpp:219</a></div>
+<div class="citation-chip"><code class="citation-code">renderer.resetAccumulation();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L230" target="_blank" rel="noopener">examples/turntable.cpp:230</a></div>
 <p>The reset must sit after the camera move and before the inner loop, or the accumulation buffer keeps radiance from the previous viewpoint. But the reset clears the path tracer&#x27;s sample index and history — it does not touch the staging ring. The first three copies of orbit position $f$ still deliver the tail of position $f-1$. That is why the `+ 3` cannot be trimmed here either: at `spp` iterations the written PNG would be three samples short under `--denoise=none`, and for `spp` of 3 or less it would be the *previous* camera position&#x27;s image — a turntable visibly lagging its own orbit, produced entirely by the driver.</p>
 <p>Of the three drivers that can resolve to `Deferred`, `turntable` is the only one whose loop does not special-case it. It renders `spp + 3` frames per position whatever `resolveMode` returned, and its banner prints `RTOffline` for any mode that is not `RTRealtime` — including `Deferred`.</p>
 <div class="citation-chip"><code class="citation-code">&lt;&lt; (rtMode == RenderMode::RTRealtime ? &quot;RTRealtime&quot; : &quot;RTOffline&quot;) &lt;&lt; &quot;\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L72" target="_blank" rel="noopener">examples/turntable.cpp:72</a></div>

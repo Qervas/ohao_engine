@@ -129,13 +129,31 @@ pins 19 accumulation frames.
 
 {{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
 
-Only one of the two scenes runs on a fresh clone. The second invokes
-`model_viewer` on `assets/showcase_objects/MetalRoughSpheres.glb`, and nothing
-under `assets/showcase_objects/` is tracked by git — it is not ignored either, so
-it survives as an untracked local file on the machine that authored the golden and
-exists nowhere else.
+Both scenes now run on a fresh clone, which was not true for two months and is
+worth the paragraph.
 
-{{cite tests/golden/manifest.json "assets/showcase_objects/MetalRoughSpheres.glb"}}
+The second scene used to invoke `model_viewer` on
+`assets/showcase_objects/MetalRoughSpheres.glb`. That file was in no clone and on
+no machine — not untracked, simply absent. What made it survive undetected is that
+`model_viewer` printed the Assimp error, carried on, rendered an **empty scene**,
+wrote a valid PNG and **exited 0**. The harness checks the exit code and whether
+the file exists; both passed. So the corpus spent two months comparing a picture of
+nothing against a golden full of geometry and reporting it as a large pixel
+difference — a missing asset wearing the costume of a rendering regression.
+
+Three changes close it. `model_viewer` and `turntable` now return non-zero when a
+model fails to load, rather than rendering nothing successfully. The harness
+captures the child's stderr instead of discarding it, so the cause reaches the
+reader. And it rejects a frame with no spatial structure, on the principle that a
+uniformly coloured image is not a render of a scene.
+
+{{cite examples/model_viewer.cpp "model_viewer renders nothing without a model; refusing to "}}
+{{cite tests/golden/render_golden.py "def degenerate(path):"}}
+
+The scene itself is now `damaged_helmet`, on `assets/test_models/DamagedHelmet.glb`
+— tracked, 3.7 MB, and the same kind of subject: a metal/rough glTF under an HDRI.
+
+{{cite tests/golden/manifest.json "assets/test_models/DamagedHelmet.glb"}}
 
 ## Where the gate runs, and why not in CI
 

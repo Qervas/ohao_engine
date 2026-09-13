@@ -50,13 +50,31 @@ void worldUpTangent(vec3 n, out vec3 t, out vec3 b) {
 // adds 0.0001 to the denominator where ggxDiso floors alpha^2 at 1e-8 and adds
 // nothing. At roughness 0.15 that epsilon suppresses the result by ~125x.
 //
-// KNOWN, AND DELIBERATELY NOT CHANGED HERE: six of the twenty-one raygen call
-// sites use the value this returns as a PROBABILITY DENSITY --
+// SIX RAYGEN CALL SITES FEED THIS INTO SOMETHING SHAPED LIKE A DENSITY --
 // `pdf_spec = D_s * NdotH_s / (4 * VdotH_s + 1e-4)`, which becomes
-// `specLastBsdfPdf`, one side of a balance heuristic. That is the exact
-// mistake the note above ggxDiso describes, and it predates this
-// deduplication; collecting the copies here is what makes it visible. Fixing
-// it changes pixels and needs its own golden-image pass.
+// `specLastBsdfPdf`. THAT IS NOT THE BUG IT LOOKS LIKE, and an earlier version
+// of this comment called it one. Check three things before you "fix" it:
+//
+//   1. `specLastBsdfPdf` is never a DIVISOR. Its only use is as an argument to
+//      misBalanceHeuristic. The specular ray's throughput is built from
+//      `mix(1, albedo, metallic) / specProb` and never divides by pdf_spec, so
+//      no estimator is dividing by this number.
+//   2. The OTHER side of that partition -- the env-IS branch's `pdfSpecMIS` --
+//      computes the same expression from the same function. Balance-heuristic
+//      weights sum to one whenever both sides agree, whatever the two agree
+//      ON, so the combination is UNBIASED. A wrong density here costs variance,
+//      not correctness.
+//   3. The sampler these weights describe is not GGX at all in the base and
+//      offline raygens: it is a mirror direction jittered by a cosine lobe
+//      scaled by roughness. Neither ggxDisoShaded nor ggxDiso is its true pdf.
+//
+// So substituting ggxDiso at those six sites alone would make them disagree
+// with `pdfSpecMIS` and would CREATE the inconsistency this file warns about
+// rather than remove it. Doing it properly means changing both sides together,
+// and doing it *correctly* means giving those two raygens a real VNDF sampler
+// -- which pt_raygen_realtime.rgen already has, guarded by OHAO_CRUDE_GLOSSY,
+// with matched pdfs on both sides of its partition. That is the shape of the
+// real fix, and it is a bigger job than swapping a clamp.
 float ggxDisoShaded(float NdotH, float roughness) {
     float a     = roughness * roughness;
     float a2    = a * a;

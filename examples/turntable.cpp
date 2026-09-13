@@ -122,6 +122,17 @@ int main(int argc, char* argv[]) {
     std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
     bool loaded = (ext == "obj") ? model->loadFromOBJ(modelPath) : model->loadFromGLTF(modelPath);
 
+    // Refuse rather than turntable an empty box. Without this the run
+    // still exits 0 and still writes frames, so any caller checking the
+    // exit code sees a success and gets pictures of nothing -- the exact
+    // failure that hid a missing model from the golden corpus.
+    if (!loaded) {
+        std::cerr << "Failed to load: " << modelPath << std::endl
+                  << "turntable has nothing to turn; refusing to render an empty scene."
+                  << std::endl;
+        return 2;
+    }
+
     if (loaded) {
         glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
         for (const auto& v : model->vertices) {

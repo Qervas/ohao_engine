@@ -70,7 +70,7 @@ and carries the contract that the corpus grows with every fixed bug:
 
 {{cite tests/golden/manifest.json "./build/cornell_box {out} 16 --denoise=none"}}
 
-{{cite tests/golden/manifest.json "Denoiser OFF (we pin raw deterministic beauty). Grow this list as features land — every fixed bug should add a scene so it can"}}
+{{cite tests/golden/manifest.json "Grow this list as features land -- every fixed bug should add a scene so it"}}
 
 Turning OIDN off is not a convenience. A denoiser is a large, version-dependent
 nonlinearity between the integrator and the PNG; leaving it in the loop would
