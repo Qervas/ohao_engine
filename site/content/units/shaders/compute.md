@@ -38,9 +38,9 @@ compute pipeline for each.
 
 {{cite ohao/render/ibl/ibl_processor.cpp "m_brdfPipeline)) {"}}
 
-Nothing constructs it. The type name never appears outside its own two files; its
-only other trace is an `#include` of its header in
-`ohao/render/render_module.hpp`, an aggregator nothing includes. `IBLProcessor`'s
+Nothing constructs it. The type name never appears outside its own two files. Its
+only other trace was an `#include` in an aggregator nothing included, and that
+aggregator has been deleted, leaving no trace at all. `IBLProcessor`'s
 own defects have a separate unit; the consequence for these three `.comp` files is
 that they never execute, and deferred lighting gets a 1×1 `R8G8B8A8_UNORM` dummy
 where the baked LUT belongs — `setIBLTextures`, the only writer of

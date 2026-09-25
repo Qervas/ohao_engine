@@ -149,9 +149,9 @@ and integrates the LUT.
 {{cite ohao/render/ibl/ibl_processor.hpp "static constexpr uint32_t PREFILTER_MIP_LEVELS = 5;"}}
 
 Neither half runs. `calculateIBL` is in no shader, and `IBLProcessor` is compiled
-into `ohao_renderer` by the source glob but never constructed — its only mention
-outside its own translation unit is an `#include` in `render_module.hpp`, itself
-included by nothing.
+into `ohao_renderer` by the source glob but never constructed. Its only mention
+outside its own translation unit was an `#include` in `render_module.hpp`, itself
+included by nothing; that umbrella has been deleted and the mention with it.
 
 What ships is the same split-sum algebra, written inline in
 `deferred_lighting.frag` and fed from the 2D equirect environment map with a mip

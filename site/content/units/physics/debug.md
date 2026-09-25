@@ -26,14 +26,12 @@ No `startFrame`, no `recordForceApplication`, no `analyzeForceRegistry` appears 
 that path, or anywhere else in the tree: those three names occur only in
 `force_debugger.hpp` and `force_debugger.cpp`, where they are declared, defined,
 and called by each other. Outside `PhysicsWorld`, which only owns the object, the
-sole file naming the debugger is `physics/examples/force_system_example.hpp`, and
-it uses only the configuration and query surface — the visualization setters,
+sole other file naming the debugger was `physics/examples/force_system_example.hpp`,
+which used only the configuration and query surface — the visualization setters,
 `getForceVectors`, `getFrameStats`, `generateForceReport` — while asserting in a
-comment that collection takes care of itself:
-
-{{cite ohao/physics/examples/force_system_example.hpp "The debugger will automatically collect data during simulation steps"}}
-
-No translation unit includes that header, and as written it would not compile.
+comment that collection took care of itself. No translation unit included that
+header, and as written it would not have compiled; it has since been deleted.
+Nothing outside `force_debugger.{hpp,cpp}` names the debugger now.
 The hook whose name promises to drive this has an empty body:
 
 {{cite ohao/physics/world/physics_world.cpp "// Update debug visualization data"}}

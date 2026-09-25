@@ -231,9 +231,10 @@ callers repo-wide:
 
 `IBLProcessor` — the class that would convolve the irradiance cube, prefilter the
 specular chain and integrate the LUT — is never instantiated either: the
-identifier appears nowhere outside its own header and source, and the only thing
-that pulls the file in at all is an `#include` line in the umbrella header
-`render/render_module.hpp`. So all three views stay
+identifier appears nowhere outside its own header and source. The one thing that
+used to pull the file in was an `#include` in the `render/render_module.hpp`
+umbrella, itself included by nothing; that header has been deleted. So all three
+views stay
 `VK_NULL_HANDLE` and all three bindings are written every frame with the same 1×1
 dummy image, which is layout-transitioned once and never uploaded to.
 

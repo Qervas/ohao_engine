@@ -197,14 +197,11 @@ the one coincident axis stops voting.
 ## Nothing calls it
 
 The honest headline: no code in the engine, the examples, or the tests constructs a
-`PickingSystem` or calls `screenToWorldRay`. The only reference anywhere is an
-umbrella header that re-exports it —
-
-{{cite ohao/render/render_module.hpp "render/picking/picking_system.hpp"}}
-
-— and `render_module.hpp` itself has no includers. The translation unit is compiled
-into `ohao_renderer` regardless, because the render library globs its sources
-recursively rather than listing them:
+`PickingSystem` or calls `screenToWorldRay`. The only reference used to be a
+`render_module.hpp` umbrella that re-exported it and was itself included by
+nothing. That umbrella has been deleted, so **the reference count is now zero**.
+The translation unit is compiled into `ohao_renderer` regardless, because the
+render library globs its sources recursively rather than listing them:
 
 {{cite ohao/render/CMakeLists.txt "file(GLOB_RECURSE RENDERER_SOURCES"}}
 

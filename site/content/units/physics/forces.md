@@ -230,10 +230,11 @@ backend's gravity, so every body it reaches falls at 2 g. Which bodies those are
 from the targeting rule above: the preset registers against a snapshot of the body list
 taken at the call, so anything created afterwards keeps 1 g — unless the world was empty
 when it ran, in which case the empty target set makes the registration global and
-present and future bodies alike get the double. Its only callers are in
-`physics/examples/force_system_example.hpp`, which no translation unit includes, which
-is why the doubling has gone unnoticed; the fix is `setGravity(vec3(0))` before
-installing a registry gravity, not a weaker generator.
+present and future bodies alike get the double. Its only callers were in
+`physics/examples/force_system_example.hpp` — a header no translation unit
+included, since deleted — which is why the doubling went unnoticed. The trap is
+still live for the next caller: the fix is `setGravity(vec3(0))` before installing
+a registry gravity, not a weaker generator.
 
 The drag half carries a smaller trap. `ForceFactory::createAirDrag` reads like it takes
 a drag coefficient; the argument lands in `FluidDragForce`'s *third* slot, the

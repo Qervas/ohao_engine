@@ -12,9 +12,7 @@ figures: [gpu-renderer-facade-ring-lag]
 
 {{cite examples/interactive.cpp "const uint8_t* pixels = renderer.getPixels();"}}
 
-So the PNG writers, the golden smoke test and the realtime viewer all drive the identical `render()` → `getPixels()` pair. `gpu_module.hpp` is not a second entry point: it is a seven-include umbrella whose own comment tells you to prefer the specific headers.
-
-{{cite ohao/gpu/gpu_module.hpp "Umbrella for the GPU / Vulkan subsystem"}}
+So the PNG writers, the golden smoke test and the realtime viewer all drive the identical `render()` → `getPixels()` pair. There is no second entry point. There used to be the *appearance* of one — a `gpu_module.hpp` umbrella re-exporting seven headers, whose own comment told you to prefer the specific headers instead — and it has been deleted along with the other four module umbrellas, none of which anything included.
 
 ## Four modes, three of which can be refused
 

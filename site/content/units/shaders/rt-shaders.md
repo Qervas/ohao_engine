@@ -311,8 +311,8 @@ crossing geometric edges.
 Nothing loads it. `AtrousDenoiser` builds its two pipelines from
 `rt_svgf_temporal.comp` and `rt_svgf_atrous.comp` instead — the variance-guided
 pair, which is what `DenoiseMode::Atrous` actually dispatches — and the
-`RTDenoiser` class that would have driven the plain kernel is a header in
-`ohao/render/rt/denoiser.hpp` with no translation unit.
+`RTDenoiser` class that would have driven the plain kernel was a header with no
+translation unit, `ohao/render/rt/denoiser.hpp`, since deleted.
 
 {{cite ohao/render/rt/denoise/atrous_denoise.cpp "rt_rt_svgf_atrous.comp.spv"}}
 

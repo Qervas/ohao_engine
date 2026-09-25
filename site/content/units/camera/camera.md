@@ -136,8 +136,9 @@ The deferred rasteriser has no such escape hatch. It renders with a matrix built
 horizontally compressed by that factor. `getProjectionMatrix` has two other readers
 and neither renders: `renderRTPipeline` assigns it to a local it then never uses, and
 `PickingSystem::screenToWorldRay` unprojects screen rays with it — inheriting the same
-1.6 — but no `PickingSystem` is ever constructed, because `render_module.hpp`, the
-only file that includes it, is itself included by nothing.
+1.6 — but no `PickingSystem` is ever constructed. Its header used to be pulled in
+by a `render_module.hpp` umbrella that nothing included; that umbrella is gone, so
+now nothing includes it at all.
 
 ## The near plane is twice what it says
 

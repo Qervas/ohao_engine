@@ -13,10 +13,14 @@ approximation wants — an environment cubemap, a diffuse irradiance cubemap, a
 roughness-mipped prefiltered specular cubemap, and a BRDF integration LUT. It is
 compiled into `ohao_renderer` by that library's recursive source glob. Nothing in
 the tree ever constructs it, and the type is never named outside its own two
-files. Its header is included exactly once, by an umbrella header that is itself
-included by nothing:
+files.
 
-{{cite ohao/render/render_module.hpp "render/ibl/ibl_processor.hpp"}}
+Its header used to be included exactly once, by a `render_module.hpp` umbrella
+that was itself included by nothing. That umbrella has been deleted, so
+**`ibl_processor.hpp` is now included by nothing at all** — the file compiles
+because the glob sweeps it up, and for no other reason.
+
+{{cite ohao/render/CMakeLists.txt "file(GLOB_RECURSE RENDERER_SOURCES"}}
 
 `loadEnvironmentMap`, `generateBRDFLUT` and all four view getters have zero
 callers in `ohao/`, `examples/` or `tests/`. Before calling that dead, check the

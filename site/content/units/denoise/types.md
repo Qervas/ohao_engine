@@ -199,13 +199,12 @@ guards a boundary that does not exist: no integer is ever cast into a
 
 ## A header and a shader that were never wired
 
-`denoiser.hpp` declares `RTDenoiser`, an à-trous wavelet filter with an
+`denoiser.hpp` declared `RTDenoiser`, an à-trous wavelet filter with an
 `init`/`denoise`/`destroy` shape and a five-iteration default. No matching
-`.cpp` was ever committed, and no translation unit includes the header: the
-identifier appears exactly once in the repository, at its own declaration, whose
-comment points at the replacement.
-
-{{cite ohao/render/rt/denoiser.hpp "/// Legacy A-Trous wavelet denoiser (compute)."}}
+`.cpp` was ever committed, and no translation unit ever included the header: the
+identifier appeared exactly once in the repository, at its own declaration, whose
+own comment pointed at the replacement. **Both have since been deleted** — this
+section is kept for the trap, not the file.
 
 Both halves landed dead, together, in commit `3e48342` — a bilateral-filter
 change whose message says the compute shader was "added for future multi-pass
@@ -216,11 +215,13 @@ push block.
 
 {{cite shaders/compute/denoise_atrous.comp "uniform readonly image2D accumBuffer;"}}
 
-It is still compiled into `build/shaders/compute_denoise_atrous.comp.spv`, and
-nothing loads it. The live `DenoiseMode::Atrous` path is a later, unrelated
-implementation: full SVGF, two compute passes with persistent history, driven by
-`AtrousDenoiser` out of `shaders/rt/`. Deleting `denoiser.hpp` and its shader is
-safe; assuming the file name tells you which à-trous is running is not.
+Its shader was still being compiled into
+`build/shaders/compute_denoise_atrous.comp.spv` with nothing loading it. The live
+`DenoiseMode::Atrous` path is a later, unrelated implementation: full SVGF, two
+compute passes with persistent history, driven by `AtrousDenoiser` out of
+`shaders/rt/`. The header and the shader have both been deleted. The lesson
+outlives them: assuming a file name tells you which à-trous is running is how two
+dead halves survived this long next to a live implementation sharing their name.
 
 ## Contracts
 

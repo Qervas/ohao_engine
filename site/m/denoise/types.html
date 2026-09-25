@@ -95,11 +95,10 @@
 </div>
 <div class="section-rule"><h2 id="a-header-and-a-shader-that-were-never-wired">A header and a shader that were never wired</h2></div>
 <div class="prose reveal">
-<p>`denoiser.hpp` declares `RTDenoiser`, an à-trous wavelet filter with an `init`/`denoise`/`destroy` shape and a five-iteration default. No matching `.cpp` was ever committed, and no translation unit includes the header: the identifier appears exactly once in the repository, at its own declaration, whose comment points at the replacement.</p>
-<div class="citation-chip"><code class="citation-code">/// Legacy A-Trous wavelet denoiser (compute). Prefer DenoiseMode::Atrous (SVGF) for new work.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoiser.hpp#L8" target="_blank" rel="noopener">ohao/render/rt/denoiser.hpp:8</a></div>
+<p>`denoiser.hpp` declared `RTDenoiser`, an à-trous wavelet filter with an `init`/`denoise`/`destroy` shape and a five-iteration default. No matching `.cpp` was ever committed, and no translation unit ever included the header: the identifier appeared exactly once in the repository, at its own declaration, whose own comment pointed at the replacement. **Both have since been deleted** — this section is kept for the trap, not the file.</p>
 <p>Both halves landed dead, together, in commit `3e48342` — a bilateral-filter change whose message says the compute shader was &quot;added for future multi-pass A-Trous implementation — not wired up yet&quot;. `denoise_atrous.comp` matches the never-implemented class exactly: four bindings in the order `denoise()` takes its views, and the identical `{stepSize, sigmaColor, sigmaNormal, sigmaDepth}` push block.</p>
 <div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumBuffer; // has depth/position info</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/denoise_atrous.comp#L12" target="_blank" rel="noopener">shaders/compute/denoise_atrous.comp:12</a></div>
-<p>It is still compiled into `build/shaders/compute_denoise_atrous.comp.spv`, and nothing loads it. The live `DenoiseMode::Atrous` path is a later, unrelated implementation: full SVGF, two compute passes with persistent history, driven by `AtrousDenoiser` out of `shaders/rt/`. Deleting `denoiser.hpp` and its shader is safe; assuming the file name tells you which à-trous is running is not.</p>
+<p>Its shader was still being compiled into `build/shaders/compute_denoise_atrous.comp.spv` with nothing loading it. The live `DenoiseMode::Atrous` path is a later, unrelated implementation: full SVGF, two compute passes with persistent history, driven by `AtrousDenoiser` out of `shaders/rt/`. The header and the shader have both been deleted. The lesson outlives them: assuming a file name tells you which à-trous is running is how two dead halves survived this long next to a live implementation sharing their name.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
@@ -120,8 +119,8 @@
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/rt/denoiser.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoiser.hpp</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
