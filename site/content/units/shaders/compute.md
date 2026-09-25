@@ -3,10 +3,9 @@ module: shaders
 id: compute
 title: Compute shaders
 standard: v2
-figures: [shaders-compute-reach]
 ---
 
-## Twelve files, one that reaches a clean-clone frame
+## Two compute shaders, and a build that ignores them
 
 Nothing in the build depends on the shaders. `add_custom_target(shaders ...)` is
 declared without `ALL`, and no `add_dependencies` call anywhere in the tree names
@@ -15,126 +14,12 @@ shaders` is a second, manual step.
 
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
-When it does run it discovers work by file extension, not from a manifest, then
-flattens the path into one SPIR-V name — `compute/brdf_lut.comp` →
-`compute_brdf_lut.comp.spv`.
-
 {{cite shaders/CMakeLists.txt "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"}}
-
-So a green build proves nothing about wiring; it has not even touched a shader.
-Grepping the `.spv` names C++ actually opens gives the real map: of twelve files,
-five reach `vkCreateComputePipelines`. Three of those five belong to
-`IBLProcessor`, which nothing constructs; a fourth is compiled out unless a
-vendored NGX library is already on disk. That leaves one shader a fresh clone can
-dispatch — `ssao.comp`, itself default-off.
-
-{{figure shaders-compute-reach "Conceptual reach map for shaders/compute/. Tiers derived by grepping every *.comp.spv string literal in ohao/, examples/ and tests/ — not a GPU capture."}}
-
-## The IBL bake nobody constructs
-
-Three files — equirect-to-cubemap, GGX prefilter, split-sum BRDF LUT — are the
-classic image-based-lighting bake, and they are wired: `IBLProcessor` builds a
-compute pipeline for each.
-
-{{cite ohao/render/ibl/ibl_processor.cpp "m_brdfPipeline)) {"}}
-
-Nothing constructs it. The type name never appears outside its own two files. Its
-only other trace was an `#include` in an aggregator nothing included, and that
-aggregator has been deleted, leaving no trace at all. `IBLProcessor`'s
-own defects have a separate unit; the consequence for these three `.comp` files is
-that they never execute, and deferred lighting gets a 1×1 `R8G8B8A8_UNORM` dummy
-where the baked LUT belongs — `setIBLTextures`, the only writer of
-`m_brdfLUTView`, has no caller either.
-
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;"}}
-
-The fragment shader knows, and substitutes an analytic scale when the sampled
-pair sums to under `1e-4`.
-
-{{cite shaders/core/deferred_lighting.frag "if (brdf.x + brdf.y < 1e-4) {"}}
-
-Whether that test fires is not something the C++ guarantees. The dummy is created
-with `VK_IMAGE_USAGE_SAMPLED_BIT` and nothing else — no transfer destination, no
-storage — so it cannot legally be written, and nothing writes it; only a layout
-transition touches it. Its texels are undefined by the Vulkan spec, not
-defined-zero.
-
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;"}}
-
-Which branch runs therefore depends on what the driver leaves in a fresh
-allocation: zero — the ordinary case — makes `vec2(max(1 - roughness, 0.04),
-roughness * 0.25)` the live path for every environment reflection the rasteriser
-draws; anything else shades from garbage. Neither outcome involves a baked
-integral.
-
-## What the LUT would hold
-
-Split-sum factors the specular IBL integral into a prefiltered radiance lookup
-times a two-term BRDF integral of view angle and roughness alone. Writing Schlick
-Fresnel as $F = F_0(1 - F_c) + F_c$ with $F_c = (1 - \mathbf{v}\!\cdot\!\mathbf{h})^5$
-splits that second factor into a pair that no longer mentions $F_0$:
-
-$$\int_\Omega \frac{f_r}{F}(\mathbf{n}\!\cdot\!\mathbf{l})\,d\omega_l = F_0 A + B,
-\qquad \{A,\,B\} = \int_\Omega \{1 - F_c,\; F_c\}\,\frac{f_r}{F}(\mathbf{n}\!\cdot\!\mathbf{l})\,d\omega_l$$
-
-With $f_r$ the Cook-Torrance lobe, $f_r/F = DG\,/\,4(\mathbf{n}\!\cdot\!\mathbf{l})(\mathbf{n}\!\cdot\!\mathbf{v})$
-still carries the GGX distribution $D$ and the Smith term $G$. `brdf_lut.comp`
-evaluates neither integral directly: it draws the half-vector $\mathbf{h}$ from
-the GGX NDF, so after the half-vector-to-light Jacobian
-$p(\mathbf{l}) = D(\mathbf{h})(\mathbf{n}\!\cdot\!\mathbf{h})\,/\,4(\mathbf{v}\!\cdot\!\mathbf{h})$,
-$D$ cancels and the per-sample weight has no NDF left in it:
-
-$$\frac{(f_r/F)\,(\mathbf{n}\!\cdot\!\mathbf{l})}{p(\mathbf{l})}
-= \frac{G\,(\mathbf{v}\!\cdot\!\mathbf{h})}{(\mathbf{n}\!\cdot\!\mathbf{h})(\mathbf{n}\!\cdot\!\mathbf{v})}$$
-
-{{cite shaders/compute/brdf_lut.comp "float G_Vis = (G * VdotH) / (NdotH * NdotV);"}}
-
-$A$ and $B$ are the sample means of $(1 - F_c)\cdot$`G_Vis` and $F_c\cdot$`G_Vis`
-over 1024 Hammersley points. That weight is an estimator tied to this sampling
-density, not an integrand — integrating it over the hemisphere does not give $A$.
-The image `IBLProcessor` allocates for the result is 512² `R16G16_SFLOAT`, one
-channel per integral.
-
-{{cite shaders/compute/brdf_lut.comp "const uint SAMPLE_COUNT = 1024u;"}}
-{{cite ohao/render/ibl/ibl_processor.hpp "BRDF_LUT_SIZE = 512;"}}
-
-Shading is meant to reconstruct specular as $F_0 A + B$ with the *constant* $F_0$,
-precisely because $A$ and $B$ already carry all the angular Fresnel weighting. The
-deferred shader instead builds a roughness-biased Fresnel at the view angle —
-
-{{cite shaders/core/deferred_lighting.frag "vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);"}}
-
-— and feeds that `F`, not `F0`, into `prefilteredColor * (F * brdf.x + brdf.y)`,
-double-counting the Fresnel falloff. With the LUT reduced to the analytic
-substitute above it is moot today, and a live defect the day the bake is enabled.
-
-The LUT's geometry term uses the image-based Smith-Schlick remap. The shader sets
-`a = roughness` and `k = (a * a) / 2`, i.e. $k = r^2/2$; since its own
-`importanceSampleGGX` defines $\alpha = r^2$, that is Karis's $k = \alpha/2$ IBL
-remap — not the $(r+1)^2/8$ direct-lighting remap the raygen shaders inline in
-their NEE branches. Crossing the two is a standard way to get a subtly wrong
-specular horizon.
-
-{{cite shaders/compute/brdf_lut.comp "float a = roughness;"}}
-{{cite shaders/compute/brdf_lut.comp "float k = (a * a) / 2.0;"}}
-
-## The workgroup size nobody checked
-
-All three IBL shaders declare `local_size 16×16` while every dispatch in
-`IBLProcessor` computes groups as `(N + 7) / 8` — twice the groups per axis, four
-times the intended invocations. Only the `coord >= size` early-out at the top of
-each shader keeps the result correct, at four times the cost.
-
-{{cite shaders/compute/prefilter_envmap.comp "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;"}}
-{{cite ohao/render/ibl/ibl_processor.cpp "vkCmdDispatch(cmd, (mipSize + 7) / 8, (mipSize + 7) / 8, 6);"}}
-
-Because the bake has no call site, none of this has ever been observed running.
 
 ## SSAO: the one on the raster path
 
 `compute_ssao.comp.spv` is loaded by `SSAOPass` and dispatched from the deferred
-render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree, unlike the
-IBL trio. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of
+render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of
 an `R16G16B16A16_SFLOAT` target — through `decodeNormalOctahedron` in
 `includes/common/encoding.glsl`, which opens by undoing a [0,1] remap:
 
@@ -231,5 +116,4 @@ writes the RGBA8 beauty — so the tracer stays unbiased.
 ## Contracts
 
 - Nothing depends on the `shaders` target, so `cmake --build build` never recompiles SPIR-V and a stale `.spv` loads without complaint. `--target shaders` is a separate step. Compilation is then by glob, so adding a `.comp` yields a `.spv` and no wiring: a loader must ask for the path-flattened name, `compute/<name>.comp` → `compute_<name>.comp.spv`.
-- Nothing constructs `IBLProcessor` and nothing calls `setIBLTextures`, so `deferred_lighting.frag` samples an uninitialised 1×1 image for the LUT on every deferred frame. Delete the `brdf.x + brdf.y < 1e-4` substitution and rough metals lose the `prefilteredColor * (F * brdf.x + brdf.y)` term but keep the unconditional `metallic > 0.5` environment floor ten lines below — dimmer, not black. {{cite shaders/core/deferred_lighting.frag "specularAmbient += surface.F0 * max(prefilteredColor"}}
 - `compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.

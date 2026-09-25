@@ -150,12 +150,6 @@ repo-wide change, not a one-line edit.
 
 ## The sampler that ships, and the one that looks official
 
-`shaders/includes/shadow/shadow_csm.glsl` is the file this unit is nominally about:
-a 16-tap Poisson-disk PCF kernel, a cascade-index-scaled normal bias, a linear blend
-across the cascade boundary, and a full PCSS blocker-search / penumbra-estimate path.
-
-{{cite shaders/includes/shadow/shadow_csm.glsl "float sampleCSM(sampler2DArray shadowMap, vec3 worldPos, vec3 normal,"}}
-
 No shader `#include`s it, so nothing in it is reachable from any pipeline. Its two
 entry points, `sampleCSM` and `sampleCSM_PCSS`, have zero callers; the helpers
 `selectCascade`, `getShadowCoords` and `sampleShadowPCF` are called only from those
@@ -169,12 +163,6 @@ blend:
 
 The two also disagree structurally: the include's `CascadeData` ends in a `float
 padding` where the C++ struct and the live UBO both declare a `uint cascadeCount`.
-
-:::key
-Editing `shadow_csm.glsl` changes nothing that renders. The shipping CSM sampler is
-`calculateShadowCSM` inside `shaders/core/deferred_lighting.frag`, and it is
-strictly weaker than the include that appears to be the implementation.
-:::
 
 ## One layer, four broadcasts
 

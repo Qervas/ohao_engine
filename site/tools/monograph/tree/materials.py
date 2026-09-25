@@ -30,13 +30,6 @@ MODULE = {
             design=['Material rows are tightly packed vec4s; texture indices bit-cast into floats for SSBO compatibility.', "Bindless index 0xFFFFFFFF means 'no texture' — shaders must branch before sample.", 'layout_meta asserts sizes match GLSL std430 expectations.'],
         ),
         page(
-            'advanced',
-            'Advanced material includes',
-            'advanced_brdf, material_sampling, material_types.',
-            files=['shaders/includes/material/advanced_brdf.glsl', 'shaders/includes/material/material_sampling.glsl', 'shaders/includes/material/material_types.glsl'],
-            design=['material_sampling: importance sample GGX VNDF / cosine hemisphere for PT.', 'material_types: enum-like constants shared across hit and raygen.', 'advanced_brdf: multi-lobe helpers beyond simple metal-rough.'],
-        ),
-        page(
             'lights',
             'Lights dual packing',
             'GPULight SSBO (64) vs deferred LightData UBO (8).',

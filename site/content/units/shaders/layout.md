@@ -183,21 +183,6 @@ from a pattern with a directory component in the middle:
 
 {{cite shaders/CMakeLists.txt ""${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl""}}
 
-`**` is not the recursive wildcard it looks like, and it is not a one-level
-wildcard either. Under `GLOB_RECURSE` the trailing `*.glsl` is applied at every
-depth anyway; all `**/` contributes is a demand that *at least one* directory
-component sit between `includes/` and the file. Checked against CMake directly on
-a scratch tree, `includes/**/*.glsl` matches `includes/a/b/c/three.glsl` and does
-not match `includes/top.glsl`. The pattern therefore collects all 30 headers in
-subdirectories of `includes/` — which in this tree all happen to sit exactly one
-level down — and misses exactly the two at its top level, `noise.glsl` and
-`pbr_unpack.glsl`, along with everything under `shaders/rt/includes/`, which is
-outside the pattern's root entirely. Touching either copy of `pbr_unpack.glsl`
-and rebuilding recompiles **zero** shaders. The material
-unpack used by every raygen can be edited and shipped without the build noticing.
-(The second glob line, which adds `includes/water/*.glsl`, is redundant: that
-file already matches the first pattern.)
-
 ## Two files named pbr_unpack.glsl
 
 The tree contains `shaders/includes/pbr_unpack.glsl` and
@@ -219,17 +204,6 @@ read the `rt/includes/` one — and (b) even editing the right copy triggers no
 recompilation, because neither file is in the dependency glob. The build will
 report success and the SPIR-V will be unchanged.
 :::
-
-## What is compiled but never loaded
-
-Cross-referencing the 91 produced names against every `.spv` string literal in
-`ohao/`, `examples/` and `tests/` leaves 43 modules that no code path names: the
-35 under `_disabled/`, plus eight live compute shaders including
-`compute_skinning.comp`, `compute_light_culling.comp` and `compute_gpu_cull.comp`.
-The include tree tells the same story from the other side — of 34 `.glsl`
-headers, 11 are outside the dependency closure of every shader, among them
-`shadow_csm.glsl` and `rt_masks.glsl`, the latter carrying a comment promising it
-mirrors `rt_visibility.hpp`.
 
 ## The other compiler, still in the tree
 

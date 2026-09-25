@@ -166,8 +166,6 @@ distinct geometry treatments in the tree:
 - **Deferred image-based lighting** precomputes the split-sum BRDF integral with a
   *different* remap, `(a*a)/2`, into a LUT that the deferred lighting pass samples:
 
-{{cite shaders/compute/brdf_lut.comp "float k = (a * a) / 2.0;"}}
-
 The only thing that is genuinely dead here is the *named* `geometrySchlickGGX`
 function in `brdf_ggx.glsl` (no callers); the identical `(r+1)^2/8` math it
 contains still ships, inlined, as the path tracer's NEE geometry term. "Function

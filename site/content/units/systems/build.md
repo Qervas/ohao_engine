@@ -38,10 +38,6 @@ with external linkage in three translation units that land in three different ar
 `ohao_renderer`, and the GLTF loader in `ohao_scene` — so `stbi_load` and friends are
 defined three times before the executable's own object file is even considered.
 
-{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "#define STB_IMAGE_IMPLEMENTATION"}}
-{{cite ohao/render/ibl/ibl_processor.cpp "#define STB_IMAGE_IMPLEMENTATION"}}
-{{cite ohao/scene/asset/model_gltf.cpp "#define STB_IMAGE_IMPLEMENTATION"}}
-
 `stb_image_write` duplicates the same way and is the more immediate per-executable
 trigger: `model_gltf.cpp` expands it inside `ohao_scene`, and so does every
 `examples/*.cpp` main and `tests/renderer/renderer_test.cpp` — a second
@@ -172,16 +168,6 @@ this pattern:
 
 {{cite shaders/CMakeLists.txt "/includes/**/*.glsl"}}
 
-CMake has no globstar. `**` is two ordinary wildcards, and the pattern still requires
-a literal `/` after them, so it only matches files at least one directory below
-`includes/`. Anything sitting at the top level of `shaders/includes/` matches
-nothing. Evaluated against this tree the shipped pattern yields 30 files; the plain
-recursive form yields 32. The two it misses are `noise.glsl` and `pbr_unpack.glsl` —
-and `pbr_unpack.glsl` is `#include`d by the three `pt_raygen*` shaders. (It is not a
-raygen-wide dependency: the tree's other two raygens, `rt_gi.rgen` and `rt_shadow.rgen`,
-pull in `includes/common/encoding.glsl` and nothing else.) Editing the material unpack
-marks not one `.spv` out of date.
-
 The same `DEPENDS` list also names the output *directory*, created by its own custom
 command. In the generated Makefile that prerequisite is written as the relative path
 `shaders` — which is already the name GNU make has for the custom target — so
@@ -273,5 +259,4 @@ supported configuration.
 - `OHAO_DLSS_ENABLED` must be defined on **both** `ohao_renderer` and `ohao_gpu_vulkan`. It is `PRIVATE` on each, so removing either definition silently desynchronises `sizeof(PathTracer)` between the two archives.
 - The `shaders` target is not in `all`. `cmake --build build --target shaders` must be run explicitly, and `build/bin/shaders/` exists only as a side effect of building `renderer_test`.
 - Every source glob except the NRD-integration one lacks `CONFIGURE_DEPENDS`; adding a `.cpp` or a `.rgen` requires re-running `cmake` before it is compiled at all.
-- `shaders/includes/*.glsl` at the top level (`pbr_unpack.glsl`, `noise.glsl`) is outside the shader dependency glob. After editing either, delete `build/shaders/` or the three `pt_raygen*` modules keep their stale SPIR-V — `--target shaders` is otherwise a no-op.
 - The path tracer's SPV loader tries `bin/shaders/<name>` relative to the CWD *before* `build/shaders/`. A leftover `bin/shaders/` in the working directory silently shadows every freshly compiled raygen, miss and hit shader.

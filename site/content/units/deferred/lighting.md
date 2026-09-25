@@ -140,11 +140,6 @@ discontinuity in filter width rather than a blend.
 
 ## The IBL that never received its cubemaps
 
-The pass exposes a setter for the three classic IBL resources — irradiance cubemap,
-prefiltered cubemap, BRDF LUT. Its only caller is a `DeferredRenderer` forwarder
-that is itself never called, and `IBLProcessor`, the class that generates all three,
-is never instantiated outside its own directory.
-
 {{cite ohao/render/deferred/deferred_lighting_pass.hpp "void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,"}}
 
 Bindings 7, 8 and 9 therefore resolve, every frame, to a 1×1 `R8G8B8A8_UNORM`
@@ -204,18 +199,6 @@ a hand-tuned brightener that fires on the mirror and never on the chalk.
 {{cite shaders/core/deferred_lighting.frag "specularAmbient += surface.F0 * max(prefilteredColor,"}}
 
 The plumbing exists; the convolution does not.
-
-:::key
-`ibl.glsl` is `#include`d by no shader in the tree, so `calculateIBL` never runs.
-The frag re-derives the split-sum structure inline, but not the code: the one line
-common to both is the combine, `prefilteredColor * (F * brdf.x + brdf.y)`. The
-include fetches `samplerCube` irradiance and prefiltered maps and scales LOD by its
-own `MAX_REFLECTION_LOD = 4.0`; the frag fetches one equirect `sampler2D` and scales
-by 9.0. The *file* is dead, and what ships beside it is a re-derivation for a texture
-type nothing in the engine ever produces for this pass.
-:::
-
-{{cite shaders/includes/lighting/ibl.glsl "const float MAX_REFLECTION_LOD = 4.0;"}}
 
 ## Weather channels with no driver
 

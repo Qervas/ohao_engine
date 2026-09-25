@@ -40,12 +40,12 @@ class ResolveCitationTest(unittest.TestCase):
 
     def test_chip_contains_path_line_and_github_link(self):
         html = cite.citation_chip_html(
-            "shaders/includes/material/material_types.glsl",
-            "return mix(dielectricF0, surface.albedo, surface.metallic);",
+            "shaders/includes/material/ggx_aniso.glsl",
+            "float ggxDisoShaded(float NdotH, float roughness) {",
         )
-        self.assertIn("material_types.glsl:138", html)
+        self.assertIn("ggx_aniso.glsl:78", html)
         self.assertIn(cite.GITHUB_BLOB_BASE, html)
-        self.assertIn("#L138", html)
+        self.assertIn("#L78", html)
         self.assertIn("citation-chip", html)
 
 

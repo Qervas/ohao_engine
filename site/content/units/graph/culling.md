@@ -58,8 +58,6 @@ $\mathbf{m}_3 + \mathbf{m}_2$ is the near plane only when clip-space $z$ runs
 $-w \ldots w$ — the OpenGL convention. OHAO's camera builds its projection with plain
 `glm::perspective`, and the tree never defines `GLM_FORCE_DEPTH_ZERO_TO_ONE`:
 
-{{cite ohao/render/picking/picking_system.cpp "glm::perspective() uses OpenGL depth range [-1, 1] (no GLM_FORCE_DEPTH_ZERO_TO_ONE)"}}
-
 so the extraction is correct as written. Define that macro — the obvious "make GLM
 Vulkan-native" cleanup — and exactly one plane changes. Far survives, since $z_{clip} \le
 w$ is the far boundary in both conventions; left, right, top and bottom never involved
@@ -156,8 +154,6 @@ the technique does not scale, and what `gpu_cull.comp` was drafted to replace.
 The scan needs `model->vertices` to stay CPU-resident after GPU upload, and it is not the
 only thing that does — picking walks the same array twice per ray, once for the world AABB
 and once for the triangles:
-
-{{cite ohao/render/picking/picking_system.cpp "AABB worldAABB = calculateWorldAABB(model->vertices, worldMatrix);"}}
 
 so `AABB` has two users beyond the cull: that ray-box rejection, and the engine test
 suite, which builds one by hand to exercise `isValid`, `center` and `size`.

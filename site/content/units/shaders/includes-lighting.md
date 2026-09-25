@@ -8,13 +8,6 @@ figures: [shaders-includes-lighting-falloff]
 
 ## What the include graph actually says
 
-Five headers sit in `shaders/includes/lighting/`, and every `#include` of that
-directory in the whole tree amounts to four lines: `forward.frag` pulls
-`light_attenuation.glsl` in its PBR branch and `blinn_phong.glsl` in the legacy
-branch, and `cloud.comp` and `volumetric_scatter.comp` — both under
-`shaders/_disabled/` — pull `phase.glsl`. `ibl.glsl` and `light_types.glsl`
-appear in no `#include` anywhere.
-
 {{cite shaders/core/forward.frag "includes/lighting/light_attenuation.glsl"}}
 
 That would be a boring page if an unused file implied unused math. It does not:
@@ -104,54 +97,7 @@ shared include — sits directly above `attenuationSmooth` in
 re-authoring every intensity that was tuned against the bounded one.
 :::
 
-## Three reasons ibl.glsl cannot simply be included
-
-`ibl.glsl` declares `PI` and `MAX_REFLECTION_LOD` as `const float`s. `math.glsl`
-defines the first as an object-like macro and pulls in `constants.glsl`, which
-defines the second the same way. `deferred_lighting.frag` reaches `math.glsl`
-transitively through `brdf_ggx.glsl` → `brdf_common.glsl`; `forward.frag`
-includes it directly, two lines before it includes `brdf_ggx.glsl`.
-
-{{cite shaders/includes/lighting/ibl.glsl "const float PI = 3.14159265359;"}}
-{{cite shaders/includes/common/math.glsl "#define PI          3.14159265359"}}
-{{cite shaders/includes/common/constants.glsl "#define MAX_REFLECTION_LOD 4.0"}}
-
-Include `math.glsl` first and the macro rewrites the declaration into
-`const float 3.14159265359 = 3.14159265359;` — a syntax error, not a redefinition
-warning. Guard `PI` and `glslc` reports the identical error one line down, at
-`MAX_REFLECTION_LOD`. The failure is order-dependent: put `ibl.glsl` first and
-both `const float`s are parsed before either macro exists, and the pair compiles
-clean. `phase.glsl` sidesteps the question entirely by guarding its own `PI`,
-which is why it composes in either order.
-
-{{cite shaders/includes/lighting/ibl.glsl "const float MAX_REFLECTION_LOD = 4.0;"}}
-{{cite shaders/includes/lighting/phase.glsl "#ifndef PI"}}
-
-Guarding both constants still is not enough. `fresnelSchlickRoughness` has a full
-body in `ibl.glsl` and another — same formula, `saturate` for `clamp` — in
-`brdf_common.glsl`, and GLSL has no weak-symbol rule: `glslc` rejects whichever
-definition it sees second, in either include order. Both raster shaders reach
-`brdf_common.glsl` through `brdf_ggx.glsl`, so this one cannot be ordered
-around. Adopting
-`ibl.glsl` means deleting its Fresnel and taking the BRDF library's.
-
-{{cite shaders/includes/lighting/ibl.glsl "vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {"}}
-{{cite shaders/includes/brdf/brdf_common.glsl "vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {"}}
-
 ## The IBL that was built twice and wired zero times
-
-`ibl.glsl` is a complete split-sum evaluator — Fresnel-with-roughness, irradiance
-cubemap fetch, prefiltered specular fetch, BRDF LUT lookup — with a matching C++
-half in `IBLProcessor`, which turns an equirectangular HDR into a cubemap,
-prefilters it across five mip levels spanning roughness 0 to 1 in quarter steps,
-and integrates the LUT.
-
-{{cite ohao/render/ibl/ibl_processor.hpp "static constexpr uint32_t PREFILTER_MIP_LEVELS = 5;"}}
-
-Neither half runs. `calculateIBL` is in no shader, and `IBLProcessor` is compiled
-into `ohao_renderer` by the source glob but never constructed. Its only mention
-outside its own translation unit was an `#include` in `render_module.hpp`, itself
-included by nothing; that umbrella has been deleted and the mention with it.
 
 What ships is the same split-sum algebra, written inline in
 `deferred_lighting.frag` and fed from the 2D equirect environment map with a mip
@@ -184,13 +130,6 @@ that analytic curve or an undefined texel is not something the code decides.
 
 ## Phase functions with no medium
 
-`phase.glsl` is the one header here that nothing has copied: grepping for its
-distinguishing constants (`1.55*g - 0.55*g³`, `3/(16π)`) finds nothing outside
-this file, and no sky or fog pass inlines a lobe. It is also the only header here
-with a caller outside `forward.frag` — a single `henyeyGreenstein` in
-`volumetric_scatter.comp`, under `shaders/_disabled/`; `cloud.comp` includes the
-header and calls nothing from it.
-
 $$p_{\mathrm{HG}}(\cos\theta,\,g) \;=\; \frac{1-g^{2}}{4\pi\,\big(1 + g^{2} - 2g\cos\theta\big)^{3/2}}$$
 
 $\theta$ is the angle between view and light directions and $g \in [-1,1]$ is the
@@ -198,8 +137,6 @@ asymmetry — positive forward-scattering, negative back. The implementation flo
 the base of the $3/2$ power at $10^{-4}$: as $g \to 1$ with $\cos\theta \to 1$
 the denominator collapses to zero, and without the floor the lobe returns `inf`
 or, at $g = 1$ exactly, a $0/0$ `NaN`.
-
-{{cite shaders/includes/lighting/phase.glsl "pow(max(1.0 + g2 - 2.0 * g * cosTheta, 0.0001), 1.5)"}}
 
 There is a trap in the word "disabled", and a second trap behind it. The shader
 CMake globs recursively with no exclusion, so both consumers land on the
@@ -239,8 +176,6 @@ indexes the UBO directly — while `deferred_lighting.frag` copies `Light` out o
 its buffer freely, so whatever produced the original corruption was not
 universal.
 
-## light_types.glsl: the abstraction that lost
-
 `LightParams`, `ShadowParams`, `getLightDirection`, `getLightDistance`,
 `calculateAmbient`, `lightCastsShadow` — none of these are referenced anywhere
 in `shaders/` or `ohao/`. The C++ `getLightDirection` that grep turns up is an
@@ -269,5 +204,3 @@ comment when adding a fourth light type.
 
 - `light_attenuation.glsl` and `blinn_phong.glsl` hold two copies of the same smooth falloff. Editing one without the other desynchronises the forward PBR branch from the legacy one — and nothing catches it, because the legacy branch is not compiled until someone builds with `USE_PBR=0`.
 - Forward and deferred point-light attenuation are different functions with different units, so intensities are not portable between `RenderMode::Forward` and `RenderMode::Deferred`. No shipped binary selects Forward: the forward pipeline is created on every init and never bound, so the header's law is compiled into SPIR-V but executed by nothing.
-- Two independent things block `ibl.glsl` from any shader that reaches `brdf_common.glsl`. Guarding its `const float PI` and `const float MAX_REFLECTION_LOD` fixes only the order-dependent parse errors; the duplicate `fresnelSchlickRoughness` body fails in either order and has to be deleted.
-- Nothing calls `setIBLTextures`, so binding 9 resolves to a 1×1 image that is never written and cannot be. The deferred environment-specular term therefore rests on a `< 1e-4` guard over undefined memory. Wiring `IBLProcessor` in would change every metal — a re-lighting job, not a bug fix.

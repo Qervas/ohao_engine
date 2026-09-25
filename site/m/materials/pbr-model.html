@@ -110,7 +110,6 @@ $$</div>
 <li>**Deferred image-based lighting** precomputes the split-sum BRDF integral with a</li>
 </ul>
 <p>*different* remap, `(a*a)/2`, into a LUT that the deferred lighting pass samples:</p>
-<div class="citation-chip"><code class="citation-code">float k = (a * a) / 2.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/brdf_lut.comp#L51" target="_blank" rel="noopener">shaders/compute/brdf_lut.comp:51</a></div>
 <p>The only thing that is genuinely dead here is the *named* `geometrySchlickGGX` function in `brdf_ggx.glsl` (no callers); the identical `(r+1)^2/8` math it contains still ships, inlined, as the path tracer&#x27;s NEE geometry term. &quot;Function unused&quot; and &quot;formula unused&quot; are not the same claim, and only the first is true.</p>
 </div>
 <div class="section-rule"><h2 id="where-the-packed-roughness-comes-from">Where the packed roughness comes from</h2></div>
@@ -135,7 +134,6 @@ $$</div>
         <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/brdf_lut.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

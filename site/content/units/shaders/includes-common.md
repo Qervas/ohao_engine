@@ -157,32 +157,7 @@ inside this same file, by the already-dead `reject` and `gain`. Nothing is
 shadowed by an inlined copy either: the only `safeNormalize` in the engine is an
 unrelated C++ function in the physics module.
 
-`math.glsl`'s `#define PI` fares no better. Six live shaders declare their own
-`const float PI = 3.14159265359;` rather than include it — the three IBL
-precompute passes (`brdf_lut.comp`, `equirect_to_cubemap.comp`,
-`prefilter_envmap.comp`), plus `ssao.comp`, `sky.frag` and
-`cinematic_composite.comp`, each with a C++ pipeline that loads its SPIR-V. Five
-more copies sit in files no pipeline loads: three under `_disabled/`, plus
-`gerstner.glsl`, reachable only from `_disabled/water/water.vert`, and
-`ibl.glsl`, which has no includers anywhere in the tree and goes further still,
-redeclaring `MAX_REFLECTION_LOD = 4.0` where `constants.glsl` already defines it.
-
-`color.glsl` is the same shape. Its `tonemapACES` and `linearToSRGBFast` are
-called once each, from `forward.frag`; its `sRGBToLinear` is reached only from
-`material_sampling.glsl`, which nothing includes. Its `luminance` — the Rec.709
-dot product this monograph's own source-tree summary promises as the tree's one
-definition — is used only by `adjustSaturation`, which is itself dead:
-
 {{cite shaders/includes/common/color.glsl "float luminance(vec3 color) {"}}
-
-Meanwhile the same Rec.709 dot product appears inlined 48 times across the ten
-shaders the engine actually loads: all three path-tracer raygens (41 of those
-hits between them), both SVGF passes, the cinematic composite and bloom-extract
-computes, `bloom_threshold.frag`, `gbuffer.frag` and `dlss_tonemap.comp`. Two
-further copies live in files nothing reaches — `advanced_brdf.glsl`, a header
-with no includers, and `dof_composite.comp`, which no C++ names — and do not
-count. The shipping tonemap pass carries its own copy of the Narkowicz ACES fit
-rather than calling the shared one:
 
 {{cite shaders/postprocess/tonemapping.frag "vec3 ACESFilm(vec3 x) {"}}
 
@@ -204,15 +179,11 @@ disabled. The shader CMake globs recursively over the whole `shaders/` tree, so
 `_disabled/` shaders still compile to SPIR-V and still gate the build on these
 headers' syntax — they simply have no C++ that loads the module.
 
-## noise.glsl is a library nobody imports
-
 The 264-line noise library — Hoskins hashes, value and gradient noise, fBm,
 ridged multifractal, domain warping, Voronoi, a directional dune profile — is
 included by exactly two files, both under `_disabled/terrain/`. No live pipeline
 pulls it. This monograph's own source-tree summary bills it as a hash for three
 consumers:
-
-{{cite site/tools/monograph/tree/shaders.py "noise.glsl: procedural hash for SSAO, particles, cloud density"}}
 
 Two of the three do not survive a grep. `ssao.comp` samples a noise *texture*
 through a descriptor, and `sampleCloudDensity` takes a `sampler3D` rather than
@@ -222,26 +193,7 @@ shape the library does not offer, since every hash in it is float-valued.
 
 {{cite shaders/particles/particle_emit.comp "uint hash(uint x) {"}}
 
-It is not alone, and the other three private hashes are worse news for the header
-than a rewrite would be. `rt_gi.rgen`, `rt_shadow.rgen` and `dlss_tonemap.comp`
-each carry a body byte-identical to `noise.glsl`'s `hash21` — the Hoskins
-`0.1031` construction, the `33.33` fold, the same return — under three different
-local names (`hash`, `hash`, `hash12`). The library was not rejected; it was
-copy-pasted past. `sky.frag` is the one genuine divergence: its `hash21` uses the
-`vec2(123.34, 456.21)` construction instead, so it alone generates a different
-sequence.
-
 {{cite shaders/postprocess/sky.frag "p = fract(p * vec2(123.34, 456.21));"}}
-
-:::key
-Before deleting anything under `includes/common/`, grep for an inlined private
-copy — this tree consistently prefers duplication to inclusion. And before
-"unifying" a duplicate into the shared header, check what the duplicate actually
-is: the octahedral encoders differ by a `×0.5+0.5`, and of the four float-valued
-private hashes three are verbatim copies of `noise.glsl`'s `hash21` while
-`sky.frag`'s is a different generator. A naive merge silently changes output
-rather than failing to build.
-:::
 
 ## Contracts
 

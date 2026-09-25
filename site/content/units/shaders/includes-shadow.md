@@ -22,20 +22,11 @@ only when neither is live — which no example in `examples/` ever arranges.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "// Forward rendering path"}}
 
-`shadow_csm.glsl` has no includer, but its math is not idle. The deferred lighting
-shader carries the same cascade-select loop inline:
-
 {{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
 
 Its PCF taps accumulate the same way round, too — 1.0 where the fragment is lit:
 
 {{cite shaders/core/deferred_lighting.frag "shadow += (projCoords.z - bias > pcfDepth) ? 0.0 : 1.0;"}}
-
-What the header holds and that inline copy does not is the sixteen-tap Poisson kernel
-(the deferred version filters with a nine-tap box), the cross-cascade blend and the
-PCSS path. `shadow_types.glsl` is the one file with neither an includer nor a caller
-for any of its six functions. This page is mostly about the header that runs, and
-about what the other two would change if someone wired them in.
 
 ## The include that has to come last
 
@@ -91,27 +82,12 @@ algebraically equal $\sqrt{1-c^2}/c$:
 
 {{cite shaders/includes/shadow/shadow_pcf.glsl "float bias = lighting.shadowBias * tan(acos(cosTheta));"}}
 
-$\tan\theta$ diverges at grazing incidence, so the clamp is load-bearing: without it a
-face edge-on to the light would push its comparison depth past every occluder in the
-map and light itself through walls. The ceiling is a bare literal `0.01`.
-`VulkanRenderer::updateLightBuffer` writes `shadowBias = 0.005f` into the light UBO
-every frame — the assignment sits in `ohao/gpu/vulkan/buffer_setup.cpp` and again,
-character for character, in the per-frame overload beside it — so that ceiling is
-$2b_0$, reached at $\theta = \arctan 2 \approx 63.4°$, past which the bias stops
-tracking slope entirely. `shadow_types.glsl` holds the identical formula in
-`calculateSlopeBias`, clamped instead to $10 b_0$, which would not saturate until
-84.3°:
-
-{{cite shaders/includes/shadow/shadow_types.glsl "return clamp(bias, 0.0, baseBias * 10.0);"}}
-
 {{figure shaders-includes-shadow-slope-bias-clamp "Conceptual, computed from the shipped expression rather than captured. The two clamps apply the same tangent law with ceilings a factor of five apart, so they agree below 63 degrees and diverge sharply above it."}}
 
 Same formula, two ceilings, and only the tighter one ships. The header's other
 defaults are worth the same scepticism: `DEFAULT_SHADOW_BIAS` does match the 0.005 the
 host writes, but `DEFAULT_SHADOW_STRENGTH` is 1.0 where the same function writes
 `shadowStrength = 0.7f`.
-
-{{cite shaders/includes/shadow/shadow_types.glsl "#define DEFAULT_SHADOW_STRENGTH  1.0"}}
 
 ## Occlusion here, visibility there
 
@@ -127,11 +103,6 @@ fragment still keeps 30 % of that light's direct contribution — a deliberate l
 of black, applied uniformly rather than as any ambient or bounce term.
 
 {{cite shaders/core/forward.frag "return contribution * (1.0 - shadow);"}}
-
-`shadow_csm.glsl` returns the opposite quantity from the same kind of loop: its taps
-accumulate 1.0 when the fragment is *lit*, and it has no strength factor at all.
-
-{{cite shaders/includes/shadow/shadow_csm.glsl "shadow += (shadowCoords.z - bias > depth) ? 0.0 : 1.0;"}}
 
 A shader that included both headers would compile cleanly and shade one of the two
 results inverted. Nothing in the tree currently does, because nothing includes the
@@ -183,21 +154,8 @@ initialised true and has no assignment anywhere in `ohao/`, `examples/` or `test
 
 {{cite ohao/gpu/vulkan/renderer.hpp "bool m_shadowsEnabled{true};"}}
 
-:::key
-`shadow_pcf.glsl` and the `shadow_depth` pair are live only on the forward path, the
-one `render()` falls through to and no example selects. The directory next door is not
-uniformly dead either: `shaders/shadow/` also holds `shadow_csm.vert` and
-`shadow_csm.geom`, which the deferred CSM pass loads. Editing `shadow_csm.glsl` or
-`shadow_types.glsl` changes nothing that renders — but the tangent-bias formula in the
-latter *is* live, inlined into `shadow_pcf.glsl` with a tighter clamp, so
-"unreferenced file" is not the same claim as "unused math".
-:::
-
 ## Contracts
 
 - `shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.
 - The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, but the code depends on it.
-- `calculateShadowForLightIndex` returns occlusion in [0, `shadowStrength`], not visibility. `shadow_csm.glsl` returns visibility. Any future shader that pulls in both must invert one.
 - The `shadow_depth` pass writes one map for whichever light the host tagged first, and nothing in either shader supports a second shadowed light. A `Sphere` light can be that first tag, and when it is, the matrix it ships with is identity — `calculateLightSpaceMatrix` has no cube-map path.
-- `selectCascade` is declared in both `shadow_types.glsl` and `shadow_csm.glsl`. The arities differ — three arguments against two — so a file pulling in both gets an overload pair, not a redefinition error, and the two disagree about their first argument: the `shadow_types.glsl` version negates it to get a positive depth, the `shadow_csm.glsl` one expects it positive already. Feed a positive depth to the wrong overload and every fragment picks cascade 0.
-- The normal-offset heuristics differ too. `shadow_types.glsl` exposes one as a function, `applyNormalOffset`, scaling by `(1 - N·L)`; `shadow_csm.glsl` has no such function and scales its normal bias by `1/(cascade+1)` inline inside `sampleCSM`, with no dependence on incidence angle. Neither is reachable from a pipeline today.

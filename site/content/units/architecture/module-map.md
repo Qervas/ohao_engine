@@ -248,12 +248,6 @@ does not match `.glsl` files sitting *directly* in `shaders/includes/`:
 
 {{cite shaders/CMakeLists.txt "includes/**/*.glsl"}}
 
-Exactly two files live at that level — `noise.glsl` and `pbr_unpack.glsl` — and the
-second is included by all three path-tracer raygen variants: `pt_raygen.rgen`,
-`pt_raygen_realtime.rgen` and `pt_raygen_offline.rgen`. The tree's other two `.rgen`
-files, `rt_gi` and `rt_shadow`, never touch it. Editing the material unpack marks
-nothing stale; you must touch one of those three raygens or delete the `.spv`.
-
 Second, there are two independent answers to "where are the SPIR-V files". Raster
 passes probe a candidate list at `VulkanRenderer` construction, using
 `core_forward.vert.spv` as the sentinel and then broadcasting the winner to

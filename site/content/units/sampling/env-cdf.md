@@ -183,13 +183,6 @@ region.
 
 {{figure sampling-env-cdf-vflip "Conceptual: the same texture row, resolved to opposite poles by the two latitude conventions in the tree. Derived by reading the two functions, not from a captured render."}}
 
-Both conventions ship, and the sampler's is the minority one. `pt_miss.rmiss`,
-`deferred_lighting.frag` (twice — the reflection lookup and the irradiance
-lookup) and `equirect_to_cubemap.comp` all write v as asin(y)/π + ½:
-
-{{cite shaders/core/deferred_lighting.frag "vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);"}}
-{{cite shaders/compute/equirect_to_cubemap.comp "vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI + 0.5);"}}
-
 Only `cinematic_composite.comp` lands on the sampler's side, and it gets there
 from an `asin` as well: its θ is arcsine, and `0.5 - theta / PI` is algebraically
 acos(y)/π. So the split is real rather than one stray function — but it is three

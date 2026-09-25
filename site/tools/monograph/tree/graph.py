@@ -28,22 +28,10 @@ MODULE = {
             files=['ohao/render/async/async_compute_queue.hpp', 'ohao/render/async/async_compute_queue.cpp'],
         ),
         page(
-            'ibl-processor',
-            'IBL processor',
-            'Env map processing (cubemap/prefilter) helpers.',
-            files=['ohao/render/ibl/ibl_processor.hpp', 'ohao/render/ibl/ibl_processor.cpp'],
-        ),
-        page(
             'particles',
             'Particle system',
             'CPU/GPU particle orchestration.',
             files=['ohao/render/particles/particle_system.hpp', 'ohao/render/particles/particle_system.cpp'],
-        ),
-        page(
-            'picking',
-            'Picking',
-            'Ray pick helpers for selection.',
-            files=['ohao/render/picking/picking_system.hpp', 'ohao/render/picking/ray.hpp'],
         ),
         page(
             'culling',

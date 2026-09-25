@@ -33,63 +33,18 @@
         <p>BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#twelve-files-one-that-reaches-a-clean-clone-frame">Twelve files, one that reaches a clean-clone frame</a></li><li><a href="#the-ibl-bake-nobody-constructs">The IBL bake nobody constructs</a></li><li><a href="#what-the-lut-would-hold">What the LUT would hold</a></li><li><a href="#the-workgroup-size-nobody-checked">The workgroup size nobody checked</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-compute-shaders-and-a-build-that-ignores-them">Two compute shaders, and a build that ignores them</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="twelve-files-one-that-reaches-a-clean-clone-frame">Twelve files, one that reaches a clean-clone frame</h2></div>
+<div class="section-rule"><h2 id="two-compute-shaders-and-a-build-that-ignores-them">Two compute shaders, and a build that ignores them</h2></div>
 <div class="prose reveal">
 <p>Nothing in the build depends on the shaders. `add_custom_target(shaders ...)` is declared without `ALL`, and no `add_dependencies` call anywhere in the tree names it, so a default `cmake --build build` compiles no SPIR-V at all — `--target shaders` is a second, manual step.</p>
 <div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L54" target="_blank" rel="noopener">shaders/CMakeLists.txt:54</a></div>
-<p>When it does run it discovers work by file extension, not from a manifest, then flattens the path into one SPIR-V name — `compute/brdf_lut.comp` → `compute_brdf_lut.comp.spv`.</p>
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/*.comp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L12" target="_blank" rel="noopener">shaders/CMakeLists.txt:12</a></div>
-<p>So a green build proves nothing about wiring; it has not even touched a shader. Grepping the `.spv` names C++ actually opens gives the real map: of twelve files, five reach `vkCreateComputePipelines`. Three of those five belong to `IBLProcessor`, which nothing constructs; a fourth is compiled out unless a vendored NGX library is already on disk. That leaves one shader a fresh clone can dispatch — `ssao.comp`, itself default-off.</p>
-<figure class="unit-figure reveal"><img src="../../assets/units/shaders-compute-reach.svg" alt="Conceptual reach map for shaders/compute/. Tiers derived by grepping every *.comp.spv string literal in ohao/, examples/ and tests/ — not a GPU capture." loading="lazy" /><figcaption>Conceptual reach map for shaders/compute/. Tiers derived by grepping every *.comp.spv string literal in ohao/, examples/ and tests/ — not a GPU capture.</figcaption></figure>
-</div>
-<div class="section-rule"><h2 id="the-ibl-bake-nobody-constructs">The IBL bake nobody constructs</h2></div>
-<div class="prose reveal">
-<p>Three files — equirect-to-cubemap, GGX prefilter, split-sum BRDF LUT — are the classic image-based-lighting bake, and they are wired: `IBLProcessor` builds a compute pipeline for each.</p>
-<div class="citation-chip"><code class="citation-code">if (!createPipeline(&quot;shaders/compute_brdf_lut.comp.spv&quot;, m_brdfPipeline)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/ibl/ibl_processor.cpp#L434" target="_blank" rel="noopener">ohao/render/ibl/ibl_processor.cpp:434</a></div>
-<p>Nothing constructs it. The type name never appears outside its own two files. Its only other trace was an `#include` in an aggregator nothing included, and that aggregator has been deleted, leaving no trace at all. `IBLProcessor`&#x27;s own defects have a separate unit; the consequence for these three `.comp` files is that they never execute, and deferred lighting gets a 1×1 `R8G8B8A8_UNORM` dummy where the baked LUT belongs — `setIBLTextures`, the only writer of `m_brdfLUTView`, has no caller either.</p>
-<div class="citation-chip"><code class="citation-code">imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L353" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:353</a></div>
-<p>The fragment shader knows, and substitutes an analytic scale when the sampled pair sums to under `1e-4`.</p>
-<div class="citation-chip"><code class="citation-code">if (brdf.x + brdf.y &lt; 1e-4) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L295" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:295</a></div>
-<p>Whether that test fires is not something the C++ guarantees. The dummy is created with `VK_IMAGE_USAGE_SAMPLED_BIT` and nothing else — no transfer destination, no storage — so it cannot legally be written, and nothing writes it; only a layout transition touches it. Its texels are undefined by the Vulkan spec, not defined-zero.</p>
-<div class="citation-chip"><code class="citation-code">imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L775" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:775</a></div>
-<p>Which branch runs therefore depends on what the driver leaves in a fresh allocation: zero — the ordinary case — makes `vec2(max(1 - roughness, 0.04), roughness * 0.25)` the live path for every environment reflection the rasteriser draws; anything else shades from garbage. Neither outcome involves a baked integral.</p>
-</div>
-<div class="section-rule"><h2 id="what-the-lut-would-hold">What the LUT would hold</h2></div>
-<div class="prose reveal">
-<p>Split-sum factors the specular IBL integral into a prefiltered radiance lookup times a two-term BRDF integral of view angle and roughness alone. Writing Schlick Fresnel as $F = F_0(1 - F_c) + F_c$ with $F_c = (1 - \mathbf{v}\!\cdot\!\mathbf{h})^5$ splits that second factor into a pair that no longer mentions $F_0$:</p>
-<div class="math-block">$$
-\int_\Omega \frac{f_r}{F}(\mathbf{n}\!\cdot\!\mathbf{l})\,d\omega_l = F_0 A + B,
-\qquad \{A,\,B\} = \int_\Omega \{1 - F_c,\; F_c\}\,\frac{f_r}{F}(\mathbf{n}\!\cdot\!\mathbf{l})\,d\omega_l
-$$</div>
-<p>With $f_r$ the Cook-Torrance lobe, $f_r/F = DG\,/\,4(\mathbf{n}\!\cdot\!\mathbf{l})(\mathbf{n}\!\cdot\!\mathbf{v})$ still carries the GGX distribution $D$ and the Smith term $G$. `brdf_lut.comp` evaluates neither integral directly: it draws the half-vector $\mathbf{h}$ from the GGX NDF, so after the half-vector-to-light Jacobian $p(\mathbf{l}) = D(\mathbf{h})(\mathbf{n}\!\cdot\!\mathbf{h})\,/\,4(\mathbf{v}\!\cdot\!\mathbf{h})$, $D$ cancels and the per-sample weight has no NDF left in it:</p>
-<div class="math-block">$$
-\frac{(f_r/F)\,(\mathbf{n}\!\cdot\!\mathbf{l})}{p(\mathbf{l})}
-= \frac{G\,(\mathbf{v}\!\cdot\!\mathbf{h})}{(\mathbf{n}\!\cdot\!\mathbf{h})(\mathbf{n}\!\cdot\!\mathbf{v})}
-$$</div>
-<div class="citation-chip"><code class="citation-code">float G_Vis = (G * VdotH) / (NdotH * NdotV);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/brdf_lut.comp#L91" target="_blank" rel="noopener">shaders/compute/brdf_lut.comp:91</a></div>
-<p>$A$ and $B$ are the sample means of $(1 - F_c)\cdot$`G_Vis` and $F_c\cdot$`G_Vis` over 1024 Hammersley points. That weight is an estimator tied to this sampling density, not an integrand — integrating it over the hemisphere does not give $A$. The image `IBLProcessor` allocates for the result is 512² `R16G16_SFLOAT`, one channel per integral.</p>
-<div class="citation-chip"><code class="citation-code">const uint SAMPLE_COUNT = 1024u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/brdf_lut.comp#L12" target="_blank" rel="noopener">shaders/compute/brdf_lut.comp:12</a></div>
-<div class="citation-chip"><code class="citation-code">static constexpr uint32_t BRDF_LUT_SIZE = 512;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/ibl/ibl_processor.hpp#L45" target="_blank" rel="noopener">ohao/render/ibl/ibl_processor.hpp:45</a></div>
-<p>Shading is meant to reconstruct specular as $F_0 A + B$ with the *constant* $F_0$, precisely because $A$ and $B$ already carry all the angular Fresnel weighting. The deferred shader instead builds a roughness-biased Fresnel at the view angle —</p>
-<div class="citation-chip"><code class="citation-code">vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L288" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:288</a></div>
-<p>— and feeds that `F`, not `F0`, into `prefilteredColor * (F * brdf.x + brdf.y)`, double-counting the Fresnel falloff. With the LUT reduced to the analytic substitute above it is moot today, and a live defect the day the bake is enabled.</p>
-<p>The LUT&#x27;s geometry term uses the image-based Smith-Schlick remap. The shader sets `a = roughness` and `k = (a * a) / 2`, i.e. $k = r^2/2$; since its own `importanceSampleGGX` defines $\alpha = r^2$, that is Karis&#x27;s $k = \alpha/2$ IBL remap — not the $(r+1)^2/8$ direct-lighting remap the raygen shaders inline in their NEE branches. Crossing the two is a standard way to get a subtly wrong specular horizon.</p>
-<div class="citation-chip"><code class="citation-code">float a = roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/brdf_lut.comp#L50" target="_blank" rel="noopener">shaders/compute/brdf_lut.comp:50</a></div>
-<div class="citation-chip"><code class="citation-code">float k = (a * a) / 2.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/brdf_lut.comp#L51" target="_blank" rel="noopener">shaders/compute/brdf_lut.comp:51</a></div>
-</div>
-<div class="section-rule"><h2 id="the-workgroup-size-nobody-checked">The workgroup size nobody checked</h2></div>
-<div class="prose reveal">
-<p>All three IBL shaders declare `local_size 16×16` while every dispatch in `IBLProcessor` computes groups as `(N + 7) / 8` — twice the groups per axis, four times the intended invocations. Only the `coord &gt;= size` early-out at the top of each shader keeps the result correct, at four times the cost.</p>
-<div class="citation-chip"><code class="citation-code">layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/prefilter_envmap.comp#L6" target="_blank" rel="noopener">shaders/compute/prefilter_envmap.comp:6</a></div>
-<div class="citation-chip"><code class="citation-code">vkCmdDispatch(cmd, (mipSize + 7) / 8, (mipSize + 7) / 8, 6);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/ibl/ibl_processor.cpp#L676" target="_blank" rel="noopener">ohao/render/ibl/ibl_processor.cpp:676</a></div>
-<p>Because the bake has no call site, none of this has ever been observed running.</p>
 </div>
 <div class="section-rule"><h2 id="ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</h2></div>
 <div class="prose reveal">
-<p>`compute_ssao.comp.spv` is loaded by `SSAOPass` and dispatched from the deferred render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree, unlike the IBL trio. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of an `R16G16B16A16_SFLOAT` target — through `decodeNormalOctahedron` in `includes/common/encoding.glsl`, which opens by undoing a [0,1] remap:</p>
+<p>`compute_ssao.comp.spv` is loaded by `SSAOPass` and dispatched from the deferred render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of an `R16G16B16A16_SFLOAT` target — through `decodeNormalOctahedron` in `includes/common/encoding.glsl`, which opens by undoing a [0,1] remap:</p>
 <div class="citation-chip"><code class="citation-code">vec2 f = encoded * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:16</a></div>
 <p>The matching `* 0.5 + 0.5` is not in that include: it is applied at the call site in `gbuffer.frag`, against an `encodeNormalOctahedron` that file redefines locally. The shared encoder of the same name returns [-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only because `gbuffer.frag` does not use the include. &quot;De-duplicating&quot; it onto the shared helper breaks the pairing silently.</p>
 <div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L124" target="_blank" rel="noopener">shaders/core/gbuffer.frag:124</a></div>
@@ -131,19 +86,12 @@ $$</div>
 <div class="prose reveal">
 <ul>
 <li>Nothing depends on the `shaders` target, so `cmake --build build` never recompiles SPIR-V and a stale `.spv` loads without complaint. `--target shaders` is a separate step. Compilation is then by glob, so adding a `.comp` yields a `.spv` and no wiring: a loader must ask for the path-flattened name, `compute/&lt;name&gt;.comp` → `compute_&lt;name&gt;.comp.spv`.</li>
-<li>Nothing constructs `IBLProcessor` and nothing calls `setIBLTextures`, so `deferred_lighting.frag` samples an uninitialised 1×1 image for the LUT on every deferred frame. Delete the `brdf.x + brdf.y &lt; 1e-4` substitution and rough metals lose the `prefilteredColor * (F * brdf.x + brdf.y)` term but keep the unconditional `metallic &gt; 0.5` environment floor ten lines below — dimmer, not black. {{cite shaders/core/deferred_lighting.frag &quot;specularAmbient += surface.F0 * max(prefilteredColor&quot;}}</li>
 <li>`compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/ibl/ibl_processor.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/brdf_lut.comp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/ibl/ibl_processor.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/prefilter_envmap.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
@@ -156,7 +104,9 @@ $$</div>
         <div class="row"><code>CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>.gitignore</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/dlss_tonemap.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/equirect_to_cubemap.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/brdf_lut.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/prefilter_envmap.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/equirect_to_cubemap.comp</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/compute/hiz_generate.comp</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/compute/light_culling.comp</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/compute/gpu_cull.comp</code><span class="desc">path note</span></div>

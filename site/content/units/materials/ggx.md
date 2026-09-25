@@ -8,34 +8,12 @@ figures: [materials-ggx-ndf-energy]
 
 ## The α convention every copy shares
 
-This tree writes the isotropic GGX distribution out **four** times, and every one
-of the four sits behind a function name: `distributionGGX` in `brdf_ggx.glsl`,
-which only `deferred_lighting.frag` and `forward.frag` reach — through
-`evaluateBRDF`; `ggxDisoShaded` and `ggxDiso` in `ggx_aniso.glsl`, `#include`d by
-the three path-tracer raygens; and `D_ClearCoat` in `advanced_brdf.glsl`, a file
-no shader `#include`s.
-`ggxD_anisoOrIso`'s isotropic branch is no longer a fifth copy: it delegates to
-`ggxDisoShaded`.
+The isotropic GGX distribution exists three times in this tree, each behind a
+name: `distributionGGX` in `brdf_ggx.glsl`, which the deferred and forward
+fragment shaders reach through `evaluateBRDF`; and `ggxDisoShaded` and `ggxDiso`
+in `ggx_aniso.glsl`, which the three path-tracer raygens include.
 
-:::why
-Until `ggxDisoShaded` existed, twenty-one further copies were **inline**: past
-bounce 0 the raygens stopped calling `ggx_aniso.glsl` and pasted the algebra
-straight into each NEE, env-MIS and pdf branch — six in `pt_raygen.rgen`, seven
-in `pt_raygen_offline.rgen`, eight in `pt_raygen_realtime.rgen`. They had drifted
-into four spellings, differing in the name of the temporary, in whether the
-epsilon was written `0.0001` or `1e-4` (the same float32), and in the constant
-used for π: thirteen wrote `OHAO_PI` and eight wrote `3.14159`, which is *not*
-the same float32 — `db0f4940` against `d00f4940`, 8.3 × 10⁻⁷ apart.
-
-An earlier revision of this page said *twenty* inline copies, six of them in
-`pt_raygen_offline.rgen`. That was wrong by one: the skin specular lobe at
-`pt_raygen_offline.rgen`'s subsurface branch is a twenty-first copy, written
-with its own `rSkin`/`aSkin`/`denomSk` temporaries and so invisible to a grep for
-the usual names. It is recorded here because a count arrived at by grepping one
-spelling is exactly the failure this page warns about at the bottom.
-:::
-
-The one thing all four agree on without qualification is the width
+The one thing all three agree on without qualification is the width
 parameter. Every one of them resolves the artist's perceptual roughness to
 α = roughness² — `ggxDiso` at its call site, the rest internally — and then squares
 α again inside the Trowbridge-Reitz denominator:
@@ -175,19 +153,15 @@ is dimmer in the deferred preview than in the path-traced frame.
 
 ## The epsilon that eats the highlight
 
-Those four D expressions guard against a vanishing denominator in four
+Those three D expressions guard against a vanishing denominator in three
 different ways, and only two of them are floors. `distributionGGX` floors the
 finished denominator, `max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.
 
 {{cite shaders/includes/common/constants.glsl "#define EPSILON       1e-6"}}
 
-`ggxDisoShaded` — which is both `ggxD_anisoOrIso`'s isotropic branch and every
-D the three raygens compute — *adds*
-10⁻⁴. `ggxDiso` adds nothing — it floors α upstream instead, which is the one
-arrangement that costs no mass. `D_ClearCoat` guards nothing at all — harmless
-only because nothing includes the file it sits in.
-
-{{cite shaders/includes/material/advanced_brdf.glsl "return a2 / (3.14159265 * denom * denom);"}}
+`ggxDisoShaded` — which is both `ggxD_anisoOrIso`'s isotropic branch and every D
+the raygens shade with — *adds* 10⁻⁴ instead. `ggxDiso` adds nothing: it floors
+α² upstream, which is the one arrangement that costs no mass.
 
 An additive term is not a floor — it never leaves the expression. At the lobe
 peak the true denominator is $\pi\,\text{roughness}^{8}$, which at the 0.04
@@ -323,9 +297,8 @@ call: `getRoughnessMipLevel` as a literal `roughness * 9.0`,
 
 {{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0;"}}
 
-Prune by grepping the formula, not only the name. That grep is what found the
-twenty-one inline D copies the raygens used to carry, and it is also what missed
-one of them for as long as it was run for a single spelling of the temporaries.
+Prune by grepping the formula, not only the name: a copy written with different
+temporaries is invisible to a search for the usual identifiers.
 
 ## Contracts
 

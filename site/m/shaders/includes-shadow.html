@@ -42,11 +42,9 @@
 <div class="citation-chip"><code class="citation-code">#include &quot;includes/shadow/shadow_pcf.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L64" target="_blank" rel="noopener">shaders/core/forward.frag:64</a></div>
 <p>That hit needs qualifying immediately. `forward.frag` is the fallback stage: `render()` tries the RT pipelines first, then deferred, and reaches the forward pair only when neither is live — which no example in `examples/` ever arranges.</p>
 <div class="citation-chip"><code class="citation-code">// Forward rendering path</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L393" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:393</a></div>
-<p>`shadow_csm.glsl` has no includer, but its math is not idle. The deferred lighting shader carries the same cascade-select loop inline:</p>
 <div class="citation-chip"><code class="citation-code">if (viewDepth &lt; cascades.splitDepths[i]) return i;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L110" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:110</a></div>
 <p>Its PCF taps accumulate the same way round, too — 1.0 where the fragment is lit:</p>
 <div class="citation-chip"><code class="citation-code">shadow += (projCoords.z - bias &gt; pcfDepth) ? 0.0 : 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L141" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:141</a></div>
-<p>What the header holds and that inline copy does not is the sixteen-tap Poisson kernel (the deferred version filters with a nine-tap box), the cross-cascade blend and the PCSS path. `shadow_types.glsl` is the one file with neither an includer nor a caller for any of its six functions. This page is mostly about the header that runs, and about what the other two would change if someone wired them in.</p>
 </div>
 <div class="section-rule"><h2 id="the-include-that-has-to-come-last">The include that has to come last</h2></div>
 <div class="prose reveal">
@@ -65,11 +63,8 @@ b(\theta) \;=\; \min\!\left(b_0 \tan\theta,\; 0.01\right), \qquad \cos\theta = \
 $$</div>
 <p>Here $b_0$ is the host-supplied `shadowBias`, $N$ the shading normal, $L$ the unit direction from the surface to the light, and $\theta$ the incidence angle. The shader computes it in exactly that form, through `acos` then `tan`, rather than the algebraically equal $\sqrt{1-c^2}/c$:</p>
 <div class="citation-chip"><code class="citation-code">float bias = lighting.shadowBias * tan(acos(cosTheta));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_pcf.glsl#L58" target="_blank" rel="noopener">shaders/includes/shadow/shadow_pcf.glsl:58</a></div>
-<p>$\tan\theta$ diverges at grazing incidence, so the clamp is load-bearing: without it a face edge-on to the light would push its comparison depth past every occluder in the map and light itself through walls. The ceiling is a bare literal `0.01`. `VulkanRenderer::updateLightBuffer` writes `shadowBias = 0.005f` into the light UBO every frame — the assignment sits in `ohao/gpu/vulkan/buffer_setup.cpp` and again, character for character, in the per-frame overload beside it — so that ceiling is $2b_0$, reached at $\theta = \arctan 2 \approx 63.4°$, past which the bias stops tracking slope entirely. `shadow_types.glsl` holds the identical formula in `calculateSlopeBias`, clamped instead to $10 b_0$, which would not saturate until 84.3°:</p>
-<div class="citation-chip"><code class="citation-code">return clamp(bias, 0.0, baseBias * 10.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_types.glsl#L90" target="_blank" rel="noopener">shaders/includes/shadow/shadow_types.glsl:90</a></div>
 <figure class="unit-figure reveal"><img src="../../assets/units/shaders-includes-shadow-slope-bias-clamp.svg" alt="Conceptual, computed from the shipped expression rather than captured. The two clamps apply the same tangent law with ceilings a factor of five apart, so they agree below 63 degrees and diverge sharply above it." loading="lazy" /><figcaption>Conceptual, computed from the shipped expression rather than captured. The two clamps apply the same tangent law with ceilings a factor of five apart, so they agree below 63 degrees and diverge sharply above it.</figcaption></figure>
 <p>Same formula, two ceilings, and only the tighter one ships. The header&#x27;s other defaults are worth the same scepticism: `DEFAULT_SHADOW_BIAS` does match the 0.005 the host writes, but `DEFAULT_SHADOW_STRENGTH` is 1.0 where the same function writes `shadowStrength = 0.7f`.</p>
-<div class="citation-chip"><code class="citation-code">#define DEFAULT_SHADOW_STRENGTH  1.0</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_types.glsl#L20" target="_blank" rel="noopener">shaders/includes/shadow/shadow_types.glsl:20</a></div>
 </div>
 <div class="section-rule"><h2 id="occlusion-here-visibility-there">Occlusion here, visibility there</h2></div>
 <div class="prose reveal">
@@ -78,8 +73,6 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">const int pcfRadius = 2;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_pcf.glsl#L69" target="_blank" rel="noopener">shaders/includes/shadow/shadow_pcf.glsl:69</a></div>
 <p>`forward.frag` consumes it as `1 - shadow`, so with strength 0.7 a fully occluded fragment still keeps 30 % of that light&#x27;s direct contribution — a deliberate lift out of black, applied uniformly rather than as any ambient or bounce term.</p>
 <div class="citation-chip"><code class="citation-code">return contribution * (1.0 - shadow);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L134" target="_blank" rel="noopener">shaders/core/forward.frag:134</a></div>
-<p>`shadow_csm.glsl` returns the opposite quantity from the same kind of loop: its taps accumulate 1.0 when the fragment is *lit*, and it has no strength factor at all.</p>
-<div class="citation-chip"><code class="citation-code">shadow += (shadowCoords.z - bias &gt; depth) ? 0.0 : 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_csm.glsl#L74" target="_blank" rel="noopener">shaders/includes/shadow/shadow_csm.glsl:74</a></div>
 <p>A shader that included both headers would compile cleanly and shade one of the two results inverted. Nothing in the tree currently does, because nothing includes the second one.</p>
 </div>
 <div class="section-rule"><h2 id="one-map-one-light-resolved-per-vertex">One map, one light, resolved per vertex</h2></div>
@@ -97,17 +90,13 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">mat4 lightSpaceMatrix = mat4(1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shadow/shadow_depth.vert#L46" target="_blank" rel="noopener">shaders/shadow/shadow_depth.vert:46</a></div>
 <p>Nothing skips the pass to spare it that. The guard that would, `m_shadowsEnabled`, is initialised true and has no assignment anywhere in `ohao/`, `examples/` or `tests/`:</p>
 <div class="citation-chip"><code class="citation-code">bool m_shadowsEnabled{true};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L389" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:389</a></div>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`shadow_pcf.glsl` and the `shadow_depth` pair are live only on the forward path, the one `render()` falls through to and no example selects. The directory next door is not uniformly dead either: `shaders/shadow/` also holds `shadow_csm.vert` and `shadow_csm.geom`, which the deferred CSM pass loads. Editing `shadow_csm.glsl` or `shadow_types.glsl` changes nothing that renders — but the tangent-bias formula in the latter *is* live, inlined into `shadow_pcf.glsl` with a tighter clamp, so &quot;unreferenced file&quot; is not the same claim as &quot;unused math&quot;.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
 <li>`shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.</li>
 <li>The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, but the code depends on it.</li>
-<li>`calculateShadowForLightIndex` returns occlusion in [0, `shadowStrength`], not visibility. `shadow_csm.glsl` returns visibility. Any future shader that pulls in both must invert one.</li>
 <li>The `shadow_depth` pass writes one map for whichever light the host tagged first, and nothing in either shader supports a second shadowed light. A `Sphere` light can be that first tag, and when it is, the matrix it ships with is identity — `calculateLightSpaceMatrix` has no cube-map path.</li>
-<li>`selectCascade` is declared in both `shadow_types.glsl` and `shadow_csm.glsl`. The arities differ — three arguments against two — so a file pulling in both gets an overload pair, not a redefinition error, and the two disagree about their first argument: the `shadow_types.glsl` version negates it to get a positive depth, the `shadow_csm.glsl` one expects it positive already. Feed a positive depth to the wrong overload and every fragment picks cascade 0.</li>
-<li>The normal-offset heuristics differ too. `shadow_types.glsl` exposes one as a function, `applyNormalOffset`, scaling by `(1 - N·L)`; `shadow_csm.glsl` has no such function and scales its normal bias by `1/(cascade+1)` inline inside `sampleCSM`, with no dependence on incidence angle. Neither is reachable from a pipeline today.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
@@ -116,12 +105,12 @@ $$</div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/shadow/shadow_pcf.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/shadow/shadow_types.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/shadow/shadow_csm.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shadow/shadow_depth.vert</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/component/light_component.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/shadow/shadow_csm.glsl</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/includes/shadow/shadow_types.glsl</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/shadow/shadow_depth.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shadow/shadow_csm.vert</code><span class="desc"></span></div>
       </div>

@@ -312,17 +312,6 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "std430-friendly packs beat pointer-chasing material structs on GPU.",
         "contracts": ["0xFFFFFFFF = missing texture", "row order == TLAS instance order"],
     },
-    "materials/advanced": {
-        "what": [
-            "Advanced material includes: multi-lobe helpers, sampling routines, material type constants used by hit and raygen.",
-        ],
-        "how": [
-            "material_sampling.glsl importance samples GGX VNDF / cosine hemisphere.",
-            "material_types.glsl shares enum-like constants.",
-            "advanced_brdf.glsl extends beyond simple metal-rough.",
-        ],
-        "why": "Keep lobe math out of the giant raygen file so offline/realtime variants share code.",
-    },
     "materials/lights": {
         "what": [
             "Dual light packing: GPULight 64-byte SSBO for path tracer (sphere/dir/spot/area) vs compact deferred LightData UBO.",
@@ -689,20 +678,10 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["async_compute_queue.hpp for overlapping work."],
         "why": "Headroom for culling/particles off the graphics queue.",
     },
-    "graph/ibl-processor": {
-        "what": ["IBL bake: equirect→cubemap, prefilter, BRDF LUT."],
-        "how": ["ibl_processor dispatches compute shaders when env changes."],
-        "why": "Runtime IBL without offline content pipeline dependency.",
-    },
     "graph/particles": {
         "what": ["Particle system orchestration (CPU/GPU)."],
         "how": ["particle_system ties compute emit/update to draw."],
         "why": "Effects without mesh component spam.",
-    },
-    "graph/picking": {
-        "what": ["Ray pick helpers for selection."],
-        "how": ["picking_system + ray.hpp."],
-        "why": "Tools need object pick independent of render mode.",
     },
     "graph/culling": {
         "what": ["CPU/GPU cull helpers (HiZ, light cull compute)."],

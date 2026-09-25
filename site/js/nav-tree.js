@@ -154,11 +154,6 @@ window.OHAO_NAV_TREE = [
         "href": "m/materials/pack.html"
       },
       {
-        "id": "materials/advanced",
-        "title": "Advanced material includes",
-        "href": "m/materials/advanced.html"
-      },
-      {
         "id": "materials/lights",
         "title": "Lights dual packing",
         "href": "m/materials/lights.html"
@@ -460,19 +455,9 @@ window.OHAO_NAV_TREE = [
         "href": "m/graph/async-compute.html"
       },
       {
-        "id": "graph/ibl-processor",
-        "title": "IBL processor",
-        "href": "m/graph/ibl-processor.html"
-      },
-      {
         "id": "graph/particles",
         "title": "Particle system",
         "href": "m/graph/particles.html"
-      },
-      {
-        "id": "graph/picking",
-        "title": "Picking",
-        "href": "m/graph/picking.html"
       },
       {
         "id": "graph/culling",

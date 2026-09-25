@@ -231,17 +231,8 @@ assumption rather than a computed bound.
 
 ## The include that nothing includes
 
-`shaders/includes/lighting/light_types.glsl` defines the `LIGHT_*` constants, a
-`LightParams` struct, direction and distance extractors, and an ambient helper. No file in
-`shaders/` or `ohao/` includes it. Its formulas still ship, though, written out by hand:
-`forward.frag` branches on identically-named macros pulled from `includes/common/types.glsl`,
-and `deferred_lighting.frag` inlines the same direction selection and the same
-`ambient * albedo * ao` product with bare integer literals. Unused file, live math.
-
 The header is not merely redundant, it is a trap: its `LIGHT_POINT` is 1, and 1 is
 *directional* in the `GPULight` table this page opened with.
-
-{{cite shaders/includes/lighting/light_types.glsl "#define LIGHT_POINT       1"}}
 
 Including it into a ray-tracing stage to avoid retyping three constants inverts the two most
 common light types in the engine.

@@ -131,15 +131,6 @@ touched:
 
 {{cite shaders/rt/pt_raygen.rgen "float tanFovY = abs(pc.invProj[1][1]);"}}
 
-The deferred rasteriser has no such escape hatch. It renders with a matrix built for
-1.6 regardless of the target's real ratio, so an offline deferred frame at 1:1 is
-horizontally compressed by that factor. `getProjectionMatrix` has two other readers
-and neither renders: `renderRTPipeline` assigns it to a local it then never uses, and
-`PickingSystem::screenToWorldRay` unprojects screen rays with it — inheriting the same
-1.6 — but no `PickingSystem` is ever constructed. Its header used to be pulled in
-by a `render_module.hpp` umbrella that nothing included; that umbrella is gone, so
-now nothing includes it at all.
-
 ## The near plane is twice what it says
 
 `GLM_FORCE_DEPTH_ZERO_TO_ONE` is never defined in the repository — its one appearance

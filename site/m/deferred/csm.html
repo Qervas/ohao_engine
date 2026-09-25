@@ -90,12 +90,9 @@ $$</div>
 </div>
 <div class="section-rule"><h2 id="the-sampler-that-ships-and-the-one-that-looks-official">The sampler that ships, and the one that looks official</h2></div>
 <div class="prose reveal">
-<p>`shaders/includes/shadow/shadow_csm.glsl` is the file this unit is nominally about: a 16-tap Poisson-disk PCF kernel, a cascade-index-scaled normal bias, a linear blend across the cascade boundary, and a full PCSS blocker-search / penumbra-estimate path.</p>
-<div class="citation-chip"><code class="citation-code">float sampleCSM(sampler2DArray shadowMap, vec3 worldPos, vec3 normal,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_csm.glsl#L81" target="_blank" rel="noopener">shaders/includes/shadow/shadow_csm.glsl:81</a></div>
 <p>No shader `#include`s it, so nothing in it is reachable from any pipeline. Its two entry points, `sampleCSM` and `sampleCSM_PCSS`, have zero callers; the helpers `selectCascade`, `getShadowCoords` and `sampleShadowPCF` are called only from those two dead functions. And unlike the classic &quot;unused function, live formula&quot; case the math is not inlined anywhere either. What runs instead is written directly into the deferred lighting shader, which defines its own `selectCascade` over the live UBO and its own 3×3 box PCF over nine taps — no Poisson disk, no normal bias, no cascade blend:</p>
 <div class="citation-chip"><code class="citation-code">float calculateShadowCSM(vec3 fragPos, float viewDepth) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L116" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:116</a></div>
 <p>The two also disagree structurally: the include&#x27;s `CascadeData` ends in a `float padding` where the C++ struct and the live UBO both declare a `uint cascadeCount`.</p>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Editing `shadow_csm.glsl` changes nothing that renders. The shipping CSM sampler is `calculateShadowCSM` inside `shaders/core/deferred_lighting.frag`, and it is strictly weaker than the include that appears to be the implementation.</p></div>
 </div>
 <div class="section-rule"><h2 id="one-layer-four-broadcasts">One layer, four broadcasts</h2></div>
 <div class="prose reveal">
@@ -127,11 +124,11 @@ $$</div>
         <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/renderer/renderer_pipeline_tests.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/shadow/shadow_csm.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shadow/shadow_csm.vert</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shadow/shadow_csm.geom</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/shadow/shadow_csm.glsl</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

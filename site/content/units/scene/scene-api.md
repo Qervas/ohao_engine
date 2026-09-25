@@ -16,8 +16,6 @@ Vertex/index upload, RT BLAS and TLAS construction, light-buffer assembly, the G
 
 {{cite ohao/gpu/vulkan/scene_upload.cpp "if (meshComponent && meshComponent->getModel() && meshComponent->isVisible()) {"}}
 
-So membership has exactly one operational definition: present as a value in `actors`. Not "parented under the root", not "listed in the mesh registry". `PickingSystem` iterates the same map, but `pickActor` and `pickAllActors` have no callers in `ohao/`, `examples/` or `tests/` — and since the `render_module.hpp` umbrella that once re-exported it was deleted, nothing includes the class at all. It is scaffolding, not a pass. The rest of this page is about what puts an actor in the map — and about the parts of the class that look load-bearing and are not.
-
 :::why
 Scene *does* maintain a `meshComponents` vector for exactly this traversal, kept current by the add/remove hooks. No pass uses it. The passes are keyed by actor, not by component: `scene_upload` stores its `MeshBufferInfo` under `actor->getID()` and needs the actor's transform anyway, so a bare `MeshComponent*` list would force an owner back-pointer walk per entry — the same hash lookup, with one more invariant to keep synchronized. The engine trades a per-actor `getComponent<T>()` probe for a registry that can never go stale because nobody trusts it.
 :::
