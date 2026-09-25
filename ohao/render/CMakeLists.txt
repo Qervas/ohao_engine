@@ -13,9 +13,6 @@ file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )
 
-# Exclude disabled passes
-list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
-
 add_library(ohao_renderer ${RENDERER_SOURCES})
 
 target_include_directories(ohao_renderer PUBLIC

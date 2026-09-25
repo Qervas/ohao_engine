@@ -617,11 +617,6 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["shadow_csm.glsl, shadow_pcf.glsl, shadow_depth.*, shadow_csm.vert."],
         "why": "Sampling math must match cascade construction on the host.",
     },
-    "shaders/includes-fx": {
-        "what": ["Gerstner water and cloud density procedural includes."],
-        "how": ["Optional; not on cornell golden path."],
-        "why": "Keep FX math out of lighting shaders until needed.",
-    },
     "shaders/postprocess-chain": {
         "what": ["Fullscreen post chain: bloom, TAA, tonemap, sky, SSR, SSS shaders."],
         "how": ["fullscreen.vert feeds fragment posts; compute for SSR/SSS."],
@@ -666,11 +661,6 @@ KNOWLEDGE: dict[str, dict] = {
             "pt_* for full PT; rt_shadow_* / rt_gi_* for hybrid; compute post for denoise/cinematic.",
         ],
         "why": "One SPIR-V family documented together so binding/SBT changes stay coordinated.",
-    },
-    "shaders/disabled": {
-        "what": ["shaders/_disabled archives retired experiments — not in the active build."],
-        "how": ["Do not reference from CMake targets."],
-        "why": "Keep history without shipping broken paths.",
     },
     "camera/camera": {
         "what": ["Camera view/projection and FPS/orbit controls used by examples."],

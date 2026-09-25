@@ -33,7 +33,7 @@
         <p>BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#twelve-files-one-that-reaches-a-clean-clone-frame">Twelve files, one that reaches a clean-clone frame</a></li><li><a href="#the-ibl-bake-nobody-constructs">The IBL bake nobody constructs</a></li><li><a href="#what-the-lut-would-hold">What the LUT would hold</a></li><li><a href="#the-workgroup-size-nobody-checked">The workgroup size nobody checked</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#the-seven-with-no-caller">The seven with no caller</a></li><li><a href="#why-skinning-comp-is-the-dangerous-one">Why skinning.comp is the dangerous one</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#twelve-files-one-that-reaches-a-clean-clone-frame">Twelve files, one that reaches a clean-clone frame</a></li><li><a href="#the-ibl-bake-nobody-constructs">The IBL bake nobody constructs</a></li><li><a href="#what-the-lut-would-hold">What the LUT would hold</a></li><li><a href="#the-workgroup-size-nobody-checked">The workgroup size nobody checked</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="twelve-files-one-that-reaches-a-clean-clone-frame">Twelve files, one that reaches a clean-clone frame</h2></div>
@@ -127,60 +127,12 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">ivec2 off = ivec2(d * s * r2 * 6.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/dlss_tonemap.comp#L44" target="_blank" rel="noopener">shaders/compute/dlss_tonemap.comp:44</a></div>
 <p>None of it feeds back into the trace — the pass reads DLSS&#x27;s `COLOR_OUT` and writes the RGBA8 beauty — so the tracer stays unbiased.</p>
 </div>
-<div class="section-rule"><h2 id="the-seven-with-no-caller">The seven with no caller</h2></div>
-<div class="prose reveal">
-<p>None of `hiz_generate`, `light_culling`, `gpu_cull`, `skinning`, `composite`, `dof_composite`, `denoise_atrous` appears as a `.spv` string anywhere in `ohao/`. For most, the job did not disappear — it landed elsewhere:</p>
-<ul>
-<li>The frustum test in `gpu_cull.comp` ships in C++: the GBuffer pass builds a</li>
-</ul>
-<p>`Frustum` and rejects per-object world AABBs on the CPU.</p>
-<div class="citation-chip"><code class="citation-code">if (!frustum.isAABBVisible(worldAABB)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L230" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:230</a></div>
-<ul>
-<li>`hiz_generate.comp`&#x27;s only developed consumer is `shaders/_disabled/ssr.comp`,</li>
-</ul>
-<p>which binds a `hizBuffer` sampler and ray-marches it with mip descent.</p>
-<div class="citation-chip"><code class="citation-code">float sampleHiZ(vec2 uv, int mipLevel) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/ssr.comp#L45" target="_blank" rel="noopener">shaders/_disabled/ssr.comp:45</a></div>
-<p>`gpu_cull.comp`&#x27;s Hi-Z &quot;branch&quot; is three commented-out lines calling an `isOccluded()` the file never defines, and it binds no Hi-Z texture at all.</p>
-<div class="citation-chip"><code class="citation-code">//     visible = !isOccluded(worldCenter, worldRadius);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/gpu_cull.comp#L140" target="_blank" rel="noopener">shaders/compute/gpu_cull.comp:140</a></div>
-<ul>
-<li>`light_culling.comp` budgets 256 lights and 64 per 16×16 tile. The deferred</li>
-</ul>
-<p>lighting shader it would feed caps at eight lights, where a tile list costs more than the loop it removes.</p>
-<div class="citation-chip"><code class="citation-code">#define MAX_LIGHTS 8  // Must match C++ MAX_LIGHTS in offscreen_renderer.hpp</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L29" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:29</a></div>
-<ul>
-<li>The edge-aware wavelet that ships is the SVGF pair under `shaders/rt/`, loaded by</li>
-</ul>
-<p>`AtrousDenoiser` — not `denoise_atrous.comp`.</p>
-<div class="citation-chip"><code class="citation-code">if (!I.createComputePipeline(&quot;rt_rt_svgf_atrous.comp.spv&quot;, I.atrousPipelineLayout, I.atrousPipeline))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/atrous_denoise.cpp#L277" target="_blank" rel="noopener">ohao/render/rt/denoise/atrous_denoise.cpp:277</a></div>
-<ul>
-<li>`composite.comp` merges SSR reflections and volumetric fog into an HDR scene</li>
-</ul>
-<p>buffer. The RT stack&#x27;s `rt/cinematic_composite.comp` is a different job, not a newer version of it: NRD&#x27;s composed HDR plus a three-level bloom mip chain plus a sky composite, AgX-tonemapped.</p>
-<div class="citation-chip"><code class="citation-code">// Merges SSR reflections and volumetric fog into the HDR scene buffer.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/composite.comp#L4" target="_blank" rel="noopener">shaders/compute/composite.comp:4</a></div>
-<ul>
-<li>`dof_composite.comp` and `rt/cinematic_dof.comp` are both depth of field, but the</li>
-</ul>
-<p>first is a CoC-buffer-driven HDR bokeh and the second a poisson gather over post-tonemap RGBA8.</p>
-<div class="citation-chip"><code class="citation-code">// Input:  binding 0 = final LDR (post-tonemap) RGBA8</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/cinematic_dof.comp#L11" target="_blank" rel="noopener">shaders/rt/cinematic_dof.comp:11</a></div>
-</div>
-<div class="section-rule"><h2 id="why-skinning-comp-is-the-dangerous-one">Why skinning.comp is the dangerous one</h2></div>
-<div class="prose reveal">
-<p>`skinning.comp` is different in kind. Its stated consumer — a per-frame BLAS rebuild for skinned meshes — no longer exists: `ohao/animation/` and the skinned vertex shaders were removed, and no first-party source under `ohao/`, `examples/` or `tests/` contains the string `skinned` in any case. Only a buffer usage flag survives, still commented &quot;for compute skinning&quot;.</p>
-<div class="citation-chip"><code class="citation-code">VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |  // for compute skinning</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L42" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:42</a></div>
-<p>The shader has also gone stale against the struct it reads. It hardcodes float offsets into the vertex stream, putting bone indices at floats 15–18:</p>
-<div class="citation-chip"><code class="citation-code">floatBitsToInt(inVerts[base + 15]),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/skinning.comp#L59" target="_blank" rel="noopener">shaders/compute/skinning.comp:59</a></div>
-<p>The current `Vertex` is position(3), color(3), normal(3), texCoord(2), texCoord1(2), tangent(4), boneIndices(4), boneWeights(4) — 25 floats, so indices begin at float 17 and weights at 21. The second UV set arrived after the shader was written:</p>
-<div class="citation-chip"><code class="citation-code">glm::vec2 texCoord1{0.0f, 0.0f};    // Second UV set (GLTF texCoord: 1)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.hpp#L23" target="_blank" rel="noopener">ohao/scene/asset/model.hpp:23</a></div>
-<p>Both reads are two floats early. The index read at 15 takes `tangent.zw` and then `boneIndices.xy`; the weight read at 19 takes `boneIndices.zw` — two `int` bit patterns reinterpreted as floats — and then `boneWeights.xy`. The shader&#x27;s own comments disagree with each other on the stride as well: 28 floats / 112 bytes in one, 23 floats / 92 bytes in another, and neither matches the struct&#x27;s 25 floats / 100 bytes.</p>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>A dead shader is not inert. It keeps compiling — when someone remembers to run the shader target — so it looks maintained, while the structs and descriptor layouts it encodes drift underneath it. `skinning.comp` would silently skin garbage if re-enabled today, and nothing in the build would say so.</p></div>
-</div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
 <li>Nothing depends on the `shaders` target, so `cmake --build build` never recompiles SPIR-V and a stale `.spv` loads without complaint. `--target shaders` is a separate step. Compilation is then by glob, so adding a `.comp` yields a `.spv` and no wiring: a loader must ask for the path-flattened name, `compute/&lt;name&gt;.comp` → `compute_&lt;name&gt;.comp.spv`.</li>
 <li>Nothing constructs `IBLProcessor` and nothing calls `setIBLTextures`, so `deferred_lighting.frag` samples an uninitialised 1×1 image for the LUT on every deferred frame. Delete the `brdf.x + brdf.y &lt; 1e-4` substitution and rough metals lose the `prefilteredColor * (F * brdf.x + brdf.y)` term but keep the unconditional `metallic &gt; 0.5` environment floor ten lines below — dimmer, not black. {{cite shaders/core/deferred_lighting.frag &quot;specularAmbient += surface.F0 * max(prefilteredColor&quot;}}</li>
 <li>`compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.</li>
-<li>`skinning.comp`&#x27;s float offsets and pushed stride must be re-derived from `ohao/scene/asset/model.hpp` before any use. Both reads are two floats stale.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
@@ -204,20 +156,14 @@ $$</div>
         <div class="row"><code>CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>.gitignore</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/dlss_tonemap.comp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/_disabled/ssr.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/gpu_cull.comp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/rt/denoise/atrous_denoise.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/composite.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/cinematic_dof.comp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/skinning.comp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/asset/model.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/equirect_to_cubemap.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/hiz_generate.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/light_culling.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/dof_composite.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/hiz_generate.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/light_culling.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/gpu_cull.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/skinning.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/composite.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/dof_composite.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

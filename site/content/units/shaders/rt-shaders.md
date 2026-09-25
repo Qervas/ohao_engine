@@ -306,9 +306,8 @@ linear depth. Colour similarity is the term doing most of the work — it is wha
 averages away Monte Carlo noise; the normal and depth guides only stop the kernel
 crossing geometric edges.
 
-{{cite shaders/rt/rt_atrous.comp "w *= exp(-colorDist / (pc.sigmaColor * pc.sigmaColor + 1e-4));"}}
-
-Nothing loads it. `AtrousDenoiser` builds its two pipelines from
+Nothing loaded it, and it has been deleted. `AtrousDenoiser` builds its two
+pipelines from
 `rt_svgf_temporal.comp` and `rt_svgf_atrous.comp` instead — the variance-guided
 pair, which is what `DenoiseMode::Atrous` actually dispatches — and the
 `RTDenoiser` class that would have driven the plain kernel was a header with no

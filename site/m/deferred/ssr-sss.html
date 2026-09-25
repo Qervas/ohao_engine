@@ -69,9 +69,7 @@
 </div>
 <div class="section-rule"><h2 id="the-hi-z-tracer-that-did-not-ship">The Hi-Z tracer that did not ship</h2></div>
 <div class="prose reveal">
-<p>A second, considerably more serious SSR exists in the tree — McGuire–Mara screen-space ray tracing: descend a hierarchical depth pyramid, step coarse where the ray is clear, refine on a suspected hit, binary-search the crossing, with roughness and edge fades.</p>
-<div class="citation-chip"><code class="citation-code">// Screen-Space Reflections using hierarchical ray marching</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/ssr.comp#L4" target="_blank" rel="noopener">shaders/_disabled/ssr.comp:4</a></div>
-<p>It lives under `shaders/_disabled/`. The CMake glob is recursive, so it still compiles to `_disabled_ssr.comp.spv` on every build — but no C++ loads that module. `SSRPass` loads the linear one:</p>
+<p>A second, considerably more serious SSR used to exist in the tree — McGuire–Mara screen-space ray tracing: descend a hierarchical depth pyramid, step coarse where the ray is clear, refine on a suspected hit, binary-search the crossing, with roughness and edge fades. It lived under `shaders/_disabled/`, compiled on every build because the CMake glob is recursive, and was loaded by no C++. It has been deleted along with the rest of that archive; `git log -- shaders/_disabled/ssr.comp` has it if the better algorithm is ever wanted. `SSRPass` loads the linear one:</p>
 <div class="citation-chip"><code class="citation-code">VkShaderModule shader = loadShaderModule(&quot;postprocess_ssr.comp.spv&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssr_pass.cpp#L122" target="_blank" rel="noopener">ohao/render/deferred/ssr_pass.cpp:122</a></div>
 <div class="why-callout reveal"><div class="why-label">Why</div><p>The Hi-Z tracer needs a depth mip pyramid nothing in the deferred pipeline builds — `shaders/compute/hiz_generate.comp` exists but has no caller. The 64-step linear march was kept because it needs only the GBuffer that already exists. The price is exactly the artefact class above: distance-dependent thickness and non-uniform screen sampling. Reviving the Hi-Z path is a pyramid-generation problem, not a shader problem.</p></div>
 </div>
@@ -150,7 +148,6 @@ $$</div>
         <div class="row"><code>ohao/render/deferred/ssr_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/ssr.comp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/_disabled/ssr.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/tonemapping.frag</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/post_processing_pipeline.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/sss_blur.comp</code><span class="desc"></span></div>

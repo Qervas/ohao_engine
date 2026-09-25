@@ -381,11 +381,6 @@ window.OHAO_NAV_TREE = [
         "href": "m/shaders/includes-shadow.html"
       },
       {
-        "id": "shaders/includes-fx",
-        "title": "Atmosphere & water includes",
-        "href": "m/shaders/includes-fx.html"
-      },
-      {
         "id": "shaders/postprocess-chain",
         "title": "Postprocess shader chain",
         "href": "m/shaders/postprocess-chain.html"
@@ -424,11 +419,6 @@ window.OHAO_NAV_TREE = [
         "id": "shaders/rt-shaders",
         "title": "RT program family",
         "href": "m/shaders/rt-shaders.html"
-      },
-      {
-        "id": "shaders/disabled",
-        "title": "Disabled shader archive",
-        "href": "m/shaders/disabled.html"
       }
     ]
   },

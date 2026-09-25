@@ -94,14 +94,13 @@ origin as sky.
 
 ## The Hi-Z tracer that did not ship
 
-A second, considerably more serious SSR exists in the tree — McGuire–Mara screen-space
-ray tracing: descend a hierarchical depth pyramid, step coarse where the ray is clear,
-refine on a suspected hit, binary-search the crossing, with roughness and edge fades.
-
-{{cite shaders/_disabled/ssr.comp "// Screen-Space Reflections using hierarchical ray marching"}}
-
-It lives under `shaders/_disabled/`. The CMake glob is recursive, so it still compiles
-to `_disabled_ssr.comp.spv` on every build — but no C++ loads that module. `SSRPass`
+A second, considerably more serious SSR used to exist in the tree — McGuire–Mara
+screen-space ray tracing: descend a hierarchical depth pyramid, step coarse where
+the ray is clear, refine on a suspected hit, binary-search the crossing, with
+roughness and edge fades. It lived under `shaders/_disabled/`, compiled on every
+build because the CMake glob is recursive, and was loaded by no C++. It has been
+deleted along with the rest of that archive; `git log -- shaders/_disabled/ssr.comp`
+has it if the better algorithm is ever wanted. `SSRPass`
 loads the linear one:
 
 {{cite ohao/render/deferred/ssr_pass.cpp "loadShaderModule("postprocess_ssr.comp.spv")"}}

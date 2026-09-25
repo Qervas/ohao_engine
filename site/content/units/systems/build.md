@@ -157,12 +157,12 @@ exactly that mangled string as `PathTracer`'s default raygen. Moving a shader be
 directories renames its SPIR-V and every hardcoded path stops resolving — with no
 build error, because the flattening is a string operation the compiler never sees.
 
-The C++ side explicitly filters the archived pass tree out of its glob:
-
-{{cite ohao/render/CMakeLists.txt "list(FILTER RENDERER_SOURCES EXCLUDE REGEX "}}
-
-The shader glob has no such filter. In the configured build here, 35 of the 91 modules
-the rules produce come from `shaders/_disabled/`. A syntax error in a shader nobody
+The C++ side used to filter an archived pass tree out of its glob, and the shader
+glob never had such a filter — so 35 of the 91 modules the rules produced came from
+`shaders/_disabled/`, a directory whose C++ twin had been deleted months earlier.
+Both are gone now: the archive, and the filter that outlived its target. The
+asymmetry is still worth knowing, because the shader glob remains unfiltered and
+compiles whatever it finds. A syntax error in a shader nobody
 ships fails the whole `shaders` target.
 
 ## The include dependency that isn't tracked

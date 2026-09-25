@@ -37,13 +37,6 @@ MODULE = {
             design=['shadow_depth.* = single-map depth; shadow_csm.vert = cascade-aware depth write.', 'PCF/CSM sample helpers shared by deferred_lighting.frag.'],
         ),
         page(
-            'includes-fx',
-            'Atmosphere & water includes',
-            'Gerstner waves, cloud density fields.',
-            files=['shaders/includes/water/gerstner.glsl', 'shaders/includes/cloud/cloud_density.glsl'],
-            design=['Procedural FX includes — used by sky/atmosphere experiments and water materials.', 'Not required on the cornell_box golden path; optional feature surface.'],
-        ),
-        page(
             'postprocess-chain',
             'Postprocess shader chain',
             'Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.',
@@ -97,13 +90,6 @@ MODULE = {
             'pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.',
             files=['shaders/rt/pt_raygen.rgen', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_raygen_offline.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/rt_shadow.rgen', 'shaders/rt/rt_shadow.rmiss', 'shaders/rt/rt_shadow.rahit', 'shaders/rt/rt_gi.rgen', 'shaders/rt/rt_gi.rchit', 'shaders/rt/rt_gi.rmiss', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_atrous.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
             design=['pt_raygen.rgen = reference brute force; realtime/offline variants add NEE/MIS/AOV packing.', 'Hybrid: rt_shadow_* visibility; rt_gi_* one-bounce inject into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
-        ),
-        page(
-            'disabled',
-            'Disabled shader archive',
-            'shaders/_disabled holds retired experiments — not in active build.',
-            files=['shaders/_disabled'],
-            design=['Do not document as shipping features.'],
         ),
     ],
 }

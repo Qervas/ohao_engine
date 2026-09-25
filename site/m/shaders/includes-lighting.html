@@ -109,8 +109,7 @@ $$</div>
 <p>There is a trap in the word &quot;disabled&quot;, and a second trap behind it. The shader CMake globs recursively with no exclusion, so both consumers land on the `shaders` target&#x27;s dependency list and a syntax error in either breaks `cmake --build build --target shaders`. But that target is declared without `ALL`, and nothing in the tree calls `add_dependencies` on it, so `shaders/all` in the generated build system has no prerequisites: a plain `cmake --build build` compiles no shaders at all. The disabled files only bite whoever asks for shaders by name.</p>
 <div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
 <div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L54" target="_blank" rel="noopener">shaders/CMakeLists.txt:54</a></div>
-<p>The C++ side reads like the symmetric fix and is not one: the render library&#x27;s glob carries a `/_disabled/` exclusion, but no `_disabled` directory exists anywhere under `ohao/`, so the filter matches zero files.</p>
-<div class="citation-chip"><code class="citation-code">list(FILTER RENDERER_SOURCES EXCLUDE REGEX &quot;/_disabled/&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/CMakeLists.txt#L17" target="_blank" rel="noopener">ohao/render/CMakeLists.txt:17</a></div>
+<p>The C++ side used to read like the symmetric fix and was not one: the render library&#x27;s glob carried a `/_disabled/` exclusion long after the C++ `_disabled` directory it named had been deleted, so the filter matched zero files for five months. Both the filter and the shader archive it was the twin of are now gone.</p>
 </div>
 <div class="section-rule"><h2 id="blinn-phong-glsl-and-the-scar-it-documents">blinn_phong.glsl and the scar it documents</h2></div>
 <div class="prose reveal">
@@ -154,7 +153,6 @@ $$</div>
         <div class="row"><code>ohao/render/ibl/ibl_processor.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/lighting/blinn_phong.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/types.glsl</code><span class="desc"></span></div>

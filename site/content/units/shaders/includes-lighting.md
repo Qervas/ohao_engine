@@ -213,11 +213,10 @@ whoever asks for shaders by name.
 {{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SHADER_SOURCES"}}
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
-The C++ side reads like the symmetric fix and is not one: the render library's
-glob carries a `/_disabled/` exclusion, but no `_disabled` directory exists
-anywhere under `ohao/`, so the filter matches zero files.
-
-{{cite ohao/render/CMakeLists.txt "list(FILTER RENDERER_SOURCES EXCLUDE REGEX"}}
+The C++ side used to read like the symmetric fix and was not one: the render
+library's glob carried a `/_disabled/` exclusion long after the C++ `_disabled`
+directory it named had been deleted, so the filter matched zero files for five
+months. Both the filter and the shader archive it was the twin of are now gone.
 
 ## blinn_phong.glsl and the scar it documents
 

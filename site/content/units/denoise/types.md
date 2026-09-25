@@ -209,11 +209,9 @@ section is kept for the trap, not the file.
 Both halves landed dead, together, in commit `3e48342` — a bilateral-filter
 change whose message says the compute shader was "added for future multi-pass
 A-Trous implementation — not wired up yet". `denoise_atrous.comp` matches the
-never-implemented class exactly: four bindings in the order `denoise()` takes
+never-implemented class exactly: four bindings in the order `denoise()` took
 its views, and the identical `{stepSize, sigmaColor, sigmaNormal, sigmaDepth}`
 push block.
-
-{{cite shaders/compute/denoise_atrous.comp "uniform readonly image2D accumBuffer;"}}
 
 Its shader was still being compiled into
 `build/shaders/compute_denoise_atrous.comp.spv` with nothing loading it. The live
