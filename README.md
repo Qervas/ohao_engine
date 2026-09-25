@@ -214,7 +214,7 @@ after the fact:
   were removed in `0873766`. `--denoise=optix` is still accepted on the command
   line and falls back to OIDN with a warning.
 
-Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, `devlog/`, and the monograph in `site/`.
+Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, and the monograph in `site/`.
 
 ## Known build gotchas
 

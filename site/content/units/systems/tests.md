@@ -30,7 +30,7 @@ in place, merely unreachable. With it off, repeat renders of one frame differ by
 at most ~6 pixels at 1 LSB on a 1920×1080 frame: the irreducible floor from
 non-associative reduction order in the multi-light NEE sum.
 
-{{cite docs/superpowers/specs/2026-06-24-renovation-phase0-foundation-design.md "deterministic up to ~6 pixels at 1 LSB on a 1920"}}
+{{cite tests/golden/manifest.json "6.2M by 1 LSB between sessions; 4 covers that with margin."}}
 
 :::why
 Bit-exact hashing was rejected because it would flag that six-pixel ghost forever.
