@@ -157,6 +157,12 @@ void SSAOPass::setNormalBuffer(VkImageView normal) {
     updateDescriptorSet();
 }
 
+void SSAOPass::setGBufferInputs(VkImageView depth, VkImageView normal) {
+    m_depthView = depth;
+    m_normalView = normal;
+    updateDescriptorSet();
+}
+
 void SSAOPass::updateDescriptorSet() {
     if (m_descriptorSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
 

@@ -661,6 +661,14 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     m_height = height;
 
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
+    // The G-buffer's views were just destroyed and recreated. Hand the new ones to
+    // post-processing NOW, before its own onResize rewrites descriptor sets: any
+    // rewrite that still holds an old view writes a destroyed handle.
+    if (m_postProcessing && m_gbufferPass) {
+        m_postProcessing->setGBufferInputs(m_gbufferPass->getDepthView(),
+                                           m_gbufferPass->getNormalView(),
+                                           m_gbufferPass->getVelocityView());
+    }
     if (m_rtGI) m_rtGI->resize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
@@ -689,11 +697,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {
         m_lightingPass->setGBufferPass(m_gbufferPass.get());
-    }
-    if (m_postProcessing && m_gbufferPass) {
-        m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
-        m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
-        m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
     }
 
     // Re-import all textures with new dimensions (passes reallocated their images on resize)

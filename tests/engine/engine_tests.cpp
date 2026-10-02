@@ -7,6 +7,7 @@
  *   3. Scene — createActor, findActor, removeActor, getAllActors, actor count
  */
 
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <memory>
@@ -741,15 +742,35 @@ void runMetaTests() {
 
 namespace {
 
+// Validation errors seen since the last reset. Only HeadlessDevice::create(true)
+// installs the messenger that feeds it.
+static std::atomic<uint64_t> g_validationErrors{0};
+static std::string g_lastValidationError;
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL countValidationErrors(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        ++g_validationErrors;
+        g_lastValidationError = data && data->pMessage ? data->pMessage : "";
+    }
+    return VK_FALSE;
+}
+
 struct HeadlessDevice {
     VkInstance instance{VK_NULL_HANDLE};
+    VkDebugUtilsMessengerEXT messenger{VK_NULL_HANDLE};
+    bool validating{false};
     VkPhysicalDevice physical{VK_NULL_HANDLE};
     VkDevice device{VK_NULL_HANDLE};
     // Recorded, because the frame test below needs a queue from the same
     // family it created the device with.
     uint32_t queueFamily{0};
 
-    bool create() {
+    // withValidation: enable VK_LAYER_KHRONOS_validation and count its errors in
+    // g_validationErrors. If the layer is not installed, `validating` stays false
+    // and the caller must report the check as skipped, never as passed.
+    bool create(bool withValidation = false) {
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "ohao_engine_tests";
@@ -757,7 +778,35 @@ struct HeadlessDevice {
         VkInstanceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ci.pApplicationInfo = &app;
+
+        const char* layer = "VK_LAYER_KHRONOS_validation";
+        const char* ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        if (withValidation) {
+            uint32_t ln = 0;
+            vkEnumerateInstanceLayerProperties(&ln, nullptr);
+            std::vector<VkLayerProperties> layers(ln);
+            vkEnumerateInstanceLayerProperties(&ln, layers.data());
+            for (const auto& l : layers)
+                if (std::strcmp(l.layerName, layer) == 0) validating = true;
+        }
+        if (validating) {
+            ci.enabledLayerCount = 1;
+            ci.ppEnabledLayerNames = &layer;
+            ci.enabledExtensionCount = 1;
+            ci.ppEnabledExtensionNames = &ext;
+        }
         if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS) return false;
+        if (validating) {
+            VkDebugUtilsMessengerCreateInfoEXT mi{};
+            mi.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+            mi.pfnUserCallback = countValidationErrors;
+            auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+                vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+            if (!create || create(instance, &mi, nullptr, &messenger) != VK_SUCCESS) validating = false;
+        }
 
         uint32_t n = 0;
         vkEnumeratePhysicalDevices(instance, &n, nullptr);
@@ -802,6 +851,12 @@ struct HeadlessDevice {
             vkDestroyDevice(device, nullptr);
             device = VK_NULL_HANDLE;
         }
+        if (messenger != VK_NULL_HANDLE) {
+            auto destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+                vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+            if (destroyFn) destroyFn(instance, messenger, nullptr);
+            messenger = VK_NULL_HANDLE;
+        }
         if (instance != VK_NULL_HANDLE) {
             vkDestroyInstance(instance, nullptr);
             instance = VK_NULL_HANDLE;
@@ -842,6 +897,50 @@ static void runHeadlessDeferredTests() {
         EXPECT(initialised, "DeferredRenderer::initialize on a bare device");
         EXPECT(finalOutput != VK_NULL_HANDLE,
                "a pipeline that initialised must hand back a final-output view");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("a resize never writes a destroyed G-buffer view into a descriptor");
+    {
+        // A resize destroys the G-buffer's views and creates new ones. A pass that
+        // rewrites a descriptor set while it still holds an OLD view writes a
+        // destroyed handle -- undefined behaviour that crashed renderer_test on
+        // NVIDIA once unrelated allocations stopped masking it. The END state looks
+        // fine either way (the last setter repairs it), so this watches the resize
+        // itself through the validation layer, which tracks handle lifetimes.
+        HeadlessDevice dev;
+        if (!dev.create(/*withValidation=*/true)) {
+            dev.destroy();
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        if (!dev.validating) {
+            dev.destroy();
+            std::cout << "(VK_LAYER_KHRONOS_validation not installed -- SKIPPED, not verified) ";
+            TEST_PASS();
+            return;
+        }
+        bool initialised = false;
+        uint64_t errorsDuringResize = 0;
+        std::string lastError;
+        {
+            ohao::DeferredRenderer renderer;
+            initialised = renderer.initialize(dev.device, dev.physical);
+            if (initialised) {
+                g_validationErrors = 0;
+                renderer.onResize(640, 480);
+                errorsDuringResize = g_validationErrors.load();
+                lastError = g_lastValidationError;
+            }
+            renderer.cleanup();
+        }
+        dev.destroy();
+
+        EXPECT(initialised, "DeferredRenderer::initialize on a validated device");
+        if (errorsDuringResize != 0) std::cout << "\n      last error: " << lastError.substr(0, 300) << "\n";
+        EXPECT_EQ(errorsDuringResize, uint64_t{0},
+                  "onResize must not write any destroyed handle into a descriptor set");
         TEST_PASS();
     }
 }

@@ -20,6 +20,12 @@ public:
     // Configuration
     void setDepthBuffer(VkImageView depth);
     void setNormalBuffer(VkImageView normal);
+    // Both G-buffer inputs at once, one descriptor rewrite. Use this whenever the
+    // G-buffer was recreated: setting them one at a time rewrites the set with the
+    // other input still pointing at a destroyed view.
+    void setGBufferInputs(VkImageView depth, VkImageView normal);
+    [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
+    [[nodiscard]] VkImageView normalInput() const noexcept { return m_normalView; }
     void setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj);
     void updateDescriptorSet();
 

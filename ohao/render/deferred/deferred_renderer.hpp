@@ -70,6 +70,7 @@ public:
 
     // Post-processing configuration
     [[nodiscard]] PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
+    [[nodiscard]] const GBufferPass* getGBufferPass() const { return m_gbufferPass.get(); }
 
     // Wireframe mode
     void setWireframeEnabled(bool enabled);

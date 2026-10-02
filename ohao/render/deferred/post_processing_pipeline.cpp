@@ -205,6 +205,18 @@ void PostProcessingPipeline::setNormalBuffer(VkImageView normal) {
     if (m_ssaoPass) m_ssaoPass->setNormalBuffer(normal);
 }
 
+void PostProcessingPipeline::setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity) {
+    if (m_ssaoPass) m_ssaoPass->setGBufferInputs(depth, normal);
+    if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
+}
+
+PostProcessingPipeline::BoundGBufferInputs PostProcessingPipeline::boundGBufferInputs() const {
+    BoundGBufferInputs b;
+    if (m_ssaoPass) { b.ssaoDepth = m_ssaoPass->depthInput(); b.ssaoNormal = m_ssaoPass->normalInput(); }
+    if (m_taaPass)  { b.taaDepth  = m_taaPass->depthInput();  b.taaVelocity = m_taaPass->velocityInput(); }
+    return b;
+}
+
 void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
     if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
 }

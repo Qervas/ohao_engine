@@ -39,6 +39,17 @@ public:
     void setDepthBuffer(VkImageView depth);
     void setNormalBuffer(VkImageView normal);
     void setVelocityBuffer(VkImageView velocity);
+    // All G-buffer-derived inputs in one step. Call it as soon as the G-buffer is
+    // recreated and before onResize(): every pass that rewrites a descriptor set
+    // must already hold the new views when it does.
+    void setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity);
+
+    // The G-buffer views SSAO and TAA currently reference (null where a pass is absent).
+    struct BoundGBufferInputs {
+        VkImageView ssaoDepth{VK_NULL_HANDLE}, ssaoNormal{VK_NULL_HANDLE};
+        VkImageView taaDepth{VK_NULL_HANDLE}, taaVelocity{VK_NULL_HANDLE};
+    };
+    [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
     void setSSRView(VkImageView ssr) { m_ssrView = ssr; }
 
     // Feature toggles

@@ -21,6 +21,10 @@ public:
     void setCurrentFrame(VkImageView currentFrame);
     void setVelocityBuffer(VkImageView velocity);
     void setDepthBuffer(VkImageView depth);
+    // Both G-buffer inputs at once, one descriptor rewrite (see SSAOPass).
+    void setGBufferInputs(VkImageView depth, VkImageView velocity);
+    [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
+    [[nodiscard]] VkImageView velocityInput() const noexcept { return m_velocityView; }
     void updateDescriptorSets();
 
     void setBlendFactor(float factor) { m_blendFactor = factor; }

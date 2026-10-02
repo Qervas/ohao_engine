@@ -163,6 +163,12 @@ void TAAPass::setDepthBuffer(VkImageView depth) {
     updateDescriptorSets();
 }
 
+void TAAPass::setGBufferInputs(VkImageView depth, VkImageView velocity) {
+    m_depthView = depth;
+    m_velocityView = velocity;
+    updateDescriptorSets();
+}
+
 void TAAPass::updateDescriptorSets() {
     if (m_sampler == VK_NULL_HANDLE) return;
 
