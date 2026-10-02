@@ -59,6 +59,10 @@ VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     m_camera = std::make_unique<Camera>();
     m_camera->setPosition(glm::vec3(0.0f, 0.0f, 3.0f));
     m_camera->setRotation(0.0f, -90.0f);
+    // The camera's aspect is the target's from the start: a window opened at its final
+    // size never resizes, and resize() is the only other place this is set.
+    if (width > 0 && height > 0)
+        m_camera->setAspectRatio(static_cast<float>(width) / static_cast<float>(height));
 
     // Try to find shader base path
     std::vector<std::string> searchPaths = {
@@ -400,7 +404,7 @@ void VulkanRenderer::applyRTRenderSettings() {
         // so the tracer must see denoiseMode==DLSSRR to run its NGX init/feature path.
         m_rtSettings.denoiseMode = m_denoiseMode;
     }
-    // Re-inject the interactive per-frame sample count: prepareRTSceneForFrame
+    // Re-inject the realtime per-frame sample count: prepareRTSceneForFrame
     // resets m_rtSettings to the pipeline default (samplesPerFrame=1) each frame,
     // so restore the user's choice here (same pattern as aniso/SSS preservation).
     m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;

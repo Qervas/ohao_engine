@@ -1514,6 +1514,45 @@ static void runOrphanedEntryPointTests() {
         EXPECT_EQ(msgs.size(), size_t{0}, "the validation layer reports nothing across the resize");
         TEST_PASS();
     }
+
+    TEST_BEGIN("the camera aspect matches the renderer's extent from initialize on");
+    {
+        // A window opened at its final size never resizes, so initialize() is the
+        // only chance to give the camera the right aspect -- else the image is stretched.
+        ohao::VulkanRenderer renderer(256, 128);
+        if (!renderer.initialize()) {
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        EXPECT(std::abs(renderer.getCamera().getAspectRatio() - 2.0f) < 1e-5f,
+               "a 256x128 renderer must start with a 2:1 camera");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("deferred with tonemapping off reads back its lighting output silently");
+    {
+        // With the post stack's tonemap off, the frame's final image is the lighting
+        // pass's HDR output, so it is the source of the readback copy (headless) or
+        // the swapchain blit (windowed). Either needs TRANSFER_SRC on that image.
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer renderer(320, 180);
+        const bool ok = renderer.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok || !renderer.validationEnabled()) {
+            std::cout << "(no Vulkan device or validation layer -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        renderer.setRenderMode(ohao::RenderMode::Deferred);
+        if (auto* d = renderer.getDeferredRenderer(); d && d->getPostProcessing())
+            d->getPostProcessing()->setTonemappingEnabled(false);
+        for (int i = 0; i < 4; ++i) renderer.render();
+        const auto& msgs = renderer.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "copying the lighting output is valid");
+        TEST_PASS();
+    }
 }
 
 // =============================================================================

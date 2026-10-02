@@ -771,6 +771,10 @@ VkImageView DeferredRenderer::getFinalOutput() const {
     return VK_NULL_HANDLE;
 }
 
+bool DeferredRenderer::finalOutputIsRGBA8() const {
+    return m_postProcessing && m_postProcessing->didExecute();
+}
+
 VkImage DeferredRenderer::getFinalOutputImage() const {
     if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputImage();

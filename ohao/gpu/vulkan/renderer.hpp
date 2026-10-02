@@ -105,11 +105,10 @@ struct LightUniformBuffer {
 };
 
 /**
- * VulkanRenderer - Renders OHAO scenes to a pixel buffer without a window
+ * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
+ * when initialized with a PresentTarget (see ohao/runtime/Application).
  *
- * Used for embedding OHAO rendering in external applications (like Godot)
- *
- * Usage:
+ * Headless usage:
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
  *   renderer.setScene(scene);
@@ -215,8 +214,8 @@ public:
 
     // Realtime/DLSS: genuine per-frame sample count. The realtime raygen traces
     // N decorrelated paths per pixel in ONE render() dispatch and averages them,
-    // so DLSS/SVGF get a clean N-spp image before denoising. Driven by the
-    // interactive '+'/'-' keys. Clamped to [1, 64]. Survives the per-frame RT
+    // so DLSS/SVGF get a clean N-spp image before denoising. Set by a realtime
+    // host. Clamped to [1, 64]. Survives the per-frame RT
     // settings reset (re-injected in applyRTRenderSettings).
     void        setRealtimeSamplesPerFrame(uint32_t n);
     [[nodiscard]] uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
@@ -471,7 +470,7 @@ private:
     // Denoise state
     DenoiseMode                  m_denoiseMode{DenoiseMode::None};
     bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
-    // Realtime per-frame sample count (interactive '+'/'-'). Re-injected into
+    // Realtime per-frame sample count (setRealtimeSamplesPerFrame). Re-injected into
     // m_rtSettings each frame in applyRTRenderSettings so the per-frame reset in
     // prepareRTSceneForFrame doesn't clobber it (same pattern as aniso/SSS).
     uint32_t                     m_realtimeSamplesPerFrame{1};

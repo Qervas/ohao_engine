@@ -288,6 +288,16 @@ void VulkanRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
 
     VkImage finalImage = m_deferredRenderer->getFinalOutputImage();
     if (finalImage == VK_NULL_HANDLE) return;
+    // The staging buffer holds width*height*4 bytes. An RGBA16F final image (post stack
+    // off) is twice that: a straight copy would write past the buffer. Refuse instead.
+    if (!m_deferredRenderer->finalOutputIsRGBA8()) {
+        static bool warned = false;
+        if (!warned) {
+            std::cerr << "[ohao] deferred readback skipped: tonemapping is off, the final image is HDR\n";
+            warned = true;
+        }
+        return;
+    }
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     if (frame.stagingBuffer == VK_NULL_HANDLE) return;

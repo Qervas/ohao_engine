@@ -119,6 +119,9 @@ public:
     // Get final output for display/readback
     [[nodiscard]] VkImageView getFinalOutput() const;
     [[nodiscard]] VkImage getFinalOutputImage() const;
+    // True when the final image is the post stack's RGBA8 output; false when it is the
+    // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
+    [[nodiscard]] bool finalOutputIsRGBA8() const;
 
     // Get SSAO output for deferred lighting
     [[nodiscard]] VkImageView getSSAOOutput() const;
