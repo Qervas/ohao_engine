@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
 
     auto scene = buildHelmetScene(app.renderer(), "assets/test_models/DamagedHelmet.glb");
     if (!scene) {
-        app.shutdown();
+        (void)app.shutdown();
         return 2;
     }
 
@@ -175,11 +175,14 @@ int main(int argc, char** argv) {
               << std::endl;
 
     scene.reset();
-    app.shutdown();
+    // Counted after teardown: leaked objects are reported only at device destruction.
+    const uint64_t validationTotal = app.shutdown();
+    if (r.validationEnabled)
+        std::cout << "validation including teardown: " << validationTotal << " messages" << std::endl;
 
     if (cfg.frameLimit > 0) {
         if (r.readbackCopies != 0) return 3;
-        if (r.validationEnabled && r.validationMessages != 0) return 4;
+        if (r.validationEnabled && validationTotal != 0) return 4;
     }
     return 0;
 }

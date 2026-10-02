@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -50,7 +51,10 @@ public:
 
     bool initialize(const AppConfig& cfg);
     RunReport run(const GameHooks& hooks);
-    void shutdown();
+    // Tears down renderer then window. Returns the validation messages seen over the
+    // whole run *including teardown* -- leaked objects are only reported when the
+    // device is destroyed, after run()'s report was taken. 0 when validation is off.
+    uint64_t shutdown();
 
     [[nodiscard]] VulkanRenderer& renderer() { return *m_renderer; }
     [[nodiscard]] InputMap& input() { return m_input; }
@@ -66,6 +70,7 @@ private:
     FrameStats m_stats;
     std::vector<InputEvent> m_events;
     bool m_quit{false};
+    uint64_t m_validationAtShutdown{0};
 };
 
 } // namespace ohao::runtime

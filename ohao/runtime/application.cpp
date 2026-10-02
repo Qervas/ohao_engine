@@ -65,9 +65,14 @@ RunReport Application::run(const GameHooks& hooks) {
     return r;
 }
 
-void Application::shutdown() {
-    m_renderer.reset();   // device and surface go before the window
+uint64_t Application::shutdown() {
+    if (m_renderer) {
+        m_renderer->shutdown();   // device and surface go before the window
+        m_validationAtShutdown = m_renderer->validationMessageCount();
+        m_renderer.reset();
+    }
     m_window.destroy();
+    return m_validationAtShutdown;
 }
 
 } // namespace ohao::runtime
