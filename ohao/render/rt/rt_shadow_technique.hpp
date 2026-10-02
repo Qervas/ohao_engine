@@ -34,6 +34,10 @@ public:
     void setSampleCount(int samples) { m_sampleCount = samples; }  // 1=hard, 4-16=soft
 
 private:
+    // G-buffer sampler. Lives as long as the technique: it is written into a
+    // descriptor set that recorded command buffers reference, so destroying it
+    // before those buffers finish executing invalidates them.
+    VkSampler m_gbufferSampler{VK_NULL_HANDLE};
     bool createOutputImage();
     bool createRTPipeline();
     bool createShaderBindingTable();

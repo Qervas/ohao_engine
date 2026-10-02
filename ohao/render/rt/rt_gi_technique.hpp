@@ -33,6 +33,10 @@ public:
                             const std::vector<float>& flags = {});
 
 private:
+    // G-buffer sampler. Lives as long as the technique: it is written into a
+    // descriptor set that recorded command buffers reference, so destroying it
+    // before those buffers finish executing invalidates them.
+    VkSampler m_gbufferSampler{VK_NULL_HANDLE};
     bool createOutputImage();
     bool createRTPipeline();
     bool createShaderBindingTable();

@@ -534,8 +534,11 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     samplerInfo.minFilter = VK_FILTER_NEAREST;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    VkSampler sampler;
-    vkCreateSampler(m_device, &samplerInfo, nullptr, &sampler);
+    if (m_gbufferSampler == VK_NULL_HANDLE &&
+        vkCreateSampler(m_device, &samplerInfo, nullptr, &m_gbufferSampler) != VK_SUCCESS) {
+        return;
+    }
+    const VkSampler sampler = m_gbufferSampler;
 
     VkDescriptorImageInfo posInfo{};
     posInfo.imageView = input.positionBuffer;
@@ -720,8 +723,6 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &toRead);
 
-    // Cleanup temp sampler
-    vkDestroySampler(m_device, sampler, nullptr);
 
     m_frameIndex++;
 }
@@ -746,6 +747,8 @@ GIOutput RTGITechnique::getOutput() const {
 void RTGITechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
+
+    if (m_gbufferSampler) { vkDestroySampler(m_device, m_gbufferSampler, nullptr); m_gbufferSampler = VK_NULL_HANDLE; }
 
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
     if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
