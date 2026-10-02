@@ -30,8 +30,6 @@ ohao_example(env_demo)
 ohao_example(turntable)
 
 
-# Interactive Viewer. GLFW is built from source by external/cmake/glfw.cmake
-# so it matches the project's CRT; no find_package or prebuilt binary needed.
-ohao_example(interactive)
-find_package(OpenGL REQUIRED)
-target_link_libraries(interactive PRIVATE glfw OpenGL::GL)
+# Windowed host: deferred rendering presented through a swapchain.
+ohao_example(ohao_game)
+target_link_libraries(ohao_game PRIVATE ohao_runtime)

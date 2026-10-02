@@ -16,6 +16,13 @@ namespace ohao {
 void VulkanRenderer::renderDeferred() {
     if (!m_deferredRenderer) return;
 
+    // Rebuild the swapchain BEFORE taking a frame slot. Recreating resizes the
+    // renderer, which idles the device and resets m_currentFrame; doing it after
+    // the slot was chosen would wait on one slot's fence and reset another's.
+    if (m_swapchain && (m_swapchainDirty || !m_swapchain->valid())) {
+        if (!recreatePresentation()) return;   // minimized: skip the frame
+    }
+
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
 
@@ -23,9 +30,6 @@ void VulkanRenderer::renderDeferred() {
     // signaled and the next waitForFrame on it cannot deadlock.
     uint32_t imageIndex = 0;
     if (m_swapchain) {
-        if (m_swapchainDirty || !m_swapchain->valid()) {
-            if (!recreatePresentation()) return;   // minimized: skip the frame
-        }
         const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
         if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
         if (acq == Swapchain::Acquire::Error) {
