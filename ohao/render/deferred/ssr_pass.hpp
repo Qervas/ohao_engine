@@ -1,6 +1,9 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/frame/frame_resources.hpp"
+
+#include <array>
 
 namespace ohao {
 
@@ -43,7 +46,8 @@ private:
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_descriptorSet{VK_NULL_HANDLE};
+    // One set per frame in flight: execute() rewrites its slot's set at record time.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
     VkSampler m_sampler{VK_NULL_HANDLE};
 
     uint32_t m_width{0}, m_height{0};

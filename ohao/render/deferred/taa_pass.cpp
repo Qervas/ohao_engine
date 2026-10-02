@@ -64,11 +64,17 @@ void TAAPass::cleanup() {
     m_sampler = VK_NULL_HANDLE;
 }
 
-void TAAPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
+void TAAPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_currentFrameView == VK_NULL_HANDLE) return;
+    if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_descriptorSets[frameIndex] == VK_NULL_HANDLE) return;
 
-    uint32_t outputIndex = m_currentHistoryIndex;
-    uint32_t historyIndex = 1 - m_currentHistoryIndex;
+    // Ping-pong: write one history image while sampling the other, which holds
+    // last frame's result. Swap first, so getOutputView() names the image written here.
+    m_currentHistoryIndex = 1 - m_currentHistoryIndex;
+    const uint32_t outputIndex = m_currentHistoryIndex;
+
+    if (!m_historyValid) clearHistory(cmd);
+    writeDescriptorSet(frameIndex, 1 - outputIndex);
 
     VkClearValue clearValue{};
     clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -90,11 +96,11 @@ void TAAPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-                            0, 1, &m_descriptorSets[historyIndex], 0, nullptr);
+                            0, 1, &m_descriptorSets[frameIndex], 0, nullptr);
 
     TAAParams params{};
     params.texelSize = glm::vec2(1.0f / m_width, 1.0f / m_height);
-    params.blendFactor = m_blendFactor;
+    params.blendFactor = m_historyValid ? m_blendFactor : 0.0f;  // no history yet: current frame only
     params.motionScale = m_motionScale;
     params.flags = 0;
     if (m_velocityView != VK_NULL_HANDLE) params.flags |= 1;
@@ -105,8 +111,38 @@ void TAAPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
-    // Swap history buffers for next frame
-    swapHistoryBuffers();
+    m_historyValid = true;
+}
+
+void TAAPass::clearHistory(VkCommandBuffer cmd) {
+    std::array<VkImageMemoryBarrier, HISTORY_COUNT> barriers{};
+    for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
+        barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barriers[i].srcAccessMask = 0;
+        barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[i].image = m_historyImages[i];
+        barriers[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                         0, nullptr, 0, nullptr, HISTORY_COUNT, barriers.data());
+
+    const VkClearColorValue zero{};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    for (uint32_t i = 0; i < HISTORY_COUNT; ++i)
+        vkCmdClearColorImage(cmd, m_historyImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+
+    for (auto& b : barriers) {
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                         0, nullptr, 0, nullptr, HISTORY_COUNT, barriers.data());
 }
 
 void TAAPass::onResize(uint32_t width, uint32_t height) {
@@ -144,99 +180,88 @@ glm::vec2 TAAPass::getJitterOffset(uint32_t frameIndex) const {
     return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);
 }
 
-void TAAPass::swapHistoryBuffers() {
-    m_currentHistoryIndex = 1 - m_currentHistoryIndex;
-}
-
 void TAAPass::setCurrentFrame(VkImageView currentFrame) {
     m_currentFrameView = currentFrame;
-    updateDescriptorSets();
 }
 
 void TAAPass::setVelocityBuffer(VkImageView velocity) {
     m_velocityView = velocity;
-    updateDescriptorSets();
 }
 
 void TAAPass::setDepthBuffer(VkImageView depth) {
     m_depthView = depth;
-    updateDescriptorSets();
 }
 
 void TAAPass::setGBufferInputs(VkImageView depth, VkImageView velocity) {
     m_depthView = depth;
     m_velocityView = velocity;
-    updateDescriptorSets();
 }
 
-void TAAPass::updateDescriptorSets() {
+void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
     if (m_sampler == VK_NULL_HANDLE) return;
 
-    // Update both descriptor sets (for ping-pong history)
-    for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
-        if (m_descriptorSets[i] == VK_NULL_HANDLE) continue;
+    // Determine fallback view: current frame > history > skip entirely
+    VkImageView fallbackView = m_currentFrameView;
+    if (fallbackView == VK_NULL_HANDLE) fallbackView = m_historyViews[historyIdx];
+    if (fallbackView == VK_NULL_HANDLE) return;  // No valid view at all
 
-        uint32_t historyIdx = 1 - i;
+    // ALWAYS write all 4 bindings — uninitialized descriptors cause SEGV on NVIDIA
+    std::array<VkDescriptorImageInfo, 4> imageInfos{};
+    std::array<VkWriteDescriptorSet, 4> writes{};
 
-        // Determine fallback view: current frame > history > skip entirely
-        VkImageView fallbackView = m_currentFrameView;
-        if (fallbackView == VK_NULL_HANDLE) fallbackView = m_historyViews[historyIdx];
-        if (fallbackView == VK_NULL_HANDLE) continue;  // No valid view at all
+    // Binding 0: Current frame
+    imageInfos[0].sampler = m_sampler;
+    imageInfos[0].imageView = m_currentFrameView != VK_NULL_HANDLE ? m_currentFrameView : fallbackView;
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_descriptorSets[slot];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfos[0];
 
-        // ALWAYS write all 4 bindings — uninitialized descriptors cause SEGV on NVIDIA
-        std::array<VkDescriptorImageInfo, 4> imageInfos{};
-        std::array<VkWriteDescriptorSet, 4> writes{};
+    // Binding 1: History frame (opposite buffer)
+    imageInfos[1].sampler = m_sampler;
+    imageInfos[1].imageView = m_historyViews[historyIdx] != VK_NULL_HANDLE ? m_historyViews[historyIdx] : fallbackView;
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_descriptorSets[slot];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfos[1];
 
-        // Binding 0: Current frame
-        imageInfos[0].sampler = m_sampler;
-        imageInfos[0].imageView = m_currentFrameView != VK_NULL_HANDLE ? m_currentFrameView : fallbackView;
-        imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = m_descriptorSets[i];
-        writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[0].descriptorCount = 1;
-        writes[0].pImageInfo = &imageInfos[0];
+    // Binding 2: Velocity (fallback to current frame — shader uses flags to skip)
+    imageInfos[2].sampler = m_sampler;
+    imageInfos[2].imageView = m_velocityView != VK_NULL_HANDLE ? m_velocityView : fallbackView;
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_descriptorSets[slot];
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &imageInfos[2];
 
-        // Binding 1: History frame (opposite buffer)
-        imageInfos[1].sampler = m_sampler;
-        imageInfos[1].imageView = m_historyViews[historyIdx] != VK_NULL_HANDLE ? m_historyViews[historyIdx] : fallbackView;
-        imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = m_descriptorSets[i];
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &imageInfos[1];
+    // Binding 3: Depth (fallback to current frame)
+    imageInfos[3].sampler = m_sampler;
+    imageInfos[3].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
+    // G-buffer depth stays DEPTH_STENCIL_READ_ONLY from the G-buffer pass to frame end.
+    imageInfos[3].imageLayout = m_depthView != VK_NULL_HANDLE
+        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = m_descriptorSets[slot];
+    writes[3].dstBinding = 3;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[3].descriptorCount = 1;
+    writes[3].pImageInfo = &imageInfos[3];
 
-        // Binding 2: Velocity (fallback to current frame — shader uses flags to skip)
-        imageInfos[2].sampler = m_sampler;
-        imageInfos[2].imageView = m_velocityView != VK_NULL_HANDLE ? m_velocityView : fallbackView;
-        imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet = m_descriptorSets[i];
-        writes[2].dstBinding = 2;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[2].descriptorCount = 1;
-        writes[2].pImageInfo = &imageInfos[2];
-
-        // Binding 3: Depth (fallback to current frame)
-        imageInfos[3].sampler = m_sampler;
-        imageInfos[3].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
-        imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[3].dstSet = m_descriptorSets[i];
-        writes[3].dstBinding = 3;
-        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[3].descriptorCount = 1;
-        writes[3].pImageInfo = &imageInfos[3];
-
-        vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
-    }
+    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
 }
 
 bool TAAPass::createHistoryBuffers() {
     VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    m_historyValid = false;   // new images hold nothing; the next execute() clears them
 
     for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
         VkImageCreateInfo imageInfo{};
@@ -248,7 +273,8 @@ bool TAAPass::createHistoryBuffers() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;   // clearHistory()
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -402,13 +428,13 @@ bool TAAPass::createDescriptors() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4 * HISTORY_COUNT;
+    poolSize.descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = HISTORY_COUNT;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
     if (m_descriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
@@ -418,13 +444,13 @@ bool TAAPass::createDescriptors() {
         return false;
     }
 
-    std::array<VkDescriptorSetLayout, HISTORY_COUNT> layouts;
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
     layouts.fill(m_descriptorLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = HISTORY_COUNT;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
     allocInfo.pSetLayouts = layouts.data();
 
     if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {

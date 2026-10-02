@@ -1,6 +1,7 @@
 #include "bloom_pass.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace ohao {
 
@@ -64,9 +65,11 @@ void BloomPass::cleanup() {
     m_sampler = VK_NULL_HANDLE;
 }
 
-void BloomPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
+void BloomPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    m_executed = false;
     // Validate all resources before executing
     if (m_hdrInputView == VK_NULL_HANDLE) return;
+    if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_inputSets[frameIndex] == VK_NULL_HANDLE) return;
     if (m_thresholdRenderPass == VK_NULL_HANDLE ||
         m_downsampleRenderPass == VK_NULL_HANDLE ||
         m_upsampleRenderPass == VK_NULL_HANDLE) return;
@@ -75,9 +78,25 @@ void BloomPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
         m_upsamplePipeline == VK_NULL_HANDLE) return;
     if (m_mipLevels == 0 || m_framebuffers[0] == VK_NULL_HANDLE) return;
 
-    executeThreshold(cmd);
+    // This frame slot's input set; its last use was retired by the slot's fence.
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_sampler;
+    imageInfo.imageView = m_hdrInputView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_inputSets[frameIndex];
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+
+    executeThreshold(cmd, m_inputSets[frameIndex]);
     executeDownsample(cmd);
     executeUpsample(cmd);
+    m_executed = true;
 }
 
 void BloomPass::onResize(uint32_t width, uint32_t height) {
@@ -88,31 +107,14 @@ void BloomPass::onResize(uint32_t width, uint32_t height) {
 
     vkDeviceWaitIdle(m_device);
 
-    destroyMipChain();
-    createMipChain();
-    createDescriptors();
+    destroyMipChain();   // also destroys the per-mip framebuffers
+    if (!createMipChain() || !createFramebuffers() || !createDescriptors()) {
+        std::cerr << "BloomPass: resize to " << width << "x" << height << " failed; bloom disabled" << std::endl;
+    }
 }
 
 void BloomPass::setInputImage(VkImageView hdrInput) {
-    m_hdrInputView = hdrInput;
-
-    // Update descriptor set 0 with new HDR input
-    if (m_hdrInputView != VK_NULL_HANDLE && !m_descriptorSets.empty() && m_sampler != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.sampler = m_sampler;
-        imageInfo.imageView = m_hdrInputView;
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSets[0];
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfo;
-
-        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-    }
+    m_hdrInputView = hdrInput;   // written into this frame's input set by execute()
 }
 
 bool BloomPass::createMipChain() {
@@ -276,6 +278,10 @@ bool BloomPass::createRenderPasses() {
         return false;
     }
 
+    return createFramebuffers();
+}
+
+bool BloomPass::createFramebuffers() {
     // Create framebuffers for each mip level
     // Note: Framebuffer 0 is used by threshold pass, others by downsample
     // All render passes share compatible attachment format, so we can use any
@@ -318,16 +324,16 @@ bool BloomPass::createDescriptors() {
         }
     }
 
-    // Pool for mip chain descriptors + input descriptor
+    // Pool for mip chain descriptors + one HDR input set per frame in flight
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = m_mipLevels + 1; // +1 for HDR input
+    poolSize.descriptorCount = m_mipLevels + MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = m_mipLevels + 1;
+    poolInfo.maxSets = m_mipLevels + MAX_FRAMES_IN_FLIGHT;
 
     if (m_descriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
@@ -337,9 +343,9 @@ bool BloomPass::createDescriptors() {
         return false;
     }
 
-    // Allocate descriptor sets
-    m_descriptorSets.resize(m_mipLevels + 1);
-    std::vector<VkDescriptorSetLayout> layouts(m_mipLevels + 1, m_inputLayout);
+    // Allocate descriptor sets: one per mip at [i + 1], plus the per-frame input sets
+    m_descriptorSets.assign(m_mipLevels + 1, VK_NULL_HANDLE);
+    std::vector<VkDescriptorSetLayout> layouts(m_mipLevels, m_inputLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -347,7 +353,15 @@ bool BloomPass::createDescriptors() {
     allocInfo.descriptorSetCount = static_cast<uint32_t>(layouts.size());
     allocInfo.pSetLayouts = layouts.data();
 
-    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data() + 1) != VK_SUCCESS) {
+        return false;
+    }
+
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> inputLayouts;
+    inputLayouts.fill(m_inputLayout);
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = inputLayouts.data();
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_inputSets.data()) != VK_SUCCESS) {
         return false;
     }
 
@@ -566,7 +580,7 @@ bool BloomPass::createPipelines() {
     return true;
 }
 
-void BloomPass::executeThreshold(VkCommandBuffer cmd) {
+void BloomPass::executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet) {
     // Threshold pass: HDR input -> mip 0
     VkClearValue clearValue{};
     clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
@@ -589,7 +603,7 @@ void BloomPass::executeThreshold(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_thresholdPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_thresholdLayout,
-                            0, 1, &m_descriptorSets[0], 0, nullptr);
+                            0, 1, &inputSet, 0, nullptr);
 
     ThresholdParams params{m_threshold, m_softThreshold, m_intensity, 0.0f};
     vkCmdPushConstants(cmd, m_thresholdLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);

@@ -444,7 +444,10 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
                 imageBarrier.subresourceRange.baseMipLevel = 0;
                 imageBarrier.subresourceRange.levelCount = 1;
                 imageBarrier.subresourceRange.baseArrayLayer = 0;
-                imageBarrier.subresourceRange.layerCount = 1;
+                // The graph tracks one layout per texture, so the barrier must move every
+                // layer: a 4-cascade shadow array transitioned at layer 0 only leaves
+                // cascades 1-3 in the attachment layout while lighting samples them.
+                imageBarrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
                 vkCmdPipelineBarrier(cmd, barrier.srcStage, barrier.dstStage, 0,
                                       0, nullptr, 0, nullptr, 1, &imageBarrier);

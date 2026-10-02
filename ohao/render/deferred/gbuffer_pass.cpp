@@ -149,7 +149,8 @@ void GBufferPass::cleanup() {
 }
 
 void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
-    if (!m_scene) return;
+    // Always run the render pass, scene or not: its clears are what every later pass
+    // samples. With no scene the G-buffer is simply empty (depth 1 = all sky).
 
     // Begin render pass
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
@@ -203,7 +204,7 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                                     ? m_wireframePipeline : m_pipeline;
 
     // Iterate through scene actors and render meshes
-    if (m_meshBufferMap) {
+    if (m_scene && m_meshBufferMap) {
         const auto& actors = m_scene->getAllActors();
         for (const auto& [actorId, actor] : actors) {
             if (!actor) continue;

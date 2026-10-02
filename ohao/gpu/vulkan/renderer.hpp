@@ -399,6 +399,7 @@ private:
     void createRTNormalUVBuffers();       // extract normals + UVs from vertex data
     void uploadRTMaterialBuffers();       // per-triangle material IDs + per-material colors
     void uploadRTTextureArray();          // build bindless texture array for path tracer
+    void destroyRTSceneResources();       // frees everything the RT upload functions create
     void uploadDeferredTextures();        // bridge model textures to deferred BindlessTextureManager
     void uploadLightBuffer();             // collect scene LightComponents → GPU SSBO + env map
     void buildBLASTLAS();                 // build BLAS per actor, TLAS with instance transforms
@@ -424,7 +425,10 @@ private:
     VkDeviceMemory m_envConditionalCDFMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
+    VkImage m_envMapImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
+    void destroyEnvMapImage();
     uint32_t m_envMapTexIdx{0xFFFFFFFFu};           // bindless index in light header
     uint32_t m_envMapWidth{0};
     uint32_t m_envMapHeight{0};
@@ -434,6 +438,7 @@ private:
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};
     VkSampler m_rtTextureSampler{VK_NULL_HANDLE};
+    std::vector<VkImageView> m_rtBindlessViews;   // one 2D view per layer of m_rtTextureArray
     uint32_t m_rtTextureCount{0};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 

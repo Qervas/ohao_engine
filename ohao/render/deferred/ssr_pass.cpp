@@ -99,12 +99,12 @@ bool SSRPass::createDescriptors() {
         return false;
 
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 1;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
     pi.poolSizeCount = 2;
     pi.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(m_device, &pi, nullptr, &m_descriptorPool) != VK_SUCCESS)
@@ -113,9 +113,11 @@ bool SSRPass::createDescriptors() {
     VkDescriptorSetAllocateInfo dai{};
     dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     dai.descriptorPool = m_descriptorPool;
-    dai.descriptorSetCount = 1;
-    dai.pSetLayouts = &m_descriptorLayout;
-    return vkAllocateDescriptorSets(m_device, &dai, &m_descriptorSet) == VK_SUCCESS;
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_descriptorLayout);
+    dai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    dai.pSetLayouts = layouts.data();
+    return vkAllocateDescriptorSets(m_device, &dai, m_descriptorSets.data()) == VK_SUCCESS;
 }
 
 bool SSRPass::createComputePipeline() {
@@ -163,8 +165,9 @@ void SSRPass::setCameraData(const glm::mat4& viewProj, const glm::vec3& cameraPo
     m_params.screenSize = glm::vec2(m_width, m_height);
 }
 
-void SSRPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
-    if (!m_pipeline || !m_gbuffer || !m_litSceneView) return;
+void SSRPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (!m_pipeline || !m_gbuffer || !m_litSceneView || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+    const VkDescriptorSet set = m_descriptorSets[frameIndex];
 
     // Update descriptors
     VkDescriptorImageInfo imgInfos[4] = {};
@@ -178,14 +181,14 @@ void SSRPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     VkWriteDescriptorSet writes[5] = {};
     for (int i = 0; i < 4; i++) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_descriptorSet;
+        writes[i].dstSet = set;
         writes[i].dstBinding = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &imgInfos[i];
     }
     writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = m_descriptorSet;
+    writes[4].dstSet = set;
     writes[4].dstBinding = 4;
     writes[4].descriptorCount = 1;
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -206,7 +209,7 @@ void SSRPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     // Dispatch
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
-                            0, 1, &m_descriptorSet, 0, nullptr);
+                            0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(SSRPushConstants), &m_params);
     vkCmdDispatch(cmd, (m_width + 15) / 16, (m_height + 15) / 16, 1);

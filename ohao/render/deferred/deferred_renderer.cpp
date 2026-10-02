@@ -395,6 +395,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 si.cameraPos = m_cameraPos;
                 si.width = m_width;
                 si.height = m_height;
+                si.frameSlot = frameIndex;
                 si.lightDirection = m_lightDirection;
                 si.lightType = 1;  // point light
                 // Use first scene light position if available, else default
@@ -404,8 +405,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 m_rtShadow->setLightRadius(0.5f);   // soft shadow — 0.5 unit light radius
                 m_rtShadow->setSampleCount(8);       // 8 rays per pixel for penumbra
                 m_rtShadow->render(c, si);
-
-                // Note: descriptor update happens before render graph execute (see below)
+                // Lighting records after this pass and writes its descriptors then.
+                if (m_rtShadow->rendered() && m_lightingPass)
+                    m_lightingPass->setRTShadowMask(m_rtShadow->getOutput().shadowMaskView, VK_NULL_HANDLE);
             });
     }
 
@@ -431,6 +433,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.width = m_width;
                 gi.height = m_height;
                 gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
+                gi.frameSlot = frameIndex;
                 gi.accel = m_rtAccel;
 
                 // GI material albedos updated in render_dispatch (matches TLAS instance order)
@@ -450,9 +453,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 }
                 m_rtGI->setSampleCount(32); // quality over speed
                 m_rtGI->render(c, gi);
-
-                // Feed GI output to lighting pass via SSGI binding (11)
-                // Note: descriptor update happens before render graph execute
+                // Feed GI output to lighting pass via SSGI binding (11), only if traced
+                if (m_rtGI->rendered() && m_lightingPass)
+                    m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
             });
     }
 
@@ -482,22 +485,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_passTimingNames[m_passTimingCount] = "RenderGraph";
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2);
     }
-    // Pre-bind RT GI output to lighting pass (SSGI binding 11)
-    if (m_useRTGI && m_rtGI && m_lightingPass) {
-        auto giOut = m_rtGI->getOutput();
-        if (giOut.indirectLightView != VK_NULL_HANDLE) {
-            m_lightingPass->setSSGITexture(giOut.indirectLightView, VK_NULL_HANDLE);
-            m_lightingPass->updateDescriptorSets();
-        }
-    }
-
-    // Pre-bind RT shadow mask to lighting pass descriptors (must happen before execute)
-    if (m_useRTShadows && m_rtShadow && m_lightingPass) {
-        auto output = m_rtShadow->getOutput();
-        if (output.shadowMaskView != VK_NULL_HANDLE) {
-            m_lightingPass->setRTShadowMask(output.shadowMaskView, VK_NULL_HANDLE);
-            m_lightingPass->updateDescriptorSets();
-        }
+    // RT shadow mask and GI reach lighting only from a frame that traced them: the
+    // RTShadow / RTGI passes above hand them over after a successful render(). Until
+    // then lighting falls back to CSM shadows and no indirect light.
+    if (m_lightingPass) {
+        m_lightingPass->setRTShadowMask(VK_NULL_HANDLE, VK_NULL_HANDLE);
+        m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
     m_renderGraph.compile();
@@ -717,7 +710,6 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
 void DeferredRenderer::setEnvMap(VkImageView view, VkSampler sampler) {
     if (m_lightingPass) {
         m_lightingPass->setEnvMap(view, sampler);
-        m_lightingPass->updateDescriptorSets();
     }
 }
 
@@ -983,7 +975,9 @@ bool DeferredRenderer::createParticleRenderPass() {
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // Depth attachment: from GBuffer (read-only for depth testing)
+    // Depth attachment: the G-buffer's, tested but never written (particles have
+    // depthWriteEnable off). It stays DEPTH_STENCIL_READ_ONLY, the layout every
+    // post-G-buffer reader (SSAO, sky, SSR, TAA) samples it in.
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = VK_FORMAT_D32_SFLOAT;
     depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -991,11 +985,11 @@ bool DeferredRenderer::createParticleRenderPass() {
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;

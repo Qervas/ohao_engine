@@ -81,7 +81,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_bloomEnabled && m_bloomPass) {
         m_bloomPass->setInputImage(currentInput);
         m_bloomPass->execute(cmd, frameIndex);
-        bloomStrength = 1.0f;
+        if (m_bloomPass->didExecute()) bloomStrength = 1.0f;
     }
 
     // ── 2. TAA (temporal anti-aliasing) ───────────────────────────────
@@ -94,29 +94,14 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // ── 3. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
-        m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
+        m_tonemapFramebuffer != VK_NULL_HANDLE && frameIndex < MAX_FRAMES_IN_FLIGHT &&
+        m_tonemapDescSets[frameIndex] != VK_NULL_HANDLE) {
 
-        updateTonemapInput(currentInput);
+        // Bloom output only when bloom ran this frame; otherwise the image was never
+        // written. Strength is 0 then, so any read-only image fills the binding.
+        VkImageView bloomView = (bloomStrength > 0.0f) ? m_bloomPass->getBloomOutput() : VK_NULL_HANDLE;
+        writeTonemapSet(frameIndex, currentInput, bloomView != VK_NULL_HANDLE ? bloomView : m_hdrInputView);
 
-        if (bloomStrength > 0.0f && m_bloomPass) {
-            VkImageView bloomView = m_bloomPass->getBloomOutput();
-            if (bloomView != VK_NULL_HANDLE) {
-                VkDescriptorImageInfo bloomInfo{};
-                bloomInfo.sampler = m_sampler;
-                bloomInfo.imageView = bloomView;
-                bloomInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-                VkWriteDescriptorSet write{};
-                write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write.dstSet = m_tonemapDescSet;
-                write.dstBinding = 1;
-                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.descriptorCount = 1;
-                write.pImageInfo = &bloomInfo;
-
-                vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-            }
-        }
 
         VkClearValue clearValue{};
         clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -145,7 +130,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                m_tonemapLayout, 0, 1, &m_tonemapDescSet, 0, nullptr);
+                                m_tonemapLayout, 0, 1, &m_tonemapDescSets[frameIndex], 0, nullptr);
 
         TonemapParams params{};
         params.exposure       = m_exposure;
@@ -269,17 +254,16 @@ VkSampler PostProcessingPipeline::getSSAOSampler() const {
 
 void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
     m_hdrInputView = hdrInput;
-    updateTonemapDescriptors();
 }
 
 void PostProcessingPipeline::setHDRInputWithImage(VkImageView hdrInput, VkImage /*hdrImage*/) {
     m_hdrInputView  = hdrInput;
-    updateTonemapDescriptors();
 }
 
-void PostProcessingPipeline::updateTonemapDescriptors() {
-    if (m_tonemapDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
-    if (m_hdrInputView == VK_NULL_HANDLE) return;
+void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, VkImageView bloom) {
+    const VkDescriptorSet set = m_tonemapDescSets[slot];
+    if (set == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
+    if (input == VK_NULL_HANDLE || bloom == VK_NULL_HANDLE) return;
 
     // Write all 3 bindings: HDR input, bloom, SSR
     std::array<VkDescriptorImageInfo, 3> imageInfos{};
@@ -287,24 +271,23 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
 
     // Binding 0: HDR input
     imageInfos[0].sampler = m_sampler;
-    imageInfos[0].imageView = m_hdrInputView;
+    imageInfos[0].imageView = input;
     imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_tonemapDescSet;
+    writes[0].dstSet = set;
     writes[0].dstBinding = 0;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[0].descriptorCount = 1;
     writes[0].pImageInfo = &imageInfos[0];
 
-    // Binding 1: Bloom texture — use HDR input as fallback
-    VkImageView bloomView = m_bloomPass ? m_bloomPass->getBloomOutput() : VK_NULL_HANDLE;
+    // Binding 1: Bloom texture
     imageInfos[1].sampler = m_sampler;
-    imageInfos[1].imageView = bloomView != VK_NULL_HANDLE ? bloomView : m_hdrInputView;
+    imageInfos[1].imageView = bloom;
     imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_tonemapDescSet;
+    writes[1].dstSet = set;
     writes[1].dstBinding = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[1].descriptorCount = 1;
@@ -316,7 +299,7 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
     imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_tonemapDescSet;
+    writes[2].dstSet = set;
     writes[2].dstBinding = 2;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[2].descriptorCount = 1;
@@ -467,13 +450,13 @@ bool PostProcessingPipeline::createTonemappingPass() {
     // Descriptor pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 3;  // HDR + bloom + SSR
+    poolSize.descriptorCount = 3 * MAX_FRAMES_IN_FLIGHT;  // HDR + bloom + SSR, per frame slot
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_tonemapDescPool) != VK_SUCCESS) {
         return false;
@@ -482,10 +465,12 @@ bool PostProcessingPipeline::createTonemappingPass() {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_tonemapDescPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_tonemapDescLayout;
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> setLayouts;
+    setLayouts.fill(m_tonemapDescLayout);
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = setLayouts.data();
 
-    if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_tonemapDescSet) != VK_SUCCESS) {
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_tonemapDescSets.data()) != VK_SUCCESS) {
         return false;
     }
 
@@ -587,25 +572,5 @@ bool PostProcessingPipeline::createTonemappingPass() {
 // ===================================================================
 // Dynamic tonemapping input rebind
 // ===================================================================
-
-void PostProcessingPipeline::updateTonemapInput(VkImageView input) {
-    if (m_tonemapDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
-    if (input == VK_NULL_HANDLE) return;
-
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = m_sampler;
-    imageInfo.imageView = input;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = m_tonemapDescSet;
-    write.dstBinding = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.descriptorCount = 1;
-    write.pImageInfo = &imageInfo;
-
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-}
 
 } // namespace ohao

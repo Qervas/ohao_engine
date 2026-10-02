@@ -1,6 +1,9 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/frame/frame_resources.hpp"
+
+#include <array>
 
 namespace ohao {
 
@@ -30,7 +33,7 @@ private:
     [[nodiscard]] bool createImages();
     [[nodiscard]] bool createComputePipeline();
     [[nodiscard]] bool createDescriptors();
-    void executePass(VkCommandBuffer cmd, VkImageView input, VkImage inputImg,
+    void executePass(VkCommandBuffer cmd, VkDescriptorSet ds, VkImageView input, VkImage inputImg,
                      VkImageView output, VkImage outputImg, glm::vec2 direction);
 
     GBufferPass* m_gbuffer{nullptr};
@@ -50,8 +53,9 @@ private:
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_descSetH{VK_NULL_HANDLE};  // horizontal pass
-    VkDescriptorSet m_descSetV{VK_NULL_HANDLE};  // vertical pass
+    // [frame slot][0 = horizontal, 1 = vertical]. Rewritten at record time, so each
+    // frame in flight needs its own pair.
+    std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_descSets{};
     VkSampler m_sampler{VK_NULL_HANDLE};
 
     uint32_t m_width{0}, m_height{0};

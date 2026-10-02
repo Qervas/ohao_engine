@@ -174,14 +174,14 @@ bool RTShadowTechnique::createDescriptorResources() {
 
     // Pool
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * MAX_FRAMES_IN_FLIGHT},
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
     poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
 
@@ -192,10 +192,12 @@ bool RTShadowTechnique::createDescriptorResources() {
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     setInfo.descriptorPool = m_descriptorPool;
-    setInfo.descriptorSetCount = 1;
-    setInfo.pSetLayouts = &m_descriptorSetLayout;
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_descriptorSetLayout);
+    setInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    setInfo.pSetLayouts = layouts.data();
 
-    return vkAllocateDescriptorSets(m_device, &setInfo, &m_descriptorSet) == VK_SUCCESS;
+    return vkAllocateDescriptorSets(m_device, &setInfo, m_descriptorSets.data()) == VK_SUCCESS;
 }
 
 bool RTShadowTechnique::createRTPipeline() {
@@ -415,7 +417,10 @@ bool RTShadowTechnique::createShaderBindingTable() {
 }
 
 void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
+    m_rendered = false;
     if (!m_rtPipeline || !input.accel || !input.accel->getTLAS()) return;
+    if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
 
     // Update descriptor set with current frame's data
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
@@ -454,28 +459,28 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     VkWriteDescriptorSet writes[4] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSet;
+    writes[0].dstSet = set;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     writes[0].pNext = &asWrite;
 
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSet;
+    writes[1].dstSet = set;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &shadowMaskInfo;
 
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSet;
+    writes[2].dstSet = set;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[2].pImageInfo = &posInfo;
 
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descriptorSet;
+    writes[3].dstSet = set;
     writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -499,7 +504,7 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     // Bind RT pipeline and descriptors
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+                            m_pipelineLayout, 0, 1, &set, 0, nullptr);
 
     // Push constants
     ShadowPushConstants pc{};
@@ -515,6 +520,7 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     // Trace rays!
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       input.width, input.height, 1);
+    m_rendered = true;
 
     // Transition shadow mask to SHADER_READ_ONLY for the lighting pass to sample
     VkImageMemoryBarrier toRead{};
@@ -564,7 +570,7 @@ void RTShadowTechnique::destroy() {
     if (m_shadowMask) { vkDestroyImage(m_device, m_shadowMask, nullptr); m_shadowMask = VK_NULL_HANDLE; }
     if (m_shadowMaskMemory) { vkFreeMemory(m_device, m_shadowMaskMemory, nullptr); m_shadowMaskMemory = VK_NULL_HANDLE; }
 
-    m_descriptorSet = VK_NULL_HANDLE;
+    m_descriptorSets = {};
 }
 
 } // namespace ohao

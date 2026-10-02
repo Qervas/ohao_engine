@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/frame/frame_resources.hpp"
 #include <array>
 #include <vector>
 
@@ -30,6 +31,8 @@ public:
 
     // Get output (for compositing)
     [[nodiscard]] VkImageView getBloomOutput() const { return m_mipViews[0]; }
+    // False when execute() skipped (e.g. no input yet): the output holds nothing.
+    [[nodiscard]] bool didExecute() const { return m_executed; }
 
 private:
     [[nodiscard]] bool createMipChain();
@@ -38,7 +41,8 @@ private:
     [[nodiscard]] bool createDescriptors();
     void destroyMipChain();
 
-    void executeThreshold(VkCommandBuffer cmd);
+    void executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet);
+    [[nodiscard]] bool createFramebuffers();   // one per mip; rebuilt with the mip chain
     void executeDownsample(VkCommandBuffer cmd);
     void executeUpsample(VkCommandBuffer cmd);
 
@@ -69,7 +73,12 @@ private:
     // Descriptors
     VkDescriptorSetLayout m_inputLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
+    // [i + 1] samples mip i; [0] is unused. The HDR input set is rewritten at record
+    // time, so it gets one set per frame in flight instead.
     std::vector<VkDescriptorSet> m_descriptorSets;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_inputSets{};
+
+    bool m_executed{false};   // execute() rendered the bloom chain this frame
 
     // Sampler
     VkSampler m_sampler{VK_NULL_HANDLE};

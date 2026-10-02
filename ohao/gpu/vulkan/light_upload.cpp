@@ -309,6 +309,11 @@ void VulkanRenderer::uploadLightBuffer() {
                 int ew, eh, ec;
                 float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
                 if (hdrPixels) {
+                    // Replacing an earlier env map: frames in flight may still sample it.
+                    if (m_envMapImage != VK_NULL_HANDLE) {
+                        vkQueueWaitIdle(m_graphicsQueue);
+                        destroyEnvMapImage();
+                    }
                     // Add HDR as a bindless texture
                     // Create VkImage (RGBA16F for HDR)
                     VkImageCreateInfo imgInfo{};
@@ -346,6 +351,8 @@ void VulkanRenderer::uploadLightBuffer() {
                         stbi_image_free(hdrPixels);
                     } else {
                     vkBindImageMemory(m_device, envImage, envMem, 0);
+                    m_envMapImage = envImage;    // owned; freed by destroyEnvMapImage()
+                    m_envMapMemory = envMem;
 
                     // Upload via staging buffer
                     VkDeviceSize pixelSize = ew * eh * 4 * sizeof(float);

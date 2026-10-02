@@ -51,10 +51,6 @@ void SkyPass::cleanup() {
         vkDestroySampler(m_device, m_sampler, nullptr);
         m_sampler = VK_NULL_HANDLE;
     }
-    if (m_linearSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(m_device, m_linearSampler, nullptr);
-        m_linearSampler = VK_NULL_HANDLE;
-    }
 }
 
 void SkyPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
@@ -132,11 +128,6 @@ void SkyPass::setDepthBuffer(VkImageView depth) {
     m_descriptorsDirty = true;
 }
 
-void SkyPass::setCloudBuffer(VkImageView view) {
-    m_cloudView = view;
-    m_descriptorsDirty = true;
-}
-
 void SkyPass::setHDROutput(VkImageView view, VkImage image) {
     m_hdrView  = view;
     m_hdrImage = image;
@@ -160,18 +151,7 @@ bool SkyPass::createSampler() {
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.compareEnable = VK_FALSE;
     si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    if (vkCreateSampler(m_device, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
-
-    // Linear sampler: for cloud buffer (bilinear upscale from half-res)
-    VkSamplerCreateInfo ls{};
-    ls.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    ls.magFilter    = VK_FILTER_LINEAR;
-    ls.minFilter    = VK_FILTER_LINEAR;
-    ls.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ls.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ls.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ls.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    return vkCreateSampler(m_device, &ls, nullptr, &m_linearSampler) == VK_SUCCESS;
+    return vkCreateSampler(m_device, &si, nullptr, &m_sampler) == VK_SUCCESS;
 }
 
 bool SkyPass::createRenderPass() {
@@ -252,16 +232,11 @@ void SkyPass::destroyFramebuffer() {
 
 bool SkyPass::createDescriptors() {
     // Binding 0: depth buffer (NEAREST, DEPTH_STENCIL_READ_ONLY)
-    // Binding 1: cloud buffer (LINEAR, GENERAL — half-res RGBA16F)
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 1> bindings{};
     bindings[0].binding         = 0;
     bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].binding         = 1;
-    bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -274,7 +249,7 @@ bool SkyPass::createDescriptors() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 2;
+    poolSize.descriptorCount = 1;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -314,22 +289,6 @@ void SkyPass::updateDescriptors() {
         w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.descriptorCount = 1;
         w.pImageInfo      = &depthInfo;
-        writes.push_back(w);
-    }
-
-    // Binding 1: cloud buffer (GENERAL layout, linear sampler)
-    VkDescriptorImageInfo cloudInfo{};
-    cloudInfo.sampler     = m_linearSampler;
-    cloudInfo.imageView   = m_cloudView;
-    cloudInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    if (m_cloudView != VK_NULL_HANDLE && m_linearSampler != VK_NULL_HANDLE) {
-        VkWriteDescriptorSet w{};
-        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet          = m_descriptorSet;
-        w.dstBinding      = 1;
-        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w.descriptorCount = 1;
-        w.pImageInfo      = &cloudInfo;
         writes.push_back(w);
     }
 

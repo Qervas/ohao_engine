@@ -35,9 +35,6 @@ public:
     // Input: GBuffer depth buffer (to identify sky pixels)
     void setDepthBuffer(VkImageView depth);
 
-    // Input: half-res cloud buffer (RGBA16F, VK_IMAGE_LAYOUT_GENERAL)
-    // Must be called after CloudPass is initialized and after each resize.
-    void setCloudBuffer(VkImageView view);
 
     // Output: HDR lighting buffer (LOAD_OP_LOAD — sky fills empty pixels)
     // Must be called after lighting pass is initialized and after each resize.
@@ -68,8 +65,6 @@ private:
 
     // External resources (not owned)
     VkImageView m_depthView{VK_NULL_HANDLE};
-    VkImageView m_cloudView{VK_NULL_HANDLE};
-    VkSampler   m_linearSampler{VK_NULL_HANDLE};  // linear sampler for cloud buffer
     VkImageView m_hdrView{VK_NULL_HANDLE};
     VkImage     m_hdrImage{VK_NULL_HANDLE};
 

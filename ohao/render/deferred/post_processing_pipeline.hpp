@@ -4,6 +4,8 @@
 #include "bloom_pass.hpp"
 #include "taa_pass.hpp"
 #include "ssao_pass.hpp"
+#include "render/frame/frame_resources.hpp"
+#include <array>
 #include <memory>
 
 namespace ohao {
@@ -96,8 +98,8 @@ private:
     [[nodiscard]] bool createTonemappingPass();
     [[nodiscard]] bool createFinalOutput();
     void destroyFinalOutput();
-    void updateTonemapDescriptors();
-    void updateTonemapInput(VkImageView input);
+    // Writes all three tonemap bindings into this frame slot's set.
+    void writeTonemapSet(uint32_t slot, VkImageView input, VkImageView bloom);
 
     // Sub-passes
     std::unique_ptr<BloomPass> m_bloomPass;
@@ -110,7 +112,9 @@ private:
     VkPipelineLayout m_tonemapLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_tonemapDescLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_tonemapDescPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_tonemapDescSet{VK_NULL_HANDLE};
+    // One set per frame in flight: the input alternates with TAA's ping-pong every
+    // frame, and a single set would be rewritten while the last frame still reads it.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_tonemapDescSets{};
     VkFramebuffer m_tonemapFramebuffer{VK_NULL_HANDLE};
     VkSampler m_sampler{VK_NULL_HANDLE};
 

@@ -11,6 +11,8 @@
 #include "render_technique.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_meta.hpp"
+#include "render/frame/frame_resources.hpp"
+#include <array>
 
 namespace ohao {
 
@@ -27,6 +29,9 @@ public:
     void resize(uint32_t width, uint32_t height) override;
     void render(VkCommandBuffer cmd, const ShadowInput& input) override;
     ShadowOutput getOutput() const override;
+    // True when the last render() traced rays. False means it bailed (no TLAS, no
+    // pipeline) and the output image was never written this frame: don't sample it.
+    [[nodiscard]] bool rendered() const { return m_rendered; }
     void destroy() override;
 
     // RT shadow config
@@ -63,7 +68,9 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
+    // One set per frame in flight: render() rewrites its slot's set at record time.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
+    bool m_rendered = false;
 
     // Shader Binding Table
     VkBuffer m_sbtBuffer = VK_NULL_HANDLE;

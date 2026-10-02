@@ -198,6 +198,7 @@ void VulkanRenderer::shutdown() {
             m_rtAccel->destroy();
             m_rtAccel.reset();
         }
+        destroyRTSceneResources();
 
         // Cleanup deferred renderer
         if (m_deferredRenderer) {
@@ -245,6 +246,8 @@ void VulkanRenderer::shutdown() {
         if (m_lightBufferMemory != VK_NULL_HANDLE) {
             vkFreeMemory(m_device, m_lightBufferMemory, nullptr);
         }
+
+        destroyEnvMapImage();
 
         // Cleanup env CDF buffers
         if (m_envMarginalCDFBuffer)    { vkDestroyBuffer(m_device, m_envMarginalCDFBuffer, nullptr); m_envMarginalCDFBuffer = VK_NULL_HANDLE; }
@@ -1894,6 +1897,12 @@ bool VulkanRenderer::readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& 
     vkDestroyBuffer(m_device, stagingBuf, nullptr);
     vkFreeMemory(m_device, stagingMem, nullptr);
     return true;
+}
+
+void VulkanRenderer::destroyEnvMapImage() {
+    if (m_envMapImageView) { vkDestroyImageView(m_device, m_envMapImageView, nullptr); m_envMapImageView = VK_NULL_HANDLE; }
+    if (m_envMapImage) { vkDestroyImage(m_device, m_envMapImage, nullptr); m_envMapImage = VK_NULL_HANDLE; }
+    if (m_envMapMemory) { vkFreeMemory(m_device, m_envMapMemory, nullptr); m_envMapMemory = VK_NULL_HANDLE; }
 }
 
 } // namespace ohao

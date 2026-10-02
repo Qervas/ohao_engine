@@ -34,6 +34,7 @@ struct ShadowInput {
     glm::vec3 cameraPos;
     uint32_t width;
     uint32_t height;
+    uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
 
     // Light data
     glm::vec3 lightDirection;      // for directional lights
@@ -78,6 +79,7 @@ struct GIInput {
     uint32_t width;
     uint32_t height;
     uint32_t frameIndex;           // for temporal accumulation
+    uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
 
     RTAccelerationStructure* accel = nullptr;
 

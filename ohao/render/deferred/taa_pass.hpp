@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/frame/frame_resources.hpp"
 #include <array>
 
 namespace ohao {
@@ -25,13 +26,12 @@ public:
     void setGBufferInputs(VkImageView depth, VkImageView velocity);
     [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
     [[nodiscard]] VkImageView velocityInput() const noexcept { return m_velocityView; }
-    void updateDescriptorSets();
 
     void setBlendFactor(float factor) { m_blendFactor = factor; }
     void setMotionScale(float scale) { m_motionScale = scale; }
     void setUseVarianceClipping(bool enable) { m_useVarianceClipping = enable; }
 
-    // Get output
+    // The image execute() just wrote (it becomes next frame's history).
     [[nodiscard]] VkImageView getOutputView() const { return m_historyViews[m_currentHistoryIndex]; }
 
     // Get jitter for current frame
@@ -43,8 +43,11 @@ private:
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createDescriptors();
     void destroyHistoryBuffers();
-
-    void swapHistoryBuffers();
+    // Zero both history images and leave them SHADER_READ_ONLY. Run on the first
+    // frame after (re)creation, when the image about to be sampled was never written.
+    void clearHistory(VkCommandBuffer cmd);
+    // Writes this frame slot's set: current frame, history[historyIdx], velocity, depth.
+    void writeDescriptorSet(uint32_t slot, uint32_t historyIdx);
 
     // Current frame input
     VkImageView m_currentFrameView{VK_NULL_HANDLE};
@@ -57,7 +60,8 @@ private:
     std::array<VkDeviceMemory, HISTORY_COUNT> m_historyMemory{};
     std::array<VkImageView, HISTORY_COUNT> m_historyViews{};
     std::array<VkFramebuffer, HISTORY_COUNT> m_framebuffers{};
-    uint32_t m_currentHistoryIndex{0};
+    uint32_t m_currentHistoryIndex{0};   // index of the image written most recently
+    bool m_historyValid{false};          // false until a frame has been resolved into history
 
     // Render pass and pipeline
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
@@ -67,7 +71,8 @@ private:
     // Descriptors
     VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, HISTORY_COUNT> m_descriptorSets{};
+    // One set per frame in flight, written at record time for that frame's slot.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
 
     // Sampler
     VkSampler m_sampler{VK_NULL_HANDLE};

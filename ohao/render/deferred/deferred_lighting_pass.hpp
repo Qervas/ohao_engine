@@ -2,6 +2,9 @@
 
 #include "render_pass_base.hpp"
 #include "gbuffer_pass.hpp"
+#include "render/frame/frame_resources.hpp"
+
+#include <array>
 
 namespace ohao {
 
@@ -30,13 +33,8 @@ public:
                         VkImageView brdfLUT, VkSampler iblSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
-    void setCloudShadow(VkImageView view, VkSampler sampler,
-                        const glm::vec2& center, const glm::vec2& extent);
     void setRTShadowMask(VkImageView view, VkSampler sampler);
     void setEnvMap(VkImageView view, VkSampler sampler);
-
-    // Update descriptors when resources change
-    void updateDescriptorSets();
 
     // Get output
     [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
@@ -84,7 +82,11 @@ private:
     // Descriptors
     VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_descriptorSet{VK_NULL_HANDLE};
+    void writeDescriptorSet(uint32_t slot);
+    // One set per frame in flight. execute() rewrites only its own slot's set, whose
+    // previous use the frame fence has already retired; a single shared set would be
+    // rewritten while the previous frame's commands still read it.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
     VkSampler m_gbufferSampler{VK_NULL_HANDLE};
 
     // External resources
@@ -101,8 +103,6 @@ private:
     VkImageView m_ssgiView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
-    VkImageView m_cloudShadowView{VK_NULL_HANDLE};
-    VkSampler m_cloudShadowSampler{VK_NULL_HANDLE};
     VkImageView m_rtShadowView{VK_NULL_HANDLE};
     VkSampler m_rtShadowSampler{VK_NULL_HANDLE};
     VkImageView m_envMapView{VK_NULL_HANDLE};
@@ -137,10 +137,8 @@ private:
         float paddingS{0.0f};
         float frostCover{0.0f};   // Default to no frost
         float paddingF{0.0f};
-        glm::vec2 cloudShadowCenter{0.0f};
-        glm::vec2 cloudShadowExtent{100.0f};
     };
-                          // Total: 200 bytes
+                          // Total: 184 bytes
 
     LightingParams m_params{};
 };

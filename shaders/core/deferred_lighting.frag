@@ -55,9 +55,6 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
-layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
-
 // RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
 layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
 
@@ -72,16 +69,14 @@ layout(push_constant) uniform PushConstants {
     float padding1;
     vec2 screenSize;
     uint lightCount;
-    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: CSM shadows, Bit 3: SSGI, Bit 4: cloud shadow, Bit 5: RT shadows
+    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: CSM shadows, Bit 3: SSGI, Bit 5: RT shadows
     float wetness;       // 0=dry, 1=fully wet — drives surface material modulation
     float paddingW;
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
     float paddingS;
     float frostCover;    // 0=bare, 1=fully frost/ice coated
-    float paddingF;      // -> 184
-    vec2 cloudShadowCenter; // world XZ center of cloud shadow map
-    vec2 cloudShadowExtent; // half-size in world units
-} pc;                   // Total: 200 bytes
+    float paddingF;
+} pc;                   // Total: 184 bytes
 
 // BRDF functions provided by #include "includes/brdf/brdf_ggx.glsl"
 // Using height-correlated Smith-GGX (Frostbite/Unity quality)
@@ -313,15 +308,6 @@ void main() {
     // Final color
     vec3 color = ambient + Lo + emissive;
 
-    // Cloud shadows — applied to final color (not per-light) with 0.3 floor
-    if ((pc.flags & 16u) != 0u) {
-        vec2 shadowUV = (fragPos.xz - pc.cloudShadowCenter) / (pc.cloudShadowExtent * 2.0) + 0.5;
-        if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0) {
-            float cloudShadow = texture(cloudShadowMap, shadowUV).r;
-            cloudShadow = max(cloudShadow, 0.3); // never pitch-black
-            color *= cloudShadow;
-        }
-    }
 
     outColor = vec4(color, 1.0);
 }

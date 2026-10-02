@@ -99,12 +99,12 @@ bool SSSPass::createDescriptors() {
         return false;
 
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8},  // 4 per pass × 2 passes
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * MAX_FRAMES_IN_FLIGHT},  // 4 per pass × 2 passes
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 2;
+    pi.maxSets = 2 * MAX_FRAMES_IN_FLIGHT;
     pi.poolSizeCount = 2;
     pi.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(m_device, &pi, nullptr, &m_descriptorPool) != VK_SUCCESS)
@@ -116,10 +116,8 @@ bool SSSPass::createDescriptors() {
     dai.descriptorPool = m_descriptorPool;
     dai.descriptorSetCount = 2;
     dai.pSetLayouts = layouts;
-    VkDescriptorSet sets[2];
-    if (vkAllocateDescriptorSets(m_device, &dai, sets) != VK_SUCCESS) return false;
-    m_descSetH = sets[0];
-    m_descSetV = sets[1];
+    for (auto& pair : m_descSets)
+        if (vkAllocateDescriptorSets(m_device, &dai, pair.data()) != VK_SUCCESS) return false;
     return true;
 }
 
@@ -152,12 +150,9 @@ bool SSSPass::createComputePipeline() {
     return r == VK_SUCCESS;
 }
 
-void SSSPass::executePass(VkCommandBuffer cmd, VkImageView input, VkImage inputImg,
+void SSSPass::executePass(VkCommandBuffer cmd, VkDescriptorSet ds, VkImageView input, VkImage inputImg,
                            VkImageView output, VkImage outputImg, glm::vec2 direction) {
-    if (!m_gbuffer) return;
-
-    // Choose descriptor set based on direction
-    VkDescriptorSet ds = (direction.x > 0.5f) ? m_descSetH : m_descSetV;
+    if (!m_gbuffer || ds == VK_NULL_HANDLE) return;
 
     // Update descriptors
     VkDescriptorImageInfo imgInfos[4] = {};
@@ -219,14 +214,15 @@ void SSSPass::executePass(VkCommandBuffer cmd, VkImageView input, VkImage inputI
                          0, 0, nullptr, 0, nullptr, 1, &toRead);
 }
 
-void SSSPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
-    if (!m_pipeline || !m_gbuffer || !m_litSceneView) return;
+void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (!m_pipeline || !m_gbuffer || !m_litSceneView || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+    const auto& sets = m_descSets[frameIndex];
 
     // Pass 1: Horizontal blur (lit scene → temp)
-    executePass(cmd, m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));
+    executePass(cmd, sets[0], m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));
 
     // Pass 2: Vertical blur (temp → output)
-    executePass(cmd, m_tempView, m_temp, m_outputView, m_output, glm::vec2(0, 1));
+    executePass(cmd, sets[1], m_tempView, m_temp, m_outputView, m_output, glm::vec2(0, 1));
 }
 
 void SSSPass::onResize(uint32_t w, uint32_t h) {

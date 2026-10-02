@@ -143,6 +143,7 @@ bool RTGITechnique::createOutputImage() {
         return false;
 
     // History buffer (same format, used as sampler for temporal blend)
+    m_historyValid = false;   // a new image holds nothing; render() clears it before first use
     imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giHistory) != VK_SUCCESS) return false;
     vkGetImageMemoryRequirements(m_device, m_giHistory, &memReqs);
@@ -277,15 +278,15 @@ bool RTGITechnique::createDescriptorResources() {
 
     // Pool
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5},  // 4 gbuffer + 1 history
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 * MAX_FRAMES_IN_FLIGHT},  // 4 gbuffer + 1 history
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
     poolInfo.poolSizeCount = 4;
     poolInfo.pPoolSizes = poolSizes;
 
@@ -296,10 +297,12 @@ bool RTGITechnique::createDescriptorResources() {
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     setInfo.descriptorPool = m_descriptorPool;
-    setInfo.descriptorSetCount = 1;
-    setInfo.pSetLayouts = &m_descriptorSetLayout;
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_descriptorSetLayout);
+    setInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    setInfo.pSetLayouts = layouts.data();
 
-    return vkAllocateDescriptorSets(m_device, &setInfo, &m_descriptorSet) == VK_SUCCESS;
+    return vkAllocateDescriptorSets(m_device, &setInfo, m_descriptorSets.data()) == VK_SUCCESS;
 }
 
 bool RTGITechnique::createRTPipeline() {
@@ -518,7 +521,10 @@ bool RTGITechnique::createShaderBindingTable() {
 }
 
 void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
+    m_rendered = false;
     if (!m_rtPipeline || !input.accel || !input.accel->getTLAS()) return;
+    if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
 
     // Update descriptor set with current frame's data
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
@@ -560,8 +566,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     albedoInfo.sampler = sampler;
 
     VkDescriptorImageInfo directLightInfo{};
-    directLightInfo.imageView = input.depthBuffer;
-    directLightInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    directLightInfo.imageView = input.depthBuffer;   // binding 5 is declared but unread by rt_gi.rgen
+    directLightInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     directLightInfo.sampler = sampler;
 
     VkDescriptorBufferInfo materialBufInfo{};
@@ -578,7 +584,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 0: Acceleration structure
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSet;
+    writes[0].dstSet = set;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -586,7 +592,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 1: GI output (storage image)
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSet;
+    writes[1].dstSet = set;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -594,7 +600,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 2: GBuffer position
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSet;
+    writes[2].dstSet = set;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -602,7 +608,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 3: GBuffer normal
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descriptorSet;
+    writes[3].dstSet = set;
     writes[3].dstBinding = 3;
     writes[3].descriptorCount = 1;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -610,7 +616,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 4: GBuffer albedo
     writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = m_descriptorSet;
+    writes[4].dstSet = set;
     writes[4].dstBinding = 4;
     writes[4].descriptorCount = 1;
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -618,7 +624,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 5: Direct lighting
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = m_descriptorSet;
+    writes[5].dstSet = set;
     writes[5].dstBinding = 5;
     writes[5].descriptorCount = 1;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -626,7 +632,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 6: Material buffer SSBO
     writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = m_descriptorSet;
+    writes[6].dstSet = set;
     writes[6].dstBinding = 6;
     writes[6].descriptorCount = 1;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -634,13 +640,34 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
 
     // 7: GI history (sampled image for temporal blend)
     writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = m_descriptorSet;
+    writes[7].dstSet = set;
     writes[7].dstBinding = 7;
     writes[7].descriptorCount = 1;
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[7].pImageInfo = &historyInfo;
 
     vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+
+    // A history image that was never written is undefined memory, and the raygen blends
+    // it into the result -- a NaN there would survive every later frame. Zero it first.
+    if (!m_historyValid) {
+        VkImageMemoryBarrier toClear{};
+        toClear.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toClear.srcAccessMask = 0;
+        toClear.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toClear.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toClear.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toClear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toClear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toClear.image = m_giHistory;
+        toClear.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toClear);
+        const VkClearColorValue zero{};
+        vkCmdClearColorImage(cmd, m_giHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1,
+                             &toClear.subresourceRange);
+        m_historyValid = true;   // from here on the history is always left TRANSFER_DST
+    }
 
     // Transition GI output to GENERAL, history to SHADER_READ_ONLY
     VkImageMemoryBarrier barriers[2] = {};
@@ -655,7 +682,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barriers[1].oldLayout = (m_frameIndex == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;   // cleared above, or last frame's copy
     barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barriers[1].image = m_giHistory;
     barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -668,7 +695,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     // Bind RT pipeline and descriptors
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+                            m_pipelineLayout, 0, 1, &set, 0, nullptr);
 
     // Push constants
     GIPushConstants pc{};
@@ -683,6 +710,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     // Trace rays!
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       input.width, input.height, 1);
+    m_rendered = true;
 
     // Copy output → history for next frame's temporal blend
     // Transition output: GENERAL → TRANSFER_SRC, history: SHADER_READ → TRANSFER_DST
@@ -736,10 +764,13 @@ void RTGITechnique::resize(uint32_t width, uint32_t height) {
     m_width = width;
     m_height = height;
 
-    // Recreate output image
+    // Recreate output and history images (createOutputImage makes both)
     if (m_giOutputView) { vkDestroyImageView(m_device, m_giOutputView, nullptr); m_giOutputView = VK_NULL_HANDLE; }
     if (m_giOutput) { vkDestroyImage(m_device, m_giOutput, nullptr); m_giOutput = VK_NULL_HANDLE; }
     if (m_giOutputMemory) { vkFreeMemory(m_device, m_giOutputMemory, nullptr); m_giOutputMemory = VK_NULL_HANDLE; }
+    if (m_giHistoryView) { vkDestroyImageView(m_device, m_giHistoryView, nullptr); m_giHistoryView = VK_NULL_HANDLE; }
+    if (m_giHistory) { vkDestroyImage(m_device, m_giHistory, nullptr); m_giHistory = VK_NULL_HANDLE; }
+    if (m_giHistoryMemory) { vkFreeMemory(m_device, m_giHistoryMemory, nullptr); m_giHistoryMemory = VK_NULL_HANDLE; }
 
     createOutputImage();
 }
@@ -769,7 +800,7 @@ void RTGITechnique::destroy() {
     if (m_materialBuffer) { vkDestroyBuffer(m_device, m_materialBuffer, nullptr); m_materialBuffer = VK_NULL_HANDLE; }
     if (m_materialMemory) { vkFreeMemory(m_device, m_materialMemory, nullptr); m_materialMemory = VK_NULL_HANDLE; }
 
-    m_descriptorSet = VK_NULL_HANDLE;
+    m_descriptorSets = {};
 }
 
 } // namespace ohao

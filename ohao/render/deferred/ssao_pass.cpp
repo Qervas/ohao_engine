@@ -140,6 +140,9 @@ void SSAOPass::onResize(uint32_t width, uint32_t height) {
     destroyOutputImage();
     createOutputImage();
     createDescriptors();
+    // The set is new and the AO output is new: write it now. The G-buffer inputs are
+    // already the resized ones (DeferredRenderer hands them over before this runs).
+    updateDescriptorSet();
 }
 
 void SSAOPass::setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj) {
@@ -176,7 +179,10 @@ void SSAOPass::updateDescriptorSet() {
     // Binding 0: Depth buffer
     imageInfos[0].sampler = m_sampler;
     imageInfos[0].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // G-buffer depth stays DEPTH_STENCIL_READ_ONLY from the G-buffer pass to frame end.
+    imageInfos[0].imageLayout = m_depthView != VK_NULL_HANDLE
+        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;

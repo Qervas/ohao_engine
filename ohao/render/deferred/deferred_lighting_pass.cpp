@@ -85,16 +85,14 @@ void DeferredLightingPass::cleanup() {
     destroyDummyResources();
 }
 
-void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
+void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (!m_gbufferPass) return;
     if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
-        m_descriptorSet == VK_NULL_HANDLE) return;
+        frameIndex >= MAX_FRAMES_IN_FLIGHT || m_descriptorSets[frameIndex] == VK_NULL_HANDLE) return;
 
-    // Update descriptors every frame — light buffer, SSAO, and SSGI views are set
-    // per-frame by the deferred renderer but the descriptor set is only written at
-    // init. Without this, bindings 5/10/11 always point to dummy zero resources.
-    // vkUpdateDescriptorSets is a cheap host-side call (~12 writes, microseconds).
-    updateDescriptorSets();
+    // Inputs (light buffer, SSAO, SSGI, RT shadow mask, env map) change between
+    // frames, so this frame's set is rewritten from them here, at record time.
+    writeDescriptorSet(frameIndex);
 
     // Transition dummy image on first use (needed for fallback descriptor bindings)
     if (!m_dummyImageTransitioned && m_dummyImage != VK_NULL_HANDLE) {
@@ -155,7 +153,7 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
 
     // Bind descriptor set (G-Buffer textures, lights, shadows, IBL)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+                            m_pipelineLayout, 0, 1, &m_descriptorSets[frameIndex], 0, nullptr);
 
     // Push constants
     m_params.screenSize = glm::vec2(m_width, m_height);
@@ -172,7 +170,6 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     else if (m_shadowMapView != VK_NULL_HANDLE)
         m_params.flags |= 4;   // CSM fallback (bit 2)
     if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
-    if (m_cloudShadowView != VK_NULL_HANDLE) m_params.flags |= 16; // Cloud shadows
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LightingParams), &m_params);
@@ -223,14 +220,6 @@ void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSample
     m_ssgiSampler = ssgiSampler;
 }
 
-void DeferredLightingPass::setCloudShadow(VkImageView view, VkSampler sampler,
-                                           const glm::vec2& center, const glm::vec2& extent) {
-    m_cloudShadowView = view;
-    m_cloudShadowSampler = sampler;
-    m_params.cloudShadowCenter = center;
-    m_params.cloudShadowExtent = extent;
-}
-
 void DeferredLightingPass::setEnvMap(VkImageView view, VkSampler sampler) {
     m_envMapView = view;
     m_envMapSampler = sampler;
@@ -266,19 +255,19 @@ void DeferredLightingPass::clearPerFrameInputs() {
 
 void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
     m_gbufferPass = gbufferPass;
-    updateDescriptorSets();
 }
 
-void DeferredLightingPass::updateDescriptorSets() {
-    if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
+void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
+    const VkDescriptorSet set = m_descriptorSets[slot];
+    if (!m_gbufferPass || set == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write ALL 14 bindings. Use dummy resources as fallback for unbound bindings.
+    // Always write ALL 15 bindings. Use dummy resources as fallback for unbound bindings.
     // Vulkan requires all declared bindings to be written before the descriptor set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 15> imageInfos{};
-    std::array<VkWriteDescriptorSet, 16> writes{};
+    std::array<VkDescriptorImageInfo, 14> imageInfos{};
+    std::array<VkWriteDescriptorSet, 15> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
 
@@ -302,7 +291,7 @@ void DeferredLightingPass::updateDescriptorSets() {
                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_descriptorSet;
+        writes[i].dstSet = set;
         writes[i].dstBinding = i;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].descriptorCount = 1;
@@ -315,7 +304,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     bufferInfo.range = VK_WHOLE_SIZE;
 
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = m_descriptorSet;
+    writes[5].dstSet = set;
     writes[5].dstBinding = 5;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[5].descriptorCount = 1;
@@ -327,7 +316,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = m_descriptorSet;
+    writes[6].dstSet = set;
     writes[6].dstBinding = 6;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[6].descriptorCount = 1;
@@ -341,7 +330,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = m_descriptorSet;
+    writes[7].dstSet = set;
     writes[7].dstBinding = 7;
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[7].descriptorCount = 1;
@@ -352,7 +341,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[8].dstSet = m_descriptorSet;
+    writes[8].dstSet = set;
     writes[8].dstBinding = 8;
     writes[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[8].descriptorCount = 1;
@@ -363,7 +352,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[8].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[9].dstSet = m_descriptorSet;
+    writes[9].dstSet = set;
     writes[9].dstBinding = 9;
     writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[9].descriptorCount = 1;
@@ -375,7 +364,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[9].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[10].dstSet = m_descriptorSet;
+    writes[10].dstSet = set;
     writes[10].dstBinding = 10;
     writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[10].descriptorCount = 1;
@@ -387,7 +376,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     imageInfos[10].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[11].dstSet = m_descriptorSet;
+    writes[11].dstSet = set;
     writes[11].dstBinding = 11;
     writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[11].descriptorCount = 1;
@@ -399,52 +388,40 @@ void DeferredLightingPass::updateDescriptorSets() {
     cascadeBufferInfo.range = VK_WHOLE_SIZE;
 
     writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[12].dstSet = m_descriptorSet;
+    writes[12].dstSet = set;
     writes[12].dstBinding = 12;
     writes[12].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[12].descriptorCount = 1;
     writes[12].pBufferInfo = &cascadeBufferInfo;
 
-    // Cloud shadow map (binding 13) — use fallback if not set
-    imageInfos[11].sampler = m_cloudShadowSampler != VK_NULL_HANDLE ? m_cloudShadowSampler : fallbackSampler;
-    imageInfos[11].imageView = m_cloudShadowView != VK_NULL_HANDLE ? m_cloudShadowView : fallbackView;
-    imageInfos[11].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    // RT shadow mask (binding 14)
+    imageInfos[11].sampler = m_rtShadowSampler != VK_NULL_HANDLE ? m_rtShadowSampler : fallbackSampler;
+    imageInfos[11].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : fallbackView;
+    imageInfos[11].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[13].dstSet = m_descriptorSet;
-    writes[13].dstBinding = 13;
+    writes[13].dstSet = set;
+    writes[13].dstBinding = 14;
     writes[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[13].descriptorCount = 1;
     writes[13].pImageInfo = &imageInfos[11];
 
-    // RT shadow mask (binding 14)
-    imageInfos[12].sampler = m_rtShadowSampler != VK_NULL_HANDLE ? m_rtShadowSampler : fallbackSampler;
-    imageInfos[12].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : fallbackView;
+    // Binding 15: HDR environment map
     imageInfos[12].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // Env map: use actual env map if available, else 1x1 dummy so shader skips IBL.
+    // CRITICAL: previously fell back to GBuffer position texture which was sampled
+    // as a fake env map, producing garbage specular on ALL surfaces!
+    imageInfos[12].imageView = m_envMapView ? m_envMapView : m_dummyView;
+    imageInfos[12].sampler = m_envMapSampler ? m_envMapSampler : m_gbufferSampler;
 
     writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[14].dstSet = m_descriptorSet;
-    writes[14].dstBinding = 14;
+    writes[14].dstSet = set;
+    writes[14].dstBinding = 15;
     writes[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[14].descriptorCount = 1;
     writes[14].pImageInfo = &imageInfos[12];
 
-    // Binding 15: HDR environment map
-    imageInfos[13].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    // Env map: use actual env map if available, else 1x1 dummy so shader skips IBL.
-    // CRITICAL: previously fell back to GBuffer position texture which was sampled
-    // as a fake env map, producing garbage specular on ALL surfaces!
-    imageInfos[13].imageView = m_envMapView ? m_envMapView : m_dummyView;
-    imageInfos[13].sampler = m_envMapSampler ? m_envMapSampler : m_gbufferSampler;
-
-    writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[15].dstSet = m_descriptorSet;
-    writes[15].dstBinding = 15;
-    writes[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[15].descriptorCount = 1;
-    writes[15].pImageInfo = &imageInfos[13];
-
-    vkUpdateDescriptorSets(m_device, 16, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -562,9 +539,10 @@ bool DeferredLightingPass::createDescriptors() {
     // 10: SSAO texture
     // 11: SSGI texture
     // 12: CascadeData UBO
-    // 13: Cloud shadow map
+    // 14: RT shadow mask
+    // 15: HDR environment map
 
-    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -612,23 +590,17 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[12].descriptorCount = 1;
     bindings[12].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    // Cloud shadow map (13)
-    bindings[13].binding = 13;
+    // RT shadow mask (14)
+    bindings[13].binding = 14;
     bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[13].descriptorCount = 1;
     bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    // RT shadow mask (14)
-    bindings[14].binding = 14;
+    // HDR environment map (15)
+    bindings[14].binding = 15;
     bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[14].descriptorCount = 1;
     bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // HDR environment map (15)
-    bindings[15].binding = 15;
-    bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[15].descriptorCount = 1;
-    bindings[15].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -639,31 +611,33 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 12 image samplers + 2 UBOs (light buffer + cascade data)
+    // Descriptor pool — 13 image samplers + 2 UBOs (light buffer + cascade data)
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 14;  // +1 for env map
+    poolSizes[0].descriptorCount = 13 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 2;
+    poolSizes[1].descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         return false;
     }
 
-    // Allocate descriptor set
+    // One set per frame in flight, all with the same layout
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_descriptorLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_descriptorLayout;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = layouts.data();
 
-    return vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) == VK_SUCCESS;
+    return vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) == VK_SUCCESS;
 }
 
 bool DeferredLightingPass::createPipeline() {

@@ -24,6 +24,30 @@ namespace ohao {
 
 
 
+void VulkanRenderer::destroyRTSceneResources() {
+    auto buffer = [&](VkBuffer& b, VkDeviceMemory& m) {
+        if (b) { vkDestroyBuffer(m_device, b, nullptr); b = VK_NULL_HANDLE; }
+        if (m) { vkFreeMemory(m_device, m, nullptr); m = VK_NULL_HANDLE; }
+    };
+    buffer(m_rtVertexBuffer, m_rtVertexMemory);
+    buffer(m_rtIndexBuffer, m_rtIndexMemory);
+    buffer(m_rtNormalBuffer, m_rtNormalMemory);
+    buffer(m_rtUVBuffer, m_rtUVMemory);
+    buffer(m_rtMatIDBuffer, m_rtMatIDMemory);
+    buffer(m_rtMatColorBuffer, m_rtMatColorMemory);
+    buffer(m_rtLightBuffer, m_rtLightMemory);
+    m_rtMatCount = 0;
+    m_rtLightCount = 0;
+
+    for (VkImageView v : m_rtBindlessViews) vkDestroyImageView(m_device, v, nullptr);
+    m_rtBindlessViews.clear();
+    if (m_rtTextureSampler) { vkDestroySampler(m_device, m_rtTextureSampler, nullptr); m_rtTextureSampler = VK_NULL_HANDLE; }
+    if (m_rtTextureArrayView) { vkDestroyImageView(m_device, m_rtTextureArrayView, nullptr); m_rtTextureArrayView = VK_NULL_HANDLE; }
+    if (m_rtTextureArray) { vkDestroyImage(m_device, m_rtTextureArray, nullptr); m_rtTextureArray = VK_NULL_HANDLE; }
+    if (m_rtTextureArrayMemory) { vkFreeMemory(m_device, m_rtTextureArrayMemory, nullptr); m_rtTextureArrayMemory = VK_NULL_HANDLE; }
+    m_rtTextureCount = 0;
+}
+
 void VulkanRenderer::createRTVertexIndexBuffers() {
     // Destroy old RT buffers
     if (m_rtVertexBuffer) { vkDestroyBuffer(m_device, m_rtVertexBuffer, nullptr); m_rtVertexBuffer = VK_NULL_HANDLE; }
@@ -392,6 +416,8 @@ void VulkanRenderer::uploadRTTextureArray() {
     // Create texture array from all actors' model textures
     {
         // Cleanup previous texture array resources
+        for (VkImageView v : m_rtBindlessViews) vkDestroyImageView(m_device, v, nullptr);
+        m_rtBindlessViews.clear();
         if (m_rtTextureSampler) { vkDestroySampler(m_device, m_rtTextureSampler, nullptr); m_rtTextureSampler = VK_NULL_HANDLE; }
         if (m_rtTextureArrayView) { vkDestroyImageView(m_device, m_rtTextureArrayView, nullptr); m_rtTextureArrayView = VK_NULL_HANDLE; }
         if (m_rtTextureArray) { vkDestroyImage(m_device, m_rtTextureArray, nullptr); m_rtTextureArray = VK_NULL_HANDLE; }
@@ -767,7 +793,8 @@ void VulkanRenderer::uploadRTTextureArray() {
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
 
                 // Create per-layer VkImageViews for bindless access
-                std::vector<VkImageView> bindlessViews(numTextures);
+                std::vector<VkImageView>& bindlessViews = m_rtBindlessViews;   // owned; freed on re-upload and shutdown
+                bindlessViews.assign(numTextures, VK_NULL_HANDLE);
                 std::vector<VkSampler> bindlessSamplers(numTextures);
                 for (uint32_t layer = 0; layer < numTextures; layer++) {
                     VkImageViewCreateInfo viewInfo{};

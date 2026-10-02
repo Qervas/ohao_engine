@@ -13,10 +13,6 @@ layout(location = 0) out vec4 outColor;
 // GBuffer depth — used to identify sky pixels (depth == 1.0 means no geometry)
 layout(set = 0, binding = 0) uniform sampler2D depthBuffer;
 
-// Cloud buffer (half-res RGBA16F, GENERAL layout)
-// RGB = in-scattered cloud radiance, A = transmittance (1=transparent, 0=opaque)
-layout(set = 0, binding = 1) uniform sampler2D cloudBuffer;
-
 // Push constants (128 bytes)
 layout(push_constant) uniform PushConstants {
     mat4  invViewProj;    // offset   0: reconstruct world-space view dir
@@ -448,13 +444,6 @@ void main() {
         float sunCorona = smoothstep(0.985, 0.9994, cosGamma) * 0.3;
         vec3  sunColor  = vec3(1.0, 0.92, 0.75) * pc.sunIntensity;
         skyColor += (sunDisc * 40.0 + sunCorona * 2.0) * sunColor * sunFade;
-    }
-
-    // Composite clouds over sky.
-    // Skip when fully transparent (a >= 0.999) to avoid FP16 precision artifacts.
-    vec4 cloudSample = texture(cloudBuffer, inTexCoord);
-    if (cloudSample.a < 0.999) {
-        skyColor = skyColor * cloudSample.a + max(cloudSample.rgb, vec3(0.0));
     }
 
     outColor = vec4(skyColor, 1.0);

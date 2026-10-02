@@ -1475,6 +1475,45 @@ static void runOrphanedEntryPointTests() {
         }
         TEST_PASS();
     }
+
+    TEST_BEGIN("a deferred resize with SSAO, TAA and bloom on leaves the layer silent");
+    {
+        // ohao_game's post-processing configuration. After a resize each pass
+        // rebuilds its images and descriptor sets; any set left unwritten, or any
+        // image sampled before its first write, is a validation message. Every
+        // message counts here, not only handle lifetimes.
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer renderer(320, 180);
+        const bool ok = renderer.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok) {
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        if (!renderer.validationEnabled()) {
+            std::cout << "(validation layer not installed -- SKIPPED) ";
+            TEST_PASS();
+            return;
+        }
+        renderer.setRenderMode(ohao::RenderMode::Deferred);
+        auto* deferred = renderer.getDeferredRenderer();
+        EXPECT(deferred && deferred->getPostProcessing(), "deferred post-processing exists");
+        if (deferred && deferred->getPostProcessing()) {
+            auto* pp = deferred->getPostProcessing();
+            pp->setSSAOEnabled(true);
+            pp->setTAAEnabled(true);
+            pp->setBloomEnabled(true);
+        }
+        for (int i = 0; i < 4; ++i) renderer.render();
+        renderer.resize(256, 128);
+        for (int i = 0; i < 4; ++i) renderer.render();
+
+        const auto& msgs = renderer.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "the validation layer reports nothing across the resize");
+        TEST_PASS();
+    }
 }
 
 // =============================================================================
