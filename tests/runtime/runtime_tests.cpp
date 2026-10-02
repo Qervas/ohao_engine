@@ -6,6 +6,7 @@
 
 #include "runtime/clock.hpp"
 #include "runtime/input.hpp"
+#include "gpu/vulkan/swapchain.hpp"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(expr, msg)                                                                     \
@@ -190,6 +191,58 @@ static void unknown_names_are_inert() {
     CHECK(m.axis("nope") == 0.0f, "unbound axis is zero");
 }
 
+// ---------------------------------------------------------------- swapchain choice
+
+static void choose_format_prefers_srgb_bgra() {
+    VkSurfaceFormatKHR fs[] = {{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+                               {VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    CHECK(ohao::Swapchain::chooseFormat(fs).format == VK_FORMAT_B8G8R8A8_SRGB, "prefer BGRA8 sRGB");
+    VkSurfaceFormatKHR only[] = {{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    CHECK(ohao::Swapchain::chooseFormat(only).format == VK_FORMAT_R8G8B8A8_UNORM, "else first offered");
+}
+
+static void choose_present_mode() {
+    VkPresentModeKHR all[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+                              VK_PRESENT_MODE_IMMEDIATE_KHR};
+    CHECK(ohao::Swapchain::choosePresentMode(all, false) == VK_PRESENT_MODE_MAILBOX_KHR, "mailbox when free");
+    CHECK(ohao::Swapchain::choosePresentMode(all, true) == VK_PRESENT_MODE_FIFO_KHR, "vsync forces fifo");
+    VkPresentModeKHR fifo[] = {VK_PRESENT_MODE_FIFO_KHR};
+    CHECK(ohao::Swapchain::choosePresentMode(fifo, false) == VK_PRESENT_MODE_FIFO_KHR,
+          "fifo is the guaranteed fallback");
+}
+
+static void choose_image_count_unlimited_max() {
+    VkSurfaceCapabilitiesKHR c{};
+    c.minImageCount = 2;
+    c.maxImageCount = 0;   // 0 = no limit
+    CHECK(ohao::Swapchain::chooseImageCount(c) == 3, "min+1 when max is unlimited");
+    c.maxImageCount = 2;
+    CHECK(ohao::Swapchain::chooseImageCount(c) == 2, "clamped to max");
+}
+
+static void choose_extent_uses_desired_when_surface_defers() {
+    VkSurfaceCapabilitiesKHR c{};
+    c.currentExtent = {0xFFFFFFFFu, 0xFFFFFFFFu};
+    c.minImageExtent = {1, 1};
+    c.maxImageExtent = {4096, 4096};
+    auto e = ohao::Swapchain::chooseExtent(c, {1920, 1080});
+    CHECK(e.width == 1920 && e.height == 1080, "surface defers: use the window size");
+    auto big = ohao::Swapchain::chooseExtent(c, {9000, 9000});
+    CHECK(big.width == 4096 && big.height == 4096, "clamped to maxImageExtent");
+    c.currentExtent = {800, 600};
+    auto fixed = ohao::Swapchain::chooseExtent(c, {1920, 1080});
+    CHECK(fixed.width == 800 && fixed.height == 600, "surface dictates: obey it");
+}
+
+static void zero_extent_means_minimized() {
+    VkSurfaceCapabilitiesKHR c{};
+    c.currentExtent = {0, 0};
+    c.minImageExtent = {0, 0};
+    c.maxImageExtent = {0, 0};
+    auto e = ohao::Swapchain::chooseExtent(c, {1920, 1080});
+    CHECK(e.width == 0 && e.height == 0, "a minimized window reports 0x0 and must not be inflated");
+}
+
 int main() {
     std::printf("[clock]\n");
     RUN(clock_sixty_frames_of_one_sixtieth_is_sixty_steps);
@@ -207,6 +260,12 @@ int main() {
     RUN(axis_from_key_pair);
     RUN(mouse_delta_no_first_jump);
     RUN(unknown_names_are_inert);
+    std::printf("[swapchain choice]\n");
+    RUN(choose_format_prefers_srgb_bgra);
+    RUN(choose_present_mode);
+    RUN(choose_image_count_unlimited_max);
+    RUN(choose_extent_uses_desired_when_surface_defers);
+    RUN(zero_extent_means_minimized);
     std::printf("\nResults: %d/%d passed\n", g_pass, g_pass + g_fail);
     return g_fail == 0 ? 0 : 1;
 }
