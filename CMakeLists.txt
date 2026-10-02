@@ -154,4 +154,10 @@ if(BUILD_ENGINE_TESTS)
     add_subdirectory(tests/engine)
 endif()
 
+option(BUILD_RUNTIME_TESTS "Build runtime host tests (clock, input, swapchain choice)" ON)
+if(BUILD_RUNTIME_TESTS)
+    message(STATUS "Building runtime tests")
+    add_subdirectory(tests/runtime)
+endif()
+
 
