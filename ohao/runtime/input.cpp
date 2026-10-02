@@ -18,24 +18,37 @@ void InputMap::bindAxis(std::string_view axis, Binding positive, Binding negativ
 }
 
 void InputMap::beginFrame(std::span<const InputEvent> events) {
-    std::set<Binding> wentDown, wentUp;
-    bool focusLost = false;
     m_mouseDelta = glm::vec2(0.0f);
+    for (auto& [name, bindings] : m_actions) {
+        ActionState& s = m_state[name];
+        s.pressed = s.released = false;
+    }
+
+    // Re-evaluate every action after each event that changes what is down, in event
+    // order. pressed / released latch on any held transition during the frame, so a
+    // tap (down, up), a re-press (up, down) and a press after focus loss all count.
+    // A repeated Down on a key already down changes nothing and fires nothing.
+    auto settle = [&] {
+        for (const auto& [name, bindings] : m_actions) {
+            ActionState& s = m_state[name];
+            bool nowHeld = false;
+            for (const auto& b : bindings) nowHeld |= isDown(b);
+            if (nowHeld && !s.held) s.pressed = true;
+            if (!nowHeld && s.held) s.released = true;
+            s.held = nowHeld;
+        }
+    };
 
     for (const auto& e : events) {
         switch (e.type) {
-        case InputEvent::Type::Down: {
-            const Binding b{e.device, e.code};
-            wentDown.insert(b);
-            m_down.insert(b);
+        case InputEvent::Type::Down:
+            m_down.insert(Binding{e.device, e.code});
+            settle();
             break;
-        }
-        case InputEvent::Type::Up: {
-            const Binding b{e.device, e.code};
-            wentUp.insert(b);
-            m_down.erase(b);
+        case InputEvent::Type::Up:
+            m_down.erase(Binding{e.device, e.code});
+            settle();
             break;
-        }
         case InputEvent::Type::MouseMove: {
             const glm::dvec2 p{e.x, e.y};
             if (m_haveMouse) m_mouseDelta += glm::vec2(p - m_lastMouse);
@@ -44,31 +57,11 @@ void InputMap::beginFrame(std::span<const InputEvent> events) {
             break;
         }
         case InputEvent::Type::FocusLost:
-            focusLost = true;
+            m_down.clear();
+            m_haveMouse = false;   // the cursor may be anywhere on return; no jump
+            settle();
             break;
         }
-    }
-    if (focusLost) {
-        m_down.clear();
-        m_haveMouse = false;   // the cursor may be anywhere on return; no jump
-    }
-
-    for (const auto& [name, bindings] : m_actions) {
-        ActionState& s = m_state[name];
-        const bool wasHeld = s.held;
-        bool nowHeld = false, anyDown = false, anyUp = false;
-        for (const auto& b : bindings) {
-            nowHeld |= isDown(b);
-            anyDown |= wentDown.count(b) != 0;
-            anyUp   |= wentUp.count(b) != 0;
-        }
-        s.held     = nowHeld;
-        // Pressed: went down this frame and was not already held at frame start
-        // (OS key-repeat Downs must not re-fire it).
-        s.pressed  = anyDown && !wasHeld;
-        // Released: stopped being held, or a tap went down and up inside this
-        // frame without ever being observed as held.
-        s.released = (wasHeld && !nowHeld) || (anyDown && anyUp && !nowHeld);
     }
 }
 

@@ -71,6 +71,9 @@ public:
     // Post-processing configuration
     [[nodiscard]] PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
     [[nodiscard]] const GBufferPass* getGBufferPass() const { return m_gbufferPass.get(); }
+    [[nodiscard]] const SSSPass* getSSSPass() const { return m_sssPass.get(); }
+    [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
+    [[nodiscard]] const RTShadowTechnique* getRTShadow() const { return m_rtShadow.get(); }
 
     // Sum of the last frame's per-pass GPU timings in ms; 0 when timing is unavailable.
     [[nodiscard]] float gpuFrameMs() const noexcept {

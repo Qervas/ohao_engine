@@ -32,6 +32,7 @@ public:
     // True when the last render() traced rays. False means it bailed (no TLAS, no
     // pipeline) and the output image was never written this frame: don't sample it.
     [[nodiscard]] bool rendered() const { return m_rendered; }
+    [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // shadow mask size
     void destroy() override;
 
     // RT shadow config

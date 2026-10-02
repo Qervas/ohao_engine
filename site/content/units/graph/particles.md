@@ -214,7 +214,8 @@ exists, falling back to the lighting view only when it does not:
 
 And it always exists. `SSSPass` is constructed unconditionally and reset only if
 `initialize()` fails, and a successful `initialize()` has already allocated its
-own 1920×1080 output image, so `getOutputView()` is never null. The SSS blur runs
+own output image — 1920×1080 until the renderer's first `onResize` sizes it to the
+extent — so `getOutputView()` is never null. The SSS blur runs
 at stage 4.5 — two stages *before* the particle pass — reading the lighting image
 and writing its result into its own allocation. Everything downstream, bloom and
 tonemapping included, works from that earlier snapshot. So the billboards land in

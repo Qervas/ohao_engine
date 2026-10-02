@@ -662,7 +662,13 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
                                            m_gbufferPass->getNormalView(),
                                            m_gbufferPass->getVelocityView());
     }
+    // Every screen-sized target follows the extent. A pass left at its creation size
+    // is invisible to validation: the RT shadow raygen stores at gl_LaunchID into the
+    // wrong texels (or past the image when the window grows) and lighting samples by UV.
+    if (m_rtShadow) m_rtShadow->resize(width, height);
     if (m_rtGI) m_rtGI->resize(width, height);
+    if (m_sssPass) m_sssPass->onResize(width, height);
+    if (m_ssrPass) m_ssrPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);

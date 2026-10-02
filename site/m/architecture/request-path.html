@@ -47,7 +47,7 @@
 <p>Invert the first two calls — build the scene and `setScene()` it before `initialize()` — and nothing complains. The pointer is stored, the upload is skipped, and `initialize()` never retries it, so `m_vertexBuffer` stays null. `renderDeferred` hands geometry to the deferred passes only when that handle is live, and the GBuffer pass has nothing to bind without it:</p>
 <div class="citation-chip"><code class="citation-code">if (m_vertexBuffer != VK_NULL_HANDLE &amp;&amp; m_indexBuffer != VK_NULL_HANDLE) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L69" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:69</a></div>
 <p>The rest of the pass chain runs anyway, and the Preetham sky pass is on by default, so what lands is an empty sky-lit frame — not black, and not an error either.</p>
-<div class="citation-chip"><code class="citation-code">bool      m_skyEnabled{true};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L187" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:187</a></div>
+<div class="citation-chip"><code class="citation-code">bool      m_skyEnabled{true};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L190" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:190</a></div>
 <p>The RT modes survive the same mistake by accident, for a reason that deserves its own movement.</p>
 </div>
 <div class="section-rule"><h2 id="why-the-scene-is-uploaded-twice">Why the scene is uploaded twice</h2></div>

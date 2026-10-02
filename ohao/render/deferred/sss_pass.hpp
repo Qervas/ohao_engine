@@ -27,6 +27,7 @@ public:
     void setSSSWidth(float w) { m_sssWidth = w; }
 
     [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
+    [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // output image size
     [[nodiscard]] VkImage getOutputImage() const { return m_output; }
 
 private:

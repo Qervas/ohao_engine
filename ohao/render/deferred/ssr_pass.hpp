@@ -27,6 +27,7 @@ public:
     void setCameraData(const glm::mat4& viewProj, const glm::vec3& cameraPos);
 
     [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
+    [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // output image size
 
 private:
     [[nodiscard]] bool createOutputImage();

@@ -163,10 +163,9 @@ But sky and particles are recorded *after* SSS and draw into the lighting image,
 whatever they write never reaches the tonemapper. Since `deferred_lighting.frag` sets
 `outColor = vec4(0.0)` wherever the GBuffer position sample is exactly zero, and
 `sky.frag` fills whatever the GBuffer left at far depth (it discards below 0.9999), that
-is the whole sky. `onResize` compounds it: it reaches the GBuffer, lighting, post, gizmo,
-sky
-and RT-GI passes but never `SSSPass::onResize` or `SSRPass::onResize`, so those images
-stay at 1920 × 1080.
+is the whole sky. `onResize` keeps every screen-sized target at the output extent — the
+GBuffer, lighting, post, gizmo, sky, SSS, SSR and both RT techniques — so the ordering, not
+a stale size, is what loses those writes.
 
 ## Ordering constraints that are not obvious
 

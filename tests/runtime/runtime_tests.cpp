@@ -120,6 +120,29 @@ static void tap_within_one_frame() {
     CHECK(!m.held("fire"), "...but not as held");
 }
 
+static void repress_within_one_frame() {
+    // A held key let go and hit again before the next frame (mashing fire at low
+    // fps) is a new press, and the let-go is a release.
+    InputMap m;
+    m.bindAction("fire", {InputDevice::Key, KEY_W});
+    std::vector<InputEvent> a{down(KEY_W)};
+    m.beginFrame(a);
+    std::vector<InputEvent> b{up(KEY_W), down(KEY_W)};
+    m.beginFrame(b);
+    CHECK(m.pressed("fire"), "a re-press inside one frame must register as pressed");
+    CHECK(m.released("fire"), "...and the let-go as released");
+    CHECK(m.held("fire"), "...and the key is held at frame end");
+}
+
+static void press_after_focus_loss_in_one_frame() {
+    // Alt-tab away and back, then press, all before the next frame: the press is real.
+    InputMap m;
+    m.bindAction("jump", {InputDevice::Key, KEY_W});
+    std::vector<InputEvent> a{{InputEvent::Type::FocusLost}, down(KEY_W)};
+    m.beginFrame(a);
+    CHECK(m.held("jump") && m.pressed("jump"), "a Down after FocusLost in the same frame survives");
+}
+
 static void two_bindings_one_action() {
     InputMap m;
     m.bindAction("forward", {InputDevice::Key, KEY_W});
@@ -262,6 +285,8 @@ int main() {
     std::printf("[input]\n");
     RUN(press_hold_release_edges);
     RUN(tap_within_one_frame);
+    RUN(repress_within_one_frame);
+    RUN(press_after_focus_loss_in_one_frame);
     RUN(two_bindings_one_action);
     RUN(rebind_replaces);
     RUN(focus_loss_releases_everything);

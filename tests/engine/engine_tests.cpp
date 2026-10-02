@@ -1515,6 +1515,36 @@ static void runOrphanedEntryPointTests() {
         TEST_PASS();
     }
 
+    TEST_BEGIN("every screen-sized deferred target follows the renderer's extent, growing too");
+    {
+        // A pass that keeps its creation size is invisible to validation: the RT
+        // shadow raygen just stores into the wrong texels (or past the image when
+        // the window grows), and lighting samples them by UV. Check the extents.
+        ohao::VulkanRenderer renderer(320, 180);
+        if (!renderer.initialize()) {
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        renderer.setRenderMode(ohao::RenderMode::Deferred);
+        auto* d = renderer.getDeferredRenderer();
+        EXPECT(d != nullptr, "deferred renderer exists");
+        auto check = [&](uint32_t w, uint32_t h, const char* when) {
+            auto same = [&](VkExtent2D e) { return e.width == w && e.height == h; };
+            if (d->getSSSPass()) EXPECT(same(d->getSSSPass()->extent()), when);
+            if (d->getSSRPass()) EXPECT(same(d->getSSRPass()->extent()), when);
+            if (d->getRTShadow()) EXPECT(same(d->getRTShadow()->extent()), when);
+        };
+        if (d) {
+            renderer.render();
+            check(320, 180, "SSS/SSR/RT shadow targets match the extent after initialize");
+            renderer.resize(2560, 1440);   // larger than any built-in default
+            renderer.render();
+            check(2560, 1440, "SSS/SSR/RT shadow targets follow a resize upward");
+        }
+        TEST_PASS();
+    }
+
     TEST_BEGIN("the camera aspect matches the renderer's extent from initialize on");
     {
         // A window opened at its final size never resizes, so initialize() is the
