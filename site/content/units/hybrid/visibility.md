@@ -209,22 +209,37 @@ A constrained variable template is only checked when instantiated, and neither
 The `static_assert`s are the whole of the enforcement.
 :::
 
-## The write that must precede the graph
+## The handover the graph does not see
 
 The RT techniques record into the render graph as compute passes, but their
-outputs are handed to the deferred lighting pass by CPU-side descriptor writes
-that are *not* graph edges. That creates a real ordering constraint, flagged in
-the source:
+outputs reach the deferred lighting pass through a CPU-side member write, not a
+graph edge. Before the graph executes, the renderer clears both inputs, so
+lighting falls back to CSM shadows and no indirect light unless something hands
+them over:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "// Pre-bind RT shadow mask to lighting pass descriptors (must happen before execute)"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_lightingPass->setRTShadowMask(VK_NULL_HANDLE, VK_NULL_HANDLE);"}}
 
-`getOutput()` → `setRTShadowMask()` → `updateDescriptorSets()` run
-unconditionally, every frame, a few lines above `m_renderGraph.compile()` and
-`execute()`. Move the block below `execute()` and the lighting pass samples the
-previous frame's view. Being unconditional also makes it self-healing: any image
-the technique reallocates is re-bound on the next frame.
+Each RT pass's record callback then hands its view over — but only if its
+`render()` actually dispatched, which it does not without a TLAS:
 
-The resize path carries the opposite defect, and it is live.
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtShadow->rendered() && m_lightingPass)"}}
+
+The lighting pass reads those members at its own record time, when it rewrites
+this frame slot's descriptor set and picks its flag bits: RT shadow mask if one
+arrived, CSM otherwise. So a frame samples exactly what that frame traced, and
+any image a technique reallocates is re-bound on the next frame because the
+handover repeats every frame.
+
+What makes it work is ordering, not tracking. The graph records passes in the
+order they were added:
+
+{{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now (passes are added in correct order)"}}
+
+and `RTShadow` and `RTGI` are added before `DeferredLighting`. Register a technique
+after the lighting pass, or give the graph a scheduler that reorders passes, and
+lighting records before the handover and silently takes the fallback.
+
+The resize path has a gap of its own, and it is live.
 `DeferredRenderer::onResize` forwards the new extent to the GI technique:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI) m_rtGI->resize(width, height);"}}
@@ -243,7 +258,7 @@ the new `m_width`/`m_height`:
 Grow the window and the trace launches more threads than the image has texels;
 the out-of-range `imageStore`s are discarded, and the lighting pass samples an
 old-extent mask with normalized coordinates, stretched over the whole frame. The
-re-bind keeps the handle valid — it cannot fix the resolution.
+per-frame handover keeps the handle valid — it cannot fix the resolution.
 
 ## Contracts
 
@@ -252,6 +267,6 @@ re-bind keeps the handle valid — it cannot fix the resolution.
 - `MASK_STATIC_ONLY` is `0xFF` today, so `RAY_MASK_STATIC` culls nothing. Any future animated-geometry class must clear a bit in the *static* mask, not just define a new one.
 - `0x01` exists as the C++ `RAY_MASK_STATIC`, as the uncompiled `RT_RAY_MASK_STATIC` macro in `rt_masks.glsl`, and as a hard-coded literal in each of `rt_gi.rgen` and `rt_shadow.rgen` — four sites. Changing the header does not change the shaders.
 - The `rt_gi.rchit` alpha-channel cull only activates if `setMaterialAlbedos` is called *with* the flags vector. The one caller omits it, so the branch is currently unreachable.
-- Technique outputs must be re-bound into the lighting pass descriptors before `renderGraph.execute()`; the graph does not track this dependency. The re-bind is unconditional per frame, so it survives reallocation — but only reallocation that actually happens.
+- Technique outputs reach the lighting pass only through the per-frame handover in each RT pass's callback, and only when `rendered()` is true. The graph does not track this dependency; it holds because the RT passes are added before `DeferredLighting` and the graph records in insertion order.
 - `DeferredRenderer::onResize` must forward the new extent to every RT technique it owns. It forwards to `m_rtGI` and not to `m_rtShadow`, so the shadow mask stays at its `init()` extent while the dispatch grid follows the window.
 - `init()` failure is non-fatal by design — the renderer resets the `unique_ptr` and continues on the CSM path, so a null `m_rtShadow` is a valid steady state, not an error.

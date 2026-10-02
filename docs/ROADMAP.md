@@ -22,7 +22,7 @@ measurable.
 
 | # | Sub-project | Done when | Spec |
 |---|---|---|---|
-| 1 | **Runtime shell** — window, swapchain presentation, fixed-step loop, input actions, Forward path removed | deferred renders straight to a window at ≥ 60 fps, zero validation errors, no per-frame readback | [spec](specs/2026-10-02-runtime-shell-design.md) |
+| 1 | **Runtime shell** — window, swapchain presentation, fixed-step loop, input actions, Forward path removed | deferred renders straight to a window at ≥ 60 fps, zero validation errors, no per-frame readback | [spec](specs/2026-10-02-runtime-shell-design.md) · **done** |
 | 2 | **ECS world + GPU-driven scene** — EnTT registry replaces Scene/Actor/Component; persistent GPU instance/material buffers; GPU frustum + two-pass Hi-Z occlusion culling; indirect draws for the G-buffer; per-frame TLAS updates for moving instances | golden scenes rebuilt as ECS entities render identically; CPU draw-submission cost flat as instance count grows | — |
 | 3 | **Level pipeline** — glTF-from-Blender loader, `extras` → components, collision generation, spawn points | a Blender blockout level loads, renders and collides | — |
 | 4 | **Player** — Jolt at fixed step, physics ↔ transform sync, first-person controller, camera, footsteps | you can walk the level | — |

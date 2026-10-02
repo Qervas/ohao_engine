@@ -76,31 +76,36 @@ exactly that — after the write, immediately before lighting samples it. `UNDEF
 licenses the driver to discard the contents, the source scope carries no dependency, and
 both are legal, so validation stays silent.
 
-## The barrier that covers one cascade in four
+## One layout per texture, so every layer moves
 
 The CSM shadow map is a four-layer array, 2048 × 2048 per cascade, imported through
-`CSMPass::getShadowMapArrayView()`. `PhysicalTexture` has no layer count, and the
-barrier the graph emits hardcodes one layer starting at zero:
+`CSMPass::getShadowMapArrayView()`. `PhysicalTexture` tracks a single
+`currentLayout` per texture and has no notion of layers, so the only barrier
+consistent with that model is one that moves the whole image:
 
-{{cite ohao/render/graph/render_graph.cpp "imageBarrier.subresourceRange.layerCount = 1;"}}
+{{cite ohao/render/graph/render_graph.cpp "imageBarrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;"}}
 
-So the `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL` transition before
-deferred lighting — the barrier this integration was added to supply — applies to
-cascade 0 only, while the lighting shader samples the full array view. The fix belongs on
-`PhysicalTexture`, not here.
+The `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL` transition before
+deferred lighting therefore covers all four cascades the lighting shader samples
+through its array view. The mip range stays hardcoded to level 0, which is all any
+imported texture has today; a mipped import would need the same treatment.
 
-## The one use frameIndex has is the one it is wrong for
+## frameIndex selects a descriptor set, and a jitter sample it is wrong for
 
-`render()` hands `frameIndex` to every pass `execute` it calls. `PostProcessingPipeline`
-forwards it to SSAO, bloom and TAA; every leaf implementation throws it away, the
-parameter commented out in the signature:
+`render()` hands `frameIndex` — `VulkanRenderer`'s frame-in-flight slot, whose fence
+was waited before recording began — to every pass `execute` it calls. Its first job is
+to pick descriptor sets. Every pass whose inputs change between frames owns one set
+per slot and rewrites only `m_descriptorSets[frameIndex]` at record time: lighting,
+SSS, SSR, TAA, bloom's input set and the tonemap. A single shared set rewritten every
+frame would be modified while up to two already-submitted frames still read it;
+the slot's set is the one whose previous reader the fence has retired.
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}}
 
-The descriptor sets these passes own are indexed by target, not frame — TAA's history
-pair, bloom's per-mip vector — so there is nothing for a frame index to select. Its one
-live consumer is `TAAPass::getJitterOffset`, read at the top of `render()` to perturb the
-projection. There it is the wrong number.
+CSM, GBuffer, SSAO, sky and gizmo own no set or write theirs only at setup or when an input view changes, and
+leave the parameter commented out. Its one other consumer is
+`TAAPass::getJitterOffset`, read at the top of `render()` to perturb the projection.
+There it is the wrong number.
 
 Jitter goes into the matrix, not the camera:
 
@@ -165,18 +170,22 @@ stay at 1920 × 1080.
 
 ## Ordering constraints that are not obvious
 
-The RT shadow and GI blocks sit above `m_renderGraph.compile()`, and the comment beside
-them calls that a descriptor deadline. It is not one: `updateDescriptorSets` is a
-host-side `vkUpdateDescriptorSets`, `VulkanRenderer::renderDeferred` does not submit
-until after `vkEndCommandBuffer`, and `RTShadowTechnique::getOutput` returns the same
-persistent `m_shadowMaskView` every frame. The record-time dependency is the push
-constant: `DeferredLightingPass::execute` zeroes `m_params.flags`, re-derives the
-RT-shadow bit from `m_rtShadowView`, and pushes it.
+Before compiling the graph, `render()` clears the RT shadow mask and the GI view out
+of the lighting pass. They come back only from inside the `RTShadow` and `RTGI`
+pass lambdas, and only when that technique's `render()` actually traced:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI->rendered() && m_lightingPass)"}}
+
+The hand-off happens at record time, during `m_renderGraph.execute(cmd)`, and its
+consumer is `DeferredLightingPass::execute` later in the same walk, which writes its
+slot's descriptor set from those members and re-derives the RT-shadow and SSGI flag
+bits from them. So the dependency is pure graph order: the RT passes must be added
+before `DeferredLighting`. Since `topologicalSort` keeps insertion order and the
+lighting pass declares no read of the RT outputs, nothing in the graph enforces it —
+move the RT blocks below lighting and every frame silently falls back to CSM and no
+GI.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 32;"}}
-
-`setRTShadowMask` sets that member; move it below `execute` and the first frame silently
-falls back to CSM.
 
 The wall clock hides a similar dependency. `m_totalTime` advances in one place only,
 inside the particle block; RT GI reconstructs a frame counter from it as
@@ -193,7 +202,8 @@ Pass order, lifetimes and every barrier outside the six graph passes are hand-wr
 
 - The layout passed to `declare*Write` must equal the `finalLayout` of that pass's own `VkRenderPass`, and a declaring pass must never also take a graph-owned attachment. Neither is validated.
 - A tracked texture read by two graph passes in a row gets a second barrier with `oldLayout = UNDEFINED` and `TOP_OF_PIPE` as its source: `currentLayout` is never refreshed during compilation.
-- `setRTShadowMask` must precede `DeferredLightingPass::execute`, which re-derives the RT-shadow flag bit from `m_rtShadowView` and pushes it. The `vkUpdateDescriptorSets` beside it is host-side and survives the move.
+- `setRTShadowMask` and `setSSGITexture` must be called before `DeferredLightingPass::execute` records, which happens only if the RT passes are added to the graph ahead of lighting. A view handed over after lighting recorded is cleared again before the next frame's graph runs.
+- `frameIndex` must be the slot whose fence `VulkanRenderer` just waited: it selects the per-slot descriptor set each pass rewrites.
 - Anything written into the lighting HDR image after the SSS dispatch never reaches post-processing while `SSSPass` is alive; sky and particles are both in that window.
 - `importGraphTextures()` must run after any pass reallocates its images, or the graph holds destroyed `VkImage` handles.
 - `frameIndex` is a ring index of period 3, not a monotonic counter, so `TAAPass::getJitterOffset` sees three values.

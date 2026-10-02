@@ -175,8 +175,8 @@ index, which advances in all modes:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "if (firstHitDist > 0.0 && frameIdx > 0u) {"}}
 
-The interactive viewer defaults to the realtime profile, so the shipping path
-gets correct vectors; the other two raygens do not.
+So an `rt_realtime --denoise=atrous` run gets correct vectors; the other two
+raygens do not.
 
 ## Two compiled shaders that nothing runs
 

@@ -228,13 +228,16 @@ the lighting pass left behind.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;"}}
 
-The depth attachment does not get the same care. It declares
-`DEPTH_STENCIL_ATTACHMENT_OPTIMAL` at both ends:
+The depth attachment is the GBuffer's, and it gets the same care. Particles test
+against it but never write it, so the render pass keeps it in
+`DEPTH_STENCIL_READ_ONLY_OPTIMAL` at both ends and in the subpass reference:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;"}}
 
-while the GBuffer pass leaves depth in `DEPTH_STENCIL_READ_ONLY_OPTIMAL`, which
-is also what the render graph declares for it.
+That is the layout the GBuffer pass resolves depth to, the one the render graph
+declares for it, and the one TAA samples it in after this pass. Flipping it to an
+attachment layout here would leave TAA reading depth in a layout its descriptor
+does not declare; read-only depth testing needs no transition at all.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;"}}
 

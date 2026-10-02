@@ -6,28 +6,35 @@ standard: v2
 figures: [gpu-renderer-facade-ring-lag]
 ---
 
-## A renderer that never owns a window
+## A renderer that does not own its window
 
-`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device, command pool and offscreen framebuffer — and never creates a swapchain. Its delivery surface is a `std::vector<uint8_t>` of RGBA8 pixels. That is not a limitation the interactive viewer escapes — the GLFW viewer renders headless too, then blits the CPU buffer into an OpenGL texture every frame.
+`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What it delivers depends on which `initialize` overload ran. The headless one delivers a `std::vector<uint8_t>` of RGBA8 pixels through `getPixels()`; the PNG writers, the golden smoke test and every example except `ohao_game` drive that `render()` → `getPixels()` pair. The windowed overload takes a `PresentTarget` and ends each frame by presenting into a swapchain, reading nothing back.
 
-{{cite examples/interactive.cpp "const uint8_t* pixels = renderer.getPixels();"}}
+{{cite ohao/gpu/vulkan/renderer.hpp "[[nodiscard]] bool initialize(const PresentTarget& target);"}}
 
-So the PNG writers, the golden smoke test and the realtime viewer all drive the identical `render()` → `getPixels()` pair. There is no second entry point. There used to be the *appearance* of one — a `gpu_module.hpp` umbrella re-exporting seven headers, whose own comment told you to prefer the specific headers instead — and it has been deleted along with the other four module umbrellas, none of which anything included.
+Neither overload makes the renderer a windowing client. The window belongs to `ohao/runtime`: `Application` creates it, builds the renderer at the window's framebuffer size, passes the window's `PresentTarget` in, and forwards drawable-size changes through `setPresentExtent`. The renderer sees a surface-creation callback and an extent, never a window handle.
 
-## Four modes, three of which can be refused
+{{cite ohao/runtime/application.cpp "if (m_window.consumeResized()) m_renderer->setPresentExtent(m_window.framebufferExtent());"}}
 
-`RenderMode` splits into two raster modes (Forward, Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — a pipeline descriptor for the mode, a live renderer profile, and an acceleration-structure manager — and falls through to raster if any is missing.
+The two modes are distinguishable from outside. `isPresenting()` reports whether a swapchain exists, and `readbackCopyCount()` counts the deferred staging copies recorded since initialisation — zero in a windowed deferred renderer, by construction. `ohao_game` turns that into an exit code: a windowed run that recorded any readback copy fails.
+
+{{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
+
+The counter is incremented only in `copyDeferredOutputToPixelBuffer`; the RT body's staging copy is not counted, so it proves nothing about an RT frame.
+
+## Three modes, two of which can be refused
+
+`RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — a pipeline descriptor for the mode, a live renderer profile, and an acceleration-structure manager — and falls through to deferred if any is missing.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (const auto* rtPipeline = getRTPipeline(m_renderMode);"}}
 
-`setRenderMode` returns `void` and is allowed to refuse: if deferred initialisation failed — which `initialize()` treats as non-fatal — or if the device has no RT extensions, it logs and leaves the previous mode in place. Only Forward is unconditionally available.
+`setRenderMode` returns `void` and is allowed to refuse: if the device has no RT support, or the profile for the requested mode fails to initialise, it logs and leaves the previous mode in place. Deferred is never refused, because `initialize()` treats a failed deferred renderer as fatal — a renderer that initialised has one.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "Deferred rendering not available, staying in Forward mode"}}
 {{cite ohao/gpu/vulkan/renderer.cpp "Path tracing not available, staying in current mode"}}
 
-The mode you asked for is therefore not necessarily the mode you got, and the field starts at Forward, not Deferred.
+The mode you asked for is therefore not necessarily the mode you got. The field starts at Deferred, so a refused RT request leaves the renderer rasterising.
 
-{{cite ohao/gpu/vulkan/renderer.hpp "RenderMode m_renderMode{RenderMode::Forward};"}}
+{{cite ohao/gpu/vulkan/renderer.hpp "RenderMode m_renderMode{RenderMode::Deferred};"}}
 
 Anything that reports "rendering in mode X" from its own local variable rather than from `getRenderMode()` can print a lie.
 
@@ -74,9 +81,9 @@ That keeps the pipeline authoritative over tracer behaviour, but it means every 
 
 {{cite ohao/gpu/vulkan/renderer.cpp "float preservedAnisoStrength = m_rtSettings.anisotropyStrength;"}}
 
-A fourth, the realtime per-frame sample count driven by the viewer's `+`/`-` keys, is re-injected one level down in `applyRTRenderSettings` instead.
+A fourth, the realtime per-frame sample count set through `setRealtimeSamplesPerFrame`, is re-injected one level down in `applyRTRenderSettings` instead. Nothing in the tree calls that setter today, so the rescue keeps the value at its default of 1; it exists for a realtime host that exposes the sample count.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// Re-inject the interactive per-frame sample count: prepareRTSceneForFrame"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "// Re-inject the realtime per-frame sample count: prepareRTSceneForFrame"}}
 
 :::key
 `RTRenderSettings` is not a settings object in the usual sense — it is a per-frame scratch struct with a hand-maintained rescue list. Adding a field and a setter is not enough to make it stick; the field must also be named in `prepareRTSceneForFrame` or `applyRTRenderSettings`, or it silently reverts to the profile default on the very next frame.
@@ -102,7 +109,7 @@ Widening that condition to "always inject" would look like a cleanup and would c
 
 ## The pixel buffer is three frames behind
 
-The pipelined paths use a ring of three frame slots.
+Headless rendering uses a ring of three frame slots.
 
 {{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
 
@@ -118,7 +125,7 @@ Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell
 
 Under `--denoise=none` that arithmetic lands exactly: after `spp + 3` calls the last copy delivered call `spp - 1`, the frame that had accumulated `spp` samples. No comment at any of those sites ties the `+ 3` to the ring depth, though, and it cannot be the whole story — the default offline configuration is `DenoiseMode::OIDN`, whose `getPixels()` branch never reads `m_pixelBuffer`. There the three extra frames buy three extra samples and compensate no lag.
 
-The one path without the lag is the legacy forward fallback used when frame resources fail to initialise: it blocks on a fence and maps the staging memory in the same call.
+A windowed deferred renderer has no lag to account for: the swapchain image is written by the same submission that recorded the frame, and `m_pixelBuffer` is never filled at all. `getPixels()` on a presenting renderer returns a buffer of the right size that nothing writes.
 
 ## getPixels() is four branches wearing one signature
 
@@ -144,13 +151,14 @@ Reading the live image means the OIDN path needs no warm-up, and the in-tree smo
 
 Two consequences follow. First, the method is declared `const` but casts away constness to allocate a command buffer, submit it and wait — it is safe only because every consumer is a single-threaded loop that calls it after `render()` returns. Second, the RGBA8 and HDR paths do not observe the same frame, so a golden test that compares `--denoise=none` against `--denoise=oidn` output is comparing different points on the accumulation curve unless the loop has already converged.
 
-Below that sits the bulk of the translation unit — more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs, each open-coding a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags and interactive's motion-vector key. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture at all, and because `render()` invalidates the cache every frame, that full queue stall runs once per displayed frame.
+Below that sits the bulk of the translation unit — more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs, each open-coding a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture at all, and because `render()` invalidates the cache every frame, that full queue stall runs once per displayed frame.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (!self->readbackNrdTonemapped(rgba, rw, rh))"}}
 
 ## Contracts
 
-- On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
+- On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — a headless `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
+- A presenting renderer's deferred frames never reach `m_pixelBuffer`. Read pixels from a headless renderer; `readbackCopyCount()` stays 0 in windowed deferred mode and a nonzero count there is a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale: any caller holding bound descriptors must force a full scene rebind afterwards.
 - Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.

@@ -14,8 +14,8 @@ transient memory, generate optimal barriers, sort passes into execution order.
 {{cite ohao/render/graph/render_graph.hpp " * - Alias transient resource memory"}}
 
 Only the third has any implementation behind it, and the barriers it generates
-are neither optimal nor — for the one multi-layer resource in the frame —
-correct; both failures are traced below. The only production consumer is
+are neither optimal nor, for a texture read twice in a row, fully correct; both
+failures are traced below. The only production consumer is
 `DeferredRenderer`, which rebuilds the graph every frame — `reset()`, six pass
 registrations, `compile()`, `execute()`, all inside one command buffer — to get
 one thing: image-layout barriers computed centrally, between passes that know
@@ -184,32 +184,28 @@ layout field the frame reset has blanked.
 
 ## One barrier, four cascades
 
-Every image barrier the graph emits covers a single mip and a single array layer.
-
-{{cite ohao/render/graph/render_graph.cpp "imageBarrier.subresourceRange.layerCount = 1;"}}
-
-The CSM shadow map is not a single layer. It is a `D32_SFLOAT` array with one
-layer per cascade, imported through its full-array view.
+The CSM shadow map is the frame's one multi-layer resource: a `D32_SFLOAT` array with
+one layer per cascade, imported through its full-array view and sampled by the
+lighting shader through a single `sampler2DArray` binding.
 
 {{cite ohao/render/deferred/csm_pass.hpp "static constexpr uint32_t CASCADE_COUNT = 4;"}}
 
-The lighting shader samples all four through one `sampler2DArray` binding.
-
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "// 6: Shadow map array (sampler2DArray, 4 cascades)"}}
 
-So the `DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL` transition
-reaches cascade 0 and nothing else; layers 1–3 are sampled while still in
-`DEPTH_STENCIL_ATTACHMENT_OPTIMAL`, which is not a layout the specification
-allows for sampled reads. This is not a latent risk. Run any deferred frame under
-`OHAO_VALIDATION=1` and the layer says it out loud three times — one
-`VUID-vkCmdDraw-imageLayout-00344` per uncovered layer, each naming binding 6
-`shadowMap` and each complaining that the previous known layout was
-`DEPTH_STENCIL_ATTACHMENT_OPTIMAL` (measured: `model_viewer <scene>.glb out.png 1
-deferred`). Nothing else covers them — `CSMPass` deliberately
-delegates the transition to the graph. Nor is the repair a one-liner:
-`importTexture` never records an array-layer count, so `TextureDesc::arrayLayers`
-stays at its default of 1 for every imported resource. The graph does not know
-this image has four layers.
+`importTexture` never records an array-layer count — `TextureDesc::arrayLayers`
+stays at its default of 1 for every imported resource — and `PhysicalTexture` keeps
+one `currentLayout` per texture. The graph cannot name individual layers, so the
+only barrier consistent with its own bookkeeping is one that moves all of them:
+
+{{cite ohao/render/graph/render_graph.cpp "imageBarrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;"}}
+
+The `DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL` transition before
+lighting therefore reaches all four cascades. `CSMPass` relies on that: it renders
+each cascade through its own single-layer framebuffer, leaves every layer in the
+attachment layout, and delegates the transition to the graph. Per-layer layouts —
+a pass that wrote cascade 2 while lighting sampled cascade 1 — would need layer
+ranges in `ResourceAccess`, which the graph does not have. Mips are still pinned to
+level 0, which is all any imported texture has today.
 
 ## What is declared and not wired
 
@@ -226,8 +222,7 @@ This is a barrier scheduler wearing a frame graph's API. One of its two jobs it
 does: it is the only place in the frame that knows a compute reader of the
 G-buffer needs a dependency the G-buffer's own render pass does not express. The
 other — getting CSM's shadow map to `SHADER_READ_ONLY_OPTIMAL` before lighting —
-it does for one cascade layer of four, and the validation layer flags the rest on
-every frame. Aliasing, lifetime deduction and pass reordering are API surface
+it does for the whole array in one barrier. Aliasing, lifetime deduction and pass reordering are API surface
 awaiting an implementation.
 :::
 
@@ -236,4 +231,4 @@ awaiting an implementation.
 - The `finalLayout` passed to `declareColorWrite`/`declareDepthWrite` must equal the attachment `finalLayout` in the pass's own `VkRenderPass`. Change either alone and the next barrier's source layout is a lie the validation layer may or may not catch.
 - Passes must be added in dependency order; `topologicalSort` will not repair a wrong one.
 - `importGraphTextures` must re-run after every resize — it does — because handles are plain indices that only a `shutdown()`/`initialize()` cycle clears.
-- Barriers cover mip 0 and array layer 0. Any mipped or multi-layer resource routed through this graph is under-synchronised.
+- Barriers cover mip 0 and every array layer, all moved together. A mipped resource routed through this graph is under-synchronised, and a multi-layer one cannot have its layers in different layouts.

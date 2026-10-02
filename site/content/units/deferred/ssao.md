@@ -28,7 +28,7 @@ and run. SSAO is the opt-in half of that split — its pipeline gate defaults fa
 
 {{cite ohao/render/deferred/post_processing_pipeline.cpp "if (m_ssaoEnabled && m_ssaoPass) {"}}
 
-and the only production caller that opens it is `model_viewer`'s deferred path. A
+and the production callers that open it are `model_viewer`'s deferred path and the `ohao_game` host. A
 default deferred frame therefore dispatches no SSAO at all; what follows is what
 the dispatch computes when a caller does ask for it.
 
@@ -280,7 +280,7 @@ glTF occlusion-roughness-metallic texture when one exists:
 
 That is baked texture AO, not screen-space AO. The lighting pass also raises an
 SSAO bit in its push-constant flags that the fragment shader never tests — it
-branches on 1, 4, 8, 16 and 32, never on 2:
+branches on 1, 4, 8 and 32, never on 2:
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;"}}
 
@@ -304,7 +304,7 @@ pass transitions it itself, from `UNDEFINED` to `GENERAL` and then to
 The rejected alternative was declaring it as a graph-tracked write, the way the
 GBuffer normal target is declared as a graph-tracked read for this pass. Keeping
 it self-managed makes the pass drop-in for any caller with a command buffer, at
-three costs. First, the graph imports the image as `ssao_output` — under the wrong
+two costs. First, the graph imports the image as `ssao_output` — under the wrong
 format, `R8_UNORM` against an `R16_SFLOAT` image — but no pass ever declares it,
 so the graph's layout ledger and the real layout can drift:
 
@@ -313,25 +313,27 @@ so the graph's layout ledger and the real layout can drift:
 Second, starting each frame from `UNDEFINED` explicitly discards the previous
 contents, so no frame can amortise its taps against the last one.
 
-Third, the same blind spot covers the input side, where it has already cost
-something. The pass writes its depth descriptor with
-`VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`:
+The same blind spot covers the input side, where agreement is kept by convention
+instead. The pass writes its depth descriptor with
+`VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL`:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL"}}
 
-but the depth image it is handed is `GBufferPass`'s depth attachment, whose render
-pass resolves it to `VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL` and leaves it
-there:
+which is the layout `GBufferPass`'s render pass resolves its depth attachment to:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;"}}
 
-The declared and actual layouts disagree on every dispatch, and because the depth
-read is not declared to the graph either, nothing reconciles them.
+Depth then stays in that one layout until the frame ends. Every later reader —
+SSAO, lighting, sky, SSR, TAA — samples it there, and the particle pass, which
+depth-tests against it without writing, attaches it in the same read-only layout
+rather than transitioning it back to an attachment layout. Because the depth read
+is not declared to the graph, nothing checks this; a pass that moved depth to any
+other layout would desynchronise every reader after it.
 :::
 
 ## Contracts
 
-- `SSAOPass::onResize` destroys the descriptor pool and allocates a fresh, unwritten descriptor set. It does not re-write it. The deferred renderer's resize path must re-push the depth and normal views afterwards (`setDepthBuffer` / `setNormalBuffer` both call `updateDescriptorSet`) or the next `execute` binds an unwritten set.
+- `SSAOPass::onResize` destroys the AO image and descriptor pool, allocates a fresh set, and writes it immediately from the depth and normal views it already holds. Those must be the resized G-buffer's views by then: `DeferredRenderer::onResize` hands them to `PostProcessingPipeline::setGBufferInputs` right after the G-buffer resizes and before post-processing's own `onResize` runs. The single set is safe without a per-frame copy because it is written only at setup and on resize, never per frame.
 - `execute()` early-outs unless both the depth and normal views are non-null, so a caller that never wires the GBuffer gets a silently absent pass rather than a crash.
-- The pass samples two GBuffer attachments — depth at binding 0 and normal at binding 1, both routed in from `GBufferPass` through `PostProcessingPipeline` — so it must be dispatched after the GBuffer render pass has ended. Ordering is satisfied; layout agreement is not: binding 0 declares `SHADER_READ_ONLY_OPTIMAL` while the attachment is left in `DEPTH_STENCIL_READ_ONLY_OPTIMAL` (see the callout above). The render graph declares only the normal read; neither the depth read nor the AO write is declared, so one of the pass's three image dependencies is on the ledger.
-- SSAO is off by default (`m_ssaoEnabled{false}`); the only production caller that enables it is `model_viewer`'s deferred path. Since nothing samples the result, enabling it currently costs up to 65 depth taps per pixel and changes no output pixel.
+- The pass samples two GBuffer attachments — depth at binding 0 and normal at binding 1, both routed in from `GBufferPass` through `PostProcessingPipeline` — so it must be dispatched after the GBuffer render pass has ended. Binding 0 declares `DEPTH_STENCIL_READ_ONLY_OPTIMAL`, the layout depth holds from the end of the G-buffer pass to the end of the frame (see the callout above). The render graph declares only the normal read; neither the depth read nor the AO write is declared, so one of the pass's three image dependencies is on the ledger.
+- SSAO is off by default (`m_ssaoEnabled{false}`); the production callers that enable it are `model_viewer`'s deferred path and the `ohao_game` host. Since nothing samples the result, enabling it currently costs up to 65 depth taps per pixel and changes no output pixel.

@@ -34,12 +34,14 @@ carry a bare assertion directly under their own fields:
 
 and the five `OHAO_ASSERT_GPU_LAYOUT` sites — `MeshBufferInfo`,
 `ObjectPushConstants`, `LightData`, `GPULight`, `PTPushConstants` — expand to the
-same check plus a size check. Without it, someone adds a `std::string` to
-`CameraUniformBuffer`, the write below still compiles, and the failure is a garbage
-matrix on the GPU plus a heap pointer sitting in device memory where the shader
-expects a float:
+same check plus a size check. Three of the bare-asserted structs — `SimpleVertex`,
+`CameraUniformBuffer`, `FrameCameraUBO` — are declared and used by nothing; the
+assertion that matters guards a type that is written every frame. Without it,
+someone adds a `std::string` to `LightData`, the write below still compiles, and
+the failure is a garbage light on the GPU plus a heap pointer sitting in device
+memory where the shader expects a float:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(frame.cameraBufferMapped, &ubo, sizeof(ubo));"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));"}}
 
 With the assertion, the failure is a compile error in the header that declares the
 struct.
@@ -52,19 +54,18 @@ adapter from a mapped pointer to a typed span:
 
 {{cite ohao/gpu/vulkan/vk_utils.hpp "return std::span<T>{static_cast<T*>(mapped), count};"}}
 
-Exactly three functions call it: `GpuAllocation::asSpan`, the only link in the
-chain that touches VMA at all, via `info.pMappedData`; and the per-frame
-`cameraMappedAs` / `lightMappedAs` accessors. `GpuBuffer::mappedAs` sits one level
-further out, forwarding to `asSpan`.
+Exactly one function calls it: `GpuAllocation::asSpan`, which reaches VMA's
+mapping through `info.pMappedData`. `GpuBuffer::mappedAs` sits one level further
+out, forwarding to `asSpan`.
 
-{{cite ohao/render/frame/frame_resources.hpp "return as_mapped_span<T>(cameraBufferMapped, count);"}}
+{{cite ohao/gpu/vulkan/gpu_allocator.hpp "return as_mapped_span<T>(info.pMappedData, count);"}}
 
-Nothing in `ohao/`, `examples/` or `tests/` calls any of those four — nor
+Nothing in `ohao/`, `examples/` or `tests/` calls either of those two — nor
 `GpuAllocator::createBufferFromSpan`, the remaining `GpuPod`-constrained entry
-point. The chain is dead end to end, and `FrameCameraUBO` with it. What runs
-instead is `memcpy` on the raw `void*`, as above — and those frame buffers are not
-even VMA allocations, they come from `vkAllocateMemory` and are persistently mapped
-with `vkMapMemory` — plus unguarded casts on the way back out:
+point. The chain is dead end to end. What runs instead is `memcpy` on the raw
+`void*`, as above — and the light buffer is not even a VMA allocation, it comes
+from `vkAllocateMemory` and is persistently mapped with `vkMapMemory` — plus
+unguarded casts on the way back out:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "LightUniformBuffer* ld = static_cast<LightUniformBuffer*>(m_lightBufferMapped);"}}
 

@@ -70,8 +70,7 @@ in the call graph argues for the split as it stands, because the material and te
 walks only ever run as part of a full rebuild. The one geometry-free material update
 is `updateRTMaterialParams`, a fourth function for re-shading a scene without
 touching a BLAS — it patches existing rows in place and uses neither fill walk. It
-has **no caller left in the tree**: the module that re-shaded scenes this way was
-removed, and the entry point outlived it. What the split costs is that a whole-scene
+has **no caller in the tree**. What the split costs is that a whole-scene
 correctness invariant now lives in four filter predicates that nothing relates to
 each other.
 :::
@@ -205,4 +204,8 @@ Two source copies of a packing the path tracer does not read.
 - Four walks decide which actors they admit. The geometry walk filters on `isVisible()`; the material and texture walks do not; `updateRTMaterialParams` does. Fix all four together or none.
 - `uploadRTTextureArray` must run after `uploadRTMaterialBuffers` in the same upload. `uploadRTMaterialBuffers` writes `0xFFFFFFFF` into every texture slot it allocates, and `uploadRTTextureArray` is what replaces those sentinels with real layer indices; skipping or reordering it leaves every material untextured.
 - Every material is assigned an albedo layer — the real map when it has one, a synthesised 1×1 pixel otherwise — so the closest-hit shader's diffuse sentinel is unreachable, and base color is applied twice for the fallback case. Removing the fallback synthesis means restoring the sentinel, not just deleting the 1×1 pixels.
+- Every buffer, image, view and sampler the RT upload functions create — including the per-layer bindless views in `m_rtBindlessViews` — is freed by one function, `destroyRTSceneResources`, at shutdown. Each upload function still frees its own previous objects on re-upload. A new RT scene resource must be added to both places, or it leaks at shutdown or on every rebuild.
+
+{{cite ohao/gpu/vulkan/rt_build.cpp "void VulkanRenderer::destroyRTSceneResources() {"}}
+
 - All texture layers share one extent chosen from the largest source texture in the scene. Adding one 2048² map inflates every other layer, including 1×1 solid colors, to the same size.

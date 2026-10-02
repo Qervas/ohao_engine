@@ -125,11 +125,6 @@ window.OHAO_NAV_TREE = [
         "id": "gpu/layout-meta",
         "title": "Layout contracts",
         "href": "m/gpu/layout-meta.html"
-      },
-      {
-        "id": "gpu/pipeline-fb",
-        "title": "Legacy pipeline & framebuffer",
-        "href": "m/gpu/pipeline-fb.html"
       }
     ]
   },
@@ -394,11 +389,6 @@ window.OHAO_NAV_TREE = [
         "id": "shaders/core-gbuffer-lighting",
         "title": "Core GBuffer & lighting shaders",
         "href": "m/shaders/core-gbuffer-lighting.html"
-      },
-      {
-        "id": "shaders/forward",
-        "title": "Forward shaders",
-        "href": "m/shaders/forward.html"
       },
       {
         "id": "shaders/particles-sh",

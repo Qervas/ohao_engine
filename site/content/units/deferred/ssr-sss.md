@@ -74,8 +74,8 @@ while `SSRPass` is handed the clean, unjittered matrix:
 
 so every `sampleUV` the march computes is offset from the depth buffer it reads by that
 frame's sub-pixel jitter, in a different direction each frame. `m_taaEnabled` defaults
-to false, which makes the offset exactly zero; the `model_viewer` example enables TAA in
-deferred mode, and there the offset is always present.
+to false, which makes the offset exactly zero; the `model_viewer` example in deferred
+mode and the `ohao_game` host both enable TAA, and there the offset is always present.
 
 Two thresholds decide which pixels get a ray at all. Rough dielectrics are skipped,
 metals always traced:
@@ -172,7 +172,15 @@ The blur is separable in the Jimenez sense: a horizontal pass into a temp image,
 vertical pass into the output, driving the same pipeline with a different `direction`
 push constant.
 
-{{cite ohao/render/deferred/sss_pass.cpp "executePass(cmd, m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));"}}
+{{cite ohao/render/deferred/sss_pass.cpp "executePass(cmd, sets[0], m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));"}}
+
+The two halves bind different images to the same bindings, and `executePass` writes
+them at record time, so each half needs its own descriptor set — and each frame in
+flight needs its own pair, since the set a submitted frame is still reading must not
+be rewritten under it. The pass therefore holds a `[slot][direction]` array and
+`execute` picks the pair for `frameIndex`. SSR does the same with one set per slot.
+
+{{cite ohao/render/deferred/sss_pass.hpp "std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_descSets{};"}}
 
 Seven taps at offsets −3…+3 are scaled by `sssWidth`, fixed at 8 pixels, so the kernel
 reaches ±24 pixels of the pass's 1920×1080 grid. Fixed, not defaulted:

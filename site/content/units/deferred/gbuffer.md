@@ -272,5 +272,6 @@ and nobody holds a stale one only because nobody holds one at all.
 - Velocity encodes camera motion only and includes the current frame's TAA jitter. It is not an object-motion vector.
 - The pass requires `maxPushConstantsSize >= 240`, above the 128-byte Vulkan floor, and never checks it.
 - Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
-- Backface culling is disabled (`VK_CULL_MODE_NONE`, to match the forward pipeline), so every closed mesh rasterises both faces and the depth test alone resolves them.
+- Backface culling is disabled (`VK_CULL_MODE_NONE`), so every closed mesh rasterises both faces and the depth test alone resolves them.
+- `execute()` begins the render pass, and so performs all five clears, every frame — with no scene bound only the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run the render pass, scene or not: its clears are what every later pass"}}
 - The vertex shader declares bone index and weight inputs it never reads; skinning was removed from this pass and the slots remain only to match the shared `Vertex` layout.

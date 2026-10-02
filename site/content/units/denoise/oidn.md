@@ -62,8 +62,8 @@ device, engine or filter state survives to the next invocation.
 Add the three full-resolution readbacks — each
 allocating its own staging buffer, submitting a command buffer and blocking on
 `vkQueueWaitIdle`, preceded by a `vkDeviceWaitIdle` — and the per-invocation cost
-is structural, not tunable. The only thing that keeps it usable in the GLFW
-viewer is a one-shot cache: `render()` invalidates it, the first `getPixels()`
+is structural, not tunable. The only thing that bounds it to once per frame is a
+one-shot cache: `render()` invalidates it, the first `getPixels()`
 after that pays for the whole chain, and repeat calls in the same frame are free.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseCacheValid) {"}}
@@ -178,12 +178,13 @@ accumulation — same ACES fit, different input.
 {{cite ohao/render/rt/rt_settings.hpp ".enableInternalDenoise = true,"}}
 {{cite shaders/rt/pt_raygen_realtime.rgen "vec3 ldr = ACES(denoised * 0.5);"}}
 
-That pairing is reachable: the GLFW viewer defaults to `RTRealtime` and applies
-`--denoise=` on top of the preset, and nothing rejects it — `allowExternalDenoiser`,
-`false` for realtime, is only ever printed in a startup log. Toggling the flag
-there moves the grade, not just the noise.
+That pairing is reachable: the shared example parser takes `rt_realtime` and
+`--denoise=` as independent tokens, the override is applied on top of the preset,
+and nothing rejects it — `allowExternalDenoiser`, `false` for realtime, is only
+ever printed in a startup log. `rt_realtime --denoise=oidn` moves the grade, not
+just the noise.
 
-{{cite examples/interactive.cpp "cli.rtMode = RenderMode::RTRealtime;"}}
+{{cite examples/example_cli.hpp "opts.denoiseOverride = parseDenoiseMode(arg.substr(10));"}}
 {{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
 
 The two tonemaps are not bit-identical either. The GPU store into an `rgba8`

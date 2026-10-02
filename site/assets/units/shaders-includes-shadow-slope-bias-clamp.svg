@@ -31,9 +31,9 @@
 <!-- shipping curve: tangent then hard clamp -->
 <polyline points="80,270 177,265 273,259 370,252 434,244 489,233 668,233"
           fill="none" stroke="#7dba8a" stroke-width="2.5"/>
-<text x="500" y="223" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">shipping: clamp(b, 0, 0.01) in shadow_pcf.glsl</text>
+<text x="500" y="223" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">clamp(b, 0, 0.01) in shadow_pcf.glsl (header, no includer)</text>
 
-<text x="300" y="80" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">unused ceiling in shadow_types.glsl: 10 &#183; b0 = 0.05</text>
+<text x="300" y="80" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">comparison only: ceiling 10 &#183; b0 = 0.05</text>
 
 <text x="28" y="330" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual: evaluated from the shipped expression, not measured. b0 is the 0.005 the host writes into the light UBO.</text>
 </svg>

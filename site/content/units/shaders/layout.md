@@ -6,7 +6,7 @@ standard: v2
 figures: [shaders-layout-resolution]
 ---
 
-## Sixty-three lines of CMake and no permutation system
+## Ninety-two lines of CMake and no permutation system
 
 The whole shader build is two `file(GLOB_RECURSE)` calls over `shaders/` — one
 collecting sources, one collecting headers for dependency tracking — plus one
@@ -17,9 +17,11 @@ results. There is no shader database, no variant matrix, no reflection step.
 
 The glob runs at *configure* time and carries no `CONFIGURE_DEPENDS`, so a newly
 added `.rgen` is invisible until CMake is re-run — the failure looks like a
-missing SPIR-V at load, not a build error. It also recurses without exclusions,
-which is why `shaders/_disabled/` is not archival: all 35 sources under it are
-globbed and compiled like everything else, for 91 SPIR-V modules total.
+missing SPIR-V at load, not a build error. It also recurses without exclusions:
+every stage source anywhere under `shaders/` is globbed and compiled, whether or
+not any C++ loads it — 40 sources, 40 SPIR-V modules. Headers are the opposite
+case: a `.glsl` file is compiled only as text spliced into a stage, so a header no
+stage includes is never parsed at all.
 
 The compile line is where the architecture actually shows:
 
@@ -47,14 +49,15 @@ pipeline object and not the SPIR-V:
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "stages[0].pSpecializationInfo = &samplerSpecInfo;"}}
 
-The cost is visible in `forward.frag`, which guards its legacy Blinn-Phong
-lighting behind an override hook nothing in the build ever supplies:
+The cost is visible in `pt_raygen_realtime.rgen`, which keeps its original glossy
+sampler, and the pdf that matches it, behind `#ifdef OHAO_CRUDE_GLOSSY` — a switch
+nothing in the build ever supplies:
 
-{{cite shaders/core/forward.frag "#define USE_PBR 1"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "// A/B baseline: original crude cosine-scatter sampler (flicker source)."}}
 
-`glslc -M` confirms the consequence: `includes/lighting/blinn_phong.glsl` is not
-in the dependency closure of any shader in the tree. It is not dead by deletion,
-it is dead by there being no `-D` in the build.
+Both `OHAO_CRUDE_GLOSSY` branches are therefore never compiled. They are
+not dead by deletion, they are dead by there being no `-D` in the build — and
+because they are never compiled, nothing checks that they still would.
 
 :::why
 The obvious alternative — a define-based permutation system, which is where every
@@ -63,9 +66,8 @@ specialization constants. The trade is real: duplicated raygen files drift, so a
 fix landed in one profile does not reach the other two. What is bought is that
 there is no permutation explosion and no cache key to invalidate — each compile is
 one source file in, one `.spv` out, with no defines to reconstruct. The converse
-does not hold, because nothing prunes: `build/shaders/` here holds 96 modules for
-91 sources, five of them left behind by shaders that have since been moved or
-deleted.
+does not hold, because nothing prunes: a shader that is moved or deleted leaves
+its old module in `build/shaders/` until someone removes it by hand.
 :::
 
 ## The flattening that became an ABI
@@ -112,10 +114,9 @@ multi-config generator):
 
 {{cite CMakeLists.txt "set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})"}}
 
-That copy used to be attached to each consuming test target. Two POST_BUILD
-`copy_directory` commands writing the same destination race under `-j8`, so the
-copy now happens once, in the `shaders` target, and the consumers only declare a
-dependency on it:
+The copy belongs to the `shaders` target rather than to each consumer because two
+POST_BUILD `copy_directory` commands writing the same destination race under
+`-j8`; the consumers only declare a dependency on it:
 
 {{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
@@ -131,24 +132,24 @@ the directory and retries under `build/shaders/`:
 
 So rung one hits when the process working directory is `build/`, and rung two hits
 when it is the repository root. Two directories work, not one — and they are not
-interchangeable. The mirror is a `copy_directory` snapshot taken at link time, so
-on this tree `build/bin/shaders/` carries 94 modules against `build/shaders/`'s
-96, and the two disagree in *both* directions: each holds stale outputs the other
-does not.
+interchangeable. The mirror is a `copy_directory` snapshot taken when the `shaders`
+target finishes, and `copy_directory` only ever adds, so the mirror accumulates its own stale
+modules independently of the compile directory: the two can disagree in *both*
+directions, each holding outputs the other does not.
 
 The deferred stack is different again: `VulkanRenderer` probes seven
 candidate directories at construction, testing each with a single sentinel file,
 
-{{cite ohao/gpu/vulkan/renderer.cpp "std::ifstream test(path + "core_forward.vert.spv");"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "std::ifstream test(path + "core_deferred_lighting.frag.spv");"}}
 
 and then publishes whatever it found to every render pass through a static:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "RenderPassBase::setShaderBasePath(m_shaderBasePath);"}}
 
-That makes one forward-rendering shader the discovery key for the entire deferred
-pipeline. The probe assigns only on a hit, but the publish is unconditional: if
-none of the seven candidates holds `core_forward.vert.spv`, an empty string is
-pushed, and `RenderPassBase`'s own default prefix is overwritten rather than left
+The sentinel is the deferred lighting module, so the discovery key is at least a
+shader the pipeline it configures actually loads. The probe assigns only on a hit,
+but the publish is unconditional: if none of the seven candidates holds
+`core_deferred_lighting.frag.spv`, an empty string is pushed, and `RenderPassBase`'s own default prefix is overwritten rather than left
 standing:
 
 {{cite ohao/render/deferred/render_pass_base.hpp "static inline std::string s_shaderBasePath = "bin/shaders/";"}}
@@ -176,8 +177,8 @@ header rebuilds the world:
 
 {{cite shaders/CMakeLists.txt "DEPENDS ${SHADER} ${SHADER_INCLUDES}"}}
 
-Measured on this tree, touching `includes/common/math.glsl` recompiles all 91
-modules — a deliberate over-approximation that avoids depfile plumbing. The
+Touching `includes/common/math.glsl` therefore recompiles all 40 modules, including
+the 39 whose include closure never reaches it — a deliberate over-approximation that avoids depfile plumbing. The
 under-approximation next to it is the dangerous half. `SHADER_INCLUDES` is built
 from a pattern with a directory component in the middle:
 
@@ -215,7 +216,7 @@ a fixed directory list:
 {{cite shaders/compile_shaders.sh "for subdir in core shadow postprocess compute debug; do"}}
 
 `debug/` does not exist, and `rt/`, `particles/` and `overlay/` are absent — so it
-covers 30 of the 91 sources and compiles no ray-tracing stage at all. It uses
+covers 15 of the 40 sources and compiles no ray-tracing stage at all. It uses
 `glslangValidator` with a single include root and no `--target-env`, where CMake
 uses `glslc` with two roots and targets Vulkan 1.3:
 
@@ -224,7 +225,7 @@ uses `glslc` with two roots and targets Vulkan 1.3:
 The compiler swap has a concrete consequence: `glslc` enables
 `GL_GOOGLE_include_directive` implicitly, `glslangValidator` requires the shader
 to declare it. Replaying the script's exact invocation over the four directories
-it walks, 29 files compile and exactly one fails —
+it walks, 14 files compile and exactly one fails —
 `shaders/postprocess/ssr.comp`, which uses `#include` without the `#extension`
 line. The script exits non-zero on a tree the real build compiles cleanly.
 
@@ -233,9 +234,6 @@ script `mkdir -p`s first — so running it today recreates a directory tree the
 engine deleted:
 
 {{cite shaders/compile_shaders.sh "GODOT_DIR="${SHADER_DIR}/../godot_editor/project/bin/shaders""}}
-
-The commit that removed `godot_editor/` is the last commit that touched this
-file, and left the copy target pointing into it.
 
 ## Contracts
 

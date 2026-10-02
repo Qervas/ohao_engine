@@ -31,13 +31,9 @@ The deferred pipeline does not. Its `LightData` uses the classic raster conventi
 
 {{cite ohao/gpu/vulkan/renderer.hpp "glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)"}}
 
-so `updateLightBuffer` swaps 0 and 1 on the way in. The remap is a single nested ternary,
-and it is written out verbatim in both overloads of the function — the immediate upload and
-the per-frame one — which is why it has no line of its own to cite:
+so `updateLightBuffer` swaps 0 and 1 on the way in. The remap is a single nested ternary:
 
-```cpp
-int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
-```
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 :"}}
 
 AreaRect = 3 has no raster equivalent, so the else-arm sends it to 2, and the deferred
 lighting loop treats the rectangle as a cone — attenuated by the component's cone angles,
@@ -53,16 +49,12 @@ members that list omits — `radius` and the area edges — keep the advertised 
 
 {{cite ohao/scene/component/light_component.cpp ", innerConeAngle(30.0f)"}}
 
-The two overloads are not the maintenance risk the duplicated block suggests; they are
-already the maintenance bug. The packing block is byte-identical, but a dozen lines below it
-the no-light fallbacks have diverged: the immediate path installs a warm default sun whose
-intensity is $\pi$, cancelling the diffuse BRDF's $1/\pi$, while the per-frame path installs
-a white one at intensity 1. An unlit scene is roughly $\pi$ times brighter through one than
-through the other, and which one you get depends on the render path: `renderDeferred` and
-`renderLegacy` call the immediate overload, `renderMultiFrame` calls the per-frame one:
+The same function decides what an unlit scene looks like. With no `LightComponent` and no
+emissive light, it installs a warm default sun whose intensity is $\pi$, cancelling the
+diffuse BRDF's $1/\pi$ so that a white Lambertian surface facing it reflects its colour
+at unit scale:
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);"}}
 
 {{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, renderer.hpp and light_upload.cpp; the diagram is conceptual, not a memory dump."}}
 
@@ -245,4 +237,3 @@ common light types in the engine.
 - Both buffers are filled from `LightComponent`s *and* from lights synthesised per emissive-textured actor. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the deferred eight-slot budget is shared between them.
 - The deferred UBO holds exactly eight lights and drops the rest without warning; the RT SSBO is sized at upload and ignores its own `MAX_GPU_LIGHTS = 64`.
 - The estimator multiplies by `lightCount` because it selects one light uniformly. Replacing uniform selection with importance sampling means replacing that factor with the real inverse density.
-- The two `updateLightBuffer` overloads must be edited together. They already disagree on the no-light fallback, so a scene with zero `LightComponent`s renders at different brightness through `renderMultiFrame` than through `renderDeferred`.

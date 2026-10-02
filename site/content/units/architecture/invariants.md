@@ -63,34 +63,39 @@ environment variable is set.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "enable with OHAO_VALIDATION=1 env var"}}
 
-So the default for every example binary, every golden render and every session in
-the interactive viewer is a run with no cross-language checking at all. Turn it
-on and the backlog arrives at once: a single `OHAO_VALIDATION=1 ./build/cornell_box
-out.png 1` here emits 74 validation errors across 14 distinct VUIDs — image
-layouts incompatible with the usage flags they were created with, `vkCmdPipelineBarrier2`
-calls on a device that never enabled `synchronization2`, a descriptor set rewritten
-while a command buffer holding it is still pending, buffers outliving `vkDestroyDevice`.
+So the default for every example binary and every golden render is a run with no
+cross-language checking at all. Two things do turn it on. `check_validation.py`
+runs real scenes with the variable set and fails on any message, warning or error:
 
-Two of those 14 are the failure class this page is about, and only the validation
-layer names either. The path tracer's layout still flags binding 12 as the
-variable-count binding while bindings up to 35 are declared behind it, which
-Vulkan does not permit. And the cascade shadow pass creates a pipeline whose
-geometry stage reads a uniform block at set 0, binding 0,
+{{cite tests/validation/check_validation.py "run real scenes under VK_LAYER_KHRONOS_validation and fail on"}}
 
-{{cite shaders/shadow/shadow_csm.geom "layout(set = 0, binding = 0) uniform CascadeMatrices {"}}
+and two `engine_tests` cases set it around `initialize()` and assert that a
+deferred resize — SSAO, TAA and bloom included — leaves the layer silent.
 
-that the pipeline layout never declares: `csm_pass.cpp` fills in a push-constant
-range and leaves `setLayoutCount` at its zero-initialised default, so the pass
-owns no descriptor set at all and never binds one.
+{{cite tests/engine/engine_tests.cpp "the validation layer reports nothing across the resize"}}
 
-{{cite ohao/render/deferred/csm_pass.cpp "pipelineLayoutInfo.pushConstantRangeCount = 1;"}}
+Both read the deferred pipeline, and on it they pass: the checker's two scenes,
+`cornell_box` and the damaged helmet, both report clean. Their reach ends at the
+raster path. The checker's scene list is those two runs, each passed the
+`deferred` token,
 
-`vkCreateGraphicsPipelines` reports it as `VUID-VkGraphicsPipelineCreateInfo-layout-07988`
-— SPIR-V uses a descriptor the host side does not know about, which is exactly
-the C++/GLSL disagreement no compile-time assert can reach. Both errors have
-survived precisely because nothing launches with validation on.
+{{cite tests/validation/check_validation.py "SCENES = ["}}
 
-## The pixel tier is real, coarse, and currently red
+and the path tracer runs under validation only when a person types the command.
+Do so — `OHAO_VALIDATION=1 cornell_box out.png 1 --denoise=none`, the default
+offline mode — and the layer reports exactly one VUID, and it is the failure class
+this page is about. The path tracer's layout flags binding 12 as the
+variable-count binding,
+
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT"}}
+
+while bindings up to 35 are declared behind it, and Vulkan permits the flag only
+on the highest-numbered binding
+(`VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-pBindingFlags-03004`). The
+comment directly above the assignment states the rule the code breaks. The error
+has survived because the one automated validation run never builds this layout.
+
+## The pixel tier is real and coarse
 
 The golden corpus renders two scenes with the denoiser disabled, so what is pinned
 is raw deterministic beauty rather than a filter's output:
@@ -155,15 +160,16 @@ count fixes it.
 
 The repository carries one CI workflow and it publishes this site. There is no
 build job, no `ctest` invocation, no golden run, no installed git hook.
-`engine_tests` and `render_golden.py` both still work — the second one just told
-us something true — and both run only when a person types the command.
+`engine_tests`, `check_validation.py` and `render_golden.py` all work, and all
+three run only when a person types the command.
 
 The audit closes on an honest total, one line per mechanism. The asserts are the
 only tier that fires by itself, on every compile, and they stop at the language
 boundary. `engine_tests` inherits that same ceiling *and* has to be launched. The
-validation layers are the only thing in the stack that reads both sides, and they
-are off unless an environment variable is set. The golden corpus is the only tier
-that judges a finished image, and it is coarse, manual, and failing.
+validation layers are the only thing in the stack that reads both sides; they
+are off unless an environment variable is set, and the script that sets it renders
+only the raster path. The golden corpus is the only tier
+that judges a finished image, and it is coarse and manual.
 
 {{figure architecture-invariants-enforcement-reach "Conceptual: how far each of the four mechanisms reaches across the C++/SPIR-V boundary. Bar lengths are schematic; the tolerances and the opt-in flag are read from render_golden.py and device_setup.cpp, not measured."}}
 
@@ -233,7 +239,7 @@ compared once per upload, not a key column in the hot path.
 :::key
 Every invariant in this engine that spans the C++/GLSL boundary is enforced by a
 person reading two files. The compile-time asserts stop at the boundary,
-validation is opt-in, the golden corpus is coarse and currently failing, and no
+validation is opt-in, the golden corpus is coarse, and no
 automation starts any of them.
 Read every cross-module claim on these pages as something to re-verify against the
 code, not as something the build guarantees.

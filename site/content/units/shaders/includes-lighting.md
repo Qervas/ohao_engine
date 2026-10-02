@@ -8,30 +8,33 @@ figures: [shaders-includes-lighting-falloff]
 
 ## What the include graph actually says
 
-{{cite shaders/core/forward.frag "includes/lighting/light_attenuation.glsl"}}
+`shaders/includes/lighting/` holds two headers, `light_attenuation.glsl` and
+`blinn_phong.glsl`. Grep the include directive across `shaders/` and neither is
+named by any stage; the only `#include` either file takes part in is
+`light_attenuation.glsl` pulling `math.glsl` for itself.
+
+{{cite shaders/includes/lighting/light_attenuation.glsl "includes/common/math.glsl"}}
 
 That would be a boring page if an unused file implied unused math. It does not:
 `deferred_lighting.frag`, the shader that actually runs, re-derives the spot-cone
-ramp, the light-direction and ambient helpers, and the whole split-sum IBL block
+ramp, the light-direction and ambient terms, and the whole split-sum IBL block
 inline — the same algebra, none of it included from here. The one thing it does
-*not* re-derive is the distance law the forward shader adopted.
+*not* re-derive is the distance law this header calls its default.
 
 :::key
-Treat this directory as a proposal, not an implementation. The only shader that
-includes any of it is `forward.frag`, whose pipeline no shipped binary ever
-binds. Everything that ships is in `deferred_lighting.frag`, which copied some of
-this math verbatim and rejected the rest. The interesting failures are where the
-copy and the original disagree.
+Treat this directory as a proposal, not an implementation. No shader includes any
+of it, and the CMake source glob compiles only stages, so neither header is even
+parsed by a shader build. Everything that ships is in `deferred_lighting.frag`,
+which copied some of this math and rejected the rest. The interesting failures
+are where the copy and the original disagree.
 :::
 
-## The falloff forward.frag asks for
+## The falloff the header calls its default
 
-`attenuationSmooth` — commented in the header as "current OHAO default" — is one
-of exactly two functions in `light_attenuation.glsl` that anything in the tree
-calls; `attenuationSpotCone` is the other, and every call site is in
-`forward.frag`'s PBR branch:
+`attenuationSmooth` is commented in the header as "current OHAO default". It has
+no callers, and neither does anything else in the file:
 
-$$a_{\text{fwd}}(d) \;=\; \frac{1}{1 + d^{2}/r^{2}}\;\Big(\mathrm{clamp}\big(1 - \tfrac{d}{r},\,0,\,1\big)\Big)^{2}$$
+$$a_{\text{hdr}}(d) \;=\; \frac{1}{1 + d^{2}/r^{2}}\;\Big(\mathrm{clamp}\big(1 - \tfrac{d}{r},\,0,\,1\big)\Big)^{2}$$
 
 $d$ is the surface-to-light distance and $r$ is the light's range, which travels
 in the `w` channel of the packed direction vector. The first factor is an
@@ -41,12 +44,11 @@ vanish at $d = r$: a light leaving its range fades out instead of popping.
 
 {{cite shaders/includes/lighting/light_attenuation.glsl "float attenuation = 1.0 / (1.0 + (distance * distance) / (range * range));"}}
 
-Point and spot lights both take it; directional lights skip attenuation
-entirely, and spots multiply in a plain linear cone ramp between the inner and
-outer cosines — the header's smoothstepped `attenuationSpotConeSmooth` variant
-has no callers.
+The header pairs it with a plain linear cone ramp between the inner and outer
+cosines, `attenuationSpotCone`, and a smoothstepped `attenuationSpotConeSmooth`
+variant.
 
-{{cite shaders/core/forward.frag "attenuation *= attenuationSpotCone(cosTheta, innerCone, outerCone);"}}
+{{cite shaders/includes/lighting/light_attenuation.glsl "float attenuationSpotCone(float cosAngle, float innerCone, float outerCone) {"}}
 
 The price of that bounded shape is that $r$ scales brightness everywhere, not
 just near the cutoff. Both factors rise monotonically with $r$ at fixed $d$, so
@@ -54,14 +56,6 @@ widening a light's range *brightens* it at every distance: at $d = 5$, taking $r
 from 10 to 20 moves the factor from $0.8 \times 0.25 = 0.200$ to
 $0.941 \times 0.5625 = 0.529$. Range is not a cutoff knob here; it is a second
 intensity knob.
-
-Nothing runs this. `forward.frag`'s pipeline is created on every renderer init,
-but the two `vkCmdBindPipeline` calls that take it sit on the fall-through
-`m_renderMode == RenderMode::Forward` path, and the CLI mode resolver every
-example shares can return only `Deferred`, `RTRealtime` or `RTOffline`.
-
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);"}}
-{{cite examples/example_cli.hpp "if (opts.useDeferred) return RenderMode::Deferred;"}}
 
 ## The falloff the deferred pipeline evaluates
 
@@ -87,21 +81,22 @@ and bounded by 1.
 {{figure shaders-includes-lighting-falloff "Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and deferred_lighting.frag, each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range."}}
 
 :::why
-Two raster pipelines, one `LightData`, two incompatible falloff laws. The
-forward law is dimensionless and peaks at 1; the deferred law carries
-1/length² units and peaks at 100. They are not related by any constant — the
-ratio between them varies with both distance and range — so a light intensity
-tuned in Deferred mode is simply wrong in Forward mode. The obvious fix — one
-shared include — sits directly above `attenuationSmooth` in
-`light_attenuation.glsl`, unused, because adopting a physical law means
-re-authoring every intensity that was tuned against the bounded one.
+One `LightData`, two incompatible falloff laws. The header's default is
+dimensionless and peaks at 1; the deferred law carries 1/length² units and peaks
+at 100. They are not related by any constant — the ratio between them varies
+with both distance and range — so an intensity tuned against one is simply wrong
+under the other. That is the reason not to "tidy" `deferred_lighting.frag` onto
+this header: including it is free, but switching the law re-authors every light
+intensity in every scene. If a shared include is wanted, the function to share
+is the deferred one, and the header's `attenuationUE4` is the closest starting
+point.
 :::
 
-## The IBL that was built twice and wired zero times
+## The IBL the deferred pass evaluates instead
 
-What ships is the same split-sum algebra, written inline in
-`deferred_lighting.frag` and fed from the 2D equirect environment map with a mip
-level as roughness proxy instead of a prefiltered cubemap:
+The header directory has no image-based lighting at all. What ships is split-sum
+IBL written inline in `deferred_lighting.frag`, fed from the 2D equirect
+environment map with a mip level as roughness proxy instead of a prefiltered cubemap:
 
 {{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512"}}
 
@@ -128,79 +123,37 @@ that analytic curve or an undefined texel is not something the code decides.
 
 {{cite shaders/core/deferred_lighting.frag "brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);"}}
 
-## Phase functions with no medium
-
-$$p_{\mathrm{HG}}(\cos\theta,\,g) \;=\; \frac{1-g^{2}}{4\pi\,\big(1 + g^{2} - 2g\cos\theta\big)^{3/2}}$$
-
-$\theta$ is the angle between view and light directions and $g \in [-1,1]$ is the
-asymmetry — positive forward-scattering, negative back. The implementation floors
-the base of the $3/2$ power at $10^{-4}$: as $g \to 1$ with $\cos\theta \to 1$
-the denominator collapses to zero, and without the floor the lobe returns `inf`
-or, at $g = 1$ exactly, a $0/0$ `NaN`.
-
-There is a trap in the word "disabled", and a second trap behind it. The shader
-CMake globs recursively with no exclusion, so both consumers land on the
-`shaders` target's dependency list and a syntax error in either breaks
-`cmake --build build --target shaders`. But that target is declared without
-`ALL`, and nothing in the tree calls `add_dependencies` on it, so `shaders/all`
-in the generated build system has no prerequisites: a plain
-`cmake --build build` compiles no shaders at all. The disabled files only bite
-whoever asks for shaders by name.
-
-{{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SHADER_SOURCES"}}
-{{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
-
-The C++ side used to read like the symmetric fix and was not one: the render
-library's glob carried a `/_disabled/` exclusion long after the C++ `_disabled`
-directory it named had been deleted, so the filter matched zero files for five
-months. Both the filter and the shader archive it was the twin of are now gone.
-
 ## blinn_phong.glsl and the scar it documents
 
-This header sits behind the `#else` of a feature flag that defaults on, and
-`glslc` is invoked with no `-D` arguments anywhere in the build, so the branch
-never compiles.
-
-{{cite shaders/core/forward.frag "#define USE_PBR 1  // Enable PBR by default"}}
-{{cite shaders/CMakeLists.txt "--target-env=vulkan1.3"}}
-
+This header is a legacy Blinn-Phong shading entry point that no stage includes.
 Its `calculateAttenuation` is a line-for-line copy of `attenuationSmooth` with
 `clamp(x, 0.0, 1.0)` substituted for `saturate` — the file includes nothing, so
-it cannot reach the helper in `math.glsl`. The comment above its entry point is
-worth more than the code beneath it:
+it cannot reach the helper in `math.glsl`, and it states its own prerequisite as
+a comment instead:
+
+{{cite shaders/includes/lighting/blinn_phong.glsl "// Requires: includes/common/types.glsl"}}
+
+The comment above its entry point is worth more than the code beneath it:
 
 {{cite shaders/includes/lighting/blinn_phong.glsl "// CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!"}}
 
-The PBR branch obeys it — `getLightParams` takes an `int lightIndex` and
-indexes the UBO directly — while `deferred_lighting.frag` copies `Light` out of
-its buffer freely, so whatever produced the original corruption was not
-universal.
+So it takes an `int lightIndex` and reads every field by indexing the UBO
+directly, which is what forces the caller's block to be declared under the name
+`lighting`. `deferred_lighting.frag` copies `Light` out of its buffer freely, one
+whole struct per loop iteration, so whatever produced the original corruption is
+not something the shipping pass guards against.
 
-`LightParams`, `ShadowParams`, `getLightDirection`, `getLightDistance`,
-`calculateAmbient`, `lightCastsShadow` — none of these are referenced anywhere
-in `shaders/` or `ohao/`. The C++ `getLightDirection` that grep turns up is an
-unrelated `DeferredRenderer` accessor. The bodies still run, though:
-`deferred_lighting.frag` branches on light type to pick `normalize(-direction)`
-or `normalize(lightPos - fragPos)` exactly as `getLightDirection` does, and
-builds its ambient term from the same intensity·AO·albedo product.
+{{cite shaders/core/deferred_lighting.frag "Light light = lighting.lights[i];"}}
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;"}}
-
-The packing it documents is real, and is the contract both raster pipelines
-depend on: type, range, intensity and shadow-map index ride in the `w` and `params`
-channels of four `vec4`s, followed by a 64-byte light-space matrix — 128 bytes
-per light, `std140`-compatible by construction.
+The packing these headers assume is real, and is the contract the deferred
+pipeline depends on: type, range, intensity and shadow-map index ride in the `w`
+and `params` channels of four `vec4`s, followed by a 64-byte light-space matrix —
+128 bytes per light, `std140`-compatible by construction.
 
 {{cite ohao/gpu/vulkan/renderer.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
 {{cite shaders/includes/common/types.glsl "vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
 
-It also re-declares the light-type enum under an `#ifndef`, commented as relying
-on the preprocessor "using the first definition". Values match `types.glsl`
-exactly so nothing breaks, but that rule is not real — identical redefinition is
-legal in any order, a differing one is a diagnostic — so do not lean on the
-comment when adding a fourth light type.
-
 ## Contracts
 
-- `light_attenuation.glsl` and `blinn_phong.glsl` hold two copies of the same smooth falloff. Editing one without the other desynchronises the forward PBR branch from the legacy one — and nothing catches it, because the legacy branch is not compiled until someone builds with `USE_PBR=0`.
-- Forward and deferred point-light attenuation are different functions with different units, so intensities are not portable between `RenderMode::Forward` and `RenderMode::Deferred`. No shipped binary selects Forward: the forward pipeline is created on every init and never bound, so the header's law is compiled into SPIR-V but executed by nothing.
+- `light_attenuation.glsl` and `blinn_phong.glsl` hold two copies of the same smooth falloff. Editing one without the other desynchronises them, and nothing catches it: no shader includes either file, so neither is compiled.
+- The header's default falloff and `deferred_lighting.frag`'s windowed inverse-square have different units, so intensities tuned against the deferred pass are not portable to anything that adopts the header law.

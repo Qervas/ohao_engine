@@ -88,12 +88,11 @@ Renumbering the enum therefore re-lights every path-traced frame with no compile
 
 {{cite shaders/core/deferred_lighting.frag "            L = normalize(-light.direction.xyz);"}}
 
-It renumbers twice, because the frame-indexed overload is a copy of the unindexed one — and the copy has already drifted. Both end with a fallback that inserts a default light when the scene has none, and the two fallbacks disagree: the original emits a warm tint at intensity `glm::pi<float>()`, with a comment naming that as compensation for the energy-conserving divide-by-pi in the diffuse BRDF; the copy emits pure white at intensity 1.
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 :"}}
+
+The same function supplies the light an empty scene gets. When no component and no emissive mesh contributes one, it inserts a default directional light: a warm tint at intensity `glm::pi<float>()`, with a comment naming that as compensation for the energy-conserving divide-by-pi in the diffuse BRDF.
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);"}}
-
-Both overloads are live — `renderDeferred` and `renderLegacy` take the unindexed one, `renderMultiFrame` the frame-indexed one — so an empty scene gets a different key light, in tint and by a factor of pi in intensity, depending on which entry point ran.
 
 The scalar fields are overloaded per type as well. `dirAndParam.w` is `LightComponent::radius` for every type *except* spot, which overrides it with the inner cone angle and displaces the outer angle into `extra.w`; area rectangles put their two edge vectors and a CPU-precomputed `length(cross(e1, e2))` into `extra`/`extra2`.
 
@@ -168,7 +167,7 @@ A component is visible only as the exact type it was added as, and only one inst
 - The constructor's `TransformComponent` is a convention, not a protected slot: `removeAllComponents()` and `removeComponent<TransformComponent>()` both clear it, after which `uploadLightBuffer` dereferences a null transform.
 - Transforms must be sampled from one thread: `getWorldMatrix()` is `const` but `const_cast`s to rebuild lazily.
 - `getLocalMatrix()` is stale unless `getWorldMatrix()` was called since the last `setDirty()`; only the world accessor triggers a rebuild.
-- `LightType`'s numeric values are the path tracer's wire format — reordering the enum changes shading with no build error. The deferred UBO uses a different numbering and remaps at upload, in two hand-maintained copies whose zero-light fallbacks have already diverged by a factor of pi.
+- `LightType`'s numeric values are the path tracer's wire format — reordering the enum changes shading with no build error. The deferred UBO uses a different numbering and remaps at upload, in one hand-written ternary that must change with the enum.
 - An `AreaRect` light's radiance ignores its rectangle: the raygen normalises every non-spot light by the sphere area implied by `LightComponent::radius`. Resizing the edges changes falloff, not brightness.
 - `AreaRect` has no deferred branch at all — the type remap collapses it onto the spot path, which then applies a cone attenuation from angles nobody set.
 - Lights are positioned from the actor's local transform, meshes from the world matrix, so parented lights are placed wrong in both pipelines.

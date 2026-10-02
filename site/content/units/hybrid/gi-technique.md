@@ -179,39 +179,41 @@ Since that counter only increases, there is no history invalidation: not on a
 camera cut, not on a scene reload. The one frame that ignores history is the first
 the technique ever renders.
 
-## The image dance, and the resize that breaks it
+## The image dance, and the frame counter a resize keeps
 
 {{figure hybrid-gi-technique-image-lifetime "Conceptual timeline of the two GI images across one render() call, transcribed from the barrier sequence in rt_gi_technique.cpp. Not a capture."}}
 
 History is not a ping-pong pair. It is a full-resolution `vkCmdCopyImage` of the
 output at the end of every frame — a redundant read-write of the whole RGBA16F
 surface, bought for descriptor views that never alternate. The barrier before the
-trace declares the history image's incoming layout conditionally:
+trace declares the history image's incoming layout unconditionally:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "barriers[1].oldLayout = (m_frameIndex == 0)"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;"}}
 
-which is correct exactly as long as the history image is the same object it was
-last frame. `resize()` breaks that: it destroys and recreates the *output* trio,
-then calls `createOutputImage()` —
+That holds because nothing leaves the history anywhere else. A history image that
+has never been written is zeroed first, in that layout, so the raygen never blends
+undefined memory — a NaN there would survive every later frame:
+
+{{cite ohao/render/rt/rt_gi_technique.cpp "if (!m_historyValid) {"}}
+
+and every later frame's copy ends with the history as its transfer destination.
+`resize()` destroys and recreates both images through `createOutputImage()`,
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "createOutputImage();"}}
 
-— which unconditionally allocates a second image into the history handles too:
+which marks the new history invalid, so it is cleared on its first use too. What
+`resize()` does not touch is `m_frameIndex`. The first frame after a resize
+therefore takes the steady-state weight of 0.3 against a history of zeros rather
+than the bootstrap 1.0: indirect light drops to 30 % of its estimate and recovers
+as $1 - 0.7^{n}$ over the following $n$ frames — about seven frames to come
+within 10 %.
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;"}}
+The descriptor state does not race the GPU. The GBuffer sampler is created on
+the first `render()` and kept until `destroy()`, and the set it is written into is
+one of `MAX_FRAMES_IN_FLIGHT`, chosen by the caller's frame slot, so a set is never
+rewritten while a submitted command buffer still holds it:
 
-So a resize leaks the old history image, memory and view; the replacement sits in
-`UNDEFINED` while `m_frameIndex` is still large, so the next barrier claims
-`TRANSFER_DST_OPTIMAL` for an image never in it, and the blend weight stays 0.3
-instead of the bootstrap 1.0. One resize mixes 70% of uninitialised memory into
-the following frame.
-
-The sampler has a lifetime problem of the same family: created inside `render()`,
-written into the descriptor set, and destroyed before the function returns —
-
-{{cite ohao/render/rt/rt_gi_technique.cpp "vkDestroySampler(m_device, sampler, nullptr);"}}
-
-— before the command buffer referencing those descriptors is even submitted.
+{{cite ohao/render/rt/rt_gi_technique.cpp "const VkDescriptorSet set = m_descriptorSets[input.frameSlot];"}}
 
 One more dependency is missing from the graph rather than from `render()`. The RTGI
 pass declares reads on the normal and albedo handles only:
@@ -261,14 +263,14 @@ layout and again in the raygen:
 
 {{cite shaders/rt/rt_gi.rgen "uniform sampler2D directLighting;"}}
 
-`render()` fills that slot with the GBuffer *depth* view, under
-`SHADER_READ_ONLY_OPTIMAL` while the GBuffer render pass leaves depth in
-`DEPTH_STENCIL_READ_ONLY_OPTIMAL`:
+`render()` fills that slot with the GBuffer *depth* view, described in the
+`DEPTH_STENCIL_READ_ONLY_OPTIMAL` layout that depth keeps from the GBuffer pass to
+the end of the frame:
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "directLightInfo.imageView = input.depthBuffer;"}}
 
 Nothing samples it: `directLighting` occurs exactly once in the whole shader tree,
-in that declaration, so the mismatch costs nothing today. It matters as a trap.
+in that declaration, so the slot costs nothing today. It matters as a trap.
 Binding 5 is the obvious home for the fix this page keeps circling — a bounce
 surface's real incident light, read from the frame's own direct lighting instead of
 re-derived from one push-constant lamp — and the slot already holds a depth image.
@@ -287,19 +289,23 @@ second multiply here would square the surface colour. That same `ambient`
 accumulator is where IBL lands when an env map is bound, so GI and image-based
 lighting are additive, not exclusive.
 
-The bind must happen before the render graph executes, though not for the reason
-the call site suggests. `DeferredLightingPass::execute` rewrites its entire
-descriptor set as its first act, so descriptor staleness is not the hazard. What
-`execute` reads and cannot recover from is the *member* `m_ssgiView`: once to raise
-flag bit 3, without which the shader never samples binding 11 at all —
+The handover is per frame and conditional on rays having been traced. Before the
+graph executes, the renderer clears the lighting pass's GI view; the RTGI pass's
+record callback hands its output back only if `render()` actually dispatched —
+it returns early with no TLAS —
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI->rendered() && m_lightingPass)"}}
+
+and the lighting pass, registered after it, reads the member at its own record
+time: once to raise flag bit 3, without which the shader never samples binding 11
+at all,
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;"}}
 
-— and once, inside that descriptor rewrite, to choose the real view over the dummy
-fallback. Both happen during `m_renderGraph.execute`, so the view has to be set
-before that call:
-
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_lightingPass->setSSGITexture(giOut.indirectLightView, VK_NULL_HANDLE);"}}
+and once inside `writeDescriptorSet`, which rewrites that frame slot's whole set
+and chooses the real view over the dummy fallback. A frame that traced nothing
+therefore renders with no indirect term rather than with a stale or never-written
+GI image.
 
 :::key
 This is a one-bounce *irradiance-from-albedo* estimator, not a miniature path
@@ -311,6 +317,6 @@ in what the hit shader is permitted to know, which is one `vec4`.
 
 - The raygen multiplies indirect light by the receiving surface's albedo before writing. Any consumer of binding 11 must not multiply by albedo again.
 - The material buffer is indexed by `gl_InstanceID`, so `setMaterialAlbedos` must receive albedos in exactly TLAS instance order — the build loop collects both in one pass for that reason. Instances past the supplied list keep the 0.8 grey default, but only as far as index 255: the SSBO is 256 `vec4`s, the descriptor's `range` matches, the closest-hit shader clamps nothing, and the TLAS build loop caps instance count at nothing. Instance 256 reads past the bound range, on a device created without `robustBufferAccess`.
-- `setSSGITexture` must run before `m_renderGraph.execute`, or that frame's lighting pass takes the dummy view and never raises the SSGI flag bit. The `updateDescriptorSets()` beside it in the renderer is redundant — `execute()` rewrites the set itself.
-- `resize()` must reset the frame counter and release the history image. Today it does neither.
+- `setSSGITexture` must run after the per-frame reset and before the lighting pass records — today from the RTGI pass's callback, which the graph records first — or that frame's lighting pass takes the dummy view and never raises the SSGI flag bit. Hand over the view only when `rendered()` is true.
+- `resize()` releases and re-clears the history image but keeps the frame counter, so the first frame after it blends at 0.3 against zeros. Resetting `m_frameIndex` there would restore the bootstrap weight.
 - The sky test is `worldPos == vec3(0.0) && posSample.a == 0.0`, matching the GBuffer0 clear exactly, so a surface at the world origin with metallic 0 gets no GI.

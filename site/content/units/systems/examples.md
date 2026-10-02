@@ -12,14 +12,20 @@ actors, and nothing under `ohao/scene/` deserialises anything but a mesh asset.
 A scene exists only as the C++ that constructs it — `createActor`, then a
 `MeshComponent`, a `MaterialComponent`, a `LightComponent`.
 
-`examples/` builds five non-interactive binaries, plus the GLFW `interactive`
-viewer when GLFW is found. Four of the five are half scene description, half
-harness. `cornell_box` writes its walls as raw `Vertex` quads and stacks twelve
+`examples/` builds four offline binaries and one windowed host. The four
+offline ones are half scene description, half harness. `cornell_box` writes its walls as raw `Vertex` quads and stacks twelve
 coloured sphere lights in the box as a many-light stress case. `model_viewer`
 builds a bedroom — bed, headboard, nightstand — around whatever model you pass,
 sized from the model's own bounds by `SceneFramer`. `turntable` picks its room
 from a mode string and orbits. `env_demo` drops a 50 m procedural ground quad
 under the model so it stops floating in void.
+
+The fifth, `ohao_game`, is not a harness. It hands a helmet-on-a-floor scene to
+`ohao_runtime`'s `Application`, which renders deferred into a swapchain and runs a
+fixed-step loop with a WASD fly camera; nothing is read back to the CPU, and its
+`--frames N` mode fails the run if anything was.
+
+{{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
 
 Everything below — the `+ 3` loop, the shared argv parser, the destruction
 order — describes these four inline drivers.
@@ -152,12 +158,10 @@ the Y-up branch.
 {{cite examples/env_demo.cpp "flipModel ? 180.0f : 0.0f"}}
 
 That makes it the NRD/guide-buffer debugging instrument rather than a demo. It
-is the only place the ViewZ, roughness, diffuse/specular radiance, hit-distance
-and NRD-composed images become PNGs. Motion vectors it does not own: the GLFW
-`interactive` viewer dumps `renders/mv_interactive.png` on the `M` key, through
-a second, independently written copy of the same decoder.
+is the only place the motion-vector, ViewZ, roughness, diffuse/specular radiance,
+hit-distance and NRD-composed images become PNGs.
 
-{{cite examples/interactive.cpp "MV dumped: "}}
+{{cite examples/env_demo.cpp "if (!renderer.readbackMotionVector(mvRaw, mw, mh)) {"}}
 
 The surprise is the default. Lighting mode defaults to `Studio`, and studio mode
 skips loading the HDR that `argv[2]` mandates:
@@ -227,31 +231,21 @@ six.
 {{cite examples/model_viewer.cpp "subModel->vertices.push_back(model->vertices[oldIdx]);"}}
 
 Worth knowing before copying that pattern: neither of the two render paths
-`model_viewer` can actually select still requires the split. The RT material
-table already carries per-triangle material IDs, offset per model, and the
-GBuffer pass already subdivides each actor's index range into per-material draw
-ranges.
+`model_viewer` can select requires the split. The RT material table already
+carries per-triangle material IDs, offset per model, and the GBuffer pass already
+subdivides each actor's index range into per-material draw ranges.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "drawRanges = buildMaterialDrawRanges(*model, bufferInfo);"}}
 
-The path that genuinely takes one material per actor is the forward/legacy
-rasteriser, which reads a single `MaterialComponent` and pushes it as one push
-constant per draw.
+Nor is there a third path that would. `render()` runs the RT pipeline when the
+mode has one, its renderer exists and an acceleration structure was built, and
+`renderDeferred()` otherwise — including on a device without ray tracing, where
+`setRenderMode` refuses the RT switch and the mode stays `Deferred`.
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "auto materialComp = actor->getComponent<MaterialComponent>();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "renderDeferred();"}}
 
-`render()` reaches that path when the RT guard fails — no RT pipeline for the
-mode, no RT renderer, or no acceleration structure — and the deferred guard
-fails as well. That second guard tests the renderer's existence, not just the
-mode, so it is `m_deferredRenderer` that decides, not `RenderMode::Deferred`
-alone.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_renderMode == RenderMode::Deferred && m_deferredRenderer) {"}}
-
-The reachable case is a device without ray-tracing support: `setRenderMode`
-refuses the switch, the mode stays `Forward`, and an `rt_offline` request
-silently renders through the legacy rasteriser. So the split is insurance for
-the no-RT fallback, paid for in vertex count and BLAS entries on every run.
+So the split is paid for in vertex count and BLAS entries on every run and buys
+nothing on either path.
 
 :::key
 The frame you last rendered is not the frame you saved. Both the RT and the
@@ -267,5 +261,5 @@ buffer or refuses to accumulate into it.
 - Under `--denoise=none`, `render()` must be called `spp + MAX_FRAMES_IN_FLIGHT` times to land `spp` accumulated samples in the host buffer. The same loop hands OIDN `spp + 3` samples and `Atrous`/`DLSSRR` exactly 1. If the ring depth ever changes, every driver's `+ 3` is wrong and only `--denoise=none` output will show it.
 - Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.
 - The `Scene` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the scene second, so reverse-order destruction of locals gets it right; `cornell_box` and `model_viewer` also call `scene.reset()` explicitly. Swapping those two declarations tears down Vulkan resources still referenced by actors.
-- `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three non-interactive drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.
+- `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.
 - An unknown trailing flag is silently ignored by `parseRenderFlags` and by `env_demo`'s own parser — typos degrade to defaults rather than failing the run.

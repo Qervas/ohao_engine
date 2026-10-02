@@ -9,17 +9,21 @@ figures: [deferred-csm-frustum-corner-pairing]
 ## The path that only runs when ray tracing is off
 
 `CSMPass` is the deferred pipeline's fallback sun shadow: a real render-graph pass
-that allocates a `D32_SFLOAT` image with one 2048² array layer per cascade, is *meant*
-to render depth from the light, and hands the array view plus a cascade UBO to the
-lighting pass. The middle step is the one that does not survive inspection — see
-*One layer, four broadcasts*.
+that allocates a `D32_SFLOAT` image with one 2048² array layer per cascade, renders
+depth from the light into each layer in turn, and hands the array view plus a cascade
+UBO to the lighting pass.
 
 {{cite ohao/render/deferred/csm_pass.hpp "static constexpr uint32_t SHADOW_MAP_SIZE = 2048;"}}
 
 The lighting shader only consults it when the RT shadow mask is absent.
 `DeferredLightingPass::execute` zeroes the flag word every frame and rebuilds it from
 the currently bound views: an RT shadow view sets bit 5, and only its absence lets the
-CSM array view set bit 2.
+CSM array view set bit 2. `DeferredRenderer` clears the RT mask before recording the
+graph and hands it back only from an `RTShadow` pass whose `render()` actually traced,
+so a frame with no TLAS instances falls back to this page's map rather than sampling
+an unwritten mask.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtShadow->rendered() && m_lightingPass)"}}
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 4;   // CSM fallback (bit 2)"}}
 
@@ -47,7 +51,7 @@ whenever $n$ is small.
 
 {{cite ohao/render/deferred/csm_pass.cpp "float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;"}}
 
-`setSplitLambda`'s only caller is a smoke test in `renderer_test`, and it re-sets the
+`setSplitLambda`'s only caller is a smoke test in `renderer_pipeline_tests.cpp` — a file no `CMakeLists.txt` builds — and it re-sets the
 value the constructor already holds, so $\lambda$ is 0.95 in every frame the engine
 renders.
 
@@ -164,49 +168,54 @@ blend:
 The two also disagree structurally: the include's `CascadeData` ends in a `float
 padding` where the C++ struct and the live UBO both declare a `uint cascadeCount`.
 
-## One layer, four broadcasts
+## One render pass per cascade
 
-The raster side has a matching split personality. The vertex shader applies no
-projection at all — it writes `gl_Position` as the raw world position and leaves the
-light transform to the geometry shader:
-
-{{cite shaders/shadow/shadow_csm.vert "outWorldPos = (object.model * vec4(inPosition, 1.0)).xyz;"}}
-
-A geometry shader then broadcasts every triangle to all four array layers via
-`gl_Layer`:
-
-{{cite shaders/shadow/shadow_csm.geom "gl_Layer = cascade;  // Select cascade layer in texture array"}}
-
-That is the standard single-pass layered approach, and it needs a layered
-framebuffer. `CSMPass::execute` does the opposite: it loops over cascades, begins a
-render pass each time, and pushes a `cascadeIndex` the geometry shader ignores into
-a framebuffer built from a single-layer view.
+The raster side is the plain multi-pass form of layered rendering. `createShadowMap`
+builds, besides the `2D_ARRAY` view the lighting shader samples, one single-layer
+`2D` view per cascade, and `createFramebuffers` wraps each in its own one-layer
+framebuffer:
 
 {{cite ohao/render/deferred/csm_pass.cpp "framebufferInfo.layers = 1;"}}
 
-The geometry shader also declares its cascade matrices as a descriptor:
+`CSMPass::execute` loops over the four cascades, begins the depth-only render pass on
+that cascade's framebuffer, and redraws every visible mesh. Nothing routes primitives
+to a layer: the framebuffer already *is* the layer. The pipeline therefore has a
+vertex stage and nothing else — no geometry shader, no fragment shader, no descriptor
+set — and the vertex shader projects straight into the cascade being rendered:
 
-{{cite shaders/shadow/shadow_csm.geom "layout(set = 0, binding = 0) uniform CascadeMatrices {"}}
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * pc.model * vec4(inPosition, 1.0);"}}
 
-`createPipeline` builds its `VkPipelineLayoutCreateInfo` with a push-constant range
-and nothing else — `setLayoutCount` is left at zero and `pSetLayouts` at null — and
-`execute` never calls `vkCmdBindDescriptorSets`. No descriptor set backs that UBO, so
-`gl_Position = cascades.viewProj[cascade] * worldPos` reads undefined data: a
-layout/shader-interface mismatch the Vulkan spec requires to be consistent.
+The cascade's matrix travels in push constants next to the model matrix, re-pushed
+per draw from the `m_cascadeData` the same `execute` just recomputed:
 
-{{cite shaders/shadow/shadow_csm.geom "gl_Position = cascades.viewProj[cascade] * worldPos;"}}
+{{cite ohao/render/deferred/csm_pass.cpp "push.viewProj = m_cascadeData.viewProj[cascade];"}}
 
-The matrices themselves are not lost — `execute` memcpys them into the
-persistently-mapped cascade UBO, and `DeferredRenderer` hands that buffer to the
-lighting pass, where binding 12 feeds the `calculateShadowCSM` that actually ships.
-Only the geometry shader, the one stage that needs them to *write* the map, misses
-them.
+:::why
+Two `mat4`s are exactly 128 bytes, the push-constant size every Vulkan device must
+support, and the header pins it with a `static_assert`. Push constants are recorded
+into the command buffer by value, so the shadow raster needs no per-frame buffer and
+no descriptor set to keep in step with frames in flight. A single-pass layered
+variant (a geometry shader or `gl_Layer` from the vertex stage broadcasting to all
+four layers) would cut the draw count by four, but needs a layered framebuffer and
+either a GS stage or `shaderOutputLayer`; at four cascades the plain loop is the
+portable choice.
+:::
+
+{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 128"}}
+
+The same matrices also go to the *sampling* side: `execute` memcpys `m_cascadeData`
+into the persistently-mapped cascade UBO, and `DeferredRenderer` hands that buffer
+to the lighting pass, where binding 12 feeds `calculateShadowCSM`.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "setCascadeBuffer(m_csmPass->getCascadeBuffer())"}}
+
+The render pass leaves every layer in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`; the move to
+a shader-readable layout before lighting is the render graph's barrier, which covers
+all four array layers rather than layer 0 alone.
 
 ## Contracts
 
 - `setCameraData` must receive the **unjittered** projection. `DeferredRenderer` passes `m_proj` while the GBuffer pass gets `jitteredProj`; a jittered matrix would nudge every cascade sphere each frame and defeat the texel snapping.
 - The lighting shader applies CSM only to lights of type 0 (directional) and only when flag bit 2 is set. Point and spot lights are unshadowed on this path.
-- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so overlapping frames in flight read whatever the CPU wrote last.
+- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from push constants recorded into its own command buffer.
 - The shadow sampler is created with `compareEnable = VK_TRUE` and `VK_COMPARE_OP_LESS_OR_EQUAL`, but binding 6 is declared `sampler2DArray` (not `sampler2DArrayShadow`) and the shader compares depths itself. The comparison state is dead, and Vulkan requires a compare-enabled sampler to be used with depth-compare instructions.

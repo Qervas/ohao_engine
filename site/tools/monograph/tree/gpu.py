@@ -69,12 +69,5 @@ MODULE = {
             files=['ohao/gpu/layout_meta.hpp', 'ohao/gpu/vulkan/material.hpp', 'ohao/gpu/vulkan/material.cpp', 'ohao/gpu/vulkan/material_instance.hpp', 'ohao/gpu/vulkan/material_instance.cpp'],
             design=['layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL.', 'Material + MaterialInstance are CPU-side authoring; packed rows feed bindless + PT material SSBO.', 'OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree — silent pink is worse.'],
         ),
-        page(
-            'pipeline-fb',
-            'Legacy pipeline & framebuffer',
-            'Forward pipeline creation, offscreen FB, shadow resources.',
-            files=['ohao/gpu/vulkan/pipeline.cpp', 'ohao/gpu/vulkan/framebuffer.cpp'],
-            design=['Forward path remains for simple demos and regression; deferred is the production raster path.', 'Framebuffer helpers allocate offscreen color/depth used by present and readback.'],
-        ),
     ],
 }

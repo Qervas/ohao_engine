@@ -5,31 +5,53 @@ title: Frame resources ring
 standard: v2
 ---
 
-## Three slots for a renderer that presents nothing
+## Three slots, and what each one fences
 
 The header justifies the ring depth as textbook triple buffering: one frame executing on the GPU, one being recorded by the CPU, one on screen.
 
 {{cite ohao/render/frame/frame_resources.hpp "3 frames allows for optimal pipelining: one being rendered by GPU,"}}
 
-The third of those does not exist in this engine. There is no `VkSwapchainKHR` and no `vkQueuePresentKHR` anywhere under `ohao/`, `examples/` or `tests/`; nothing is ever "being displayed" by a presentation engine, and no submission in the frame path carries a semaphore. The consumer at the end of the pipe is a host `memcpy` out of a slot's mapped staging buffer into a CPU pixel vector.
+The slots themselves are small. Each holds a primary command buffer, a fence created signalled, and a host-visible staging buffer for pixel readback — nothing else.
 
-So the slot the comment assigns to the display is really the slot that lets the CPU read a *finished* image without asking the GPU to stop. Each frame body takes the slot it is about to reuse, waits on its fence, copies the staging buffer the GPU filled the last time that slot ran, resets the fence, and only then re-records into it. Depth 3 sets how much GPU work stands between that read and the write that would overwrite it.
+{{cite ohao/render/frame/frame_resources.hpp "VkFence renderFence{VK_NULL_HANDLE};"}}
+
+What a slot really guards is larger than what it owns. `VulkanRenderer` indexes everything that a submitted frame may still be reading by the same `m_currentFrame`: the slot's command buffer and staging buffer, the swapchain acquire semaphore `m_imageAcquired[slot]`, and — handed down as `frameIndex` — the per-slot descriptor sets that lighting, SSS, SSR, TAA, bloom and the tonemap rewrite at record time. Waiting on one fence retires all of them together. That is the ring's whole contract: after `waitForFrame(slot)` returns, nothing the GPU did the last time that slot ran is still in flight, so every slot-indexed object can be rewritten.
+
+{{cite ohao/gpu/vulkan/renderer.hpp "std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAcquired{};"}}
+
+The "one on screen" in the header is not a slot. Displayed images belong to the swapchain, whose image count is chosen independently — the surface minimum plus one — and whose render-finished semaphores are indexed by image, not by slot:
+
+{{cite ohao/gpu/vulkan/swapchain.hpp "// Render-finished semaphores are one PER IMAGE, indexed by the acquired image,"}}
+
+:::why
+A per-slot render-finished semaphore would be wrong even though per-slot acquire semaphores are right. The slot fence proves the *submission* that waited on `m_imageAcquired[slot]` has completed, so that semaphore is free to reuse. Nothing proves the *presentation* that waited on a render-finished semaphore has consumed it — no fence tracks `vkQueuePresentKHR` — so a slot-indexed one can still be pending on a different image when the slot comes round. Indexing by image ties its reuse to reacquiring that image, which the presentation engine hands back only once the previous present of it is done.
+:::
+
+## The frame body, in the order that keeps the fence honest
+
+`renderDeferred` rebuilds a dirty swapchain *before* it takes a slot: recreation resizes the renderer, which idles the device and resets `m_currentFrame` to 0, and doing that after choosing a slot would wait on one slot's fence and reset another's. Then it waits, acquires, and only then resets the fence:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Every early return below happens BEFORE resetFrame, so the slot's fence stays"}}
+
+The ordering matters because `vkResetFences` is a promise to submit. A frame that resets the fence and then bails — an out-of-date acquire, a minimised window — leaves it unsignalled with nothing queued to signal it, and the next `waitForFrame` on that slot blocks forever. Every exit before `resetFrame` leaves the fence as it found it.
+
+From there the body records into the slot's command buffer and ends at one of two consumers. Windowed, it blits the deferred output into the acquired swapchain image, submits waiting on `m_imageAcquired[slot]` at the transfer stage and signalling that image's render-finished semaphore, and presents. Headless, it copies the output into the slot's staging buffer instead, and the host reads that buffer back with a `memcpy` the next time the slot comes round — after its fence has proved the copy finished:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Headless: this slot's staging buffer holds the frame finished"}}
 
 ## One constant, and the drivers that hardcode it anyway
 
-Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a literal: the command-buffer count, the fence loop, the descriptor-set count, the `std::array` of slots, and — outside this file — the descriptor pool, which budgets one extra set for the legacy non-ring path.
+Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a literal: the command-buffer count, the fence loop, the `std::array` of slots, the acquire semaphores, and every per-slot descriptor-set array in the deferred passes.
 
-{{cite ohao/gpu/vulkan/pipeline.cpp "const uint32_t totalSets = framesInFlight + 1; // +1 for legacy compatibility"}}
-
-The depth leaks back out as a bare `3` wherever a driver flushes the readback lag before saving an image — four sites, none of which reads the constant. All four are the offline examples.
+The headless readback lag leaks back out as a bare `3` wherever a driver flushes it before saving an image — four sites, none of which reads the constant. All four are the offline examples on the RT path, which reads back through the same slot ring.
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
 
-`cornell_box` and `model_viewer` write `samples + 3`, `turntable` writes `spp + 3`, and `env_demo` splits its three across the `--pan-x` branch — `samples + 2`, then one more `render()` after the camera moves. Raise the constant to 4 and all five capture an image one accumulation pass earlier than they meant to.
+`cornell_box` and `model_viewer` write `samples + 3`, `turntable` writes `spp + 3`, and `env_demo` splits its three across the `--pan-x` branch — `samples + 2`, then one more `render()` after the camera moves. Raise the constant to 4 and all four capture an image one accumulation pass earlier than they meant to.
 
-## Nine allocations the engine's own allocator never sees
+## Three allocations the engine's own allocator never sees
 
-Each slot owns three buffers — camera UBO, light UBO, readback staging — built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly. Three slots therefore mean nine buffers backed by nine separate `VkDeviceMemory` allocations, persistently mapped at creation and never unmapped except on resize. The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
+Each slot's staging buffer is built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly: three buffers backed by three separate `VkDeviceMemory` allocations, each `width * height * 4` bytes, persistently mapped at creation and unmapped only on resize. They exist in windowed mode too — `initializeFrameResources` always asks for them — where nothing copies into them. The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
 
 {{cite ohao/render/frame/frame_resources.cpp "if ((typeFilter & (1 << i)) &&"}}
 
@@ -37,14 +59,12 @@ Failing to find one is the subsystem's only `throw`, in a file where every other
 
 {{cite ohao/render/frame/frame_resources.cpp "throw std::runtime_error("}}
 
-All nine ask for `HOST_VISIBLE | HOST_COHERENT`. Coherent memory needs no flush or invalidate, which is right for the two uniform buffers the CPU writes each frame. The staging buffer is the opposite traffic — the CPU *reads* `width * height * 4` bytes out of it — yet gets the same mask, never requesting `HOST_CACHED`, the property that would let those reads go through the CPU cache.
+All three ask for `HOST_VISIBLE | HOST_COHERENT`. The traffic is CPU *reads* of a whole frame, yet the mask never requests `HOST_CACHED`, the property that would let those reads go through the CPU cache. Each buffer is zeroed at creation rather than left as whatever the driver returned, so the first pass around the ring reads black instead of garbage.
 
-It is zeroed at creation rather than left as whatever the driver returned, so the first pass around the ring reads black instead of garbage.
-
-{{cite ohao/render/frame/frame_resources.cpp "// Initialize staging buffer to black"}}
+{{cite ohao/render/frame/frame_resources.cpp "// Initialize staging buffer to black (prevents garbage on first few frames)"}}
 
 :::why
-The engine ships a VMA-backed `GpuAllocator` whose usage enum includes a dedicated readback mode, and the ring uses none of it — not even the suballocation that would collapse nine device allocations into a handful.
+The engine ships a VMA-backed `GpuAllocator` whose usage enum includes a dedicated readback mode, and the ring uses none of it.
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "case AllocationUsage::GpuToCpu:"}}
 
@@ -54,7 +74,7 @@ The engine ships a VMA-backed `GpuAllocator` whose usage enum includes a dedicat
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_renderGraph.initialize(m_device, m_physicalDevice);"}}
 
-The hand-rolled path keeps this file self-contained and VMA-free, which makes it cheap to read and cheap to move. The cost is that the readback buffer, the one allocation whose access pattern differs, is allocated exactly like the two that do not.
+The hand-rolled path keeps this file self-contained and VMA-free, which makes it cheap to read and cheap to move. The cost is that the one allocation whose access pattern is a readback gets no readback-friendly memory.
 :::
 
 ## The fence starts signalled, and nobody checks it afterwards
@@ -67,17 +87,9 @@ Every slot's fence is created already signalled, so the first pass around the ri
 
 {{cite ohao/render/frame/frame_resources.hpp "bool waitForFrame(uint32_t frameIndex, uint64_t timeoutNs = UINT64_MAX);"}}
 
-All three call sites in `render_dispatch.cpp` take that default and discard the result. With an infinite timeout a `false` return cannot mean "timed out": it means `vkWaitForFences` returned something other than `VK_SUCCESS` — device loss, out of memory — or that the manager was never initialised.
+Both call sites in `render_dispatch.cpp` — the deferred and RT frame bodies — take that default and discard the result. With an infinite timeout a `false` return cannot mean "timed out": it means `vkWaitForFences` returned something other than `VK_SUCCESS` — device loss, out of memory. The caller does not change course: headless, the readback `memcpy` runs against a staging buffer the GPU may still be writing; windowed, the frame goes on to acquire and record. An uninitialised manager is not a live case: `initializeFrameResources()` failing fails `VulkanRenderer::initialize()`.
 
 {{cite ohao/render/frame/frame_resources.cpp "VkResult result = vkWaitForFences"}}
-
-In none of those cases does the caller change course, but the consequence splits by which failure it was. Each site copies only when `frame.stagingBufferMapped` is non-null. After a `vkWaitForFences` failure it *is* non-null, so the copy runs against a staging buffer the GPU may still be writing. On an uninitialised manager `getFrame` hands back a default-constructed slot whose pointer is `nullptr`, so the copy is skipped — and the frame body walks on to `vkResetCommandBuffer` with a `VK_NULL_HANDLE` command buffer instead.
-
-{{cite ohao/render/frame/frame_resources.hpp "void* stagingBufferMapped{nullptr};"}}
-
-That second path is reachable. A failed `initializeFrameResources()` is explicitly non-fatal, and only the forward `renderMultiFrame` body is gated on `isInitialized()` — the deferred and RT bodies enter the ring unconditionally.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "// Not a fatal error - we can still use single-frame rendering"}}
 
 ## Two bounds policies for the same index
 
@@ -85,39 +97,29 @@ That second path is reachable. A failed `initializeFrameResources()` is explicit
 
 {{cite ohao/render/frame/frame_resources.cpp "getFrame(uint32_t frameIndex) {"}}
 
-`waitForFrame` and `resetFrame` do the opposite: an index at or past `MAX_FRAMES_IN_FLIGHT` is rejected — the first returns `false` without waiting, the second returns without resetting. The two policies agree only while the caller feeds a pre-wrapped index, which `VulkanRenderer` does by advancing through the static `nextFrame` helper.
+`waitForFrame` and `resetFrame` do the opposite: an index at or past `MAX_FRAMES_IN_FLIGHT` is rejected — the first returns `false` without waiting, the second returns without resetting. The per-slot descriptor arrays in the deferred passes reject it too, skipping the pass. The policies agree only while the caller feeds a pre-wrapped index, which `VulkanRenderer` does by advancing through the static `nextFrame` helper.
 
-Hand this class a monotonically increasing global frame counter instead — the obvious "cleanup" once the modulo in `getFrame` is read as the API's contract — and from the fourth frame on `getFrame` still returns the right slot while the wait and the reset both bail on the range check. The CPU then records into a command buffer the GPU may still be executing and submits against a fence that is already signalled. The ring reports none of it: `waitForFrame`'s `false` goes into a discarded value and `resetFrame` returns `void`. One layer down it is loud — resetting a pending command buffer and submitting with a signalled fence are both validation errors — but the layers are opt-in, so an ordinary run stays quiet.
+Hand this class a monotonically increasing global frame counter instead — the obvious "cleanup" once the modulo in `getFrame` is read as the API's contract — and from the fourth frame on `getFrame` still returns the right slot while the wait and the reset both bail on the range check. The CPU then records into a command buffer the GPU may still be executing and submits against a fence that is already signalled. The ring reports none of it: `waitForFrame`'s `false` goes into a discarded value and `resetFrame` returns `void`. One layer down it is loud — resetting a pending command buffer and submitting with a signalled fence are both validation errors — but the layers are opt-in through `OHAO_VALIDATION`, so an ordinary run stays quiet.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "Validation layers ENABLED"}}
 
-## Two names the frame path does not use
+## Names the frame path does not use
 
-`FrameCameraUBO` declares view, proj and `viewPos` with a `static_assert` pinning it as a GPU POD.
+The `FrameResources` docblock still lists per-slot uniform buffers and a descriptor set; the struct holds neither. Per-frame descriptor sets live in the passes that rewrite them, sized by the same constant.
 
-{{cite ohao/render/frame/frame_resources.hpp "static_assert(GpuPod<FrameCameraUBO>"}}
+{{cite ohao/render/frame/frame_resources.hpp "* - Descriptor set (bound to this frame's uniform buffers)"}}
 
-Nothing constructs it. The buffers this manager allocates are sized from `CameraUniformBuffer` in `renderer.hpp` — a field-for-field, alignment-for-alignment twin declared in another header.
+`FrameCameraUBO` declares view, proj and `viewPos` with a `static_assert` pinning it as a GPU POD, and nothing constructs it. The slot's `valid` flag is cleared in `shutdown()` and set nowhere, so its `explicit operator bool` is false for every slot of a working ring — test a slot with it and the test always fails.
 
-{{cite ohao/gpu/vulkan/device_setup.cpp "size_t cameraBufferSize = sizeof(CameraUniformBuffer);"}}
-
-The *layout* very much ships; it just ships under the other name. Deleting `FrameCameraUBO` removes a duplicate, but "re-deriving" the buffer size from it would decouple the ring from the struct the descriptor and the shader actually agree on.
-
-`cameraMappedAs<T>()` and `lightMappedAs<T>()` are unused with a different consequence: they wrap the raw `void*` in a `std::span<T>` and have no callers, while the real writes `memcpy` into the bare pointer.
-
-{{cite ohao/render/frame/frame_resources.hpp "return as_mapped_span<T>(cameraBufferMapped, count);"}}
-
-Adopting them would buy no bounds check — `as_mapped_span` is a `static_cast` plus a caller-supplied element count, so a wrong count is exactly as unchecked as a wrong `memcpy` size. What ties the two ends together today is the type and nothing else: the allocation asks for `sizeof(CameraUniformBuffer)` and the write copies `sizeof(ubo)` off a `CameraUniformBuffer`. Change the struct and both move; write the size by hand at either end and nothing notices.
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(frame.cameraBufferMapped, &ubo, sizeof(ubo));"}}
+{{cite ohao/render/frame/frame_resources.hpp "[[nodiscard]] explicit operator bool() const noexcept { return valid; }"}}
 
 ## What shutdown does not destroy
 
-`shutdown()` idles the device, then destroys three fences and the buffer/memory pairs — deliberately destroying neither the command buffers nor the descriptor sets.
+`shutdown()` idles the device, then destroys three fences and the staging buffer/memory pairs — deliberately not the command buffers, which return to `VulkanRenderer`'s pool when that pool is destroyed.
 
-{{cite ohao/render/frame/frame_resources.cpp "// Descriptor sets are freed when descriptor pool is destroyed"}}
+{{cite ohao/render/frame/frame_resources.cpp "// Command buffers are freed when command pool is destroyed"}}
 
-Both pools belong to `VulkanRenderer`, so teardown is order-independent with respect to them — but not with respect to the device, which every destroy call and the `vkDeviceWaitIdle` need alive. The destructor calls `shutdown()` again; that second call short-circuits, because `shutdown()` returns immediately unless `m_initialized` is set *and* `m_device` is non-null.
+`VulkanRenderer` tears down the presentation side — acquire semaphores and swapchain — first, then the ring. Teardown is order-independent with respect to the pool but not the device, which every destroy call and the `vkDeviceWaitIdle` need alive. The destructor calls `shutdown()` again; that second call short-circuits, because `shutdown()` returns immediately unless `m_initialized` is set *and* `m_device` is non-null.
 
 {{cite ohao/render/frame/frame_resources.cpp "void FrameResourceManager::shutdown() {"}}
 
@@ -131,28 +133,20 @@ A resolution change affects one thing in the ring: the staging buffers. `resizeS
 
 {{cite ohao/render/frame/frame_resources.cpp "// Create new staging buffers with new size"}}
 
-The caller pairs that with `m_currentFrame = 0`, commented as avoiding a read from an old-size buffer. There is nothing left to avoid: every slot was replaced, so the reset changes which slot runs next and nothing about what any of them holds.
+The caller pairs that with `m_currentFrame = 0`. After the device idle every fence is signalled — no frame body leaves a fence reset without a submission — and every slot's staging buffer is new, so where the ring restarts changes nothing about what it holds. The reset does matter to the windowed body, which is why the swapchain is rebuilt before a slot is chosen.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_frameResources.resizeStagingBuffers(width * height * 4);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_frameResources.resizeStagingBuffers(static_cast<size_t>(width) * height * 4);"}}
 
-What this path *does* add is an unguarded route to the `throw`. `resizeStagingBuffers` → `createStagingBuffers` → `createBuffer` → `findMemoryType` is the same chain `initialize()` walks, but nothing between a `VulkanRenderer::resize` call and `main` installs a handler. The failure that returns `false` from `initialize()` calls `std::terminate` here.
-
-The uniform buffers and descriptor sets survive untouched, correctly: their sizes are resolution-independent, and the shadow-map image view baked into each set at init points at a fixed-size attachment that the framebuffer teardown leaves alone. That descriptor write is hardwired — bindings 0, 1 and 2, two uniform buffers and one combined sampler — regardless of the `VkDescriptorSetLayout` passed in, which is used only to allocate.
-
-{{cite ohao/render/frame/frame_resources.cpp "descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;"}}
-
-The pool those sets come from stocks exactly those two descriptor types and nothing else, which puts a floor under how wrong the layout can be: one asking for a storage buffer or a storage image cannot allocate at all.
-
-{{cite ohao/gpu/vulkan/pipeline.cpp "poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;"}}
+What this path *does* add is an unguarded route to the `throw`. `resizeStagingBuffers` → `createStagingBuffers` → `createBuffer` → `findMemoryType` is the same chain `initialize()` walks, but nothing between `VulkanRenderer::resize` and `main` installs a handler — and in the windowed host, `resize` runs from inside `renderDeferred` whenever the swapchain is rebuilt. The failure that returns `false` from `initialize()` calls `std::terminate` here.
 
 :::key
-`initialize()` returns `true` immediately if it has already run. There is no re-initialise path: the ring's shape, buffer sizes and descriptor writes are fixed for the renderer's lifetime, and the only mutable dimension is the staging buffer size. Making the camera or light UBO resolution- or scene-dependent needs a new entry point, not a second `initialize()`.
+`initialize()` returns `true` immediately if it has already run. There is no re-initialise path: the ring's depth and shape are fixed for the renderer's lifetime, and the only mutable dimension is the staging buffer size.
 :::
 
 ## Contracts
 
-- The layout passed to `initialize()` must be exactly binding 0 = uniform buffer, 1 = uniform buffer, 2 = combined image sampler. Ask for any other descriptor type and it fails loudly — the pool has only those two, `vkAllocateDescriptorSets` returns `VK_ERROR_OUT_OF_POOL_MEMORY`, and `initialize()` returns `false`. Permute the same three descriptors and it allocates; the hardwired writes then land on the wrong bindings, which the validation layers flag as a type/binding mismatch and an unvalidated run does not.
-- `initialize()` must run after the command pool, descriptor pool, layout and shadow image view exist, and before any `render()`. A second call with different sizes returns `true` and does nothing.
+- `waitForFrame(slot)` must precede every rewrite of a slot-indexed object — command buffer, staging buffer, acquire semaphore, and the per-slot descriptor sets the deferred passes select with `frameIndex`. The deferred renderer must be recorded with the slot whose fence was just waited.
+- `resetFrame` must come after the last early return of a frame body. A reset fence with no submission behind it deadlocks the next wait on that slot.
 - Indices given to `waitForFrame` / `resetFrame` must already lie in `[0, MAX_FRAMES_IN_FLIGHT)`. `getFrame` wraps; those two reject, and the rejection is a skipped synchronisation that this class never reports.
-- `resize()` must call `resizeStagingBuffers`, or the next readback copies the new `width * height * 4` bytes out of a buffer still sized for the old dimensions. The `m_currentFrame = 0` beside it is not part of the contract: all three slots are replaced and zeroed, so nothing depends on where the ring restarts.
-- Bumping `MAX_FRAMES_IN_FLIGHT` is safe for everything the ring itself builds and wrong for every drain loop that hardcodes 3 — `cornell_box`, `model_viewer`, `env_demo` and `turntable`. Four hand-copied literals; none of them reads the constant.
+- `resize()` must call `resizeStagingBuffers`, or the next headless readback copies the new `width * height * 4` bytes out of a buffer still sized for the old dimensions.
+- Bumping `MAX_FRAMES_IN_FLIGHT` is safe for everything sized from the constant and wrong for every drain loop that hardcodes 3 — `cornell_box`, `model_viewer`, `env_demo` and `turntable`. Four hand-copied literals; none of them reads the constant.

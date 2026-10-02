@@ -8,10 +8,10 @@ figures: [scene-loaders-routing]
 
 ## Two front doors, four parsers
 
-The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. `inverse/scene_builder.hpp` calls it directly; the two viewers reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.
+The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. `inverse/scene_builder.hpp` calls it directly; `model_viewer` and the windowed host `ohao_game` reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.
 
 {{cite ohao/scene/asset/model_loader.cpp "// GLB, GLTF, DAE, etc → Assimp"}}
-{{cite examples/interactive.cpp "if (auto r = ModelLoader::loadResult(modelPath)) {"}}
+{{cite examples/ohao_game.cpp "auto loaded = ModelLoader::loadResult(modelPath);"}}
 
 The tinygltf importer in `model_gltf.cpp` is therefore unreachable from the facade — but it is not dead. `env_demo` and `turntable` call `Model::loadFromGLTF` directly, skipping `ModelLoader` entirely.
 
@@ -79,10 +79,10 @@ A file whose meshes are positioned by node transforms — a wheel parented under
 
 {{cite ohao/scene/asset/model_fbx.cpp "geoTransform = toGlm(mesh->instances.data[0]->geometry_to_node);"}}
 
-Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult` and both viewers set it on the model actor's transform, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.
+Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult` and both `SceneFramer` callers set it on the model actor's transform, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.
 
 {{cite ohao/render/camera/scene_framer.cpp "result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));"}}
-{{cite examples/interactive.cpp "actor->getTransform()->setRotation(frame.modelRotation);"}}
+{{cite examples/ohao_game.cpp "actor->getTransform()->setRotation(frame.modelRotation);"}}
 
 ## Roughness arrives by four different roads
 

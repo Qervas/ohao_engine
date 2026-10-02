@@ -149,7 +149,7 @@ value is undefined by specification. Only 9 is ever read: the frag declares no
 sampler for either cubemap binding, so 7 and 8 are written into the set each frame
 and never touched by any instruction.
 
-{{figure deferred-lighting-bindings "Conceptual map of descriptor set 0, sorting all 16 bindings into four classes: sampled with a real resource, written but with no sampler declared, sampled with a permanently-dummy view, and sampled inside a branch whose flag bit is never set. Read from createDescriptors()/updateDescriptorSets() and the shader's declarations — not a capture."}}
+{{figure deferred-lighting-bindings "Conceptual map of descriptor set 0, sorting its declared bindings by how the shader uses them: sampled with a real resource, written but with no sampler declared, or sampled with a permanently-dummy view. Read from createDescriptors()/writeDescriptorSet() and the shader's declarations — not a capture."}}
 
 The shader routes around all of it. It ignores the cubemap bindings entirely,
 samples the raw equirectangular HDR at binding 15, and when the LUT fetch comes
@@ -226,22 +226,10 @@ takes wetness, snow and frost — and is equally uncalled, so a weather system w
 designed across two subsystems and never given a driver. Cheap to revive; not a
 shipped feature.
 
-A fifth channel is dead the same way and takes the last 16 bytes of the push block
-with it. `setCloudShadow` has no caller anywhere in the tree, so `m_cloudShadowView`
-stays null, flag bit 4 is never raised, and the cloud-shadow multiply at the end of
-the shader — the only term in this pass that scales final colour rather than
-per-light radiance — is unreachable.
-
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_cloudShadowView != VK_NULL_HANDLE) m_params.flags |= 16;"}}
-
-Binding 13 therefore sits where 7, 8 and 9 do — written every frame with the 1×1
-dummy — but with a sampler declared and a fetch written against it, in a branch no
-frame ever enters.
-
 ## Contracts
 
 - GBuffer0's clear colour and the shader's sky test are one invariant in two files. Changing either alone sends background pixels through the lighting loop.
-- The pass owns exactly one descriptor set (`maxSets = 1`) and `updateDescriptorSets()` rewrites all 16 bindings at the top of every `execute()`, with nothing guarding against an in-flight command buffer still reading it. The shipping caller does not honour that: `VulkanRenderer::renderDeferred` waits on `waitForFrame(m_currentFrame)`, which is frame N−3's fence, and `MAX_FRAMES_IN_FLIGHT` is 3 — so up to two already-submitted command buffers can still be reading the set when it is rewritten. A live race, not a hypothetical one.
-- `LightingParams` is exactly 200 bytes; the explicit padding floats after `wetness`, `snowCover` and `frostCover` hold the two trailing `vec2`s on 8-byte boundaries, keeping the C++ struct byte-identical to the std430 push block. The "184 bytes" in the shader's comment is the offset before those `vec2`s, not the size.
+- The pass owns one descriptor set per frame in flight (`maxSets = MAX_FRAMES_IN_FLIGHT`, three today), and `execute(cmd, frameIndex)` rewrites all 15 bindings of `m_descriptorSets[frameIndex]` only, at record time. Its inputs — light buffer, SSAO, RT shadow mask, GI, env map — can change between frames, so the set has to be rewritten; a single shared set would be rewritten while up to two already-submitted frames still read it. The per-slot set is safe because `VulkanRenderer::renderDeferred` waits the fence of `m_currentFrame` and then records the deferred renderer with that same slot, so the set's previous use is retired. The contract is on the caller: `frameIndex` must be the slot whose fence was waited. {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}} {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
+- `LightingParams` is 184 bytes, all scalar after `screenSize`; the explicit `padding*` floats after `wetness`, `snowCover` and `frostCover` are unread spacers that keep the C++ struct byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
 - Binding an RT shadow mask disables CSM for that frame outright, and the mask is applied identically to all lights. Multi-light scenes with RT shadows are not correct, only plausible.
-- Declared and never read by this shader: `lighting.numLights` (the host reads it back off the mapped buffer instead), `lighting.shadowBias`, `lighting.shadowStrength`, each light's `lightSpaceMatrix`, `params.z` and `params.w`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3, 4, 7, 8 and 10. Binding 13 is a separate case: declared, sampled in source, and gated behind a flag bit nothing ever sets.
+- Declared and never read by this shader: `lighting.numLights` (the host reads it back off the mapped buffer instead), `lighting.shadowBias`, `lighting.shadowStrength`, each light's `lightSpaceMatrix`, `params.z` and `params.w`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3, 4, 7, 8 and 10. Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow mask at 14.

@@ -41,7 +41,7 @@ usable at one sample per pixel — see below.
 
 ## Real-time path tracing — and the firefly that taught me the most
 
-The most recent stretch pushed the interactive viewer from noisy preview to real-time path tracing at 67 fps (1 spp, 720p), denoised with NVIDIA DLSS Ray Reconstruction and stabilized with ReSTIR GI. The fix I got the most out of, though, was the smallest one.
+The most recent stretch pushed the `RTRealtime` path from noisy preview to real-time path tracing at 67 fps (1 spp, 720p), denoised with NVIDIA DLSS Ray Reconstruction and stabilized with ReSTIR GI. The fix I got the most out of, though, was the smallest one.
 
 ![Outdoor HDRI scene, graded](docs/images/hero_outdoor_graded.jpg)
 
@@ -126,7 +126,7 @@ All live in `ohao/render/rt/denoise/`.
 | Backend | Files | Use |
 |---|---|---|
 | Intel OIDN 2.x | `oidn_denoise.cpp` | CPU post-process for offline reference |
-| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp`, `nrd_cinematic.cpp` | Realtime REBLUR diffuse + specular for the interactive viewer |
+| NVIDIA NRD 4.17 | `nrd_denoise.cpp`, `nrd_compose.cpp`, `nrd_cinematic.cpp` | Realtime REBLUR diffuse + specular for `RTRealtime` |
 | NVIDIA DLSS-RR | `dlss_rr.cpp` | Ray Reconstruction, the real-time path's default |
 | built-in à-trous | `atrous_denoise.cpp` | SVGF-style, no external dependency |
 
@@ -180,17 +180,23 @@ Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a **C++20** compiler. 
 ./build/model_viewer      model.glb  output.png 256       # GLB in Cornell box, OIDN denoised
 ./build/model_viewer      model.fbx  output.png 1 deferred # FBX geometry via Assimp
 ./build/env_demo          model.glb  env.hdr output.png 256
-./build/interactive       model.glb  env.hdr              # GLFW viewer, ~75 fps
 ./build/turntable         model.glb  mirror 256 480       # turntable video frames
 ./build/renderer_test                                      # smoke test
 ```
 
-All examples accept `--denoise=none|oidn|nrd|atrous|dlss`. The interactive viewer uses NRD's REBLUR_DIFFUSE_SPECULAR for realtime denoising.
+All examples accept `--denoise=none|oidn|nrd|atrous|dlss`; `rt_realtime` selects the real-time path tracer, which denoises with NRD's REBLUR_DIFFUSE_SPECULAR or DLSS-RR.
+
+The game host renders the **Deferred** raster path (with RT shadows and RT GI where the GPU supports them) straight to a window:
+
+```bash
+./build/Release/ohao_game.exe            # windowed: WASD/QE move, right-drag look, Shift fast, Esc quits, --vsync
+OHAO_VALIDATION=1 ./build/Release/ohao_game.exe --frames 600 --resize-at 200   # presentation gate: exit 0 = no validation messages, no readbacks
+```
 
 ## Dependencies
 
 - Vulkan SDK 1.3+ with RT extensions
-- GLFW 3.x (interactive viewer only)
+- GLFW 3.x (`ohao_game` window and input)
 - Intel OpenImageDenoise 2.x
 - NVIDIA NRD (RayTracingDenoiser) v4.17, fetched via FetchContent. Pure Vulkan, no CUDA. Opt out with `-DOHAO_NRD=OFF`.
 - Jolt Physics 5.1.0, Assimp 5.4.3, tinygltf, stb, glm, VMA, nlohmann/json (all FetchContent)

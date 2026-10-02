@@ -25,7 +25,7 @@ this one.
 
 Hardware face culling is a separate mechanism, and the GBuffer pipeline turns it off:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_NONE;  // Disable culling — matches forward pipeline"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_NONE;  // No culling: imported meshes are not guaranteed consistently wound"}}
 
 so the GBuffer pass rasterizes every back-facing triangle in the scene. The one pipeline
 in the deferred path that culls faces is the cascade shadow pass, and it culls the *front*
@@ -95,9 +95,9 @@ short-circuits to `glm::vec2(0.0f)` while it stays off:
 
 {{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_taaEnabled{false};"}}
 
-The only site in the tree that enables it is `examples/model_viewer.cpp` on the
-`--deferred` path; `cornell_box`, `interactive`, `env_demo` and `turntable` never
-touch it. (Four callers that disabled it explicitly have since been removed.) When jitter *is* live it is added to two
+The sites in the tree that enable it are `examples/model_viewer.cpp` on the
+`deferred` path, the `ohao_game` windowed host and one resize test in `engine_tests`; `cornell_box`, `interactive`,
+`env_demo` and `turntable` never touch it. When jitter *is* live it is added to two
 entries of the projection's third column:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "jitteredProj[2][1] += jitter.y;"}}

@@ -3,7 +3,6 @@ module: gpu
 id: layout-meta
 title: Layout contracts
 standard: v2
-figures: [gpu-layout-meta-pushconst-drift]
 ---
 
 ## A boundary with no type checker
@@ -61,7 +60,7 @@ no code queries `maxPushConstantsSize`; across `ohao/`, `shaders/` and `examples
 the identifier occurs once, inside a comment. On a minimum-spec device the failure
 surfaces at pipeline-layout creation, not at compile time.
 
-Only one of the two is actually at a ceiling. `ObjectPushConstants` still has 16
+Only one of the two is actually at a ceiling. The raster block still has 16
 bytes of headroom under the 256 the code assumes. The path-tracer block has none:
 when a per-frame sample count had to reach the raygen shaders there was no room
 for another field:
@@ -76,48 +75,24 @@ The base and offline raygens mask the high bits off; the realtime raygen loops o
 them. A size contract that is exactly satisfied has stopped being a check and
 become a design constraint.
 
-## The drift the macro was built for, sitting in the tree
+## The asserted struct nothing pushes
 
-The forward pipeline is where the blind spot shows. `createPipeline()` builds
-`m_pipeline` out of `core_forward.vert` and `core_forward.frag`:
+The raster per-draw block is where the macro and the code have parted ways.
+`ObjectPushConstants` is the struct `layout_meta.hpp` sizes and `renderer.hpp`
+asserts at 240 bytes, with its lane meanings written beside each field:
 
-{{cite ohao/gpu/vulkan/pipeline.cpp "core_forward.frag.spv"}}
+{{cite ohao/gpu/vulkan/renderer.hpp "OHAO_ASSERT_GPU_LAYOUT(ObjectPushConstants, layout::kObjectPushConstantsBytes);"}}
 
-Its layout declares a push range of `sizeof(ObjectPushConstants)`, and
-`renderSceneObjects()` fills all six fields and pushes all 240 bytes into that
-layout:
+Nothing in `ohao/` pushes it, declares a variable of it, or takes its `sizeof`
+outside that assertion. The only raster pipeline that takes a per-draw push block is
+the G-buffer pass, and it pushes a struct of its own. The assertion therefore pins
+the size of a type with no consumer, while the block that does cross the boundary
+every draw goes unchecked. Both still agree today — the next section shows they are
+byte clones — but only by coincidence of two hand-written declarations.
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "vkCmdPushConstants(cmd, m_pipelineLayout,"}}
+## The live block the macro never touched
 
-The two shaders that range feeds declare a 96-byte block agreeing with the C++
-struct on exactly one member:
-
-{{cite shaders/core/forward.vert "    vec3 baseColor;"}}
-
-After `mat4 model` the C++ side has `viewProj`; the shader expects `baseColor`,
-`metallic`, `roughness`, `ao`. So `pc.baseColor` reads bytes 64–75 — the first
-column of the view-projection matrix — and multiplies it into the vertex colour.
-`forward.frag` continues that block with two packed texture indices at bytes 88
-and 92, tests them against the missing-texture sentinel, passes for essentially
-any matrix, and indexes the bindless array with the bit pattern of a float.
-
-{{figure gpu-layout-meta-pushconst-drift "Conceptual byte map of the 240-byte per-draw push range: what C++ writes, what gbuffer.vert declares, and what forward.vert/.frag declares. Offsets computed from the struct and GLSL block declarations; not a memory capture."}}
-
-Nothing asserts this and nothing has caught it, because no shipped example reaches
-the forward path. Four of the five route through `resolveMode()`, which returns
-`Deferred` or the ray-traced mode the CLI parsed, never `Forward`:
-
-{{cite examples/example_cli.hpp "    if (opts.useDeferred) return RenderMode::Deferred;"}}
-
-`env_demo` skips that helper and pushes its own mode variable, which its argument
-loop can only set to `RTOffline` or `RTRealtime`. Forward survives as the
-renderer's default field value and the fallback branch of `render()`:
-
-{{cite ohao/gpu/vulkan/renderer.hpp "    RenderMode m_renderMode{RenderMode::Forward};"}}
-
-## The counter-example the macro never touched
-
-The deferred pass is where packer and shader agree, and the macro had nothing to
+The deferred pass is where packer and shader agree, and the macro has nothing to
 do with it. `GBufferPass` never touches `ObjectPushConstants`; it declares its own
 `GBufferUBO`, a field-for-field byte clone, unasserted and unlinked to
 `layout_meta.hpp`:
@@ -125,12 +100,12 @@ do with it. `GBufferPass` never touches `ObjectPushConstants`; it declares its o
 {{cite ohao/render/deferred/gbuffer_pass.hpp "};  // 240 bytes — fits in 256-byte push constant limit"}}
 
 The comment immediately above that struct says "Total: 224 bytes (3 mat4 + 2
-vec4)". It is three `mat4`s and three `vec4`s — 240 — and the shader copied the
-224:
+vec4)". It is three `mat4`s and three `vec4`s — 240 — and the shader carries the
+same 224:
 
 {{cite shaders/core/gbuffer.frag "// Total: 224 bytes (3 mat4 + 2 vec4)"}}
 
-A stale byte count propagating from a C++ header into a shader header is precisely
+A stale byte count shared between a C++ header and a shader header is precisely
 what the size assert exists to make impossible, and it is sitting on the one
 per-draw block in the tree that has no size assert.
 
@@ -169,11 +144,10 @@ against a magnitude instead:
 
 The two tests agree on every value the packer produces, so this is not a live bug;
 it is a hazard in two directions. `< 4096u` rejects the garbage a drifted push
-block supplies and `!= 0xFFFFFFFFu` does not — which is why both of the forward
-path's lookups are dangerous: `forward.frag` tests `albedoTexIdx` and
-`normalTexIdx` — bytes 88 and 92, inside the view-projection matrix — against the
-sentinel alone, and either one then indexes `textures[]` with a matrix element's
-bit pattern. And the bound is a literal, so raising
+block supplies and `!= 0xFFFFFFFFu` does not — so if `GBufferUBO` and the shader
+block ever fall out of step, the albedo and normal lookups pass the sentinel test
+for essentially any float that lands in their lanes and index `textures[]` with its
+bit pattern, while the other two reject it. And the bound is a literal, so raising
 `maxTextures` past 4096 hides the high descriptors from two of the four lookups
 and leaves them visible to the other two.
 
@@ -186,7 +160,8 @@ them, and a thirteen-value preset enum whose `Custom` case is an explicit no-op,
 leaving twelve presets. Eight of the thirty-one reach a GPU buffer: base colour,
 roughness and metallic as numbers; four of the nine texture paths — albedo,
 normal, roughness, emissive — resolved through `BindlessTextureManager` and
-bit-cast into the same push block by both packers; and `emissive`, collapsed to a
+bit-cast into the G-buffer push block, with the same four indices packed into the
+path tracer's material rows; and `emissive`, collapsed to a
 boolean, and on the deferred path only inside the emissive-texture branch:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;"}}
@@ -222,14 +197,15 @@ alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
 not just totals. The toolchain already supports the include half:
 `shaders/includes/common/types.glsl` declares the 128-byte `Light` struct once,
-and `forward.frag` and `shadow_depth.vert` pull it in. Nothing else does —
-`deferred_lighting.frag` includes only `encoding.glsl` and `brdf_ggx.glsl` and
-re-declares the same struct by hand, so the one shared-declaration mechanism in
-the tree is already routed around by the pipeline that ships. Its cost is that
+and no shader includes it — `deferred_lighting.frag`, the one shader that reads
+`LightData`, includes only `encoding.glsl` and `brdf_ggx.glsl` and re-declares the
+same struct by hand, so the one shared-declaration mechanism in the tree is routed
+around by the pipeline that ships. Its cost is that
 every C++ struct becomes downstream of shader preprocessing and layout questions
 become runtime failures. OHAO took the cheap half — one place to edit a size,
-review for everything else. The forward push block is the bill for the half it
-skipped.
+review for everything else. An asserted `ObjectPushConstants` that nothing pushes,
+beside an unasserted `GBufferUBO` that every draw pushes, is the bill for the half
+it skipped.
 :::
 
 :::key
@@ -243,7 +219,7 @@ changed meaning, a shader block written against an older struct — passes it.
 
 - `PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended. `params.w` carries `samplesPerFrame` in its high 16 bits and `maxBounces` in its low 16; the realtime raygen unpacks the high half, base and offline mask it off.
 - Nothing queries `maxPushConstantsSize`, and two of the five asserted structs exceed Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
-- `core/forward.vert` and `core/forward.frag` declare a 96-byte push block that disagrees with `ObjectPushConstants` after byte 64. No shipped example selects `RenderMode::Forward` today; re-enabling it without rewriting the block reads matrix entries as material parameters and a float's bit pattern as a bindless texture index.
+- `ObjectPushConstants` is asserted at 240 bytes and used by nothing else. A size or lane change made there reaches no shader; the per-draw contract that matters is `GBufferUBO` against `gbuffer.vert`/`gbuffer.frag`.
 - `GBufferPass::GBufferUBO` is a byte clone of `ObjectPushConstants` with no `OHAO_ASSERT_GPU_LAYOUT` and no link to `layout_meta.hpp`. Its own header comment says both 224 and 240 bytes, and `gbuffer.frag` copied the 224. Editing either struct leaves the other silent.
 - The deferred per-draw block orders lanes `(metallic, roughness, roughMetalTexIdx, albedoTexIdx)`; the path tracer's material row 1 orders them `(roughness, metallic, normalTexIdx, emissiveTexIdx)`. All four lanes differ, and neither ordering is asserted against its shader.
 - `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track `BindlessTextureManager`'s `maxTextures` by hand.

@@ -63,8 +63,8 @@ The header also carries an `encodeNormalOctahedron` with the same math as the on
 `gbuffer.frag` defines locally, and it has zero callers anywhere in `shaders/`:
 the only encode in the tree is the local one. Nothing structural forces that
 duplication — `gbuffer.frag` simply never enables `GL_GOOGLE_include_directive`,
-which `deferred_lighting.frag` and `forward.frag` both do one line into the file,
-in the same directory, under the same shader build. The pair that must stay in
+which `deferred_lighting.frag` does one line into the file, in the same directory,
+under the same shader build. The pair that must stay in
 lockstep is `gbuffer.frag`'s encoder against the header's *decoder*; the header's
 encoder is dead weight.
 
@@ -181,7 +181,7 @@ metallic slider gets its `smoothstep(0.35, 0.65)` sharpening.
 The loop runs `min(pc.lightCount, MAX_LIGHTS)` times, and `MAX_LIGHTS` is 8, so
 the deferred path shades at most eight lights per pixel however many the scene
 holds. (The shader's comment sources that constant from `offscreen_renderer.hpp`,
-a file that no longer exists; the matching C++ value now lives in
+a file that is not in the tree; the matching C++ value lives in
 `ohao/gpu/vulkan/renderer.hpp`.) Point and spot lights use a windowed
 inverse-square:
 
@@ -218,9 +218,6 @@ tells a real environment from the dummy image the descriptor writer substitutes
 when none is loaded:
 
 {{cite shaders/core/deferred_lighting.frag "if ((pc.flags & 1u) != 0u && textureSize(envMap, 0).x > 1) {"}}
-
-That guard has history: the fallback used to be the GBuffer position texture,
-sampled as an environment, producing garbage specular everywhere.
 
 Inside the branch the defensiveness stops being defensive and becomes the
 pipeline. Bindings 7 and 8 (irradiance and prefiltered cubemaps) and binding 9
@@ -282,5 +279,5 @@ the material the path tracer receives.
 
 - Background is detected by exact float equality — `gBuffer0.rgb == vec3(0)` **and** `.a == 0`, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is discarded as sky.
 - `gbuffer.frag`'s local `encodeNormalOctahedron` and `encoding.glsl`'s `decodeNormalOctahedron` are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. The header's own `encodeNormalOctahedron` is not part of that contract — it has no callers, and editing it changes nothing.
-- `LightingParams` (C++) and the GLSL push-constant block must stay byte-identical at 200 bytes, including the unread `invViewProj` and `screenSize` fields.
+- `LightingParams` (C++) and the GLSL push-constant block must stay byte-identical at 184 bytes, including the unread `invViewProj` and `screenSize` fields.
 - The pipeline rasterises with `VK_CULL_MODE_NONE` and the shader has no `gl_FrontFacing` flip, so back faces store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.

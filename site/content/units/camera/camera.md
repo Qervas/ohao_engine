@@ -50,7 +50,8 @@ eagerly.
 
 :::why
 There is no dirty flag: `setPosition` recomputes a perspective matrix that cannot
-have changed, and the interactive viewer calls three setters per frame. The rejected
+have changed, and `ohao_game`'s fly camera calls `setPosition` every frame and
+`setRotation` on every frame the look button is held. The rejected
 alternative — lazy recompute behind a dirty bit — would force `getViewMatrix() const`
 to be mutable-cached and would open the classic stale-matrix window where a setter
 runs after the frame's matrices were already read. A few redundant
@@ -58,12 +59,17 @@ runs after the frame's matrices were already read. A few redundant
 view matrix is a wrong image.
 :::
 
-## The basis accessors nobody calls
+## The basis reaches the renderer through the view matrix
 
-`getFront`, `getRight`, `getUp`, `getPitch` and `getYaw` have zero callers anywhere
-in `ohao/`, `examples/` or `tests/`. That is not evidence the basis is unused — it is
-evidence that it round-trips through the view matrix. `glm::lookAt` packs the three
-axes into the rotation block:
+`getFront`, `getRight`, `getPitch` and `getYaw` have one caller in the tree, the
+windowed host's fly camera, which seeds its angles from the camera and moves along
+its basis:
+
+{{cite examples/ohao_game.cpp "cam.getFront() * (a.input().axis("}}
+
+`getUp` has none. No renderer reads the basis through these accessors — it
+round-trips through the view matrix. `glm::lookAt` packs the three axes into the
+rotation block:
 
 {{cite ohao/render/camera/camera.cpp "viewMatrix = glm::lookAt(position, position + front, up);"}}
 
@@ -72,16 +78,17 @@ column, to build the pinhole ray:
 
 {{cite shaders/rt/pt_raygen.rgen "vec3 fwd = -vec3(pc.invView[2]);"}}
 
-So the accessors are deletable; the vectors they expose are not.
+So the accessors are a gameplay convenience; the vectors they expose are what the
+renderer actually consumes.
 
-## Three projections from one camera
+## Two projections from one camera
 
 `updateVectors` builds a projection matrix from the camera's own fov, aspect, near
 and far:
 
 {{cite ohao/render/camera/camera.cpp "projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);"}}
 
-Exactly one of the three pipelines uses it. The deferred renderer takes it verbatim
+Exactly one of the two pipelines uses it. The deferred renderer takes it verbatim
 and applies the Vulkan Y-flip downstream, in `setCameraData`, not in the camera:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_proj[1][1] *= -1;"}}
@@ -92,25 +99,31 @@ raygen negates Y itself when forming the ray:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);"}}
 
-The forward path does not even read the fov — both overloads of `updateUniformBuffer`
-hard-code 45° and a 0.1–100 range into the `CameraUniformBuffer` that `forward.vert`
-samples at binding 0:
+`cornell_box`'s `camera.setFov(38.0f)` is therefore honoured by both: the path
+tracer reads the fov and nothing else, the deferred rasteriser reads the whole
+matrix.
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "void VulkanRenderer::updateUniformBuffer() {"}}
+## The aspect ratio the renderer owns
 
-`cornell_box`'s `camera.setFov(38.0f)` is therefore honoured by the path tracer and
-by the deferred rasteriser, and silently ignored by forward rendering.
+`setAspectRatio` has two callers, both in `VulkanRenderer`. The constructor, which
+takes the output size, sets it before anything renders — a window opened at its final
+size never resizes, so construction is the only chance:
 
-## The aspect ratio that is never set
+{{cite ohao/gpu/vulkan/renderer.cpp "m_camera->setAspectRatio(static_cast<float>(width) / static_cast<float>(height));"}}
 
-`setAspectRatio` has no callers. Neither do `setPerspectiveProjection`,
-`setOrthographicProjection`, `setProjectionType` or `focusOnPoint` — which means the
+and `resize()` sets it again from the new extent:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_camera) m_camera->setAspectRatio(static_cast<float>(width) / static_cast<float>(height));"}}
+
+`setPerspectiveProjection`,
+`setOrthographicProjection`, `setProjectionType` and `focusOnPoint` have no callers
+at all — which means the
 orthographic branch of `updateVectors` is unreachable in shipping code, and near/far
 are frozen at their constructor defaults for the process lifetime. The renderer
 default-constructs the camera, and the constructor's default argument wins over the
 member initialiser, which disagrees with it — the class declares two different
 default aspect ratios, 16:9 on the field and 16:10 in the signature, and 1.6 is the
-one that ships:
+one a default-constructed camera starts with, until the renderer overwrites it:
 
 {{cite ohao/render/camera/camera.hpp "float aspect = 16.0f / 10.0f,"}}
 
@@ -133,8 +146,7 @@ touched:
 
 ## The near plane is twice what it says
 
-`GLM_FORCE_DEPTH_ZERO_TO_ONE` is never defined in the repository — its one appearance
-anywhere in the tree is a comment noting the absence — so `glm::perspective` and
+`GLM_FORCE_DEPTH_ZERO_TO_ONE` appears nowhere in the repository, so `glm::perspective` and
 `glm::ortho` hand back OpenGL-convention matrices that map the frustum to
 $z_{ndc} \in [-1, 1]$. Vulkan clips against $0 \le z_c \le w_c$. The surface where
 $z_c = 0$ sits at view depth
@@ -148,22 +160,11 @@ off, so that slab is clipped rather than flattened:
 {{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.depthClampEnable = VK_FALSE;"}}
 
 The deferred pipeline's effective near plane is therefore twice its nominal one, and
-the depth buffer only ever receives the outer half of GL's depth mapping. Forward
-rendering inherits the same defect from its own matrix — `updateUniformBuffer` builds
-a raw `glm::perspective` and applies only the Y-flip. Two passes dodge it, by
-different means. CSM is the single raster pipeline in the engine that enables depth
-clamp, so its slab is flattened rather than clipped:
+the depth buffer only ever receives the outer half of GL's depth mapping. CSM
+escapes: it is the single raster pipeline in the engine that enables depth clamp,
+so its slab is flattened rather than clipped:
 
 {{cite ohao/render/deferred/csm_pass.cpp "rasterizer.depthClampEnable = VK_TRUE; // Clamp depth to [0, 1]"}}
-
-The forward path's own shadow pipeline, `createShadowPipeline`, leaves
-`depthClampEnable` at `VK_FALSE` and escapes anyway, because the light-space matrix it
-consumes is rescaled from GL NDC to Vulkan's $[0, 1]$ by hand before upload:
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w=1)"}}
-
-"The shadow pass" is two pipelines here, reaching safety by different routes; the
-phrase is only meaningful once you say which.
 
 Worse, the scalars travelling beside the matrix disagree with it. `renderDeferred`
 announces a 0.1–1000 range while handing over a matrix that ends at 100:
@@ -182,37 +183,9 @@ a linear schedule, weighted by `m_splitLambda`, which defaults to 0.95:
 Either schedule is anchored at the same 1000, so the outermost cascade is fitted to a
 frustum depth the projection cannot draw.
 
-## The 240 bytes the forward shader never agreed to
-
-`getViewProjectionMatrix` has exactly one call site, and it is a live layout bug.
-`renderSceneObjects` fills an `ObjectPushConstants` — `mat4 model`, `mat4 viewProj`,
-`mat4 prevMVP`, then three `vec4`s of material, 240 bytes in all — and pushes the
-whole thing through `m_pipelineLayout`:
-
-{{cite ohao/gpu/vulkan/scene_upload.cpp "vkCmdPushConstants(cmd, m_pipelineLayout,"}}
-
-That layout belongs to the forward pipeline, built from `core_forward.vert.spv` and
-`core_forward.frag.spv`, and those shaders declare a 96-byte block instead:
-
-{{cite shaders/core/forward.frag "float albedoTexIdx;   // uint32 packed as float"}}
-
-`mat4 model` occupies bytes 0–63 on both sides; after that they diverge. std430 puts
-`baseColor` at 64, `metallic` at 76, `roughness` at 80, `ao` at 84, and the two
-texture indices at 88 and 92 — exactly the sixteen bytes of `viewProj[0]` followed by
-the sixteen of `viewProj[1]`. The view-projection matrix therefore *does* reach the
-shader: its first column is read as base colour and metallic, its second as roughness,
-ao, and two `floatBitsToUint`-decoded bindless texture indices. The fields
-`renderSceneObjects` actually meant as material — `materialParams` at byte 192,
-`albedoColor` at 208 — sit past the end of what either shader declares and are never
-read.
-
-The shadow path escapes: `renderShadowPass` pushes the same struct through
-`m_shadowPipelineLayout`, but `shadow_depth.vert` reads only `pc.model`.
-
 ## Contracts
 
 - Pitch must stay strictly inside ±90° or `cross(front, worldUp)` degenerates and the view matrix's rotation block stops describing the camera. All three writers of `pitch` clamp it — `setRotation`, `rotate`, `focusOnPoint` — and a "cleanup" that widens any of them to ±90 exactly will produce a frame with a randomly rolled camera, not a gimbal-locked one.
-- Nothing calls `setAspectRatio`, so a resize changes the render target without changing the projection. Adding a resize hook is the fix; until then the deferred image's horizontal fov is that of a 16:10 frame.
+- The camera's aspect is the renderer's: set from the extent in `VulkanRenderer`'s constructor and again on every `resize()` that changes it. Code that replaces the camera, or renders through a different extent, must set it too.
 - The Y-flip is *not* in this class. Consumers that build a Vulkan clip-space matrix must apply `proj[1][1] *= -1` themselves (deferred does; the path tracer instead negates Y when forming the ray). Adding the flip inside `Camera` would double-flip one of the two.
-- `getViewProjectionMatrix()` has a single call site, and the forward shaders do not declare the `viewProj` field it writes — they read view and proj from the uniform buffer at binding 0. The bytes are still consumed, as material data. Fixing the layout on one side only (deleting `viewProj` from the struct, or adding it to the shaders) changes what the forward pass renders; both sides must move together.
 - Near and far are immutable after construction (0.1 and 100), because the only two mutators that touch them have no callers. Any geometry beyond 100 units is outside the deferred frustum regardless of what the CSM cascade range claims.

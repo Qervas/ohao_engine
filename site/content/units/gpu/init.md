@@ -5,37 +5,57 @@ title: Device init
 standard: v2
 ---
 
-## A Vulkan device with nowhere to present
+## Presentation is something the host hands in
 
-The first surprising thing about OHAO's boot sequence is what it never asks for.
-There is no `VK_KHR_surface`, no `VK_KHR_swapchain`, no
-`glfwGetRequiredInstanceExtensions`, and no `vkCreateSwapchainKHR` anywhere in
-`ohao/` or `examples/`. The instance is a plain Vulkan 1.3 application info block
-with an empty extension list; the only two extensions it can ever add are
-`VK_EXT_debug_utils` when `OHAO_VALIDATION` is set in the environment, and
-`VK_KHR_get_physical_device_properties2` in a DLSS-enabled build.
+The renderer never includes a windowing header. It boots one of two ways: `initialize()`
+builds a headless device whose output is a CPU byte buffer, and
+`initialize(const PresentTarget&)` stores what a windowing system handed it and then
+runs the same sequence. A `PresentTarget` is four things — the instance extensions the
+window system needs, a callback that creates a `VkSurfaceKHR` from an instance, the
+drawable extent, and a vsync flag.
 
-That propagates all the way to the interactive viewer: `examples/interactive.cpp`
-opens a GLFW OpenGL window and pushes CPU-side pixels through `glTexSubImage2D`
-every frame, because the renderer's output contract is a byte buffer, not a
-presented image. Frame resources budget for exactly that — one persistently-mapped
-host-visible staging buffer per in-flight frame, sized width × height × 4.
+{{cite ohao/gpu/vulkan/present_target.hpp "std::function<VkSurfaceKHR(VkInstance)> createSurface;"}}
 
-{{cite ohao/gpu/vulkan/device_setup.cpp "size_t stagingBufferSize = m_width * m_height * 4;"}}
+The instance is a plain Vulkan 1.3 application info block. Headless, its extension
+list is empty unless `OHAO_VALIDATION` is set in the environment (which adds
+`VK_EXT_debug_utils`) or the build is DLSS-enabled (which adds
+`VK_KHR_get_physical_device_properties2`); windowed, the target's extensions are
+merged in first, de-duplicated by name. The surface is created immediately after the
+instance, because it has to exist before a device is picked: device selection skips
+any graphics queue family that cannot present to it, and `VK_KHR_swapchain` joins the
+device extension list only when a surface exists.
+
+{{cite ohao/gpu/vulkan/device_setup.cpp "if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);"}}
+
+Frame resources are sized for the headless contract either way — one
+persistently-mapped host-visible staging buffer per in-flight frame, width × height ×
+4 bytes. A windowed renderer allocates them and never reads them; its frames end in a
+blit into the swapchain image.
+
+{{cite ohao/gpu/vulkan/device_setup.cpp "const size_t stagingBufferSize = static_cast<size_t>(m_width) * m_height * 4;   // RGBA8"}}
+
+Validation is opt-in at the same step. With `OHAO_VALIDATION` set, `createInstance`
+checks that `VK_LAYER_KHRONOS_validation` is actually installed before enabling it,
+then installs the engine's own debug messenger, which counts every warning and error
+and keeps the first 256 messages. `validationEnabled()` reports false both when the
+variable is unset and when the layer is missing, so a caller must read it as "not
+checked", never as "clean".
+
+{{cite ohao/gpu/vulkan/device_setup.cpp "m_validationEnabled = create && create(m_instance, &mi, nullptr, &m_debugMessenger) == VK_SUCCESS;"}}
 
 :::why
-The rejected alternative is a WSI swapchain with present-mode negotiation, surface
-format selection, and resize handling. Offscreen-only buys a renderer that runs
-identically headless (`cornell_box`, `turntable`, the smoke test) and on a desktop;
-the only trace of WSI left in the tree is an undefined `cleanupSwapchain()`
-declaration in `renderer.hpp`. The cost is paid every displayed frame: a
-VRAM → host → GL round trip instead of a zero-copy present.
+Presentation is an option on the renderer, not its default, so that one renderer runs
+identically headless (`cornell_box`, `turntable`, the smoke test, the golden corpus)
+and in a window. The window system stays outside `ohao/gpu`: `PresentTarget` carries
+a surface-creation callback rather than a window handle, so the renderer depends on
+`VkSurfaceKHR` and nothing else, and the GLFW-specific half lives in `ohao/runtime`.
 :::
 
 ## Picking a GPU by type, then demanding it be an RT GPU
 
 Device selection scores nothing. It walks the enumerated devices, takes the first
-queue family with `VK_QUEUE_GRAPHICS_BIT`, and keeps the candidate if no discrete
+queue family with `VK_QUEUE_GRAPHICS_BIT` (and, when a surface exists, the first
+such family that can present to it), and keeps the candidate if no discrete
 GPU has been seen yet *or* if this one is discrete — so the effect is "the last
 discrete GPU enumerated wins, otherwise the last graphics-capable device wins".
 
@@ -64,8 +84,8 @@ already made them mandatory. The soft-fail path survives only for its other fail
 {{cite ohao/render/rt/rt_acceleration_structure.cpp "if (!hasAS || !hasRTPipeline) {"}}
 
 Exactly one queue is created, at index 0 of that graphics family, and everything
-runs on it: rasterization, RT dispatch, compute post-process, and every staging
-copy. An `AsyncComputeQueue` class exists in `ohao/render/async/` and is compiled
+runs on it: rasterization, RT dispatch, compute post-process, every staging
+copy, and presentation. An `AsyncComputeQueue` class exists in `ohao/render/async/` and is compiled
 into `ohao_renderer` by the source glob, but nothing constructs one — its only
 reference in the tree is `tests/renderer/renderer_pipeline_tests.cpp`, a file no
 CMake target builds. The device create info never asks for a second queue either.
@@ -93,24 +113,33 @@ renderer over a capability it never exercises.
 
 The `pNext` chain is assembled in reverse of the order the structs are declared:
 `features12` is written first but linked last, and each subsequent struct points
-back at the one above it, so the final chain reaching `vkCreateDevice` is
-`VkPhysicalDeviceFeatures2` → ray tracing pipeline → acceleration structure →
-Vulkan 1.3 → Vulkan 1.2.
+back at the one above it, so the mandatory part of the chain reaching
+`vkCreateDevice` is `VkPhysicalDeviceFeatures2` → ray tracing pipeline →
+acceleration structure → Vulkan 1.3 → Vulkan 1.2. Ray query and buffer float atomics,
+both optional, are linked in front of the ray tracing pipeline struct only when their
+extensions were found and enabled — a feature struct in the chain for an extension
+that is not enabled is invalid regardless of its bits.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "features13.pNext = &features12;"}}
 
-The 1.3 struct is a pure link. Its comment names dynamic rendering and
-synchronization2, but `sType` and `pNext` are the only fields assigned, and the tree
-contains no `vkCmdBeginRendering`, `vkCmdPipelineBarrier2` or `vkQueueSubmit2` — the
-engine is on classic render passes and VK1.0-style barriers throughout.
+The 1.3 struct sets one field, `shaderDemoteToHelperInvocation`, and it is not
+optional in practice. `glslc` targeting SPIR-V 1.6 lowers `discard` to
+`OpDemoteToHelperInvocation`, so every shader that discards — deferred lighting, sky,
+particles, SVGF — needs the feature enabled to be valid. It is mandatory on every
+Vulkan 1.3 device, so enabling it costs no portability. Nothing else from 1.3 is
+used: the tree contains no `vkCmdBeginRendering`, `vkCmdPipelineBarrier2` or
+`vkQueueSubmit2` — the engine is on classic render passes and VK1.0-style barriers
+throughout.
 
-The Vulkan 1.2 bits do the work. Of eight assigned fields, seven are
+{{cite ohao/gpu/vulkan/device_setup.cpp "features13.shaderDemoteToHelperInvocation = VK_TRUE;"}}
+
+The Vulkan 1.2 bits do the descriptor work. Of eight assigned fields, seven are
 descriptor-indexing features; the eighth, `bufferDeviceAddress`, is required by
 acceleration structure builds. `runtimeDescriptorArray` plus
 `shaderSampledImageArrayNonUniformIndexing` let shaders declare an unsized
 `uniform sampler2D textures[]` and index it with `nonuniformEXT(...)`, which
-`forward.frag`, `gbuffer.frag`, `pt_closesthit.rchit`, `pt_anyhit.rahit` and
-`pt_miss.rmiss` all do. Three more — `descriptorBindingPartiallyBound`,
+`gbuffer.frag`, `pt_closesthit.rchit`, `pt_anyhit.rahit` and `pt_miss.rmiss` all do.
+Three more — `descriptorBindingPartiallyBound`,
 `descriptorBindingSampledImageUpdateAfterBind`,
 `descriptorBindingVariableDescriptorCount` — are precisely the three binding flags
 `BindlessTextureManager` sets on its single variable-count texture binding.
@@ -151,25 +180,34 @@ NRI skip the RT path instead of failing to resolve a function.
 
 ## The order inside initialize() that is not cosmetic
 
-`initialize()` reads as a flat list of `if (!createX()) return false`, but two of
-the steps have real dependencies that a reordering would break silently rather than
-loudly.
+`initialize()` reads as a flat list of `if (!createX()) return false`, but three of
+the steps have real dependencies that a reordering would break, two of them silently
+rather than loudly.
 
-- Shadow resources must precede descriptor sets. `createDescriptorSets` writes
-  `m_shadowImageView` and `m_shadowSampler` into binding 2 with no null check; run
-  it first and the set is written with `VK_NULL_HANDLE`. The layout is indifferent —
-  `createDescriptorSetLayout` never reads a shadow handle.
+- The surface must precede device selection. `pickPhysicalDevice` filters graphics
+  queue families by `vkGetPhysicalDeviceSurfaceSupportKHR` only when `m_surface` is
+  already set, and `createLogicalDevice` adds `VK_KHR_swapchain` under the same test.
+  Create the surface later and the renderer may pick a family that cannot present and
+  a device without the swapchain extension; the failure arrives at
+  `vkCreateSwapchainKHR`, two steps away.
 
-{{cite ohao/gpu/vulkan/pipeline.cpp "shadowMapInfo.imageView = m_shadowImageView;"}}
+{{cite ohao/gpu/vulkan/device_setup.cpp "vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &canPresent);"}}
 
-- `BindlessTextureManager` must precede `createPipeline`. The pipeline layout
-  appends the bindless descriptor set layout only if the manager exists; without it,
-  the forward pipeline is built with one set and `forward.frag`'s
-  `set = 1, binding = 0` array has nothing behind it.
+- `BindlessTextureManager` must be handed to `DeferredRenderer` before the deferred
+  renderer initialises. The G-buffer pass builds its pipeline layout with the bindless
+  set only if it has a manager at that moment; without one the layout has zero sets
+  and `gbuffer.frag`'s `set = 0, binding = 0` texture array has nothing behind it.
 
-{{cite ohao/gpu/vulkan/pipeline.cpp "layouts.push_back(m_textureManager->getDescriptorSetLayout());"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_deferredRenderer->setTextureManager(m_textureManager.get());"}}
 
-A third step is notable for its absence rather than its position. `initialize()`
+- Presentation comes last. `createPresentation` needs only the device, but the
+  swapchain it builds is rebuilt through `recreatePresentation`, which calls
+  `resize()` on the deferred renderer and the RT profiles — so everything `resize()`
+  touches must already exist by the first frame.
+
+{{cite ohao/gpu/vulkan/renderer.cpp "if (m_presentTarget && !createPresentation()) {"}}
+
+A fourth step is notable for its absence rather than its position. `initialize()`
 builds only the acceleration-structure manager; the realtime and offline
 `PathTracer`s are constructed lazily on `setRenderMode`, because each holds beauty
 plus a full AOV set at render resolution and building both eagerly can exhaust VRAM
@@ -188,12 +226,12 @@ and AS buffers.
 - `m_enabledDeviceExtensions` must still hold exactly what `vkCreateDevice` was given
   when an RT profile is constructed; NRI resolves its dispatch table from that list.
   It need not outlive that call — `NrdDenoiser` copies before it stores.
-- Shadow resources must be created before `createDescriptorSets`, or binding 2 is
-  written with a null image view.
-- `BindlessTextureManager::initialize` must complete before `createPipeline`, or the
-  bindless descriptor set layout is missing from the pipeline layout.
-- `createSyncObjects` still creates a single legacy `VkFence`; the per-frame
-  `renderFence`s live in `FrameResourceManager` and the two coexist.
+- With a `PresentTarget`, the surface must exist before `pickPhysicalDevice` and
+  `createLogicalDevice`, or neither present support nor `VK_KHR_swapchain` is
+  guaranteed.
+- `DeferredRenderer::setTextureManager` must run before `DeferredRenderer::initialize`,
+  or the G-buffer pipeline layout has no bindless set.
+- `validationEnabled() == false` means validation did not run, not that it passed.
 - Only one queue is created. A second needs a change to the queue create info
   (`queueCount`, or another `VkDeviceQueueCreateInfo`), not just a `vkGetDeviceQueue`
   call.

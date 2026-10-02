@@ -21,18 +21,18 @@ new undefined symbol appears. A left-to-right single pass — the default, and a
 genuine DAG needs — would leave symbols unresolved here. That flag is not a build
 quirk; it is the load-bearing evidence for what this page is about.
 
-{{figure architecture-module-map-link-graph "Conceptual. Only the six ohao archives are drawn — third-party edges (Jolt, miniaudio, Vulkan, VMA, assimp) are omitted. Solid edges are read from the target_link_libraries calls in each module's CMakeLists.txt; dashed edges are #include lines that have no corresponding link edge. Not a measured link-time symbol graph."}}
+{{figure architecture-module-map-link-graph "Conceptual. Only the six engine archives are drawn — ohao_runtime, which sits above them and only ohao_game links, is omitted, as are third-party edges (Jolt, miniaudio, Vulkan, VMA, assimp) are omitted. Solid edges are read from the target_link_libraries calls in each module's CMakeLists.txt; dashed edges are #include lines that have no corresponding link edge. Not a measured link-time symbol graph."}}
 
-## Six archives, and a seventh directory that is not one
+## Seven archives, and a directory that is not one
 
-`ohao/CMakeLists.txt` adds exactly six subdirectories, and six archives come out —
-but not one target per directory:
+`ohao/CMakeLists.txt` adds exactly seven subdirectories, and seven archives come
+out — but not one target per directory:
 
 {{cite ohao/CMakeLists.txt "add_subdirectory(render)"}}
 
 `ohao/gpu/` declares no library at all; its entire `CMakeLists.txt` is one
 `add_subdirectory(vulkan)` line, and `ohao_gpu_vulkan` is defined a level down. Two
-of the other five are conditional rather than literal: `ohao/core/` degrades to an
+of the other six are conditional rather than literal: `ohao/core/` degrades to an
 `INTERFACE` library if its three `.cpp` files ever disappear, and `ohao/render/`
 omits the `STATIC` keyword, so `ohao_renderer`'s type follows `BUILD_SHARED_LIBS`
 — `OFF` in this configuration, hence static in practice.
@@ -52,7 +52,17 @@ Not every directory under `ohao/` is a link target. Research trees outside the
 public product face carry no `add_subdirectory` line, no target and no `.cpp`
 file — they are headers reached purely through the repo-wide `-I ohao` path, so
 their cost lands in the including translation unit and they never appear in the
-archive graph at all. The six libraries above are the whole link surface.
+archive graph at all.
+
+The seventh archive is the host layer, and it stands apart from the cycles below.
+`ohao_runtime` — window, input, fixed-step clock, application loop — links core,
+the GPU archive and GLFW:
+
+{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_core ohao_gpu_vulkan glm glfw"}}
+
+Nothing else in `ohao/` includes a `runtime/` header, and only one executable links
+it, `ohao_game`, on top of the shared example group. So it adds a layer and no
+edge back down; the six engine archives are the whole cyclic surface.
 
 ## Cycle one: GPU calls up into render
 
@@ -250,7 +260,7 @@ does not match `.glsl` files sitting *directly* in `shaders/includes/`:
 
 Second, there are two independent answers to "where are the SPIR-V files". Raster
 passes probe a candidate list at `VulkanRenderer` construction, using
-`core_forward.vert.spv` as the sentinel and then broadcasting the winner to
+`core_deferred_lighting.frag.spv` as the sentinel and then broadcasting the winner to
 `RenderPassBase`:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "std::ifstream test(path + "}}

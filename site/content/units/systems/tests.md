@@ -230,9 +230,9 @@ have provided nobody reads its `ALL PASS` as a claim about the image.
 
 {{cite tests/renderer/renderer_test.cpp "=== ALL PASS ==="}}
 
-`engine_tests` runs four sections. Three are the ones its header comment names —
-`EventBus`, `CommandHistory`, `Scene`. The fourth, `runMetaTests`, is the largest
-and the only place the renderer's compile-time contracts are exercised at all:
+`engine_tests` runs eight sections. Three are the ones its header comment names —
+`EventBus`, `CommandHistory`, `Scene`. The fourth, `runMetaTests`, is the only place
+the renderer's compile-time contracts are exercised at all:
 fifteen cases covering RT profile traits (offline four bounces, realtime two),
 `DenoiseModeTraits` against their runtime mirrors, `RTFeatureFlags` and
 `makeFeatureSettings`, `applyDenoisePolicy` and the jitter / fresh-sample /
@@ -241,6 +241,14 @@ AOV-accumulation predicates, `as_span` and `span_covers_image`, `Result` and
 handles with `ShapeInfo`.
 
 {{cite tests/engine/engine_tests.cpp "void runMetaTests() {"}}
+
+The other four stand up real Vulkan with no swapchain: the deferred pipeline, the
+path tracer on an RT-capable device, a headless frame recorded, submitted and read
+back, and the renderer's resize and refusal paths — two of those resize cases with
+the validation layer on, failing on what the layer reports. Each reports itself
+skipped, not passed, when the machine has no device or no layer.
+
+{{cite tests/engine/engine_tests.cpp "static void runHeadlessDeferredRenderTests() {"}}
 
 Its `EXPECT` macro `return`s from the enclosing section function, so the first
 failure silently skips the rest of that section; the exit code is still non-zero,

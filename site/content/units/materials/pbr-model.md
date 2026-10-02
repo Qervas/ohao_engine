@@ -49,7 +49,7 @@ include `ggx_aniso.glsl`:
 
 {{cite shaders/includes/material/ggx_aniso.glsl "float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,"}}
 
-while the deferred and forward fragment shaders call `evaluateBRDF` in
+while the deferred lighting fragment shader calls `evaluateBRDF` in
 `brdf_ggx.glsl`. They agree on F0 and on being "GGX metallic-roughness," and they
 diverge on almost everything expensive: the geometry term, energy compensation,
 diffuse model, and even how the metallic slider is interpreted. The rest of this

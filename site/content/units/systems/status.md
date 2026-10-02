@@ -174,8 +174,8 @@ a tolerance that is too tight from a renderer that genuinely regressed.
 
 `docs/bugs_solved/` is the older half of the discipline: numbered writeups with
 symptom, root cause, fix, files touched, verification. Two entries exist, and
-both describe bugs whose *fixes are still load-bearing* and whose *file paths are
-all wrong*. Bug 001 places its fix in `src/renderer/frame/frame_resources.hpp`:
+neither one's file paths resolve. Bug 001 describes a fix that is still
+load-bearing, and places it in `src/renderer/frame/frame_resources.hpp`:
 
 {{cite docs/bugs_solved/001_staging_buffer_resize.md "src/renderer/frame/frame_resources.hpp"}}
 
@@ -186,19 +186,25 @@ viewport flicker — is alive at a different address entirely.
 
 {{cite ohao/render/frame/frame_resources.cpp "bool FrameResourceManager::resizeStagingBuffers"}}
 
-Bug 002 fared the same way. Its conclusion was that every pass touching shared
-uniform data must bind the *same* per-frame descriptor set, because mixing a
-per-frame set with the legacy one renders the shadow map with light matrix A and
-samples it with matrix B — the reported symptom was shadows rotated 90°. The
-parameterised signature that enforces it survives, still called from both the
-per-frame and the legacy path:
+Bug 002 misses for a stronger reason: the code it fixed has no address at all.
+Its conclusion was that every pass touching shared uniform data must bind the
+*same* per-frame descriptor set — the reported symptom was shadows rotated 90°,
+rendered with one light matrix and sampled with another — and its fix gave the
+shadow pass a descriptor-set parameter:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "renderShadowPass(cmd, frame.descriptorSet);"}}
+{{cite docs/bugs_solved/002_shadow_descriptor_set_mismatch.md "renderShadowPass(cmd, frame.descriptorSet);"}}
 
-So the archive's invariants outlived the refactor and its pointers did not. That
-is the general shape of rot here, and it is not confined to the bug log:
-`STATUS.md` marks skeletal animation 🗑️ in one row and, four sections later,
-still reasons about the gap the removed subsystem would leave behind.
+No `renderShadowPass` exists in the tree. The only raster shadow pass is the
+deferred cascade pass, and it has no descriptor set to mismatch: each cascade's
+view-projection reaches the vertex shader in push constants.
+
+{{cite shaders/shadow/shadow_csm.vert "view-projection rides in push constants"}}
+
+So the archive holds one invariant that still governs live code and one that
+governs nothing, and the pointers of both have rotted. That is the general shape
+of rot here, and it is not confined to the bug log: `STATUS.md` marks skeletal
+animation 🗑️ in one row and, four sections later, still reasons about the gap the
+removed subsystem would leave behind.
 
 {{cite STATUS.md@223ff7f "| **Skeletal animation** | 🗑️ | Removed in renovation cleanup |"}}
 

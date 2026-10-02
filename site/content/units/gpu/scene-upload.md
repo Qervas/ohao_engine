@@ -16,13 +16,13 @@ light cache the deferred pipeline reads.
 
 {{cite ohao/gpu/vulkan/scene_upload.cpp "vkDeviceWaitIdle(m_device);"}}
 
-Lights are outside that deal. `updateLightBuffer` re-walks the actor map once per rendered
+Lights are outside that deal. `updateLightBuffer` re-walks the actor map once per deferred
 frame, reading each `LightComponent`'s position, direction, colour, range and cone angles
 straight into the deferred light UBO; the RT SSBO is refreshed by
 `updateRTLightParams`, which never enters this function. Move a light and the deferred
 pipeline needs no upload at all. Move a mesh and all of the above runs.
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "void VulkanRenderer::updateLightBuffer(uint32_t frameIndex) {"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "void VulkanRenderer::updateLightBuffer() {"}}
 
 Every GPU-side step past the geometry copy hangs off `buildAccelerationStructures`, which
 returns before doing any of it when the device has no ray-tracing support. There the RT
@@ -42,9 +42,9 @@ bytes — keyed by actor ID.
 {{cite ohao/gpu/vulkan/scene_upload.cpp "m_meshBufferMap[actor->getID()] = MeshBufferInfo{"}}
 
 The container behind the walk is a `std::unordered_map<uint64_t, Actor::Ptr>`, so
-concatenation order is hash order, not authoring order — the raster draw loop, the shadow
-loop and the BLAS builder each re-find their slice by actor ID rather than recomputing
-offsets.
+concatenation order is hash order, not authoring order — the G-buffer draw loop, the
+cascaded-shadow loop and the BLAS builder each re-find their slice by actor ID rather than
+recomputing offsets.
 
 :::key
 This is a teardown, not an update. Most of the sharp edges below follow from that — the
@@ -58,16 +58,20 @@ combined index buffer holds global vertex ids rather than mesh-local ones.
 
 {{cite ohao/gpu/vulkan/scene_upload.cpp "combinedIndices.push_back(index + vertexOffset);"}}
 
-That `+ vertexOffset` is why both draw loops in this file issue
-`vkCmdDrawIndexed(cmd, indexCount, 1, indexOffset, 0, 0)`: `firstIndex` picks the slice and
-the `vertexOffset` argument is zero because the bias is already in the data. Those two draw
-calls are the only byte-identical thing about the loops. Everything around them differs —
-pipeline, render pass, viewport and scissor, descriptor set, pipeline layout, and the
-push-constant payload: the main loop fills all six members of `ObjectPushConstants`, the
-shadow loop sets `pc.model` on a zero-initialised struct and pushes the same 240 bytes.
+That `+ vertexOffset` is why both raster draw loops that consume these buffers — the G-buffer
+pass and the cascaded shadow pass, each handed the buffers and the slice map by
+`renderDeferred` — pass zero as `vkCmdDrawIndexed`'s `vertexOffset`: `firstIndex` picks the
+slice and the bias is already in the data. The G-buffer pass further splits an actor's slice
+into runs of triangles sharing a material and draws each run separately, still with a zero
+vertex offset.
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "vkCmdPushConstants(cmd, m_pipelineLayout,"}}
-{{cite ohao/gpu/vulkan/scene_upload.cpp "vkCmdPushConstants(cmd, m_shadowPipelineLayout,"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);"}}
+
+Everything around those two draws differs — pipeline, render pass, viewport, pipeline layout
+and push-constant payload: the G-buffer pass pushes its 240-byte per-material block, the
+shadow pass a 128-byte `model` plus the cascade's view-projection.
+
+{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 128,"}}
 
 The ray tracer leans on the same bias from the other side: each BLAS is handed the buffer
 *base* with `firstVertex = 0`, which the acceleration-structure unit covers. The coupling is
@@ -97,58 +101,6 @@ rasterizer's per-frame vertex fetch reads memory nobody asked to be device-local
 memory that is depends on the device's type list, not on intent.
 :::
 
-## Two hundred forty bytes the forward shaders do not agree about
-
-The per-draw material path is push-constant only: `renderSceneObjects` reads a
-`MaterialComponent`, resolves up to four bindless textures by *string name*, and bit-punts
-each `uint32_t` slot index into a float so it can travel in a `vec4`.
-
-{{cite ohao/gpu/vulkan/scene_upload.cpp "pc.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));"}}
-
-`ObjectPushConstants` is three `mat4`s then three `vec4`s — 240 bytes, well above the
-128-byte `maxPushConstantsSize` the Vulkan spec guarantees, and the pipeline layout declares
-the whole range.
-
-{{cite ohao/gpu/layout_meta.hpp "3 * sizeof(glm::mat4) + 3 * sizeof(glm::vec4); // 240"}}
-
-The shaders that layout serves declare something else. `createPipeline` builds this pipeline
-from `core/forward.vert` and `core/forward.frag`, and both open with `mat4 model` followed by
-loose scalars — so their `baseColor` lands at byte 64, `metallic` at 76, `roughness` at 80
-and `ao` at 84, with the fragment shader's two texture indices at 88 and 92. The CPU writes
-`viewProj` across bytes 64–127.
-
-{{cite ohao/gpu/vulkan/pipeline.cpp "// Load shaders (new AAA directory structure: core/forward.vert/frag)"}}
-{{cite shaders/core/forward.frag "float albedoTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)"}}
-
-The forward fragment shader's albedo, metallic, roughness and both bindless indices are
-therefore columns of the view-projection matrix reinterpreted as material data, and the
-index guard rejects only the exact bit pattern `0xFFFFFFFF` before indexing the descriptor
-array:
-
-{{cite shaders/core/forward.frag "if (albedoIdx != 0xFFFFFFFFu) {"}}
-
-The three `vec4`s the upload code packs at bytes 192–239 sit past the end of every block
-those shaders declare. Only this path is affected: the deferred GBuffer pass has its own draw
-loop and matching block, and the shadow pass writes only `model`, the one field both sides
-agree on.
-
-How live that is cuts both ways. `RenderMode::Forward` is the *default-initialised* value of
-`m_renderMode` — what any caller that never calls `setRenderMode` gets, and what a caller is
-left holding when `setRenderMode` refuses, which it does for Deferred without a deferred
-renderer and for an RT profile without RT support.
-
-{{cite ohao/gpu/vulkan/renderer.hpp "RenderMode m_renderMode{RenderMode::Forward};"}}
-
-Yet nothing in the tree asks for it: the shared example CLI's `rtMode` starts at `RTOffline`
-and is only ever assigned an RT profile, `resolveMode` returns that or `Deferred`, and the
-smoke test selects `RTOffline`. No in-tree call site passes `RenderMode::Forward`. The
-mismatch is reachable by any embedder and currently driven by nobody.
-
-{{cite examples/example_cli.hpp "RenderMode rtMode{RenderMode::RTOffline};"}}
-
-Verified here: both shader declarations, the C++ struct, the pipeline's shader paths, the push
-site and every `setRenderMode` call site in the tree. Not verified here: the resulting image.
-
 ## Textures are uploaded by writing back into the scene
 
 `uploadDeferredTextures` pushes each model's albedo, normal, rough/metal and emissive images
@@ -157,12 +109,14 @@ into the bindless manager, then writes the generated name back into the actor's
 
 {{cite ohao/gpu/vulkan/light_upload.cpp "matComp->getMaterial().albedoTexture = texName;"}}
 
-That write-back is what makes the draw loop's string lookup resolvable at all, but it turns
-upload into a mutation of the scene rather than a read of it. The assignment sits inside the
-per-material loop, so a model with several albedo textures leaves only the last one named —
-the raster path is one material per actor, while the RT path keeps per-triangle material ids.
-Scalar roughness and metallic collapse the same way, to material 0, but only when the model
-carries any `materialColors` at all; metallic falls back to `0.0f` when the per-material
+The G-buffer pass mostly does not need that write-back. An actor whose model carries
+`materialColors` is drawn per material run, and each run rebuilds its own texture name from
+the actor's name and the material index. Only an actor without per-material colours falls
+back to the names stored on its `MaterialComponent` — and that copy is lossy: the assignment
+sits inside the per-material loop, so a model with several albedo textures leaves only the
+last one named. Either way the upload is a mutation of the scene rather than a read of it.
+Scalar roughness and metallic are written back collapsed to material 0, but only when the
+model carries any `materialColors` at all; metallic falls back to `0.0f` when the per-material
 metallic array is empty rather than reading material 0.
 
 {{cite ohao/gpu/vulkan/light_upload.cpp "float metallic = !model->materialMetallic.empty() ? model->materialMetallic[0] : 0.0f;"}}
@@ -240,12 +194,11 @@ gate above.
 
 {{cite examples/env_demo.cpp "// LightingMode::None → no lights, HDR env IBL only (pure environment)"}}
 
-The loader is guarded by a path cache, and the comment explaining why is the most useful
-line in the file: re-decoding the HDR on every `updateSceneBuffers` leaked whole images until
-it crashed. What made that matter was a re-entrant caller that called
-`updateSceneBuffers` on every single render, turning a scene-load cost into a
-per-frame one. Nothing in the tree does that today, and the guard is what makes
-it survivable if something does again.
+The loader is guarded by a path cache: when the requested path matches the one already
+loaded, the branch only re-stamps the bindless index and intensity scale into the light
+header and re-binds the existing image and CDFs. Without it every `updateSceneBuffers`
+would re-decode and re-upload the HDR and rebuild its CDFs, so a caller that re-uploads the scene every frame
+would turn a scene-load cost into a per-frame one.
 
 The cheaper shape, for anything that needs to change a scene repeatedly, is to
 re-upload materials and light/env scale **in place** and reach `updateSceneBuffers`
@@ -254,14 +207,18 @@ only when one of those in-place updates fails — that is what
 
 {{cite ohao/gpu/vulkan/light_upload.cpp "float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);"}}
 
-Two details survive that fix. The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a
-4096×2048 panorama is 128 MB resident plus an equal host staging buffer — created directly
-beneath a comment claiming RGBA16F. And only the image *view* is retained; the `VkImage` and
-its `VkDeviceMemory` are function locals nothing destroys, so switching environments at
-runtime keeps the previous one alive.
+The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a 4096×2048 panorama is
+128 MB resident plus an equal host staging buffer — created directly beneath a comment
+claiming RGBA16F.
 
 {{cite ohao/gpu/vulkan/light_upload.cpp "imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;"}}
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkImage envImage = VK_NULL_HANDLE;"}}
+
+The renderer owns the image, its memory and its view, and frees all three in one place,
+`destroyEnvMapImage`, at shutdown and before loading a different panorama. The replacement
+path idles the graphics queue first, because frames still in flight may be sampling the old
+image.
+
+{{cite ohao/gpu/vulkan/light_upload.cpp "// Replacing an earlier env map: frames in flight may still sample it."}}
 
 ## Contracts
 
@@ -271,4 +228,3 @@ runtime keeps the previous one alive.
 - On an RT-capable device `updateSceneBuffers` is not idempotent: it re-uploads every texture into fresh bindless slots and frees none, so repeated calls drain the 4096-slot table. Without RT support none of that runs — including the bindless upload the deferred pipeline depends on.
 - `uploadDeferredTextures` writes texture names, roughness and metallic back into `MaterialComponent`. Code treating the scene as const across an upload is wrong.
 - The environment map reaches the GPU only when RT is supported and at least one light was collected. A scene lit purely by an HDRI still needs one `LightComponent` or one emissive mesh past the summed-luminance gate.
-- `ObjectPushConstants` and the `core/forward.*` push blocks diverge past the first `mat4`. Only `model` is safe to rely on through those pipeline layouts.

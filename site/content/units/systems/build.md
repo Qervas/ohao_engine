@@ -153,13 +153,9 @@ exactly that mangled string as `PathTracer`'s default raygen. Moving a shader be
 directories renames its SPIR-V and every hardcoded path stops resolving — with no
 build error, because the flattening is a string operation the compiler never sees.
 
-The C++ side used to filter an archived pass tree out of its glob, and the shader
-glob never had such a filter — so 35 of the 91 modules the rules produced came from
-`shaders/_disabled/`, a directory whose C++ twin had been deleted months earlier.
-Both are gone now: the archive, and the filter that outlived its target. The
-asymmetry is still worth knowing, because the shader glob remains unfiltered and
-compiles whatever it finds. A syntax error in a shader nobody
-ships fails the whole `shaders` target.
+The glob has no exclusion filter: it compiles every stage file it finds under
+`shaders/` — forty today — whether or not any C++ loads the result. A syntax error
+in a shader nobody ships fails the whole `shaders` target.
 
 ## The include dependency that isn't tracked
 
@@ -171,9 +167,9 @@ this pattern:
 The same `DEPENDS` list also names the output *directory*, created by its own custom
 command. In the generated Makefile that prerequisite is written as the relative path
 `shaders` — which is already the name GNU make has for the custom target — so
-`build.make` literally contains `shaders: shaders`, and each of the 91 module rules
-lists `shaders` as a prerequisite of a file inside `shaders`. Make prints 92 *circular
-dependency dropped* lines per invocation and ignores the edges. The ordering constraint
+`build.make` literally contains `shaders: shaders`, and every module rule
+lists `shaders` as a prerequisite of a file inside `shaders`. Make prints a *circular
+dependency dropped* line for each and ignores the edges. The ordering constraint
 the `DEPENDS` was written to express is therefore not enforced at all; it survives only
 because the directory already exists by the time `glslc` runs.
 
@@ -183,12 +179,10 @@ its directory's mtime. Two consecutive `--target shaders` invocations here compi
 modules and change no timestamps — the target is a genuine fixpoint, which is exactly
 why the missing `pbr_unpack.glsl` edge above is dangerous rather than merely redundant.
 
-The flat directory keeps its own history, too. `build/shaders/` holds 96 `.spv` files
-but only 91 have a producing rule; the other five — `pt_raygen.rgen.spv`,
-`pt_raygen_offline`, `pt_raygen_realtime`, `pt_closesthit.rchit.spv` and
-`rt_nrd_tonemap.comp.spv` — are orphans of an earlier naming scheme, one of them months
-older than the other four. Nothing deletes them, and a flat namespace gives no signal
-that a name is unclaimed.
+The flat directory is never pruned. When a shader source is deleted or renamed, its
+old `.spv` stays in the output directory: no rule produces it any more and none
+removes it, and a flat namespace gives no signal that a name is unclaimed. A
+hardcoded path that still names it keeps loading the stale module.
 
 ## Where the SPIR-V lands, and where the engine looks
 

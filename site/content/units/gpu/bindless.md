@@ -45,25 +45,21 @@ only by an index. That costs a Vulkan 1.2 feature set and non-uniform indexing, 
 buys keeping a 4096² albedo and a 1×1 default in one lookup without rescaling either.
 :::
 
-## One layout, two set numbers
+## One consumer, at set 0
 
-The same `VkDescriptorSetLayout` object is consumed at two different set indices.
-The forward pipeline puts camera/light UBOs at set 0 and appends the bindless layout
-as set 1; the GBuffer pipeline has no UBO set at all — matrices and material scalars
-arrive as push constants — so the bindless layout becomes its set 0.
+The manager's set has exactly one raster consumer: the G-buffer pass. Its pipeline
+has no UBO set at all — matrices and material scalars arrive as push constants — so
+the bindless layout is its only set, at index 0.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Bind bindless texture descriptor set (set 1) if available"}}
 {{cite ohao/render/deferred/gbuffer_pass.cpp "// Bind bindless textures for static pipeline (set 0)"}}
 
-They also differ in *when* they bind. The GBuffer pass binds inside its
-pipeline-switch guard, so the set is written once per pipeline change; the forward
-path binds it unconditionally once per render pass, before any `vkCmdBindPipeline`.
-Neither rebinds per draw.
+The bind sits inside the pipeline-switch guard of the draw loop, so the set is bound
+once per pipeline change, not once per draw. With a single static pipeline that is
+once per pass.
 
-Vulkan permits one layout at two indices — a set layout carries no index of its own —
-but the GLSL does not: `forward.frag` declares `layout(set = 1, binding = 0)` and
-`gbuffer.frag` declares `layout(set = 0, binding = 0)` for the same array. Adding a
-UBO set to the GBuffer pipeline shifts bindless to set 1 while the shader still names
+Vulkan lets a set layout sit at any index — it carries no index of its own — but the
+GLSL does not: `gbuffer.frag` names `layout(set = 0, binding = 0)`. Adding a UBO set
+in front of the bindless one shifts bindless to set 1 while the shader still names
 set 0, which presents a uniform buffer where the SPIR-V wants a combined image
 sampler — a descriptor-type mismatch validation rejects at
 `vkCreateGraphicsPipelines`. That failure is loud. The silent one is the `< 4096u`
@@ -71,35 +67,24 @@ guard in the next section.
 
 {{cite shaders/core/gbuffer.frag "layout(set = 0, binding = 0) uniform sampler2D textures[];"}}
 
-The symmetry stops at the push constant, and only one of the two paths survives it.
-Both pipelines push a 240-byte block of three `mat4` then three `vec4` —
-`ObjectPushConstants` for forward, the byte-identical `GBufferUBO` for the GBuffer
-pass — and `gbuffer.frag` declares exactly that. `forward.frag` declares a different,
-96-byte block: `mat4 model`, then `vec3 baseColor` and four scalars, then the two
-texture indices.
+The push constant is the other half of the contract, and it agrees on both sides: the
+pass pushes a 240-byte `GBufferUBO` of three `mat4` then three `vec4`, and
+`gbuffer.frag` declares the same block field for field. The texture indices travel in
+the `w` lanes of `materialParams` and `albedoColor` and the `x` lane of
+`emissiveParams`, as `uint32_t` bit patterns packed into floats.
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "vkCmdPushConstants(cmd, m_pipelineLayout,"}}
-{{cite shaders/core/forward.frag "    float albedoTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)"}}
+{{cite ohao/render/deferred/gbuffer_pass.hpp "};  // 240 bytes — fits in 256-byte push constant limit"}}
 
-Under std430 push-constant rules `albedoTexIdx` lands at byte 88 and `normalTexIdx` at
-92 — both inside the `viewProj` the C++ side wrote across bytes 64–127. `forward.frag`
-therefore runs `floatBitsToUint` over a view-projection matrix element and indexes the
-array with the result; the test it clears is `!= 0xFFFFFFFFu`, a sentinel compare, not
-a bounds check. Everything past `model` is misread the same way, and `forward.vert`
-declares a third variant again, with `vec2 padding` where the fragment shader has the
-two indices. The bindless plumbing on the forward path is real — layout, binding,
-`nonuniformEXT` — but the material data feeding it is not what the renderer pushes.
-Only the GBuffer consumer is a working path.
+Startup order is load-bearing: the manager must be handed to `DeferredRenderer`
+before the G-buffer pass builds its pipeline, because the pipeline layout includes the
+bindless set only if a manager is present at that moment. If the manager's own
+initialisation fails, `VulkanRenderer` resets it to null and carries on, and the
+G-buffer pipeline layout is built with zero sets — while `gbuffer.frag` still
+declares and samples the set-0 array. That is not a graceful untextured mode; it is a
+pipeline layout that does not cover its shader, which validation reports at pipeline
+creation.
 
-{{cite shaders/core/forward.vert "    vec2 padding;"}}
-
-Startup order is likewise load-bearing: the manager must exist before
-`createPipeline()`, because the pipeline layout is built from
-`getDescriptorSetLayout()`. If initialisation fails the manager is reset to null and
-the pipeline is created *without* the bindless set — the renderer degrades to
-untextured rather than crashing.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "// so the forward pipeline layout can include the bindless descriptor set"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "pipelineLayoutInfo.setLayoutCount = 0;"}}
 
 ## Two sentinels, one of them fragile
 
@@ -166,8 +151,7 @@ The result is not a fully occluded dielectric but a fully occluded *near-mirror*
 zeroed roughness is the more visible artifact of the two, and it is on the adjacent
 source line. **Nothing in the tree defends against it.** The defence is available —
 `BindlessTextureHandle` defaults its `operator<=>`, so a caller can compare a
-returned handle against `getDefaultWhiteTexture()` and refuse it — and a since-removed
-caller did exactly that. No current one does.
+returned handle against `getDefaultWhiteTexture()` and refuse it. No caller does.
 
 {{cite ohao/gpu/vulkan/bindless_texture_manager.hpp "constexpr auto operator<=>(const BindlessTextureHandle&) const noexcept = default;"}}
 
@@ -184,10 +168,10 @@ full 4096-slot walk — and the walk is the cheap half: the `unloadTexture` in f
 of it issues a `vkDeviceWaitIdle` and the upload behind it ends in a
 `vkQueueWaitIdle`, two full drains per re-upload.
 
-Nothing in the tree currently does this in a hot loop. Something did — a
-per-evaluation texture swap nested inside a loop over views — which is how the
-cost came to be measured at all. Treat the O(N²) walk plus two drains as the
-price of any future design that swaps textures per frame rather than per scene.
+Nothing in the tree does this in a hot loop. Treat the O(N²) walk plus two drains
+as the price of any design that swaps textures per frame rather than per scene — a
+per-view texture swap inside an evaluation loop, for instance, pays it once per
+view.
 
 The walk also has a blind spot on the unload side. `unloadTexture` destroys the view
 and then zeroes the slot; the update loop skips every slot whose view is null. So
@@ -245,7 +229,8 @@ tracing stages.
 This set cannot be bound to the RT pipeline, and it is not. `rt_build.cpp` builds a
 separate layered `VK_FORMAT_R8G8B8A8_UNORM` image, creates a single-layer view per
 slice, and hands the view array straight to the path tracer's own descriptor at
-set 0, binding 12.
+set 0, binding 12. The renderer owns those per-layer views in `m_rtBindlessViews` and
+destroys them with the rest of the RT scene resources, on re-upload and at shutdown.
 
 {{cite ohao/gpu/vulkan/rt_build.cpp "renderer.setBindlessTextures(bindlessViews, bindlessSamplers);"}}
 {{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 12) uniform sampler2D textures[];"}}
@@ -283,9 +268,9 @@ is bound here", never as "the texture I asked for is bound here".
 
 ## Contracts
 
-- The manager must exist before pipeline creation, or the bindless layout is absent from the pipeline layout and every material renders untextured.
-- The layout is set **1** in the forward pipeline and set **0** in the GBuffer pipeline; changing either pipeline's set count requires editing the matching `layout(set = …)` in `forward.frag` or `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
-- `forward.frag`'s push-constant block is not `ObjectPushConstants`: its `albedoTexIdx` and `normalTexIdx` fall inside the pushed `viewProj`. The shader block must be brought into agreement before any bindless sampling on the forward path means anything.
+- The manager must be set on `DeferredRenderer` before the G-buffer pass initialises, or the bindless layout is absent from the G-buffer pipeline layout while `gbuffer.frag` still samples it.
+- The layout is set **0** in the G-buffer pipeline; adding a set in front of it requires editing `layout(set = …)` in `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
+- `GBufferUBO` and `gbuffer.frag`'s push-constant block must stay field-for-field identical; the texture indices are read from fixed lanes of the last three `vec4`s.
 - `updateDescriptorSet()` never needs an external call — every load path runs it before returning. After an **unload** it is not just unnecessary but ineffective: the loop skips null-view slots, so the freed element still names a destroyed `VkImageView` until a load reuses that slot. An unloaded index must not be sampled.
 - `unloadTexture` issues its own `vkDeviceWaitIdle` before destroying the image and view: nothing else in the manager tracks whether an in-flight submission may still sample them. Dropping that stall to speed up a texture-swapping loop reintroduces a use-after-free.
 - The `< 4096u` guards in `gbuffer.frag` hard-code the `maxTextures` default. Raising capacity without editing those two lines silently drops rough-metal and emissive textures above slot 4095.

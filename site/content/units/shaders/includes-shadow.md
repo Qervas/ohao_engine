@@ -6,25 +6,22 @@ standard: v2
 figures: [shaders-includes-shadow-slope-bias-clamp]
 ---
 
-## Three headers, one live include
+## One header, and nothing includes it
 
-`shaders/includes/shadow/` is laid out like a library: a PCF sampler, a cascade
-sampler with a Poisson kernel and a PCSS path, and a types header of structs,
-defaults and helpers. Exactly one of the three is ever pulled into a stage. Grepping
-the include directive across the whole shader tree returns a single hit, in the
-forward fragment shader:
+`shaders/includes/shadow/` holds a single file, `shadow_pcf.glsl`: a per-light PCF
+sampler written against a single 2D shadow map. Grep the include directive across
+`shaders/` and it is named by no stage, and the CMake source glob compiles stages
+only, so the header is not even parsed by a shader build.
 
-{{cite shaders/core/forward.frag "includes/shadow/shadow_pcf.glsl"}}
+{{cite shaders/includes/shadow/shadow_pcf.glsl "float calculateShadowForLightIndex(int lightIndex, vec3 worldPos, vec3 normal,"}}
 
-That hit needs qualifying immediately. `forward.frag` is the fallback stage:
-`render()` tries the RT pipelines first, then deferred, and reaches the forward pair
-only when neither is live — which no example in `examples/` ever arranges.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "// Forward rendering path"}}
+The shadowing that runs lives elsewhere, written inline. `deferred_lighting.frag`
+samples a four-layer cascade array, selecting the cascade by positive view-space
+depth:
 
 {{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
 
-Its PCF taps accumulate the same way round, too — 1.0 where the fragment is lit:
+and its PCF taps accumulate *visibility* — 1.0 where the fragment is lit:
 
 {{cite shaders/core/deferred_lighting.frag "shadow += (projCoords.z - bias > pcfDepth) ? 0.0 : 1.0;"}}
 
@@ -37,10 +34,11 @@ declared, under that exact name, with those exact members:
 {{cite shaders/includes/shadow/shadow_pcf.glsl "IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!"}}
 
 GLSL has no forward declaration for an interface block, so this is a purely textual
-ordering constraint that the compiler reports only as an undefined identifier.
-`forward.frag` declares the block at set 0, binding 1 and pulls the header in
-twenty-six lines further down, under a comment explaining why. Hoisting the includes
-to the top of the file — the reflex tidy-up — stops it compiling.
+ordering constraint that the compiler reports only as an undefined identifier. Any
+adopter has to declare the block first and include the header below it; hoisting
+the includes to the top of the file — the reflex tidy-up — stops it compiling. It
+also needs `LIGHT_DIRECTIONAL` from `types.glsl` in scope, which it names in a
+comment rather than an include.
 
 :::why
 Passing the light data in as a parameter is what the same signature already does for
@@ -53,15 +51,16 @@ corrupted on some drivers:
 
 That comment is the only evidence in the tree — no driver named, no repro, no test —
 so read it as the author's recorded rationale rather than a reproduced finding. The
-code follows it regardless: every field is read by indexing the UBO directly, which is
-what forces the block to be visible by name, and the fragile include order is the
-price paid for it.
+shipping lighting pass does the opposite and copies a whole `Light` per loop
+iteration. The header follows its own rule regardless: every field is read by
+indexing the UBO directly, which is what forces the block to be visible by name, and
+the fragile include order is the price paid for it.
 :::
 
 The first thing the function does with that index is read `params.z`, the shadow-map
 index the host writes, and return zero occlusion for any light whose value is
-negative — so the forward shader can call it once per light in the loop and let
-non-casters cost a single compare.
+negative — so a caller can invoke it once per light in its loop and let non-casters
+cost a single compare.
 
 {{cite shaders/includes/shadow/shadow_pcf.glsl "float shadowMapIndex = lighting.lights[lightIndex].params.z;"}}
 
@@ -76,86 +75,80 @@ subtracted before the comparison therefore has to grow with incidence angle:
 $$b(\theta) \;=\; \min\!\left(b_0 \tan\theta,\; 0.01\right), \qquad \cos\theta = \max(N\cdot L,\, 0)$$
 
 Here $b_0$ is the host-supplied `shadowBias`, $N$ the shading normal, $L$ the unit
-direction from the surface to the light, and $\theta$ the incidence angle. The shader
+direction from the surface to the light, and $\theta$ the incidence angle. The header
 computes it in exactly that form, through `acos` then `tan`, rather than the
 algebraically equal $\sqrt{1-c^2}/c$:
 
 {{cite shaders/includes/shadow/shadow_pcf.glsl "float bias = lighting.shadowBias * tan(acos(cosTheta));"}}
 
-{{figure shaders-includes-shadow-slope-bias-clamp "Conceptual, computed from the shipped expression rather than captured. The two clamps apply the same tangent law with ceilings a factor of five apart, so they agree below 63 degrees and diverge sharply above it."}}
+{{figure shaders-includes-shadow-slope-bias-clamp "Conceptual, computed from the expression rather than captured. The 0.01 ceiling is the clamp shadow_pcf.glsl applies; the curve with a ceiling five times higher is a comparison line only, and has no counterpart in the current tree. The two agree below 63 degrees and diverge sharply above it."}}
 
-Same formula, two ceilings, and only the tighter one ships. The header's other
-defaults are worth the same scepticism: `DEFAULT_SHADOW_BIAS` does match the 0.005 the
-host writes, but `DEFAULT_SHADOW_STRENGTH` is 1.0 where the same function writes
-`shadowStrength = 0.7f`.
+The deferred cascade path does none of this. Its bias is the cascade UBO's
+`shadowBias`, a constant 0.012 subtracted at every incidence angle, and the
+`normalBias` beside it in the same struct is never read by the shader:
+
+{{cite ohao/render/deferred/render_pass_base.hpp "float shadowBias{0.012f};"}}
 
 ## Occlusion here, visibility there
 
-The live header filters with a 5×5 grid at one-texel spacing — twenty-five taps, all
+The header filters with a 5×5 grid at one-texel spacing — twenty-five taps, all
 weighted equally — and returns *occlusion*, pre-multiplied by the global strength:
 
 {{cite shaders/includes/shadow/shadow_pcf.glsl "return shadow * lighting.shadowStrength;"}}
 
 {{cite shaders/includes/shadow/shadow_pcf.glsl "const int pcfRadius = 2;"}}
 
-`forward.frag` consumes it as `1 - shadow`, so with strength 0.7 a fully occluded
-fragment still keeps 30 % of that light's direct contribution — a deliberate lift out
-of black, applied uniformly rather than as any ambient or bounce term.
+A caller would consume it as `1 - shadow`, so with the host's strength of 0.7 a fully
+occluded fragment would keep 30 % of that light's direct contribution.
 
-{{cite shaders/core/forward.frag "return contribution * (1.0 - shadow);"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "lightUbo.shadowStrength = 0.7f;"}}
 
-A shader that included both headers would compile cleanly and shade one of the two
-results inverted. Nothing in the tree currently does, because nothing includes the
-second one.
+The cascade path returns the opposite quantity — visibility, 3×3 taps, no strength
+term — and multiplies it straight into the light's BRDF result. A shader that
+mixed the two samplers would compile cleanly and shade one of the two results
+inverted.
 
-## One map, one light, resolved per vertex
+{{cite shaders/core/deferred_lighting.frag "Lo += evaluateBRDF(surface, L, radiance) * shadow;"}}
 
-The depth-write side is a matched pair whose fragment shader is empty on purpose —
-the pass has no colour attachment, so depth arrives straight from the rasteriser into
-one 2048² image sized by a single constant on the renderer:
+## Four cascades, one light type, resolved per pass
 
-{{cite ohao/gpu/vulkan/renderer.hpp "constexpr uint32_t SHADOW_MAP_SIZE = 2048;"}}
+The depth-write side is a single vertex stage with no fragment shader: depth arrives
+straight from the rasteriser into one 2048² layer per cascade. Each cascade is its own
+render pass into its own array-layer view, so the vertex shader needs no layer
+routing — it takes the model matrix and that cascade's view-projection as push
+constants and projects directly:
 
-The vertex shader is where the interesting choice sits. It walks the light UBO looking
-for the first entry with a non-negative shadow-map index and adopts that light's
-matrix, per vertex:
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * pc.model * vec4(inPosition, 1.0);"}}
 
-{{cite shaders/shadow/shadow_depth.vert "if (lightUbo.lights[i].params.z >= 0.0) {"}}
+The two matrices are 128 bytes, exactly the push-constant size every Vulkan device
+guarantees, and the C++ mirror pins that size:
 
-The loop can never find two, because the host hands out at most one non-negative
-index. `updateLightBuffer` tags the first light whose `LightType` casts to 0 or 2 and
-leaves every other at −1 — and in the engine's enum 0 is not the directional light,
-it is `Sphere`, a point light:
+{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 128, "must fit the guaranteed push-constant minimum");"}}
+
+On the consuming side, the cascade map shadows directional lights only — the
+`lightType == 0` test in the deferred loop — and only when flag bit 2 is set, which
+the host sets only when no RT shadow mask is bound:
+
+{{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
+
+That leaves the light UBO's own shadow fields with no reader. `updateLightBuffer`
+still tags the first light whose `LightType` casts to 0 or 2 with `params.z = 0`,
+and in the engine's enum 0 is `Sphere`, a point light:
 
 {{cite ohao/scene/component/light_component.hpp "Sphere = 0,       // point light with radius (soft shadows)"}}
 
-`Directional` is 1 and `Spot` is 2, so the qualifying set is point-or-spot and a sun
-never casts. That inversion is not cosmetic. The type the host packs into
-`position.w` is a *different* encoding — directional becomes 0, point becomes 1 — and
-`calculateLightSpaceMatrix` switches on that one, falling through to identity for
-anything that is neither directional nor spot:
+So the host marks point-or-spot lights as casters and computes a
+`lightSpaceMatrix` for them — identity for a point light, since
+`calculateLightSpaceMatrix` has no cube-map path — while the only shader that
+shadows anything ignores `params.z` and `lightSpaceMatrix` and shadows the
+directional lights instead. Only `shadow_pcf.glsl`, which nothing compiles, would
+read the tagged values.
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "// Point lights don't use a single matrix (need cube maps)"}}
 
-So whenever the tagged caster is a `Sphere`, it ships `params.z = 0` — a valid
-shadow-map index — alongside an identity light-space matrix, which both the depth
-pass and `shadow_pcf.glsl` then use as if it were a real projection.
-
-The scan itself is a per-vertex re-derivation of a value the host already knows and
-could have pushed, and its failure mode is quiet rather than loud. It is reached from
-the other side of the same test: a scene lit only by `Directional` lights leaves every
-`params.z` at −1, the loop finds nothing, and the identity fallback survives, so the
-pass rasterises raw world coordinates as if they were clip space.
-
-{{cite shaders/shadow/shadow_depth.vert "mat4 lightSpaceMatrix = mat4(1.0);"}}
-
-Nothing skips the pass to spare it that. The guard that would, `m_shadowsEnabled`, is
-initialised true and has no assignment anywhere in `ohao/`, `examples/` or `tests/`:
-
-{{cite ohao/gpu/vulkan/renderer.hpp "bool m_shadowsEnabled{true};"}}
-
 ## Contracts
 
-- `shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.
-- The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, but the code depends on it.
-- The `shadow_depth` pass writes one map for whichever light the host tagged first, and nothing in either shader supports a second shadowed light. A `Sphere` light can be that first tag, and when it is, the matrix it ships with is identity — `calculateLightSpaceMatrix` has no cube-map path.
+- `shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`, with `types.glsl` already in scope. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.
+- The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, and the shipping deferred pass does not observe it.
+- `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay `{mat4 model; mat4 viewProj;}` at 128 bytes; the C++ side is statically asserted, the GLSL side is not.
+- Cascade shadows apply to directional lights only, and RT shadows (bit 5) replace them outright. The host's `params.z` caster tag and per-light `lightSpaceMatrix` are read by no compiled shader.

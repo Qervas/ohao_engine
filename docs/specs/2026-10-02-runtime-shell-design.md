@@ -89,7 +89,9 @@ counted (no spiral of death). `alpha = accumulator / fixedDt ∈ [0, 1)`.
 - **Instance:** add `glfwGetRequiredInstanceExtensions()` to the instance
   extensions when a window is requested. **Device:** add `VK_KHR_swapchain`, and
   require the graphics queue family to support present on the surface.
-- **Format:** prefer `B8G8R8A8_SRGB` / `SRGB_NONLINEAR`, else the first offered.
+- **Format:** prefer `B8G8R8A8_UNORM`, then `R8G8B8A8_UNORM` (colour space `SRGB_NONLINEAR`), else the first offered.
+  The deferred output is already gamma-encoded by the tonemap shader; an `_SRGB` swapchain would encode it a
+  second time and wash the image out, so the blit copies display-ready bytes into a UNORM image.
 - **Present mode:** `MAILBOX` if available, else `FIFO`. `--vsync` forces `FIFO`.
 - **Image count:** `minImageCount + 1`, clamped to `maxImageCount`.
 - **Usage:** `TRANSFER_DST` — the renderer blits into swapchain images; it never

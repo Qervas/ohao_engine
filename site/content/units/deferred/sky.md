@@ -128,18 +128,6 @@ The rig does buy correct visibility for free: antisolar puts the moon below the 
 
 and the derivation above is the only code that assigns `m_moonDirection`, which is private and exposed by a getter with no matching setter. A phased moon needs an override there, not a call into the pass.
 
-## The input with no producer
-
-Binding 1 is a `sampler2D` the shader composites over the finished sky, reading RGB as in-scattered radiance and alpha as transmittance:
-
-{{cite shaders/postprocess/sky.frag "vec4 cloudSample = texture(cloudBuffer, inTexCoord);"}}
-
-The half-res `RGBA16F`, `GENERAL`-layout image those channels are supposed to come from exists only in comments — on the shader binding, on the setter, and on the descriptor-layout code. Nothing in the tree allocates it, so treat the format and resolution as documented intent, not as a description of a resource.
-
-{{cite ohao/render/deferred/sky_pass.hpp "// Input: half-res cloud buffer (RGBA16F, VK_IMAGE_LAYOUT_GENERAL)"}}
-
-`SkyPass::setCloudBuffer` has no callers anywhere in the tree, and there is no cloud pass to call it: the volumetric cloud system was moved out and `cloud.comp` now lives under `shaders/_disabled/`. `updateDescriptors()` writes binding 1 only when `m_cloudView` is non-null, so the descriptor is declared in the layout, allocated from the pool, and never written — while the shader samples it unconditionally, before the `a < 0.999` guard can skip anything. Reading an unwritten combined-image-sampler descriptor is undefined per the Vulkan spec; if a driver returns zeros, the guard is taken and the sky is multiplied by `cloud.a == 0`. Nothing here claims what a given driver does — only that nothing makes the read defined.
-
 ## Which image the sky actually lands in
 
 `setHDROutput` binds the pass to the *lighting* pass's image — at init, and again from `onResize` once that image has been reallocated. Post-processing, however, prefers the SSS pass's output whenever that pass initialised — and `SSSPass::initialize` allocates its output image unconditionally, so `getOutputView()` is non-null wherever SSS came up at all.

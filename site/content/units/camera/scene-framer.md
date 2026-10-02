@@ -120,21 +120,17 @@ The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
 
 {{cite examples/model_viewer.cpp "// No front wall"}}
 
-`interactive` does not. Its indoor path builds a sealed box, front wall included:
+`applyCamera` has two callers. The other, the windowed host `ohao_game`, builds no
+room at all — one floor quad at y = −S under the model:
 
-{{cite examples/interactive.cpp "{-S-E,-S-E,S},{-S-E,S+E,S}"}}
+{{cite examples/ohao_game.cpp "m->vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};"}}
 
-and then declines the framer's camera altogether. `CameraState` is a fixed
-initialiser — yaw −90°, pitch 0, and a position chosen by hand to sit inside the
-room rather than at the framer's 1.7·S, as its own comment says:
+and then takes the framer's camera and light rig unchanged, so its fly camera
+starts at z = 1.7·S like `model_viewer`'s still one does:
 
-{{cite examples/interactive.cpp "glm::vec3 position = {0, 0, 12};"}}
+{{cite examples/ohao_game.cpp "SceneFramer::applyCamera(renderer.getCamera(), frame);"}}
 
-`applyCamera` has exactly one caller, `model_viewer`. `interactive` skips it, and
-the framer's camera position survives only as a dead store on the no-model
-fallback path — written once, never read:
-
-{{cite examples/interactive.cpp "frame.cameraPosition = {0, 0, 25};"}}
+The z = +S wall that the camera sits behind is therefore built by neither caller.
 
 {{figure camera-scene-framer-room-elevation "Elevation through the Y–Z plane, drawn to scale from the constants in scene_framer.cpp: the room as model_viewer builds it (front wall omitted), scaled model, the camera at z = 1.7S, and the light spheres at true radius. Conceptual diagram, not a captured render."}}
 
@@ -152,7 +148,7 @@ names no wall — only a parenthetical that it is already interior:
 
 {{cite ohao/render/camera/scene_framer.cpp "already interior"}}
 
-It does clear the walls, and it fails on the furniture. Both callers build the same
+It does clear the walls, and it fails on the furniture. `model_viewer` builds a
 nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over
 $z \in [-15,-12]$; the lamp sits at $y = -S + 6 = -9$ with radius 1.0, so the
 sphere's lower cap is 0.625 units inside the solid it is meant to light — the exact
@@ -216,16 +212,17 @@ shading lines is compiled in but never entered.
 The light radii are geometry, not aesthetics. With the clamp off on the offline
 profile, the only defence against an unbounded NEE sample is keeping every light
 sphere strictly inside the surfaces it can illuminate — and *which* surfaces those
-are is per-caller: ceiling, floor and side walls exist in both, the z = +S wall
-only in `interactive`. Moving a light "a bit closer to the ceiling" is a rendering
+are is per-caller: `model_viewer` builds a floor, a ceiling and the back and side
+walls, `ohao_game` only the floor, and neither builds the z = +S wall that
+`FrontFill`'s comment measures against. Moving a light "a bit closer to the ceiling" is a rendering
 bug, not a lighting tweak.
 :::
 
 ## Contracts
 
-- Light positions are not multiples of `S`. `CeilingLight` carries an absolute z = 2, `WindowLight` an absolute y = 3 and z = 5, and `BedsideLamp` is affine throughout (`S*0.55`, `-S + 6`, `-S + 2`). Only the single wall-facing coordinate of the three commented lights — `S*0.85`, `S*0.8`, `S*0.85` — is a plain multiple, and all four radii are absolute constants. So the clearances hold only while `0.85 S + 1.2 < S`, i.e. `S > 8`; shrinking the room without shrinking the radii pushes `CeilingLight` through the ceiling in both callers and `FrontFill` through the z = +S wall in `interactive`, the only caller that builds that wall.
-- `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall, as `model_viewer` does, or move the camera. `interactive` does neither on its indoor path.
+- Light positions are not multiples of `S`. `CeilingLight` carries an absolute z = 2, `WindowLight` an absolute y = 3 and z = 5, and `BedsideLamp` is affine throughout (`S*0.55`, `-S + 6`, `-S + 2`). Only the single wall-facing coordinate of the three commented lights — `S*0.85`, `S*0.8`, `S*0.85` — is a plain multiple, and all four radii are absolute constants. So the clearances hold only while `0.85 S + 1.2 < S`, i.e. `S > 8`; shrinking the room without shrinking the radii pushes `CeilingLight` through `model_viewer`'s ceiling, and `FrontFill` past a z = +S plane that a caller building a front wall would have to respect.
+- `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` omits it, `ohao_game` builds no walls — or move the camera.
 - Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.
 - `FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.
-- Only `model_viewer` and `interactive` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
+- Only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
 - On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `applyLights` silently adds nothing.

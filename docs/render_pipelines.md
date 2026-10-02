@@ -1,29 +1,28 @@
-# Render pipelines — one Vulkan host, four modes
+# Render pipelines — one Vulkan host, three modes
 
 ## North star
 
 One Vulkan foundation — device, upload, bindless textures, offscreen targets,
-seed — with several image-formation paths on top of it sharing scene,
+swapchain presentation, seed — with several image-formation paths on top of it sharing scene,
 materials and acceleration structures. Switching mode does not rebuild the
 scene.
 
 ```
 Scene / cameras / lights
         │
- Vulkan foundation (device, upload, bindless, offscreen, seed)
+ Vulkan foundation (device, upload, bindless, offscreen, swapchain, seed)
         │
- ┌──────┼────────────┬──────────────┐
- ▼      ▼            ▼              ▼
-Forward Deferred   RTRealtime    RTOffline
-        (raster)   (path trace)  (path trace)
+   ┌────────┼──────────────┐
+   ▼        ▼              ▼
+Deferred  RTRealtime    RTOffline
+(raster)  (path trace)  (path trace)
 ```
 
 `RenderMode` (`ohao/gpu/vulkan/renderer.hpp`):
 
 | Mode | Role |
 |------|------|
-| **Forward** | Legacy forward raster, 8-light limit. Kept for comparison |
-| **Deferred** | G-buffer raster: CSM, SSAO, post-processing. The interactive default |
+| **Deferred** | G-buffer raster: CSM, SSAO, post-processing. The game path — `ohao_game` presents it to a window |
 | **RTRealtime** | KHR path tracing tuned for interactive use — 1 spp, DLSS-RR / NRD denoised, ReSTIR GI |
 | **RTOffline** | KHR path tracing tuned for reference stills — high spp, OIDN |
 
@@ -32,7 +31,7 @@ rather than comparing enumerators by hand.
 
 ## Hybrid
 
-The hybrid path is not a fifth mode: it is **Deferred** with RT shadows and
+The hybrid path is not a fourth mode: it is **Deferred** with RT shadows and
 one-bounce RT GI composited on top of the G-buffer. That is why the two
 pipelines must agree about materials and the TLAS — they are looking at the
 same surfaces in the same frame.

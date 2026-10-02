@@ -25,7 +25,7 @@ neither ever dereferences it:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,"}}
 
-Counting call sites settles the shape: 95 raw `vkAllocateMemory` calls across 32
+Counting call sites settles the shape: 84 raw `vkAllocateMemory` calls across 29
 `.cpp` files under `ohao/`, against exactly two `vmaCreateBuffer`/`vmaCreateImage`
 calls, both inside `gpu_allocator.cpp` itself. Every buffer and image the engine
 renders with owns a private `VkDeviceMemory`.
@@ -60,61 +60,53 @@ Suballocating large resources out of shared blocks is most of what an allocator 
 for; with that branch, `GpuAllocator` returns one allocation per non-trivial
 resource — the hand-rolled topology, plus a dependency.
 
-## The leak counter that wrapped
+## The leak counter both sides must agree on
 
-`AllocationStats` is maintained by hand, and for most of this tree's life the two
-sides of the ledger used different numbers. `createBuffer` credited its `size`
-argument — what the caller asked for — while `destroyBuffer` debited
-`VmaAllocationInfo::size`, what VMA actually reserved:
+`AllocationStats` is maintained by hand, and its two sides must use the same number.
+`destroyBuffer` debits `VmaAllocationInfo::size`, what VMA actually reserved:
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "VkDeviceSize size = buffer.allocation.getSize();"}}
 
 VMA documents that field as possibly *greater* than the requested size — the
-allocation absorbs alignment padding. `currentUsage` is an unsigned `std::size_t`, so
-each padded buffer drifted the running total downward, and the first debit that
-exceeded what was left — destroying the last live buffer would do it — wrapped the
-subtraction to a value near $2^{64}$. Nothing polls for that mid-run: `hasLeaks()` and
-`liveBytes()` are defined on `AllocationStats` and called from nowhere in `ohao/`,
-`tests/` or `examples/`. The symptom surfaced at teardown, where `shutdown()` reads
-`currentUsage` directly and printed a leak warning with a nonsense byte count.
-
-{{cite ohao/gpu/vulkan/gpu_allocator.cpp "if (m_stats.currentUsage > 0) {"}}
-
-`createImage` always credited `allocation.getSize()`, so the asymmetry was
-buffers-only, and the fix was to make the buffer path match it — credit the VMA
-allocation size, the same quantity the debit uses:
+allocation absorbs alignment padding. `currentUsage` is an unsigned `std::size_t`, so a
+credit of the caller's requested size would let each padded buffer drift the running
+total downward, and the first debit that exceeded what was left — destroying the last
+live buffer would do it — would wrap the subtraction to a value near $2^{64}$. So the
+buffer path credits the VMA allocation size, the same quantity the debit uses and the
+same one `createImage` credits:
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "const VkDeviceSize accountedSize = result.allocation.getSize();"}}
 
-What forced it was a test harness whose 290 small allocations made
-the warning print on every *passing* run — `18446744073709536560 bytes still
-allocated` directly above `Allocations: 290 == Frees: 290`. A false leak warning on a
-green run is how a real one gets ignored.
+Nothing polls the counter mid-run: `hasLeaks()` and `liveBytes()` are defined on
+`AllocationStats` and called from nowhere in `ohao/`, `tests/` or `examples/`. The only
+reader is teardown, where `shutdown()` reads `currentUsage` directly and prints a leak
+warning when it is nonzero — which is where any future asymmetry would surface, as a
+nonsense byte count on a run that freed everything.
+
+{{cite ohao/gpu/vulkan/gpu_allocator.cpp "if (m_stats.currentUsage > 0) {"}}
 
 ## Host-visible for the rasteriser, staged for the ray tracer
 
-Those 95 allocations are scattered: GBuffer render targets in `gbuffer_pass.cpp`, the
+Those 84 allocations are scattered: GBuffer render targets in `gbuffer_pass.cpp`, the
 cascade array in `csm_pass.cpp`, the bloom mip chain in `bloom_pass.cpp`, device-local
-RT geometry in `rt_build.cpp`. What the *forward* path draws from is narrower —
-`buffer_setup.cpp` holds three of the 95: a camera uniform buffer, a light uniform
-buffer, and a hard-coded three-vertex demo triangle, all built the same way —
-`vkCreateBuffer`, `findMemoryType` over `HOST_VISIBLE | HOST_COHERENT`,
-`vkAllocateMemory`, bind. The uniform buffers are mapped once at init and never
-unmapped:
+RT geometry in `rt_build.cpp`. What the renderer facade itself feeds the deferred path
+is narrower — the light uniform buffer in `buffer_setup.cpp` and the scene's vertex and
+index buffers in `scene_upload.cpp`, all built the same way — `vkCreateBuffer`,
+`findMemoryType` over `HOST_VISIBLE | HOST_COHERENT`, `vkAllocateMemory`, bind. The
+light buffer is mapped once at init and never unmapped:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "vkMapMemory(m_device, m_uniformBufferMemory, 0, bufferSize, 0, &m_uniformBufferMapped);"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "vkMapMemory(m_device, m_lightBufferMemory, 0, bufferSize, 0, &m_lightBufferMapped);"}}
 
-Loading a scene destroys the demo triangle and `updateSceneBuffers` builds real vertex
-and index buffers in `scene_upload.cpp` the same way — host-visible, map, `memcpy`,
-unmap:
+`updateSceneBuffers` builds the vertex and index buffers host-visible too — map,
+`memcpy`, unmap:
 
 {{cite ohao/gpu/vulkan/scene_upload.cpp "memcpy(data, combinedVertices.data(), vertexBufferSize);"}}
 
 Nothing stages them for the draw itself: on a discrete GPU, vertex and index fetches
 read host memory across PCIe instead of local VRAM. In exchange there is no transfer
 queue, no ownership transfer and no upload barrier, and a geometry edit is a `memcpy` —
-a fair trade for a renderer whose frames cost seconds, and the first thing to revisit
-if raster throughput starts to matter.
+a fair trade for headless renders whose frames cost seconds, and the first thing to
+revisit now that a windowed host draws deferred frames against a frame budget.
 
 They are staged, just not for raster. Both buffers carry
 `VK_BUFFER_USAGE_TRANSFER_SRC_BIT`, which the raster pipeline has no use for:
@@ -132,29 +124,14 @@ A loaded mesh is therefore resident twice on any RT-capable card — host-visibl
 rasteriser, device-local for BLAS builds and the closest-hit shader's vertex and index
 fetch.
 
-## The projection the camera does not own
+## The far plane the cascades are told
 
-`updateUniformBuffer` never asks the camera for a projection. It builds its own:
-45° vertical FOV, near 0.1, far 100, then negates `proj[1][1]` for Vulkan's Y-down
-clip space.
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "void VulkanRenderer::updateUniformBuffer() {"}}
-
-`Camera::getProjectionMatrix()` exists and the deferred path does honour it —
-`renderDeferred` reads it off the camera and hands it to `DeferredRenderer`, which uses
-it for the GBuffer, the lighting pass and SSR. The clip planes match by coincidence:
-`Camera` is default-constructed and nothing in the tree calls `setPerspectiveProjection`
-or `setAspectRatio`, so near and far stay at the same 0.1 and 100 the hard-coded
-`glm::perspective` uses.
+`renderDeferred` hands `DeferredRenderer` the camera's own view and projection, which
+it uses for the GBuffer, the lighting pass and SSR. The camera is default-constructed
+and nothing in the tree calls `setPerspectiveProjection`, so its clip planes stay at the
+constructor's 0.1 and 100.
 
 {{cite ohao/render/camera/camera.hpp "float farPlane{100.0f};"}}
-
-The aspect ratio does not match. The camera's is frozen at the constructor's 16:10
-while `updateUniformBuffer` divides the live render extent, so the two pipelines frame
-differently on any other output shape. The clip-plane split is latent instead: were
-anyone to call `setPerspectiveProjection`, it would change what the deferred pipeline
-renders and nothing about the forward/legacy pipeline, where geometry beyond 100 world
-units is clipped regardless of camera settings.
 
 The `0.1f, 1000.0f` passed alongside the matrix are not clip planes and never reach a
 projection. They land in `m_nearPlane`/`m_farPlane`, whose only consumer is the
@@ -179,7 +156,7 @@ the 100-unit frustum, actually covers depth 1.4 to 3.5. The three near cascades 
 compressed into the first ~13 world units of a 100-unit view, and most of what is
 routed to them falls outside their shadow maps.
 
-## Eight slots, two copies, one of them drifted
+## Eight slots, two type encodings
 
 Lights are a fixed array, not a growable list. `LightData` is four `vec4`s plus a
 `mat4` light-space matrix — 128 bytes — and the uniform block holds eight:
@@ -223,10 +200,10 @@ correctly, packing both edge vectors and the derived area into `GPULight`:
 The two pipelines therefore disagree about what that actor is: a rectangle to the path
 tracer, a cone to the rasteriser.
 
-## The default light that only half the pipelines got right
+## The default light and its $\pi$
 
-If the scene contributed nothing, a default directional light is synthesized. The
-legacy/deferred copy gives it intensity $\pi$ and a warm tint:
+If the scene contributed nothing, a default directional light is synthesized with
+intensity $\pi$ and a warm tint:
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
 
@@ -241,8 +218,8 @@ direction. Setting $I = \pi$ makes a white albedo return $L_o = 1$ head-on — a
 reference white — instead of $1/\pi \approx 0.318$, which is $\log_2 \pi \approx 1.65$
 stops underexposed.
 
-The shipping lobe is not Lambert. Both pipelines that read this buffer call
-`evaluateBRDF`, whose diffuse term is Burley/Disney scaled by $k_D = (1 - F)(1 - m)$
+The shipping lobe is not Lambert. The deferred lighting pass, the one consumer of
+this buffer, calls `evaluateBRDF`, whose diffuse term is Burley/Disney scaled by $k_D = (1 - F)(1 - m)$
 for Fresnel $F$ and metalness $m$:
 
 {{cite shaders/includes/brdf/brdf_common.glsl "return diffuseColor * INV_PI * lightScatter * viewScatter;"}}
@@ -253,15 +230,6 @@ Burley's two scatter factors both go to 1 at normal incidence, so it does collap
 $\rho/\pi$ exactly where the calibration is aimed — but $k_D$ trims 4% off a dielectric
 at $F_0 = 0.04$, and the Kulla-Conty multi-scatter term adds a little back. $I = \pi$
 lands near reference white, not on it.
-
-The frame-indexed overload, used by the multi-frame forward path, was copied before
-that fix and still writes:
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);"}}
-
-An empty scene therefore renders roughly $\pi$ times darker, and colour-neutral
-rather than warm, through `renderMultiFrame` than through `renderDeferred` or
-`renderLegacy`. The two functions are otherwise near-identical for ~85 lines.
 
 ## Emissive meshes flattened into point lights
 
@@ -297,7 +265,8 @@ both inside `gpu_allocator.cpp`, plus one assertion apiece in
 `tests/engine/engine_tests.cpp`; `vk_check` has neither. The helper that carries
 weight is `as_mapped_span`, which turns a persistently mapped `void*` into a typed
 `std::span` behind a `GpuPod` (trivially copyable, standard layout) constraint;
-`GpuBuffer::mappedAs` and both `FrameResources` accessors are built on it.
+its one caller is `GpuBuffer::mappedAs`, which belongs to the allocator nothing in
+the renderer allocates through.
 
 `mip_levels_for` needs a more careful verdict than "unused". Its integer shift loop
 has no production callers — only that same test file, which pins its 1×1 and 256×128
@@ -326,7 +295,7 @@ interface.
 
 - `cacheEmissiveLights()` must run before `updateLightBuffer()` or emissive lights are missing from the frame. Scene upload calls it once; the per-frame update only reads the cache.
 - Two light-type encodings coexist inside one loop: `LightComponent::LightType` (Sphere 0, Directional 1, Spot 2, AreaRect 3) and the shader type packed into `position.w` (directional 0, point 1, spot 2). The remap is right for the first three and silently folds AreaRect into spot; the shadow-caster test reads the source encoding where the rest of the loop reads the packed one. Any edit here must state which encoding it is in.
-- `MAX_LIGHTS` is 8 in four places: `renderer.hpp` for the C++ side, `includes/common/types.glsl` for the forward pipeline (`forward.frag` and `shadow_depth.vert` include it), an `#ifndef`-guarded copy in `includes/common/constants.glsl`, and a fourth `#define` hard-coded into `deferred_lighting.frag` whose comment points at `offscreen_renderer.hpp` — a file that no longer exists. Change one without the others and the uniform block silently truncates or overruns.
-- Both `updateUniformBuffer` overloads and both `updateLightBuffer` overloads are copies, not wrappers. A fix applied to one is not applied to the other; the default-light intensity has already drifted this way.
-- `GpuAllocator::createBuffer` credits requested bytes and `destroyBuffer` debits VMA's possibly-larger allocation size; on unsigned `currentUsage` the difference drifts downward until a debit underflows it, and `shutdown()` reports the wrapped value as a leak.
+- `MAX_LIGHTS` is 8 in four places: `renderer.hpp` for the C++ side, the `#define` hard-coded into `deferred_lighting.frag` — the one shader that reads the buffer, whose comment points at `offscreen_renderer.hpp`, a file that does not exist — an `#ifndef`-guarded copy in `includes/common/constants.glsl`, and `includes/common/types.glsl`, which no shader includes. Change the C++ value without the lighting shader's and the uniform block silently truncates or overruns.
+- The light buffer is one host-visible allocation, not one per frame slot. `renderDeferred` rewrites it with `memcpy` after waiting on only the current slot's fence, so up to two earlier frames may still be reading it while it changes. A light that moves every frame needs a per-slot buffer.
+- `GpuAllocator::createBuffer` and `destroyBuffer` must both account `allocation.getSize()`; crediting requested bytes on one side drifts unsigned `currentUsage` downward until a debit underflows it, and `shutdown()` reports the wrapped value as a leak.
 - Enabling `VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT` is a prerequisite for any RT buffer moving to `GpuAllocator`, not an optimisation.

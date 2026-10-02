@@ -24,7 +24,7 @@ The ordering is real and the C++ plumbing is complete: the SSAO view reaches
 
 `deferred_lighting.frag` declares no binding 10 — its samplers jump from
 `brdfLUT` at 9 to `ssgiTexture` at 11 — and never masks the flag word against
-bit 1; only 1, 4, 8, 16 and 32 are tested. The `ao` that multiplies the ambient
+bit 1; only 1, 4, 8 and 32 are tested. The `ao` that multiplies the ambient
 term is the alpha channel of the albedo G-buffer:
 
 {{cite shaders/core/deferred_lighting.frag "float ao = gBuffer2Sample.a;"}}
@@ -53,8 +53,12 @@ Bloom therefore always sees the pre-TAA frame, and no composite pass exists.
 
 ## The bloom chain and its one anti-firefly trick
 
-The mip chain is a single `R16G16B16A16_SFLOAT` image with per-level views, mip
-0 at full resolution, capped at eight levels:
+The mip chain is a single `R16G16B16A16_SFLOAT` image with per-level views and
+one framebuffer per level, mip 0 at full resolution, capped at eight levels. The
+views and framebuffers are one unit: `onResize` destroys and rebuilds them together
+with the image, so the chain always matches the current extent.
+
+{{cite ohao/render/deferred/bloom_pass.cpp "destroyMipChain();   // also destroys the per-mip framebuffers"}}
 
 {{cite ohao/render/deferred/bloom_pass.cpp "m_mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(m_width, m_height)))) + 1;"}}
 
@@ -126,62 +130,70 @@ plus the blurred chain, and the tonemap adds that on top of the untouched HDR at
 unit strength — above-threshold energy is counted roughly twice, not
 redistributed. And `setBloomIntensity()` is inert: it reaches
 `BloomPass::m_intensity`, which is pushed to the threshold shader in a field that
-shader declares and never reads, while the strength the tonemap uses is a literal.
+shader declares and never reads, while the strength the tonemap uses is a literal —
+raised only when the chain actually ran this frame:
 
-{{cite ohao/render/deferred/post_processing_pipeline.cpp "bloomStrength = 1.0f;"}}
+{{cite ohao/render/deferred/post_processing_pipeline.cpp "if (m_bloomPass->didExecute()) bloomStrength = 1.0f;"}}
 
-## The ping-pong that does not pong
+`BloomPass::execute` validates its pipelines, render passes and framebuffers before
+recording and sets `didExecute()` only after the upsample. When it reports false the
+strength stays 0 and the tonemap's bloom binding is filled with the HDR input instead
+of the mip chain, so an image no pass wrote this frame is never sampled.
 
-`TAAPass` keeps two `R16G16B16A16_SFLOAT` history images. `execute()` computes
-`outputIndex = m_currentHistoryIndex` and `historyIndex = 1 - m_currentHistoryIndex`,
-renders into the framebuffer at `outputIndex`:
+## Ping-pong history, swapped before it is read
+
+`TAAPass` keeps two `R16G16B16A16_SFLOAT` history images and an index naming the one
+written most recently. `execute()` flips that index *first*:
+
+{{cite ohao/render/deferred/taa_pass.cpp "m_currentHistoryIndex = 1 - m_currentHistoryIndex;"}}
+
+then renders into the framebuffer at the new index and writes this frame slot's
+descriptor set to sample the other image — the one the previous frame resolved into:
 
 {{cite ohao/render/deferred/taa_pass.cpp "renderPassInfo.framebuffer = m_framebuffers[outputIndex];"}}
 
-and binds the descriptor set at `historyIndex`:
+{{cite ohao/render/deferred/taa_pass.cpp "writeDescriptorSet(frameIndex, 1 - outputIndex);"}}
 
-{{cite ohao/render/deferred/taa_pass.cpp "&m_descriptorSets[historyIndex], 0, nullptr);"}}
-
-The trap is that the swap is already folded into the descriptor sets — set *i*
-was built to sample history view *1 − i*:
-
-{{cite ohao/render/deferred/taa_pass.cpp "uint32_t historyIdx = 1 - i;"}}
-
-The two inversions cancel. Set `1 − cur` samples view `cur`, exactly the view
-attached to framebuffer `cur`, so the pass samples the image it renders into.
-That alone would be undefined behaviour; the render pass makes it a certainty by
-declaring `LOAD_OP_CLEAR` on that attachment, so whatever history was there is
-gone before the first fragment runs:
-
-{{cite ohao/render/deferred/taa_pass.cpp "colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;"}}
-
-Binding `m_descriptorSets[outputIndex]` is the one-token fix. A second off-by-one rides
-on top: `execute()` calls `swapHistoryBuffers()` before returning while
-`getOutputView()` reads the *current* index, so the pipeline picks up the image
-written last frame.
+Because the flip happens before recording, `getOutputView()` — which reads the
+current index — names the image written *this* frame, and the tonemap that follows
+picks up the fresh resolve rather than last frame's:
 
 {{cite ohao/render/deferred/taa_pass.hpp "return m_historyViews[m_currentHistoryIndex];"}}
 
+The render pass clears its attachment on load. That is safe only because the
+attachment and the sampled history are never the same image: the cleared one holds
+the resolve from two frames back, which nothing reads again.
+
+{{cite ohao/render/deferred/taa_pass.cpp "colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;"}}
+
+The history binding alternates every frame, so the set must be rewritten every frame —
+which is why there is one set per frame in flight, written at record time for the
+slot whose fence was just waited. Rewriting a single shared set would modify it while
+up to two submitted frames still read it.
+
+Fresh history images hold nothing. `createHistoryBuffers()` drops `m_historyValid`,
+and the next `execute()` zeroes both images with `vkCmdClearColorImage`, leaves them
+`SHADER_READ_ONLY_OPTIMAL`, and resolves that one frame with blend weight 0 — the
+current frame alone — so a resize never fades in from black or from undefined
+memory:
+
+{{cite ohao/render/deferred/taa_pass.cpp "params.blendFactor = m_historyValid ? m_blendFactor : 0.0f;"}}
+
 Every feature toggle defaults to off except tonemapping, and the header says why
-in a comment — "disabled by default for stability". `model_viewer`'s deferred
-branch is the only place in the build that switches bloom, TAA and SSAO on. Two
-other call sites exist and neither is compiled: `renderer_pipeline_tests.cpp` is
-named by no `CMakeLists.txt` in the tree, and the pybind11 module sits behind an
-option that defaults off.
+in a comment — "disabled by default for stability". The callers that want the full
+stack switch bloom, TAA and SSAO on themselves: `model_viewer`'s deferred branch, the
+`ohao_game` windowed host, and the engine test that resizes a deferred renderer under
+the validation layer. Two other call sites exist and neither is compiled:
+`renderer_pipeline_tests.cpp` is named by no `CMakeLists.txt` in the tree, and the
+pybind11 module sits behind an option that defaults off.
+
+{{cite examples/ohao_game.cpp "pp->setTAAEnabled(true);"}}
 
 {{cite CMakeLists.txt "option(BUILD_PYTHON_BINDINGS"}}
 
-:::why
-That default is load-bearing: it keeps shipped renders away from the aliasing above
-rather than presenting the pass as production-ready. The alternative — TAA on,
-trusting the driver to do something sane when a colour attachment is
-simultaneously a sampled image — fails differently on different hardware, the
-worst kind of failure to debug.
-:::
-
 ## What the resolve shader does when the plumbing is right
 
-None of the above touches the shader, which is a competent modern resolve.
+The resolve shader itself is a competent modern resolve.
 History is fetched with a 4-tap Catmull-Rom approximation rather than plain
 bilinear — bilinear reprojection re-blurs the history every frame and the
 softness compounds — with the result floored at zero to kill the ringing
@@ -287,9 +299,9 @@ while binding 2 falls back to the HDR input itself when no SSR view has been set
 
 Bloom's binding has the same fallback and survives it because `bloomStrength` is
 zero when bloom is off. SSR has no such guard, so a live fallback adds the scene
-to itself — one stop brighter, everywhere. In practice `DeferredRenderer` calls
-`setSSRView()` before `setHDRInputWithImage()` every frame and the real view
-wins; the fallback goes live only if `SSRPass` failed to initialise.
+to itself — one stop brighter, everywhere. In practice `DeferredRenderer` hands
+`setSSRView()` the SSR output every frame before post-processing records, and the
+tonemap's per-slot set is written inside `execute()`, so the real view wins; the fallback goes live only if `SSRPass` failed to initialise.
 
 The `flashIntensity` push constant — an additive warm-white HDR spike for
 lightning, placed before the tonemap so the curve compresses it — is wired end to
@@ -297,9 +309,9 @@ end and has no producer anywhere in the tree.
 
 ## Contracts
 
-- `setSSRView()` only stores a handle; the descriptor is rewritten only by `setHDRInput`/`setHDRInputWithImage`. SSR must be set *before* the HDR input each frame, or binding 2 keeps last frame's view — and if never set at all, the tonemap adds the scene to itself.
+- `setSSRView()` and `setHDRInput*()` only store handles; `execute()` writes all three tonemap bindings into the set for `frameIndex` at record time, so both must be set before `execute()` that frame. If no SSR view is ever set, the tonemap adds the HDR input to itself.
 - `setTonemappingEnabled(false)` does not yield an untonemapped LDR image. Bloom and TAA still run, but `m_didExecute` stays false and `DeferredRenderer::getFinalOutput()` falls back to the HDR lighting attachment, discarding both.
 - The output image is `R8G8B8A8_UNORM` on purpose. Moving to `_SRGB` must be paired with removing the `pow` in `tonemapping.frag`, and reconciled with the operator-4 branch that already skips it.
 - `setBloomIntensity()` and `setUseVarianceClipping()` are stored but never reach the image: bloom strength is a literal in `execute()`, and clipping is unconditional in the shader.
 - `setSSAOEnabled(true)` produces an image nothing reads. Anyone adding `binding = 10` to `deferred_lighting.frag` must also gate it on flag bit 1 — the C++ side already raises that bit, and the ambient term already multiplies by a *different* `ao` from the G-buffer alpha, so a naive addition applies occlusion twice.
-- TAA is not correct as written — render target and sampled history alias, `getOutputView()` returns the previous frame's buffer, and motion vectors carry the current frame's jitter because `m_prevViewProj` is stored unjittered. It is off by default; treat deferred output with TAA enabled as untrusted.
+- TAA's history is sound — the render target and the sampled history are always different images, and the output is this frame's — but its inputs are not: motion vectors carry the current frame's jitter because `m_prevViewProj` is stored unjittered, and the jitter sweep spans half a pixel. Treat TAA's reprojection as approximate.

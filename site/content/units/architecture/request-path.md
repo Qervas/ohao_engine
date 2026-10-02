@@ -8,17 +8,23 @@ figures: [architecture-request-path-frame-ring]
 
 ## One sequence, in an order that matters
 
-OHAO has no editor host. The rendering examples — `cornell_box`, `model_viewer`,
-`env_demo`, `turntable`, the interactive viewer — are thin `main()`s over one
-sequence: construct a `VulkanRenderer` at a fixed output size, bring
+OHAO has no editor host. The offline examples — `cornell_box`, `model_viewer`,
+`env_demo`, `turntable` — are thin `main()`s over one sequence: construct a `VulkanRenderer` at a fixed output size, bring
 up the device, build a `Scene` out of plain CPU components, hand the scene over,
 choose a `RenderMode`, then loop `render()` and read the pixels back. `cornell_box`
 is the shortest complete instance of it, and it shows the one convention that
 surprises people reading the CLI: the output resolution is a compile-time constant
 in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer` and
-`env_demo`, 1280×720 in `turntable` and the interactive viewer.
+`env_demo`, 1280×720 in `turntable`.
 
 {{cite examples/cornell_box.cpp "const uint32_t W = 1920, H = 1080;"}}
+
+The windowed host, `ohao_game`, runs the same sequence through `ohao_runtime`'s
+`Application` with two substitutions: the renderer is sized from the window's
+framebuffer extent and initialised against a present target, and the loop presents
+to a swapchain instead of reading pixels back.
+
+{{cite ohao/runtime/application.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
 
 Scene construction touches no Vulkan at all — walls, spheres, and twelve sphere
 lights are built as `MeshComponent` / `MaterialComponent` / `LightComponent` on
@@ -105,14 +111,15 @@ runs never dispatch.
 
 Mode selection can also fail closed. If RT is unavailable, `setRenderMode` prints
 and returns *without* assigning `m_renderMode`, leaving the renderer in whatever
-mode it already had — which at startup is `Forward`.
+mode it already had — which at startup is `Deferred`.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "Path tracing not available, staying in current mode"}}
 
-No example ever asks for `Forward`: `resolveMode()` returns Deferred or one of the
-two RT modes. Forward is reachable only as the refusal state, and the examples
-print the mode they *requested*, not the one the renderer accepted, so a silent
-downgrade reads as success on stdout.
+{{cite ohao/gpu/vulkan/renderer.hpp "RenderMode m_renderMode{RenderMode::Deferred};"}}
+
+So an RT request on a device without ray tracing renders deferred instead, and the
+examples print the mode they *requested*, not the one the renderer accepted, so a
+silent downgrade reads as success on stdout.
 
 ## Three deep, and the +3 in every driver
 
@@ -196,7 +203,7 @@ reset — before it records the command buffer that dispatches the tracer:
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline, false);"}}
 
 Four values are explicitly re-injected around the reset — anisotropy strength and
-rotation, subsurface strength, and the interactive per-frame sample count:
+rotation, subsurface strength, and the realtime per-frame sample count:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "so restore the user's choice here (same pattern as aniso/SSS preservation)."}}
 

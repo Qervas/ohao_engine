@@ -9,8 +9,8 @@ figures: [materials-ggx-ndf-energy]
 ## The α convention every copy shares
 
 The isotropic GGX distribution exists three times in this tree, each behind a
-name: `distributionGGX` in `brdf_ggx.glsl`, which the deferred and forward
-fragment shaders reach through `evaluateBRDF`; and `ggxDisoShaded` and `ggxDiso`
+name: `distributionGGX` in `brdf_ggx.glsl`, which the deferred lighting
+fragment shader reaches through `evaluateBRDF`; and `ggxDisoShaded` and `ggxDiso`
 in `ggx_aniso.glsl`, which the three path-tracer raygens include.
 
 The one thing all three agree on without qualification is the width
@@ -272,7 +272,7 @@ calls — was written specifically to reject Frisvad. Trust the function.
 ## What is actually reachable
 
 `brdf_common.glsl` and `brdf_ggx.glsl` define twenty functions between them; the
-deferred and forward fragment shaders reach nine. Four of the eleven unreachable
+deferred lighting fragment shader reaches nine. Four of the eleven unreachable
 ones still have their math shipping under no name at all. `geometrySchlickGGX`
 and `geometrySmith`, its sole caller, are the `(roughness+1)²/8` remap inlined in
 every NEE branch of all three raygens. `fresnelSchlick` — textbook Schlick with

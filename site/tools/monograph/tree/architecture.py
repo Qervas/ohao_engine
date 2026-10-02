@@ -12,7 +12,7 @@ MODULE = {
             'request-path',
             'Request path',
             'CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels.',
-            files=['examples/interactive.cpp', 'examples/cornell_box.cpp', 'ohao/gpu/vulkan/renderer.cpp'],
+            files=['examples/ohao_game.cpp', 'examples/cornell_box.cpp', 'ohao/gpu/vulkan/renderer.cpp'],
             design=['The engine is a library: no editor host required.', 'Examples are thin drivers over the same API surface.'],
             workflow=['Parse CLI (model, env, mode, denoise)', 'Build Scene + load assets into components', 'VulkanRenderer(w,h).initialize() cold start', 'setScene → upload + BLAS/TLAS', 'setRenderMode / ensureRTRenderer as needed', 'render() loop or single shot; getPixels / present'],
             why='One mental model for every tool (viewer, turntable, tests).',

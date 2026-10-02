@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" class="unit-diagram" role="img" aria-label="Descriptor set 0 of the deferred lighting pass: sixteen declared bindings, sorted into four classes — sampled with a real resource, written every frame but with no sampler in the shader, sampled but always the one-by-one dummy image, and sampled only inside a branch whose flag bit is never set">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 356" class="unit-diagram" role="img" aria-label="Descriptor set 0 of the deferred lighting pass: fifteen declared bindings at 0 to 12, 14 and 15, sorted into three classes — sampled with a real resource, written every frame but with no sampler in the shader, and sampled but always the one-by-one dummy image">
 <rect width="100%" height="100%" fill="#0f1419"/>
-<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">DESCRIPTOR SET 0 — DeferredLightingPass, 16 declared bindings</text>
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">DESCRIPTOR SET 0 — DeferredLightingPass, 15 declared bindings</text>
 
 <!-- column panels -->
 <rect x="28" y="44" width="320" height="212" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
@@ -25,9 +25,8 @@
   <text x="386" y="114" fill="#6e685c">10</text><text x="418" y="114" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">SSAO (written, no sampler)</text><rect x="670" y="107" width="8" height="8" fill="#6e685c"/>
   <text x="386" y="138" fill="#6e685c">11</text><text x="418" y="138" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">SSGI — half-res indirect</text><rect x="670" y="131" width="8" height="8" fill="#7dba8a"/>
   <text x="386" y="162" fill="#6e685c">12</text><text x="418" y="162" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">CascadeUBO — viewProj[4]</text><rect x="670" y="155" width="8" height="8" fill="#7dba8a"/>
-  <text x="386" y="186" fill="#6e685c">13</text><text x="418" y="186" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="12">cloud shadow (R16F)</text><rect x="670" y="179" width="8" height="8" fill="#c4a574"/>
-  <text x="386" y="210" fill="#6e685c">14</text><text x="418" y="210" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">RT shadow mask (R8)</text><rect x="670" y="203" width="8" height="8" fill="#7dba8a"/>
-  <text x="386" y="234" fill="#6e685c">15</text><text x="418" y="234" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">env map — equirect, 1 mip</text><rect x="670" y="227" width="8" height="8" fill="#7dba8a"/>
+  <text x="386" y="186" fill="#6e685c">14</text><text x="418" y="186" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">RT shadow mask (R8)</text><rect x="670" y="203" width="8" height="8" fill="#7dba8a"/>
+  <text x="386" y="210" fill="#6e685c">15</text><text x="418" y="210" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">env map — equirect, 1 mip</text><rect x="670" y="203" width="8" height="8" fill="#7dba8a"/>
 </g>
 
 <!-- legend -->
@@ -38,9 +37,7 @@
   <text x="318" y="287" fill="#e8e2d6">written every frame, no sampler declared in the shader</text>
   <rect x="28" y="302" width="8" height="8" fill="#c4784a"/>
   <text x="46" y="311" fill="#e8e2d6">sampled, but the setter has no caller — always the 1×1 dummy, contents undefined</text>
-  <rect x="28" y="326" width="8" height="8" fill="#c4a574"/>
-  <text x="46" y="335" fill="#e8e2d6">sampler + sample site exist, but the flag bit gating them is never set</text>
 </g>
 
-<text x="28" y="364" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual. Read from createDescriptors()/updateDescriptorSets() and the frag's declarations — not a capture or a profile.</text>
+<text x="28" y="340" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual. Read from createDescriptors()/updateDescriptorSets() and the frag's declarations — not a capture or a profile.</text>
 </svg>

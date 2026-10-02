@@ -103,7 +103,7 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; historyFrameCount &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L207" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:207</a></div>
 <p>With the offline profile bound it is false on every Atrous frame, so the motion-vector AOV is identically zero and reprojection degenerates to `prevPixel == pixel` — the smaller problem there. That profile also resets accumulation on view change, which raises `pc.reset` and makes Pass 1 discard *all* history unconditionally — not per-pixel, not by geometry test — for every frame the camera moves. The realtime raygen was fixed by gating on the frame index, which advances in all modes:</p>
 <div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; frameIdx &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L421" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:421</a></div>
-<p>The interactive viewer defaults to the realtime profile, so the shipping path gets correct vectors; the other two raygens do not.</p>
+<p>So an `rt_realtime --denoise=atrous` run gets correct vectors; the other two raygens do not.</p>
 </div>
 <div class="section-rule"><h2 id="two-compiled-shaders-that-nothing-runs">Two compiled shaders that nothing runs</h2></div>
 <div class="prose reveal">

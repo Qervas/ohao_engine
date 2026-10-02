@@ -16,7 +16,7 @@ KNOWLEDGE: dict[str, dict] = {
     "architecture/request-path": {
         "what": [
             "The request path is the single mental model for every OHAO binary: a thin driver builds a Scene, hands it to VulkanRenderer, chooses a RenderMode, and either presents a swapchain or reads pixels.",
-            "Examples (interactive, cornell_box, turntable, model_viewer) share this path; they differ only in scene construction and CLI flags.",
+            "Examples (cornell_box, turntable, model_viewer, ohao_game) share this path; they differ only in scene construction and CLI flags.",
         ],
         "how": [
             "Parse CLI (model path, HDR env, --mode, --denoise, spp).",
@@ -263,15 +263,6 @@ KNOWLEDGE: dict[str, dict] = {
             "MaterialInstance holds texture indices and factors before pack.",
         ],
         "why": "Silent layout drift is undebuggable; assert at compile time.",
-    },
-    "gpu/pipeline-fb": {
-        "what": [
-            "Legacy forward pipeline and offscreen framebuffer helpers for simple demos and regression paths.",
-        ],
-        "how": [
-            "pipeline.cpp creates forward graphics pipelines; framebuffer.cpp allocates color/depth for present/readback.",
-        ],
-        "why": "Forward remains for smoke tests; deferred is the production raster path.",
     },
     "materials/pbr-model": {
         "what": [
@@ -571,7 +562,7 @@ KNOWLEDGE: dict[str, dict] = {
     "denoise/dlss": {
         "what": ["NVIDIA DLSS Ray Reconstruction via NGX — guides include color, depth, motion, normal-roughness, specular hit-distance (binding 35)."],
         "how": [
-            "dlss_rr.hpp/cpp; needs LD_LIBRARY_PATH to DLSS .so; interactive --denoise=dlssrr.",
+            "dlss_rr.hpp/cpp; needs LD_LIBRARY_PATH to DLSS .so; rt_realtime --denoise=dlss.",
             "dlss_tonemap.comp prepares display path.",
         ],
         "why": "Highest interactive quality on supported NVIDIA hardware.",
@@ -626,11 +617,6 @@ KNOWLEDGE: dict[str, dict] = {
         "what": ["Core raster pair: gbuffer.vert/frag MRT contract and deferred_lighting.frag."],
         "how": ["Bindless nonuniformEXT; lighting reconstructs position from depth."],
         "why": "These two shaders are the deferred product surface.",
-    },
-    "shaders/forward": {
-        "what": ["Legacy forward.vert/frag with limited lights."],
-        "how": ["Used by RenderMode::Forward smoke paths."],
-        "why": "Simple path for debugging without GBuffer.",
     },
     "shaders/particles-sh": {
         "what": ["Particle emit/update compute + render shaders."],
@@ -741,8 +727,8 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Optional heavy deps must not break bare builds.",
     },
     "systems/examples": {
-        "what": ["Example map: cornell_box, model_viewer, env_demo, interactive, turntable share example_cli.hpp flags."],
-        "how": ["interactive is full dogfood (WASD, mode switch, --denoise=dlssrr)."],
+        "what": ["Example map: cornell_box, model_viewer, env_demo, turntable share example_cli.hpp flags; ohao_game is the windowed host."],
+        "how": ["ohao_game presents deferred to a swapchain (WASD/QE fly camera); --frames N fails the run on any readback or validation message."],
         "why": "Thin drivers over one API — golden and demo paths stay aligned.",
     },
     "systems/tests": {

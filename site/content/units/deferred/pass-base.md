@@ -65,8 +65,10 @@ base class, shared by every pass and defaulted to a relative path:
 {{cite ohao/render/deferred/render_pass_base.hpp "static inline std::string s_shaderBasePath"}}
 
 `VulkanRenderer`'s constructor probes seven candidate directories for
-`core_forward.vert.spv` and, during `initialize()`, pushes the winner into the
+`core_deferred_lighting.frag.spv` and, during `initialize()`, pushes the winner into the
 base before the deferred renderer — and therefore any pass — is constructed:
+
+{{cite ohao/gpu/vulkan/renderer.cpp "core_deferred_lighting.frag.spv"}}
 
 {{cite ohao/gpu/vulkan/renderer.cpp "RenderPassBase::setShaderBasePath(m_shaderBasePath);"}}
 
@@ -116,10 +118,14 @@ The practical effect is that a pass's `bool initialize()` contract can be bypass
 A missing SPV inside `GBufferPass::createPipeline` does not produce `false` — it
 unwinds through `DeferredRenderer::initialize` and `initializeDeferredRenderer`
 into the `try`/`catch` inside `VulkanRenderer::initialize`, the only one anywhere
-in that chain and the only thing that converts it back into a boolean. Getting
-there costs the caller its own recovery: `initializeDeferredRenderer` *returning*
-`false` is handled as non-fatal and forward rendering carries on, but a throw goes
-straight past that branch and fails all of `VulkanRenderer::initialize`.
+in that chain and the only thing that converts it back into a boolean. The two
+channels end in the same place only because `VulkanRenderer` has no recovery to
+offer: deferred is its only raster path, so `initializeDeferredRenderer` *returning*
+`false` fails `initialize` just as a throw does. What the throw skips is the
+recovery in between: on `false`, `initializeDeferredRenderer` resets
+`m_deferredRenderer` and every pass already built goes with it, and
+`DeferredRenderer` has named the failing pass on the way out; a throw passes both by,
+leaving the half-built renderer alive until `VulkanRenderer` itself is destroyed.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (!initializeDeferredRenderer()) {"}}
 

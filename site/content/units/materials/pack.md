@@ -130,10 +130,9 @@ self-asserts and by `tests/engine/engine_tests.cpp`; `kNoTexture` is referenced
 nowhere outside its own header.
 `rt_build.cpp` — the only file that writes binding 10 — spells `0xFFFFFFFFu` out
 three times instead: twice while building the sentinel rows, once inside
-`packIdx`. The bit-cast idiom is copied further, into `scene_upload.cpp` and
-`gbuffer_pass.cpp`, but those two pack indices into the forward and deferred
-per-draw push constants, never into this buffer, and they take their sentinel
-from `UINT32_MAX`. Every consumer hardcodes the stride 3. The drift is already
+`packIdx`. The bit-cast idiom is copied further, into `gbuffer_pass.cpp`, but that
+packs indices into the deferred per-draw push constants, never into this buffer,
+and takes its sentinel from `UINT32_MAX`. Every consumer hardcodes the stride 3. The drift is already
 in the tree:
 
 {{cite ohao/gpu/vulkan/rt_build.cpp "allMatColors has 2 vec4s per material, so divide by 2 for material count"}}

@@ -13,14 +13,14 @@ MODULE = {
             'Build system',
             'CMake options, targets, shaders target, examples.',
             files=['CMakeLists.txt', 'ohao/CMakeLists.txt', 'examples/CMakeLists.txt', 'shaders/CMakeLists.txt'],
-            design=['Top-level options gate NRD, OIDN, DLSS, Jolt, tests.', 'shaders custom target compiles GLSL → SPIR-V into bin/shaders.', 'examples link ohao libraries; interactive is the full-featured driver.'],
+            design=['Top-level options gate NRD, OIDN, DLSS, Jolt, tests.', 'shaders custom target compiles GLSL → SPIR-V into bin/shaders.', 'examples link ohao libraries; ohao_game is the windowed host.'],
         ),
         page(
             'examples',
             'Examples map',
-            'cornell_box, model_viewer, env_demo, interactive, turntable.',
-            files=['examples/cornell_box.cpp', 'examples/model_viewer.cpp', 'examples/env_demo.cpp', 'examples/interactive.cpp', 'examples/turntable.cpp', 'examples/example_cli.hpp'],
-            design=['example_cli.hpp shared flags: model, env, mode, denoise, spp.', 'interactive: WASD camera + mode switch + --denoise=dlssrr.', 'cornell_box / turntable feed golden and showcase pipelines.', 'Research-only CLIs under examples/ are out of the public monograph scope.'],
+            'cornell_box, model_viewer, env_demo, turntable, ohao_game.',
+            files=['examples/cornell_box.cpp', 'examples/model_viewer.cpp', 'examples/env_demo.cpp', 'examples/turntable.cpp', 'examples/ohao_game.cpp', 'examples/example_cli.hpp'],
+            design=['example_cli.hpp shared flags: model, env, mode, denoise, spp.', 'ohao_game: windowed deferred host (WASD/QE fly camera, --frames/--resize-at presentation gate).', 'cornell_box / turntable feed golden and showcase pipelines.', 'Research-only CLIs under examples/ are out of the public monograph scope.'],
         ),
         page(
             'tests',

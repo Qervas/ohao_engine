@@ -15,19 +15,19 @@ and more than once per translation unit.
 
 {{cite shaders/CMakeLists.txt "-I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes"}}
 
-That is why every file here opens with an `#ifndef OHAO_..._GLSL` guard, and the
-guards are load-bearing rather than habit. Compiling `forward.frag` reaches
-`math.glsl` three separate times: directly, again through
-`brdf_ggx.glsl` → `brdf_common.glsl`, and a third time through
-`light_attenuation.glsl`. Strip the guard and `saturate` is redefined twice and
-the shader fails to compile. The same shader pulls `types.glsl` and
-`constants.glsl`, which both `#define MAX_LIGHTS 8`. That collision is harmless —
-`glslc` rejects a redefinition only when the substitution *differs* — so the
-`#ifndef MAX_LIGHTS` wrapper in `constants.glsl` is not what lets the two
-coexist; agreeing on `8` is. `deferred_lighting.frag` proves it, spelling the
-macro out unconditionally after `brdf_ggx.glsl` has already dragged
-`constants.glsl` in, and shipping anyway. What breaks the build is a third copy
-drifting to `16`.
+That is why every file here opens with an `#ifndef OHAO_..._GLSL` guard. No
+shader in the tree currently reaches the same header twice, so today the guards
+fire for nobody — but the graph is one include away from needing them:
+`math.glsl` is pulled in by both `brdf_common.glsl` and `light_attenuation.glsl`,
+so a shader that took the BRDF and the attenuation header together would reach it
+twice, and without the guard `saturate` would be redefined and the shader would
+fail to compile. Macros behave differently. `types.glsl` and `constants.glsl`
+both `#define MAX_LIGHTS 8`, and `glslc` rejects a redefinition only when the
+substitution *differs* — so the `#ifndef MAX_LIGHTS` wrapper in `constants.glsl`
+is not what keeps copies compatible; agreeing on `8` is. `deferred_lighting.frag`
+proves it, spelling the macro out unconditionally after `brdf_ggx.glsl` has
+already dragged `constants.glsl` in, and compiling anyway. What breaks the build
+is a copy drifting to `16`.
 
 {{cite shaders/core/deferred_lighting.frag "#define MAX_LIGHTS 8"}}
 
@@ -40,8 +40,8 @@ itself the bootstrap every shader should include first. No shader includes it.
 ## The transitive chain deferred lighting depends on without naming
 
 `constants.glsl` looks like a bag of macros nobody needs. It has exactly one live
-consumer, three includes down. `brdf_ggx.glsl` — the BRDF the deferred and
-forward fragment shaders call — spends `EPSILON` at six sites. Three are genuine
+consumer, three includes down. `brdf_ggx.glsl` — the BRDF `deferred_lighting.frag`
+calls — spends `EPSILON` at six sites. Three are genuine
 division guards, `max(denom, EPSILON)` in the GGX distribution, in the
 Schlick-GGX geometry term and in the height-correlated Smith visibility:
 
@@ -70,29 +70,31 @@ observe: the build simply stops.
 ## The Light struct is the one hard ABI here
 
 `types.glsl` is not a utility header; it is a GPU-side mirror of a C++ struct.
-Its `Light` is four `vec4`s plus a `mat4` — 128 bytes in std140 — and it is the
-type that `forward.frag` and `shadow_depth.vert` use to declare their light UBO
-array.
+Its `Light` is four `vec4`s plus a `mat4` — 128 bytes in std140 — matching the
+`LightData` the renderer uploads every frame.
 
 {{cite shaders/includes/common/types.glsl "mat4 lightSpaceMatrix;  // Transform to light space"}}
+
+No shader includes it. The one raster stage that reads that buffer,
+`deferred_lighting.frag`, declares its own field-for-field copy of the struct
+inline, so this header is a second copy of the ABI with no consumer, and the copy
+that matters lives in a shader body.
+
+{{cite shaders/core/deferred_lighting.frag "Light lights[MAX_LIGHTS];"}}
 
 The C++ side pins the size at compile time; the GLSL side has no equivalent
 check, so the assert protects only half the boundary.
 
 {{cite ohao/gpu/vulkan/renderer.hpp "OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);"}}
 
-There is also a naming contract that only a comment enforces. `types.glsl` gives
-you the struct; the *includer* declares the UBO; and `shadow_pcf.glsl`, spliced
-in afterwards, reads that UBO by the bare global name `lighting` at seven sites
-without ever declaring it. It is the only header on the live translation unit
-that does — `blinn_phong.glsl` has the same habit but sits in the `#else` branch
-that `USE_PBR` defaulting to 1 compiles out, and `light_attenuation.glsl` takes
-everything by parameter.
+The headers that would consume `types.glsl` carry a naming contract only a
+comment enforces: `shadow_pcf.glsl` and `blinn_phong.glsl` read the light UBO by
+the bare global name `lighting` without ever declaring it, so an includer has to
+declare the block under that exact name *above* the include line.
+`deferred_lighting.frag` happens to name its block `lighting`, but includes
+neither header; `light_attenuation.glsl` takes everything by parameter.
 
-{{cite shaders/core/forward.frag "CRITICAL: Include files access this UBO directly by name"}}
-
-Move that one include above the UBO declaration and the failure is an undeclared
-identifier in a file you did not touch.
+{{cite shaders/includes/shadow/shadow_pcf.glsl "IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!"}}
 
 ## Octahedral normals: three encoders, two decoders, one of each ships
 
@@ -147,8 +149,8 @@ different reason.
 ## What the math and color headers actually deliver
 
 `math.glsl` exports eighteen helpers. One of them reaches live code: `saturate`,
-at ten call sites, all inside `light_attenuation.glsl` and `brdf_common.glsl`.
-The other seventeen have no live caller. Thirteen have no caller at all —
+at the two Fresnel call sites in `brdf_common.glsl` (its other eight call sites
+sit in `light_attenuation.glsl`, which no shader includes). The other seventeen have no live caller. Thirteen have no caller at all —
 `remap`, `remapClamped`, `linearstep`, `fastAtan2`, `lengthSquared`,
 `safeNormalize`, `reject`, `getRotationMatrix`, `smoothHermite`,
 `smootherHermite`, `gain`, `packNormal`, `unpackNormal` — and so do `octEncode`
@@ -157,39 +159,39 @@ inside this same file, by the already-dead `reject` and `gain`. Nothing is
 shadowed by an inlined copy either: the only `safeNormalize` in the engine is an
 unrelated C++ function in the physics module.
 
+`color.glsl` is in the same position wholesale: no shader includes it. Its
+`luminance` and `tonemapACES` have live counterparts, but they are private copies
+— `tonemapping.frag` defines its own ACES fit rather than including this one.
+
 {{cite shaders/includes/common/color.glsl "float luminance(vec3 color) {"}}
 
 {{cite shaders/postprocess/tonemapping.frag "vec3 ACESFilm(vec3 x) {"}}
 
-## Reconstruction and depth linearization sit mostly on dead pipelines
+## Reconstruction and depth linearization: one live overload
 
 `reconstruction.glsl` has one live entry point: the `mat4` overload of
 `reconstructViewPos`, called twice by `ssao.comp`. The compact overload that
 takes `(1/proj[0][0], 1/proj[1][1], near, far)` to save 48 bytes of push
-constants is called only from `_disabled/ssr.comp`; `reconstructWorldPos` and
-`reconstructWorldDir` have no callers at all, and the header comment naming
-`cloud.comp` and `water.frag` as users of the latter is wrong on both counts —
-they live under `_disabled/` and neither calls it.
+constants has no callers; nor do `reconstructWorldPos` and
+`reconstructWorldDir`. The header's usage comments name consumers —
+`volumetric_scatter`, `cloud.comp`, `water.frag` — that do not exist anywhere in
+`shaders/`.
 
 {{cite shaders/includes/common/reconstruction.glsl "// Used by: cloud.comp, water.frag (ray origin/direction from screen pixel)"}}
 
-Both depth linearizers in `encoding.glsl` are in the same position: `dof_coc`,
-`ssgi` and `volumetric_scatter` are their only callers and all three are
-disabled. The shader CMake globs recursively over the whole `shaders/` tree, so
-`_disabled/` shaders still compile to SPIR-V and still gate the build on these
-headers' syntax — they simply have no C++ that loads the module.
+Both depth linearizers in `encoding.glsl` are in the same position: their
+comments name `ssgi`, `volumetric_scatter` and `dof_coc`, none of which is in the
+tree, and nothing calls either function. They are not unchecked, though: the
+whole of `encoding.glsl` is spliced into five live shaders and
+`reconstruction.glsl` into `ssao.comp`, so the uncalled functions are still
+parsed on every shader build — they simply never reach a call site.
 
-The 264-line noise library — Hoskins hashes, value and gradient noise, fBm,
-ridged multifractal, domain warping, Voronoi, a directional dune profile — is
-included by exactly two files, both under `_disabled/terrain/`. No live pipeline
-pulls it. This monograph's own source-tree summary bills it as a hash for three
-consumers:
+{{cite shaders/includes/common/encoding.glsl "// Used by: ssgi, volumetric_scatter"}}
 
-Two of the three do not survive a grep. `ssao.comp` samples a noise *texture*
-through a descriptor, and `sampleCloudDensity` takes a `sampler3D` rather than
-generating anything procedurally. The third is true in the way that hurts:
-`particle_emit.comp` does want a hash, and rolls a private integer bit-mixer — a
-shape the library does not offer, since every hash in it is float-valued.
+There is no shared noise or hash header at all. The shaders that need
+pseudo-randomness each roll their own: `particle_emit.comp` an integer
+bit-mixer, `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familiar
+`fract`-of-products shape.
 
 {{cite shaders/particles/particle_emit.comp "uint hash(uint x) {"}}
 
@@ -199,7 +201,7 @@ shape the library does not offer, since every hash in it is float-valued.
 
 - `gbuffer.frag`'s private encoder returns $[-1,1]$ and the `×0.5+0.5` remap lives at its call site; `decodeNormalOctahedron` assumes $[0,1]$. Change either half alone and every consumer's lower-hemisphere normals flip.
 - `types.glsl`'s `Light` must stay field-for-field and 128 bytes aligned with C++ `LightData`. Only the C++ side is statically asserted.
-- `types.glsl` must be included before the light UBO declaration, and the UBO must be named `lighting`, because `shadow_pcf.glsl` reads that global at seven sites without declaring it. (`blinn_phong.glsl` needs the same name, but only in the `USE_PBR 0` branch nothing compiles.)
+- `deferred_lighting.frag`'s inline `Light` is the struct that must stay field-for-field with C++ `LightData`; `types.glsl` is a duplicate no shader compiles. Any shader that adopts `shadow_pcf.glsl` or `blinn_phong.glsl` must declare its light UBO as `lighting` above the include, because both read that global without declaring it.
 - `brdf_ggx.glsl` gets `EPSILON` transitively through `brdf_common.glsl` → `math.glsl` → `constants.glsl` and declares none of it. That chain is required by the deferred lighting pass.
-- `constants.glsl`'s `MAX_LIGHTS 8` must match `renderer.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that no longer exists in the tree.
+- `constants.glsl`'s `MAX_LIGHTS 8` must match `renderer.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree.
 {{cite shaders/includes/common/constants.glsl "// See: src/renderer/offscreen/offscreen_types.hpp"}}

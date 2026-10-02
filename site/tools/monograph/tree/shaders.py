@@ -66,13 +66,6 @@ MODULE = {
             design=['GBuffer MRT: albedo, normal, material, velocity (from current/prev clip pos), depth.', 'Bindless texture indices via nonuniformEXT; 0xFFFFFFFF = missing map.', 'deferred_lighting.frag: light loop + IBL + CSM + optional RT shadow/GI textures.'],
         ),
         page(
-            'forward',
-            'Forward shaders',
-            'Legacy forward.vert/frag path.',
-            files=['shaders/core/forward.vert', 'shaders/core/forward.frag'],
-            design=['8-light-limit forward path for smoke tests and simple scenes.'],
-        ),
-        page(
             'particles-sh',
             'Particle shaders',
             'Emit, update, render.',

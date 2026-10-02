@@ -163,7 +163,7 @@ then asks for eight rays at a 0.5-unit source radius.
 `deferred_lighting.frag` then applies the mask *inside* its per-light loop. Every
 light in the scene is shadowed by the visibility of that one hardcoded point
 light, and because the RT branch pre-empts CSM rather than coexisting with it, a
-directional sun that previously had cascades gets it too. Enabling RT shadows is
+directional sun that would otherwise have cascades gets it too. Enabling RT shadows is
 an improvement only for a scene whose key light matches the hardcoded one. The
 gap is in the wiring, not the algorithm: `ShadowInput` already carries direction,
 position, type and range per invocation, and the technique reads all four into
@@ -231,7 +231,6 @@ pulled out of an integral it does not commute with.
 ## Contracts
 
 - `RTShadowTechnique::resize()` exists and satisfies the `ShadowTechniqueLike` concept, but `DeferredRenderer::onResize` never calls it — it resizes `m_rtGI` and not `m_rtShadow`. After a window resize the mask keeps its init extent while `vkCmdTraceRaysKHR` dispatches at the new one, so stores past the old extent are discarded and the lighting pass samples a mask that no longer registers with the screen.
-- `render()` creates a `VkSampler` for its two GBuffer reads and destroys it at the end of the same function, before the command buffer it recorded has executed. Vulkan requires that sampler to outlive every submitted command referencing it.
-- One descriptor set, rewritten by `vkUpdateDescriptorSets` during recording: safe only if the previous frame's submission using it has already completed.
+- The GBuffer sampler is created on the first `render()` and destroyed only in `destroy()`; the descriptor set rewritten during recording is the one for the caller's `frameSlot`, one of `MAX_FRAMES_IN_FLIGHT`. Both hold only while the caller passes the frame-ring slot whose fence it has just waited on.
 - The pre-trace transition uses `oldLayout = VK_IMAGE_LAYOUT_UNDEFINED` with `srcStageMask = TOP_OF_PIPE`. Discarding the contents is fine — every pixel is written unconditionally each dispatch — but that barrier does not wait on last frame's fragment-shader reads of the same image.
-- `setRTShadowMask` and the `updateDescriptorSets` that follows it must both run before `m_renderGraph.execute`. The setter only stores `m_rtShadowView` — the flag bit the fragment shader branches on is derived from that member inside `execute`, and the write that puts the mask at binding 14 is the separate call. Move the pair after `execute` and the lighting pass records with bit 5 clear and the dummy view still bound.
+- `setRTShadowMask` must run after the per-frame reset and before the lighting pass records, and only when `rendered()` is true — today from the RTShadow pass's own callback, which the graph records before `DeferredLighting`. The setter only stores `m_rtShadowView`; the flag bit the fragment shader branches on and the descriptor at binding 14 are both derived from that member when the lighting pass records. Hand it over later and that frame records with bit 5 clear and the dummy view bound.
