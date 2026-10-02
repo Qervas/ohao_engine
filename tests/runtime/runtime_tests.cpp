@@ -193,10 +193,18 @@ static void unknown_names_are_inert() {
 
 // ---------------------------------------------------------------- swapchain choice
 
-static void choose_format_prefers_srgb_bgra() {
-    VkSurfaceFormatKHR fs[] = {{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-                               {VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
-    CHECK(ohao::Swapchain::chooseFormat(fs).format == VK_FORMAT_B8G8R8A8_SRGB, "prefer BGRA8 sRGB");
+// The deferred output is already gamma-encoded by the tonemap shader, so the
+// swapchain must be UNORM: an sRGB swapchain would encode it a second time.
+static void choose_format_prefers_unorm_bgra() {
+    VkSurfaceFormatKHR fs[] = {{VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+                               {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+                               {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    CHECK(ohao::Swapchain::chooseFormat(fs).format == VK_FORMAT_B8G8R8A8_UNORM,
+          "prefer BGRA8 UNORM: the image is already display-encoded");
+    VkSurfaceFormatKHR srgbOnly[] = {{VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+                                     {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    CHECK(ohao::Swapchain::chooseFormat(srgbOnly).format == VK_FORMAT_R8G8B8A8_UNORM,
+          "any UNORM 8-bit format beats an sRGB one");
     VkSurfaceFormatKHR only[] = {{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
     CHECK(ohao::Swapchain::chooseFormat(only).format == VK_FORMAT_R8G8B8A8_UNORM, "else first offered");
 }
@@ -261,7 +269,7 @@ int main() {
     RUN(mouse_delta_no_first_jump);
     RUN(unknown_names_are_inert);
     std::printf("[swapchain choice]\n");
-    RUN(choose_format_prefers_srgb_bgra);
+    RUN(choose_format_prefers_unorm_bgra);
     RUN(choose_present_mode);
     RUN(choose_image_count_unlimited_max);
     RUN(choose_extent_uses_desired_when_surface_defers);

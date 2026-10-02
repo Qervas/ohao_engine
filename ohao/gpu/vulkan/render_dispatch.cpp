@@ -16,14 +16,27 @@ namespace ohao {
 void VulkanRenderer::renderDeferred() {
     if (!m_deferredRenderer) return;
 
-    // Get command buffer
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
 
-    // Read pixels from THIS frame's staging buffer AFTER waiting
-    // This data was written 3 frames ago and is now guaranteed complete
-    if (frame.stagingBufferMapped) {
-        memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped, m_width * m_height * 4);
+    // Every early return below happens BEFORE resetFrame, so the slot's fence stays
+    // signaled and the next waitForFrame on it cannot deadlock.
+    uint32_t imageIndex = 0;
+    if (m_swapchain) {
+        if (m_swapchainDirty || !m_swapchain->valid()) {
+            if (!recreatePresentation()) return;   // minimized: skip the frame
+        }
+        const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
+        if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
+        if (acq == Swapchain::Acquire::Error) {
+            std::cerr << "[present] vkAcquireNextImageKHR failed" << std::endl;
+            return;
+        }
+    } else if (frame.stagingBufferMapped) {
+        // Headless: this slot's staging buffer holds the frame finished
+        // MAX_FRAMES_IN_FLIGHT frames ago, complete now that its fence signaled.
+        memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped,
+               static_cast<size_t>(m_width) * m_height * 4);
     }
 
     m_frameResources.resetFrame(m_currentFrame);
@@ -112,20 +125,89 @@ void VulkanRenderer::renderDeferred() {
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
 
-    // Copy final output to staging buffer for CPU readback
-    copyDeferredOutputToPixelBuffer(cmd);
+    if (m_swapchain) blitDeferredOutputToSwapchain(cmd, imageIndex);
+    else             copyDeferredOutputToPixelBuffer(cmd);   // headless readback
 
     vkEndCommandBuffer(cmd);
 
-    // Submit
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
-
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSemaphore renderFinished = VK_NULL_HANDLE;
+    if (m_swapchain) {
+        renderFinished = m_swapchain->renderFinished(imageIndex);
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = &m_imageAcquired[m_currentFrame];
+        submitInfo.pWaitDstStageMask = &waitStage;
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = &renderFinished;
+    }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
 
+    if (m_swapchain) {
+        const VkResult pr = m_swapchain->present(m_graphicsQueue, imageIndex);
+        if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) m_swapchainDirty = true;
+    }
+
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
+}
+
+void VulkanRenderer::blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex) {
+    const VkImage src = m_deferredRenderer->getFinalOutputImage();
+    const VkImage dst = m_swapchain->image(imageIndex);
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkImageMemoryBarrier b[2]{};
+    for (auto& x : b) {
+        x.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        x.srcQueueFamilyIndex = x.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        x.subresourceRange = range;
+    }
+    b[0].image = src;    // same layout assumption copyDeferredOutputToPixelBuffer makes
+    b[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    b[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b[1].image = dst;
+    b[1].srcAccessMask = 0;
+    b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    const uint32_t count = src != VK_NULL_HANDLE ? 2u : 1u;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+        count, src != VK_NULL_HANDLE ? b : &b[1]);
+
+    if (src != VK_NULL_HANDLE) {
+        const VkExtent2D ext = m_swapchain->extent();
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1]  = {static_cast<int32_t>(m_width), static_cast<int32_t>(m_height), 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[1]  = {static_cast<int32_t>(ext.width), static_cast<int32_t>(ext.height), 1};
+        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    } else {
+        // No deferred output this frame: present black rather than garbage.
+        const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
+        vkCmdClearColorImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    }
+
+    b[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    b[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b[1].dstAccessMask = 0;
+    b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0, 0, nullptr, 0, nullptr, count, src != VK_NULL_HANDLE ? b : &b[1]);
 }
 
 void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
@@ -198,6 +280,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
 
 void VulkanRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
     if (!m_deferredRenderer) return;
+    ++m_readbackCopies;
 
     VkImage finalImage = m_deferredRenderer->getFinalOutputImage();
     if (finalImage == VK_NULL_HANDLE) return;

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <optional>
+#include <array>
+#include "gpu/vulkan/swapchain.hpp"
+#include "gpu/vulkan/present_target.hpp"
 #include <atomic>
 #include <mutex>
 #include <vulkan/vulkan.h>
@@ -119,6 +123,14 @@ public:
 
     // Lifecycle
     [[nodiscard]] bool initialize();
+    // Windowed: present into a swapchain on `target`'s surface. Frames end with a
+    // blit into the acquired swapchain image; nothing is read back to the CPU.
+    [[nodiscard]] bool initialize(const PresentTarget& target);
+    [[nodiscard]] bool isPresenting() const noexcept { return m_swapchain != nullptr; }
+    // The window's drawable size changed; the swapchain is rebuilt next frame.
+    void setPresentExtent(VkExtent2D extent);
+    // Headless readback copies recorded since initialize (windowed mode: always 0).
+    [[nodiscard]] uint64_t readbackCopyCount() const noexcept { return m_readbackCopies; }
     void shutdown();
 
     // Rendering
@@ -431,6 +443,17 @@ private:
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.
     bool m_shadowsEnabled{true};
+
+    // Presentation (windowed mode only).
+    [[nodiscard]] bool createPresentation();
+    [[nodiscard]] bool recreatePresentation();
+    void blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex);
+    std::optional<PresentTarget> m_presentTarget;
+    VkSurfaceKHR m_surface{VK_NULL_HANDLE};
+    std::unique_ptr<Swapchain> m_swapchain;
+    std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAcquired{};
+    bool m_swapchainDirty{false};
+    uint64_t m_readbackCopies{0};
 
     // Validation messenger state (see validationEnabled()).
     VkDebugUtilsMessengerEXT m_debugMessenger{VK_NULL_HANDLE};

@@ -4,12 +4,14 @@
 
 namespace ohao {
 
+// UNORM, not sRGB: the deferred output is already gamma-encoded by the tonemap
+// shader, and an sRGB swapchain would encode it a second time on the blit.
 VkSurfaceFormatKHR Swapchain::chooseFormat(std::span<const VkSurfaceFormatKHR> formats) {
-    for (const auto& f : formats)
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-            return f;
+    for (VkFormat want : {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM})
+        for (const auto& f : formats)
+            if (f.format == want && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return f;
     return formats.empty()
-               ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}
+               ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}
                : formats.front();
 }
 

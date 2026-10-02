@@ -23,6 +23,16 @@ bool VulkanRenderer::createInstance() {
         .pApplicationInfo = &appInfo,
     };
 
+    if (m_presentTarget) {
+        for (const char* e : m_presentTarget->instanceExtensions) {
+            bool have = false;
+            for (const char* x : m_enabledInstanceExtensions) have |= std::strcmp(x, e) == 0;
+            if (!have) m_enabledInstanceExtensions.push_back(e);
+        }
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
+        createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
+    }
+
     // Validation layers — enable with OHAO_VALIDATION=1 env var
     const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
     bool wantValidation = std::getenv("OHAO_VALIDATION") != nullptr;
@@ -130,6 +140,15 @@ bool VulkanRenderer::pickPhysicalDevice() {
 
         for (uint32_t i = 0; i < queueFamilyCount; i++) {
             if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                if (m_surface != VK_NULL_HANDLE) {
+                    VkBool32 canPresent = VK_FALSE;
+                    vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &canPresent);
+                    if (!canPresent) {
+                        std::cout << "  graphics queue family " << i
+                                  << " cannot present to this surface" << std::endl;
+                        continue;
+                    }
+                }
                 bool isDiscrete = (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
                 // Always prefer discrete over integrated
                 if (!foundDiscrete || isDiscrete) {
@@ -276,6 +295,7 @@ bool VulkanRenderer::createLogicalDevice() {
         }
     }
 
+    if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)

@@ -84,6 +84,11 @@ VulkanRenderer::~VulkanRenderer() {
     shutdown();
 }
 
+bool VulkanRenderer::initialize(const PresentTarget& target) {
+    m_presentTarget = target;
+    return initialize();
+}
+
 bool VulkanRenderer::initialize() {
     if (m_initialized) return true;
 
@@ -91,6 +96,14 @@ bool VulkanRenderer::initialize() {
         if (!createInstance()) {
             std::cerr << "Failed to create Vulkan instance" << std::endl;
             return false;
+        }
+        if (m_presentTarget) {
+            m_surface = m_presentTarget->createSurface ? m_presentTarget->createSurface(m_instance)
+                                                       : VK_NULL_HANDLE;
+            if (m_surface == VK_NULL_HANDLE) {
+                std::cerr << "Failed to create window surface" << std::endl;
+                return false;
+            }
         }
         if (!pickPhysicalDevice()) {
             std::cerr << "Failed to pick physical device" << std::endl;
@@ -155,6 +168,11 @@ if (!createLightBuffer()) {
             m_rtAccel.reset();
         }
 
+        if (m_presentTarget && !createPresentation()) {
+            std::cerr << "Failed to create swapchain" << std::endl;
+            return false;
+        }
+
         m_initialized = true;
 
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
@@ -192,6 +210,14 @@ void VulkanRenderer::shutdown() {
             m_textureManager->cleanup();
             m_textureManager.reset();
         }
+
+        // Presentation: semaphores and swapchain belong to the device.
+        vkDeviceWaitIdle(m_device);
+        for (auto& sem : m_imageAcquired) {
+            if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_device, sem, nullptr);
+            sem = VK_NULL_HANDLE;
+        }
+        m_swapchain.reset();
 
         // Cleanup multi-frame resources
         m_frameResources.shutdown();
@@ -235,6 +261,10 @@ void VulkanRenderer::shutdown() {
         vkDestroyDevice(m_device, nullptr);
     }
 
+    if (m_surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+        m_surface = VK_NULL_HANDLE;
+    }
     if (m_debugMessenger != VK_NULL_HANDLE) {
         auto destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
@@ -535,6 +565,48 @@ VkImageView VulkanRenderer::getNormalRoughnessAOV() const {
         return renderer->getNormalRoughnessAOV();
     }
     return VK_NULL_HANDLE;
+}
+
+bool VulkanRenderer::createPresentation() {
+    // The deferred final image must be a valid blit source: R8G8B8A8_UNORM from
+    // post-processing, or R16G16B16A16_SFLOAT from lighting when post is skipped.
+    for (VkFormat f : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT}) {
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, f, &fp);
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)) {
+            std::cerr << "[present] deferred output format " << f << " cannot be a blit source"
+                      << std::endl;
+            return false;
+        }
+    }
+    m_swapchain = std::make_unique<Swapchain>();
+    if (!m_swapchain->create(m_physicalDevice, m_device, m_surface, m_presentTarget->extent,
+                             m_presentTarget->vsync)) {
+        return false;
+    }
+    VkSemaphoreCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    for (auto& sem : m_imageAcquired)
+        if (vkCreateSemaphore(m_device, &si, nullptr, &sem) != VK_SUCCESS) return false;
+    std::cout << "[present] swapchain " << m_swapchain->extent().width << "x"
+              << m_swapchain->extent().height << ", " << m_swapchain->imageCount() << " images"
+              << std::endl;
+    return true;
+}
+
+bool VulkanRenderer::recreatePresentation() {
+    const VkExtent2D want = m_presentTarget->extent;
+    if (want.width == 0 || want.height == 0) return false;   // minimized
+    if (!m_swapchain->recreate(want)) return false;
+    m_swapchainDirty = false;
+    resize(m_swapchain->extent().width, m_swapchain->extent().height);
+    return true;
+}
+
+void VulkanRenderer::setPresentExtent(VkExtent2D extent) {
+    if (!m_presentTarget) return;
+    m_presentTarget->extent = extent;
+    m_swapchainDirty = true;
 }
 
 float VulkanRenderer::gpuFrameMs() const noexcept {
