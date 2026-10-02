@@ -339,54 +339,14 @@ bool VulkanRenderer::createCommandPool() {
         return false;
     }
 
-    // Allocate command buffer
-    VkCommandBufferAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = m_commandPool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-
-    if (vkAllocateCommandBuffers(m_device, &allocInfo, &m_commandBuffer) != VK_SUCCESS) {
-        return false;
-    }
-
-    return true;
-}
-
-bool VulkanRenderer::createSyncObjects() {
-    // Legacy single fence (kept for compatibility during transition)
-    VkFenceCreateInfo fenceInfo{
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
-    };
-
-    if (vkCreateFence(m_device, &fenceInfo, nullptr, &m_renderFence) != VK_SUCCESS) {
-        return false;
-    }
-
     return true;
 }
 
 bool VulkanRenderer::initializeFrameResources() {
-    // Calculate buffer sizes
-    size_t cameraBufferSize = sizeof(CameraUniformBuffer);
-    size_t lightBufferSize = sizeof(LightUniformBuffer);
-    size_t stagingBufferSize = m_width * m_height * 4; // RGBA
-
-    // Initialize frame resources with per-frame buffers and descriptor sets
-    bool success = m_frameResources.initialize(
-        m_device,
-        m_physicalDevice,
-        m_commandPool,
-        m_descriptorSetLayout,
-        m_descriptorPool,
-        m_shadowImageView,
-        m_shadowSampler,
-        cameraBufferSize,
-        lightBufferSize,
-        stagingBufferSize
-    );
+    // Per-frame command buffer, fence and readback staging buffer.
+    const size_t stagingBufferSize = static_cast<size_t>(m_width) * m_height * 4;   // RGBA8
+    bool success = m_frameResources.initialize(m_device, m_physicalDevice, m_commandPool,
+                                               stagingBufferSize);
 
     if (success) {
         std::cout << "Multi-frame rendering enabled with "

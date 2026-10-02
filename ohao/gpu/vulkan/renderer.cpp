@@ -72,7 +72,7 @@ VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     };
 
     for (const auto& path : searchPaths) {
-        std::ifstream test(path + "core_forward.vert.spv");
+        std::ifstream test(path + "core_deferred_lighting.frag.spv");
         if (test.good()) {
             m_shaderBasePath = path;
             break;
@@ -104,32 +104,8 @@ bool VulkanRenderer::initialize() {
             std::cerr << "Failed to create command pool" << std::endl;
             return false;
         }
-        if (!createRenderPass()) {
-            std::cerr << "Failed to create render pass" << std::endl;
-            return false;
-        }
-        if (!createOffscreenFramebuffer()) {
-            std::cerr << "Failed to create offscreen framebuffer" << std::endl;
-            return false;
-        }
 
-        // Shadow mapping setup (must be before descriptor sets)
-        if (!createShadowRenderPass()) {
-            std::cerr << "Failed to create shadow render pass" << std::endl;
-            return false;
-        }
-        if (!createShadowResources()) {
-            std::cerr << "Failed to create shadow resources" << std::endl;
-            return false;
-        }
-
-        if (!createDescriptorSetLayout()) {
-            std::cerr << "Failed to create descriptor set layout" << std::endl;
-            return false;
-        }
-
-        // Initialize bindless texture manager BEFORE pipeline creation
-        // so the forward pipeline layout can include the bindless descriptor set
+// Bindless texture manager: the deferred G-buffer pass binds its set
         m_textureManager = std::make_unique<BindlessTextureManager>();
         if (!m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,
                                            m_graphicsQueueFamily, m_graphicsQueue)) {
@@ -139,46 +115,15 @@ bool VulkanRenderer::initialize() {
             std::cout << "BindlessTextureManager initialized" << std::endl;
         }
 
-        if (!createPipeline()) {
-            std::cerr << "Failed to create graphics pipeline" << std::endl;
-            return false;
-        }
-
-        // Shadow pipeline (after main pipeline)
-        if (!createShadowPipeline()) {
-            std::cerr << "Failed to create shadow pipeline" << std::endl;
-            return false;
-        }
-
-        if (!createUniformBuffer()) {
-            std::cerr << "Failed to create uniform buffer" << std::endl;
-            return false;
-        }
-        if (!createLightBuffer()) {
+if (!createLightBuffer()) {
             std::cerr << "Failed to create light buffer" << std::endl;
-            return false;
-        }
-        if (!createDescriptorPool()) {
-            std::cerr << "Failed to create descriptor pool" << std::endl;
-            return false;
-        }
-        if (!createDescriptorSets()) {
-            std::cerr << "Failed to create descriptor sets" << std::endl;
-            return false;
-        }
-        if (!createVertexBuffer()) {
-            std::cerr << "Failed to create vertex buffer" << std::endl;
-            return false;
-        }
-        if (!createSyncObjects()) {
-            std::cerr << "Failed to create sync objects" << std::endl;
             return false;
         }
 
         // Initialize multi-frame resources for pipelined rendering
         if (!initializeFrameResources()) {
-            std::cerr << "Failed to initialize frame resources (continuing with legacy mode)" << std::endl;
-            // Not a fatal error - we can still use single-frame rendering
+            std::cerr << "Failed to initialize frame resources" << std::endl;
+            return false;
         }
 
         // Set shader base path for all render passes
@@ -194,8 +139,8 @@ bool VulkanRenderer::initialize() {
             m_deferredRenderer->setTextureManager(m_textureManager.get());
         }
         if (!initializeDeferredRenderer()) {
-            std::cerr << "Failed to initialize deferred renderer (deferred mode unavailable)" << std::endl;
-            // Not fatal - forward rendering still works
+            std::cerr << "Failed to initialize deferred renderer" << std::endl;
+            return false;
         }
 
         // Initialize RT acceleration structure manager
@@ -213,9 +158,6 @@ bool VulkanRenderer::initialize() {
         m_initialized = true;
 
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
-        std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
-        std::cout << "Multi-frame rendering: " << (m_frameResources.isInitialized() ? "enabled" : "disabled") << std::endl;
-        std::cout << "Deferred rendering: " << (m_deferredRenderer ? "available" : "unavailable") << std::endl;
         std::cout << "Ray tracing: " << (m_rtAccel ? "enabled" : "disabled") << std::endl;
         return true;
 
@@ -254,12 +196,7 @@ void VulkanRenderer::shutdown() {
         // Cleanup multi-frame resources
         m_frameResources.shutdown();
 
-        // Cleanup legacy sync objects
-        if (m_renderFence != VK_NULL_HANDLE) {
-            vkDestroyFence(m_device, m_renderFence, nullptr);
-        }
-
-        // Cleanup vertex buffer
+// Cleanup vertex buffer
         if (m_vertexBuffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
         }
@@ -275,14 +212,6 @@ void VulkanRenderer::shutdown() {
             vkFreeMemory(m_device, m_indexBufferMemory, nullptr);
         }
 
-        // Cleanup uniform buffer
-        if (m_uniformBuffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(m_device, m_uniformBuffer, nullptr);
-        }
-        if (m_uniformBufferMemory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, m_uniformBufferMemory, nullptr);
-        }
-
         // Cleanup light buffer
         if (m_lightBuffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(m_device, m_lightBuffer, nullptr);
@@ -296,51 +225,6 @@ void VulkanRenderer::shutdown() {
         if (m_envMarginalCDFMemory)    { vkFreeMemory(m_device, m_envMarginalCDFMemory, nullptr);    m_envMarginalCDFMemory = VK_NULL_HANDLE; }
         if (m_envConditionalCDFBuffer) { vkDestroyBuffer(m_device, m_envConditionalCDFBuffer, nullptr); m_envConditionalCDFBuffer = VK_NULL_HANDLE; }
         if (m_envConditionalCDFMemory) { vkFreeMemory(m_device, m_envConditionalCDFMemory, nullptr);    m_envConditionalCDFMemory = VK_NULL_HANDLE; }
-
-        // Cleanup descriptor pool
-        if (m_descriptorPool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
-        }
-
-        // Cleanup descriptor set layout
-        if (m_descriptorSetLayout != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
-        }
-
-        // Cleanup pipeline
-        if (m_pipeline != VK_NULL_HANDLE) {
-            vkDestroyPipeline(m_device, m_pipeline, nullptr);
-        }
-        if (m_pipelineLayout != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
-        }
-
-        // Cleanup shaders
-        if (m_vertShaderModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(m_device, m_vertShaderModule, nullptr);
-        }
-        if (m_fragShaderModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(m_device, m_fragShaderModule, nullptr);
-        }
-
-        // Cleanup shadow resources
-        cleanupShadowResources();
-
-        // Cleanup staging buffer
-        if (m_stagingBuffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(m_device, m_stagingBuffer, nullptr);
-        }
-        if (m_stagingBufferMemory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, m_stagingBufferMemory, nullptr);
-        }
-
-        // Cleanup framebuffer
-        cleanupFramebuffer();
-
-        // Cleanup render pass
-        if (m_renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(m_device, m_renderPass, nullptr);
-        }
 
         // Cleanup command pool
         if (m_commandPool != VK_NULL_HANDLE) {
@@ -384,18 +268,7 @@ void VulkanRenderer::render() {
         return;
     }
 
-    if (m_renderMode == RenderMode::Deferred && m_deferredRenderer) {
-        renderDeferred();
-        m_denoiseCacheValid = false;
-        return;
-    }
-
-    // Forward rendering path
-    if (m_frameResources.isInitialized()) {
-        renderMultiFrame();
-    } else {
-        renderLegacy();
-    }
+    renderDeferred();
     m_denoiseCacheValid = false;
 }
 
@@ -443,10 +316,6 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
-    if (mode == RenderMode::Deferred && !m_deferredRenderer) {
-        std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
-        return;
-    }
     const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
     if (rtPipeline) {
         if (!m_rtAccel || !ensureRTRenderer(mode)) {
@@ -458,7 +327,7 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
     }
 
     m_renderMode = mode;
-    const char* names[] = {"Forward", "Deferred", "RTRealtime", "RTOffline"};
+    const char* names[] = {"Deferred", "RTRealtime", "RTOffline"};
     std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
 }
 

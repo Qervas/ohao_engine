@@ -32,8 +32,7 @@ class DeferredRenderer;
 
 // Render mode selection
 enum class RenderMode {
-    Forward,      // Legacy forward rendering (8 light limit)
-    Deferred,     // AAA deferred rendering (CSM, post-processing)
+    Deferred,     // Raster path: G-buffer, CSM, SSAO, post-processing (+ hybrid RT shadows/GI)
     RTRealtime,   // Path tracing tuned for interactive use
     RTOffline     // Path tracing tuned for reference/offline rendering
 };
@@ -43,7 +42,7 @@ enum class RenderMode {
 }
 
 [[nodiscard]] constexpr bool isRasterRenderMode(RenderMode m) noexcept {
-    return m == RenderMode::Forward || m == RenderMode::Deferred;
+    return m == RenderMode::Deferred;
 }
 
 // Simple vertex structure for basic rendering (Phase 1 triangle)
@@ -297,55 +296,28 @@ private:
     [[nodiscard]] bool pickPhysicalDevice();
     [[nodiscard]] bool createLogicalDevice();
     [[nodiscard]] bool createCommandPool();
-    [[nodiscard]] bool createOffscreenFramebuffer();
-    [[nodiscard]] bool createRenderPass();
-    [[nodiscard]] bool createPipeline();
-    [[nodiscard]] bool createSyncObjects();
 
-    // Shadow mapping
-    [[nodiscard]] bool createShadowResources();
-    [[nodiscard]] bool createShadowRenderPass();
-    [[nodiscard]] bool createShadowPipeline();
-    void renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet);
     glm::mat4 calculateLightSpaceMatrix(const LightData& light);
-    void cleanupShadowResources();
 
     // Phase 1: Rendering pipeline setup
-    [[nodiscard]] bool createDescriptorSetLayout();
-    [[nodiscard]] bool createDescriptorPool();
-    [[nodiscard]] bool createDescriptorSets();
-    [[nodiscard]] bool createUniformBuffer();
     [[nodiscard]] bool createLightBuffer();   // Phase 3: Light uniform buffer
-    [[nodiscard]] bool createVertexBuffer();  // Creates demo triangle
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
-    void updateUniformBuffer();
-    void updateUniformBuffer(uint32_t frameIndex);  // Per-frame version
     void updateLightBuffer();   // Phase 3: Collect and update lights
-    void updateLightBuffer(uint32_t frameIndex);    // Per-frame version
     void cacheEmissiveLights(); // Scan emissive materials → cached LightData (called once per scene change)
     [[nodiscard]] bool updateAnimatedActorsForRT();
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
 
-    // Phase 2: Scene mesh rendering
-    void renderSceneObjects(VkCommandBuffer cmd);  // Draw all scene meshes with push constants
 
     // Rendering internals
-    void recordCommandBuffer();
-    void copyFramebufferToPixelBuffer();
-    void renderMultiFrame();  // Multi-frame ring buffer rendering
     void renderRTPipeline(const IRTRenderPipeline& pipeline);
 public:
 private:
-    void renderLegacy();      // Legacy single-frame rendering
     const IRTRenderPipeline* getRTPipeline(RenderMode mode) const;
     IRTRendererProfile* getRTRenderer(RenderMode mode);
     const IRTRendererProfile* getRTRenderer(RenderMode mode) const;
     void forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn);
 
-    // Cleanup
-    void cleanupFramebuffer();
-    void cleanupSwapchain();
 
     // Dimensions
     uint32_t m_width;
@@ -361,54 +333,6 @@ private:
     // Multi-frame rendering (ring buffer)
     FrameResourceManager m_frameResources;
     uint32_t m_currentFrame{0};
-
-    // Legacy single command buffer (kept for compatibility during transition)
-    VkCommandBuffer m_commandBuffer{VK_NULL_HANDLE};
-
-    // Offscreen framebuffer
-    VkImage m_colorImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_colorImageMemory{VK_NULL_HANDLE};
-    VkImageView m_colorImageView{VK_NULL_HANDLE};
-    VkImage m_depthImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_depthImageMemory{VK_NULL_HANDLE};
-    VkImageView m_depthImageView{VK_NULL_HANDLE};
-    VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
-    VkRenderPass m_renderPass{VK_NULL_HANDLE};
-
-    // Shadow mapping resources
-    VkImage m_shadowImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_shadowImageMemory{VK_NULL_HANDLE};
-    VkImageView m_shadowImageView{VK_NULL_HANDLE};
-    VkSampler m_shadowSampler{VK_NULL_HANDLE};
-    VkFramebuffer m_shadowFramebuffer{VK_NULL_HANDLE};
-    VkRenderPass m_shadowRenderPass{VK_NULL_HANDLE};
-    VkPipeline m_shadowPipeline{VK_NULL_HANDLE};
-    VkPipelineLayout m_shadowPipelineLayout{VK_NULL_HANDLE};
-    VkShaderModule m_shadowVertShader{VK_NULL_HANDLE};
-    VkShaderModule m_shadowFragShader{VK_NULL_HANDLE};
-    bool m_shadowsEnabled{true};
-
-    // Staging buffer for pixel readback
-    VkBuffer m_stagingBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_stagingBufferMemory{VK_NULL_HANDLE};
-
-    // Pipeline
-    VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
-    VkPipeline m_pipeline{VK_NULL_HANDLE};
-
-    // Shaders
-    VkShaderModule m_vertShaderModule{VK_NULL_HANDLE};
-    VkShaderModule m_fragShaderModule{VK_NULL_HANDLE};
-
-    // Descriptor sets
-    VkDescriptorSetLayout m_descriptorSetLayout{VK_NULL_HANDLE};
-    VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_descriptorSet{VK_NULL_HANDLE};
-
-    // Uniform buffer (camera)
-    VkBuffer m_uniformBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_uniformBufferMemory{VK_NULL_HANDLE};
-    void* m_uniformBufferMapped{nullptr};
 
     // Light uniform buffer
     VkBuffer m_lightBuffer{VK_NULL_HANDLE};
@@ -484,8 +408,9 @@ private:
     // Cached emissive mesh lights (computed once during updateSceneBuffers, used per-frame)
     std::vector<LightData> m_cachedEmissiveLights;
 
-    // Sync
-    VkFence m_renderFence{VK_NULL_HANDLE};
+    // Light-buffer shadow flag: marks the first directional/spot light as the
+    // shadow caster that the deferred CSM pass renders for.
+    bool m_shadowsEnabled{true};
 
     // Pixel buffer (CPU accessible)
     std::vector<uint8_t> m_pixelBuffer;
@@ -521,9 +446,7 @@ private:
     // Initialized flag
     bool m_initialized{false};
 
-    // Render mode
-    // Default to Forward until deferred output integration is complete
-    RenderMode m_renderMode{RenderMode::Forward};
+    RenderMode m_renderMode{RenderMode::Deferred};
 
     // Deferred renderer (AAA quality)
     std::unique_ptr<DeferredRenderer> m_deferredRenderer;

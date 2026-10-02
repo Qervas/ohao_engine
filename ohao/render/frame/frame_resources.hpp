@@ -37,19 +37,6 @@ struct FrameResources {
     // Synchronization: fence signals when GPU finishes this frame
     VkFence renderFence{VK_NULL_HANDLE};
 
-    // Camera uniform buffer (view/proj matrices)
-    VkBuffer cameraBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory cameraBufferMemory{VK_NULL_HANDLE};
-    void* cameraBufferMapped{nullptr};
-
-    // Light uniform buffer
-    VkBuffer lightBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory lightBufferMemory{VK_NULL_HANDLE};
-    void* lightBufferMapped{nullptr};
-
-    // Descriptor set for this frame (binds to this frame's buffers)
-    VkDescriptorSet descriptorSet{VK_NULL_HANDLE};
-
     // Staging buffer for pixel readback (optional, only if async readback is needed)
     VkBuffer stagingBuffer{VK_NULL_HANDLE};
     VkDeviceMemory stagingBufferMemory{VK_NULL_HANDLE};
@@ -59,16 +46,6 @@ struct FrameResources {
     bool valid{false};
 
     [[nodiscard]] explicit operator bool() const noexcept { return valid; }
-
-    template<GpuPod T>
-    [[nodiscard]] std::span<T> cameraMappedAs(std::size_t count = 1) const noexcept {
-        return as_mapped_span<T>(cameraBufferMapped, count);
-    }
-
-    template<GpuPod T>
-    [[nodiscard]] std::span<T> lightMappedAs(std::size_t count = 1) const noexcept {
-        return as_mapped_span<T>(lightBufferMapped, count);
-    }
 };
 
 /**
@@ -115,12 +92,6 @@ public:
         VkDevice device,
         VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool,
-        VkDescriptorSetLayout descriptorSetLayout,
-        VkDescriptorPool descriptorPool,
-        VkImageView shadowImageView,
-        VkSampler shadowSampler,
-        size_t cameraBufferSize,
-        size_t lightBufferSize,
         size_t stagingBufferSize
     );
 
@@ -184,16 +155,7 @@ public:
 private:
     bool createCommandBuffers(VkCommandPool commandPool);
     bool createSyncObjects();
-    bool createUniformBuffers(size_t cameraBufferSize, size_t lightBufferSize);
     bool createStagingBuffers(size_t size);
-    bool createDescriptorSets(
-        VkDescriptorSetLayout layout,
-        VkDescriptorPool pool,
-        VkImageView shadowImageView,
-        VkSampler shadowSampler,
-        size_t cameraBufferSize,
-        size_t lightBufferSize
-    );
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     bool createBuffer(
