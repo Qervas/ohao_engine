@@ -103,12 +103,13 @@ private:
     // Cascade data for shader
     CascadeData m_cascadeData{};
 
-    // Push constant for shadow rendering
+    // Push constants for one draw into one cascade (matches shadow_csm.vert).
+    // 128 bytes: the push-constant size every Vulkan device guarantees.
     struct ShadowPushConstant {
         glm::mat4 model;
-        uint32_t cascadeIndex;
-        float padding[3];
+        glm::mat4 viewProj;   // the cascade being rendered
     };
+    static_assert(sizeof(ShadowPushConstant) == 128, "must fit the guaranteed push-constant minimum");
 };
 
 } // namespace ohao

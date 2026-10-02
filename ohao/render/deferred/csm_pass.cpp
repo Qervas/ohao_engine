@@ -171,9 +171,8 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 // Set push constants
                 ShadowPushConstant push{};
                 push.model = modelMatrix;
-                push.cascadeIndex = cascade;
-                vkCmdPushConstants(cmd, targetLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT,
+                push.viewProj = m_cascadeData.viewProj[cascade];
+                vkCmdPushConstants(cmd, targetLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(ShadowPushConstant), &push);
 
                 // Draw indexed
@@ -354,20 +353,15 @@ bool CSMPass::createCascadeBuffer() {
 
 bool CSMPass::createPipeline() {
     // Load shaders
+    // Depth-only, vertex stage only: each cascade is its own render pass into its
+    // own layer view, so the vertex shader projects straight into that cascade.
     VkShaderModule vertShader = loadShaderModule("shadow_shadow_csm.vert.spv");
-    VkShaderModule geomShader = loadShaderModule("shadow_shadow_csm.geom.spv");
 
-    std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
-
+    std::array<VkPipelineShaderStageCreateInfo, 1> shaderStages{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     shaderStages[0].module = vertShader;
     shaderStages[0].pName = "main";
-
-    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[1].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
-    shaderStages[1].module = geomShader;
-    shaderStages[1].pName = "main";
 
     // Vertex input - must use full vertex stride since we share vertex buffers
     auto csmBindingDescs = Vertex::getBindingDescriptions();
@@ -426,7 +420,7 @@ bool CSMPass::createPipeline() {
 
     // Push constants for model matrix and cascade index
     VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
+    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstant.offset = 0;
     pushConstant.size = sizeof(ShadowPushConstant);
 
@@ -437,7 +431,6 @@ bool CSMPass::createPipeline() {
 
     if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(m_device, vertShader, nullptr);
-        vkDestroyShaderModule(m_device, geomShader, nullptr);
         return false;
     }
 
@@ -461,7 +454,6 @@ bool CSMPass::createPipeline() {
                                                 nullptr, &m_pipeline);
 
     vkDestroyShaderModule(m_device, vertShader, nullptr);
-    vkDestroyShaderModule(m_device, geomShader, nullptr);
 
     return result == VK_SUCCESS;
 }

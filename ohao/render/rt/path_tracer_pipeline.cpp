@@ -259,7 +259,9 @@ bool PathTracer::createShaderBindingTable() {
     VkDeviceAddress sbtAddr = getBufferDeviceAddress(m_sbtBuffer);
 
     m_rgenRegion.deviceAddress = sbtAddr;
-    m_rgenRegion.stride = handleSizeAligned;
+    // A raygen region holds exactly one record, and the spec requires its size
+    // to equal its stride (VUID-vkCmdTraceRaysKHR-size-04023).
+    m_rgenRegion.stride = rgenSize;
     m_rgenRegion.size = rgenSize;
 
     m_missRegion.deviceAddress = sbtAddr + rgenSize;

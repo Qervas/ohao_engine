@@ -111,7 +111,9 @@ bool RTGITechnique::createOutputImage() {
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    // TRANSFER_SRC: execute() copies this frame's GI into the history image.
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giOutput) != VK_SUCCESS) return false;
@@ -495,7 +497,9 @@ bool RTGITechnique::createShaderBindingTable() {
     VkDeviceAddress sbtAddr = getBufferDeviceAddress(m_sbtBuffer);
 
     m_rgenRegion.deviceAddress = sbtAddr;
-    m_rgenRegion.stride = handleSizeAligned;
+    // A raygen region holds exactly one record, and the spec requires its size
+    // to equal its stride (VUID-vkCmdTraceRaysKHR-size-04023).
+    m_rgenRegion.stride = rgenSize;
     m_rgenRegion.size = rgenSize;
 
     m_missRegion.deviceAddress = sbtAddr + rgenSize;
