@@ -696,6 +696,10 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {
+        // SSAO, RT GI and the RT shadow mask may all have been recreated above;
+        // lighting still holds their old views. Drop them before the rewrite --
+        // render() re-supplies them before the lighting pass executes.
+        m_lightingPass->clearPerFrameInputs();
         m_lightingPass->setGBufferPass(m_gbufferPass.get());
     }
 

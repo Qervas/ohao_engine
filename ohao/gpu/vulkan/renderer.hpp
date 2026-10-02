@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <vulkan/vulkan.h>
 #include <algorithm>
 #include <vector>
@@ -129,6 +131,24 @@ public:
 
     // Camera
     [[nodiscard]] Camera& getCamera() { return *m_camera; }
+    // Last deferred frame's GPU time in ms (timestamp queries); 0 when unavailable.
+    [[nodiscard]] float gpuFrameMs() const noexcept;
+
+    // Validation (OHAO_VALIDATION=1 at initialize). validationEnabled() is false when
+    // the variable is unset OR the Khronos layer is not installed -- callers must
+    // treat that as "not checked", never as "clean".
+    [[nodiscard]] bool validationEnabled() const noexcept { return m_validationEnabled; }
+    [[nodiscard]] uint64_t validationMessageCount() const noexcept { return m_validationMessages.count.load(); }
+    // The first messages, kept so a test can say WHICH rule was broken.
+    [[nodiscard]] std::vector<std::string> validationMessages() const {
+        std::lock_guard<std::mutex> lock(m_validationMessages.mutex);
+        return m_validationMessages.first;
+    }
+    struct ValidationLog {
+        std::atomic<uint64_t> count{0};
+        mutable std::mutex mutex;
+        std::vector<std::string> first;   // capped
+    };
     [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
 
     // Vulkan handles for out-of-tree consumers — wiring only, no callers here.
@@ -411,6 +431,11 @@ private:
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.
     bool m_shadowsEnabled{true};
+
+    // Validation messenger state (see validationEnabled()).
+    VkDebugUtilsMessengerEXT m_debugMessenger{VK_NULL_HANDLE};
+    ValidationLog m_validationMessages;
+    bool m_validationEnabled{false};
 
     // Pixel buffer (CPU accessible)
     std::vector<uint8_t> m_pixelBuffer;

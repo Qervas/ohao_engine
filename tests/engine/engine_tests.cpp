@@ -8,6 +8,7 @@
  */
 
 #include <atomic>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <memory>
@@ -1424,6 +1425,54 @@ static void runOrphanedEntryPointTests() {
         renderer.setScene(nullptr);
         EXPECT(!renderer.updateRTMaterialParams(),
                "an explicitly null scene must refuse on the same path");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("resize after initialize resizes deferred output and keeps rendering");
+    {
+        // Under validation: a resize after real frames have rendered is where a
+        // pass can rewrite a descriptor set while holding a view another pass just
+        // destroyed. The layer tracks handle lifetimes, so those show up as
+        // "invalid Vk..." / "destroyed" errors deterministically -- without it they
+        // are a heap-layout-dependent segfault.
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer renderer(320, 180);
+        const bool ok = renderer.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok) {
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        renderer.setRenderMode(ohao::RenderMode::Deferred);
+        for (int i = 0; i < 4; ++i) renderer.render();
+        renderer.resize(256, 128);
+        for (int i = 0; i < 4; ++i) renderer.render();   // drain the readback ring at the new size
+        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(256 * 128 * 4),
+                  "readback buffer follows the resize");
+        EXPECT(std::abs(renderer.getCamera().getAspectRatio() - 2.0f) < 1e-5f,
+               "resize must update the camera aspect, or the image is stretched");
+        const uint8_t* px = renderer.getPixels();
+        EXPECT(px != nullptr, "pixels available after resize");
+        size_t opaque = 0;
+        for (size_t i = 3; i < renderer.getPixelBufferSize(); i += 4) opaque += px[i] != 0;
+        EXPECT_EQ(opaque, static_cast<size_t>(256 * 128),
+                  "every pixel of the resized frame was written (alpha set)");
+
+        if (!renderer.validationEnabled()) {
+            std::cout << "(validation layer not installed -- handle-lifetime check SKIPPED) ";
+        } else {
+            size_t lifetime = 0;
+            std::string firstLifetime;
+            for (const auto& m : renderer.validationMessages()) {
+                const bool bad = m.find("invalid Vk") != std::string::npos ||
+                                 m.find("was destroyed") != std::string::npos;
+                if (bad && lifetime++ == 0) firstLifetime = m;
+            }
+            if (lifetime) std::cout << "\n      first: " << firstLifetime.substr(0, 260) << "\n";
+            EXPECT_EQ(lifetime, size_t{0},
+                      "no command or descriptor write may reference a destroyed Vulkan handle");
+        }
         TEST_PASS();
     }
 }

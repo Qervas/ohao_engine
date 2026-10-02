@@ -19,6 +19,12 @@ public:
 
     // Configuration
     void setGBufferPass(GBufferPass* gbufferPass);
+    // Forget the inputs that other passes own and re-supply every frame (SSAO,
+    // SSGI/RT GI, RT shadow mask). Call it when those passes may have recreated
+    // their images -- a resize -- BEFORE anything rewrites this pass's
+    // descriptors; the bindings fall back to the dummy view until render()
+    // hands the new views back. Does not itself touch descriptors.
+    void clearPerFrameInputs();
     void setShadowMap(VkImageView shadowMap, VkSampler shadowSampler);
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
                         VkImageView brdfLUT, VkSampler iblSampler);

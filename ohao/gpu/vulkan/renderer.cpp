@@ -235,6 +235,13 @@ void VulkanRenderer::shutdown() {
         vkDestroyDevice(m_device, nullptr);
     }
 
+    if (m_debugMessenger != VK_NULL_HANDLE) {
+        auto destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
+        if (destroyFn) destroyFn(m_instance, m_debugMessenger, nullptr);
+        m_debugMessenger = VK_NULL_HANDLE;
+    }
+
     // Cleanup instance
     if (m_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(m_instance, nullptr);
@@ -528,6 +535,10 @@ VkImageView VulkanRenderer::getNormalRoughnessAOV() const {
         return renderer->getNormalRoughnessAOV();
     }
     return VK_NULL_HANDLE;
+}
+
+float VulkanRenderer::gpuFrameMs() const noexcept {
+    return m_deferredRenderer ? m_deferredRenderer->gpuFrameMs() : 0.0f;
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {

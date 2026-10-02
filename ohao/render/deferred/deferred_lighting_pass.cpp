@@ -255,6 +255,15 @@ void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::m
     m_params.invViewProj = invViewProj;
 }
 
+void DeferredLightingPass::clearPerFrameInputs() {
+    m_ssaoView = VK_NULL_HANDLE;
+    m_ssaoSampler = VK_NULL_HANDLE;
+    m_ssgiView = VK_NULL_HANDLE;
+    m_ssgiSampler = VK_NULL_HANDLE;
+    m_rtShadowView = VK_NULL_HANDLE;
+    m_rtShadowSampler = VK_NULL_HANDLE;
+}
+
 void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
     m_gbufferPass = gbufferPass;
     updateDescriptorSets();

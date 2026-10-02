@@ -243,18 +243,20 @@ void VulkanRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
 }
 
 void VulkanRenderer::resize(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return;                 // minimized: keep the old targets
     if (width == m_width && height == m_height) return;
 
     m_width = width;
     m_height = height;
-    m_pixelBuffer.resize(width * height * 4);
+    m_pixelBuffer.resize(static_cast<size_t>(width) * height * 4);
+    if (m_camera) m_camera->setAspectRatio(static_cast<float>(width) / static_cast<float>(height));
 
     if (m_initialized) {
         vkDeviceWaitIdle(m_device);
 
         // Resize multi-frame staging buffers (critical for correct pixel readback!)
         if (m_frameResources.isInitialized()) {
-            m_frameResources.resizeStagingBuffers(width * height * 4);
+            m_frameResources.resizeStagingBuffers(static_cast<size_t>(width) * height * 4);
             // Reset frame index to avoid reading from old-size staging buffers
             m_currentFrame = 0;
         }

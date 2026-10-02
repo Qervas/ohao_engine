@@ -25,7 +25,22 @@ bool VulkanRenderer::createInstance() {
 
     // Validation layers — enable with OHAO_VALIDATION=1 env var
     const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
-    if (std::getenv("OHAO_VALIDATION")) {
+    bool wantValidation = std::getenv("OHAO_VALIDATION") != nullptr;
+    if (wantValidation) {
+        uint32_t ln = 0;
+        vkEnumerateInstanceLayerProperties(&ln, nullptr);
+        std::vector<VkLayerProperties> layers(ln);
+        vkEnumerateInstanceLayerProperties(&ln, layers.data());
+        bool installed = false;
+        for (const auto& l : layers)
+            if (std::strcmp(l.layerName, validationLayers[0]) == 0) installed = true;
+        if (!installed) {
+            std::cerr << "[OHAO] validation requested but VK_LAYER_KHRONOS_validation is not installed"
+                      << std::endl;
+            wantValidation = false;
+        }
+    }
+    if (wantValidation) {
         createInfo.enabledLayerCount = 1;
         createInfo.ppEnabledLayerNames = validationLayers;
         m_enabledInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -56,6 +71,31 @@ bool VulkanRenderer::createInstance() {
         return false;
     }
 
+    if (wantValidation) {
+        VkDebugUtilsMessengerCreateInfoEXT mi{};
+        mi.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+        mi.pfnUserCallback = [](VkDebugUtilsMessageSeverityFlagBitsEXT,
+                                VkDebugUtilsMessageTypeFlagsEXT,
+                                const VkDebugUtilsMessengerCallbackDataEXT* data,
+                                void* user) -> VkBool32 {
+            auto* log = static_cast<ValidationLog*>(user);
+            log->count.fetch_add(1);
+            const char* msg = (data && data->pMessage) ? data->pMessage : "";
+            const char* vuid = (data && data->pMessageIdName) ? data->pMessageIdName : "-";
+            std::cerr << "[validation] " << vuid << " | " << msg << std::endl;
+            std::lock_guard<std::mutex> lock(log->mutex);
+            if (log->first.size() < 256) log->first.emplace_back(msg);
+            return VK_FALSE;
+        };
+        mi.pUserData = &m_validationMessages;
+        auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
+        m_validationEnabled = create && create(m_instance, &mi, nullptr, &m_debugMessenger) == VK_SUCCESS;
+    }
     return true;
 }
 

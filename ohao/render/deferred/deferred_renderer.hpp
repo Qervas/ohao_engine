@@ -72,6 +72,13 @@ public:
     [[nodiscard]] PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
     [[nodiscard]] const GBufferPass* getGBufferPass() const { return m_gbufferPass.get(); }
 
+    // Sum of the last frame's per-pass GPU timings in ms; 0 when timing is unavailable.
+    [[nodiscard]] float gpuFrameMs() const noexcept {
+        float sum = 0.0f;
+        for (int i = 0; i < m_passTimingCount; ++i) sum += m_passTimingsMs[i];
+        return sum;
+    }
+
     // Wireframe mode
     void setWireframeEnabled(bool enabled);
     [[nodiscard]] bool getWireframeEnabled() const { return m_wireframeEnabled; }
