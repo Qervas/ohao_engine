@@ -23,7 +23,8 @@ measurable.
 | # | Sub-project | Done when | Spec |
 |---|---|---|---|
 | 1 | **Runtime shell** — window, swapchain presentation, fixed-step loop, input actions, Forward path removed | deferred renders straight to a window at ≥ 60 fps, zero validation errors, no per-frame readback | [spec](specs/2026-10-02-runtime-shell-design.md) · **done** |
-| 2 | **ECS world + GPU-driven scene** — EnTT registry replaces Scene/Actor/Component; persistent GPU instance/material buffers; GPU frustum + two-pass Hi-Z occlusion culling; indirect draws for the G-buffer; per-frame TLAS updates for moving instances | golden scenes rebuilt as ECS entities render identically; CPU draw-submission cost flat as instance count grows | — |
+| 2a | **ECS world + persistent GPU scene** — EnTT registry replaces Scene/Actor/Component; render-world extraction into persistent GPU mesh/material/instance/light tables; one BLAS per mesh; per-frame TLAS refit; one bindless texture table | golden scenes rebuilt as ECS entities render identically; moving objects correct in RT; upload cost proportional to change | [spec](specs/2026-10-03-ecs-gpu-scene-design.md) |
+| 2b | **GPU-driven culling** — indirect G-buffer/shadow draws, GPU frustum + two-pass Hi-Z occlusion culling | CPU draw-submission cost flat as instance count grows | — |
 | 3 | **Level pipeline** — glTF-from-Blender loader, `extras` → components, collision generation, spawn points | a Blender blockout level loads, renders and collides | — |
 | 4 | **Player** — Jolt at fixed step, physics ↔ transform sync, first-person controller, camera, footsteps | you can walk the level | — |
 | 5 | **Combat** — hitscan weapon (recoil, spread, muzzle flash, impact decals), health/damage, enemy AI, death/restart, HUD | the slice is playable | — |
