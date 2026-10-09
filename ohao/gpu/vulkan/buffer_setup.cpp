@@ -6,6 +6,7 @@
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/asset/model.hpp"
+#include "render/scene/light_table.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace ohao {
@@ -50,82 +51,7 @@ bool VulkanRenderer::createLightBuffer() {
 }
 
 glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
-    // For directional lights, use orthographic projection
-    int lightType = static_cast<int>(light.position.w);
-
-    if (lightType == 0) {  // Directional light
-        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
-
-        // Calculate scene bounds - use larger frustum to encompass typical scenes
-        float orthoSize = 50.0f;  // Covers -50 to 50 units (increased from 25)
-        float nearPlane = 0.1f;   // Closer near plane
-        float farPlane = 200.0f;  // Further far plane
-
-        // Light view matrix: looking from "infinity" in light direction toward scene center
-        glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        glm::vec3 lightPos = sceneCenter - lightDir * 100.0f;  // Position light further away
-
-        // Calculate up vector (avoid parallel with light direction)
-        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
-            up = glm::vec3(1.0f, 0.0f, 0.0f);
-        }
-
-        glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, up);
-        glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, nearPlane, farPlane);
-
-        // Flip Y for Vulkan coordinate system (do this BEFORE combining)
-        lightProj[1][1] *= -1.0f;
-
-        // Combine view and projection
-        glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
-        // Formula: z_vulkan = z_ndc * 0.5 + 0.5
-        // This scales the Z output and adds a bias
-        // In GLM column-major: matrix[col][row], so row 2 is the Z output
-        for (int i = 0; i < 4; i++) {
-            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
-        }
-        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w=1)
-
-        return lightSpaceMatrix;
-    }
-    else if (lightType == 2) {  // Spot light - use perspective projection
-        glm::vec3 lightPos = glm::vec3(light.position);
-        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
-
-        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
-            up = glm::vec3(1.0f, 0.0f, 0.0f);
-        }
-
-        float outerCone = glm::acos(light.params.y);  // Convert from cosine to angle
-        float fov = outerCone * 2.0f;
-        float range = light.direction.w;
-
-        glm::mat4 lightView = glm::lookAt(lightPos, lightPos + lightDir, up);
-        float near = 0.1f;
-        float far = range;
-        glm::mat4 lightProj = glm::perspective(fov, 1.0f, near, far);
-
-        // Flip Y for Vulkan coordinate system
-        lightProj[1][1] *= -1.0f;
-
-        // Combine view and projection
-        glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
-        for (int i = 0; i < 4; i++) {
-            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
-        }
-        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w)
-
-        return lightSpaceMatrix;
-    }
-
-    // Point lights don't use a single matrix (need cube maps)
-    return glm::mat4(1.0f);
+    return render::lightSpaceMatrix(light);
 }
 
 void VulkanRenderer::updateLightBuffer() {

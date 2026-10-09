@@ -80,10 +80,12 @@ public:
     // vertexBuffer must contain packed vec3 positions (float32).
     // indexBuffer must contain uint32_t indices.
     // vertexOffset/indexOffset are BYTE offsets into the combined buffer.
+    // firstVertex is added to every index: 0 for buffers holding global indices,
+    // the mesh's first vertex for arenas holding mesh-local indices.
     BlasHandle createBLAS(VkBuffer vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride,
                           VkBuffer indexBuffer, uint32_t indexCount,
                           VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                          VkCommandBuffer cmd);
+                          VkCommandBuffer cmd, uint32_t firstVertex = 0);
 
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);

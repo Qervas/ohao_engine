@@ -32,6 +32,7 @@
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/gpu_light.hpp"
+#include "render/scene/render_scene.hpp"
 #include "scene/scene_module.hpp"
 
 #include <span>
@@ -1596,6 +1597,103 @@ static void runOrphanedEntryPointTests() {
 }
 
 // =============================================================================
+// SECTION — RENDER SCENE (persistent GPU render world)
+// =============================================================================
+
+static void runRenderSceneTests() {
+    std::cout << "\n=== RenderScene ===" << std::endl;
+    using namespace ohao::render;
+
+    auto makeQuad = [](std::vector<ohao::Vertex>& v, std::vector<uint32_t>& i) {
+        v.assign(4, ohao::Vertex{});
+        v[0].position = {-1, 0, -1}; v[1].position = {1, 0, -1};
+        v[2].position = {1, 0, 1};   v[3].position = {-1, 0, 1};
+        for (auto& x : v) { x.normal = {0, 1, 0}; x.boneWeights = {1, 0, 0, 0}; }
+        i = {0, 1, 2, 0, 2, 3};
+    };
+
+    TEST_BEGIN("a registered mesh gets an AABB, a table entry and a BLAS");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r.renderScene();
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        EXPECT(m.valid(), "registerMesh returns a valid handle");
+        const MeshInfo* info = rs.meshInfo(m);
+        EXPECT(info && info->indexCount == 6 && info->vertexCount == 4, "mesh table entry");
+        EXPECT(info->aabbMin.x == -1.0f && info->aabbMax.z == 1.0f, "AABB computed once at registration");
+        EXPECT(!rs.rtSupported() || info->blas != ohao::INVALID_BLAS, "one BLAS per mesh when RT is available");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("static instances upload once; moving ones upload in proportion");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r.renderScene();
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        std::vector<uint32_t> slots;
+        for (int k = 0; k < 10000; ++k)
+            slots.push_back(rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true}));
+        r.render();
+        EXPECT(rs.stats().instanceBytesUploaded >= 10000 * sizeof(InstanceGpu), "first frame uploads everything");
+        r.render();
+        EXPECT_EQ(rs.stats().instanceBytesUploaded, size_t{0}, "a still scene uploads no instance bytes");
+        for (int k = 0; k < 100; ++k)
+            rs.updateInstance(slots[k], InstanceDesc{m, {&mat, 1}, glm::mat4(2), glm::mat4(1), true});
+        r.render();
+        EXPECT_EQ(rs.stats().instanceBytesUploaded, 100 * sizeof(InstanceGpu), "bytes = moved instances");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("missing material refs fall back to the default material");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r.renderScene();
+        // Two submeshes, one material given.
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {{0, 3, 0}, {3, 3, 1}}, {0, 1}, "two"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{{1, 0, 0}});
+        uint32_t s = rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        EXPECT_EQ(rs.materialIndexFor(s, 0), mat.index, "slot 0 uses the given material");
+        EXPECT_EQ(rs.materialIndexFor(s, 1), 0u, "slot 1 has no ref: default material 0");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("arena growth defers destroying the old buffers past frames in flight");
+    {
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer r(64, 64);
+        const bool ok = r.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok || !r.validationEnabled()) { std::cout << "(skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r.renderScene();
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        const auto grows0 = rs.stats().arenaGrowths;
+        for (int k = 0; k < 64 && rs.stats().arenaGrowths == grows0; ++k) {
+            std::vector<ohao::Vertex> big(20000, v[0]);
+            std::vector<uint32_t> bigI(60000, 0);
+            MeshHandle m = rs.registerMesh(MeshData{big, bigI, {}, {}, "big"});
+            rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+            r.render();   // frames in flight keep reading the arenas
+        }
+        EXPECT(rs.stats().arenaGrowths > grows0, "the arena grew during the test");
+        for (int k = 0; k < 4; ++k) r.render();
+        const auto msgs = r.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "no buffer was destroyed while in use");
+        TEST_PASS();
+    }
+}
+
+// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -1612,6 +1710,7 @@ int main() {
     runHeadlessPathTracerTests();
     runHeadlessDeferredRenderTests();
     runOrphanedEntryPointTests();
+    runRenderSceneTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";

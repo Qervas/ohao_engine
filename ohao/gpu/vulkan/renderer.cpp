@@ -7,6 +7,7 @@
 #include "scene/component/mesh_component.hpp"
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "render/scene/render_scene.hpp"
 #include "scene/scene.hpp"
 
 namespace ohao {
@@ -172,6 +173,16 @@ if (!createLightBuffer()) {
             m_rtAccel.reset();
         }
 
+        // Persistent GPU render world: needs the device, command pool and RT.
+        m_renderScene = std::make_unique<render::RenderScene>();
+        if (!m_renderScene->initialize(render::RenderScene::InitInfo{
+                m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
+                m_commandPool, isRTSupported() ? m_rtAccel.get() : nullptr})) {
+            std::cerr << "Failed to initialize RenderScene" << std::endl;
+            m_renderScene.reset();
+            return false;
+        }
+
         if (m_presentTarget && !createPresentation()) {
             std::cerr << "Failed to create swapchain" << std::endl;
             return false;
@@ -194,6 +205,12 @@ void VulkanRenderer::shutdown() {
 
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
+
+        // The render world holds BLASes in m_rtAccel: release it first.
+        if (m_renderScene) {
+            m_renderScene->shutdown();
+            m_renderScene.reset();
+        }
 
         // Cleanup RT resources BEFORE device destruction
         if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }

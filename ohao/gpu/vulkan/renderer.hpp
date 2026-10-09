@@ -28,8 +28,11 @@
 #include "render/rt/rt_render_pipeline.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
+#include "render/scene/render_scene_types.hpp"
 
 namespace ohao {
+
+namespace render { class RenderScene; }
 
 class Scene;
 class Camera;
@@ -76,24 +79,12 @@ struct ObjectPushConstants {
     glm::vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
 };
 
-// Light data for uniform buffer (matches shader layout)
-// 128 bytes per light to match UnifiedLight in shaders
-struct LightData {
-    alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
-    alignas(16) glm::vec4 direction;     // xyz = direction, w = range
-    alignas(16) glm::vec4 color;         // xyz = color, w = intensity
-    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused
-    alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)
-};
-
-// Maximum lights supported
-constexpr uint32_t MAX_LIGHTS = 8;
+// LightData and MAX_LIGHTS live in render/scene/render_scene_types.hpp.
 
 // Shadow map configuration
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
 OHAO_ASSERT_GPU_LAYOUT(ObjectPushConstants, layout::kObjectPushConstantsBytes);
-OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);
 
 // Light uniform buffer
 struct LightUniformBuffer {
@@ -207,6 +198,10 @@ public:
     // RT acceleration structure access
     [[nodiscard]] RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
     [[nodiscard]] bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
+
+    // Persistent GPU render world (meshes, materials, instances, lights). Valid
+    // between initialize() and shutdown().
+    [[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }
 
     // Denoiser control
     void        setDenoiseMode(DenoiseMode mode);
@@ -503,6 +498,9 @@ private:
 
     // Bindless texture manager
     std::unique_ptr<BindlessTextureManager> m_textureManager;
+
+    // Persistent GPU render world; recordUpdates runs at the start of every frame body.
+    std::unique_ptr<render::RenderScene> m_renderScene;
 
     // Deferred rendering methods
     [[nodiscard]] bool initializeDeferredRenderer();

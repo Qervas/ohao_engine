@@ -7,6 +7,7 @@
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "render/rt/rt_visibility.hpp"
+#include "render/scene/render_scene.hpp"
 
 namespace ohao {
 
@@ -43,6 +44,10 @@ void VulkanRenderer::renderDeferred() {
                static_cast<size_t>(m_width) * m_height * 4);
     }
 
+    // Retire-queue tick. After the early returns above: every tick then matches a
+    // frame that is submitted on this slot, so MAX_FRAMES_IN_FLIGHT ticks cover
+    // every slot's fence.
+    m_renderScene->onFrameRetired();
     m_frameResources.resetFrame(m_currentFrame);
 
     // Update camera data
@@ -125,6 +130,7 @@ void VulkanRenderer::renderDeferred() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(cmd, &beginInfo);
+    m_renderScene->recordUpdates(cmd, m_currentFrame);
 
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
@@ -226,6 +232,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
         memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped, m_width * m_height * 4);
     }
 
+    m_renderScene->onFrameRetired();   // retire-queue tick, after the slot's fence wait
     m_frameResources.resetFrame(m_currentFrame);
 
     glm::mat4 view = m_camera->getViewMatrix();
@@ -241,6 +248,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
+    m_renderScene->recordUpdates(cmd, m_currentFrame);
 
     // PT needs unflipped projection (ray generation handles Y internally).
     // Use same FOV/aspect as deferred for consistent framing.

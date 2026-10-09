@@ -218,7 +218,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
                                                 VkDeviceSize vertexStride,
                                                 VkBuffer indexBuffer, uint32_t indexCount,
                                                 VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                                                VkCommandBuffer cmd) {
+                                                VkCommandBuffer cmd, uint32_t firstVertex) {
     if (!m_supported) return INVALID_BLAS;
 
     // Geometry: point to BASE of combined buffers (not sub-range).
@@ -298,7 +298,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
     rangeInfo.primitiveCount = primitiveCount;
     rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);  // byte offset into index buffer
-    rangeInfo.firstVertex = 0;  // indices are already global
+    rangeInfo.firstVertex = firstVertex;  // 0 when indices are already global
     rangeInfo.transformOffset = 0;
 
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
