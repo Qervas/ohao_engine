@@ -22,7 +22,9 @@ public:
     struct InitInfo {
         VkInstance instance; VkPhysicalDevice physical; VkDevice device;
         VkQueue queue; uint32_t queueFamily; VkCommandPool commandPool;
-        RTAccelerationStructure* rt;   // null when RT is unavailable
+        // Build BLASes on an RTAccelerationStructure owned by the RenderScene (never
+        // shared with the legacy path, whose rebuild wipes and reuses BLAS indices).
+        bool rayTracing;
     };
     RenderScene();
     ~RenderScene();
@@ -49,6 +51,9 @@ public:
     [[nodiscard]] const MeshInfo* meshInfo(MeshHandle h) const;
     [[nodiscard]] uint32_t materialIndexFor(uint32_t slot, uint32_t materialSlot) const;
     [[nodiscard]] bool rtSupported() const noexcept;
+    // The RenderScene's own acceleration structures (BLAS per mesh; TLAS in Task 5).
+    // Null when RT is unavailable.
+    [[nodiscard]] RTAccelerationStructure* rtAccel() const noexcept;
 
     // Buffers the passes bind.
     [[nodiscard]] VkBuffer vertexArena() const;

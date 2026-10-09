@@ -19,6 +19,7 @@ struct RenderScene::Impl {
     bool initialized{false};
 
     GpuAllocator allocator;
+    std::unique_ptr<RTAccelerationStructure> rtAccel;   // own instance; see InitInfo::rayTracing
     MeshRegistry meshes;
     MaterialTable materials;
     InstanceTable instances;
@@ -36,9 +37,8 @@ struct RenderScene::Impl {
     RenderSceneStats stats;
     std::vector<Draw> draws;
     bool drawsDirty{true};
-    bool tlasNeedsRebuild{true};   // consumed by the TLAS builder (Task 5)
 
-    [[nodiscard]] bool rt() const noexcept { return info.rt != nullptr && info.rt->isSupported(); }
+    [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
     void retire(std::vector<GpuBuffer>& bufs) {
         for (GpuBuffer& b : bufs)
@@ -91,8 +91,15 @@ bool RenderScene::initialize(const InitInfo& info) {
         std::cerr << "[RenderScene] GpuAllocator initialization failed\n";
         return false;
     }
+    if (info.rayTracing) {
+        m->rtAccel = std::make_unique<RTAccelerationStructure>();
+        if (!m->rtAccel->init(info.device, info.physical, info.queue, info.queueFamily, info.commandPool)) {
+            std::cout << "[RenderScene] ray tracing unavailable: meshes get no BLAS\n";
+            m->rtAccel.reset();
+        }
+    }
     const MeshRegistry::Context ctx{&m->allocator, info.device, info.queue, info.commandPool,
-                                    m->rt() ? info.rt : nullptr};
+                                    m->rt() ? m->rtAccel.get() : nullptr};
     m->initialized = true;   // so shutdown() releases whatever was created below
     if (!m->meshes.initialize(ctx) || !m->materials.initialize(m->allocator) ||
         !m->instances.initialize(m->allocator) || !m->lights.initialize(m->allocator)) {
@@ -116,6 +123,10 @@ void RenderScene::shutdown() {
     m->instances.shutdown();
     m->materials.shutdown();
     m->meshes.shutdown();
+    if (m->rtAccel) {
+        m->rtAccel->destroy();
+        m->rtAccel.reset();
+    }
     m->allocator.shutdown();
     m->draws.clear();
     m->initialized = false;
@@ -126,10 +137,7 @@ MeshHandle RenderScene::registerMesh(const MeshData& data) {
     std::vector<GpuBuffer> retired;
     uint32_t grown = 0;
     const MeshHandle h = m->meshes.registerMesh(data, retired, grown);
-    if (grown > 0) {
-        m->stats.arenaGrowths += grown;
-        m->tlasNeedsRebuild = true;   // every BLAS was rebuilt against the new arenas
-    }
+    m->stats.arenaGrowths += grown;
     m->retire(retired);
     return h;
 }
@@ -209,6 +217,7 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
             m->materials.recordUploads(batch);
             m->stats.instanceBytesUploaded = m->instances.recordUploads(batch, retired);
             m->stats.lightBytesUploaded = m->lights.recordUploads(batch);
+            m->stats.instanceTableGrowths = m->instances.gpuGrowths();
             if (batch.used > 0) m->allocator.flushBuffer(m->staging[frameSlot], 0, batch.used);
 
             VkMemoryBarrier after{};
@@ -244,6 +253,7 @@ uint32_t RenderScene::materialIndexFor(uint32_t slot, uint32_t materialSlot) con
 }
 
 bool RenderScene::rtSupported() const noexcept { return m->rt(); }
+RTAccelerationStructure* RenderScene::rtAccel() const noexcept { return m->rt() ? m->rtAccel.get() : nullptr; }
 
 VkBuffer RenderScene::vertexArena() const { return m->meshes.vertexArena(); }
 VkBuffer RenderScene::indexArena() const { return m->meshes.indexArena(); }

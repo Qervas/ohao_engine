@@ -22,8 +22,8 @@ public:
     void shutdown();   // destroys the arenas and every BLAS; the caller idles the device
 
     // Appends `data`. Arenas that must grow are replaced; the replaced buffers are
-    // pushed to `retired` (the caller defers their destruction) and every BLAS is
-    // rebuilt against the new buffers. `grown` counts the arenas that grew.
+    // pushed to `retired` (the caller defers their destruction); built BLASes do not
+    // reference their inputs and stay as they are. `grown` counts the arenas that grew.
     MeshHandle registerMesh(const MeshData& data, std::vector<GpuBuffer>& retired, uint32_t& grown);
 
     [[nodiscard]] const MeshInfo* info(MeshHandle h) const;

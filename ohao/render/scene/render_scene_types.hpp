@@ -126,7 +126,8 @@ struct RenderSceneStats {
     std::size_t instanceBytesUploaded{0};   // last recordUpdates
     std::size_t lightBytesUploaded{0};
     double recordCpuMs{0.0};                // CPU time of the last recordUpdates (staging writes + copy recording)
-    uint32_t arenaGrowths{0};               // cumulative
+    uint32_t arenaGrowths{0};               // cumulative, mesh arenas (load time)
+    uint32_t instanceTableGrowths{0};       // cumulative, device instance/material-ref buffers (mid-frame)
     enum class TlasOp { None, Build, Refit } lastTlasOp{TlasOp::None};
 };
 

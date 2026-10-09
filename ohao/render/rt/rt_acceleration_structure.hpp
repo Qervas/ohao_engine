@@ -122,6 +122,10 @@ public:
 
     VkAccelerationStructureKHR getTLAS() const { return m_tlas; }
     uint32_t getBlasCount() const { return static_cast<uint32_t>(m_blasEntries.size()); }
+    // Device address of a live BLAS; 0 when the handle is unknown or destroyed.
+    VkDeviceAddress getBlasAddress(BlasHandle handle) const {
+        return handle < m_blasEntries.size() ? m_blasEntries[handle].deviceAddress : 0;
+    }
     uint32_t getInstanceCount() const { return static_cast<uint32_t>(m_instances.size()); }
 
     // Cleanup everything

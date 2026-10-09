@@ -129,7 +129,8 @@ void LightTable::set(std::span<const LightDesc> lights) {
 
         float shadowMapIndex = -1.0f;
         if (m_shadowsEnabled && shadowCasterIndex < 0) {
-            if (d.kind == LightKind::Directional || d.kind == LightKind::Spot) {
+            // The legacy rule, kept as is: old LightType 0/2 = Sphere(point)/Spot.
+            if (d.kind == LightKind::Point || d.kind == LightKind::Spot) {
                 shadowMapIndex = 0.0f;
                 shadowCasterIndex = static_cast<int>(raster.size());
             }

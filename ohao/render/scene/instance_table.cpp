@@ -175,6 +175,7 @@ std::size_t InstanceTable::recordUploads(detail::StagingBatch& batch, std::vecto
         m_instanceBuffer = instances;
         m_refBuffer = refs;
         m_gpuCapacity = m_capacity;
+        ++m_gpuGrowths;
     }
 
     std::size_t instanceBytes = 0;

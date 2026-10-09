@@ -1665,7 +1665,7 @@ static void runRenderSceneTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("arena growth defers destroying the old buffers past frames in flight");
+    TEST_BEGIN("instance-table growth mid-frame defers destroying the old buffers");
     {
         _putenv_s("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
@@ -1675,20 +1675,114 @@ static void runRenderSceneTests() {
         r.setRenderMode(ohao::RenderMode::Deferred);
         std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
         RenderScene& rs = r.renderScene();
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
         MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
-        const auto grows0 = rs.stats().arenaGrowths;
-        for (int k = 0; k < 64 && rs.stats().arenaGrowths == grows0; ++k) {
-            std::vector<ohao::Vertex> big(20000, v[0]);
-            std::vector<uint32_t> bigI(60000, 0);
-            MeshHandle m = rs.registerMesh(MeshData{big, bigI, {}, {}, "big"});
-            rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
-            r.render();   // frames in flight keep reading the arenas
+        // Each frame adds a batch; the device instance + material-ref buffers grow
+        // inside recordUpdates while earlier frames still read the old ones.
+        for (int k = 0; k < 64 && rs.stats().instanceTableGrowths < 2; ++k) {
+            for (int n = 0; n < 300; ++n)
+                rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+            r.render();
         }
-        EXPECT(rs.stats().arenaGrowths > grows0, "the arena grew during the test");
+        EXPECT(rs.stats().instanceTableGrowths >= 2, "the instance table grew past 1024 twice");
         for (int k = 0; k < 4; ++k) r.render();
         const auto msgs = r.validationMessages();
         if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
-        EXPECT_EQ(msgs.size(), size_t{0}, "no buffer was destroyed while in use");
+        EXPECT_EQ(msgs.size(), size_t{0}, "no retired buffer was destroyed while in use");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("mesh arena growth keeps registering and drawing meshes");
+    {
+        // registerMesh idles the queue, so this does not exercise deferred
+        // destruction; it checks that meshes registered across a growth are intact.
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r.renderScene();
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        const auto grows0 = rs.stats().arenaGrowths;
+        std::vector<MeshHandle> meshes;
+        for (int k = 0; k < 64 && rs.stats().arenaGrowths == grows0; ++k) {
+            std::vector<ohao::Vertex> big(20000, v[0]);
+            big.back().position = {float(k), 2.0f, 3.0f};
+            std::vector<uint32_t> bigI(60000, 0);
+            meshes.push_back(rs.registerMesh(MeshData{big, bigI, {}, {}, "big"}));
+            rs.createInstance(InstanceDesc{meshes.back(), {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+            r.render();
+        }
+        EXPECT(rs.stats().arenaGrowths > grows0, "the arena grew during the test");
+        MeshHandle after = rs.registerMesh(MeshData{v, i, {}, {}, "after"});
+        rs.createInstance(InstanceDesc{after, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        for (int k = 0; k < 4; ++k) r.render();
+        bool intact = true;
+        for (size_t k = 0; k < meshes.size(); ++k) {
+            const MeshInfo* mi = rs.meshInfo(meshes[k]);
+            intact = intact && mi && mi->vertexOffset == k * 20000u && mi->indexOffset == k * 60000u &&
+                     mi->aabbMax.x == std::max(0.0f, float(k)) &&
+                     (!rs.rtSupported() || rs.rtAccel()->getBlasAddress(mi->blas) != 0);
+        }
+        EXPECT(intact, "meshes registered before and at the growth keep offsets, AABB and BLAS");
+        const MeshInfo* ai = rs.meshInfo(after);
+        EXPECT(ai && ai->vertexOffset == meshes.size() * 20000u && ai->indexCount == 6, "a mesh after growth appends");
+        EXPECT(!rs.rtSupported() || rs.rtAccel()->getBlasAddress(ai->blas) != 0, "a mesh after growth gets a BLAS");
+        EXPECT_EQ(rs.draws().size(), meshes.size() + 1, "every instance draws");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("raster shadow map goes to the first point or spot light (legacy rule)");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        RenderScene& rs = r.renderScene();
+        LightDesc point{}; point.kind = LightKind::Point; point.order = 0;
+        LightDesc sun{};   sun.kind = LightKind::Directional; sun.order = 1;
+        const LightDesc lights[] = {sun, point};   // `order` sorts them: point first
+        rs.setLights(lights);
+        const auto raster = rs.rasterLights();
+        EXPECT_EQ(raster.size(), size_t{2}, "two raster lights");
+        EXPECT(raster[0].position.w == 1.0f && raster[0].params.z == 0.0f, "the point light has shadow index 0");
+        EXPECT(raster[1].position.w == 0.0f && raster[1].params.z == -1.0f, "the directional light has none");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("the legacy scene build does not touch RenderScene's BLASes");
+    {
+        _putenv_s("OHAO_VALIDATION", "1");
+        auto r = std::make_unique<ohao::VulkanRenderer>(64, 64);
+        const bool ok = r->initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok || !r->validationEnabled()) { std::cout << "(skipped) "; TEST_PASS(); return; }
+        if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        r->setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        RenderScene& rs = r->renderScene();
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        EXPECT(rs.rtAccel() && rs.rtAccel() != r->getRT(), "RenderScene owns its acceleration structures");
+        const VkDeviceAddress before = rs.rtAccel()->getBlasAddress(rs.meshInfo(m)->blas);
+        EXPECT(before != 0, "the mesh has a BLAS");
+
+        // Legacy path: setScene -> updateSceneBuffers -> buildBLASTLAS, which
+        // destroys and re-creates every BLAS in the renderer's m_rtAccel.
+        ohao::Scene scene("legacy");
+        auto actor = scene.createActor("quad");
+        auto model = std::make_shared<ohao::Model>();
+        model->vertices = v; model->indices = i;
+        auto mesh = actor->addComponent<ohao::MeshComponent>();
+        mesh->setModel(model);
+        mesh->setVisible(true);
+        r->setScene(&scene);
+        EXPECT(r->getRT()->getBlasCount() > 0, "the legacy build made its own BLAS");
+
+        EXPECT_EQ(rs.rtAccel()->getBlasAddress(rs.meshInfo(m)->blas), before, "RenderScene's BLAS survived the legacy build");
+        MeshHandle m2 = rs.registerMesh(MeshData{v, i, {}, {}, "quad2"});
+        EXPECT(rs.rtAccel()->getBlasAddress(rs.meshInfo(m2)->blas) != 0, "a later mesh gets a BLAS");
+        for (int k = 0; k < 4; ++k) r->render();
+        r->shutdown();
+        const auto msgs = r->validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "rendering and teardown are clean");
         TEST_PASS();
     }
 }

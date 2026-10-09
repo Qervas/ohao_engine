@@ -173,11 +173,12 @@ if (!createLightBuffer()) {
             m_rtAccel.reset();
         }
 
-        // Persistent GPU render world: needs the device, command pool and RT.
+        // Persistent GPU render world: needs the device and command pool. It owns its
+        // own RTAccelerationStructure (buildBLASTLAS wipes m_rtAccel's BLASes).
         m_renderScene = std::make_unique<render::RenderScene>();
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
                 m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
-                m_commandPool, isRTSupported() ? m_rtAccel.get() : nullptr})) {
+                m_commandPool, isRTSupported()})) {
             std::cerr << "Failed to initialize RenderScene" << std::endl;
             m_renderScene.reset();
             return false;
@@ -206,7 +207,7 @@ void VulkanRenderer::shutdown() {
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
 
-        // The render world holds BLASes in m_rtAccel: release it first.
+        // The render world (and its own acceleration structures) goes first.
         if (m_renderScene) {
             m_renderScene->shutdown();
             m_renderScene.reset();

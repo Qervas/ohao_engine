@@ -198,10 +198,8 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         return {};
     }
 
-    const uint32_t grownBefore = grown;
     bool ok = reserve(m_vertices, vertexCount, cmd, retired, grown);
     ok = ok && reserve(m_indices, indexCount, cmd, retired, grown);
-    const bool blasInputsMoved = grown != grownBefore;
     ok = ok && reserve(m_triangleSlots, triangleCount, cmd, retired, grown);
     ok = ok && reserve(m_meshTable, 1, cmd, retired, grown);
 
@@ -247,14 +245,8 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     m_triangleSlots.used += triangleCount;
     m_meshTable.used += 1;
 
-    // Every BLAS holds device addresses into the vertex/index arenas: rebuild them
-    // all against the new buffers before the old ones can be retired.
-    if (blasInputsMoved && m_ctx.rt) {
-        for (MeshInfo& existing : m_meshes) {
-            if (existing.blas != INVALID_BLAS) m_ctx.rt->destroyBLAS(existing.blas);
-            buildBlas(existing);
-        }
-    }
+    // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
+    // existing BLASes survive arena growth untouched.
     buildBlas(mesh);
 
     const auto index = static_cast<uint32_t>(m_meshes.size());

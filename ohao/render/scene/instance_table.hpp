@@ -37,6 +37,7 @@ public:
 
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept;
     [[nodiscard]] bool needsGpuGrowth() const noexcept { return m_capacity > m_gpuCapacity; }
+    [[nodiscard]] uint32_t gpuGrowths() const noexcept { return m_gpuGrowths; }
     // Grows the device buffers (old -> new copy recorded, old pushed to `retired`),
     // then uploads dirty slots. Returns the InstanceGpu bytes uploaded.
     std::size_t recordUploads(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired);
@@ -53,6 +54,7 @@ private:
     GpuBuffer m_instanceBuffer;
     GpuBuffer m_refBuffer;
     uint32_t m_gpuCapacity{0};
+    uint32_t m_gpuGrowths{0};
 
     uint32_t m_capacity{0};
     uint32_t m_highWater{0};
