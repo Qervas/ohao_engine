@@ -1,14 +1,10 @@
 #include "scene.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
-#include "physics/components/physics_component.hpp"
-#include "physics/world/physics_world.hpp"
 #include "scene/component/component_factory.hpp"
 #include "scene/component/component_pack.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/asset/model.hpp"
-#include "physics/collision/shapes/collision_shape.hpp"
-#include "physics/world/physics_settings.hpp"
 #include "core/console_widget.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -28,13 +24,7 @@ Scene::Scene(std::string_view name)
     rootNode = std::make_shared<Actor>("World");
     registerActor(rootNode);
     
-    // Initialize physics world
-    physicsWorld = std::make_unique<physics::PhysicsWorld>();
-    physics::PhysicsSettings settings;
-    settings.gravity = glm::vec3(0.0f, -9.81f, 0.0f);
-    physicsWorld->initialize(settings);
-    
-    std::cout << "Scene '" << name << "' created with physics world" << std::endl;
+    std::cout << "Scene '" << name << "' created" << std::endl;
 }
 
 Scene::~Scene() {
@@ -104,7 +94,6 @@ void Scene::removeAllActors() {
     
     // Clear component lists
     meshComponents.clear();
-    physicsComponents.clear();
     
     // Ensure maps are empty
     actors.clear();
@@ -169,42 +158,6 @@ void Scene::onMeshComponentRemoved(MeshComponent* component) {
 
 void Scene::onMeshComponentChanged(MeshComponent* component) {
     needsBufferUpdate = true;
-}
-
-void Scene::onPhysicsComponentAdded(PhysicsComponent* component) {
-    if (!component) return;
-    
-    // Add to physics components list if not already there
-    if (std::find(physicsComponents.begin(), physicsComponents.end(), component) == physicsComponents.end()) {
-        physicsComponents.push_back(component);
-    }
-    
-    // Connect the component to our physics world
-    component->setPhysicsWorld(physicsWorld.get());
-    
-    // Initialize the component to ensure it creates a rigid body
-    component->initialize();
-    
-    std::cout << "Physics component added to scene (total: " << physicsComponents.size() << ", rigid bodies: " << physicsWorld->getRigidBodyCount() << ")" << std::endl;
-}
-
-void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
-    if (!component) return;
-    std::erase(physicsComponents, component);
-    component->setPhysicsWorld(nullptr);
-}
-
-void Scene::updatePhysics(float deltaTime) {
-    if (physicsWorld) {
-        physicsWorld->stepSimulation(deltaTime);
-        
-        // Update all physics components
-        for (auto* component : physicsComponents) {
-            if (component) {
-                component->update(deltaTime);
-            }
-        }
-    }
 }
 
 const std::string& Scene::getName() const noexcept {
@@ -275,48 +228,9 @@ bool Scene::importModel(std::string_view filename, Actor::Ptr targetActor) {
     // Get the components (they're guaranteed to exist now)
     auto meshComponent = targetActor->getComponent<MeshComponent>();
     auto materialComponent = targetActor->getComponent<MaterialComponent>();
-    auto physicsComponent = targetActor->getComponent<PhysicsComponent>();
     
     // Set the model
     meshComponent->setModel(model);
-    
-    // Configure physics properties based on model type
-    // TODO: Add import option to choose static vs dynamic
-    bool shouldBeStatic = (baseName.find("room") != std::string::npos || 
-                          baseName.find("cornell") != std::string::npos ||
-                          baseName.find("building") != std::string::npos ||
-                          baseName.find("wall") != std::string::npos);
-    
-    if (shouldBeStatic) {
-        physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::STATIC);
-        physicsComponent->setMass(0.0f);
-        physicsComponent->setFriction(0.8f);
-        physicsComponent->setRestitution(0.2f);
-        std::cout << "Set imported model '" << targetActor->getName() << "' as STATIC (room/building detected)" << std::endl;
-    } else {
-        physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::DYNAMIC);
-        physicsComponent->setMass(1.0f);
-        physicsComponent->setRestitution(0.3f);
-        physicsComponent->setFriction(0.5f);
-        std::cout << "Set imported model '" << targetActor->getName() << "' as DYNAMIC" << std::endl;
-    }
-    
-    // Create appropriate collision shape based on model bounds
-    // For now, use a bounding box - could be improved with mesh collision later
-    auto transform = targetActor->getTransform();
-    if (transform) {
-        glm::vec3 scale = transform->getScale();
-        physicsComponent->createBoxShape(scale * 0.5f);
-    } else {
-        // Default box shape if no transform
-        physicsComponent->createBoxShape(1.0f, 1.0f, 1.0f);
-    }
-    
-    // Connect to physics world
-    physicsComponent->setTransformComponent(targetActor->getTransform());
-    
-    std::cout << "Added PhysicsComponent to imported model '" << targetActor->getName() 
-              << "' - Collision shape configured" << std::endl;
     
     // Convert MTL materials to PBR materials
     if (!model->materials.empty()) {
@@ -439,61 +353,6 @@ void Scene::unregisterActorHierarchy(Actor::Ptr actor) {
     
     // Unregister this actor
     unregisterActor(actor);
-}
-
-void Scene::addPhysicsToAllObjects() {
-    std::cout << "Adding physics components to all objects in scene..." << std::endl;
-    
-    int physicsObjectsCreated = 0;
-    
-    // Iterate through all actors in the scene
-    for (const auto& [id, actor] : actors) {
-        if (!actor) continue;
-        
-        // Skip actors that already have physics components
-        if (actor->getComponent<PhysicsComponent>()) {
-            std::cout << "Actor '" << actor->getName() << "' already has physics component" << std::endl;
-            continue;
-        }
-        
-        // Only add physics to actors that have mesh components (visual objects)
-        auto meshComponent = actor->getComponent<MeshComponent>();
-        if (!meshComponent) {
-            std::cout << "Skipping actor '" << actor->getName() << "' - no mesh component" << std::endl;
-            continue;
-        }
-        
-        // Add physics component
-        auto physicsComponent = actor->addComponent<PhysicsComponent>();
-        if (physicsComponent) {
-            // Set up physics properties for a dynamic object
-            physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::DYNAMIC);
-            physicsComponent->setMass(1.0f);  // 1 kg
-            physicsComponent->setRestitution(0.3f);  // Some bounce
-            physicsComponent->setFriction(0.5f);     // Medium friction
-            
-            // Create a box collision shape based on object scale
-            auto transform = actor->getTransform();
-            if (transform) {
-                glm::vec3 scale = transform->getScale();
-                // Create box collision shape (half-extents = scale / 2)
-                physicsComponent->createBoxShape(scale * 0.5f);
-            } else {
-                // Default box shape if no transform
-                physicsComponent->createBoxShape(0.5f, 0.5f, 0.5f);
-            }
-            
-            // Set transform component reference for synchronization
-            physicsComponent->setTransformComponent(actor->getTransform());
-            
-            std::cout << "Added physics to actor '" << actor->getName() << "' with box collision shape" << std::endl;
-            physicsObjectsCreated++;
-        }
-    }
-    
-    std::cout << "Physics setup complete. Created " << physicsObjectsCreated << " physics objects." << std::endl;
-    std::cout << "Total physics components in scene: " << physicsComponents.size() << std::endl;
-    std::cout << "Total rigid bodies in physics world: " << physicsWorld->getRigidBodyCount() << std::endl;
 }
 
 } // namespace ohao

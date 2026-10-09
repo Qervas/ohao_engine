@@ -698,6 +698,16 @@ void runMetaTests() {
         EXPECT(moon.gravity.y < -1.f && moon.gravity.y > -3.f, "moon g");
         TEST_PASS();
     }
+
+    TEST_BEGIN("a rigid body exists without any scene component and is named");
+    {
+        ohao::physics::PhysicsWorld world;
+        auto body = world.createRigidBody("crate");
+        EXPECT(body != nullptr, "createRigidBody(name) returns a body");
+        EXPECT(body->getName() == "crate", "the body carries its name");
+        EXPECT_EQ(world.getBodyCount(), size_t{1}, "the world owns it");
+        TEST_PASS();
+    }
 }
 
 // =============================================================================
@@ -711,7 +721,7 @@ void runMetaTests() {
 // own failure and wrong about the conclusion:
 //
 //   1. Linking DeferredRenderer into a focused GPU test binary fails: it drags
-//      in ohao_scene -> PhysicsComponent -> ohao_physics -> Jolt, which such a
+//      in ohao_scene -> ohao_physics -> Jolt, which such a
 //      binary has no business acquiring.
 //   2. Linking it into THIS binary, which already has all of those, fails on
 //      stb_image being defined in both ohao_gpu_vulkan and ohao_scene.

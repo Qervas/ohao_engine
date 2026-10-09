@@ -137,7 +137,7 @@ PYBIND11_MODULE(ohao_physics, m) {
             [](PhysicsWorld& world, const glm::vec3& halfExtents,
                const glm::vec3& position, float mass) {
                 // Create a rigid body with box shape
-                auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+                auto body = std::make_shared<dynamics::RigidBody>();
                 body->setMass(mass);
                 body->setPosition(position);
                 body->setType(mass > 0 ? dynamics::RigidBodyType::DYNAMIC
@@ -158,7 +158,7 @@ PYBIND11_MODULE(ohao_physics, m) {
         .def("create_rigid_body_with_sphere",
             [](PhysicsWorld& world, float radius,
                const glm::vec3& position, float mass) {
-                auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+                auto body = std::make_shared<dynamics::RigidBody>();
                 body->setMass(mass);
                 body->setPosition(position);
                 body->setType(mass > 0 ? dynamics::RigidBodyType::DYNAMIC

@@ -1351,7 +1351,7 @@ bool testRadialImpulse() {
     auto world = std::make_unique<PhysicsWorld>(cfg);
 
     // Add a dynamic body at (2, 0, 0) — needs a collision shape for backend creation
-    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto body = std::make_shared<dynamics::RigidBody>();
     body->setPosition(glm::vec3(2, 0, 0));
     body->setMass(1.0f);
     body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
@@ -1402,7 +1402,7 @@ bool testWindForce() {
     cfg.gravity = glm::vec3(0, 0, 0);
     auto world = std::make_unique<PhysicsWorld>(cfg);
 
-    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto body = std::make_shared<dynamics::RigidBody>();
     body->setPosition(glm::vec3(0, 0, 0));
     body->setMass(1.0f);
     body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
@@ -1431,13 +1431,13 @@ bool testForceVolume() {
     cfg.gravity = glm::vec3(0, 0, 0);
     auto world = std::make_unique<PhysicsWorld>(cfg);
 
-    auto bodyIn  = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto bodyIn  = std::make_shared<dynamics::RigidBody>();
     bodyIn->setPosition(glm::vec3(0, 0, 0));
     bodyIn->setMass(1.0f);
     bodyIn->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
     world->addRigidBodyForTesting(bodyIn);
 
-    auto bodyOut = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto bodyOut = std::make_shared<dynamics::RigidBody>();
     bodyOut->setPosition(glm::vec3(100, 0, 0)); // outside volume
     bodyOut->setMass(1.0f);
     bodyOut->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
@@ -1502,13 +1502,13 @@ bool testSpringForce() {
     cfg.gravity = glm::vec3(0, 0, 0);
     auto world = std::make_unique<PhysicsWorld>(cfg);
 
-    auto bodyA = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto bodyA = std::make_shared<dynamics::RigidBody>();
     bodyA->setPosition(glm::vec3(-2, 0, 0));
     bodyA->setMass(1.0f);
     bodyA->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
     world->addRigidBodyForTesting(bodyA);
 
-    auto bodyB = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto bodyB = std::make_shared<dynamics::RigidBody>();
     bodyB->setPosition(glm::vec3(2, 0, 0));
     bodyB->setMass(1.0f);
     bodyB->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
@@ -1576,7 +1576,7 @@ bool testAxisLock() {
     cfg.gravity = glm::vec3(0, -9.81f, 0);
     auto world = std::make_unique<PhysicsWorld>(cfg);
 
-    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    auto body = std::make_shared<dynamics::RigidBody>();
     body->setPosition(glm::vec3(0, 5, 0));
     body->setMass(1.0f);
     body->setFreezeLinearAxes(2); // bit1 = Y axis frozen

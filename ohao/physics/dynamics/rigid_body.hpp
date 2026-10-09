@@ -15,14 +15,13 @@
 namespace ohao {
 
 // Forward declarations
-class PhysicsComponent;
 
 namespace physics {
 namespace dynamics {
 
 class RigidBody {
 public:
-    RigidBody(PhysicsComponent* component);
+    RigidBody();
     ~RigidBody();
     
     // === TYPE & STATE ===
@@ -108,8 +107,8 @@ public:
     void integrate(float deltaTime);
     
     // === COMPONENT SYNC ===
-    PhysicsComponent* getComponent() const { return m_component; }
-    void updateTransformComponent();
+    void setName(std::string name) { m_name = std::move(name); }
+    const std::string& getName() const { return m_name; }
     
     // === SLEEP/WAKE SYSTEM ===
     void setAwake(bool awake);
@@ -187,8 +186,7 @@ public:
     bool hasBackendBody() const { return m_backendHandle != backend::INVALID_BODY; }
 
 private:
-    // Component reference
-    PhysicsComponent* m_component;
+    std::string m_name;
 
     // Unique identifier (for profile snapshots)
     uint32_t m_uniqueId;

@@ -2,7 +2,6 @@
 
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
-#include "physics/components/physics_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "scene/component/transform_component.hpp"
@@ -118,16 +117,6 @@ public:
      */
     [[nodiscard]] static std::shared_ptr<Model> generateMeshForPrimitive(PrimitiveType type);
     
-    /**
-     * Create appropriate collision shape for physics component
-     */
-    static void setupPhysicsShape(PhysicsComponent* physics, PrimitiveType type);
-    
-    /**
-     * Create triangle mesh collision shape from MeshComponent
-     */
-    static void setupPhysicsShapeFromMesh(PhysicsComponent* physics, MeshComponent* mesh);
-
 private:
     // Mesh generation helpers
     [[nodiscard]] static std::shared_ptr<Model> generateCubeMesh();
@@ -138,7 +127,6 @@ private:
     
     // Component setup helpers
     static void setupMeshComponent(MeshComponent* mesh, PrimitiveType type);
-    static void setupPhysicsComponent(PhysicsComponent* physics, const ComponentSet& config, PrimitiveType type);
     static void setupMaterialComponent(MaterialComponent* material, const ComponentSet& config);
     static void setupLightComponent(LightComponent* light, const ComponentSet& config);
 };
@@ -164,7 +152,6 @@ public:
     [[nodiscard]] static bool validateComponentSetup(std::shared_ptr<Actor> actor, PrimitiveType type);
     
 private:
-    static void connectPhysicsToTransform(std::shared_ptr<Actor> actor);
     static void connectMeshToMaterial(std::shared_ptr<Actor> actor);
 };
 

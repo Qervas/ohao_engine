@@ -1,5 +1,4 @@
 #include "physics_world.hpp"
-#include "physics/components/physics_component.hpp"
 #include "scene/actor/actor.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/forces/forces.hpp"
@@ -84,7 +83,6 @@ void PhysicsWorld::shutdown() {
     // Clear all bodies and constraints
     m_rigidBodies.clear();
     m_activeBodyPointers.clear();
-    m_componentToBody.clear();
 
     // Shutdown backend
     if (m_backend) {
@@ -117,7 +115,6 @@ void PhysicsWorld::reset() {
                 body->setLinearVelocity(glm::vec3(0.0f));
                 body->setAngularVelocity(glm::vec3(0.0f));
                 body->clearForces();
-                body->updateTransformComponent();
             }
         }
         OHAO_LOG("Physics world reset (no profile, cleared velocities)");
@@ -189,16 +186,12 @@ void PhysicsWorld::stop() {
     m_state = SimulationState::STOPPED;
 }
 
-std::shared_ptr<dynamics::RigidBody> PhysicsWorld::createRigidBody(PhysicsComponent* component) {
-    if (!component) {
-        return nullptr;
-    }
-    
-    auto rigidBody = std::make_shared<dynamics::RigidBody>(component);
+std::shared_ptr<dynamics::RigidBody> PhysicsWorld::createRigidBody(std::string_view name) {
+    auto rigidBody = std::make_shared<dynamics::RigidBody>();
+    rigidBody->setName(std::string(name));
     
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
     m_rigidBodies.push_back(rigidBody);
-    m_componentToBody[component] = rigidBody;
     
     updateActiveBodyPointers();
     return rigidBody;
@@ -214,11 +207,6 @@ void PhysicsWorld::removeRigidBody(std::shared_ptr<dynamics::RigidBody> body) {
     }
 
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
-
-    // Remove from component mapping
-    std::erase_if(m_componentToBody, [&](const auto& entry) {
-        return entry.second == body;
-    });
 
     // Remove from bodies list
     std::erase(m_rigidBodies, body);
@@ -236,10 +224,6 @@ void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
     }
 
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
-
-    std::erase_if(m_componentToBody, [&](const auto& entry) {
-        return entry.second && entry.second.get() == body;
-    });
 
     std::erase_if(m_rigidBodies, [&](const auto& sp) {
         return sp.get() == body;
@@ -478,15 +462,6 @@ void PhysicsWorld::syncPendingBodiesToBackend() {
         // Only create backend body if we have a collision shape
         if (!body->getCollisionShape()) continue;
 
-        // Sync position/rotation from TransformComponent → RigidBody before creating
-        // the backend body. This fixes the timing issue where createRigidBody() runs
-        // before the caller sets the transform (e.g. addCube sets position AFTER
-        // createActorWithComponents returns).
-        auto* comp = body->getComponent();
-        if (comp) {
-            comp->updateRigidBodyFromTransform();
-        }
-
         auto info = buildCreationInfo(body.get());
         auto handle = m_backend->createBody(info);
         if (handle != backend::INVALID_BODY) {
@@ -537,9 +512,6 @@ void PhysicsWorld::syncBodiesFromBackend() {
             body->setLinearVelocity(lv);
             body->setAngularVelocity(av);
         }
-
-        // Sync to transform component (visual representation)
-        body->updateTransformComponent();
 
         // Clear local force accumulators
         body->clearForces();
@@ -699,10 +671,7 @@ std::string PhysicsWorld::resolveHandleName(backend::BodyHandle handle) const {
     if (handle == backend::INVALID_BODY) return "";
     for (auto& body : m_rigidBodies) {
         if (body && body->getBackendHandle() == handle) {
-            auto* comp = body->getComponent();
-            if (!comp) return "";
-            auto* actor = comp->getOwner();
-            return actor ? actor->getName() : "";
+            return body->getName();
         }
     }
     return "";

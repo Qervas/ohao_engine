@@ -72,7 +72,7 @@ static int testsFailed = 0;
 
 // Helpers
 static std::shared_ptr<RigidBody> makeDynamic(const glm::vec3& pos = glm::vec3(0.0f), float mass = 1.0f) {
-    auto body = std::make_shared<RigidBody>(nullptr);
+    auto body = std::make_shared<RigidBody>();
     body->setType(RigidBodyType::DYNAMIC);
     body->setMass(mass);
     body->setPosition(pos);
@@ -80,7 +80,7 @@ static std::shared_ptr<RigidBody> makeDynamic(const glm::vec3& pos = glm::vec3(0
 }
 
 static std::shared_ptr<RigidBody> makeStatic(const glm::vec3& pos = glm::vec3(0.0f)) {
-    auto body = std::make_shared<RigidBody>(nullptr);
+    auto body = std::make_shared<RigidBody>();
     body->setType(RigidBodyType::STATIC);
     body->setPosition(pos);
     return body;

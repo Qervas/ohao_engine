@@ -6,7 +6,6 @@
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
-#include "physics/components/physics_component.hpp"
 #include "core/concepts.hpp"
 #include <string_view>
 #include <tuple>
@@ -17,7 +16,7 @@ namespace ohao {
  * Component Pack System - Template-based safe component management
  * 
  * Usage:
- *   ComponentPack<MeshComponent, MaterialComponent, PhysicsComponent>::applyTo(actor);
+ *   ComponentPack<MeshComponent, MaterialComponent>::applyTo(actor);
  *   
  * This ensures all components are added consistently and safely.
  */
@@ -73,14 +72,11 @@ private:
 // Standard visual object pack (mesh + material)
 using VisualObjectPack = ComponentPack<MeshComponent, MaterialComponent>;
 
-// Standard physics object pack (mesh + material + physics)  
-using PhysicsObjectPack = ComponentPack<MeshComponent, MaterialComponent, PhysicsComponent>;
-
 // Lightweight object pack (just mesh, no physics)
 using LightweightObjectPack = ComponentPack<MeshComponent>;
 
 // Full featured object pack (all standard components)
-using StandardObjectPack = ComponentPack<MeshComponent, MaterialComponent, PhysicsComponent>;
+using StandardObjectPack = ComponentPack<MeshComponent, MaterialComponent>;
 
 // Light source pack (mesh + material + light)
 using LightSourcePack = ComponentPack<MeshComponent, MaterialComponent, LightComponent>;
@@ -101,10 +97,6 @@ public:
     // Convenience methods
     [[nodiscard]] static Actor::Ptr createVisualObject(Scene* scene, std::string_view name) {
         return createWithPack<VisualObjectPack>(scene, name);
-    }
-    
-    [[nodiscard]] static Actor::Ptr createPhysicsObject(Scene* scene, std::string_view name) {
-        return createWithPack<PhysicsObjectPack>(scene, name);
     }
     
     [[nodiscard]] static Actor::Ptr createStandardObject(Scene* scene, std::string_view name) {

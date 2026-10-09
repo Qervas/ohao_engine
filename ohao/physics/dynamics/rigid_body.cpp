@@ -1,6 +1,4 @@
 #include "rigid_body.hpp"
-#include "physics/components/physics_component.hpp"
-#include "scene/component/transform_component.hpp"
 #include "physics/collision/shapes/box_shape.hpp"
 #include "physics/collision/shapes/sphere_shape.hpp"
 #include "physics/collision/shapes/cylinder_shape.hpp"
@@ -14,9 +12,8 @@ namespace dynamics {
 // Initialize static unique ID counter
 std::atomic<uint32_t> RigidBody::s_nextId{1};  // Start at 1 (0 = invalid)
 
-RigidBody::RigidBody(PhysicsComponent* component)
-    : m_component(component),
-      m_uniqueId(s_nextId.fetch_add(1)) {  // Atomic ID assignment
+RigidBody::RigidBody()
+    : m_uniqueId(s_nextId.fetch_add(1)) {  // Atomic ID assignment
     // Initialize with default material
     m_material = MaterialLibrary::getInstance().getDefault();
     updateMassProperties();
@@ -328,18 +325,6 @@ glm::vec3 RigidBody::getAngularMomentum() const {
     
     glm::mat3 worldInertia = inertia::transformToWorldSpace(m_inertiaTensor, m_rotation);
     return worldInertia * m_angularVelocity;
-}
-
-// === COMPONENT SYNC ===
-void RigidBody::updateTransformComponent() {
-    if (m_component) {
-        auto transform = m_component->getTransformComponent();
-        if (transform) {
-            // Update transform component from physics state
-            transform->setPosition(m_position);
-            transform->setRotation(m_rotation);
-        }
-    }
 }
 
 // === PRIVATE METHODS ===

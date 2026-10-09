@@ -58,10 +58,6 @@ bool ComponentFactory::addComponentsToActor(std::shared_ptr<Actor> actor, Primit
         // Standard objects (Cube, Sphere, Platform, etc.)
         StandardObjectPack::applyTo(actor);
         OHAO_LOG("Applied StandardObjectPack to primitive '" + actor->getName() + "'");
-        
-        // Setup physics component
-        auto physicsComponent = actor->getComponent<PhysicsComponent>();
-        setupPhysicsComponent(physicsComponent.get(), config, type);
     }
     
     // All objects get mesh and material setup if they have those components
@@ -176,51 +172,6 @@ void ComponentFactory::setupMeshComponent(MeshComponent* mesh, PrimitiveType typ
         OHAO_LOG("Setup mesh component for primitive type: " + std::to_string(static_cast<int>(type)));
     } else {
         OHAO_LOG_ERROR("Failed to generate mesh for primitive type: " + std::to_string(static_cast<int>(type)));
-    }
-}
-
-void ComponentFactory::setupPhysicsComponent(PhysicsComponent* physics, const ComponentSet& config, PrimitiveType type) {
-    // Set physics properties
-    physics->setMass(config.mass);
-    physics->setRigidBodyType(config.physicsType);
-    physics->setFriction(config.friction);
-    physics->setRestitution(config.restitution);
-    
-    // Setup collision shape
-    setupPhysicsShape(physics, type);
-    
-    OHAO_LOG("Setup physics component with mass: " + std::to_string(config.mass) + 
-             ", type: " + std::to_string(static_cast<int>(config.physicsType)));
-}
-
-void ComponentFactory::setupPhysicsShape(PhysicsComponent* physics, PrimitiveType type) {
-    switch (type) {
-        case PrimitiveType::Cube:
-            physics->createBoxShape(glm::vec3(0.5f, 0.5f, 0.5f));
-            break;
-            
-        case PrimitiveType::Sphere:
-            physics->createSphereShape(0.5f);
-            break;
-            
-        case PrimitiveType::Platform:
-            // Use thick platform box - perfect for floors, bridges, ledges
-            physics->createBoxShape(glm::vec3(2.0f, 0.2f, 2.0f)); // width=4, height=0.4, depth=4
-            break;
-            
-        case PrimitiveType::Cylinder:
-            // Use proper cylinder shape instead of box approximation
-            physics->createCylinderShape(0.5f, 1.0f); // radius=0.5, height=1.0
-            break;
-            
-        case PrimitiveType::Cone:
-            // For cone, use a capsule as approximation (better than box)
-            physics->createCapsuleShape(0.5f, 1.0f); // radius=0.5, height=1.0
-            break;
-            
-        default:
-            physics->createBoxShape(glm::vec3(0.5f, 0.5f, 0.5f));
-            break;
     }
 }
 
@@ -498,20 +449,9 @@ std::shared_ptr<Model> ComponentFactory::generateConeMesh() {
 void ComponentManager::connectComponentDependencies(std::shared_ptr<Actor> actor) {
     if (!actor) return;
     
-    connectPhysicsToTransform(actor);
     connectMeshToMaterial(actor);
     
     OHAO_LOG("Connected component dependencies for actor: " + actor->getName());
-}
-
-void ComponentManager::connectPhysicsToTransform(std::shared_ptr<Actor> actor) {
-    auto physicsComponent = actor->getComponent<PhysicsComponent>();
-    auto transformComponent = actor->getTransform();
-    
-    if (physicsComponent && transformComponent) {
-        physicsComponent->setTransformComponent(transformComponent);
-        OHAO_LOG("Connected physics component to transform");
-    }
 }
 
 void ComponentManager::connectMeshToMaterial(std::shared_ptr<Actor> actor) {
@@ -539,11 +479,6 @@ bool ComponentManager::validateComponentSetup(std::shared_ptr<Actor> actor, Prim
         return false;
     }
     
-    if (expectedConfig.needsPhysics && !actor->getComponent<PhysicsComponent>()) {
-        OHAO_LOG_ERROR("Actor missing required physics component");
-        return false;
-    }
-    
     if (expectedConfig.needsMaterial && !actor->getComponent<MaterialComponent>()) {
         OHAO_LOG_ERROR("Actor missing required material component");
         return false;
@@ -556,26 +491,6 @@ bool ComponentManager::validateComponentSetup(std::shared_ptr<Actor> actor, Prim
     
     OHAO_LOG("Component setup validation passed for actor: " + actor->getName());
     return true;
-}
-
-void ComponentFactory::setupPhysicsShapeFromMesh(PhysicsComponent* physics, MeshComponent* mesh) {
-    if (!physics || !mesh) {
-        OHAO_LOG_WARNING("Cannot setup physics shape: physics or mesh component is null");
-        return;
-    }
-    
-    // Get the model from mesh component
-    auto model = mesh->getModel();
-    if (!model) {
-        OHAO_LOG_WARNING("Cannot setup physics shape: mesh component has no model");
-        return;
-    }
-    
-    // Create collision shape from the model's geometry
-    physics->createCollisionShapeFromModel(*model);
-    
-    OHAO_LOG("Created collision shape from mesh with " + 
-             std::to_string(model->vertices.size()) + " vertices");
 }
 
 } // namespace ohao

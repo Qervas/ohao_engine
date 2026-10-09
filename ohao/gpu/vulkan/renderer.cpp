@@ -295,12 +295,6 @@ void VulkanRenderer::setScene(Scene* scene) {
     }
 }
 
-void VulkanRenderer::updatePhysics(float deltaTime) {
-    if (m_scene) {
-        m_scene->updatePhysics(deltaTime);
-    }
-}
-
 void VulkanRenderer::render() {
     if (!m_initialized) return;
 

@@ -64,9 +64,6 @@ void SimulationProfile::restore(std::vector<std::shared_ptr<dynamics::RigidBody>
 
         body->setAwake(snapshot.isAwake);
 
-        // Sync transform to rendering component
-        body->updateTransformComponent();
-
         restoredCount++;
     }
 

@@ -19,7 +19,6 @@
 namespace ohao {
 
 // Forward declarations
-class PhysicsComponent;
 
 namespace physics {
 
@@ -86,7 +85,7 @@ public:
     [[nodiscard]] bool isPaused() const noexcept { return m_state == SimulationState::PAUSED; }
     
     // Body management
-    [[nodiscard]] std::shared_ptr<dynamics::RigidBody> createRigidBody(PhysicsComponent* component);
+    [[nodiscard]] std::shared_ptr<dynamics::RigidBody> createRigidBody(std::string_view name = {});
     void removeRigidBody(std::shared_ptr<dynamics::RigidBody> body);
     void removeRigidBody(dynamics::RigidBody* body);
     [[nodiscard]] size_t getBodyCount() const noexcept { return m_rigidBodies.size(); }
@@ -334,7 +333,6 @@ private:
     // Body management
     std::vector<std::shared_ptr<dynamics::RigidBody>> m_rigidBodies;
     std::vector<dynamics::RigidBody*> m_activeBodyPointers; // Cache for performance
-    std::unordered_map<PhysicsComponent*, std::shared_ptr<dynamics::RigidBody>> m_componentToBody;
     
     // Threading
     std::mutex m_bodiesMutex;

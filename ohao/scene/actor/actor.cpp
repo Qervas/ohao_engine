@@ -3,7 +3,6 @@
 #include "scene/component/transform_component.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
-#include "physics/components/physics_component.hpp"
 #include "scene/scene.hpp"
 #include "scene/asset/model.hpp"
 #include "gpu/vulkan/material.hpp"
@@ -222,11 +221,6 @@ void Actor::onComponentAdded(std::shared_ptr<Component> component) {
         if (meshComponent) {
             scene->onMeshComponentAdded(meshComponent.get());
         }
-        
-        auto physicsComponent = std::dynamic_pointer_cast<PhysicsComponent>(component);
-        if (physicsComponent) {
-            scene->onPhysicsComponentAdded(physicsComponent.get());
-        }
     }
 }
 
@@ -237,11 +231,6 @@ void Actor::onComponentRemoved(std::shared_ptr<Component> component) {
         auto meshComponent = std::dynamic_pointer_cast<MeshComponent>(component);
         if (meshComponent) {
             scene->onMeshComponentRemoved(meshComponent.get());
-        }
-        
-        auto physicsComponent = std::dynamic_pointer_cast<PhysicsComponent>(component);
-        if (physicsComponent) {
-            scene->onPhysicsComponentRemoved(physicsComponent.get());
         }
     }
 }

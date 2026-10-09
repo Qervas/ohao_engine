@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * Scene — owns actors, mesh/physics registries, and the physics world.
+ * Scene — owns actors, mesh registry.
  *
  * Art notes (core style template applied):
  *   - string_view at query boundaries; owned strings in maps
@@ -24,12 +24,7 @@
 #include <glm/glm.hpp>
 
 namespace ohao {
-namespace physics {
-class PhysicsWorld;
-}
-
 class MeshComponent;
-class PhysicsComponent;
 
 struct SceneDescriptor {
     std::string name;
@@ -105,21 +100,9 @@ public:
     void onMeshComponentRemoved(MeshComponent* component);
     void onMeshComponentChanged(MeshComponent* component);
 
-    void onPhysicsComponentAdded(PhysicsComponent* component);
-    void onPhysicsComponentRemoved(PhysicsComponent* component);
-
-    // ─── Physics ────────────────────────────────────────────────────────────
-    void updatePhysics(float deltaTime);
-    [[nodiscard]] physics::PhysicsWorld* getPhysicsWorld() noexcept { return physicsWorld.get(); }
-    [[nodiscard]] const physics::PhysicsWorld* getPhysicsWorld() const noexcept { return physicsWorld.get(); }
-    [[nodiscard]] const std::vector<PhysicsComponent*>& getPhysicsComponents() const noexcept {
-        return physicsComponents;
-    }
     [[nodiscard]] const std::vector<MeshComponent*>& getMeshComponents() const noexcept {
         return meshComponents;
     }
-
-    void addPhysicsToAllObjects();
 
     // ─── Properties ─────────────────────────────────────────────────────────
     [[nodiscard]] const std::string& getName() const noexcept;
@@ -152,9 +135,6 @@ private:
     ActorNameMap actorsByName;
 
     std::vector<MeshComponent*> meshComponents;
-    std::vector<PhysicsComponent*> physicsComponents;
-
-    std::unique_ptr<physics::PhysicsWorld> physicsWorld;
     Actor::Ptr rootNode;
     std::string projectPath;
     bool needsBufferUpdate{false};

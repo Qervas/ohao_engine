@@ -8,7 +8,7 @@
  * - NullPhysicsBackend: graceful fallback (no physics, but no crashes)
  * - JoltPhysicsBackend: production backend (Jolt Physics, MIT license)
  *
- * All external APIs (PhysicsComponent, OhaoPhysicsBody, GDScript) are unchanged.
+ * All external APIs (OhaoPhysicsBody, GDScript) are unchanged.
  * PhysicsWorld delegates to whichever backend is active.
  *
  * Features:

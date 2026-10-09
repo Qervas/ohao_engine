@@ -299,8 +299,6 @@ public:
         return VkExtent2D{.width = m_width, .height = m_height};
     }
 
-    // Physics
-    void updatePhysics(float deltaTime);
 
     // Scene buffer management (call after modifying scene)
     [[nodiscard]] bool updateSceneBuffers();

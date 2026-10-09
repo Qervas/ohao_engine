@@ -309,13 +309,7 @@ glm::vec3 ForceDebugger::getColorForForceType(std::string_view forceType) const 
 std::string ForceDebugger::getBodyName(dynamics::RigidBody* body) const {
     if (!body) return "Unknown";
     
-    // Try to get name from component
-    auto* component = body->getComponent();
-    if (component) {
-        // In a real implementation, this would get the entity/component name
-        return "Body_" + std::to_string(reinterpret_cast<size_t>(component));
-    }
-    
+    if (!body->getName().empty()) return body->getName();
     return "Body_" + std::to_string(reinterpret_cast<size_t>(body));
 }
 
