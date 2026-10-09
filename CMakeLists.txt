@@ -160,4 +160,9 @@ if(BUILD_RUNTIME_TESTS)
     add_subdirectory(tests/runtime)
 endif()
 
+option(BUILD_ECS_TESTS "Build ECS tests (world, hierarchy, transforms)" ON)
+if(BUILD_ECS_TESTS)
+    add_subdirectory(tests/ecs)
+endif()
+
 

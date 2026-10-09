@@ -1,0 +1,6 @@
+file(GLOB_RECURSE ECS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+file(GLOB_RECURSE ECS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+add_library(ohao_ecs STATIC ${ECS_SOURCES} ${ECS_HEADERS})
+target_include_directories(ohao_ecs PUBLIC ${CMAKE_SOURCE_DIR}/ohao)
+target_compile_features(ohao_ecs PUBLIC cxx_std_20)
+target_link_libraries(ohao_ecs PUBLIC ohao_core glm EnTT::EnTT)
