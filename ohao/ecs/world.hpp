@@ -28,7 +28,9 @@ public:
     // Destroys the entity and its whole subtree, detaching it from its parent first.
     void destroy(entt::entity e);
     // parent == entt::null detaches. The local transform is kept (world changes).
-    void setParent(entt::entity child, entt::entity parent);
+    // Returns false and changes nothing if child is invalid or parent == child or a
+    // descendant of child (a cycle).
+    bool setParent(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
     void addSystem(std::string name, System fn);

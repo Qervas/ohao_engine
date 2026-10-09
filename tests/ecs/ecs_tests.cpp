@@ -136,6 +136,25 @@ static void systems_run_in_registration_order() {
     CHECK(order == "12", "systems run in the order they were added");
 }
 
+static void cyclic_parenting_is_rejected() {
+    World w;
+    auto a = w.create("a", Transform{{1, 0, 0}});
+    auto b = w.create("b", Transform{{0, 1, 0}});
+    auto c = w.create("c", Transform{{0, 0, 1}});
+    w.setParent(b, a);
+    w.setParent(c, b);
+    CHECK(!w.setParent(a, a), "self-parenting is rejected");
+    CHECK(!w.setParent(a, c), "parenting to a descendant is rejected");
+    CHECK(!w.registry().all_of<Parent>(a), "the hierarchy is unchanged");
+    w.update(0.0f);   // must return
+    glm::vec3 pos = glm::vec3(w.registry().get<WorldTransform>(c).world[3]);
+    CHECK(std::fabs(pos.x - 1) < 1e-5f && std::fabs(pos.y - 1) < 1e-5f && std::fabs(pos.z - 1) < 1e-5f,
+          "world matrices stay consistent");
+    CHECK(verifyTransforms(w.registry()) == 0, "transforms verify clean");
+    w.destroy(a);
+    CHECK(!w.registry().valid(c), "destroy still terminates and removes the subtree");
+}
+
 int main() {
     std::printf("ECS tests\n");
     RUN(world_matrix_of_a_root);
@@ -147,6 +166,7 @@ int main() {
     RUN(destroy_child_detaches_from_parent);
     RUN(reparent_keeps_local);
     RUN(systems_run_in_registration_order);
+    RUN(cyclic_parenting_is_rejected);
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     return g_fail == 0 ? 0 : 1;
 }

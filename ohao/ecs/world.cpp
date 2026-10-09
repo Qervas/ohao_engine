@@ -47,8 +47,16 @@ void World::destroy(entt::entity e) {
     for (auto it = order.rbegin(); it != order.rend(); ++it) m_registry.destroy(*it);
 }
 
-void World::setParent(entt::entity child, entt::entity parent) {
-    if (!m_registry.valid(child)) return;
+bool World::setParent(entt::entity child, entt::entity parent) {
+    if (!m_registry.valid(child)) return false;
+    // Reject cycles: a node cannot be its own ancestor.
+    if (parent != entt::null && m_registry.valid(parent)) {
+        for (entt::entity a = parent; a != entt::null && m_registry.valid(a);) {
+            if (a == child) return false;
+            const auto* p = m_registry.try_get<Parent>(a);
+            a = p ? p->entity : entt::null;
+        }
+    }
     if (const auto* old = m_registry.try_get<Parent>(child)) {
         if (m_registry.valid(old->entity))
             if (auto* sibs = m_registry.try_get<Children>(old->entity))
@@ -60,6 +68,7 @@ void World::setParent(entt::entity child, entt::entity parent) {
         m_registry.get_or_emplace<Children>(parent).entities.push_back(child);
     }
     m_registry.emplace_or_replace<TransformDirty>(child);
+    return true;
 }
 
 void World::setTransform(entt::entity e, const Transform& local) {
