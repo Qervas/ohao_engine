@@ -140,13 +140,18 @@ def main():
     if len(sys.argv) < 2:
         sys.exit("usage: render_golden.py <manifest.json> [--update|--selftest]")
     manifest_path = sys.argv[1]
-    mode = sys.argv[2] if len(sys.argv) > 2 else "check"
+    mode = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--only" else "check"
+    only = None
+    if "--only" in sys.argv:
+        only = sys.argv[sys.argv.index("--only") + 1]
     with open(manifest_path) as f:
         manifest = json.load(f)
 
     all_ok = True
     with tempfile.TemporaryDirectory() as tmp:
         for sc in manifest["scenes"]:
+            if only is not None and sc["name"] != only:
+                continue
             name = sc["name"]
             golden = sc["golden"]
             mad = sc.get("max_abs_diff", DEFAULT_MAX_ABS_DIFF)

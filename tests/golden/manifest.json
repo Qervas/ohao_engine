@@ -59,6 +59,22 @@
       "max_abs_diff": 4,
       "max_diff_frac": 0.01,
       "_note": "Replaces metal_rough_spheres, whose MetalRoughSpheres.glb was never in the repository. model_viewer used to exit 0 after a failed load and render an empty frame, so that scene reported a large pixel difference for two months instead of a missing file. DamagedHelmet.glb IS tracked (3.7 MB) and covers the same ground: a metal/rough glTF under an HDRI."
+    },
+    {
+      "name": "cornell_box_deferred",
+      "command": "./build/cornell_box {out} 4 deferred --denoise=none",
+      "golden": "tests/golden/cornell_box_deferred.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01,
+      "_note": "Deferred hybrid (G-buffer + RT shadows/GI where supported). Captured on master before sub-project 2a so the ECS/RenderScene migration is checked against the old renderer's own output."
+    },
+    {
+      "name": "damaged_helmet_deferred",
+      "command": "./build/model_viewer assets/test_models/DamagedHelmet.glb {out} 4 deferred --denoise=none",
+      "golden": "tests/golden/damaged_helmet_deferred.png",
+      "max_abs_diff": 6,
+      "max_diff_frac": 0.05,
+      "_note": "Deferred hybrid on the helmet; same purpose as cornell_box_deferred. Not bit-exact run-to-run (fresh-vs-fresh max_abs 3, diff_frac ~0.026 measured 2026-10-09); max_diff_frac is 0.05 for that reason, cornell_box_deferred is exact. max_abs tail up to 5 observed against the golden (2 of ~8 runs), so max_abs_diff is 6."
     }
   ]
 }
