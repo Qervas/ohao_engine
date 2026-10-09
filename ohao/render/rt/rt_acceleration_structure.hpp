@@ -37,6 +37,15 @@ struct BlasEntry {
     uint32_t indexCount = 0;
 };
 
+// TLAS storage replaced by buildTLASFromDevice. Earlier frames may still trace or
+// build with it, so the caller destroys it (destroyRetired) once they retired.
+// `as` is VK_NULL_HANDLE for a retired scratch buffer.
+struct RetiredTlas {
+    VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+};
+
 // Instance referencing a BLAS with a transform
 struct RTInstance {
     BlasHandle blasHandle = INVALID_BLAS;
@@ -112,6 +121,21 @@ public:
     // Call once per frame after addInstance() calls.
     void buildTLAS(VkCommandBuffer cmd);
 
+    // Record a TLAS build (rebuild = true, or no TLAS yet, or a different count) or
+    // refit (UPDATE mode) on `cmd` from `count` VkAccelerationStructureInstanceKHR
+    // already in device memory at `instances`. Nothing is submitted. The caller
+    // must have made the instance writes visible to ACCELERATION_STRUCTURE_BUILD
+    // (SHADER_READ). Barriers recorded here: before -- earlier readers (the
+    // asConsumerStages from init) and earlier builds finish with the TLAS and its
+    // scratch; after -- the TLAS is visible to asConsumerStages. Storage too small
+    // for `count` is replaced and the old storage goes to takeRetired(); it is
+    // never destroyed here. Do not mix with buildTLAS() on the same object.
+    // Returns false when nothing was recorded (no RT, empty input, allocation failure).
+    bool buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceAddress instances, uint32_t count, bool rebuild);
+    // TLAS storage replaced since the last call; the caller owns destroying it.
+    [[nodiscard]] std::vector<RetiredTlas> takeRetired();
+    void destroyRetired(const RetiredTlas& r);
+
     // Pre-allocate scratch buffer (call before multi-BLAS rebuilds to avoid mid-recording realloc)
     void ensureScratchBuffer(VkDeviceSize requiredSize);
 
@@ -167,6 +191,16 @@ private:
     bool m_forceTlasRebuild{false};
     VkBuffer m_tlasBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_tlasMemory = VK_NULL_HANDLE;
+    // buildTLASFromDevice state: storage size of m_tlas, instance count of its
+    // last build (an UPDATE must use the same count), and a scratch buffer of its
+    // own -- the BLAS scratch is resized under blocking submits, this one inside
+    // frames, so it is retired rather than destroyed when it grows.
+    VkDeviceSize m_tlasStorageSize = 0;
+    uint32_t m_tlasBuiltCount = 0;
+    VkBuffer m_tlasScratchBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_tlasScratchMemory = VK_NULL_HANDLE;
+    VkDeviceSize m_tlasScratchSize = 0;
+    std::vector<RetiredTlas> m_retired;
 
     // Instance buffer (GPU-side VkAccelerationStructureInstanceKHR array)
     VkBuffer m_instanceBuffer = VK_NULL_HANDLE;

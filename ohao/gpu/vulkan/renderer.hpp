@@ -484,6 +484,9 @@ private:
     // Storage is owned by renderer.cpp's createInstance() / createLogicalDevice().
     std::vector<const char*> m_enabledInstanceExtensions;
     std::vector<const char*> m_enabledDeviceExtensions;
+    // VK_KHR_ray_query + its rayQuery feature were enabled at vkCreateDevice. Only
+    // then may a barrier name a non-RT shader stage with ACCELERATION_STRUCTURE_READ.
+    bool m_rayQueryEnabled{false};
 
     // Shader base path
     std::string m_shaderBasePath;

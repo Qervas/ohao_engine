@@ -178,7 +178,7 @@ if (!createLightBuffer()) {
         m_renderScene = std::make_unique<render::RenderScene>();
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
                 m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
-                m_commandPool, isRTSupported()})) {
+                m_commandPool, isRTSupported(), m_rayQueryEnabled})) {
             std::cerr << "Failed to initialize RenderScene" << std::endl;
             m_renderScene.reset();
             return false;

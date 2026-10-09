@@ -546,6 +546,149 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
     if (ownCmd) endSingleTimeCommands(cmd);
 }
 
+// === TLAS from device-resident instances (recorded in the frame, never submitted) ===
+
+bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceAddress instances,
+                                                  uint32_t count, bool rebuild) {
+    if (!m_supported || cmd == VK_NULL_HANDLE || instances == 0 || count == 0) return false;
+
+    VkAccelerationStructureGeometryInstancesDataKHR instancesData{};
+    instancesData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    instancesData.arrayOfPointers = VK_FALSE;
+    instancesData.data.deviceAddress = instances;
+
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geometry.geometry.instances = instancesData;
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
+    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                             &buildInfo, &count, &sizeInfo);
+
+    // An UPDATE must use the primitive count of the build it updates.
+    bool build = rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;
+
+    if (sizeInfo.accelerationStructureSize > m_tlasStorageSize) {
+        // Size the new storage with headroom so a growing scene does not replace
+        // the TLAS (and its handle) on every added instance.
+        uint32_t capacity = std::max(count, 64u);
+        capacity = capacity > (UINT32_MAX / 2) ? count : capacity + capacity / 2;
+        VkAccelerationStructureBuildSizesInfoKHR capInfo{};
+        capInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+        vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                 &buildInfo, &capacity, &capInfo);
+        const VkDeviceSize storage = std::max(capInfo.accelerationStructureSize, sizeInfo.accelerationStructureSize);
+
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (!createBuffer(storage,
+                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory)) {
+            destroyBuffer(buffer, memory);
+            std::cerr << "[RT] TLAS storage allocation failed (" << storage << " bytes)" << std::endl;
+            return false;
+        }
+        VkAccelerationStructureCreateInfoKHR createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+        createInfo.buffer = buffer;
+        createInfo.size = storage;
+        createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+        if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &tlas) != VK_SUCCESS) {
+            destroyBuffer(buffer, memory);
+            std::cerr << "[RT] TLAS creation failed" << std::endl;
+            return false;
+        }
+        // Earlier frames may still trace the old TLAS: the caller destroys it later.
+        if (m_tlas != VK_NULL_HANDLE || m_tlasBuffer != VK_NULL_HANDLE)
+            m_retired.push_back(RetiredTlas{m_tlas, m_tlasBuffer, m_tlasMemory});
+        m_tlas = tlas;
+        m_tlasBuffer = buffer;
+        m_tlasMemory = memory;
+        m_tlasStorageSize = storage;
+        build = true;   // new storage has nothing to update from
+    }
+
+    const VkDeviceSize scratchNeed = build ? sizeInfo.buildScratchSize : sizeInfo.updateScratchSize;
+    if (scratchNeed > m_tlasScratchSize) {
+        const VkDeviceSize alignment = 256;
+        const VkDeviceSize want = std::max({sizeInfo.buildScratchSize, sizeInfo.updateScratchSize, m_tlasScratchSize * 2});
+        const VkDeviceSize size = (want + alignment - 1) & ~(alignment - 1);
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (!createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory)) {
+            destroyBuffer(buffer, memory);
+            std::cerr << "[RT] TLAS scratch allocation failed (" << size << " bytes)" << std::endl;
+            return false;
+        }
+        // An earlier frame's build may still be using the old scratch.
+        if (m_tlasScratchBuffer != VK_NULL_HANDLE)
+            m_retired.push_back(RetiredTlas{VK_NULL_HANDLE, m_tlasScratchBuffer, m_tlasScratchMemory});
+        m_tlasScratchBuffer = buffer;
+        m_tlasScratchMemory = memory;
+        m_tlasScratchSize = size;
+    }
+
+    // Before: earlier frames' readers of this TLAS (asConsumerStages) and its
+    // earlier build (TLAS + scratch writes) finish before it is rewritten in place.
+    VkMemoryBarrier before{};
+    before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    before.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    before.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    vkCmdPipelineBarrier(cmd,
+                         m_asConsumerStages | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         0, 1, &before, 0, nullptr, 0, nullptr);
+
+    buildInfo.mode = build ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                           : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    buildInfo.srcAccelerationStructure = build ? VK_NULL_HANDLE : m_tlas;
+    buildInfo.dstAccelerationStructure = m_tlas;
+    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_tlasScratchBuffer);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+    rangeInfo.primitiveCount = count;
+    const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
+    m_tlasBuiltCount = count;
+
+    // After: the TLAS is visible to every stage that reads it.
+    VkMemoryBarrier after{};
+    after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    after.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    after.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, m_asConsumerStages,
+                         0, 1, &after, 0, nullptr, 0, nullptr);
+    return true;
+}
+
+std::vector<RetiredTlas> RTAccelerationStructure::takeRetired() {
+    std::vector<RetiredTlas> out;
+    out.swap(m_retired);
+    return out;
+}
+
+void RTAccelerationStructure::destroyRetired(const RetiredTlas& r) {
+    if (m_device == VK_NULL_HANDLE) return;
+    if (r.as != VK_NULL_HANDLE && vkDestroyAccelerationStructureKHR)
+        vkDestroyAccelerationStructureKHR(m_device, r.as, nullptr);
+    VkBuffer buffer = r.buffer;
+    VkDeviceMemory memory = r.memory;
+    destroyBuffer(buffer, memory);
+}
+
 // === Cleanup ===
 
 void RTAccelerationStructure::destroy() {
@@ -559,6 +702,12 @@ void RTAccelerationStructure::destroy() {
         m_tlas = VK_NULL_HANDLE;
     }
     destroyBuffer(m_tlasBuffer, m_tlasMemory);
+    m_tlasStorageSize = 0;
+    m_tlasBuiltCount = 0;
+    destroyBuffer(m_tlasScratchBuffer, m_tlasScratchMemory);
+    m_tlasScratchSize = 0;
+    for (const RetiredTlas& r : m_retired) destroyRetired(r);   // device idle above
+    m_retired.clear();
     destroyBuffer(m_instanceBuffer, m_instanceMemory);
     m_instanceBufferCapacity = 0;
 

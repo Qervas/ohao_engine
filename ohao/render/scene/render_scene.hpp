@@ -25,6 +25,9 @@ public:
         // Build BLASes on an RTAccelerationStructure owned by the RenderScene (never
         // shared with the legacy path, whose rebuild wipes and reuses BLAS indices).
         bool rayTracing;
+        // VK_KHR_ray_query's rayQuery feature is enabled: compute and fragment shaders
+        // may read the TLAS, so its post-build barrier must reach those stages too.
+        bool rayQuery;
     };
     RenderScene();
     ~RenderScene();
@@ -43,7 +46,8 @@ public:
     // Bindless index of the environment map, stamped into the RT light header.
     void setEnvMapTextureIndex(uint32_t texIdx);
 
-    // Start of a frame's command buffer, after the slot's fence was waited.
+    // Start of a frame's command buffer, after the slot's fence was waited. Records
+    // the table copies, then the TLAS build or refit (stats().lastTlasOp).
     void recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot);
     // Called once per frame after the slot's fence wait (retire queue tick).
     void onFrameRetired();
@@ -51,8 +55,8 @@ public:
     [[nodiscard]] const MeshInfo* meshInfo(MeshHandle h) const;
     [[nodiscard]] uint32_t materialIndexFor(uint32_t slot, uint32_t materialSlot) const;
     [[nodiscard]] bool rtSupported() const noexcept;
-    // The RenderScene's own acceleration structures (BLAS per mesh; TLAS in Task 5).
-    // Null when RT is unavailable.
+    // The RenderScene's own acceleration structures (BLAS per mesh, TLAS over the
+    // instance table). Null when RT is unavailable.
     [[nodiscard]] RTAccelerationStructure* rtAccel() const noexcept;
 
     // Buffers the passes bind.
@@ -72,7 +76,13 @@ public:
     [[nodiscard]] std::span<const Draw> draws() const;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
-    [[nodiscard]] VkAccelerationStructureKHR tlas() const;           // Task 5
+    // TLAS over every slot below the instance high-water mark (custom index = slot;
+    // released and invisible slots have mask 0). Built or refit by recordUpdates;
+    // VK_NULL_HANDLE before the first build or without RT. The handle changes when
+    // the TLAS outgrows its storage.
+    [[nodiscard]] VkAccelerationStructureKHR tlas() const;
+    // Host copy of the slot's TLAS instance transform (3x4 row-major), expanded.
+    [[nodiscard]] glm::mat4 tlasTransform(uint32_t slot) const;
     [[nodiscard]] bool empty() const noexcept;
 
 private:

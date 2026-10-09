@@ -35,6 +35,7 @@
 #include "render/scene/render_scene.hpp"
 #include "scene/scene_module.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <span>
 #include <vector>
 
@@ -1783,6 +1784,81 @@ static void runRenderSceneTests() {
         const auto msgs = r->validationMessages();
         if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
         EXPECT_EQ(msgs.size(), size_t{0}, "rendering and teardown are clean");
+        TEST_PASS();
+    }
+
+    // The TLAS is built and refit inside the frame's command buffer: the validation
+    // layer checks those builds and their barriers.
+    TEST_BEGIN("moving an instance refits the TLAS with the new transform");
+    {
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer r(64, 64);
+        const bool ok = r.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok) { std::cout << "(skipped) "; TEST_PASS(); return; }
+        RenderScene& rs = r.renderScene();
+        if (!rs.rtSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        uint32_t s = rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        r.render();
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::Build, "first frame builds");
+        EXPECT(rs.tlas() != VK_NULL_HANDLE, "the RenderScene has a TLAS");
+        r.render();
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::None, "a still scene does nothing");
+        const glm::mat4 moved = glm::translate(glm::mat4(1), {3, 0, 0});
+        rs.updateInstance(s, InstanceDesc{m, {&mat, 1}, moved, glm::mat4(1), true});
+        r.render();
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::Refit, "a transform change refits");
+        EXPECT(rs.tlasTransform(s)[3].x == 3.0f, "the TLAS instance carries the new world matrix");
+        rs.updateInstance(s, InstanceDesc{m, {&mat, 1}, moved, glm::mat4(1), false});
+        r.render();
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::Build, "a visibility change rebuilds");
+        for (int k = 0; k < 4; ++k) r.render();
+        const auto msgs = r.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "in-frame TLAS builds and refits are clean");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("a slot released and reused in one frame forces a TLAS rebuild");
+    {
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer r(64, 64);
+        const bool ok = r.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok) { std::cout << "(skipped) "; TEST_PASS(); return; }
+        RenderScene& rs = r.renderScene();
+        if (!rs.rtSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        MeshHandle a = rs.registerMesh(MeshData{v, i, {}, {}, "a"});
+        MeshHandle b = rs.registerMesh(MeshData{v, i, {}, {}, "b"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        uint32_t s = rs.createInstance(InstanceDesc{a, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        r.render(); r.render();
+        rs.destroyInstance(s);
+        uint32_t s2 = rs.createInstance(InstanceDesc{b, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        EXPECT_EQ(s2, s, "the released slot is reused");
+        r.render();
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::Build, "slot reuse rebuilds, never refits");
+        // Grow the instance table (and the TLAS instance buffer and storage with it)
+        // while earlier frames still trace the old TLAS.
+        const auto grows0 = rs.stats().instanceTableGrowths;
+        for (int n = 0; n < 1500; ++n)
+            rs.createInstance(InstanceDesc{a, {&mat, 1}, glm::translate(glm::mat4(1), {float(n), 0, 0}),
+                                           glm::mat4(1), true});
+        r.render();
+        EXPECT(rs.stats().instanceTableGrowths > grows0, "the instance table grew mid-frame");
+        EXPECT(rs.stats().lastTlasOp == RenderSceneStats::TlasOp::Build, "growth rebuilds");
+        EXPECT(rs.tlasTransform(1500)[3].x == 1499.0f, "grown slots carry their transforms");
+        for (int k = 0; k < 4; ++k) r.render();
+        r.shutdown();
+        const auto msgs = r.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "retired TLAS storage was never destroyed in use");
         TEST_PASS();
     }
 }

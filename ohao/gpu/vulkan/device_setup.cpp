@@ -277,6 +277,7 @@ bool VulkanRenderer::createLogicalDevice() {
         vkGetPhysicalDeviceFeatures2(m_physicalDevice, &probeFeatures2);
 
         rayQuerySupported = rqExt && (rayQueryProbe.rayQuery == VK_TRUE);
+        m_rayQueryEnabled = rayQuerySupported;
         bufferAtomicAddSupported = afExt && (atomicFloatProbe.shaderBufferFloat32AtomicAdd == VK_TRUE);
 
         if (rayQuerySupported) {
