@@ -76,6 +76,14 @@
       "max_abs_diff": 6,
       "max_diff_frac": 0.05,
       "_note": "Deferred hybrid on the helmet; same purpose as cornell_box_deferred. Not bit-exact run-to-run (fresh-vs-fresh max_abs 3, diff_frac ~0.026 measured 2026-10-09); max_diff_frac is 0.05 for that reason, cornell_box_deferred is exact. max_abs tail up to 5 observed against the golden (2 of ~8 runs), so max_abs_diff is 6."
+    },
+    {
+      "name": "cornell_box_rt_realtime",
+      "command": "./build/cornell_box {out} 16 rt_realtime --denoise=none",
+      "golden": "tests/golden/cornell_box_rt_realtime.png",
+      "max_abs_diff": 10,
+      "max_diff_frac": 0.05,
+      "_note": "Realtime path tracer (ReSTIR GI reservoirs, temporal history, 19 frames). Added 2026-10-10 after it lost the device and wrote an all-black frame on master and on this branch: bindings 29-35 (reservoirs, spec hit-distance) were never written into the descriptor set. A black frame fails here twice -- the uniform-frame check and max_abs 225. Not bit-exact run-to-run: pt_raygen_realtime.rgen reads accumBuffer/normalAOV at neighbour pixels in the same dispatch that writes them, a race. Fresh-vs-fresh measured max_abs 3-5, diff_frac ~0.015 at compare res, hence 10 / 0.05."
     }
   ]
 }

@@ -144,7 +144,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[32] = {};
+    VkWriteDescriptorSet writes[40] = {};
     uint32_t writeCount = 0;
     const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
         VkWriteDescriptorSet& w = writes[writeCount++];
@@ -391,6 +391,20 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
     writes[writeCount].pImageInfo      = &outSpecInfo;
     writeCount++;
 
+    // Bindings 29-34: ReSTIR GI reservoir ping-pong (realtime raygen), prev planes
+    // read at 29-31, curr planes written at 32-34. Binding 35: specular hit-distance
+    // guide (R32F). The realtime raygen touches all seven every frame, so they must
+    // be valid in every set: an unwritten storage image here loses the device.
+    const uint32_t prevGIReservoirIndex = 1u - m_giReservoirWriteIndex;
+    VkDescriptorImageInfo giReservoirInfo[6]{};
+    for (uint32_t p = 0; p < 3; ++p) {
+        giReservoirInfo[p]     = {VK_NULL_HANDLE, m_giReservoirViews[p][prevGIReservoirIndex], VK_IMAGE_LAYOUT_GENERAL};
+        giReservoirInfo[3 + p] = {VK_NULL_HANDLE, m_giReservoirViews[p][m_giReservoirWriteIndex], VK_IMAGE_LAYOUT_GENERAL};
+    }
+    for (uint32_t i = 0; i < 6; ++i) addImage(29u + i, &giReservoirInfo[i]);
+    const VkDescriptorImageInfo specHitDistInfo{VK_NULL_HANDLE, m_specHitDistView, VK_IMAGE_LAYOUT_GENERAL};
+    addImage(35, &specHitDistInfo);
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -596,6 +610,38 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
             0, 0, nullptr, 0, nullptr, 2, historyBarriers);
+    }
+
+    // --- ReSTIR GI reservoirs (3 prev read + 3 curr write) and the spec hit-distance
+    //     guide to GENERAL. The guide is fully rewritten each frame: UNDEFINED is fine.
+    {
+        VkImageMemoryBarrier giBarriers[7] = {};
+        const auto reservoirBarrier = [&](VkImageMemoryBarrier& b, uint32_t plane, uint32_t index,
+                                          VkAccessFlags dstAccess) {
+            const bool initialized = m_giReservoirInitialized[index];
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = initialized ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+            b.dstAccessMask = dstAccess;
+            b.oldLayout = initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = m_giReservoirImages[plane][index];
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        };
+        for (uint32_t p = 0; p < 3; ++p) {
+            reservoirBarrier(giBarriers[p], p, prevGIReservoirIndex, VK_ACCESS_SHADER_READ_BIT);
+            reservoirBarrier(giBarriers[3 + p], p, m_giReservoirWriteIndex, VK_ACCESS_SHADER_WRITE_BIT);
+        }
+        giBarriers[6].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        giBarriers[6].srcAccessMask = 0;
+        giBarriers[6].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        giBarriers[6].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        giBarriers[6].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        giBarriers[6].image = m_specHitDistImage;
+        giBarriers[6].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        // Source is the previous frame's ray tracing writes (same queue).
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 7, giBarriers);
     }
 
     // --- Bind pipeline and descriptors ---
@@ -1199,6 +1245,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
     m_surfaceHistoryWriteIndex = 1u - m_surfaceHistoryWriteIndex;
     m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] = true;
     m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
+    m_giReservoirInitialized[m_giReservoirWriteIndex] = true;
+    m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;
 }
 
 } // namespace ohao
