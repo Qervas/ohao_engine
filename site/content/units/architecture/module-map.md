@@ -118,14 +118,14 @@ distinct undefined `ohao::` symbols that only `ohao_renderer.a` provides — whi
 GPU archive's symbols. That is precisely the shape a single pass cannot resolve,
 and exactly why the group exists.
 
-The other pairs that used to complete cycles no longer do. `ohao_scene` carries no
-undefined symbol that another engine archive defines, and physics reaches nobody.
+No other pair of archives forms a cycle. `ohao_scene` carries no undefined symbol
+that another engine archive defines, and physics reaches nobody.
 The `Material` header under `gpu/vulkan/` is still a Vulkan-free struct,
 
 {{cite ohao/gpu/vulkan/material.hpp "struct Material {"}}
 
 and `scene/asset/model.cpp` still includes it, but uses no `Material` member — the
-loaders produce `MaterialData` — so the include is a leftover, not an edge:
+loaders produce `MaterialData` — so the include is unused and adds no edge:
 
 {{cite ohao/scene/asset/model.cpp "#include "gpu/vulkan/material.hpp""}}
 
@@ -143,7 +143,7 @@ and only the header propagates, so it is the one worth stating precisely:
 `Vertex` declares its own binding and attribute descriptions as static members, so
 the vertex input layout — a pipeline object — is authored by the module that owns
 the vertex struct rather than by the module that builds pipelines. Across all of
-`ohao/scene/` — which is now only `asset/`, the model loaders and the primitive
+`ohao/scene/` — which holds only `asset/`, the model loaders and the primitive
 mesh generator — that costs six mentions of a `Vk*` type and zero calls to any
 `vk*` entry point: the loaders genuinely are Vulkan-free. That is a statement about
 ownership, not about linkage — `ohao_scene` puts `${Vulkan_LIBRARIES}` in its
@@ -156,8 +156,8 @@ library and containing not one `Vk` type or `vk` call of its own:
 
 {{cite ohao/physics/CMakeLists.txt "${Vulkan_INCLUDE_DIRS}"}}
 
-Nothing in physics includes a Vulkan header any more, so the line is vestigial — it
-records a dependency that no longer exists rather than enabling one.
+Nothing in physics includes a Vulkan header, so the line is vestigial: it enables
+no dependency that physics has.
 
 :::why
 The alternative — describing the vertex layout in a GPU-side translation unit and

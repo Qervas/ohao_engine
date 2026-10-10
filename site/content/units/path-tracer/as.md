@@ -224,11 +224,13 @@ slots carry mask zero rather than being compacted out. Inside
 `buildTLASFromDevice` the build decision is widened once more, because an update
 must use the primitive count of the build it refines:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "bool build = rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;"}}
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "const bool build = grow || rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;"}}
 
-Storage that is too small for the new count is replaced with headroom, and the old
-storage cannot be destroyed on the spot — earlier frames may still be tracing it.
-It goes to a retire list instead:
+Storage that is too small for the new count is replaced with headroom. Scratch is
+ensured first and the new storage is published only after the build into it is
+recorded, so a failed allocation leaves the current TLAS in place. The old storage
+cannot be destroyed on the spot — earlier frames may still be tracing it. It goes to
+a retire list instead:
 
 {{cite ohao/render/rt/rt_acceleration_structure.hpp "// TLAS storage replaced by buildTLASFromDevice. Earlier frames may still trace or"}}
 

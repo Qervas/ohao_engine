@@ -82,10 +82,14 @@ Two edges of that contract are easy to miss:
 No survivor is left holding a `Parent` that names a dead entity, and the surviving parent's `Children` no longer lists it. Each destroyed entity's `MeshRenderer` fires EnTT's destroy signal on the way out, which is how its GPU instance slot gets released (see the render-extract unit).
 
 :::key
-`World` owns three invariants — every entity has `Transform` and `CreationOrder`, `Parent` and `Children` agree, and no cycle exists — and enforces all three only through its own methods. `registry()` hands out the raw registry, so nothing stops game code from calling `registry().destroy(e)` on a parented entity or `emplace<Parent>` by hand. Do either and the transform system will push a dead id from a stale `Children` list onto its stack and `get<Transform>` it. The world API is the safe surface; the raw registry is for components the world does not own.
+`World` owns three invariants — every entity has `Transform` and `CreationOrder`, `Parent` and `Children` agree, and no cycle exists. Its methods enforce all three. The raw registry keeps the second one on the destroy path: `World` connects destroy hooks to `Parent` and `Children`, so `registry().destroy(e)` removes `e` from its parent's `Children`, and its children are detached (they become roots, keeping their local transforms) rather than destroyed. `World::destroy` is the preferred path, because it removes the whole subtree. Nothing guards `emplace<Parent>` by hand; parenting goes through `setParent`.
 :::
 
 ## Contracts
+
+- Destroy with `World::destroy` (the subtree goes with the entity). `registry().destroy(e)` and `registry().clear()` keep `Parent`/`Children` consistent through the hooks but detach children instead of destroying them.
+
+{{cite ohao/ecs/world.cpp "void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {"}}
 
 - Write `Transform` with `World::setTransform` or `registry().patch<Transform>()`. Both fire EnTT's update signal, which the world turns into `TransformDirty`; a write through `get<Transform>()` is not seen (the transform-system unit covers the check that catches it).
 

@@ -68,8 +68,10 @@ Every recomputed entity is tagged `RenderDirty`, renderable or not. That is how 
 It compares against the parent's *stored* world, not a recomputed one, so an untracked write to a parent is counted once — at the parent — and its children, still consistent with the parent's stale matrix, are not. The count therefore names the entities that were written wrongly, not everything that is visibly wrong.
 
 :::key
-`verifyTransforms` is a function, not a build mode: no system or frame loop calls it, and the only caller in the tree is the ECS test suite. The patch rule is enforced by convention and by tests that seed exactly one bad write; a game that wants the check at run time has to call it itself.
+In debug builds `World::update` calls `verifyTransforms` before it runs any system and logs the first nonzero count once per world; `World::transformMismatches()` returns that count. Release builds compile the check out, so there the patch rule is enforced by convention and by the tests that seed exactly one bad write.
 :::
+
+{{cite ohao/ecs/world.cpp "m_transformMismatches = verifyTransforms(m_registry);"}}
 
 {{cite tests/ecs/ecs_tests.cpp "CHECK(verifyTransforms(w.registry()) == 1, "an untracked write is reported");"}}
 

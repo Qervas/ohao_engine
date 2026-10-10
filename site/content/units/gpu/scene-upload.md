@@ -26,10 +26,11 @@ So moving a mesh uploads one 160-byte `InstanceGpu` and refits the TLAS; it stal
 nothing, because the slot's fence has been waited and the device-local table is only
 ever written by copies recorded in the same command buffer that will read it. The
 deferred light UBO is the one exception: `updateLightBuffer` re-reads the light table's
-host copy once per deferred frame into a persistently mapped buffer, with no staging
-at all.
+host copy once per deferred frame into that frame slot's persistently mapped buffer,
+with no staging at all. One buffer per slot, written after the slot's fence wait, is
+what makes the direct write safe.
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "void VulkanRenderer::updateLightBuffer() {"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "LightUniformBuffer* VulkanRenderer::updateLightBuffer(uint32_t slot) {"}}
 
 :::key
 Nothing in the render world is torn down and rebuilt. Growth is the only thing that

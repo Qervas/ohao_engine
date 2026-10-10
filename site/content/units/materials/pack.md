@@ -99,8 +99,8 @@ so raster and RT cannot disagree about which material a triangle has.
 
 Row 2 carries one lane that only the path tracer reads. `legacyRtTintTex` is a 1×1
 texture of the material's sRGB-encoded base colour, which the closest-hit multiplies
-in when the material has no albedo texture, to reproduce the old RT texture array that
-gave every untextured material one. The raster passes never look at it.
+in when the material has no albedo texture, so every untextured material reaches the
+path tracer with a texture of its own colour. The raster passes never look at it.
 
 {{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
 
@@ -179,7 +179,7 @@ The same header carries a constant that reads like a hard limit and is not one:
 
 {{cite ohao/render/rt/gpu_light.hpp "static constexpr uint32_t MAX_GPU_LIGHTS = 64;"}}
 
-Unlike the old build, something does reference it: the light table sizes the
+It is referenced: the light table sizes the
 device buffer as the header plus 64 lights and truncates a longer list with a
 one-time log. The shaders clamp their light choice against `lightBuf.lightCount`,
 which is already post-truncation. The deferred side is the same kind of bound — its

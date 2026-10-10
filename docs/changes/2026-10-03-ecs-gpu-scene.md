@@ -8,7 +8,7 @@
 
 ## 1. Summary
 
-Game code now lives in an EnTT registry (`ohao/ecs`) with systems that run in a fixed, explicit order. The renderer no longer includes EnTT or the old `Scene`/`Actor`/`Component` system; it reads `ohao::render::RenderScene`, a persistent GPU-side world with mesh arenas (one BLAS per mesh), material, instance and light tables, and an in-frame TLAS that is built or refit from the instance table each frame. The deferred G-buffer and cascaded shadow maps draw one instance per `vkCmdDrawIndexed` with no per-draw push constants, and the path tracer, RT shadows and RT GI trace the same TLAS and share one bindless texture table at native resolution. The old scene code, the temporary scene bridge, the legacy RT build and the texture array are deleted. The deferred goldens were captured on master before the migration and pass; the RT goldens were kept, with `cornell_box` bit-identical and the `damaged_helmet` RT reference re-captured for the environment-map fix.
+Game code now lives in an EnTT registry (`ohao/ecs`) with systems that run in a fixed, explicit order. The renderer no longer includes EnTT or the old `Scene`/`Actor`/`Component` system; it reads `ohao::render::RenderScene`, a persistent GPU-side world with mesh arenas (one BLAS per mesh), material, instance and light tables, and an in-frame TLAS that is built or refit from the instance table each frame. The deferred G-buffer and cascaded shadow maps draw one instance per `vkCmdDrawIndexed` (the G-buffer's only per-draw state is a 16-byte material-slot push constant; CSM pushes its `viewProj` once per cascade), and the path tracer, RT shadows and RT GI trace the same TLAS and share one bindless texture table at native resolution. The old scene code, the temporary scene bridge, the legacy RT build and the texture array are deleted. The deferred goldens were captured on master before the migration and pass; the RT goldens were kept, with `cornell_box` bit-identical and the `damaged_helmet` RT reference re-captured for the environment-map fix.
 
 ## 2. New modules and APIs
 
@@ -132,9 +132,11 @@ File: `ohao/render/rt/rt_acceleration_structure.hpp` / `.cpp`.
 
 **CSM.** `CSMPass` uses set 0 as the instance table, one set per frame slot, and a 64-byte `viewProj` push constant. Shader: `shaders/shadow/shadow_csm.vert`.
 
-**Lights.** The raster light UBO is filled from `RenderScene::rasterLights()` (at most 8). The default-sun fallback is kept when no light is present.
+**Lights.** The raster light UBO is filled from `RenderScene::rasterLights()` (at most 8), one buffer per frame slot (`VulkanRenderer::updateLightBuffer(slot)`). The default-sun fallback is kept when no light is present.
 
-**Path tracer, RT shadows, RT GI.** Hit shaders resolve instance slot, then mesh, then `indexOffset + 3 * gl_PrimitiveID` for vertices, and material as `firstMaterial + mesh.triangleMaterialSlot[gl_PrimitiveID]`. Bindings 4, 5, 8, 9 and 10 are repurposed for the instance, mesh and material data; the instance table is binding 36 and the material references are binding 37. Binding 6 in `rt_gi.rgen` (formerly the per-instance material buffer) is free. Shaders: `shaders/rt/pt_closesthit.rchit`, `shaders/rt/pt_anyhit.rahit`, `shaders/rt/pt_miss.rmiss`, `shaders/rt/rt_gi.rchit`. RT GI reads `InstanceGpu::giAlbedoPacked.rgb`; every hit counts as a hit (the old alpha was always 1.0). RT GI's bounce light is the brightest light in `RenderScene::lights()`.
+**RT accumulation.** After `recordUpdates`, a frame whose TLAS was built or refit, or that uploaded instance data or lights, calls the active RT profile's `notifyViewChanged`: the offline profile restarts accumulation, the realtime profile flags the frame and keeps its denoiser history. A still scene uploads nothing and keeps accumulating, so the Cornell RT golden is unchanged.
+
+**Path tracer, RT shadows, RT GI.** Hit shaders resolve instance slot, then mesh, then `indexOffset + 3 * gl_PrimitiveID` for vertices, and material as `firstMaterial + mesh.triangleMaterialSlot[gl_PrimitiveID]`. Bindings 4, 5, 8, 9 and 10 are repurposed for the instance, mesh and material data; the instance table is binding 36 and the material references are binding 37. RT GI binds the instance table at its own binding 6 (`InstanceGpu instances[]` in `rt_gi.rchit`). Shaders: `shaders/rt/pt_closesthit.rchit`, `shaders/rt/pt_anyhit.rahit`, `shaders/rt/pt_miss.rmiss`, `shaders/rt/rt_gi.rchit`. RT GI reads `InstanceGpu::giAlbedoPacked.rgb`; every hit counts as a hit (the old alpha was always 1.0). RT GI's bounce light is the brightest light in `RenderScene::lights()`.
 
 **One bindless texture table.** `BindlessTextureManager` is the only texture system. Textures are kept at native resolution; the sampler decodes sRGB. The HDRI is registered in the same table, and its index is stamped into the RT light header through `setEnvMapTextureIndex`. Binding 12 is sized to the manager's capacity (4096, clamped to the device's update-after-bind limits with a log line). The hit and miss shaders treat an index at or past the count as untextured, using the specialization constant `OHAO_BINDLESS_COUNT` (`constant_id = 1`). Materials index this table's slots directly; before the fix, slots past 1024 read unwritten descriptors.
 
@@ -149,7 +151,7 @@ File: `ohao/render/rt/rt_acceleration_structure.hpp` / `.cpp`.
 
 The result is in `stats().lastTlasOp`. The TLAS is built from a device address, not from a blocking single-time submit. The post-build barrier reaches compute and fragment stages only when `rayQuery` is enabled.
 
-**Staging and ordering.** Host edits mark entries dirty. `recordUpdates` copies only dirty runs from the per-slot staging buffer into the device-local tables, after a pre-copy barrier. Device-local tables are therefore never written by the host while a frame reads them. This replaces the host-mapped light buffer that was rewritten while frames were in flight.
+**Staging and ordering.** Host edits mark entries dirty. `recordUpdates` copies only dirty runs from the per-slot staging buffer into the device-local tables, after a pre-copy barrier. Device-local tables are therefore never written by the host while a frame reads them. The one host-written per-frame buffer is the raster light UBO: there is one per frame slot, the host writes only the current slot's after that slot's fence wait, and the lighting pass binds it in the same slot's descriptor set.
 
 **Goldens.** The deferred goldens were captured on master before the migration (`tests/golden/cornell_box_deferred.png`, `tests/golden/damaged_helmet_deferred.png`). The RT goldens were kept:
 - `cornell_box` RT is bit-identical.
@@ -161,16 +163,16 @@ The result is in `stats().lastTlasOp`. The TLAS is built from a device address, 
 ## 5. Tools, gates and tests
 
 **New test suites**
-- `tests/ecs/ecs_tests.cpp` (new, target `ecs_tests`, ctest `EcsTests`). Links `ohao_ecs` and `ohao_gpu_vulkan`; `/FORCE:MULTIPLE /IGNORE:4088` on MSVC. 20 tests: hierarchy and transforms (root and child composition, moving a parent, patch marks dirty, unpatched write detected, destroying a parent destroys its subtree, destroying a child detaches it, reparenting keeps local transform, cyclic parenting rejected, `lookRotation`), system order, creation order, extract (create, update and release slots; destroyed subtree releases slots; unknown mesh skipped), lights (kept without a scene; follow transforms in creation order), spawning (model materials become submeshes and materials; emissive texture yields a proxy light), and the 10k-instance timing gate.
-- `tests/engine/engine_tests.cpp`: 56 tests. The new `RenderScene`, RT and physics tests include: a rigid body exists without a scene component; a registered mesh gets an AABB, a table entry and a BLAS; static instances upload once and moving ones upload in proportion; missing material refs fall back to the default material; instance-table growth mid-frame defers destroying the old buffers under validation; mesh arena growth keeps meshes intact; the raster shadow map goes to the first Point or Spot light; a material edit reaches the material table pack; legacy RT tint textures are 1x1 UNORM and shared per colour; the path tracer traces the `RenderScene`; texture slots past 1024 reach the path tracer and out-of-range reads as untextured; moving an instance refits the TLAS with the new transform; a slot released and reused in one frame forces a TLAS rebuild.
+- `tests/ecs/ecs_tests.cpp` (new, target `ecs_tests`, ctest `EcsTests`). Links `ohao_ecs` and `ohao_gpu_vulkan`; `/FORCE:MULTIPLE /IGNORE:4088` on MSVC. 26 tests: hierarchy and transforms (root and child composition, moving a parent, patch marks dirty, unpatched write detected, the debug update reports it, destroying a parent destroys its subtree, destroying a child detaches it, `registry().destroy` of a parent detaches its children and of a child updates its parent, `registry().clear()` with a hierarchy, reparenting keeps local transform, cyclic parenting rejected, `lookRotation`), system order, creation order, extract (create, update and release slots; destroyed subtree releases slots; unknown mesh skipped), lights (kept without a scene; follow transforms in creation order), spawning (model materials become submeshes and materials; emissive texture yields a proxy light), a patched `GiMaterialLegacy` re-uploads its instance, a World released after an explicit renderer shutdown, and the 10k-instance timing gate (Release only).
+- `tests/engine/engine_tests.cpp`: 58 tests. The new `RenderScene`, RT and physics tests include: a rigid body exists without a scene component; a registered mesh gets an AABB, a table entry and a BLAS; static instances upload once and moving ones upload in proportion; missing material refs fall back to the default material; instance-table growth mid-frame defers destroying the old buffers under validation; mesh arena growth keeps meshes intact; the raster shadow map goes to the first Point or Spot light; a material edit reaches the material table pack; legacy RT tint textures are 1x1 UNORM and shared per colour; the path tracer traces the `RenderScene`; texture slots past 1024 reach the path tracer and out-of-range reads as untextured; moving an instance refits the TLAS with the new transform; a slot released and reused in one frame forces a TLAS rebuild; the raster light UBO is one buffer per frame slot; RT accumulation restarts when an instance moves or a light changes.
 - `tests/renderer/renderer_test.cpp` and `tests/renderer/CMakeLists.txt`: updated for the new scene path.
 - `tests/physics/physics_backend_tests.cpp`: changed for handle- and name-based bodies.
 
 **Timing gate.** `ten_thousand_instances_one_percent_moving_under_half_a_millisecond` builds 10,000 instances, moves 1% per sample for 20 samples, and asserts the median of `TransformSystem` plus extract plus `recordCpuMs` is below 0.5 ms. It prints the median and the worst sample. A worst-case assertion flaked (about 1 in 25) once `render()` recorded 10k draws and four CSM cascades between samples; the gate is now the median.
 
-**Golden script.** `tests/golden/render_golden.py` takes `--only <name>` to run one scene. `tests/golden/manifest.json` has four scenes: `cornell_box` and `damaged_helmet` (RT, 16 spp, denoise off) and `cornell_box_deferred` and `damaged_helmet_deferred` (deferred, 4 spp). The deferred helmet entry has `max_abs_diff` 6 and `max_diff_frac` 0.05; the others use `max_abs_diff` 4 and `max_diff_frac` 0.01 (see section 6).
+**Golden script.** `tests/golden/render_golden.py` takes `--only <name>` to run one scene, before or after the mode flag; an unknown name, a missing value or an unexpected argument exits 1 with the usage line. `tests/golden/manifest.json` has four scenes: `cornell_box` and `damaged_helmet` (RT, 16 spp, denoise off) and `cornell_box_deferred` and `damaged_helmet_deferred` (deferred, 4 spp). The deferred helmet entry has `max_abs_diff` 6 and `max_diff_frac` 0.05; the others use `max_abs_diff` 4 and `max_diff_frac` 0.01 (see section 6).
 
-**Validation.** `OHAO_VALIDATION=1 build/Release/cornell_box.exe` exits 3 on master and on this branch (see section 7). `tests/validation/check_validation.py` and `OHAO_VALIDATION=1 ohao_game --frames 600 --resize-at 200` are the gates named in the spec. Measured on 2026-10-10 on the documentation commit: `check_validation.py` reports `cornell_box deferred: clean` and `damaged_helmet deferred: clean`; the windowed game under validation with a resize at frame 200 exits 0 with `validation including teardown: 0 messages`. Without validation, `ohao_game --frames 600` ran at 177.9 fps (5.62 ms per frame), against the 60 fps target. Suites on the same build: `engine_tests` 56/56, `ecs_tests` 20/20, `runtime_tests` 21/21; all four golden scenes pass (`cornell_box` max_abs 0, `damaged_helmet` 1, `cornell_box_deferred` 0, `damaged_helmet_deferred` 3 of a limit of 6).
+**Validation.** `OHAO_VALIDATION=1 build/Release/cornell_box.exe` exits 3 on master and on this branch (see section 7). `tests/validation/check_validation.py` and `OHAO_VALIDATION=1 ohao_game --frames 600 --resize-at 200` are the gates named in the spec. Measured on 2026-10-10 on the documentation commit: `check_validation.py` reports `cornell_box deferred: clean` and `damaged_helmet deferred: clean`; the windowed game under validation with a resize at frame 200 exits 0 with `validation including teardown: 0 messages`. Without validation, `ohao_game --frames 600` ran at 177.9 fps (5.62 ms per frame), against the 60 fps target. Suites on the same build: `engine_tests` 56/56, `ecs_tests` 20/20, `runtime_tests` 21/21; all four golden scenes pass (`cornell_box` max_abs 0, `damaged_helmet` 1, `cornell_box_deferred` 0, `damaged_helmet_deferred` 3 of a limit of 6). After the final review fixes (section 7.3), on 2026-10-10: `engine_tests` 58/58, `ecs_tests` 26/26, `runtime_tests` 21/21, the same validation results, `ohao_game --frames 600` at 176.4 fps, goldens `cornell_box` 0, `damaged_helmet` 1, `cornell_box_deferred` 0, `damaged_helmet_deferred` 2.
 
 **Build.** The shaders target is still manual and has no `ALL` dependency (see the runtime-shell change doc). Shaders rebuild with `cmake --build build --target shaders`.
 
@@ -211,21 +213,21 @@ Ledger findings are marked (finding). Minor items are marked (minor). The `minor
 - **RT double-applies base colour on untextured materials (finding, high).** The tint texture (1x1 texel multiplied as `pow(texel, 2.2)`) and the material colour are both applied. Kept deliberately so `cornell_box` RT stays bit-exact. Fixing it changes the Cornell RT output, so the RT golden must be re-captured after a converged comparison.
 - **Validation exit 3 on `cornell_box` (finding).** `OHAO_VALIDATION=1 build/Release/cornell_box.exe` reports VUID 03004 and then NRD aborts on `vkCmdPushDescriptorSet` under the validation layer. Present on master too. The path-tracer engine test runs without validation, so it does not show.
 - **Shader rebuild dependency (finding).** The shaders target may not rebuild when `shaders/includes/scene/scene_data.glsl` changes; include dependency tracking is not in place.
+- **`rt_realtime` loses the device (finding, high, found 2026-10-10).** `cornell_box.exe out.png 16 rt_realtime --denoise=<none|atrous|nrd>` logs `QueueWaitIdle(): failed, result = ... (-4)` (VK_ERROR_DEVICE_LOST) and writes an all-black image. Reproduced on `2dd5e09` before the final review fixes, so it is not caused by them. `rt_offline --denoise=nrd` renders a sane Cornell box, so the NRD/NRI link itself works. Not investigated.
 - **NRD and VMA link order (finding).** `/INCLUDE:vmaCreateAllocator` is correct only because of CMake link order. NRI's `ImplVK.obj` binds to the engine's VMA build; a configuration mismatch on the NRD path is possible. Pre-existing in `engine_tests`.
 
 ### 7.2 Minor items, grouped
 
 **ECS world and transforms**
 - `World::update` iterates the system list by reference; `addSystem` during an update would invalidate the iterator.
-- `verifyTransforms` has no automatic debug-build caller and uses an absolute threshold of 1e-4.
+- `verifyTransforms` uses an absolute threshold of 1e-4.
 - `setParent`, `setTransform` and the recompute path assume the entity has a `Transform`; entities not created by `World::create` are not supported.
 - `RenderDirty` and `MovedLastFrame` tag every moved entity, while the header describes renderables only.
 - Reparenting gives a one-frame motion-vector jump (`prevWorld` comes from the old parent). It is undocumented and untested.
-- `World` move operations are implicitly deleted; the signal holds `this`.
+- `World` move operations are implicitly deleted; the signals hold `this`.
 - `setParent` returns `bool` without `[[nodiscard]]`. A non-null invalid parent silently detaches the child and returns true.
 
 **Render extract and spawning**
-- `GiMaterialLegacy` changes after spawn are not tracked (there is no `on_update` to tag `RenderDirty`).
 - The "only the moved one uploads" test is vacuous: it has a single instance.
 - The light list is rebuilt twice per move (once for the move, once for the `prevWorld` settle).
 - An entity patched from a valid mesh to an unknown one keeps its old slot and mesh until fixed or destroyed. The log-once behaviour has no assertion.
@@ -249,20 +251,13 @@ Ledger findings are marked (finding). Minor items are marked (minor). The `minor
 
 **Acceleration structures**
 - The TLAS and BLAS scratch addresses are not checked against `minAccelerationStructureScratchOffsetAlignment` (safe on the known drivers; validation clean).
-- A scratch allocation failure after the TLAS storage swap publishes an unbuilt TLAS for one frame (out-of-memory only).
 - The slot-reuse test does not isolate the structural flag: mask and mesh changes also force a Build.
 - There is no periodic TLAS rebuild after long refit chains (trace quality).
-
-**Physics**
-- `rigid_body.hpp` still has a `=== COMPONENT SYNC ===` header and forward-declaration blocks left from the component API. No include of the scene remains.
 
 **Deferred shading and examples**
 - `turntable` writes no PNGs on Windows (`mkdir -p` fails). Pre-existing.
 
 **Golden script (`tests/golden/render_golden.py`)**
-- `--only` with an unknown name selects nothing and exits 0 (a false green).
-- `--only` as the last argument raises `IndexError`.
-- `--only` before `--update` or `--selftest` silently drops the mode; the usage string lacks `[--only NAME]`.
 - The deferred helmet margin is 1 LSB above the observed tail (6 against 5).
 
 **Resolved on this branch (recorded so they are not re-reported)**
@@ -272,9 +267,21 @@ Ledger findings are marked (finding). Minor items are marked (minor). The `minor
 - Test name `rendering_without_a_scene_keeps_ecs_lights`: renamed in `9519b29`.
 
 **Still stale after `9519b29`**
-- `ohao/render/scene/model_upload.cpp` lines 45-46, 63 and 174 refer to `light_upload.cpp` and `uploadDeferredTextures`, which are deleted.
 - `ohao/ecs/spawn.hpp:13` and `ohao/render/scene/model_upload.hpp:10` forward-declare `class Model;` in a namespace block. Not addressed by `9519b29`; harmless.
 - README LOC rows for `gpu`, `physics`, `core`, `audio`, `shaders` and the total are not recounted (ledger, `9519b29`).
+
+### 7.3 Final review fixes
+
+The whole-branch review's findings, fixed on this branch after the documentation commit:
+
+- **Raster light UBO per frame slot (important).** It was one host-mapped buffer rewritten every frame while two earlier frames could read it. Now `MAX_FRAMES_IN_FLIGHT` buffers; `renderDeferred` writes the current slot's after its fence wait and binds it in that slot's lighting descriptor set. The RT path no longer writes the raster UBO (nothing in RT reads it). Test: `the raster light UBO is one buffer per frame slot` (engine_tests, under validation, a light moving every frame).
+- **Debug transform check (important).** `World::update` runs `verifyTransforms` before the systems in debug builds and logs the first mismatch once per World; `World::transformMismatches()` exposes it. Compiled out in Release. Test: `update_reports_an_unpatched_write_in_debug` (asserts the report in Debug, its absence in Release).
+- **RT accumulation on scene change (important).** See section 4, "RT accumulation". Test: `RT accumulation restarts when an instance moves or a light changes`.
+- **TLAS publish order.** `buildTLASFromDevice` ensures scratch first and publishes new storage only after the build is recorded; an allocation failure leaves the current TLAS in place.
+- **RenderScene lifetime.** `VulkanRenderer::shutdown()` shuts the scene down but keeps the object until the renderer is destroyed, so a World released after an explicit shutdown is safe. Test: `world_outlives_an_explicit_renderer_shutdown`.
+- **Raw registry destroys.** `World` connects `on_destroy<Parent>` (the parent forgets the child) and `on_destroy<Children>` (children are detached, not destroyed). `World::destroy` is still the preferred path and takes the subtree. Tests: `registry_destroy_of_a_parent_detaches_its_children`, `registry_destroy_of_a_child_leaves_the_parent_consistent`, `registry_clear_with_a_hierarchy_is_safe`.
+- **`GiMaterialLegacy` is tracked.** Its construct and update signals tag `RenderDirty`. Test: `patched_gi_material_reuploads_the_instance`.
+- **Golden script arguments** (section 5) and stale comments in `model_upload.cpp`, `render_scene_types.hpp`, `rigid_body.hpp` and `physics_world.hpp`.
 
 ## 8. Wiki pages affected
 
@@ -284,5 +291,5 @@ The monograph was refreshed in the documentation commit that follows the impleme
 - **Deferred and graph:** `gbuffer`, `csm`, `lighting`, `culling`, `render-graph`.
 - **Path tracer, hybrid, materials, sampling, denoise:** `as`, `bindings` (descriptor map 0-37), `hit-miss`, `host`, `profiles`, `restir`, the hybrid techniques, `pack`, `lights`, `mis`, `env-cdf`.
 - **Architecture:** `module-map` (eight archives, one include cycle between GPU and render), `invariants`, `request-path`.
-- **Physics:** `backend`, `bodies`, `world`, `debug`, `materials-phys`, `math-constants` (handle-based bodies, no `PhysicsComponent`).
+- **Physics:** `backend`, `bodies`, `world`, `debug`, `materials-phys`, `math-constants` (bodies are `shared_ptr<RigidBody>` identified by name; no `PhysicsComponent`; the ECS physics boundary comes in sub-project 4).
 - **Testing and status:** goldens, `ecs_tests` and the engine suites, the validation exit 3 and the shaders target.

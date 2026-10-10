@@ -145,9 +145,9 @@ The RT dispatch closes its `render` call with four arguments that read like the 
 
 ## The sun that overwrites your only light
 
-`renderDeferred` does something no other body does: it edits the light buffer after uploading it. When the buffer reports exactly one light, it replaces `lights[0].direction` with the sky pass's sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.
+`renderDeferred` does something no other body does: it edits the frame slot's light buffer after filling it. When the buffer reports exactly one light, it replaces `lights[0].direction` with the sky pass's sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (ld && ld->numLights == 1) {"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (ld->numLights == 1) {"}}
 
 The intent is stated where the buffer is filled: a scene with no lights gets one fabricated directional light, and the comment says its direction is synced by `renderDeferred`.
 

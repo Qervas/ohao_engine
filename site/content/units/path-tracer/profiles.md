@@ -254,6 +254,13 @@ bootstrap hint. Keeping the accumulation buffer alive across a camera move is
 what makes an interactive viewport usable; throwing it away is what makes a
 reference render correct.
 
+A change to the traced scene takes the same path. After `recordUpdates`, a frame
+whose TLAS was built or refit, or that uploaded instance data or lights, calls
+`notifyViewChanged` on the active profile, so an offline render restarts on a moved
+instance and a still scene keeps accumulating:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->notifyViewChanged();"}}
+
 ## What the per-frame reset stomps
 
 There is a second profile hierarchy, and this is where it surfaces.

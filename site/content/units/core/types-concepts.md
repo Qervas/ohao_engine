@@ -40,7 +40,7 @@ every frame. Without it, someone adds a `std::string` to `LightData`, the write 
 still compiles, and the failure is a garbage light on the GPU plus a heap pointer
 sitting in device memory where the shader expects a float:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(m_lightBufferMapped[slot], &lightUbo, sizeof(lightUbo));"}}
 
 With the assertion, the failure is a compile error in the header that declares the
 struct.
@@ -64,10 +64,10 @@ Nothing in `ohao/`, `examples/` or `tests/` calls either of those two — nor
 point. The chain is dead end to end, even though the render world's buffers do come
 out of that allocator: it reads their mapped staging memory through the raw pointer
 from `getMappedData()` and `memcpy`s into it. The light buffer is not even a VMA
-allocation, it comes from `vkAllocateMemory` and is persistently mapped with
-`vkMapMemory`, and it is read back through an unguarded cast:
+allocation: each frame slot's buffer comes from `vkAllocateMemory`, is persistently
+mapped with `vkMapMemory`, and is handed back through an unguarded cast:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "LightUniformBuffer* ld = static_cast<LightUniformBuffer*>(m_lightBufferMapped);"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "return static_cast<LightUniformBuffer*>(m_lightBufferMapped[slot]);"}}
 
 The shader-binding-table writers cast their mapped pointer to bytes the same way. The
 concept therefore holds on these paths only because the structs declared it

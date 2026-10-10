@@ -106,10 +106,11 @@ world, grown when a frame's dirty bytes exceed it:
 
 {{cite ohao/render/scene/render_scene.cpp "AllocationUsage::CpuToGpu, true);"}}
 
-and the light uniform buffer the deferred lighting pass binds is raw `vkAllocateMemory`
-memory, host-visible and coherent, mapped once at init and never unmapped:
+and the light uniform buffers the deferred lighting pass binds, one per frame slot, are
+raw `vkAllocateMemory` memory, host-visible and coherent, mapped once at init and never
+unmapped. The host writes a slot's buffer only after that slot's fence wait:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "vkMapMemory(m_device, m_lightBufferMemory, 0, bufferSize, 0, &m_lightBufferMapped);"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "vkMapMemory(m_device, m_lightBufferMemory[slot], 0, bufferSize, 0, &m_lightBufferMapped[slot]);"}}
 
 A mesh is therefore resident once, in device memory, whether it is drawn, traced or
 used as a BLAS input; there is no host-visible twin. In exchange every change to the
@@ -295,7 +296,7 @@ Judge a change against whichever side of that line the resource sits on.
 - Emissive proxies travel in the same light list as every other light and are appended after the regular ones; the raster array holds at most `MAX_LIGHTS`, so a full list drops proxies first. Setting the list again rebuilds both consumers' arrays.
 - Two light-type encodings coexist inside one loop: the source `LightKind` (Point, Directional, Spot, AreaRect, EmissiveProxy) and the shader type packed into `position.w` (directional 0, point 1, spot 2). The remap is right for the first three and silently folds AreaRect into spot; the shadow-caster test reads the source encoding where the rest of the loop reads the packed one. Any edit here must state which encoding it is in.
 - `MAX_LIGHTS` is 8 in four places: `render_scene_types.hpp` for the C++ side, the `#define` hard-coded into `deferred_lighting.frag` — the one shader that reads the buffer, whose comment points at `offscreen_renderer.hpp`, a file that does not exist — an `#ifndef`-guarded copy in `includes/common/constants.glsl`, and `includes/common/types.glsl`, which no shader includes. Change the C++ value without the lighting shader's and the uniform block silently truncates or overruns.
-- The light uniform buffer is one host-visible allocation, not one per frame slot. `renderDeferred` rewrites it with `memcpy` after waiting on only the current slot's fence, so up to two earlier frames may still be reading it while it changes. A light that moves every frame needs a per-slot buffer.
+- The light uniform buffer is one host-visible allocation per frame slot. `renderDeferred` writes only the current slot's buffer, after that slot's fence wait, and hands that buffer to the lighting pass, which binds it in the same slot's descriptor set. Writing any other slot's buffer races the frames still in flight.
 - Every buffer the render world holds is created `GpuOnly` or as a mapped staging buffer through its own `GpuAllocator`; anything it replaces goes through the retire queue, never an immediate `destroyBuffer`.
 - `GpuAllocator::createBuffer` and `destroyBuffer` must both account `allocation.getSize()`; crediting requested bytes on one side drifts unsigned `currentUsage` downward until a debit underflows it, and `shutdown()` reports the wrapped value as a leak.
 - The device-address flag on the VMA allocator requires the device to have enabled `bufferDeviceAddress`; an allocator built against a device without it tags every block with a flag the device cannot honour.

@@ -54,12 +54,12 @@ comes from the push constant rather than the `numLights` field inside the UBO.
 
 {{cite shaders/core/deferred_lighting.frag "int lightCount = int(min(pc.lightCount, uint(MAX_LIGHTS)));"}}
 
-That field is unread by the shader but it is not dead data: the host keeps the same
-buffer mapped, reads `numLights` back out of it, floors it at 1, and *that* is the
+That field is unread by the shader but it is not dead data: the host keeps each frame
+slot's buffer mapped, reads `numLights` back out of it, floors it at 1, and *that* is the
 push constant. The count round-trips through GPU-visible memory before the loop
 sees it.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "std::max(1, lightData->numLights)"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "std::max(1, ld->numLights)"}}
 
 Each record is 128 bytes and 72 of them are dead here. Sixty-four are the per-light
 `lightSpaceMatrix`, never read because cascade shadows resolve through
