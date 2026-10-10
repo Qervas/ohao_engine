@@ -15,6 +15,7 @@
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "ecs/framing.hpp"
 #include "ecs/spawn.hpp"
 #include "scene/asset/model_loader.hpp"
 #include "scene/asset/primitive_mesh_generator.hpp"
@@ -108,7 +109,7 @@ entt::entity buildHelmetScene(Application& app, const std::string& modelPath) {
     }
 
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
-    SceneFramer::applyLights(world, frame);
+    ecs::spawnFramedLights(world, frame);
     SceneFramer::applyCamera(renderer.getCamera(), frame);
 
     if (auto* deferred = renderer.getDeferredRenderer()) {

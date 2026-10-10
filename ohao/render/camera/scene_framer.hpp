@@ -9,8 +9,6 @@
 #include <vector>
 #include <string>
 
-namespace ohao::ecs { class World; }
-
 namespace ohao {
 
 class Camera;
@@ -45,10 +43,8 @@ public:
     [[nodiscard]] static FrameResult computeFraming(const std::vector<Vertex>& vertices,
                                                     bool forceYUp = false);
 
-    // Spawns the FrameResult's lights as point-light entities, in list order.
-    // Defined in ohao_ecs (ecs/scene_framer_lights.cpp) so ohao_renderer stays
-    // free of the ECS; link ohao_ecs to call it.
-    static void applyLights(ecs::World& world, const FrameResult& result);
+    // The FrameResult's lights become entities through ecs::spawnFramedLights
+    // (ecs/framing.hpp).
 
     // Apply camera settings from a FrameResult
     static void applyCamera(Camera& camera, const FrameResult& result);

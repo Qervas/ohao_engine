@@ -9,6 +9,7 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "scene/asset/model_loader.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "ecs/framing.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
 #include "render/camera/camera.hpp"
@@ -198,7 +199,7 @@ int main(int argc, char* argv[]) {
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
 
     // Auto-framed lights (scaled to room size)
-    SceneFramer::applyLights(world, frame);
+    ecs::spawnFramedLights(world, frame);
 
     // Auto-framed camera
     auto& camera = renderer.getCamera();

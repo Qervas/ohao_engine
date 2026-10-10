@@ -184,15 +184,18 @@ int main(int argc, char* argv[]) {
                  (mode == "env") ? 8.0f : (mode == "mirror") ? 20.0f : 25.0f, 1.0f);
 
         if (mode == "cornell") {
-            ecs::Light area;   // edges are local; the entity is unrotated
+            // Facing down (-Z onto -Y: the raster pass reads the direction), with the
+            // edges given in local space so the world edges stay (3,0,0)/(0,0,3) (to ~1e-6).
+            ecs::Transform t;
+            t.position = {-1.5f, 4.99f, -1.5f};
+            t.rotation = ecs::lookRotation(glm::vec3(0, -1, 0));
+            ecs::Light area;
             area.type = ecs::LightType::AreaRect;
             area.color = {1, 0.98f, 0.92f};
             area.intensity = 12.0f;
             area.radius = 0.5f;
-            area.areaEdge1 = {3, 0, 0};
-            area.areaEdge2 = {0, 0, 3};
-            ecs::Transform t;
-            t.position = {-1.5f, 4.99f, -1.5f};
+            area.areaEdge1 = glm::inverse(t.rotation) * glm::vec3(3, 0, 0);
+            area.areaEdge2 = glm::inverse(t.rotation) * glm::vec3(0, 0, 3);
             ecs::spawnLight(world, "CeilingPanel", area, t);
         }
     }
