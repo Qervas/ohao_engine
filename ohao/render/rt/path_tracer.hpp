@@ -16,7 +16,7 @@
 //   // per frame, after RenderScene::recordUpdates:
 //   pt.setSceneBuffers(renderScene);
 //   pt.setBindlessTextures(views, samplers);
-//   pt.render(cmd, view, proj, lightPos, intensity, lightColor, lightRadius);
+//   pt.render(cmd, frameSlot, view, proj, lightPos, intensity, lightColor, lightRadius);
 //   // on camera move:
 //   pt.resetAccumulation();
 //   // on window resize:

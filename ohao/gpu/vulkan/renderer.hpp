@@ -14,7 +14,6 @@
 #include <string>
 #include <string_view>
 #include <span>
-#include <unordered_map>
 #include <functional>
 #include <glm/glm.hpp>
 #include "gpu/vulkan/vk_utils.hpp"
@@ -36,7 +35,6 @@ namespace ohao {
 namespace render { class RenderScene; }
 
 class Camera;
-class Model;
 class DeferredRenderer;
 
 // Render mode selection

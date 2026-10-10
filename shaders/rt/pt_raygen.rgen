@@ -13,7 +13,7 @@ layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;
 layout(set = 0, binding = 6, rgba32f) uniform image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform image2D normalAOV;
 
-// Light buffer — scene lights collected from LightComponents
+// Light buffer — scene lights come from the RenderScene light table
 struct GPULight {
     vec4 positionAndType;    // xyz=position, w=type (0=sphere,1=dir,2=spot,3=area)
     vec4 colorAndIntensity;  // rgb=color, w=intensity

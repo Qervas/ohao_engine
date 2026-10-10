@@ -241,7 +241,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
     writes[writeCount].pImageInfo = &currShadingHistoryInfo;
     writeCount++;
 
-    // Binding 17: env marginal CDF (only if set — dummy buffers from light_upload guarantee this)
+    // Binding 17: env marginal CDF (only if set — dummy buffers from env_upload.cpp guarantee this)
     VkDescriptorBufferInfo envMargInfo{};
     if (m_envMarginalCDFBuffer != VK_NULL_HANDLE) {
         envMargInfo.buffer = m_envMarginalCDFBuffer;

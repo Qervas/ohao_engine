@@ -258,7 +258,7 @@ static void ten_thousand_instances_one_percent_moving_under_half_a_millisecond()
 
 // render() itself never rewrites the light list: the lights the ECS extract set
 // survive any number of frames.
-static void rendering_without_a_scene_keeps_ecs_lights() {
+static void rendering_keeps_ecs_lights() {
     ohao::VulkanRenderer r(64, 64);
     if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
     r.setRenderMode(ohao::RenderMode::Deferred);
@@ -398,7 +398,7 @@ int main() {
     RUN(destroyed_subtree_releases_slots);
     RUN(ten_thousand_instances_one_percent_moving_under_half_a_millisecond);
     RUN(lights_follow_transforms_in_creation_order);
-    RUN(rendering_without_a_scene_keeps_ecs_lights);
+    RUN(rendering_keeps_ecs_lights);
     RUN(model_materials_become_submeshes_and_materials);
     RUN(emissive_texture_yields_a_proxy_light);
     RUN(unknown_mesh_handles_are_skipped_not_fatal);

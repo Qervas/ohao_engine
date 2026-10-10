@@ -11,7 +11,7 @@ target_include_directories(physics_backend_tests PRIVATE
     ${Vulkan_INCLUDE_DIRS}
 )
 
-# ohao_physics transitively depends on component, actor, UI, scene libs
+# ohao_physics transitively depends on the ecs and scene (asset) libs
 if(MSVC)
     target_link_libraries(physics_backend_tests PRIVATE
         ohao_physics ohao_scene ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)

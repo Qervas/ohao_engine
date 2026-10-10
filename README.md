@@ -36,7 +36,7 @@ usable at one sample per pixel — see below.
 | Render code | ~26K LOC |
 | GPU/Vulkan layer | ~10K LOC |
 | Physics (Jolt) | ~11K LOC |
-| Scene graph | ~6K LOC |
+| ECS + asset loaders | ~3K LOC |
 | Denoise backends | 4 (Intel OIDN, NVIDIA NRD, NVIDIA DLSS-RR, built-in a-trous) |
 
 ## Real-time path tracing — and the firefly that taught me the most
@@ -155,8 +155,9 @@ All live in `ohao/render/rt/denoise/`.
 ohao/
   core/          828 LOC  logging, events, commands
   gpu/vulkan/  9,639 LOC  device, memory, descriptors, dispatch
-  render/     25,558 LOC  rt/, deferred/, graph/, ibl/, particles/, picking/, async/
-  scene/       5,918 LOC  actor, component, asset (gltf/obj/fbx via Assimp)
+  render/     25,748 LOC  scene/ (RenderScene), rt/, deferred/, graph/, ibl/, particles/, picking/, async/
+  ecs/           707 LOC  EnTT world, transform system, render extract, spawn helpers
+  scene/asset/ 2,556 LOC  loaders (gltf/obj/fbx via Assimp)
   physics/    11,083 LOC  Jolt 5.1 backend behind IPhysicsBackend plugin
   audio/         476 LOC  miniaudio backend
 shaders/      17,058 LOC  125 files, mostly rt/, core/, postprocess/, compute/
@@ -230,7 +231,7 @@ These bit me, listed so they don't bite you:
 - GCC: `-Wl,--start-group ... --end-group` for circular static lib deps
 - GCC strict mode: missing `<cstring>` and `<algorithm>` includes in some upstream headers
 - stbi duplicate symbols: `--allow-multiple-definition` on Linux, `/FORCE:MULTIPLE` on MSVC
-- Shutdown order matters: Scene before VulkanRenderer, PathTracer before VkDevice
+- Shutdown order matters: the ECS world and RenderScene before VulkanRenderer, PathTracer before VkDevice
 
 ## License
 
