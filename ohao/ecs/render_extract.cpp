@@ -6,6 +6,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -89,6 +90,7 @@ public:
             const auto* mr = m_reg.try_get<MeshRenderer>(e);
             const auto* wt = m_reg.try_get<WorldTransform>(e);
             if (!mr || !wt) continue;
+            if (!meshUsable(mr->mesh)) continue;   // stale/unknown: skipped, logged once
             if (const auto* rs = m_reg.try_get<RenderSlot>(e)) {
                 // Only touch slots this extract handed out to this entity.
                 if (rs->slot < m_owner.size() && m_owner[rs->slot] == e)
@@ -102,6 +104,10 @@ public:
         for (const auto& [seq, e] : m_pending) {
             const auto& mr = m_reg.get<MeshRenderer>(e);
             const uint32_t slot = m_rs.createInstance(describe(e, mr, m_reg.get<WorldTransform>(e)));
+            if (slot == render::kInvalidIndex) {   // e.g. the scene was shut down
+                warnOnce(mr.mesh, "createInstance failed");
+                continue;
+            }
             if (slot >= m_owner.size()) m_owner.resize(std::size_t{slot} + 1, entt::null);
             m_owner[slot] = e;
             m_reg.emplace<RenderSlot>(e, RenderSlot{slot});
@@ -163,6 +169,21 @@ private:
         m_lightsSet = true;
     }
 
+    // A mesh handle the scene does not know (never registered, rejected at
+    // registration, or default MeshRenderer{}). The entity is skipped -- no slot --
+    // and each distinct handle is reported once.
+    bool meshUsable(render::MeshHandle h) {
+        if (m_rs.meshInfo(h)) return true;
+        warnOnce(h, "unknown or stale mesh handle");
+        return false;
+    }
+    void warnOnce(render::MeshHandle h, const char* what) {
+        const uint64_t key = (uint64_t{h.index} << 32) | h.generation;
+        if (!m_warned.insert(key).second) return;
+        std::cerr << "[ecs] render_extract: " << what << " (mesh index " << h.index << ", generation "
+                  << h.generation << "); entities using it are not rendered\n";
+    }
+
     void markRenderDirty(entt::registry& reg, entt::entity e) { reg.emplace_or_replace<RenderDirty>(e); }
     void markLightsDirty(entt::registry&, entt::entity) { m_lightsDirty = true; }
 
@@ -186,6 +207,7 @@ private:
     std::vector<render::LightDesc> m_lights;
     bool m_lightsDirty{false};
     bool m_lightsSet{false};
+    std::unordered_set<uint64_t> m_warned;   // mesh handles already reported
 };
 
 } // namespace

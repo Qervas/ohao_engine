@@ -215,6 +215,7 @@ static void destroyed_subtree_releases_slots() {
     auto c = spawnModel(w, r.renderScene(), r.getTextureManager(), quad, "c", Transform{});
     w.setParent(c, p);
     w.update(0.0f); r.render();
+    CHECK(r.renderScene().draws().size() == 2, "precondition: parent and child both draw");
     w.destroy(p);
     w.update(0.0f); r.render();
     CHECK(r.renderScene().draws().empty(), "parent and child slots both released");
@@ -331,6 +332,29 @@ static void emissive_texture_yields_a_proxy_light() {
           "the proxy is placed by the entity's world matrix, range = radius * 10");
 }
 
+static void unknown_mesh_handles_are_skipped_not_fatal() {
+    ohao::VulkanRenderer r(64, 64);
+    if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
+    r.setRenderMode(ohao::RenderMode::Deferred);
+    World w;
+    installRenderExtract(w, r.renderScene());
+    ohao::Model empty; empty.vertices.assign(3, ohao::Vertex{});   // zero indices: registerMesh rejects it
+    auto bad = spawnModel(w, r.renderScene(), r.getTextureManager(), empty, "empty", Transform{});
+    auto def = w.create("default");
+    w.registry().emplace<MeshRenderer>(def);   // MeshRenderer{}: invalid handle
+    ohao::Model tri; tri.vertices.assign(3, ohao::Vertex{}); tri.vertices[1].position = {1,0,0}; tri.vertices[2].position = {0,0,1}; tri.indices = {0,1,2};
+    auto good = spawnModel(w, r.renderScene(), r.getTextureManager(), tri, "good", Transform{});
+    for (int f = 0; f < 4; ++f) {
+        w.setTransform(bad, Transform{{float(f), 0, 0}});   // keep the bad ones dirty
+        w.setTransform(def, Transform{{0, float(f), 0}});
+        w.update(0.0f); r.render();
+    }
+    CHECK(!w.registry().all_of<RenderSlot>(bad), "a rejected mesh gets no slot");
+    CHECK(!w.registry().all_of<RenderSlot>(def), "a default MeshRenderer gets no slot");
+    CHECK(w.registry().all_of<RenderSlot>(good), "the valid entity beside them gets a slot");
+    CHECK(r.renderScene().draws().size() == 1, "only the valid entity draws");
+}
+
 int main() {
     std::printf("ECS tests\n");
     RUN(world_matrix_of_a_root);
@@ -352,6 +376,7 @@ int main() {
     RUN(lights_follow_transforms_in_creation_order);
     RUN(model_materials_become_submeshes_and_materials);
     RUN(emissive_texture_yields_a_proxy_light);
+    RUN(unknown_mesh_handles_are_skipped_not_fatal);
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     return g_fail == 0 ? 0 : 1;
 }
