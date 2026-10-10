@@ -351,6 +351,7 @@ private:
     std::unordered_map<const Model*, BridgedModel> m_bridgeModels;
     std::vector<std::pair<render::MaterialDesc, render::MaterialHandle>> m_bridgeMaterials;
     std::vector<BridgedInstance> m_bridgeInstances;
+    bool m_bridgeOwnsLights{false};   // the bridge's setLights is the RenderScene's current light list
     [[nodiscard]] bool updateAnimatedActorsForRT();
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
 

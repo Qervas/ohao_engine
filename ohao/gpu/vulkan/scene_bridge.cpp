@@ -165,10 +165,20 @@ void VulkanRenderer::syncBridgedScene() {
         m_renderScene->updateInstance(b.slot, b.desc);
     }
 
+    // Lights only while the bridge owns a scene: with none it must not stomp lights
+    // another producer (the ECS extract) set. Its own lights are cleared once.
+    if (!m_scene) {
+        if (m_bridgeOwnsLights) {
+            m_renderScene->setLights({});
+            m_bridgeOwnsLights = false;
+        }
+        return;
+    }
+
     // Lights, in actor iteration order: LightComponents, and the emissive proxy of every
     // mesh actor (the light table places proxies after the regular lights, as before).
     std::vector<render::LightDesc> lights;
-    if (m_scene) {
+    {
         uint64_t order = 0;
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
             if (!actor) { ++order; continue; }
@@ -213,6 +223,7 @@ void VulkanRenderer::syncBridgedScene() {
         }
     }
     m_renderScene->setLights(lights);
+    m_bridgeOwnsLights = true;
 }
 
 } // namespace ohao
