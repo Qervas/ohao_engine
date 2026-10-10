@@ -63,6 +63,14 @@ struct EmissiveProxyLight {
     float intensity{0.0f};
 };
 
+// Monotonic creation sequence, set by World::create. Unlike entity ids it is never
+// recycled, so it orders lights (and new instances) deterministically.
+struct CreationOrder { uint64_t seq{0}; };
+
+// LEGACY: RT GI's per-instance material word (see render::InstanceGpu::giAlbedoPacked).
+// rgb = albedo, a = packed roughness/metallic/vertex-count rule. Set by spawnModel.
+struct GiMaterialLegacy { glm::vec4 packed{0.73f, 0.73f, 0.73f, 0.95f}; };
+
 struct TransformDirty {};
 struct RenderDirty {};
 struct MovedLastFrame {};

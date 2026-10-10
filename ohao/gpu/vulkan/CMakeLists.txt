@@ -30,3 +30,11 @@ target_link_libraries(ohao_gpu_vulkan PUBLIC
 if(OHAO_DLSS AND TARGET ngx_dlss)
     target_compile_definitions(ohao_gpu_vulkan PRIVATE OHAO_DLSS_ENABLED)
 endif()
+
+# NRD's NRI_VK.lib carries its own VMA build with the same global symbols. Under
+# /FORCE:MULTIPLE whichever object the linker pulls first wins, and NRI's VMA paired
+# with our headers crashes in vmaCreateAllocator. Pulling our VMA object up front
+# makes every consumer link ours, whatever its library order.
+if(MSVC)
+    target_link_options(ohao_gpu_vulkan INTERFACE /INCLUDE:vmaCreateAllocator)
+endif()

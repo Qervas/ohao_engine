@@ -23,7 +23,8 @@ public:
     [[nodiscard]] entt::registry& registry() noexcept { return m_registry; }
     [[nodiscard]] const entt::registry& registry() const noexcept { return m_registry; }
 
-    // Creates an entity with Name, Transform (tagged TransformDirty) and an empty Children.
+    // Creates an entity with Name, Transform (tagged TransformDirty), an empty Children
+    // and its CreationOrder.
     entt::entity create(std::string_view name, const Transform& local = {});
     // Destroys the entity and its whole subtree, detaching it from its parent first.
     void destroy(entt::entity e);
@@ -34,6 +35,8 @@ public:
     void setTransform(entt::entity e, const Transform& local);
 
     void addSystem(std::string name, System fn);
+    // Inserts right after the system named `after` (appends if there is none).
+    void addSystemAfter(std::string_view after, std::string name, System fn);
     void update(float dt);
     [[nodiscard]] std::vector<std::string> systemNames() const;
 
@@ -42,6 +45,7 @@ private:
 
     entt::registry m_registry;
     std::vector<std::pair<std::string, System>> m_systems;
+    uint64_t m_nextSeq{0};
 };
 
 } // namespace ohao::ecs

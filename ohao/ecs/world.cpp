@@ -28,6 +28,7 @@ entt::entity World::create(std::string_view name, const Transform& local) {
     m_registry.emplace<Transform>(e, local);
     m_registry.emplace<Children>(e);
     m_registry.emplace<TransformDirty>(e);
+    m_registry.emplace<CreationOrder>(e, m_nextSeq++);
     return e;
 }
 
@@ -81,6 +82,13 @@ void World::addSystem(std::string name, System fn) {
 
 void World::update(float dt) {
     for (auto& [name, fn] : m_systems) fn(*this, dt);
+}
+
+void World::addSystemAfter(std::string_view after, std::string name, System fn) {
+    auto it = std::find_if(m_systems.begin(), m_systems.end(),
+                           [&](const auto& s) { return s.first == after; });
+    if (it != m_systems.end()) ++it;
+    m_systems.emplace(it, std::move(name), std::move(fn));
 }
 
 std::vector<std::string> World::systemNames() const {

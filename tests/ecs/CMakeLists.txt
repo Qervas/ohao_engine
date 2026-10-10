@@ -1,6 +1,6 @@
 add_executable(ecs_tests ecs_tests.cpp)
 target_compile_features(ecs_tests PRIVATE cxx_std_20)
-target_link_libraries(ecs_tests PRIVATE ohao_ecs)
+target_link_libraries(ecs_tests PRIVATE ohao_ecs ohao_gpu_vulkan)
 if(MSVC)
     target_link_options(ecs_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
