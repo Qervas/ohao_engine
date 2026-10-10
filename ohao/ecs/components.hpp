@@ -31,6 +31,11 @@ struct WorldTransform {
 struct Parent { entt::entity entity{entt::null}; };
 struct Children { std::vector<entt::entity> entities; };
 
+// Change tracking: like Transform, MeshRenderer, Light, EmissiveProxyLight and
+// GiMaterialLegacy are picked up by the render extract only when written through
+// registry.patch<T>() or registry.replace<T>() (or emplaced/removed). A plain
+// get<T>() write fires no signal and never reaches the renderer.
+
 // One material per submesh, in submesh order. Fewer entries than submeshes is legal:
 // the missing submeshes render with the default material.
 struct MeshRenderer {

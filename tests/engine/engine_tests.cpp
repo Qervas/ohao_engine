@@ -1850,6 +1850,86 @@ static void runRenderSceneTests() {
         EXPECT_EQ(msgs.size(), size_t{0}, "retired TLAS storage was never destroyed in use");
         TEST_PASS();
     }
+
+    // The raster light UBO is host-written every frame while up to two earlier
+    // frames may still read it: one buffer per frame slot, written after that
+    // slot's fence, bound by that slot's lighting descriptor set.
+    TEST_BEGIN("the raster light UBO is one buffer per frame slot");
+    {
+        _putenv_s("OHAO_VALIDATION", "1");
+        ohao::VulkanRenderer r(64, 64);
+        const bool ok = r.initialize();
+        _putenv_s("OHAO_VALIDATION", "");
+        if (!ok) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        RenderScene& rs = r.renderScene();
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        std::vector<VkBuffer> bound;
+        for (int f = 0; f < 6; ++f) {
+            LightDesc l{};
+            l.kind = LightKind::Point;
+            l.position = {float(f), 2.0f, 0.0f};   // a light that moves every frame
+            rs.setLights({&l, 1});
+            r.render();
+            bound.push_back(r.getDeferredRenderer()->lightBuffer());
+        }
+        for (uint32_t s = 0; s < ohao::MAX_FRAMES_IN_FLIGHT; ++s)
+            EXPECT(r.lightBuffer(s) != VK_NULL_HANDLE, "every frame slot has a light buffer");
+        EXPECT(r.lightBuffer(0) != r.lightBuffer(1) && r.lightBuffer(1) != r.lightBuffer(2) &&
+                   r.lightBuffer(0) != r.lightBuffer(2),
+               "the slots' light buffers are distinct");
+        for (int f = 0; f < 6; ++f)
+            EXPECT(bound[f] == r.lightBuffer(uint32_t(f) % ohao::MAX_FRAMES_IN_FLIGHT),
+                   "frame f's lighting pass binds slot f's light buffer");
+        // Frame 5 (slot 2) wrote x=5; slots 0 and 1 still hold frames 3 and 4.
+        for (uint32_t s = 0; s < ohao::MAX_FRAMES_IN_FLIGHT; ++s) {
+            const ohao::LightUniformBuffer* u = r.lightUniforms(s);
+            EXPECT(u != nullptr && u->numLights == 1, "each slot holds the one scene light");
+            EXPECT(u->lights[0].position.x == float(3 + s),
+                   "writing one slot leaves the frames in flight on the others untouched");
+        }
+        for (int k = 0; k < 4; ++k) r.render();
+        const auto msgs = r.validationMessages();
+        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
+        EXPECT_EQ(msgs.size(), size_t{0}, "a light moving every frame renders clean");
+        TEST_PASS();
+    }
+
+    // Accumulating RT profiles restart when the scene they trace changes: a TLAS
+    // build or refit, or a light change. A still scene keeps accumulating.
+    TEST_BEGIN("RT accumulation restarts when an instance moves or a light changes");
+    {
+        auto r = std::make_unique<ohao::VulkanRenderer>(64, 64);
+        if (!r->initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        RenderScene& rs = r->renderScene();
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
+        MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
+        uint32_t s = rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
+        LightDesc l{};
+        l.position = {0, 2, 0};
+        rs.setLights({&l, 1});
+        r->setRenderMode(ohao::RenderMode::RTOffline);
+        if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
+        for (int k = 0; k < 5; ++k) r->render();
+        EXPECT_EQ(r->getPathTracerFrameIndex(), 5u, "a still scene accumulates every frame");
+        rs.updateInstance(s, InstanceDesc{m, {&mat, 1}, glm::translate(glm::mat4(1), {1, 0, 0}),
+                                          glm::mat4(1), true});
+        r->render();
+        EXPECT(rs.stats().lastTlasOp != RenderSceneStats::TlasOp::None, "the move changed the TLAS");
+        EXPECT_EQ(r->getPathTracerFrameIndex(), 1u, "a moved instance restarts accumulation");
+        r->render(); r->render();
+        EXPECT_EQ(r->getPathTracerFrameIndex(), 3u, "and it accumulates again once still");
+        l.position = {0, 3, 0};
+        rs.setLights({&l, 1});
+        r->render();
+        EXPECT_EQ(r->getPathTracerFrameIndex(), 1u, "a light change restarts accumulation");
+        TEST_PASS();
+    }
 }
 
 // =============================================================================

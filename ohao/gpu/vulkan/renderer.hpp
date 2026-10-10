@@ -136,6 +136,15 @@ public:
     };
     [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
 
+    // Raster light UBO of a frame slot, and its host mapping (tests).
+    [[nodiscard]] VkBuffer lightBuffer(uint32_t slot) const noexcept {
+        return slot < MAX_FRAMES_IN_FLIGHT ? m_lightBuffers[slot] : VK_NULL_HANDLE;
+    }
+    [[nodiscard]] const LightUniformBuffer* lightUniforms(uint32_t slot) const noexcept {
+        return slot < MAX_FRAMES_IN_FLIGHT ? static_cast<const LightUniformBuffer*>(m_lightBufferMapped[slot])
+                                           : nullptr;
+    }
+
     // Vulkan handles for out-of-tree consumers — wiring only, no callers here.
     [[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }
     [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
@@ -176,8 +185,9 @@ public:
     // Ray tracing is available: the RenderScene built its acceleration structures.
     [[nodiscard]] bool isRTSupported() const;
 
-    // Persistent GPU render world (meshes, materials, instances, lights). Valid
-    // between initialize() and shutdown().
+    // Persistent GPU render world (meshes, materials, instances, lights). Usable
+    // between initialize() and shutdown(); after shutdown() the object stays alive
+    // but inert (every edit is ignored) until the renderer is destroyed.
     [[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }
 
     // Denoiser control
@@ -286,10 +296,13 @@ private:
     glm::mat4 calculateLightSpaceMatrix(const LightData& light);
 
     // Phase 1: Rendering pipeline setup
-    [[nodiscard]] bool createLightBuffer();   // Phase 3: Light uniform buffer
+    [[nodiscard]] bool createLightBuffer();   // one light UBO per frame slot
+    void destroyLightBuffers();
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
-    void updateLightBuffer();   // Light UBO from m_renderScene's raster lights (+ default sun)
+    // Writes `slot`'s light UBO from m_renderScene's raster lights (+ default sun) and
+    // returns its mapping. Call only after that slot's fence wait.
+    LightUniformBuffer* updateLightBuffer(uint32_t slot);
 
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
 
@@ -319,10 +332,10 @@ private:
     FrameResourceManager m_frameResources;
     uint32_t m_currentFrame{0};
 
-    // Light uniform buffer
-    VkBuffer m_lightBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_lightBufferMemory{VK_NULL_HANDLE};
-    void* m_lightBufferMapped{nullptr};
+    // Light uniform buffers, one per frame slot (host-visible, persistently mapped)
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_lightBuffers{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> m_lightBufferMemory{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> m_lightBufferMapped{};
 
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
     RTRealtimePipeline m_rtRealtimePipeline;

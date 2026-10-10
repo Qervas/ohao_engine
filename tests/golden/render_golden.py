@@ -19,6 +19,7 @@ Usage (run from repo root):
   python3 tests/golden/render_golden.py tests/golden/manifest.json            # check vs goldens
   python3 tests/golden/render_golden.py tests/golden/manifest.json --update   # (re)generate goldens
   python3 tests/golden/render_golden.py tests/golden/manifest.json --selftest # render 2x, compare to each other
+  ... [--only NAME]   # any mode, one scene; --only may come before or after the mode flag
 
 Exit code: 0 if all scenes pass, 1 otherwise. Suitable for a git pre-push hook.
 """
@@ -136,16 +137,39 @@ def verdict(s, max_abs_diff, max_diff_frac):
     return s is not None and s["max_abs"] <= max_abs_diff and s["diff_frac"] <= max_diff_frac
 
 
+USAGE = "usage: render_golden.py <manifest.json> [--update|--selftest] [--only NAME]"
+
+
+def parse_args(argv):
+    """-> (manifest_path, mode, only). Exits with the usage line on bad arguments."""
+    if len(argv) < 2 or argv[1].startswith("--"):
+        sys.exit(USAGE)
+    manifest_path, mode, only = argv[1], "check", None
+    rest = argv[2:]
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--only":
+            if i + 1 >= len(rest) or rest[i + 1].startswith("--"):
+                sys.exit("--only needs a scene name\n" + USAGE)
+            only = rest[i + 1]
+            i += 2
+            continue
+        if a in ("--update", "--selftest") and mode == "check":
+            mode = a
+        else:
+            sys.exit(f"unexpected argument {a!r}\n" + USAGE)
+        i += 1
+    return manifest_path, mode, only
+
+
 def main():
-    if len(sys.argv) < 2:
-        sys.exit("usage: render_golden.py <manifest.json> [--update|--selftest]")
-    manifest_path = sys.argv[1]
-    mode = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--only" else "check"
-    only = None
-    if "--only" in sys.argv:
-        only = sys.argv[sys.argv.index("--only") + 1]
+    manifest_path, mode, only = parse_args(sys.argv)
     with open(manifest_path) as f:
         manifest = json.load(f)
+    if only is not None and only not in [sc["name"] for sc in manifest["scenes"]]:
+        names = ", ".join(sc["name"] for sc in manifest["scenes"])
+        sys.exit(f"--only {only!r}: no such scene in {manifest_path} (scenes: {names})")
 
     all_ok = True
     with tempfile.TemporaryDirectory() as tmp:

@@ -576,50 +576,10 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
                                              &buildInfo, &count, &sizeInfo);
 
     // An UPDATE must use the primitive count of the build it updates.
-    bool build = rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;
+    const bool grow = sizeInfo.accelerationStructureSize > m_tlasStorageSize;
+    const bool build = grow || rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;
 
-    if (sizeInfo.accelerationStructureSize > m_tlasStorageSize) {
-        // Size the new storage with headroom so a growing scene does not replace
-        // the TLAS (and its handle) on every added instance.
-        uint32_t capacity = std::max(count, 64u);
-        capacity = capacity > (UINT32_MAX / 2) ? count : capacity + capacity / 2;
-        VkAccelerationStructureBuildSizesInfoKHR capInfo{};
-        capInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-        vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                                 &buildInfo, &capacity, &capInfo);
-        const VkDeviceSize storage = std::max(capInfo.accelerationStructureSize, sizeInfo.accelerationStructureSize);
-
-        VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        if (!createBuffer(storage,
-                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory)) {
-            destroyBuffer(buffer, memory);
-            std::cerr << "[RT] TLAS storage allocation failed (" << storage << " bytes)" << std::endl;
-            return false;
-        }
-        VkAccelerationStructureCreateInfoKHR createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-        createInfo.buffer = buffer;
-        createInfo.size = storage;
-        createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-        if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &tlas) != VK_SUCCESS) {
-            destroyBuffer(buffer, memory);
-            std::cerr << "[RT] TLAS creation failed" << std::endl;
-            return false;
-        }
-        // Earlier frames may still trace the old TLAS: the caller destroys it later.
-        if (m_tlas != VK_NULL_HANDLE || m_tlasBuffer != VK_NULL_HANDLE)
-            m_retired.push_back(RetiredTlas{m_tlas, m_tlasBuffer, m_tlasMemory});
-        m_tlas = tlas;
-        m_tlasBuffer = buffer;
-        m_tlasMemory = memory;
-        m_tlasStorageSize = storage;
-        build = true;   // new storage has nothing to update from
-    }
-
+    // Scratch first: a failure here must leave the published TLAS untouched.
     const VkDeviceSize scratchNeed = build ? sizeInfo.buildScratchSize : sizeInfo.updateScratchSize;
     if (scratchNeed > m_tlasScratchSize) {
         const VkDeviceSize alignment = 256;
@@ -641,6 +601,44 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
         m_tlasScratchSize = size;
     }
 
+    // New storage when the scene outgrew the old one. It is published (and the old
+    // TLAS retired) only after the build into it is recorded.
+    VkAccelerationStructureKHR dst = m_tlas;
+    VkBuffer newBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory newMemory = VK_NULL_HANDLE;
+    VkDeviceSize newStorage = 0;
+    if (grow) {
+        // Size the new storage with headroom so a growing scene does not replace
+        // the TLAS (and its handle) on every added instance.
+        uint32_t capacity = std::max(count, 64u);
+        capacity = capacity > (UINT32_MAX / 2) ? count : capacity + capacity / 2;
+        VkAccelerationStructureBuildSizesInfoKHR capInfo{};
+        capInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+        vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                 &buildInfo, &capacity, &capInfo);
+        newStorage = std::max(capInfo.accelerationStructureSize, sizeInfo.accelerationStructureSize);
+
+        if (!createBuffer(newStorage,
+                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newBuffer, newMemory)) {
+            destroyBuffer(newBuffer, newMemory);
+            std::cerr << "[RT] TLAS storage allocation failed (" << newStorage << " bytes)" << std::endl;
+            return false;
+        }
+        VkAccelerationStructureCreateInfoKHR createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+        createInfo.buffer = newBuffer;
+        createInfo.size = newStorage;
+        createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        dst = VK_NULL_HANDLE;
+        if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &dst) != VK_SUCCESS) {
+            destroyBuffer(newBuffer, newMemory);
+            std::cerr << "[RT] TLAS creation failed" << std::endl;
+            return false;
+        }
+    }
+
     // Before: earlier frames' readers of this TLAS (asConsumerStages) and its
     // earlier build (TLAS + scratch writes) finish before it is rewritten in place.
     VkMemoryBarrier before{};
@@ -655,7 +653,7 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
     buildInfo.mode = build ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
     buildInfo.srcAccelerationStructure = build ? VK_NULL_HANDLE : m_tlas;
-    buildInfo.dstAccelerationStructure = m_tlas;
+    buildInfo.dstAccelerationStructure = dst;
     buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_tlasScratchBuffer);
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
@@ -663,6 +661,16 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
     vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
     m_tlasBuiltCount = count;
+
+    if (grow) {
+        // Earlier frames may still trace the old TLAS: the caller destroys it later.
+        if (m_tlas != VK_NULL_HANDLE || m_tlasBuffer != VK_NULL_HANDLE)
+            m_retired.push_back(RetiredTlas{m_tlas, m_tlasBuffer, m_tlasMemory});
+        m_tlas = dst;
+        m_tlasBuffer = newBuffer;
+        m_tlasMemory = newMemory;
+        m_tlasStorageSize = newStorage;
+    }
 
     // After: the TLAS is visible to every stage that reads it.
     VkMemoryBarrier after{};

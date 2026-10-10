@@ -54,6 +54,7 @@ public:
     // Light configuration
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
+    [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lightBuffer; }
     [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
     [[nodiscard]] float getNightFactor() const { return m_nightFactor; }
     [[nodiscard]] glm::vec3 getMoonDirection() const { return m_moonDirection; }

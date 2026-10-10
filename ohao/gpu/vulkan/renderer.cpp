@@ -195,11 +195,11 @@ void VulkanRenderer::shutdown() {
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
 
-        // The render world (and its own acceleration structures) goes first.
-        if (m_renderScene) {
-            m_renderScene->shutdown();
-            m_renderScene.reset();
-        }
+        // The render world's GPU resources (and its acceleration structures) go
+        // first. The object itself stays, inert, until the renderer is destroyed:
+        // a World's render extract may still hold a reference and release its
+        // slots into it after an explicit shutdown().
+        if (m_renderScene) m_renderScene->shutdown();
 
         // Cleanup RT resources BEFORE device destruction
         if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
@@ -233,13 +233,7 @@ void VulkanRenderer::shutdown() {
         // Cleanup multi-frame resources
         m_frameResources.shutdown();
 
-        // Cleanup light buffer
-        if (m_lightBuffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(m_device, m_lightBuffer, nullptr);
-        }
-        if (m_lightBufferMemory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, m_lightBufferMemory, nullptr);
-        }
+        destroyLightBuffers();
 
         // Cleanup command pool
         if (m_commandPool != VK_NULL_HANDLE) {
@@ -414,8 +408,6 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline) {
     m_rtSettings.anisotropyRotation = preservedAnisoRotation;
     m_rtSettings.subsurfaceStrength = preservedSssStrength;
     applyRTRenderSettings();
-
-    updateLightBuffer();
 
     // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates
     // ran (renderRTPipeline binds them after it). Textures, env map and env scale:

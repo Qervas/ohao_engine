@@ -42,10 +42,9 @@ bool texelsPresent(const Model::TextureData& td) {
            td.pixels.size() >= static_cast<std::size_t>(td.width) * static_cast<std::size_t>(td.height) * 4;
 }
 
-// Texture uploads ported from VulkanRenderer::uploadDeferredTextures
-// (gpu/vulkan/light_upload.cpp): the same per-kind formats and texture types, in the
-// same order (all albedo, then normal, roughness/metal, emissive), one upload per
-// material. Fills the materials' texture indices.
+// Texture uploads, by kind in a fixed order (all albedo, then normal, roughness/metal,
+// emissive), one upload per material, each kind with its own format and texture type.
+// Fills the materials' texture indices.
 void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<MaterialDesc>& mats) {
     if (!tm) return;
     int loaded = 0;
@@ -60,7 +59,7 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
             if (td.pixels.empty() || !texelsPresent(td)) continue;
             BindlessTextureHandle h;
             if (repackRoughMetal) {
-                // light_upload.cpp: R=AO, G=roughness, B=metallic, A=255.
+                // Roughness/metal maps keep R=AO, G=roughness, B=metallic; A is forced to 255.
                 std::vector<uint8_t> repacked(static_cast<std::size_t>(td.width) * td.height * 4);
                 for (int p = 0; p < td.width * td.height; ++p) {
                     repacked[p * 4 + 0] = td.pixels[p * 4 + 0];
@@ -171,8 +170,8 @@ glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrid
         roughness = overrideMaterial->roughness;
         metallic = overrideMaterial->metallic;
     }
-    // uploadDeferredTextures (light_upload.cpp) overwrote the override material's
-    // roughness/metallic with model material 0 before buildBLASTLAS packed them.
+    // Roughness/metallic come from model material 0 whenever the model has materials,
+    // even with an override material (the override sets only the albedo).
     if (!model.materialColors.empty()) {
         roughness = model.materialColors[0].w;
         metallic = !model.materialMetallic.empty() ? model.materialMetallic[0] : 0.0f;

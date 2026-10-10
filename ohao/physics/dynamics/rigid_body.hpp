@@ -14,8 +14,6 @@
 
 namespace ohao {
 
-// Forward declarations
-
 namespace physics {
 namespace dynamics {
 
@@ -106,7 +104,7 @@ public:
     // === INTEGRATION ===
     void integrate(float deltaTime);
     
-    // === COMPONENT SYNC ===
+    // === NAME (reported by PhysicsWorld::resolveHandleName) ===
     void setName(std::string name) { m_name = std::move(name); }
     const std::string& getName() const { return m_name; }
     

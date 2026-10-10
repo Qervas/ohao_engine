@@ -6,50 +6,60 @@
 
 namespace ohao {
 
+// One light UBO per frame slot: the host rewrites it every frame while up to
+// MAX_FRAMES_IN_FLIGHT - 1 earlier frames may still read theirs.
 bool VulkanRenderer::createLightBuffer() {
-    VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
+    const VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
 
-    VkBufferCreateInfo bufferInfo{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = bufferSize,
-        .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    };
+    for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot) {
+        VkBufferCreateInfo bufferInfo{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = bufferSize,
+            .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_lightBuffers[slot]) != VK_SUCCESS) {
+            return false;
+        }
 
-    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_lightBuffer) != VK_SUCCESS) {
-        return false;
+        VkMemoryRequirements memRequirements;
+        vkGetBufferMemoryRequirements(m_device, m_lightBuffers[slot], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = memRequirements.size,
+            .memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
+                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+        };
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_lightBufferMemory[slot]) != VK_SUCCESS) {
+            return false;
+        }
+        vkBindBufferMemory(m_device, m_lightBuffers[slot], m_lightBufferMemory[slot], 0);
+        vkMapMemory(m_device, m_lightBufferMemory[slot], 0, bufferSize, 0, &m_lightBufferMapped[slot]);
+
+        // No frame is in flight yet: every slot starts with the default light.
+        updateLightBuffer(slot);
     }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(m_device, m_lightBuffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
-                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-    };
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_lightBufferMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindBufferMemory(m_device, m_lightBuffer, m_lightBufferMemory, 0);
-
-    // Keep buffer mapped for easy updates
-    vkMapMemory(m_device, m_lightBufferMemory, 0, bufferSize, 0, &m_lightBufferMapped);
-
-    // Initialize with default light
-    updateLightBuffer();
-
     return true;
+}
+
+void VulkanRenderer::destroyLightBuffers() {
+    for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot) {
+        if (m_lightBuffers[slot] != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_lightBuffers[slot], nullptr);
+        if (m_lightBufferMemory[slot] != VK_NULL_HANDLE) vkFreeMemory(m_device, m_lightBufferMemory[slot], nullptr);
+        m_lightBuffers[slot] = VK_NULL_HANDLE;
+        m_lightBufferMemory[slot] = VK_NULL_HANDLE;
+        m_lightBufferMapped[slot] = nullptr;
+    }
 }
 
 glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
     return render::lightSpaceMatrix(light);
 }
 
-void VulkanRenderer::updateLightBuffer() {
+LightUniformBuffer* VulkanRenderer::updateLightBuffer(uint32_t slot) {
+    if (slot >= MAX_FRAMES_IN_FLIGHT || !m_lightBufferMapped[slot]) return nullptr;
+
     LightUniformBuffer lightUbo{};
     lightUbo.numLights = 0;
     lightUbo.ambientIntensity = 0.35f;
@@ -83,7 +93,8 @@ void VulkanRenderer::updateLightBuffer() {
         lightUbo.numLights = 1;
     }
 
-    memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));
+    memcpy(m_lightBufferMapped[slot], &lightUbo, sizeof(lightUbo));
+    return static_cast<LightUniformBuffer*>(m_lightBufferMapped[slot]);
 }
 
 } // namespace ohao

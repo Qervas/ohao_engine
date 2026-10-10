@@ -18,8 +18,6 @@
 
 namespace ohao {
 
-// Forward declarations
-
 namespace physics {
 
 // Physics world configuration
@@ -96,10 +94,10 @@ public:
         return m_rigidBodies;
     }
 
-    // Resolve a backend BodyHandle to the owning actor's name ("" if not found)
+    // Resolve a backend BodyHandle to its rigid body's name ("" if not found)
     [[nodiscard]] std::string resolveHandleName(backend::BodyHandle handle) const;
 
-    // Test-only: Add raw rigid body without component (for Python tests)
+    // Test-only: add a rigid body directly (Python tests)
     void addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body);
     
     // Backward compatibility methods

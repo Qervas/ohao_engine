@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <iostream>
 
 namespace ohao::ecs {
 
@@ -14,12 +15,41 @@ glm::mat4 Transform::matrix() const {
 
 World::World() {
     m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);
+    // Hierarchy hooks keep Parent/Children consistent on every destroy path,
+    // registry().destroy() and registry().clear() included. Pool creation order is
+    // deliberate: registry().clear() empties pools newest first, so Children is
+    // cleared while Parent and TransformDirty are still intact (the Children hook
+    // writes to both) and they are emptied after it.
+    m_registry.storage<TransformDirty>();
+    m_registry.on_destroy<Parent>().connect<&World::onParentDestroyed>(this);
+    m_registry.on_destroy<Children>().connect<&World::onChildrenDestroyed>(this);
     // Structural: transforms are always propagated before any other system runs.
     addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });
 }
 
 void World::onTransformChanged(entt::registry& r, entt::entity e) {
     r.emplace_or_replace<TransformDirty>(e);
+}
+
+// A child loses its Parent (detached, or destroyed): its parent forgets it.
+void World::onParentDestroyed(entt::registry& r, entt::entity child) {
+    const entt::entity parent = r.get<Parent>(child).entity;
+    if (!r.valid(parent)) return;
+    if (auto* sibs = r.try_get<Children>(parent)) std::erase(sibs->entities, child);
+}
+
+// A parent's Children goes away while children remain (only registry().destroy()
+// or remove<Children>() can do that; World::destroy takes the children first):
+// detach them. Their local transform is kept and becomes their world transform.
+void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {
+    const std::vector<entt::entity> kids = r.get<Children>(parent).entities;
+    for (const entt::entity c : kids) {
+        if (!r.valid(c)) continue;
+        if (const auto* p = r.try_get<Parent>(c); p && p->entity == parent) {
+            r.remove<Parent>(c);
+            r.emplace_or_replace<TransformDirty>(c);
+        }
+    }
 }
 
 entt::entity World::create(std::string_view name, const Transform& local) {
@@ -81,6 +111,17 @@ void World::addSystem(std::string name, System fn) {
 }
 
 void World::update(float dt) {
+#ifndef NDEBUG
+    // A Transform written through get<>() instead of patch<>() is never propagated.
+    if (m_transformMismatches == 0) {
+        m_transformMismatches = verifyTransforms(m_registry);
+        if (m_transformMismatches != 0)
+            std::cerr << "[ecs] " << m_transformMismatches
+                      << " entities have a WorldTransform that disagrees with their Transform: a "
+                         "Transform was written without registry.patch<Transform>() or "
+                         "World::setTransform() (reported once per World)\n";
+    }
+#endif
     for (auto& [name, fn] : m_systems) fn(*this, dt);
 }
 

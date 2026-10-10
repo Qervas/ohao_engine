@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <memory>
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(expr, msg)                                                                     \
@@ -122,6 +123,66 @@ static void destroy_child_detaches_from_parent() {
     CHECK(w.registry().get<Children>(p).entities.empty(), "parent forgets a destroyed child");
 }
 
+// update() runs verifyTransforms in debug builds and reports the first mismatch
+// once per World; Release builds skip the check (the count stays 0).
+static void update_reports_an_unpatched_write_in_debug() {
+    World w;
+    auto e = w.create("e");
+    w.update(0.0f);
+    CHECK(w.transformMismatches() == 0, "nothing to report after a clean update");
+    w.registry().get<Transform>(e).position.x = 7;   // the forbidden write
+    w.update(0.0f);
+#ifndef NDEBUG
+    CHECK(w.transformMismatches() == 1, "a debug update reports the untracked write");
+#else
+    CHECK(w.transformMismatches() == 0, "Release builds do not run the check");
+#endif
+}
+
+// registry().destroy() bypasses World::destroy (which takes the subtree with it).
+// The registry path detaches: children become roots, nothing keeps a dangling Parent.
+static void registry_destroy_of_a_parent_detaches_its_children() {
+    World w;
+    auto p = w.create("p", Transform{{10, 0, 0}});
+    auto c = w.create("c", Transform{{0, 1, 0}});
+    auto g = w.create("g", Transform{{0, 0, 1}});
+    w.setParent(c, p);
+    w.setParent(g, c);
+    w.update(0.0f);
+    w.registry().destroy(p);
+    CHECK(w.registry().valid(c) && w.registry().valid(g), "the registry path keeps the children");
+    CHECK(!w.registry().all_of<Parent>(c), "the orphan has no dangling Parent");
+    CHECK(w.registry().get<Parent>(g).entity == c, "grandchildren keep their own parent");
+    w.update(0.0f);
+    const glm::vec3 pos = glm::vec3(w.registry().get<WorldTransform>(g).world[3]);
+    CHECK(std::fabs(pos.x) < 1e-5f && std::fabs(pos.y - 1) < 1e-5f && std::fabs(pos.z - 1) < 1e-5f,
+          "the detached subtree is re-rooted: world = its own locals");
+    CHECK(verifyTransforms(w.registry()) == 0, "and consistent");
+}
+
+static void registry_destroy_of_a_child_leaves_the_parent_consistent() {
+    World w;
+    auto p = w.create("p");
+    auto c = w.create("c");
+    w.setParent(c, p);
+    w.registry().destroy(c);
+    CHECK(w.registry().get<Children>(p).entities.empty(), "parent forgets a child destroyed through the registry");
+}
+
+static void registry_clear_with_a_hierarchy_is_safe() {
+    World w;
+    auto p = w.create("p");
+    for (int k = 0; k < 8; ++k) w.setParent(w.create("c"), p);
+    w.update(0.0f);
+    w.registry().clear();
+    CHECK(w.registry().storage<entt::entity>().free_list() == 0, "no entity survives clear()");
+    CHECK(w.registry().storage<TransformDirty>().empty() && w.registry().storage<Parent>().empty(),
+          "no component is left on a dead entity");
+    auto e = w.create("after");
+    w.update(0.0f);
+    CHECK(w.registry().valid(e), "the world is usable after clear()");
+}
+
 static void reparent_keeps_local() {
     World w;
     auto a = w.create("a", Transform{{1, 0, 0}});
@@ -222,6 +283,12 @@ static void destroyed_subtree_releases_slots() {
 }
 
 static void ten_thousand_instances_one_percent_moving_under_half_a_millisecond() {
+#ifndef NDEBUG
+    // A timing budget for optimized code; debug builds also run verifyTransforms
+    // over every entity each update.
+    std::printf("(debug build -- not timed) ");
+    return;
+#endif
     ohao::VulkanRenderer r(64, 64);
     if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
     r.setRenderMode(ohao::RenderMode::Deferred);
@@ -356,6 +423,42 @@ static void emissive_texture_yields_a_proxy_light() {
           "the proxy is placed by the entity's world matrix, range = radius * 10");
 }
 
+// GiMaterialLegacy, like MeshRenderer, reaches the instance table when patched.
+static void patched_gi_material_reuploads_the_instance() {
+    ohao::VulkanRenderer r(64, 64);
+    if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
+    r.setRenderMode(ohao::RenderMode::Deferred);
+    World w;
+    installRenderExtract(w, r.renderScene());
+    ohao::Model tri; tri.vertices.assign(3, ohao::Vertex{}); tri.vertices[1].position = {1,0,0}; tri.vertices[2].position = {0,0,1}; tri.indices = {0,1,2};
+    auto e = spawnModel(w, r.renderScene(), r.getTextureManager(), tri, "t", Transform{});
+    w.update(0.0f); r.render();
+    w.update(0.0f); r.render();
+    CHECK(r.renderScene().stats().instanceBytesUploaded == 0, "precondition: a still entity uploads nothing");
+    w.registry().emplace_or_replace<GiMaterialLegacy>(e);
+    w.update(0.0f); r.render();
+    w.registry().patch<GiMaterialLegacy>(e, [](GiMaterialLegacy& g) { g.packed = {0.1f, 0.2f, 0.3f, 0.5f}; });
+    w.update(0.0f); r.render();
+    CHECK(r.renderScene().stats().instanceBytesUploaded == sizeof(ohao::render::InstanceGpu),
+          "a patched GiMaterialLegacy re-uploads its instance");
+}
+
+// The renderer's shutdown() keeps the RenderScene object alive (inert) until the
+// renderer is destroyed, so a World whose extract holds it can be released after.
+static void world_outlives_an_explicit_renderer_shutdown() {
+    ohao::VulkanRenderer r(64, 64);
+    if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
+    r.setRenderMode(ohao::RenderMode::Deferred);
+    auto w = std::make_unique<World>();
+    installRenderExtract(*w, r.renderScene());
+    ohao::Model tri; tri.vertices.assign(3, ohao::Vertex{}); tri.vertices[1].position = {1,0,0}; tri.vertices[2].position = {0,0,1}; tri.indices = {0,1,2};
+    spawnModel(*w, r.renderScene(), r.getTextureManager(), tri, "t", Transform{});
+    w->update(0.0f); r.render();
+    r.shutdown();
+    CHECK(r.renderScene().createInstance({}) == ohao::render::kInvalidIndex, "and inert after shutdown");
+    w.reset();   // releases its slots into the shut-down scene: must not crash
+}
+
 static void unknown_mesh_handles_are_skipped_not_fatal() {
     ohao::VulkanRenderer r(64, 64);
     if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
@@ -388,6 +491,10 @@ int main() {
     RUN(unpatched_write_is_detected);
     RUN(destroy_parent_destroys_subtree);
     RUN(destroy_child_detaches_from_parent);
+    RUN(update_reports_an_unpatched_write_in_debug);
+    RUN(registry_destroy_of_a_parent_detaches_its_children);
+    RUN(registry_destroy_of_a_child_leaves_the_parent_consistent);
+    RUN(registry_clear_with_a_hierarchy_is_safe);
     RUN(reparent_keeps_local);
     RUN(systems_run_in_registration_order);
     RUN(cyclic_parenting_is_rejected);
@@ -402,6 +509,8 @@ int main() {
     RUN(model_materials_become_submeshes_and_materials);
     RUN(emissive_texture_yields_a_proxy_light);
     RUN(unknown_mesh_handles_are_skipped_not_fatal);
+    RUN(patched_gi_material_reuploads_the_instance);
+    RUN(world_outlives_an_explicit_renderer_shutdown);
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     return g_fail == 0 ? 0 : 1;
 }

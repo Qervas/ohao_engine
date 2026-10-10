@@ -66,13 +66,13 @@ void VulkanRenderer::renderDeferred() {
         m_deferredRenderer->setEnvMap(m_envMapImageView, m_envSampler);
     }
 
-    // Update m_lightBuffer with current scene lights (correct numLights, default fallback if empty)
-    updateLightBuffer();
+    // This slot's light UBO (its fence was waited on above): scene lights, or the
+    // default sun when the scene has none.
+    LightUniformBuffer* ld = updateLightBuffer(m_currentFrame);
 
     // Sync fallback directional light with sky sun direction so deferred lighting matches the sky
-    if (m_lightBufferMapped && m_deferredRenderer) {
-        LightUniformBuffer* ld = static_cast<LightUniformBuffer*>(m_lightBufferMapped);
-        if (ld && ld->numLights == 1) {
+    if (ld) {
+        if (ld->numLights == 1) {
             // No explicit scene lights — align the fallback sun with sky
             glm::vec3 skyLightDir = m_deferredRenderer->getLightDirection(); // points DOWN toward scene
             float nightFactor = m_deferredRenderer->getNightFactor();
@@ -106,11 +106,10 @@ void VulkanRenderer::renderDeferred() {
         }
     }
 
-    // Pass actual light count to deferred renderer (avoids NaN from zero-init garbage entries)
-    if (m_lightBuffer != VK_NULL_HANDLE && m_lightBufferMapped) {
-        LightUniformBuffer* lightData = static_cast<LightUniformBuffer*>(m_lightBufferMapped);
-        uint32_t lightCount = lightData ? static_cast<uint32_t>(std::max(1, lightData->numLights)) : 1u;
-        m_deferredRenderer->setLightBuffer(m_lightBuffer, lightCount);
+    // The lighting pass binds this slot's buffer in this slot's descriptor set.
+    if (ld) {
+        const uint32_t lightCount = static_cast<uint32_t>(std::max(1, ld->numLights));
+        m_deferredRenderer->setLightBuffer(m_lightBuffers[m_currentFrame], lightCount);
     }
 
     VkCommandBuffer cmd = frame.commandBuffer;
@@ -239,6 +238,15 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_renderScene->recordUpdates(cmd, m_currentFrame);
+    // The traced scene changed (TLAS built or refit, instance data or lights
+    // uploaded): treat it like a view change. Accumulating profiles restart; the
+    // realtime profile flags the frame and keeps its denoiser history. A still
+    // scene uploads nothing and keeps accumulating.
+    if (const auto& st = m_renderScene->stats();
+        st.lastTlasOp != render::RenderSceneStats::TlasOp::None || st.instanceBytesUploaded > 0 ||
+        st.lightBytesUploaded > 0) {
+        rtRenderer->notifyViewChanged();
+    }
     // After recordUpdates: table growth and TLAS (re)creation replace handles.
     rtRenderer->setSceneBuffers(*m_renderScene);
 
