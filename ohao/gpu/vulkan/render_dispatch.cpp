@@ -258,7 +258,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
-    rtRenderer->render(cmd, ptView, ptProj,
+    rtRenderer->render(cmd, m_currentFrame, ptView, ptProj,
                        glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
                        glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
 

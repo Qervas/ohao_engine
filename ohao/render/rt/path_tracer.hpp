@@ -29,9 +29,11 @@
 #include "render/rt/denoise/denoise_types.hpp"
 #include "core/concepts.hpp"
 #include "gpu/layout_meta.hpp"
+#include "render/frame/frame_resources.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -83,7 +85,9 @@ public:
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
     // Traces the scene last given to setSceneBuffers; does nothing without a TLAS.
-    void render(VkCommandBuffer cmd,
+    // `frameSlot` is the frame-in-flight slot whose fence was just waited: its own
+    // descriptor set is rewritten and bound (earlier frames may still read theirs).
+    void render(VkCommandBuffer cmd, uint32_t frameSlot,
                 const glm::mat4& view, const glm::mat4& proj,
                 const glm::vec3& lightPos, float lightIntensity,
                 const glm::vec3& lightColor, float lightRadius);
@@ -130,14 +134,21 @@ public:
     // after RenderScene::recordUpdates: growth and TLAS rebuilds replace handles.
     void setSceneBuffers(const render::RenderScene& scene);
     // Bindless textures (binding 12): views[i] is bindless index i, one sampler per
-    // view. At most kMaxBindlessTextures are bound.
+    // view. Every one of the bindingCapacity() entries is written each frame; entries
+    // past views.size() repeat views[0]. Hit/miss shaders treat an index >=
+    // bindingCapacity() (specialization constant OHAO_BINDLESS_COUNT) as no texture.
     void setBindlessTextures(std::span<const VkImageView> views,
                              std::span<const VkSampler> samplers) {
         m_bindlessImageViews.assign(views.begin(), views.end());
         m_bindlessSamplers.assign(samplers.begin(), samplers.end());
         m_bindlessTextureCount = static_cast<uint32_t>(std::min(views.size(), samplers.size()));
     }
-    static constexpr uint32_t kMaxBindlessTextures = 1024;
+    // Size of binding 12: the texture table's capacity. Call before init(); init
+    // clamps it to the device's update-after-bind sampled-image limits (logged).
+    void setBindlessCapacity(uint32_t capacity) noexcept { m_bindlessCapacity = std::max(1u, capacity); }
+    [[nodiscard]] uint32_t bindlessCapacity() const noexcept { return m_bindlessCapacity; }
+    static constexpr uint32_t kDefaultBindlessCapacity = 4096;
+    static constexpr uint32_t kBindlessCountSpecConstantId = 1;   // hit + miss shaders
 
     // Shader contract: envWidth == 0 means "no env map loaded" — the shader
     // must skip env importance sampling in this case. The renderer provides
@@ -277,6 +288,7 @@ private:
     std::vector<VkImageView> m_bindlessImageViews;
     std::vector<VkSampler> m_bindlessSamplers;
     uint32_t m_bindlessTextureCount = 0;
+    uint32_t m_bindlessCapacity = kDefaultBindlessCapacity;   // binding 12 size (clamped in init)
 
     uint32_t m_sampleIndex = 0;
     uint32_t m_renderSeed = 0;  // resetAccumulation() restores sample index to this
@@ -428,7 +440,8 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
+    // One set per frame in flight: render() rewrites only its frame slot's set.
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};
 
     // Shader Binding Table
     VkBuffer m_sbtBuffer = VK_NULL_HANDLE;

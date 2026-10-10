@@ -8,6 +8,7 @@
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "scene/scene.hpp"
 
 namespace ohao {
@@ -308,6 +309,9 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
 
     const auto initProfile = [&](auto& slot, const char* label) -> bool {
         slot = std::make_unique<std::remove_reference_t<decltype(*slot)>>();
+        // Binding 12 covers the whole texture table: materials store its slot indices.
+        slot->setBindlessCapacity(m_textureManager ? m_textureManager->getMaxTextures()
+                                                   : PathTracer::kDefaultBindlessCapacity);
         if (!slot->init(m_device, m_physicalDevice, m_width, m_height,
                         m_instance, m_graphicsQueueFamily,
                         m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {

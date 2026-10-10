@@ -24,7 +24,7 @@ public:
     virtual void destroy() = 0;
     virtual void resize(uint32_t width, uint32_t height) = 0;
 
-    virtual void render(VkCommandBuffer cmd,
+    virtual void render(VkCommandBuffer cmd, uint32_t frameSlot,
                         const glm::mat4& view, const glm::mat4& proj,
                         const glm::vec3& lightPos, float lightIntensity,
                         const glm::vec3& lightColor, float lightRadius) = 0;
@@ -61,6 +61,8 @@ public:
 
     // See PathTracer::setSceneBuffers / setBindlessTextures.
     virtual void setSceneBuffers(const render::RenderScene& scene) = 0;
+    // Binding-12 size (the texture table's capacity); before init().
+    virtual void setBindlessCapacity(uint32_t capacity) = 0;
     virtual void setBindlessTextures(std::span<const VkImageView> views,
                                      std::span<const VkSampler> samplers) = 0;
 
@@ -104,11 +106,11 @@ public:
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
-    void render(VkCommandBuffer cmd,
+    void render(VkCommandBuffer cmd, uint32_t frameSlot,
                 const glm::mat4& view, const glm::mat4& proj,
                 const glm::vec3& lightPos, float lightIntensity,
                 const glm::vec3& lightColor, float lightRadius) override {
-        m_pathTracer.render(cmd, view, proj, lightPos, lightIntensity, lightColor, lightRadius);
+        m_pathTracer.render(cmd, frameSlot, view, proj, lightPos, lightIntensity, lightColor, lightRadius);
     }
 
     VkImage getOutputImage() const override { return m_pathTracer.getOutputImage(); }
@@ -139,6 +141,7 @@ public:
     VkImageView getNrdTonemappedAOV()      const override { return m_pathTracer.getNrdTonemappedAOV(); }
 
     void setSceneBuffers(const render::RenderScene& scene) override { m_pathTracer.setSceneBuffers(scene); }
+    void setBindlessCapacity(uint32_t capacity) override { m_pathTracer.setBindlessCapacity(capacity); }
     void setBindlessTextures(std::span<const VkImageView> views,
                              std::span<const VkSampler> samplers) override {
         m_pathTracer.setBindlessTextures(views, samplers);

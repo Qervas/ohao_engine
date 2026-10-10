@@ -1834,6 +1834,91 @@ static void runRenderSceneTests() {
         TEST_PASS();
     }
 
+    // Materials store texture-table slot indices up to its capacity (4096): the path
+    // tracer's binding 12 must cover them, and an index past it must read as "no
+    // texture" instead of an unwritten descriptor. Not under validation (NRD abort).
+    TEST_BEGIN("texture slots past 1024 reach the path tracer; out-of-range reads as untextured");
+    {
+        auto r = std::make_unique<ohao::VulkanRenderer>(64, 64);
+        if (!r->initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        ohao::BindlessTextureManager* tm = r->getTextureManager();
+        if (!tm || tm->getMaxTextures() <= 1100) { std::cout << "(small texture table -- skipped) "; TEST_PASS(); return; }
+        // Fill the table past slot 1024 with 1x1 textures; the last one is pure red.
+        const std::array<uint8_t, 4> grey{128, 128, 128, 255}, red{255, 0, 0, 255};
+        ohao::BindlessTextureHandle last;
+        for (int n = 0; n < 1100; ++n) {
+            last = tm->loadTextureFromMemory(std::span<const uint8_t>(n == 1099 ? red : grey), 1, 1,
+                                             VK_FORMAT_R8G8B8A8_SRGB, ohao::BindlessTextureType::Albedo, false);
+            if (!last.valid()) break;
+        }
+        tm->updateDescriptorSet();
+        EXPECT(last.valid() && last.index >= 1024, "a texture slot past 1024");
+        tm->registerName(last, "far_red");
+
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        ohao::Scene scene("rt-far");
+        const auto addQuad = [&](const char* name, float x, const char* texName) {
+            auto actor = scene.createActor(name);
+            actor->getTransform()->setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)));
+            actor->getTransform()->setPosition({x, 0, 0});
+            actor->getTransform()->setScale(glm::vec3(0.9f));
+            auto model = std::make_shared<ohao::Model>();
+            model->vertices = v; model->indices = i;
+            auto mesh = actor->addComponent<ohao::MeshComponent>();
+            mesh->setModel(model);
+            mesh->setVisible(true);
+            auto mat = actor->addComponent<ohao::MaterialComponent>();
+            mat->getMaterial().baseColor = {1.0f, 1.0f, 1.0f};
+            if (texName) {
+                mat->getMaterial().useAlbedoTexture = true;
+                mat->getMaterial().albedoTexture = texName;
+            }
+        };
+        addQuad("left_far_red", -1.0f, "far_red");
+        addQuad("right_plain", 1.0f, nullptr);
+        auto lightActor = scene.createActor("light");
+        auto lc = lightActor->addComponent<ohao::LightComponent>();
+        lc->setLightType(ohao::LightType::Sphere);
+        lc->setIntensity(20.0f);
+        lightActor->getTransform()->setPosition({0, 0, 2});
+        r->setScene(&scene);
+
+        // A third quad straight on the RenderScene, whose material names slot 100000:
+        // past every binding, it must render as its base colour (green), not crash.
+        RenderScene& rs = r->renderScene();
+        MaterialDesc bogus;
+        bogus.baseColor = {0.1f, 0.9f, 0.1f};
+        bogus.albedoTex = 100000;
+        const MaterialHandle bogusMat = rs.registerMaterial(bogus);
+        std::vector<ohao::Vertex> v2 = v;
+        for (auto& vert : v2) {   // the quad in the XY plane, facing the camera
+            vert.position = glm::vec3(vert.position.x * 0.9f, vert.position.z * 0.9f, 0.0f);
+            vert.normal = {0, 0, 1};
+        }
+        const MeshHandle bogusMesh = rs.registerMesh(MeshData{v2, i, {}, {}, "bogus"});
+        const uint32_t bogusSlot = rs.createInstance(InstanceDesc{bogusMesh, {&bogusMat, 1},
+            glm::translate(glm::mat4(1), {0, 2.0f, 0}), glm::mat4(1), true});
+        EXPECT(bogusSlot != kInvalidIndex, "the out-of-range instance exists");
+
+        r->getCamera().setPosition({0.0f, 0.7f, 6.0f});
+        r->getCamera().setRotation(0.0f, -90.0f);
+        r->setRenderMode(ohao::RenderMode::RTOffline);
+        if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
+        for (int k = 0; k < 6; ++k) r->render();
+        const auto px = r->getPixelSpan();
+        int redLeft = 0, greenTop = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) {
+                const uint8_t* p = &px[(static_cast<std::size_t>(y) * 64 + x) * 4];
+                if (x < 32 && p[0] > 40 && p[0] > 3 * p[1] && p[0] > 3 * p[2]) ++redLeft;
+                if (p[1] > 40 && p[1] > 3 * p[0] && p[1] > 3 * p[2]) ++greenTop;
+            }
+        EXPECT(redLeft > 20, "the quad textured from slot >= 1024 renders red (binding 12 covers it)");
+        EXPECT(greenTop > 20, "the quad naming slot 100000 renders its base colour (guarded)");
+        TEST_PASS();
+    }
+
     // The TLAS is built and refit inside the frame's command buffer: the validation
     // layer checks those builds and their barriers.
     TEST_BEGIN("moving an instance refits the TLAS with the new transform");

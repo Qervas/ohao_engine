@@ -406,7 +406,7 @@ void PathTracer::destroy() {
     // Descriptors
     if (m_descriptorPool) { vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); m_descriptorPool = VK_NULL_HANDLE; }
     if (m_descriptorSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr); m_descriptorSetLayout = VK_NULL_HANDLE; }
-    m_descriptorSet = VK_NULL_HANDLE;  // freed with pool
+    m_descriptorSets = {};  // freed with pool
 
     // Images
     destroyImages();

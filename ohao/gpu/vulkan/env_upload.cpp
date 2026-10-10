@@ -256,16 +256,9 @@ void VulkanRenderer::uploadEnvironmentMap() {
 void VulkanRenderer::bindRTTextures(IRTRendererProfile& renderer) {
     if (!m_textureManager) return;
     // Every live slot of the one bindless table, index = bindless index. Holes (freed
-    // slots) get the default white texture: the path tracer writes the array densely.
-    const uint32_t count = std::min(m_textureManager->usedSlotEnd(), PathTracer::kMaxBindlessTextures);
-    if (m_textureManager->usedSlotEnd() > PathTracer::kMaxBindlessTextures) {
-        static bool logged = false;
-        if (!logged) {
-            std::cerr << "[RT] " << m_textureManager->usedSlotEnd() << " bindless textures: the path tracer binds the first "
-                      << PathTracer::kMaxBindlessTextures << "\n";
-            logged = true;
-        }
-    }
+    // slots) get the default white texture: the path tracer writes the array densely
+    // up to its binding capacity (the table's capacity, set in ensureRTRenderer).
+    const uint32_t count = m_textureManager->usedSlotEnd();
     const VkImageView fallback = m_textureManager->getImageView(m_textureManager->getDefaultWhiteTexture());
     m_rtTextureViews.resize(count);
     m_rtTextureSamplers.resize(count);

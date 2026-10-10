@@ -21,6 +21,8 @@ layout(location = 0) rayPayloadInEXT RayPayload payload;
 
 // Bindless textures (same binding as closest-hit)
 layout(set = 0, binding = 12) uniform sampler2D textures[];
+// Binding 12's size (PathTracer::bindlessCapacity). An index at or past it is "no env map".
+layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;
 
 // Environment map index passed via light buffer header
 layout(set = 0, binding = 11) readonly buffer LightBuffer {
@@ -59,7 +61,7 @@ void main() {
     payload.hitDist = -1.0;  // signal miss
 
     // Sample environment map if available
-    if (lightBuf.envMapTexIdx != 0xFFFFFFFFu) {
+    if (lightBuf.envMapTexIdx < OHAO_BINDLESS_COUNT) {
         vec3 dir = normalize(gl_WorldRayDirectionEXT);
         vec2 uv = dirToEquirect(dir);
         float envS = (lightBuf.envIntensity > 0.0) ? lightBuf.envIntensity : 1.0;
@@ -73,7 +75,7 @@ void main() {
     }
 
     // Report env PDF so the caller can apply MIS weighting on BSDF-side env hits.
-    if (lightBuf.envMapTexIdx != 0xFFFFFFFFu && pc.control.w > 0u && pc.tuning.y > 0.0) {
+    if (lightBuf.envMapTexIdx < OHAO_BINDLESS_COUNT && pc.control.w > 0u && pc.tuning.y > 0.0) {
         vec3 dir = normalize(gl_WorldRayDirectionEXT);
         payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));
     } else {

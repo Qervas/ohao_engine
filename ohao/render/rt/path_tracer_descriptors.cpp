@@ -9,6 +9,31 @@
 namespace ohao {
 
 bool PathTracer::createDescriptorResources() {
+    // Binding 12 holds the whole texture table (bindless index = slot). Clamp to what
+    // the device allows for an update-after-bind combined-image-sampler array in one
+    // set and one stage, leaving room for this set's other resources.
+    {
+        VkPhysicalDeviceDescriptorIndexingProperties indexing{};
+        indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+        VkPhysicalDeviceProperties2 props{};
+        props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        props.pNext = &indexing;
+        vkGetPhysicalDeviceProperties2(m_physicalDevice, &props);
+        constexpr uint32_t kOtherResources = 64;   // the set's 36 other bindings, with margin
+        const uint32_t perStageResources = indexing.maxPerStageUpdateAfterBindResources > kOtherResources
+                                               ? indexing.maxPerStageUpdateAfterBindResources - kOtherResources
+                                               : 1u;
+        const uint32_t limit = std::min({indexing.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                                         indexing.maxPerStageDescriptorUpdateAfterBindSamplers,
+                                         indexing.maxDescriptorSetUpdateAfterBindSampledImages,
+                                         indexing.maxDescriptorSetUpdateAfterBindSamplers, perStageResources});
+        if (limit > 0 && m_bindlessCapacity > limit) {
+            std::cerr << "[PathTracer] bindless texture capacity " << m_bindlessCapacity
+                      << " exceeds the device's update-after-bind limit; clamped to " << limit << "\n";
+            m_bindlessCapacity = limit;
+        }
+    }
+
     constexpr VkShaderStageFlags RGEN = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     constexpr VkShaderStageFlags HIT = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
     constexpr VkShaderStageFlags MISS = VK_SHADER_STAGE_MISS_BIT_KHR;
@@ -36,7 +61,7 @@ bool PathTracer::createDescriptorResources() {
     add(10, BUFFER, HIT);   // material table (3 vec4s per material)
     add(11, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
     // Bindless textures (closest-hit, any-hit, miss for the env map). Variable count.
-    add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, kMaxBindlessTextures,
+    add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
     add(13, IMAGE, RGEN);   // previous-frame surface history
@@ -76,39 +101,43 @@ bool PathTracer::createDescriptorResources() {
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
         return false;
 
-    // Pool — allocate enough for bindless textures
+    // Pool: one set per frame in flight (each frame rewrites only its own set).
+    constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C), +6 ReSTIR GI reservoir (29-34), +1 spec hit-dist (35)
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25 * kSets},  // 1,2,6,7,13-16,19-35
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = kSets;
     poolInfo.poolSizeCount = 4;
     poolInfo.pPoolSizes = poolSizes;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
         return false;
 
-    // Allocate set with variable descriptor count for bindless textures
-    uint32_t variableCount = kMaxBindlessTextures;
+    // Variable descriptor count for the bindless textures, in every set.
+    std::array<uint32_t, kSets> variableCounts;
+    variableCounts.fill(m_bindlessCapacity);
+    std::array<VkDescriptorSetLayout, kSets> layouts;
+    layouts.fill(m_descriptorSetLayout);
     VkDescriptorSetVariableDescriptorCountAllocateInfo variableInfo{};
     variableInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
-    variableInfo.descriptorSetCount = 1;
-    variableInfo.pDescriptorCounts = &variableCount;
+    variableInfo.descriptorSetCount = kSets;
+    variableInfo.pDescriptorCounts = variableCounts.data();
 
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     setInfo.pNext = &variableInfo;
     setInfo.descriptorPool = m_descriptorPool;
-    setInfo.descriptorSetCount = 1;
-    setInfo.pSetLayouts = &m_descriptorSetLayout;
+    setInfo.descriptorSetCount = kSets;
+    setInfo.pSetLayouts = layouts.data();
 
-    return vkAllocateDescriptorSets(m_device, &setInfo, &m_descriptorSet) == VK_SUCCESS;
+    return vkAllocateDescriptorSets(m_device, &setInfo, m_descriptorSets.data()) == VK_SUCCESS;
 }
 
 } // namespace ohao

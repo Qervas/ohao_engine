@@ -42,6 +42,9 @@ vec2 vtxUV(uint v)     { uint b = v * 25u + 9u; return vec2(vtx[b], vtx[b + 1u])
 // Bindless texture array — the one table the G-buffer also reads (binding 12, variable
 // count). Hit shaders have no derivatives: sample the base level (native resolution).
 layout(set = 0, binding = 12) uniform sampler2D textures[];
+// Binding 12's size (PathTracer::bindlessCapacity). An index at or past it is "no texture".
+layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;
+uint boundTexture(uint idx) { return idx < OHAO_BINDLESS_COUNT ? idx : 0xFFFFFFFFu; }
 
 void main() {
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
@@ -107,11 +110,11 @@ void main() {
     vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, legacyRtTintTexIdx, unused)
 
     // Decode texture indices (stored as uint bits in float)
-    uint diffuseTexIdx    = floatBitsToUint(matColor.a);
-    uint normalTexIdx     = floatBitsToUint(matParams.z);
-    uint emissiveTexIdx   = floatBitsToUint(matParams.w);
-    uint roughMetalTexIdx = floatBitsToUint(matParams2.x);
-    uint legacyTintTexIdx = floatBitsToUint(matParams2.z);
+    uint diffuseTexIdx    = boundTexture(floatBitsToUint(matColor.a));
+    uint normalTexIdx     = boundTexture(floatBitsToUint(matParams.z));
+    uint emissiveTexIdx   = boundTexture(floatBitsToUint(matParams.w));
+    uint roughMetalTexIdx = boundTexture(floatBitsToUint(matParams2.x));
+    uint legacyTintTexIdx = boundTexture(floatBitsToUint(matParams2.z));
 
     // === Albedo: sample diffuse texture or use base color ===
     // Albedo textures are R8G8B8A8_SRGB in the shared bindless table: the sampler

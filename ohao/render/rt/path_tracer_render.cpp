@@ -35,11 +35,14 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 }  // namespace
 
-void PathTracer::render(VkCommandBuffer cmd,
+void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
                          const glm::mat4& view, const glm::mat4& proj,
                          const glm::vec3& lightPos, float lightIntensity,
                          const glm::vec3& lightColor, float lightRadius) {
     if (!m_rtPipeline || m_tlas == VK_NULL_HANDLE) return;
+    if (frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
+    // This frame slot's fence was waited: its set is no longer read by the GPU.
+    const VkDescriptorSet set = m_descriptorSets[frameSlot];
     if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
         !m_instances || !m_materialRefs || !m_lightBuffer) return;
 
@@ -146,7 +149,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = m_descriptorSet;
+        w.dstSet = set;
         w.dstBinding = binding;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -154,7 +157,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     };
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 0;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -177,25 +180,28 @@ void PathTracer::render(VkCommandBuffer cmd,
         sceneBufferInfos[b] = VkDescriptorBufferInfo{sceneBuffers[b].buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet& w = writes[writeCount++];
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = m_descriptorSet;
+        w.dstSet = set;
         w.dstBinding = sceneBuffers[b].binding;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w.pBufferInfo = &sceneBufferInfos[b];
     }
 
-    // Binding 12: Bindless textures (MUST be last — variable count)
+    // Binding 12: bindless textures. The whole array is written (entries past the
+    // table's views repeat view 0), so no index below the capacity reads an unwritten
+    // descriptor; the shaders treat indices >= the capacity as no texture.
     std::vector<VkDescriptorImageInfo> texInfos;
-    const uint32_t textureCount = std::min(m_bindlessTextureCount, kMaxBindlessTextures);
+    const uint32_t textureCount = m_bindlessTextureCount > 0 ? m_bindlessCapacity : 0u;
     if (textureCount > 0) {
         texInfos.resize(textureCount);
         for (uint32_t i = 0; i < textureCount; i++) {
-            texInfos[i].imageView = m_bindlessImageViews[i];
-            texInfos[i].sampler = m_bindlessSamplers[i];
+            const uint32_t src = i < m_bindlessTextureCount ? i : 0u;
+            texInfos[i].imageView = m_bindlessImageViews[src];
+            texInfos[i].sampler = m_bindlessSamplers[src];
             texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstSet = set;
         writes[writeCount].dstBinding = 12;
         writes[writeCount].descriptorCount = textureCount;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -204,7 +210,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     }
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 13;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -212,7 +218,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     writeCount++;
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 14;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -220,7 +226,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     writeCount++;
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 15;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -228,7 +234,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     writeCount++;
 
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 16;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -242,7 +248,7 @@ void PathTracer::render(VkCommandBuffer cmd,
         envMargInfo.offset = 0;
         envMargInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstSet = set;
         writes[writeCount].dstBinding = 17;
         writes[writeCount].descriptorCount = 1;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -257,7 +263,7 @@ void PathTracer::render(VkCommandBuffer cmd,
         envCondInfo.offset = 0;
         envCondInfo.range = VK_WHOLE_SIZE;
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstSet = set;
         writes[writeCount].dstBinding = 18;
         writes[writeCount].descriptorCount = 1;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -270,7 +276,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     motionVectorInfo.imageView = m_motionVectorView;
     motionVectorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstSet = set;
     writes[writeCount].dstBinding = 19;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -282,7 +288,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     depthInfo.imageView   = m_depthAOVView;
     depthInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 20;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -294,7 +300,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     roughInfo.imageView   = m_roughnessAOVView;
     roughInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 21;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -306,7 +312,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     diffRadianceInfo.imageView   = m_diffuseRadianceView;
     diffRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 22;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -318,7 +324,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     specRadianceInfo.imageView   = m_specularRadianceView;
     specRadianceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 23;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -330,7 +336,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     diffAlbedoInfo.imageView   = m_diffAlbedoView;
     diffAlbedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 24;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -342,7 +348,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     specColorInfo.imageView   = m_specColorView;
     specColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 25;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -354,7 +360,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     normalRoughnessInfo.imageView   = m_normalRoughnessView;
     normalRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 26;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -366,7 +372,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     outDiffInfo.imageView   = m_outDiffRadianceView;
     outDiffInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 27;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -378,7 +384,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     outSpecInfo.imageView   = m_outSpecRadianceView;
     outSpecInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstSet          = set;
     writes[writeCount].dstBinding      = 28;
     writes[writeCount].descriptorCount = 1;
     writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -595,7 +601,7 @@ void PathTracer::render(VkCommandBuffer cmd,
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+                            m_pipelineLayout, 0, 1, &set, 0, nullptr);
 
     // --- Push constants ---
     PTPushConstants pc{};
