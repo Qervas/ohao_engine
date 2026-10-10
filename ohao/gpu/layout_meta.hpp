@@ -27,11 +27,11 @@ inline constexpr std::size_t kPTPushConstantsBytes = 256;
 inline constexpr std::size_t kMaterialVec4s        = 3;
 inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm::vec4);
 
-// ─── Material SSBO packing (must match pt_closesthit / rt_build) ────────────
+// ─── Material SSBO packing (render::MaterialTable; gbuffer.frag, pt_closesthit) ─
 //
 // matColors[matID * 3 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
 // matColors[matID * 3 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-// matColors[matID * 3 + 2] = vec4(roughMetalTexIdx, unused, unused, unused)
+// matColors[matID * 3 + 2] = vec4(roughMetalTexIdx, emissiveStrength, legacyRtTintTexIdx, unused)
 
 struct MaterialGpuPack {
     static constexpr std::size_t kSlots     = kMaterialVec4s;

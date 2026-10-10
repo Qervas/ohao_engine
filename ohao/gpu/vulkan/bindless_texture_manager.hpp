@@ -141,6 +141,13 @@ public:
     // Stats
     [[nodiscard]] uint32_t getLoadedTextureCount() const noexcept { return m_loadedCount; }
     [[nodiscard]] uint32_t getMaxTextures() const noexcept { return m_maxTextures; }
+    // One past the highest slot holding a view. Bindless indices are slots, so a
+    // consumer building its own descriptor array binds [0, usedSlotEnd()).
+    [[nodiscard]] uint32_t usedSlotEnd() const noexcept {
+        for (uint32_t i = static_cast<uint32_t>(m_textures.size()); i > 0; --i)
+            if (m_textures[i - 1].view != VK_NULL_HANDLE) return i;
+        return 0;
+    }
     [[nodiscard]] size_t getTotalMemoryUsage() const noexcept { return m_totalMemoryUsage; }
     [[nodiscard]] float fillRatio() const noexcept {
         return m_maxTextures == 0 ? 0.f

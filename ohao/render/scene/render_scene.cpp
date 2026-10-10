@@ -331,6 +331,11 @@ void RenderScene::setEnvMapTextureIndex(uint32_t texIdx) {
     m->lights.setEnvMapTextureIndex(texIdx);
 }
 
+void RenderScene::setEnvIntensity(float scale) {
+    if (!m->initialized) return;
+    m->lights.setEnvIntensity(scale);
+}
+
 void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
     if (!m->initialized || cmd == VK_NULL_HANDLE || frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const auto t0 = std::chrono::steady_clock::now();

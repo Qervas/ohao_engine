@@ -35,11 +35,13 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 }  // namespace
 
-void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
+void PathTracer::render(VkCommandBuffer cmd,
                          const glm::mat4& view, const glm::mat4& proj,
                          const glm::vec3& lightPos, float lightIntensity,
                          const glm::vec3& lightColor, float lightRadius) {
-    if (!m_rtPipeline || !accel || !accel->getTLAS()) return;
+    if (!m_rtPipeline || m_tlas == VK_NULL_HANDLE) return;
+    if (!m_vertexArena || !m_indexArena || !m_meshTable || !m_triangleSlots || !m_materialTable ||
+        !m_instances || !m_materialRefs || !m_lightBuffer) return;
 
 #ifdef OHAO_DLSS_ENABLED
     // --- Phase 1: lazy DLSS-RR NGX init + feature creation ---
@@ -98,7 +100,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    VkAccelerationStructureKHR tlas = accel->getTLAS();
+    VkAccelerationStructureKHR tlas = m_tlas;
     asWrite.pAccelerationStructures = &tlas;
 
     // Binding 1: Accumulation buffer (storage image, RGBA32F)
@@ -110,24 +112,6 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     VkDescriptorImageInfo outputInfo{};
     outputInfo.imageView = m_outputView;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    // Binding 3: Material buffer SSBO
-    VkDescriptorBufferInfo materialInfo{};
-    materialInfo.buffer = m_materialBuffer;
-    materialInfo.offset = 0;
-    materialInfo.range = m_materialData.size() * sizeof(glm::vec4);
-
-    // Binding 4: Normal buffer SSBO
-    VkDescriptorBufferInfo normalBufInfo{};
-    normalBufInfo.buffer = m_normalBuffer != VK_NULL_HANDLE ? m_normalBuffer : m_materialBuffer;
-    normalBufInfo.offset = 0;
-    normalBufInfo.range = VK_WHOLE_SIZE;
-
-    // Binding 5: Index buffer SSBO
-    VkDescriptorBufferInfo indexBufInfo{};
-    indexBufInfo.buffer = m_indexBuffer != VK_NULL_HANDLE ? m_indexBuffer : m_materialBuffer;
-    indexBufInfo.offset = 0;
-    indexBufInfo.range = VK_WHOLE_SIZE;
 
     // Binding 6: Albedo AOV (storage image, RGBA32F)
     VkDescriptorImageInfo albedoAOVInfo{};
@@ -157,132 +141,63 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[29] = {};
+    VkWriteDescriptorSet writes[32] = {};
+    uint32_t writeCount = 0;
+    const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
+        VkWriteDescriptorSet& w = writes[writeCount++];
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = m_descriptorSet;
+        w.dstBinding = binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w.pImageInfo = info;
+    };
 
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    writes[0].pNext = &asWrite;
+    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstBinding = 0;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writes[writeCount].pNext = &asWrite;
+    writeCount++;
 
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].pImageInfo = &accumInfo;
+    addImage(1, &accumInfo);
+    addImage(2, &outputInfo);
+    addImage(6, &albedoAOVInfo);
+    addImage(7, &normalAOVInfo);
 
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSet;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorCount = 1;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[2].pImageInfo = &outputInfo;
-
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descriptorSet;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[3].pBufferInfo = &materialInfo;
-
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = m_descriptorSet;
-    writes[4].dstBinding = 4;
-    writes[4].descriptorCount = 1;
-    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[4].pBufferInfo = &normalBufInfo;
-
-    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = m_descriptorSet;
-    writes[5].dstBinding = 5;
-    writes[5].descriptorCount = 1;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[5].pBufferInfo = &indexBufInfo;
-
-    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = m_descriptorSet;
-    writes[6].dstBinding = 6;
-    writes[6].descriptorCount = 1;
-    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[6].pImageInfo = &albedoAOVInfo;
-
-    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = m_descriptorSet;
-    writes[7].dstBinding = 7;
-    writes[7].descriptorCount = 1;
-    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[7].pImageInfo = &normalAOVInfo;
-
-    // Binding 8: UV buffer
-    VkDescriptorBufferInfo uvBufInfo{};
-    uvBufInfo.buffer = m_uvBuffer != VK_NULL_HANDLE ? m_uvBuffer : m_materialBuffer;
-    uvBufInfo.offset = 0;
-    uvBufInfo.range = VK_WHOLE_SIZE;
-
-    writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[8].dstSet = m_descriptorSet;
-    writes[8].dstBinding = 8;
-    writes[8].descriptorCount = 1;
-    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[8].pBufferInfo = &uvBufInfo;
-
-    // Binding 9: Material ID buffer
-    VkDescriptorBufferInfo matIDBufInfo{};
-    matIDBufInfo.buffer = m_matIDBuffer != VK_NULL_HANDLE ? m_matIDBuffer : m_materialBuffer;
-    matIDBufInfo.offset = 0;
-    matIDBufInfo.range = VK_WHOLE_SIZE;
-
-    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[9].dstSet = m_descriptorSet;
-    writes[9].dstBinding = 9;
-    writes[9].descriptorCount = 1;
-    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[9].pBufferInfo = &matIDBufInfo;
-
-    // Binding 10: Material color buffer
-    VkDescriptorBufferInfo matColorBufInfo{};
-    matColorBufInfo.buffer = m_matColorBuffer != VK_NULL_HANDLE ? m_matColorBuffer : m_materialBuffer;
-    matColorBufInfo.offset = 0;
-    matColorBufInfo.range = VK_WHOLE_SIZE;
-
-    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[10].dstSet = m_descriptorSet;
-    writes[10].dstBinding = 10;
-    writes[10].descriptorCount = 1;
-    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[10].pBufferInfo = &matColorBufInfo;
-
-    // Binding 11: Light buffer (SSBO)
-    uint32_t writeCount = 11;
-    VkDescriptorBufferInfo lightBufInfo{};
-    if (m_lightBuffer != VK_NULL_HANDLE) {
-        lightBufInfo.buffer = m_lightBuffer;
-        lightBufInfo.offset = 0;
-        lightBufInfo.range = VK_WHOLE_SIZE;
-        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[11].dstSet = m_descriptorSet;
-        writes[11].dstBinding = 11;
-        writes[11].descriptorCount = 1;
-        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[11].pBufferInfo = &lightBufInfo;
-        writeCount = 12;
+    // RenderScene buffers: 4 vertex arena, 5 index arena, 8 mesh table, 9 triangle
+    // material slots, 10 material table, 11 RT lights, 36 instances, 37 material refs.
+    const struct { uint32_t binding; VkBuffer buffer; } sceneBuffers[] = {
+        {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
+        {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
+    };
+    VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
+    for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {
+        sceneBufferInfos[b] = VkDescriptorBufferInfo{sceneBuffers[b].buffer, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet& w = writes[writeCount++];
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = m_descriptorSet;
+        w.dstBinding = sceneBuffers[b].binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo = &sceneBufferInfos[b];
     }
 
     // Binding 12: Bindless textures (MUST be last — variable count)
     std::vector<VkDescriptorImageInfo> texInfos;
-    if (!m_bindlessImageViews.empty()) {
-        texInfos.resize(m_bindlessTextureCount);
-        for (uint32_t i = 0; i < m_bindlessTextureCount; i++) {
+    const uint32_t textureCount = std::min(m_bindlessTextureCount, kMaxBindlessTextures);
+    if (textureCount > 0) {
+        texInfos.resize(textureCount);
+        for (uint32_t i = 0; i < textureCount; i++) {
             texInfos[i].imageView = m_bindlessImageViews[i];
-            texInfos[i].sampler = (i < m_bindlessSamplers.size()) ? m_bindlessSamplers[i] : m_defaultSampler;
+            texInfos[i].sampler = m_bindlessSamplers[i];
             texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[writeCount].dstSet = m_descriptorSet;
         writes[writeCount].dstBinding = 12;
-        writes[writeCount].descriptorCount = m_bindlessTextureCount;
+        writes[writeCount].descriptorCount = textureCount;
         writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[writeCount].pImageInfo = texInfos.data();
         writeCount++;

@@ -167,16 +167,11 @@ public:
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
-    void setEnvironmentMap(std::string_view path) {
-        m_envMapPath = std::string(path);
-        // Force reload on next scene upload when path changes.
-        if (m_envMapPath != m_envMapLoadedPath) {
-            m_envMapLoadedPath.clear();
-            m_envMapTexIdx = 0xFFFFFFFFu;
-        }
-    }
-    /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into
-    /// light-buffer header (offset 8) on every light upload — no env re-load.
+    /// HDRI for the path tracer and deferred reflections, loaded on the next
+    /// updateSceneBuffers (setScene) when the path changed.
+    void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
+    /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into the
+    /// RT light header (offset 8) every RT frame — no env re-load.
     void setEnvIntensityScale(float s) noexcept {
         m_envIntensityScale = std::max(0.0f, s);
     }
@@ -197,9 +192,8 @@ public:
     // Texture manager access
     [[nodiscard]] BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
 
-    // RT acceleration structure access
-    [[nodiscard]] RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
-    [[nodiscard]] bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
+    // Ray tracing is available: the RenderScene built its acceleration structures.
+    [[nodiscard]] bool isRTSupported() const;
 
     // Persistent GPU render world (meshes, materials, instances, lights). Valid
     // between initialize() and shutdown().
@@ -300,13 +294,9 @@ public:
     // Scene buffer management (call after modifying scene)
     [[nodiscard]] bool updateSceneBuffers();
 
-    /// Inverse / live edit: rewrite material base colors into existing GPU
-    /// buffers without destroying geometry, textures, BLAS, or env map.
-    /// Returns false if RT materials are not yet uploaded (call updateSceneBuffers first).
-    [[nodiscard]] bool updateRTMaterialParams();
-
-    /// Inverse / live edit: rebuild light SSBO from scene lights without
-    /// reloading env HDR or touching BLAS (env tex idx is re-stamped).
+    /// Live edit: re-read the scene's lights into the RenderScene light table (both
+    /// the raster and the RT list) without reloading the env HDR or touching BLASes.
+    /// Returns false without a scene.
     [[nodiscard]] bool updateRTLightParams();
 
     // Check if scene has renderable meshes
@@ -332,10 +322,9 @@ private:
     void updateLightBuffer();   // Light UBO from m_renderScene's raster lights (+ default sun)
 
     // TEMPORARY (sub-project 2a, Tasks 7-9): scene_bridge.cpp feeds the old Scene into
-    // m_renderScene so the deferred passes draw from it. Deleted in Task 9.
-    [[nodiscard]] bool updateLegacySceneBuffers();   // combined buffers + legacy RT build
-    void bridgeSceneToRenderScene();   // full rebuild, at the end of updateSceneBuffers
-    void syncBridgedScene();           // per deferred frame: transforms, visibility, lights
+    // m_renderScene so the deferred and RT passes draw from it. Deleted in Task 9.
+    void bridgeSceneToRenderScene();   // full rebuild, in updateSceneBuffers
+    void syncBridgedScene();           // per frame: transforms, visibility, lights
     struct BridgedModel {
         std::shared_ptr<Model> model;                  // keeps the cache key alive
         std::optional<render::UploadedModel> uploaded; // set once a visible actor used it
@@ -352,8 +341,7 @@ private:
     std::vector<std::pair<render::MaterialDesc, render::MaterialHandle>> m_bridgeMaterials;
     std::vector<BridgedInstance> m_bridgeInstances;
     bool m_bridgeOwnsLights{false};   // the bridge's setLights is the RenderScene's current light list
-    [[nodiscard]] bool updateAnimatedActorsForRT();
-    void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
+    void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
 
 
     // Rendering internals
@@ -386,54 +374,24 @@ private:
     VkDeviceMemory m_lightBufferMemory{VK_NULL_HANDLE};
     void* m_lightBufferMapped{nullptr};
 
-    // Vertex buffer (combined for all scene meshes)
-    VkBuffer m_vertexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_vertexBufferMemory{VK_NULL_HANDLE};
-    uint32_t m_vertexCount{0};
-
-    // Index buffer (combined for all scene meshes)
-    VkBuffer m_indexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_indexBufferMemory{VK_NULL_HANDLE};
-    uint32_t m_indexCount{0};
-
-    // Mesh buffer info map (actor ID -> buffer offsets)
-    std::unordered_map<uint64_t, MeshBufferInfo> m_meshBufferMap;
-
     // Flag to track if scene has renderable meshes
     bool m_hasSceneMeshes{false};
 
-    // RT acceleration structure + path tracer
-    std::unique_ptr<RTAccelerationStructure> m_rtAccel;
+    // Path tracer profiles (the acceleration structures belong to m_renderScene)
     RTRealtimePipeline m_rtRealtimePipeline;
     RTOfflinePipeline m_rtOfflinePipeline;
     std::unique_ptr<RTRealtimeRenderer> m_rtRealtimeRenderer;
     std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
-    bool m_rtAccelDirty{true};
-    void buildAccelerationStructures();  // orchestrator — calls sub-functions below
-    void createRTVertexIndexBuffers();    // copy raster buffers to device-local RT buffers
-    void createRTNormalUVBuffers();       // extract normals + UVs from vertex data
-    void uploadRTMaterialBuffers();       // per-triangle material IDs + per-material colors
-    void uploadRTTextureArray();          // build bindless texture array for path tracer
-    void destroyRTSceneResources();       // frees everything the RT upload functions create
-    void uploadDeferredTextures();        // bridge model textures to deferred BindlessTextureManager
-    void uploadLightBuffer();             // collect scene LightComponents → GPU SSBO + env map
-    void buildBLASTLAS();                 // build BLAS per actor, TLAS with instance transforms
-    // Separate RT-flagged copies of vertex/index data (device-local + device address)
-    VkBuffer m_rtVertexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_rtVertexMemory{VK_NULL_HANDLE};
-    VkBuffer m_rtIndexBuffer{VK_NULL_HANDLE};
-    VkBuffer m_rtNormalBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_rtNormalMemory{VK_NULL_HANDLE};
-    VkBuffer m_rtUVBuffer{VK_NULL_HANDLE};        // per-vertex UVs for texture sampling
-    VkDeviceMemory m_rtUVMemory{VK_NULL_HANDLE};
-    VkBuffer m_rtMatIDBuffer{VK_NULL_HANDLE};     // per-triangle material index
-    VkDeviceMemory m_rtMatIDMemory{VK_NULL_HANDLE};
-    VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
-    uint32_t m_rtMatCount{0}; // materials in mat-color buffer (3 vec4s each)
-    VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
-    uint32_t m_rtLightCount{0};
+    // Environment map (env_upload.cpp): HDR image in the bindless table, its CDFs,
+    // and the RT bindless view/sampler arrays rebuilt each RT frame.
+    void uploadEnvironmentMap();          // once per path; stamps env index + scale into the RenderScene
+    void bindRTTextures(IRTRendererProfile& renderer);
+    void destroyEnvCDFBuffers();
+    [[nodiscard]] bool envMapLoaded() const noexcept {
+        return m_envMapImageView != VK_NULL_HANDLE && m_envMapTexIdx != 0xFFFFFFFFu;
+    }
+    std::vector<VkImageView> m_rtTextureViews;
+    std::vector<VkSampler> m_rtTextureSamplers;
     VkBuffer m_envMarginalCDFBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_envMarginalCDFMemory{VK_NULL_HANDLE};
     VkBuffer m_envConditionalCDFBuffer{VK_NULL_HANDLE};
@@ -442,20 +400,14 @@ private:
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
     VkImage m_envMapImage{VK_NULL_HANDLE};
     VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
-    VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
+    VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
+    VkSampler m_envSampler{VK_NULL_HANDLE};         // the old RT texture sampler (bilinear, base level)
     void destroyEnvMapImage();
     uint32_t m_envMapTexIdx{0xFFFFFFFFu};           // bindless index in light header
     uint32_t m_envMapWidth{0};
     uint32_t m_envMapHeight{0};
     float m_envMapIntegral{0.0f};
     float m_envIntensityScale{1.0f}; // light header offset 8
-    VkImage m_rtTextureArray{VK_NULL_HANDLE};
-    VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
-    VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};
-    VkSampler m_rtTextureSampler{VK_NULL_HANDLE};
-    std::vector<VkImageView> m_rtBindlessViews;   // one 2D view per layer of m_rtTextureArray
-    uint32_t m_rtTextureCount{0};
-    VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.

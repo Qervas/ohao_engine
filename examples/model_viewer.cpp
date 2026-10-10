@@ -24,6 +24,7 @@
 #include <string_view>
 #include <chrono>
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 
 using namespace ohao;
 using ohao::examples::parseRenderFlags;
@@ -56,7 +57,7 @@ void addWall(Scene* scene, const std::string& name,
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] "
-                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…]\n";
+                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…] [--print-bounds]\n";
         return 1;
     }
 
@@ -321,6 +322,33 @@ int main(int argc, char* argv[]) {
                 actor.getTransform()->setRotation(flipRot);
             }
         });
+    }
+
+    // "--print-bounds": the model's screen-space box in the path tracer's framing (the
+    // 8 corners of each model actor's world AABB through the camera the RT pass uses),
+    // for comparing renders inside and outside the model.
+    for (int a = 1; a < argc; ++a) {
+        if (std::string_view(argv[a]) != "--print-bounds") continue;
+        const glm::mat4 view = camera.getViewMatrix();
+        const glm::mat4 proj = glm::perspective(glm::radians(camera.getFov()), float(W) / float(H), 0.1f, 1000.0f);
+        glm::vec2 lo(1e30f), hi(-1e30f);
+        scene->forEachActor([&](Actor& actor) {
+            if (actor.getName().find("Mesh_") != 0 && actor.getName() != "Model") return;
+            auto mc = actor.getComponent<MeshComponent>();
+            if (!mc || !mc->getModel() || mc->getModel()->vertices.empty()) return;
+            glm::vec3 bmin(1e30f), bmax(-1e30f);
+            for (const auto& v : mc->getModel()->vertices) { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
+            const glm::mat4 world = actor.getTransform()->getWorldMatrix();
+            for (int c = 0; c < 8; ++c) {
+                const glm::vec3 corner((c & 1) ? bmax.x : bmin.x, (c & 2) ? bmax.y : bmin.y, (c & 4) ? bmax.z : bmin.z);
+                const glm::vec4 clip = proj * view * world * glm::vec4(corner, 1.0f);
+                const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+                // Path tracer raygen: pixel row 0 is the top (ndc.y = +1).
+                const glm::vec2 px((ndc.x * 0.5f + 0.5f) * float(W), (0.5f - ndc.y * 0.5f) * float(H));
+                lo = glm::min(lo, px); hi = glm::max(hi, px);
+            }
+        });
+        std::cout << "BOUNDS " << lo.x << " " << lo.y << " " << hi.x << " " << hi.y << " (of " << W << "x" << H << ")\n";
     }
 
     const RenderMode mode = resolveMode(cli);

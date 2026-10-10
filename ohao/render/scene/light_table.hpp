@@ -22,6 +22,7 @@ public:
 
     void set(std::span<const LightDesc> lights);
     void setEnvMapTextureIndex(uint32_t texIdx);
+    void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
     [[nodiscard]] uint32_t rtCount() const noexcept { return static_cast<uint32_t>(m_rt.size()); }
@@ -36,6 +37,7 @@ private:
     std::vector<LightData> m_raster;
     std::vector<GPULight> m_rt;
     uint32_t m_envMapTexIdx{kNoTexture};
+    float m_envIntensity{1.0f};
     bool m_shadowsEnabled{true};
     bool m_dirty{true};
 };

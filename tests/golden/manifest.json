@@ -58,7 +58,8 @@
       "golden": "tests/golden/damaged_helmet.png",
       "max_abs_diff": 4,
       "max_diff_frac": 0.01,
-      "_note": "Replaces metal_rough_spheres, whose MetalRoughSpheres.glb was never in the repository. model_viewer used to exit 0 after a failed load and render an empty frame, so that scene reported a large pixel difference for two months instead of a missing file. DamagedHelmet.glb IS tracked (3.7 MB) and covers the same ground: a metal/rough glTF under an HDRI."
+      "_note": "Replaces metal_rough_spheres, whose MetalRoughSpheres.glb was never in the repository. model_viewer used to exit 0 after a failed load and render an empty frame, so that scene reported a large pixel difference for two months instead of a missing file. DamagedHelmet.glb IS tracked (3.7 MB) and covers the same ground: a metal/rough glTF under an HDRI.",
+      "_recaptured": "2026-10-10, sub-project 2a Task 8 (RT reads RenderScene). The old golden was NOT lit by the HDRI: the legacy RT build loaded the env map before any path tracer existed, so it took bindless index 0 -- the first wall's 1x1 solid-color layer -- and every miss ray returned that constant color. The new path registers the HDRI in the one texture table. Verified at 1024 spp against master: with the old index emulated, master vs new is max_abs 9 / frac>4 0.0002 inside the helmet box and 8 / 0.0001 outside (640-wide); with the real HDRI the whole frame changes (mean RGB 130 -> 98). Albedo/emissive textures are now sRGB-decoded by the sampler instead of pow(2.2) on UNORM; the helmet's textures were already sampled at their native 2048^2."
     },
     {
       "name": "cornell_box_deferred",

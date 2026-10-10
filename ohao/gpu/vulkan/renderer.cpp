@@ -161,24 +161,14 @@ if (!createLightBuffer()) {
             return false;
         }
 
-        // Initialize RT acceleration structure manager
-        m_rtAccel = std::make_unique<RTAccelerationStructure>();
-        if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
-            std::cout << "Ray tracing: available" << std::endl;
-
-            // Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual
-            // init at 4K can OOM (each PT holds beauty + AOV images at full res).
-        } else {
-            std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
-            m_rtAccel.reset();
-        }
-
-        // Persistent GPU render world: needs the device and command pool. It owns its
-        // own RTAccelerationStructure (buildBLASTLAS wipes m_rtAccel's BLASes).
+        // Persistent GPU render world: needs the device and command pool. It owns the
+        // acceleration structures (one BLAS per mesh, the TLAS) when the device has
+        // ray tracing; it decides that itself. The realtime/offline PathTracers are
+        // created lazily on setRenderMode() (eager dual init at 4K can OOM).
         m_renderScene = std::make_unique<render::RenderScene>();
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
                 m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
-                m_commandPool, isRTSupported(), m_rayQueryEnabled})) {
+                m_commandPool, /*rayTracing=*/true, m_rayQueryEnabled})) {
             std::cerr << "Failed to initialize RenderScene" << std::endl;
             m_renderScene.reset();
             return false;
@@ -192,7 +182,7 @@ if (!createLightBuffer()) {
         m_initialized = true;
 
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
-        std::cout << "Ray tracing: " << (m_rtAccel ? "enabled" : "disabled") << std::endl;
+        std::cout << "Ray tracing: " << (isRTSupported() ? "enabled" : "disabled") << std::endl;
         return true;
 
     } catch (const std::exception& e) {
@@ -216,11 +206,11 @@ void VulkanRenderer::shutdown() {
         // Cleanup RT resources BEFORE device destruction
         if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
         if (m_rtOfflineRenderer) { m_rtOfflineRenderer->destroy(); m_rtOfflineRenderer.reset(); }
-        if (m_rtAccel) {
-            m_rtAccel->destroy();
-            m_rtAccel.reset();
-        }
-        destroyRTSceneResources();
+
+        // The env map's view is owned by the texture manager: release it first.
+        destroyEnvMapImage();
+        destroyEnvCDFBuffers();
+        if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
 
         // Cleanup deferred renderer
         if (m_deferredRenderer) {
@@ -245,22 +235,6 @@ void VulkanRenderer::shutdown() {
         // Cleanup multi-frame resources
         m_frameResources.shutdown();
 
-// Cleanup vertex buffer
-        if (m_vertexBuffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
-        }
-        if (m_vertexBufferMemory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, m_vertexBufferMemory, nullptr);
-        }
-
-        // Cleanup index buffer
-        if (m_indexBuffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(m_device, m_indexBuffer, nullptr);
-        }
-        if (m_indexBufferMemory != VK_NULL_HANDLE) {
-            vkFreeMemory(m_device, m_indexBufferMemory, nullptr);
-        }
-
         // Cleanup light buffer
         if (m_lightBuffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(m_device, m_lightBuffer, nullptr);
@@ -268,14 +242,6 @@ void VulkanRenderer::shutdown() {
         if (m_lightBufferMemory != VK_NULL_HANDLE) {
             vkFreeMemory(m_device, m_lightBufferMemory, nullptr);
         }
-
-        destroyEnvMapImage();
-
-        // Cleanup env CDF buffers
-        if (m_envMarginalCDFBuffer)    { vkDestroyBuffer(m_device, m_envMarginalCDFBuffer, nullptr); m_envMarginalCDFBuffer = VK_NULL_HANDLE; }
-        if (m_envMarginalCDFMemory)    { vkFreeMemory(m_device, m_envMarginalCDFMemory, nullptr);    m_envMarginalCDFMemory = VK_NULL_HANDLE; }
-        if (m_envConditionalCDFBuffer) { vkDestroyBuffer(m_device, m_envConditionalCDFBuffer, nullptr); m_envConditionalCDFBuffer = VK_NULL_HANDLE; }
-        if (m_envConditionalCDFMemory) { vkFreeMemory(m_device, m_envConditionalCDFMemory, nullptr);    m_envConditionalCDFMemory = VK_NULL_HANDLE; }
 
         // Cleanup command pool
         if (m_commandPool != VK_NULL_HANDLE) {
@@ -318,7 +284,7 @@ void VulkanRenderer::render() {
 
     // Check render mode
     if (const auto* rtPipeline = getRTPipeline(m_renderMode);
-        rtPipeline && getRTRenderer(m_renderMode) && m_rtAccel) {
+        rtPipeline && getRTRenderer(m_renderMode) && isRTSupported()) {
         renderRTPipeline(*rtPipeline);
         m_denoiseCacheValid = false;
         return;
@@ -328,8 +294,12 @@ void VulkanRenderer::render() {
     m_denoiseCacheValid = false;
 }
 
+bool VulkanRenderer::isRTSupported() const {
+    return m_renderScene && m_renderScene->rtSupported();
+}
+
 bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
-    if (!m_rtAccel) {
+    if (!isRTSupported()) {
         return false;
     }
     if (getRTRenderer(mode)) {
@@ -361,20 +331,15 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
         return false;
     }
 
-    // setScene()/updateSceneBuffers() often run before any PathTracer exists.
-    // forEachRTRenderer was a no-op then — re-upload so materials, textures,
-    // lights, and AS buffers bind into the newly created profile.
-    if (created && m_scene && m_initialized) {
-        m_rtAccelDirty = true;
-        updateSceneBuffers();
-    }
+    // Scene buffers, textures and lights are bound every RT frame from the
+    // RenderScene (prepareRTSceneForFrame / renderRTPipeline): nothing to re-upload.
     return created;
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
     const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
     if (rtPipeline) {
-        if (!m_rtAccel || !ensureRTRenderer(mode)) {
+        if (!ensureRTRenderer(mode)) {
             std::cerr << "Path tracing not available, staying in current mode" << std::endl;
             return;
         }
@@ -431,12 +396,7 @@ void VulkanRenderer::applyRTRenderSettings() {
     }
 }
 
-bool VulkanRenderer::updateAnimatedActorsForRT() {
-    // Skeletal animation removed — no animated actors. Always static.
-    return false;
-}
-
-void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS) {
+void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer) return;
 
@@ -453,16 +413,20 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, b
     m_rtSettings.subsurfaceStrength = preservedSssStrength;
     applyRTRenderSettings();
 
+    // TEMPORARY bridge: the old Scene's live transforms, visibility and lights into
+    // the RenderScene, before recordUpdates uploads them.
+    syncBridgedScene();
     updateLightBuffer();
-    if (m_rtLightBuffer != VK_NULL_HANDLE) {
-        rtRenderer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
-    }
 
-    (void)hasDynamicBLAS;  // dynamic BLAS removed with skeletal animation
-
-    if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
-        rtRenderer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
-    }
+    // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates
+    // ran (renderRTPipeline binds them after it). Textures, env map and env scale:
+    bindRTTextures(*rtRenderer);
+    rtRenderer->setEnvCDFBuffers(m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                                 envMapLoaded() ? m_envMapWidth : 0u, envMapLoaded() ? m_envMapHeight : 0u,
+                                 envMapLoaded() ? m_envMapIntegral : 0.0f);
+    rtRenderer->setEnvMapResource(envMapLoaded() ? m_envMapImageView : VK_NULL_HANDLE,
+                                  envMapLoaded() ? m_envSampler : VK_NULL_HANDLE);
+    m_renderScene->setEnvIntensity(m_envIntensityScale);
 }
 
 const IRTRenderPipeline* VulkanRenderer::getRTPipeline(RenderMode mode) const {
@@ -1913,12 +1877,6 @@ bool VulkanRenderer::readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& 
     vkDestroyBuffer(m_device, stagingBuf, nullptr);
     vkFreeMemory(m_device, stagingMem, nullptr);
     return true;
-}
-
-void VulkanRenderer::destroyEnvMapImage() {
-    if (m_envMapImageView) { vkDestroyImageView(m_device, m_envMapImageView, nullptr); m_envMapImageView = VK_NULL_HANDLE; }
-    if (m_envMapImage) { vkDestroyImage(m_device, m_envMapImage, nullptr); m_envMapImage = VK_NULL_HANDLE; }
-    if (m_envMapMemory) { vkFreeMemory(m_device, m_envMapMemory, nullptr); m_envMapMemory = VK_NULL_HANDLE; }
 }
 
 } // namespace ohao

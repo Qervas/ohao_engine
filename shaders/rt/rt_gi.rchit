@@ -1,28 +1,21 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
 
-// Closest Hit Shader for GI — returns the hit surface's albedo + distance
-// Uses instance custom index to look up per-surface albedo from material buffer.
+#include "includes/scene/scene_data.glsl"
+
+// Closest Hit Shader for GI — returns the hit surface's albedo + distance.
+// The instance custom index is the RenderScene slot.
 
 layout(location = 0) rayPayloadInEXT vec4 giPayload;
 hitAttributeEXT vec2 hitBarycentric;
 
-// Material buffer — one vec4 per instance (rgb=albedo, a=unused)
-layout(set = 0, binding = 6) readonly buffer MaterialBuffer {
-    vec4 materials[];
-} materialBuf;
+layout(set = 0, binding = 6, std430) readonly buffer Instances { InstanceGpu instances[]; };
 
 void main() {
-    vec3 albedo = materialBuf.materials[gl_InstanceID].rgb;
-
-    // Workaround for RTX 5070 driver bug: traceRayEXT cull mask is ignored.
-    // Detect animated instances by checking material alpha channel.
-    // Static walls have alpha=1.0, animated instances have alpha=0.0.
-    float isStatic = materialBuf.materials[gl_InstanceID].a;
-    if (isStatic < 0.5) {
-        giPayload = vec4(0.0, 0.0, 0.0, -1.0);  // treat animated as miss
-        return;
-    }
-
+    // LEGACY rgb = the actor's albedo (InstanceGpu::giAlbedoPacked). Its .a is not
+    // read: the old per-instance GI buffer always held alpha 1.0 (static), so every
+    // hit counted.
+    vec3 albedo = instances[gl_InstanceCustomIndexEXT].giAlbedoPacked.rgb;
     giPayload = vec4(albedo, gl_HitTEXT);
 }

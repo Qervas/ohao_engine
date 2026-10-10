@@ -61,14 +61,14 @@ void VulkanRenderer::renderDeferred() {
 
     // Skeletal animation removed — all meshes are static.
 
-    if (m_rtAccel && m_rtAccel->isSupported()) {
-        m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
+    // RT shadows and GI trace the RenderScene's TLAS (DeferredRenderer reads it).
+    if (isRTSupported()) {
         m_deferredRenderer->setRTShadowsEnabled(true);
     }
 
     // Pass env map to deferred renderer for reflections
-    if (m_envMapImageView) {
-        m_deferredRenderer->setEnvMap(m_envMapImageView, m_rtTextureSampler);
+    if (envMapLoaded()) {
+        m_deferredRenderer->setEnvMap(m_envMapImageView, m_envSampler);
     }
 
     // TEMPORARY bridge: the old Scene's live transforms, visibility and lights into
@@ -222,7 +222,7 @@ void VulkanRenderer::blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t
 
 void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
-    if (!rtRenderer || !m_rtAccel) return;
+    if (!rtRenderer || !isRTSupported()) return;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
@@ -238,8 +238,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
-    // Skeletal animation removed — all meshes are static (no dynamic BLAS).
-    prepareRTSceneForFrame(pipeline, false);
+    prepareRTSceneForFrame(pipeline);
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);
@@ -249,6 +248,8 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_renderScene->recordUpdates(cmd, m_currentFrame);
+    // After recordUpdates: table growth and TLAS (re)creation replace handles.
+    rtRenderer->setSceneBuffers(*m_renderScene);
 
     // PT needs unflipped projection (ray generation handles Y internally).
     // Use same FOV/aspect as deferred for consistent framing.
@@ -257,7 +258,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
-    rtRenderer->render(cmd, m_rtAccel.get(), ptView, ptProj,
+    rtRenderer->render(cmd, ptView, ptProj,
                        glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
                        glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
 

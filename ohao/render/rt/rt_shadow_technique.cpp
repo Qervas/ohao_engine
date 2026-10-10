@@ -418,7 +418,7 @@ bool RTShadowTechnique::createShaderBindingTable() {
 
 void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     m_rendered = false;
-    if (!m_rtPipeline || !input.accel || !input.accel->getTLAS()) return;
+    if (!m_rtPipeline || input.tlas == VK_NULL_HANDLE) return;
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
 
@@ -426,7 +426,7 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    VkAccelerationStructureKHR tlas = input.accel->getTLAS();
+    VkAccelerationStructureKHR tlas = input.tlas;
     asWrite.pAccelerationStructures = &tlas;
 
     VkDescriptorImageInfo shadowMaskInfo{};

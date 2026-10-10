@@ -45,8 +45,9 @@ public:
     // Resize handling
     void onResize(uint32_t width, uint32_t height);
 
-    // Scene configuration. The G-buffer and CSM passes draw the RenderScene; the old
-    // Scene is still read by the RT GI pass for its bounce light.
+    // Scene configuration. The G-buffer and CSM passes draw the RenderScene and RT
+    // shadows/GI trace its TLAS; the old Scene is still read by the RT GI pass for
+    // its bounce light.
     void setScene(Scene* scene);
     void setRenderScene(const render::RenderScene* scene);
 
@@ -100,13 +101,8 @@ public:
     [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
     [[nodiscard]] bool getRTShadowsEnabled() const { return m_useRTShadows; }
-    void setAccelerationStructure(RTAccelerationStructure* accel) { m_rtAccel = accel; }
     void setEnvMap(VkImageView view, VkSampler sampler);
 
-private:
-    // stored here for RT passes to access
-    RTAccelerationStructure* m_rtAccel{nullptr};
-public:
     [[nodiscard]] bool getSkyEnabled() const { return m_skyEnabled; }
     void setSunDirection(const glm::vec3& dir);
     void setSkyTurbidity(float t);

@@ -8,6 +8,7 @@
  */
 
 #include <atomic>
+#include <bit>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -33,9 +34,13 @@
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/scene/material_table.hpp"
+#include "render/scene/model_upload.hpp"
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "scene/scene_module.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <span>
 #include <vector>
 
@@ -1372,15 +1377,16 @@ static void runHeadlessDeferredRenderTests() {
 // ENTRY POINTS WHOSE ONLY CALLER WAS REMOVED
 // -----------------------------------------------------------------------------
 //
-// VulkanRenderer::resize and VulkanRenderer::updateRTMaterialParams each had
-// exactly one caller -- the inverse-rendering session -- and when that module
-// left this repository both became unreachable from anything that ships.
+// VulkanRenderer::resize had exactly one caller -- the inverse-rendering
+// session -- and when that module left this repository it became unreachable
+// from anything that ships. (updateRTMaterialParams, its sibling, died with the
+// legacy RT scene build: materials now live in the RenderScene material table,
+// covered under RENDER SCENE below.)
 //
-// Unreachable is not the same as wrong. Both are ordinary engine API that a game
-// wants: a resized viewport, and a material edit that does not rebuild
-// acceleration structures. What they lost was not their usefulness, it was their
-// only evidence of working. Dead code with no test rots quietly and then fails
-// the first time someone needs it.
+// Unreachable is not the same as wrong. A resized viewport is ordinary engine
+// API that a game wants. What it lost was not its usefulness, it was its only
+// evidence of working. Dead code with no test rots quietly and then fails the
+// first time someone needs it.
 //
 // These are that evidence. They also mean the next person who greps for callers,
 // finds none, and reaches for the delete key has something to read first.
@@ -1421,22 +1427,6 @@ static void runOrphanedEntryPointTests() {
         renderer.resize(16, 16);
         EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(16 * 16 * 4),
                   "resize must shrink the readback buffer too, not just grow it");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("updateRTMaterialParams() refuses, rather than corrupts, without RT state");
-    {
-        ohao::VulkanRenderer renderer(32, 32);
-        // No scene, no RT material buffer, no materials. All three of its
-        // preconditions fail. The contract is a clean false -- NOT a map of a
-        // null VkDeviceMemory, which is what a missing guard would do here.
-        const bool ok = renderer.updateRTMaterialParams();
-        EXPECT(!ok, "updateRTMaterialParams must return false when there is no scene "
-                    "and no RT material buffer to patch");
-
-        renderer.setScene(nullptr);
-        EXPECT(!renderer.updateRTMaterialParams(),
-               "an explicitly null scene must refuse on the same path");
         TEST_PASS();
     }
 
@@ -1748,42 +1738,99 @@ static void runRenderSceneTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("the legacy scene build does not touch RenderScene's BLASes");
+    // The material table pack is what the G-buffer and the path tracer's hit
+    // shaders read: every field of a material, at the MaterialGpuPack offsets.
+    TEST_BEGIN("a material edit reaches the material table pack");
     {
-        _putenv_s("OHAO_VALIDATION", "1");
-        auto r = std::make_unique<ohao::VulkanRenderer>(64, 64);
-        const bool ok = r->initialize();
-        _putenv_s("OHAO_VALIDATION", "");
-        if (!ok || !r->validationEnabled()) { std::cout << "(skipped) "; TEST_PASS(); return; }
-        if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
-        r->setRenderMode(ohao::RenderMode::Deferred);
-        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
-        RenderScene& rs = r->renderScene();
-        MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
-        EXPECT(rs.rtAccel() && rs.rtAccel() != r->getRT(), "RenderScene owns its acceleration structures");
-        const VkDeviceAddress before = rs.rtAccel()->getBlasAddress(rs.meshInfo(m)->blas);
-        EXPECT(before != 0, "the mesh has a BLAS");
+        MaterialDesc d;
+        d.baseColor = {0.25f, 0.5f, 0.75f};
+        d.roughness = 0.3f;
+        d.metallic = 1.0f;
+        d.albedoTex = 7; d.normalTex = 8; d.roughMetalTex = 9; d.emissiveTex = 10;
+        d.emissiveStrength = 2.0f;
+        d.legacyRtTintTex = 11;
+        const auto bits = [](float f) { return std::bit_cast<uint32_t>(f); };
+        const MaterialTable::Pack p = MaterialTable::pack(d);
+        EXPECT(p[0] == 0.25f && p[1] == 0.5f && p[2] == 0.75f && bits(p[3]) == 7u, "row 0: base color, albedo texture");
+        EXPECT(p[4] == 0.3f && p[5] == 1.0f && bits(p[6]) == 8u && bits(p[7]) == 10u,
+               "row 1: roughness, metallic, normal and emissive textures");
+        EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && bits(p[10]) == 11u,
+               "row 2: rough/metal texture, emissive strength, legacy RT tint");
+        // An edit is a new registration: the table never rewrites a live material.
+        d.baseColor = {1, 0, 0};
+        EXPECT(MaterialTable::pack(d)[0] == 1.0f, "the edited color is what gets packed");
+        EXPECT(bits(MaterialTable::pack(MaterialDesc{})[10]) == kNoTexture, "no tint by default");
 
-        // Legacy path: setScene -> updateSceneBuffers -> buildBLASTLAS, which
-        // destroys and re-creates every BLAS in the renderer's m_rtAccel.
-        ohao::Scene scene("legacy");
-        auto actor = scene.createActor("quad");
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- partial) "; TEST_PASS(); return; }
+        RenderScene& rs = r.renderScene();
+        MaterialDesc a; a.baseColor = {0.5f, 0.5f, 0.5f};
+        MaterialDesc b = a; b.baseColor = {0.9f, 0.1f, 0.1f};
+        const MaterialHandle ha = rs.registerMaterial(a);
+        const MaterialHandle hb = rs.registerMaterial(b);
+        EXPECT(ha.valid() && hb.valid() && ha.index != hb.index && ha.index != 0u,
+               "re-registering an edited material gets its own table entry");
+        TEST_PASS();
+    }
+
+    TEST_BEGIN("legacy RT tint textures are 1x1 UNORM and shared per encoded color");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        ohao::BindlessTextureManager* tm = r.getTextureManager();
+        if (!tm) { std::cout << "(no texture manager -- skipped) "; TEST_PASS(); return; }
+        EXPECT_EQ(legacyRtTintTexture(nullptr, glm::vec3(0.5f)), kNoTexture, "no manager, no texture");
+        const uint32_t a = legacyRtTintTexture(tm, glm::vec3(0.73f));
+        const uint32_t b = legacyRtTintTexture(tm, glm::vec3(0.73f));
+        const uint32_t c = legacyRtTintTexture(tm, glm::vec3(0.65f, 0.05f, 0.05f));
+        EXPECT(a != kNoTexture && a == b, "one texture per color");
+        EXPECT(c != kNoTexture && c != a, "another color, another texture");
+        const auto* info = tm->getTextureInfo(ohao::BindlessTextureHandle{a});
+        EXPECT(info && info->width == 1 && info->height == 1 && info->format == VK_FORMAT_R8G8B8A8_UNORM,
+               "the old texture array's layer format: 1x1 R8G8B8A8_UNORM");
+        TEST_PASS();
+    }
+
+    // The path tracer binds the RenderScene: vertex/index arenas, mesh table, slots,
+    // materials, instances, refs, lights, one texture table and the in-frame TLAS.
+    // Not under validation: NRD's NRI wrapper aborts the process when the validation
+    // layer hides vkCmdPushDescriptorSet (pre-existing, any RT profile init).
+    TEST_BEGIN("the path tracer traces the RenderScene");
+    {
+        auto r = std::make_unique<ohao::VulkanRenderer>(64, 64);
+        if (!r->initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
+        std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
+        ohao::Scene scene("rt");
+        auto actor = scene.createActor("quad");   // the XZ quad turned to face +Z, 4 units wide
+        actor->getTransform()->setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)));
+        actor->getTransform()->setScale(glm::vec3(2.0f));
         auto model = std::make_shared<ohao::Model>();
         model->vertices = v; model->indices = i;
         auto mesh = actor->addComponent<ohao::MeshComponent>();
         mesh->setModel(model);
         mesh->setVisible(true);
+        auto mat = actor->addComponent<ohao::MaterialComponent>();
+        mat->getMaterial().baseColor = {0.9f, 0.9f, 0.9f};
+        auto lightActor = scene.createActor("light");
+        auto lc = lightActor->addComponent<ohao::LightComponent>();
+        lc->setLightType(ohao::LightType::Sphere);
+        lc->setIntensity(20.0f);
+        lightActor->getTransform()->setPosition({0, 0, 2});
         r->setScene(&scene);
-        EXPECT(r->getRT()->getBlasCount() > 0, "the legacy build made its own BLAS");
-
-        EXPECT_EQ(rs.rtAccel()->getBlasAddress(rs.meshInfo(m)->blas), before, "RenderScene's BLAS survived the legacy build");
-        MeshHandle m2 = rs.registerMesh(MeshData{v, i, {}, {}, "quad2"});
-        EXPECT(rs.rtAccel()->getBlasAddress(rs.meshInfo(m2)->blas) != 0, "a later mesh gets a BLAS");
-        for (int k = 0; k < 4; ++k) r->render();
-        r->shutdown();
-        const auto msgs = r->validationMessages();
-        if (!msgs.empty()) std::cout << "\n      first: " << msgs.front().substr(0, 260) << "\n";
-        EXPECT_EQ(msgs.size(), size_t{0}, "rendering and teardown are clean");
+        r->getCamera().setPosition({0.0f, 0.0f, 6.0f});
+        r->getCamera().setRotation(0.0f, -90.0f);
+        r->setRenderMode(ohao::RenderMode::RTOffline);
+        if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
+        for (int k = 0; k < 6; ++k) r->render();
+        RenderScene& rs = r->renderScene();
+        EXPECT(rs.tlas() != VK_NULL_HANDLE, "the RenderScene built a TLAS for the path tracer");
+        EXPECT_EQ(rs.rtLightCount(), 1u, "the scene's light reached the RT light list");
+        const auto px = r->getPixelSpan();
+        EXPECT_EQ(px.size(), size_t{64 * 64 * 4}, "a full readback");
+        const std::size_t centre = (32 * 64 + 32) * 4, corner = 0;
+        EXPECT(px[centre] > 20, "the lit quad covers the image centre (closest-hit read the scene)");
+        EXPECT(px[centre] > px[corner], "the corner, past the quad, sees the black sky");
         TEST_PASS();
     }
 

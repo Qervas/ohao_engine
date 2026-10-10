@@ -1,5 +1,6 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "render/scene/render_scene.hpp"
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "scene/actor/actor.hpp"
@@ -377,9 +378,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     }
 
+    // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
+    // buffer. Null without RT or before anything was built.
+    const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
+
     // 3.7. RT Shadows — traces shadow rays using TLAS, outputs shadow mask
-    if (m_useRTShadows && m_rtShadow && m_rtAccel && m_rtAccel->isSupported() &&
-        m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
+    if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
         m_renderGraph.addComputePass("RTShadow",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -401,7 +405,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 // Use first scene light position if available, else default
                 si.lightPosition = glm::vec3(0, 4.5f, 0);
                 si.lightRange = 15.0f;
-                si.accel = m_rtAccel;
+                si.tlas = sceneTlas;
                 m_rtShadow->setLightRadius(0.5f);   // soft shadow — 0.5 unit light radius
                 m_rtShadow->setSampleCount(8);       // 8 rays per pixel for penumbra
                 m_rtShadow->render(c, si);
@@ -412,8 +416,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 3.8. RT GI — traces indirect rays, outputs color bleeding
-    if (m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
-        m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
+    if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
         m_renderGraph.addComputePass("RTGI",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -434,9 +437,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.height = m_height;
                 gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
                 gi.frameSlot = frameIndex;
-                gi.accel = m_rtAccel;
-
-                // GI material albedos updated in render_dispatch (matches TLAS instance order)
+                gi.tlas = sceneTlas;
+                gi.instances = m_renderScene->instanceBuffer();
 
                 // Find brightest scene light for GI bounce
                 if (m_scene) {

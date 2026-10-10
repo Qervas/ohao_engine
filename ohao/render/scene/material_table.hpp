@@ -9,7 +9,8 @@
 namespace ohao::render {
 
 // Material table: a fixed-capacity device-local array of 48-byte packs (the
-// MaterialGpuPack layout, emissive strength in row 2 .y). Index 0 is the default
+// MaterialGpuPack layout, emissive strength in row 2 .y, the legacy RT tint texture
+// in row 2 .z). Index 0 is the default
 // material. Writes are staged through the frame slot's staging buffer.
 class MaterialTable {
 public:

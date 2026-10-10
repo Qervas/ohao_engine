@@ -21,7 +21,6 @@ namespace ohao {
 
 class Scene;
 class Camera;
-class RTAccelerationStructure;
 
 // ─── Shadow Technique ────────────────────────────────────────────────
 
@@ -42,8 +41,8 @@ struct ShadowInput {
     int lightType;                 // 0=dir, 1=point, 2=spot
     float lightRange;
 
-    // RT-specific (null if rasterization-only)
-    RTAccelerationStructure* accel = nullptr;
+    // RT-specific: the RenderScene's TLAS (null if rasterization-only)
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 };
 
 struct ShadowOutput {
@@ -81,7 +80,8 @@ struct GIInput {
     uint32_t frameIndex;           // for temporal accumulation
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
 
-    RTAccelerationStructure* accel = nullptr;
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;   // RenderScene TLAS (custom index = slot)
+    VkBuffer instances = VK_NULL_HANDLE;                // RenderScene instance table (InstanceGpu[])
 
     // Light info for indirect bounce calculation
     glm::vec3 lightPos{0.0f, 4.5f, 0.0f};
@@ -123,7 +123,7 @@ struct ReflectionInput {
     uint32_t height;
     float roughnessThreshold;      // skip reflections above this roughness
 
-    RTAccelerationStructure* accel = nullptr;
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 };
 
 struct ReflectionOutput {
@@ -159,7 +159,7 @@ struct AOInput {
     float radius;
     float intensity;
 
-    RTAccelerationStructure* accel = nullptr;
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 };
 
 struct AOOutput {

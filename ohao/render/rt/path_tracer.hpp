@@ -13,9 +13,10 @@
 // Usage:
 //   PathTracer pt;
 //   pt.init(device, physicalDevice, 1920, 1080);
-//   pt.setMaterialAlbedos(albedos);
-//   // per frame:
-//   pt.render(cmd, accel, view, proj, lightPos, intensity, lightColor, lightRadius);
+//   // per frame, after RenderScene::recordUpdates:
+//   pt.setSceneBuffers(renderScene);
+//   pt.setBindlessTextures(views, samplers);
+//   pt.render(cmd, view, proj, lightPos, intensity, lightColor, lightRadius);
 //   // on camera move:
 //   pt.resetAccumulation();
 //   // on window resize:
@@ -30,6 +31,7 @@
 #include "gpu/layout_meta.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -45,6 +47,7 @@ namespace ohao { class NrdCompositor; }      // NEW 4.D
 namespace ohao { class NrdCinematicPost; }   // NEW 4.G (replaces 4.E NrdTonemap)
 namespace ohao { class AtrousDenoiser; }     // à-trous beauty denoiser (DenoiseMode::Atrous)
 namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
+namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
@@ -79,7 +82,8 @@ public:
                             const std::vector<const char*>& deviceExtensions = {});
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
-    void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
+    // Traces the scene last given to setSceneBuffers; does nothing without a TLAS.
+    void render(VkCommandBuffer cmd,
                 const glm::mat4& view, const glm::mat4& proj,
                 const glm::vec3& lightPos, float lightIntensity,
                 const glm::vec3& lightColor, float lightRadius);
@@ -120,37 +124,20 @@ public:
     [[nodiscard]] VkImageView getNrdTonemappedAOV()      const { return m_nrdTonemappedView; }
     [[nodiscard]] VkImage     getNrdTonemappedAOVImage() const { return m_nrdTonemappedImage; }
 
-    // Set per-instance material albedo colors (must match TLAS instance order)
-    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
-    void setMaterialData(const std::vector<glm::vec4>& materials);
-    void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) {
-        m_normalBuffer = normalBuf; m_indexBuffer = indexBuf; m_normalVertexCount = vertexCount;
-    }
-    void setUVBuffer(VkBuffer uvBuf) { m_uvBuffer = uvBuf; }
-    void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) {
-        m_matIDBuffer = matIDBuf; m_matColorBuffer = matColorBuf;
-    }
-    void setLightBuffer(VkBuffer lightBuf, uint32_t lightCount) {
-        m_lightBuffer = lightBuf; m_lightCount = lightCount;
-    }
-    void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) {
-        m_textureArrayView = view; m_textureSampler = sampler; m_textureArrayCount = count;
-    }
-    // Bindless textures — pass individual image views + samplers
-    void setBindlessTextures(const std::vector<VkImageView>& views,
-                             const std::vector<VkSampler>& samplers) {
-        m_bindlessImageViews = views;
-        m_bindlessSamplers = samplers;
-        m_bindlessTextureCount = static_cast<uint32_t>(views.size());
-    }
+    // Scene inputs from the RenderScene: bindings 4 (vertex arena), 5 (index arena),
+    // 8 (mesh table), 9 (triangle material slots), 10 (material table), 11 (RT
+    // lights), 36 (instances), 37 (material refs) and 0 (TLAS). Call every frame
+    // after RenderScene::recordUpdates: growth and TLAS rebuilds replace handles.
+    void setSceneBuffers(const render::RenderScene& scene);
+    // Bindless textures (binding 12): views[i] is bindless index i, one sampler per
+    // view. At most kMaxBindlessTextures are bound.
     void setBindlessTextures(std::span<const VkImageView> views,
                              std::span<const VkSampler> samplers) {
         m_bindlessImageViews.assign(views.begin(), views.end());
         m_bindlessSamplers.assign(samplers.begin(), samplers.end());
-        m_bindlessTextureCount = static_cast<uint32_t>(views.size());
+        m_bindlessTextureCount = static_cast<uint32_t>(std::min(views.size(), samplers.size()));
     }
-    [[nodiscard]] std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
-    [[nodiscard]] std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
+    static constexpr uint32_t kMaxBindlessTextures = 1024;
 
     // Shader contract: envWidth == 0 means "no env map loaded" — the shader
     // must skip env importance sampling in this case. The renderer provides
@@ -204,7 +191,6 @@ public:
 
 private:
     [[nodiscard]] bool createImages();
-    [[nodiscard]] bool createMaterialBuffer();
     [[nodiscard]] bool createDescriptorResources();
     [[nodiscard]] bool createRTPipeline();
     [[nodiscard]] bool createShaderBindingTable();
@@ -264,14 +250,16 @@ private:
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
     RTRenderSettings m_renderSettings{kOfflineRTSettings};
     PathTracerShaderSet m_shaderSet{};
-    static constexpr uint32_t m_maxBindlessTextures = 1024;
-    VkBuffer m_normalBuffer = VK_NULL_HANDLE;
-    VkBuffer m_indexBuffer = VK_NULL_HANDLE;
-    VkBuffer m_uvBuffer = VK_NULL_HANDLE;
-    VkBuffer m_matIDBuffer = VK_NULL_HANDLE;
-    VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
+    // RenderScene inputs (setSceneBuffers); borrowed, never destroyed here.
+    VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
+    VkBuffer m_vertexArena = VK_NULL_HANDLE;
+    VkBuffer m_indexArena = VK_NULL_HANDLE;
+    VkBuffer m_meshTable = VK_NULL_HANDLE;
+    VkBuffer m_triangleSlots = VK_NULL_HANDLE;
+    VkBuffer m_materialTable = VK_NULL_HANDLE;
+    VkBuffer m_instances = VK_NULL_HANDLE;
+    VkBuffer m_materialRefs = VK_NULL_HANDLE;
     VkBuffer m_lightBuffer = VK_NULL_HANDLE;
-    uint32_t m_lightCount = 0;
 
     // Env CDF storage buffers (bindings 17, 18)
     VkBuffer m_envMarginalCDFBuffer   = VK_NULL_HANDLE;
@@ -288,14 +276,8 @@ private:
     // Bindless textures — individual sampler2D entries
     std::vector<VkImageView> m_bindlessImageViews;
     std::vector<VkSampler> m_bindlessSamplers;
-    VkSampler m_defaultSampler = VK_NULL_HANDLE;
     uint32_t m_bindlessTextureCount = 0;
 
-    // Legacy (kept for compatibility during migration)
-    VkImageView m_textureArrayView = VK_NULL_HANDLE;
-    VkSampler m_textureSampler = VK_NULL_HANDLE;
-    uint32_t m_textureArrayCount = 0;
-    uint32_t m_normalVertexCount = 0;
     uint32_t m_sampleIndex = 0;
     uint32_t m_renderSeed = 0;  // resetAccumulation() restores sample index to this
     uint32_t m_historyFrameCount = 0;
@@ -440,11 +422,6 @@ private:
     VkImageView    m_giReservoirViews[3][2]    = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
     bool           m_giReservoirInitialized[2] = {false, false};
     uint32_t       m_giReservoirWriteIndex     = 0;
-
-    // Material buffer (per-instance albedo, vec4 SSBO)
-    VkBuffer m_materialBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_materialMemory = VK_NULL_HANDLE;
-    std::vector<glm::vec4> m_materialData;
 
     // RT Pipeline
     VkPipeline m_rtPipeline = VK_NULL_HANDLE;

@@ -76,11 +76,6 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
-    if (!createMaterialBuffer()) {
-        std::cerr << "[RTGI] Failed to create material buffer" << std::endl;
-        return false;
-    }
-
     if (!createDescriptorResources()) {
         std::cerr << "[RTGI] Failed to create descriptor resources" << std::endl;
         return false;
@@ -157,57 +152,6 @@ bool RTGITechnique::createOutputImage() {
     return true;
 }
 
-bool RTGITechnique::createMaterialBuffer() {
-    // Pre-allocate material buffer for up to 256 instances (vec4 each)
-    // HOST_VISIBLE so CPU can write albedo colors directly
-    const uint32_t maxInstances = 256;
-    m_materialData.resize(maxInstances, glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
-
-    VkBufferCreateInfo bufInfo{};
-    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = maxInstances * sizeof(glm::vec4);
-    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_materialBuffer) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, m_materialBuffer, &memReqs);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_materialMemory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(m_device, m_materialBuffer, m_materialMemory, 0);
-
-    // Write default albedos
-    void* mapped;
-    vkMapMemory(m_device, m_materialMemory, 0, maxInstances * sizeof(glm::vec4), 0, &mapped);
-    memcpy(mapped, m_materialData.data(), maxInstances * sizeof(glm::vec4));
-    vkUnmapMemory(m_device, m_materialMemory);
-
-    return true;
-}
-
-void RTGITechnique::setMaterialAlbedos(const std::vector<glm::vec3>& albedos,
-                                        const std::vector<float>& flags) {
-    for (size_t i = 0; i < albedos.size() && i < m_materialData.size(); i++) {
-        float alpha = (i < flags.size()) ? flags[i] : 1.0f;
-        m_materialData[i] = glm::vec4(albedos[i], alpha);
-    }
-
-    // Upload to GPU
-    void* mapped;
-    VkDeviceSize size = m_materialData.size() * sizeof(glm::vec4);
-    vkMapMemory(m_device, m_materialMemory, 0, size, 0, &mapped);
-    memcpy(mapped, m_materialData.data(), size);
-    vkUnmapMemory(m_device, m_materialMemory);
-}
-
 bool RTGITechnique::createDescriptorResources() {
     // Layout: 8 bindings
     //   0: TLAS (acceleration structure) — RAYGEN
@@ -216,7 +160,7 @@ bool RTGITechnique::createDescriptorResources() {
     //   3: GBuffer normal (sampled image) — RAYGEN
     //   4: GBuffer albedo (sampled image) — RAYGEN
     //   5: Direct lighting (sampled image) — RAYGEN
-    //   6: Material buffer SSBO — CLOSEST_HIT
+    //   6: RenderScene instance table SSBO — CLOSEST_HIT
     //   7: GI history (sampled image) — RAYGEN (temporal blend)
     VkDescriptorSetLayoutBinding bindings[8] = {};
 
@@ -256,7 +200,7 @@ bool RTGITechnique::createDescriptorResources() {
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // 6: Material buffer SSBO (per-instance albedo for closest-hit)
+    // 6: RenderScene instance table (closest-hit reads giAlbedoPacked by slot)
     bindings[6].binding = 6;
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[6].descriptorCount = 1;
@@ -522,7 +466,7 @@ bool RTGITechnique::createShaderBindingTable() {
 
 void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_rendered = false;
-    if (!m_rtPipeline || !input.accel || !input.accel->getTLAS()) return;
+    if (!m_rtPipeline || input.tlas == VK_NULL_HANDLE || input.instances == VK_NULL_HANDLE) return;
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
 
@@ -530,7 +474,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    VkAccelerationStructureKHR tlas = input.accel->getTLAS();
+    VkAccelerationStructureKHR tlas = input.tlas;
     asWrite.pAccelerationStructures = &tlas;
 
     VkDescriptorImageInfo giOutputInfo{};
@@ -570,10 +514,11 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     directLightInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     directLightInfo.sampler = sampler;
 
+    // 6: the RenderScene instance table (rt_gi.rchit reads giAlbedoPacked by slot)
     VkDescriptorBufferInfo materialBufInfo{};
-    materialBufInfo.buffer = m_materialBuffer;
+    materialBufInfo.buffer = input.instances;
     materialBufInfo.offset = 0;
-    materialBufInfo.range = m_materialData.size() * sizeof(glm::vec4);
+    materialBufInfo.range = VK_WHOLE_SIZE;
 
     VkDescriptorImageInfo historyInfo{};
     historyInfo.imageView = m_giHistoryView;
@@ -797,8 +742,6 @@ void RTGITechnique::destroy() {
     if (m_giHistoryView) { vkDestroyImageView(m_device, m_giHistoryView, nullptr); m_giHistoryView = VK_NULL_HANDLE; }
     if (m_giHistory) { vkDestroyImage(m_device, m_giHistory, nullptr); m_giHistory = VK_NULL_HANDLE; }
     if (m_giHistoryMemory) { vkFreeMemory(m_device, m_giHistoryMemory, nullptr); m_giHistoryMemory = VK_NULL_HANDLE; }
-    if (m_materialBuffer) { vkDestroyBuffer(m_device, m_materialBuffer, nullptr); m_materialBuffer = VK_NULL_HANDLE; }
-    if (m_materialMemory) { vkFreeMemory(m_device, m_materialMemory, nullptr); m_materialMemory = VK_NULL_HANDLE; }
 
     m_descriptorSets = {};
 }

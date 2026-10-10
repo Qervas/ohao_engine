@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "includes/scene/scene_data.glsl"
 
 // Path Tracer Closest Hit Shader — Bindless PBR
 // Matches the GBuffer's bindless pattern: sampler2D textures[] + material indices
@@ -19,19 +22,25 @@ struct RayPayload {
 layout(location = 0) rayPayloadInEXT RayPayload payload;
 hitAttributeEXT vec2 baryCoord;
 
-// Geometry buffers
-layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;
-layout(set = 0, binding = 4) readonly buffer NormalBuffer { vec4 normals[]; } normalBuf;
-layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } indexBuf;
-layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
-layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
+// Scene data from RenderScene (ohao/render/scene): mesh arenas, mesh table,
+// per-triangle material slots, materials, instances and their material refs.
+layout(set = 0, binding = 4, std430)  readonly buffer VertexArena { float vtx[]; };        // Vertex = 25 floats
+layout(set = 0, binding = 5, std430)  readonly buffer IndexArena { uint idx[]; };          // mesh-local
+layout(set = 0, binding = 8, std430)  readonly buffer MeshTable { MeshGpu meshes[]; };
+layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSlot[]; };
+// Material table: 3 vec4s per material (layout::MaterialGpuPack)
+//   [matID*3+0] = (baseColor.rgb, albedoTexIdx as float bits)
+//   [matID*3+1] = (roughness, metallic, normalTexIdx bits, emissiveTexIdx bits)
+//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, legacyRtTintTexIdx bits, unused)
+layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+layout(set = 0, binding = 36, std430) readonly buffer Instances { InstanceGpu instances[]; };
+layout(set = 0, binding = 37, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
 
-// Material buffer: 2 vec4s per material
-//   [matID*2+0] = (baseColor.rgb, diffuseTexIdx as float bits)
-//   [matID*2+1] = (roughness, metallic, normalTexIdx as float bits, emissiveTexIdx as float bits)
-layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }
+vec2 vtxUV(uint v)     { uint b = v * 25u + 9u; return vec2(vtx[b], vtx[b + 1u]); }
 
-// Bindless texture array — same pattern as GBuffer (binding 12 = last, variable count)
+// Bindless texture array — the one table the G-buffer also reads (binding 12, variable
+// count). Hit shaders have no derivatives: sample the base level (native resolution).
 layout(set = 0, binding = 12) uniform sampler2D textures[];
 
 void main() {
@@ -44,23 +53,21 @@ void main() {
     float v = baryCoord.y;
     float w = 1.0 - u - v;
 
-    // Global triangle/vertex lookup
-    uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;
-    uint baseIdx = globalTriID * 3;
-    uint i0 = indexBuf.indices[baseIdx + 0];
-    uint i1 = indexBuf.indices[baseIdx + 1];
-    uint i2 = indexBuf.indices[baseIdx + 2];
+    // Instance slot -> mesh -> mesh-local indices
+    InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];
+    MeshGpu mesh = meshes[inst.mesh];
+    uint baseIdx = mesh.indexOffset + uint(gl_PrimitiveID) * 3u;
+    uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];
+    uint i1 = mesh.vertexOffset + idx[baseIdx + 1u];
+    uint i2 = mesh.vertexOffset + idx[baseIdx + 2u];
 
     // Interpolate UVs
-    vec2 uv0 = uvBuf.uvs[i0];
-    vec2 uv1 = uvBuf.uvs[i1];
-    vec2 uv2 = uvBuf.uvs[i2];
-    vec2 texUV = w * uv0 + u * uv1 + v * uv2;
+    vec2 texUV = w * vtxUV(i0) + u * vtxUV(i1) + v * vtxUV(i2);
 
     // Interpolate vertex normals
-    vec3 n0 = normalBuf.normals[i0].xyz;
-    vec3 n1 = normalBuf.normals[i1].xyz;
-    vec3 n2 = normalBuf.normals[i2].xyz;
+    vec3 n0 = vtxNormal(i0);
+    vec3 n1 = vtxNormal(i1);
+    vec3 n2 = vtxNormal(i2);
     vec3 interpolated = w * n0 + u * n1 + v * n2;
 
     mat3 normalMatrix = transpose(inverse(mat3(gl_ObjectToWorldEXT)));
@@ -93,28 +100,36 @@ void main() {
     curv = clamp(curv * 8.0, 0.0, 1.0);  // scale so typical face values land 0..1
 
     // === Material lookup — 3 vec4s per material ===
-    uint matID = matIDBuf.matIDs[globalTriID];
+    uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];
+    uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
     vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
     vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
-    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, unused, unused, unused)
+    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, legacyRtTintTexIdx, unused)
 
     // Decode texture indices (stored as uint bits in float)
     uint diffuseTexIdx    = floatBitsToUint(matColor.a);
     uint normalTexIdx     = floatBitsToUint(matParams.z);
     uint emissiveTexIdx   = floatBitsToUint(matParams.w);
     uint roughMetalTexIdx = floatBitsToUint(matParams2.x);
+    uint legacyTintTexIdx = floatBitsToUint(matParams2.z);
 
     // === Albedo: sample diffuse texture or use base color ===
+    // Albedo textures are R8G8B8A8_SRGB in the shared bindless table: the sampler
+    // decodes to linear.
     vec3 albedo = matColor.rgb;
     if (diffuseTexIdx != 0xFFFFFFFFu) {
-        vec3 sampled = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
-        // RT texture array is UNORM, manual sRGB to Linear conversion
-        albedo *= pow(sampled, vec3(2.2));
+        albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;
+    } else if (legacyTintTexIdx != 0xFFFFFFFFu) {
+        // LEGACY: the old RT texture array gave every untextured material a 1x1
+        // UNORM texture of its sRGB-encoded base color and decoded it with pow 2.2,
+        // so the base color was applied twice. Kept so the RT goldens hold; see
+        // render::legacyRtTintTexture.
+        albedo *= pow(textureLod(textures[nonuniformEXT(legacyTintTexIdx)], texUV, 0.0).rgb, vec3(2.2));
     }
 
     // === Normal mapping via Frisvad basis (constructs TBN from normal alone) ===
     if (normalTexIdx != 0xFFFFFFFFu) {
-        vec3 mapN = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
+        vec3 mapN = textureLod(textures[nonuniformEXT(normalTexIdx)], texUV, 0.0).rgb;
         mapN = normalize(mapN * 2.0 - 1.0);  // [0,1] → [-1,1] and normalize for stability
 
         // Frisvad orthonormal basis from single normal vector
@@ -140,7 +155,7 @@ void main() {
     float metallic  = matParams.y;
     float ao        = 1.0;
     if (roughMetalTexIdx != 0xFFFFFFFFu) {
-        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], texUV);
+        vec4 rm = textureLod(textures[nonuniformEXT(roughMetalTexIdx)], texUV, 0.0);
         ao        *= rm.r;  // R channel = AO
         roughness *= rm.g;  // G channel = Roughness
         metallic  *= rm.b;  // B channel = Metallic
@@ -150,9 +165,8 @@ void main() {
     // === Emissive ===
     vec3 emissive = vec3(0.0);
     if (emissiveTexIdx != 0xFFFFFFFFu) {
-        vec3 sampled = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
-        // RT texture array is UNORM, manual sRGB to Linear conversion
-        emissive = pow(sampled, vec3(2.2));
+        // R8G8B8A8_SRGB: the sampler decodes to linear.
+        emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb;
     }
     payload.color = emissive;
 

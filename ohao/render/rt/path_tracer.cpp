@@ -1,4 +1,5 @@
 #include "path_tracer.hpp"
+#include "render/scene/render_scene.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -99,11 +100,6 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
-    if (!createMaterialBuffer()) {
-        std::cerr << "[PathTracer] Failed to create material buffer" << std::endl;
-        return false;
-    }
-
     if (!createDescriptorResources()) {
         std::cerr << "[PathTracer] Failed to create descriptor resources" << std::endl;
         return false;
@@ -183,6 +179,20 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     return true;
 }
 
+
+// ─── Scene inputs ────────────────────────────────────────────────────
+
+void PathTracer::setSceneBuffers(const render::RenderScene& scene) {
+    m_tlas = scene.tlas();
+    m_vertexArena = scene.vertexArena();
+    m_indexArena = scene.indexArena();
+    m_meshTable = scene.meshTable();
+    m_triangleSlots = scene.triangleSlotBuffer();
+    m_materialTable = scene.materialBuffer();
+    m_instances = scene.instanceBuffer();
+    m_materialRefs = scene.materialRefBuffer();
+    m_lightBuffer = scene.rtLightBuffer();
+}
 
 // ─── Accumulation reset ──────────────────────────────────────────────
 
@@ -397,10 +407,6 @@ void PathTracer::destroy() {
     if (m_descriptorPool) { vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); m_descriptorPool = VK_NULL_HANDLE; }
     if (m_descriptorSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr); m_descriptorSetLayout = VK_NULL_HANDLE; }
     m_descriptorSet = VK_NULL_HANDLE;  // freed with pool
-
-    // Material buffer
-    if (m_materialBuffer) { vkDestroyBuffer(m_device, m_materialBuffer, nullptr); m_materialBuffer = VK_NULL_HANDLE; }
-    if (m_materialMemory) { vkFreeMemory(m_device, m_materialMemory, nullptr); m_materialMemory = VK_NULL_HANDLE; }
 
     // Images
     destroyImages();

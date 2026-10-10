@@ -33,10 +33,6 @@ public:
 
     void setSampleCount(int samples) { m_sampleCount = samples; }
 
-    // Set per-instance material albedo colors (must match TLAS instance order)
-    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos,
-                            const std::vector<float>& flags = {});
-
 private:
     // G-buffer sampler. Lives as long as the technique: it is written into a
     // descriptor set that recorded command buffers reference, so destroying it
@@ -46,7 +42,6 @@ private:
     bool createRTPipeline();
     bool createShaderBindingTable();
     bool createDescriptorResources();
-    bool createMaterialBuffer();
     bool loadFunctionPointers();
 
     VkDevice m_device = VK_NULL_HANDLE;
@@ -79,11 +74,6 @@ private:
     VkStridedDeviceAddressRegionKHR m_missRegion{};
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};
-
-    // Material buffer (per-instance albedo)
-    VkBuffer m_materialBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_materialMemory = VK_NULL_HANDLE;
-    std::vector<glm::vec4> m_materialData;
 
     struct GIPushConstants {
         glm::mat4 invView;

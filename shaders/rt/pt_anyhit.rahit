@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "includes/scene/scene_data.glsl"
 
 // Path Tracer Any-Hit Shader — Alpha Testing
 // Runs for every intersection. If the diffuse texture alpha < 0.5,
@@ -8,11 +11,17 @@
 
 hitAttributeEXT vec2 baryCoord;
 
-layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } indexBuf;
-layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
-layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
-layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+// Same RenderScene bindings as pt_closesthit.rchit.
+layout(set = 0, binding = 4, std430)  readonly buffer VertexArena { float vtx[]; };        // Vertex = 25 floats
+layout(set = 0, binding = 5, std430)  readonly buffer IndexArena { uint idx[]; };          // mesh-local
+layout(set = 0, binding = 8, std430)  readonly buffer MeshTable { MeshGpu meshes[]; };
+layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSlot[]; };
+layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+layout(set = 0, binding = 36, std430) readonly buffer Instances { InstanceGpu instances[]; };
+layout(set = 0, binding = 37, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
 layout(set = 0, binding = 12) uniform sampler2D textures[];
+
+vec2 vtxUV(uint v) { uint b = v * 25u + 9u; return vec2(vtx[b], vtx[b + 1u]); }
 
 void main() {
     // Barycentric interpolation
@@ -20,15 +29,11 @@ void main() {
     float v = baryCoord.y;
     float w = 1.0 - u - v;
 
-    // Get triangle vertices
-    uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;
-    uint baseIdx = globalTriID * 3;
-    uint i0 = indexBuf.indices[baseIdx + 0];
-    uint i1 = indexBuf.indices[baseIdx + 1];
-    uint i2 = indexBuf.indices[baseIdx + 2];
-
-    // Get material
-    uint matID = matIDBuf.matIDs[globalTriID];
+    // Instance slot -> mesh -> material
+    InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];
+    MeshGpu mesh = meshes[inst.mesh];
+    uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];
+    uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
     vec4 matColor = matColorBuf.matColors[matID * 3u + 0u];
     uint diffuseTexIdx = floatBitsToUint(matColor.a);
 
@@ -36,13 +41,14 @@ void main() {
     if (diffuseTexIdx == 0xFFFFFFFFu) return;
 
     // Interpolate UVs
-    vec2 uv0 = uvBuf.uvs[i0];
-    vec2 uv1 = uvBuf.uvs[i1];
-    vec2 uv2 = uvBuf.uvs[i2];
-    vec2 texUV = w * uv0 + u * uv1 + v * uv2;
+    uint baseIdx = mesh.indexOffset + uint(gl_PrimitiveID) * 3u;
+    uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];
+    uint i1 = mesh.vertexOffset + idx[baseIdx + 1u];
+    uint i2 = mesh.vertexOffset + idx[baseIdx + 2u];
+    vec2 texUV = w * vtxUV(i0) + u * vtxUV(i1) + v * vtxUV(i2);
 
     // Sample alpha
-    float alpha = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).a;
+    float alpha = textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).a;
 
     // Alpha test — discard if transparent
     if (alpha < 0.5) {

@@ -50,10 +50,19 @@ std::optional<render::MaterialDesc> actorMaterial(const Actor& actor, BindlessTe
     return d;
 }
 
+// The path tracer's legacy tint for a material without an albedo texture (what
+// uploadModel adds to model materials), so bridge-registered materials match.
+render::MaterialDesc withLegacyRtTint(render::MaterialDesc d, BindlessTextureManager* tm) {
+    if (d.albedoTex == render::kNoTexture && d.legacyRtTintTex == render::kNoTexture)
+        d.legacyRtTintTex = render::legacyRtTintTexture(tm, d.baseColor);
+    return d;
+}
+
 bool sameMaterial(const render::MaterialDesc& a, const render::MaterialDesc& b) {
     return a.baseColor == b.baseColor && a.roughness == b.roughness && a.metallic == b.metallic &&
            a.albedoTex == b.albedoTex && a.normalTex == b.normalTex && a.roughMetalTex == b.roughMetalTex &&
-           a.emissiveTex == b.emissiveTex && a.emissiveStrength == b.emissiveStrength;
+           a.emissiveTex == b.emissiveTex && a.emissiveStrength == b.emissiveStrength &&
+           a.legacyRtTintTex == b.legacyRtTintTex;
 }
 
 render::LightKind lightKind(LightType t) {
@@ -95,8 +104,10 @@ void VulkanRenderer::bridgeSceneToRenderScene() {
             if (!meshComp || !meshComp->getModel() || !meshComp->isVisible()) continue;
             const std::shared_ptr<Model> model = meshComp->getModel();
 
-            const std::optional<render::MaterialDesc> actorMat = actorMaterial(*actor, tm);
+            std::optional<render::MaterialDesc> actorMat = actorMaterial(*actor, tm);
+            if (actorMat) actorMat = withLegacyRtTint(*actorMat, tm);
             const render::MaterialDesc* overrideMat = actorMat ? &*actorMat : nullptr;
+            const render::MaterialDesc defaultMat = withLegacyRtTint(render::MaterialDesc{}, tm);
 
             BridgedModel& cached = m_bridgeModels[model.get()];
             cached.model = model;
@@ -105,7 +116,7 @@ void VulkanRenderer::bridgeSceneToRenderScene() {
                 cached.emissive = cached.uploaded->emissive;
                 cached.emissiveKnown = true;
                 if (model->materialColors.empty() && !cached.uploaded->materials.empty())
-                    m_bridgeMaterials.emplace_back(overrideMat ? *overrideMat : render::MaterialDesc{},
+                    m_bridgeMaterials.emplace_back(overrideMat ? *overrideMat : defaultMat,
                                                    cached.uploaded->materials[0]);
             }
             const render::UploadedModel& up = *cached.uploaded;
@@ -114,7 +125,7 @@ void VulkanRenderer::bridgeSceneToRenderScene() {
             // The old draw-range rule: a range with a model material used it; any other
             // range (no materialColors, or an index past them) used the actor's
             // MaterialComponent, or the 0.8/0.5/0 defaults without one.
-            const render::MaterialHandle fallback = materialFor(overrideMat ? *overrideMat : render::MaterialDesc{});
+            const render::MaterialHandle fallback = materialFor(overrideMat ? *overrideMat : defaultMat);
             BridgedInstance b{};
             b.actorId = actorId;
             if (model->materialColors.empty()) {

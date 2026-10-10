@@ -24,7 +24,7 @@ public:
     virtual void destroy() = 0;
     virtual void resize(uint32_t width, uint32_t height) = 0;
 
-    virtual void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
+    virtual void render(VkCommandBuffer cmd,
                         const glm::mat4& view, const glm::mat4& proj,
                         const glm::vec3& lightPos, float lightIntensity,
                         const glm::vec3& lightColor, float lightRadius) = 0;
@@ -59,16 +59,10 @@ public:
     virtual VkImage     getNrdTonemappedAOVImage() const = 0;
     virtual VkImageView getNrdTonemappedAOV()      const = 0;
 
-    virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
-    virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
-    virtual void setUVBuffer(VkBuffer uvBuf) = 0;
-    virtual void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) = 0;
-    virtual void setLightBuffer(VkBuffer lightBuf, uint32_t lightCount) = 0;
-    virtual void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) = 0;
-    virtual void setBindlessTextures(const std::vector<VkImageView>& views,
-                                     const std::vector<VkSampler>& samplers) = 0;
-    virtual std::vector<VkImageView> getBindlessImageViews() const = 0;
-    virtual std::vector<VkSampler> getBindlessSamplers() const = 0;
+    // See PathTracer::setSceneBuffers / setBindlessTextures.
+    virtual void setSceneBuffers(const render::RenderScene& scene) = 0;
+    virtual void setBindlessTextures(std::span<const VkImageView> views,
+                                     std::span<const VkSampler> samplers) = 0;
 
     virtual void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
                                    uint32_t envWidth, uint32_t envHeight, float integral) = 0;
@@ -110,11 +104,11 @@ public:
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
-    void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
+    void render(VkCommandBuffer cmd,
                 const glm::mat4& view, const glm::mat4& proj,
                 const glm::vec3& lightPos, float lightIntensity,
                 const glm::vec3& lightColor, float lightRadius) override {
-        m_pathTracer.render(cmd, accel, view, proj, lightPos, lightIntensity, lightColor, lightRadius);
+        m_pathTracer.render(cmd, view, proj, lightPos, lightIntensity, lightColor, lightRadius);
     }
 
     VkImage getOutputImage() const override { return m_pathTracer.getOutputImage(); }
@@ -144,24 +138,11 @@ public:
     VkImage     getNrdTonemappedAOVImage() const override { return m_pathTracer.getNrdTonemappedAOVImage(); }
     VkImageView getNrdTonemappedAOV()      const override { return m_pathTracer.getNrdTonemappedAOV(); }
 
-    void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
-    void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {
-        m_pathTracer.setNormalBuffer(normalBuf, indexBuf, vertexCount);
-    }
-    void setUVBuffer(VkBuffer uvBuf) override { m_pathTracer.setUVBuffer(uvBuf); }
-    void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) override {
-        m_pathTracer.setMaterialBuffers(matIDBuf, matColorBuf);
-    }
-    void setLightBuffer(VkBuffer lightBuf, uint32_t lightCount) override { m_pathTracer.setLightBuffer(lightBuf, lightCount); }
-    void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) override {
-        m_pathTracer.setTextureArray(view, sampler, count);
-    }
-    void setBindlessTextures(const std::vector<VkImageView>& views,
-                             const std::vector<VkSampler>& samplers) override {
+    void setSceneBuffers(const render::RenderScene& scene) override { m_pathTracer.setSceneBuffers(scene); }
+    void setBindlessTextures(std::span<const VkImageView> views,
+                             std::span<const VkSampler> samplers) override {
         m_pathTracer.setBindlessTextures(views, samplers);
     }
-    std::vector<VkImageView> getBindlessImageViews() const override { return m_pathTracer.getBindlessImageViews(); }
-    std::vector<VkSampler> getBindlessSamplers() const override { return m_pathTracer.getBindlessSamplers(); }
 
     void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
                           uint32_t envWidth, uint32_t envHeight, float integral) override {
