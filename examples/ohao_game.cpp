@@ -1,6 +1,6 @@
 // ohao_game -- the windowed host. Deferred rendering straight to a swapchain,
-// fixed-step loop, input actions. A fly camera over the DamagedHelmet for now;
-// gameplay arrives with the ECS work.
+// fixed-step loop, input actions, the scene as ECS entities. A fly camera over the
+// DamagedHelmet and a cube spun through World::setTransform.
 //
 //   ohao_game [--vsync] [--frames N] [--resize-at F]
 //
@@ -15,11 +15,9 @@
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
-#include "scene/actor/actor.hpp"
+#include "ecs/spawn.hpp"
 #include "scene/asset/model_loader.hpp"
-#include "scene/component/material_component.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/scene.hpp"
+#include "scene/asset/primitive_mesh_generator.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -49,23 +47,25 @@ bool argFlag(int argc, char** argv, const char* name) {
 constexpr int KEY_W = 87, KEY_A = 65, KEY_S = 83, KEY_D = 68, KEY_Q = 81, KEY_E = 69;
 constexpr int KEY_ESCAPE = 256, KEY_LEFT_SHIFT = 340, MOUSE_RIGHT = 1;
 
-// The helmet on a floor under the studio HDRI, framed the way model_viewer frames it.
-std::unique_ptr<Scene> buildHelmetScene(VulkanRenderer& renderer, const std::string& modelPath) {
+// The helmet on a floor under the studio HDRI, framed the way model_viewer frames it,
+// plus a cube the update hook spins. Returns the cube entity (entt::null on failure).
+entt::entity buildHelmetScene(Application& app, const std::string& modelPath) {
+    VulkanRenderer& renderer = app.renderer();
+    ecs::World& world = app.world();
     auto loaded = ModelLoader::loadResult(modelPath);
     if (!loaded) {
         std::cerr << "[ohao_game] failed to load " << modelPath << ": " << loaded.error() << std::endl;
-        return nullptr;
+        return entt::null;
     }
     std::shared_ptr<Model> model = std::move(loaded.value());
     const FrameResult frame = SceneFramer::computeFraming(model->vertices);
     const float S = frame.roomHalfSize;
-
-    auto scene = std::make_unique<Scene>("ohao_game");
+    render::RenderScene& rs = renderer.renderScene();
+    BindlessTextureManager* tm = renderer.getTextureManager();
 
     // Floor
     {
-        auto actor = scene->createActor("Floor");
-        auto m = std::make_shared<Model>();
+        Model m;
         auto mkv = [](glm::vec3 p) {
             Vertex v{};
             v.position = p;
@@ -75,33 +75,40 @@ std::unique_ptr<Scene> buildHelmetScene(VulkanRenderer& renderer, const std::str
             v.boneWeights = {1, 0, 0, 0};
             return v;
         };
-        m->vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};
-        m->indices = {0, 1, 2, 0, 2, 3};
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(m);
-        mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = {0.18f, 0.10f, 0.05f};
-        mat->getMaterial().roughness = 0.6f;
+        m.vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};
+        m.indices = {0, 1, 2, 0, 2, 3};
+        render::MaterialDesc mat;
+        mat.baseColor = {0.18f, 0.10f, 0.05f};
+        mat.roughness = 0.6f;
+        ecs::spawnModel(world, rs, tm, m, "Floor", ecs::Transform{}, &mat);
     }
 
     // Helmet
     {
-        auto actor = scene->createActor("Model");
-        actor->getTransform()->setRotation(frame.modelRotation);
-        actor->getTransform()->setScale(glm::vec3(frame.modelScale));
-        actor->getTransform()->setPosition(frame.modelPosition);
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(model);
-        mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
-        mat->getMaterial().roughness = 0.5f;
+        ecs::Transform t;
+        t.position = frame.modelPosition;
+        t.rotation = frame.modelRotation;
+        t.scale = glm::vec3(frame.modelScale);
+        render::MaterialDesc mat;
+        mat.baseColor = {0.8f, 0.7f, 0.6f};
+        mat.roughness = 0.5f;
+        ecs::spawnModel(world, rs, tm, *model, "Model", t, &mat);
+    }
+
+    // The spinning cube, to the helmet's right, clear of the floor.
+    entt::entity cube = entt::null;
+    {
+        ecs::Transform t;
+        t.position = {S * 0.8f, -S + 4.0f, 4.0f};
+        t.scale = glm::vec3(3.0f);
+        render::MaterialDesc mat;
+        mat.baseColor = {0.70f, 0.12f, 0.08f};
+        mat.roughness = 0.35f;
+        cube = ecs::spawnModel(world, rs, tm, *PrimitiveMeshGenerator::makeCube(), "SpinningCube", t, &mat);
     }
 
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
-    SceneFramer::applyLights(scene.get(), frame);
-    renderer.setScene(scene.get());
+    SceneFramer::applyLights(world, frame);
     SceneFramer::applyCamera(renderer.getCamera(), frame);
 
     if (auto* deferred = renderer.getDeferredRenderer()) {
@@ -112,7 +119,7 @@ std::unique_ptr<Scene> buildHelmetScene(VulkanRenderer& renderer, const std::str
             pp->setExposure(1.0f);
         }
     }
-    return scene;
+    return cube;
 }
 
 } // namespace
@@ -127,8 +134,8 @@ int main(int argc, char** argv) {
     Application app;
     if (!app.initialize(cfg)) return 1;
 
-    auto scene = buildHelmetScene(app.renderer(), "assets/test_models/DamagedHelmet.glb");
-    if (!scene) {
+    const entt::entity cube = buildHelmetScene(app, "assets/test_models/DamagedHelmet.glb");
+    if (cube == entt::null) {
         (void)app.shutdown();
         return 2;
     }
@@ -145,9 +152,16 @@ int main(int argc, char** argv) {
     float yaw = cam.getYaw();
     float pitch = cam.getPitch();
 
+    float cubeAngle = 0.0f;
     GameHooks hooks;
     hooks.update = [&](Application& a, float dt, float) {
         if (a.input().pressed("quit")) a.quit();
+
+        // Spin the cube: a tracked transform write moves it in raster and RT alike.
+        cubeAngle += dt * 1.2f;
+        ecs::Transform t = a.world().registry().get<ecs::Transform>(cube);
+        t.rotation = glm::angleAxis(cubeAngle, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+        a.world().setTransform(cube, t);
 
         const bool looking = a.input().held("look");
         a.window().setCursorCaptured(looking);
@@ -174,7 +188,6 @@ int main(int argc, char** argv) {
                                       : std::string("NOT ENABLED (set OHAO_VALIDATION=1)"))
               << std::endl;
 
-    scene.reset();
     // Counted after teardown: leaked objects are reported only at device destruction.
     const uint64_t validationTotal = app.shutdown();
     if (r.validationEnabled)

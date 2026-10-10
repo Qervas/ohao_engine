@@ -1312,7 +1312,7 @@ bool testInvalidHandleOperations() {
 
 // =============================================================================
 // ROUND 1-4 TESTS: Gravity Scale, Radial Impulse, Damping, Wind, Buoyancy,
-//                  Force Volumes, Collision Signals, Sleep/Wake, Actor Layer,
+//                  Force Volumes, Collision Signals, Sleep/Wake, Body Layer,
 //                  Springs, Apply Forces, Velocity Getters, CCD, Axis Lock
 // =============================================================================
 

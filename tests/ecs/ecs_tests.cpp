@@ -256,8 +256,8 @@ static void ten_thousand_instances_one_percent_moving_under_half_a_millisecond()
     CHECK(median < 0.5, "TransformSystem + extract + staging for 10k instances, 1% moving, median < 0.5 ms");
 }
 
-// The old-Scene bridge (scene_bridge.cpp) owns no scene here: rendering must not
-// clear the lights the ECS extract set.
+// render() itself never rewrites the light list: the lights the ECS extract set
+// survive any number of frames.
 static void rendering_without_a_scene_keeps_ecs_lights() {
     ohao::VulkanRenderer r(64, 64);
     if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
@@ -320,7 +320,7 @@ static void model_materials_become_submeshes_and_materials() {
     CHECK(info->submeshes[1].materialSlot == 0 && info->submeshes[1].firstIndex == 6, "run 2: material 0");
     const glm::vec4 gi = w.registry().get<GiMaterialLegacy>(e).packed;
     // GI legacy: roughness/metallic come from material 0 (the old texture upload wrote
-    // them into the actor's MaterialComponent before the GI pack read it).
+    // them over the override material before the GI pack read it).
     CHECK(std::fabs(gi.w - 0.25f) < 1e-6f && std::fabs(gi.r - 0.73f) < 1e-6f, "GI legacy pack");
     w.update(0.0f); r.render();
     CHECK(r.renderScene().draws().size() == 2, "one draw per submesh");

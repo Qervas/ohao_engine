@@ -171,7 +171,7 @@ glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrid
         roughness = overrideMaterial->roughness;
         metallic = overrideMaterial->metallic;
     }
-    // uploadDeferredTextures (light_upload.cpp) overwrote the actor material's
+    // uploadDeferredTextures (light_upload.cpp) overwrote the override material's
     // roughness/metallic with model material 0 before buildBLASTLAS packed them.
     if (!model.materialColors.empty()) {
         roughness = model.materialColors[0].w;

@@ -9,7 +9,7 @@ namespace ohao {
 class PrimitiveMeshGenerator {
 public:
     static void generateCube(Model& model, float size = 1.0f);
-    static void generateSphere(Model& model, float radius = 0.5f, int segments = 16);
+    static void generateSphere(Model& model, float radius = 0.5f, int sectors = 32, int stacks = 16);
     static void generatePlatform(Model& model, float width = 2.0f, float height = 0.4f, float depth = 2.0f);
     static void generateCylinder(Model& model, float radius = 0.5f, float height = 1.0f, int segments = 16);
     static void generateCone(Model& model, float radius = 0.5f, float height = 1.0f, int segments = 16);
@@ -21,9 +21,9 @@ public:
         return m;
     }
 
-    [[nodiscard]] static std::shared_ptr<Model> makeSphere(float radius = 0.5f, int segments = 16) {
+    [[nodiscard]] static std::shared_ptr<Model> makeSphere(float radius = 0.5f, int sectors = 32, int stacks = 16) {
         auto m = std::make_shared<Model>();
-        generateSphere(*m, radius, segments);
+        generateSphere(*m, radius, sectors, stacks);
         return m;
     }
 

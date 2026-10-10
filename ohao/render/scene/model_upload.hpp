@@ -40,7 +40,7 @@ UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, 
 [[nodiscard]] uint32_t legacyRtTintTexture(BindlessTextureManager* textures, const glm::vec3& baseColor);
 
 // LEGACY RT GI material word (InstanceGpu::giAlbedoPacked), ported from
-// VulkanRenderer::buildBLASTLAS. `overrideMaterial` is the actor's material, if any.
+// VulkanRenderer::buildBLASTLAS. `overrideMaterial` is the entity's override material, if any.
 [[nodiscard]] glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial);
 
 } // namespace ohao::render

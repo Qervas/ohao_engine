@@ -42,7 +42,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
     if (m_device == VK_NULL_HANDLE) return;
     if (m_envSampler == VK_NULL_HANDLE) m_envSampler = createEnvSampler(m_device);
 
-    // Load once per path: reloading every updateSceneBuffers leaked multi-GB HDR images.
+    // Load once per path: reloading on every scene upload leaked multi-GB HDR images.
     if (!m_envMapPath.empty() && m_envMapPath != m_envMapLoadedPath && m_textureManager) {
         int ew = 0, eh = 0, ec = 0;
         float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);

@@ -1,5 +1,5 @@
 # OHAO Engine Tests
-# Tests EventBus, CommandHistory, Scene, and SceneSerializer
+# Tests EventBus, CommandHistory, meta/traits, headless renderer and RenderScene
 
 add_executable(engine_tests
     engine_tests.cpp
@@ -18,10 +18,10 @@ endif()
 
 if(MSVC)
     target_link_libraries(engine_tests PRIVATE
-        ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
+        ohao_ecs ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
 else()
     target_link_libraries(engine_tests PRIVATE
-        ohao_scene ohao_physics ohao_core
+        ohao_ecs ohao_scene ohao_physics ohao_core
         -Wl,--start-group ohao_renderer ${Vulkan_LIBRARIES} glm)
 endif()
 

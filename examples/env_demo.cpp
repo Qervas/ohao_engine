@@ -7,11 +7,9 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
-#include "scene/component/light_component.hpp"
+#include "ecs/render_extract.hpp"
+#include "ecs/spawn.hpp"
+#include "scene/asset/model.hpp"
 #include "render/camera/camera.hpp"
 
 #include <iostream>
@@ -242,8 +240,10 @@ int main(int argc, char* argv[]) {
                   << " mode: skipping HDR env load (explicit lighting only)" << std::endl;
     }
 
-    // Scene with just the model — no walls
-    auto scene = std::make_unique<Scene>("Env Demo");
+    // Scene with just the model — no walls. Creation order is draw order and light
+    // order. Declared after the renderer: the World releases its RenderScene slots first.
+    ecs::World world;
+    ecs::installRenderExtract(world, renderer.renderScene());
 
     // Load model
     auto model = std::make_shared<Model>();
@@ -279,24 +279,22 @@ int main(int argc, char* argv[]) {
         float maxExtent = std::max({extent.x, extent.y, extent.z});
         float scale = 4.0f / std::max(maxExtent, 0.001f);
 
-        auto actor = scene->createActor("Model");
+        ecs::Transform t;
         if (isYUp) {
             // Y-up faces +Z toward the camera natively; --flip for back-facing assets.
-            actor->getTransform()->setRotation(
-                glm::quat(glm::radians(glm::vec3(0, flipModel ? 180.0f : 0.0f, 0))));
+            t.rotation = glm::quat(glm::radians(glm::vec3(0, flipModel ? 180.0f : 0.0f, 0)));
         } else {
             // Z-up: rotate onto Y. +Z-up → -90° X; -Z-up → +90° X.
             bool posZIsUp = (bmax.z > 0.01f);
             float rotX = posZIsUp ? -90.0f : 90.0f;
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
+            t.rotation = glm::quat(glm::radians(glm::vec3(rotX, 0, 0)));
         }
-        actor->getTransform()->setScale(glm::vec3(scale));
-        actor->getTransform()->setPosition({-center.x * scale, -center.y * scale, -center.z * scale});
+        t.scale = glm::vec3(scale);
+        t.position = {-center.x * scale, -center.y * scale, -center.z * scale};
 
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(model); mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().roughness = 0.5f;
+        render::MaterialDesc mat;   // default material, roughness 0.5
+        mat.roughness = 0.5f;
+        ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), *model, "Model", t, &mat);
 
         // After centering at origin: model height = ~4 world units, bottom
         // at y = -2 (Y-up) or after Z-up rotation at the equivalent Y. Use
@@ -309,12 +307,9 @@ int main(int argc, char* argv[]) {
 
     // Sub-plan 4.H Phase 1: procedural ground plane.
     // Two triangles, ~50m × 50m, grey PBR (albedo 0.5, roughness 0.6, metallic
-    // 0). Placed at groundY just under the loaded model. Picked up by the
-    // standard scene-upload + BLAS-build path via the Actor/MeshComponent/
-    // MaterialComponent triplet — no engine-side API change needed.
+    // 0). Placed at groundY just under the loaded model.
     if (groundEnabled) {
         const float half = 25.0f;  // 50m × 50m total
-        auto groundActor = scene->createActor("Ground");
         auto gm = std::make_shared<Model>();
         auto mkv = [&](glm::vec3 pos) {
             Vertex v{};
@@ -334,17 +329,27 @@ int main(int argc, char* argv[]) {
             mkv({-half, groundY,  half}),
         };
         gm->indices = {0, 1, 2, 0, 2, 3};
-        auto gmesh = groundActor->addComponent<MeshComponent>();
-        gmesh->setModel(gm);
-        gmesh->setVisible(true);
-        auto gmat = groundActor->addComponent<MaterialComponent>();
-        gmat->getMaterial().baseColor = {0.5f, 0.5f, 0.5f};
-        gmat->getMaterial().roughness = 0.6f;
-        gmat->getMaterial().metallic  = 0.0f;
+        render::MaterialDesc gmat;
+        gmat.baseColor = {0.5f, 0.5f, 0.5f};
+        gmat.roughness = 0.6f;
+        gmat.metallic  = 0.0f;
+        ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), *gm, "Ground",
+                        ecs::Transform{}, &gmat);
         std::cout << "[4.H] Ground plane: " << (half * 2.0f) << "m at y=" << groundY << std::endl;
     }
 
-    // Sub-plan 4.H Phase 2: lighting.
+    // Sub-plan 4.H Phase 2: lighting. Sphere (point) lights.
+    auto addSphere = [&](const std::string& name, glm::vec3 pos,
+                         glm::vec3 color, float intensity, float radius) {
+        ecs::Light light;
+        light.type = ecs::LightType::Point;
+        light.color = color;
+        light.intensity = intensity;
+        light.radius = radius;
+        ecs::Transform t;
+        t.position = pos;
+        ecs::spawnLight(world, name, light, t);
+    };
     if (lightingMode == LightingMode::Studio) {
         // 3-point lighting around model normalized to ~4 units tall, centered
         // at origin. Implemented as soft sphere lights (well-tested shader
@@ -352,16 +357,6 @@ int main(int argc, char* argv[]) {
         // sphere-area / rect-area unit mismatch in pt_raygen. Distances ~2× model
         // half-height. Color temps follow product photography: warm key, cool
         // fill, neutral rim.
-        auto addSphere = [&](const std::string& name, glm::vec3 pos,
-                             glm::vec3 color, float intensity, float radius) {
-            auto a = scene->createActor(name);
-            auto lc = a->addComponent<LightComponent>();
-            lc->setLightType(LightType::Sphere);
-            lc->setColor(color);
-            lc->setIntensity(intensity);
-            lc->setRadius(radius);
-            a->getTransform()->setPosition(pos);
-        };
 
         // v8: D65 neutral white lights (5600K, daylight studio). Warm key was
         // pink-tinting the grey ground. Real product photography uses
@@ -382,16 +377,6 @@ int main(int argc, char* argv[]) {
         // tight dim fill, soft rim. Creates the harsh terminator that SSS softens.
         // Subject in deep shadow on the camera-left side; key lights the right cheek.
         // This is what makes skin look like skin instead of marble.
-        auto addSphere = [&](const std::string& name, glm::vec3 pos,
-                             glm::vec3 color, float intensity, float radius) {
-            auto a = scene->createActor(name);
-            auto lc = a->addComponent<LightComponent>();
-            lc->setLightType(LightType::Sphere);
-            lc->setColor(color);
-            lc->setIntensity(intensity);
-            lc->setRadius(radius);
-            a->getTransform()->setPosition(pos);
-        };
         // Key: 45° camera-right, slight warm (tungsten-ish, 4500K). Dimmer
         // than 4-point studio so close-up subjects don't clip and texture
         // detail survives. SSS does the visual work, not brightness.
@@ -403,17 +388,15 @@ int main(int argc, char* argv[]) {
         std::cout << "[4.L] Cinema Rembrandt lighting injected (strong side key, 8:1 ratio)" << std::endl;
     } else if (lightingMode == LightingMode::HdrOnly) {
         // Preserve pre-4.H behavior: single warm key sphere light + HDR env
-        auto keyLight = scene->createActor("Key");
-        auto kl = keyLight->addComponent<LightComponent>();
-        kl->setLightType(LightType::Sphere);
-        kl->setColor({1.0f, 0.95f, 0.9f});
-        kl->setIntensity(8.0f);
-        kl->setRadius(1.0f);
-        keyLight->getTransform()->setPosition({4.0f, 3.0f, 4.0f});
+        addSphere("Key", {4.0f, 3.0f, 4.0f}, {1.0f, 0.95f, 0.9f}, 8.0f, 1.0f);
     }
     // LightingMode::None → no lights, HDR env IBL only (pure environment)
 
-    renderer.setScene(scene.get());
+    // Headless: no Application drives the systems, so every frame updates the world.
+    const auto renderFrame = [&] {
+        world.update(0.0f);
+        renderer.render();
+    };
 
     auto& camera = renderer.getCamera();
     if (lightingMode == LightingMode::Cinema) {
@@ -484,7 +467,7 @@ int main(int argc, char* argv[]) {
                 camera.rotate(0.0f, rotY);        // yaw sweep — reproduces mouse-look rotation
                 renderer.notifyCameraChanged();
             }
-            renderer.render();
+            renderFrame();
             const uint8_t* px = renderer.getPixels();
             char nameBuf[1024];
             std::snprintf(nameBuf, sizeof(nameBuf), "%s_%03d%s",
@@ -508,11 +491,11 @@ int main(int argc, char* argv[]) {
     // and render one final frame — that last frame's MV reflects the pan.
     int preCount = samples + 3;
     if (panX != 0.0f) preCount = samples + 2;
-    for (int i = 0; i < preCount; i++) renderer.render();
+    for (int i = 0; i < preCount; i++) renderFrame();
     if (panX != 0.0f) {
         auto pos = camera.getPosition();
         camera.setPosition({pos.x + panX, pos.y, pos.z});
-        renderer.render();
+        renderFrame();
     }
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();

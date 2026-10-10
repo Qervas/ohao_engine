@@ -4,12 +4,9 @@
 #include "render/camera/camera.hpp"
 #include "render/rt/denoise/oidn_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include "scene/component/mesh_component.hpp"
-#include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
-#include "scene/scene.hpp"
 
 namespace ohao {
 
@@ -272,16 +269,17 @@ void VulkanRenderer::shutdown() {
     m_initialized = false;
 }
 
-void VulkanRenderer::setScene(Scene* scene) {
-    m_scene = scene;
-    // Update scene buffers when scene is set
-    if (m_initialized && m_scene) {
-        updateSceneBuffers();
-    }
-}
-
 void VulkanRenderer::render() {
     if (!m_initialized) return;
+
+    // The environment map (and the dummy CDF buffers without one), once per path. A
+    // new HDRI joins the bindless table, so frames in flight must finish first.
+    if (!m_envMapChecked || m_envMapPath != m_envMapAttemptedPath) {
+        if (!m_envMapPath.empty() && m_envMapPath != m_envMapLoadedPath) vkDeviceWaitIdle(m_device);
+        m_envMapChecked = true;
+        m_envMapAttemptedPath = m_envMapPath;
+        uploadEnvironmentMap();
+    }
 
     // Check render mode
     if (const auto* rtPipeline = getRTPipeline(m_renderMode);
@@ -417,9 +415,6 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline) {
     m_rtSettings.subsurfaceStrength = preservedSssStrength;
     applyRTRenderSettings();
 
-    // TEMPORARY bridge: the old Scene's live transforms, visibility and lights into
-    // the RenderScene, before recordUpdates uploads them.
-    syncBridgedScene();
     updateLightBuffer();
 
     // No rebuilds: the RenderScene's tables and TLAS are current once recordUpdates

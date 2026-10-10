@@ -1,9 +1,6 @@
 #include "scene_framer.hpp"
 #include "camera.hpp"
 #include "scene/asset/model.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/component/light_component.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -98,18 +95,6 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     };
 
     return result;
-}
-
-void SceneFramer::applyLights(Scene* scene, const FrameResult& result) {
-    for (const auto& light : result.lights) {
-        auto actor = scene->createActor(light.name);
-        auto lc = actor->addComponent<LightComponent>();
-        lc->setLightType(LightType::Sphere);
-        lc->setColor(light.color);
-        lc->setIntensity(light.intensity);
-        lc->setRadius(light.radius);
-        actor->getTransform()->setPosition(light.position);
-    }
 }
 
 void SceneFramer::applyCamera(Camera& camera, const FrameResult& result) {

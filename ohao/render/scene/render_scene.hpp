@@ -69,6 +69,8 @@ public:
     [[nodiscard]] VkBuffer materialBuffer() const;
     [[nodiscard]] VkBuffer materialRefBuffer() const;
     [[nodiscard]] VkBuffer instanceBuffer() const;
+    // The light list last given to setLights, sorted by order (host copy).
+    [[nodiscard]] std::span<const LightDesc> lights() const;
     [[nodiscard]] std::span<const LightData> rasterLights() const;   // <= MAX_LIGHTS, host copy for the light UBO
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;

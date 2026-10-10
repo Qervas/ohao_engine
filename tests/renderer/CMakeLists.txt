@@ -13,12 +13,12 @@ target_include_directories(renderer_test PRIVATE
 
 if(MSVC)
     target_link_libraries(renderer_test PRIVATE
-        ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
         ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 else()
     target_link_libraries(renderer_test PRIVATE
         -Wl,--start-group
-        ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
         -Wl,--end-group
         ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 endif()

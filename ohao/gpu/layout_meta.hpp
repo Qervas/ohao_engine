@@ -19,8 +19,6 @@ namespace layout {
 
 // ─── Canonical sizes (std140/std430 / push-constant contracts) ──────────────
 
-inline constexpr std::size_t kObjectPushConstantsBytes =
-    3 * sizeof(glm::mat4) + 3 * sizeof(glm::vec4); // 240
 inline constexpr std::size_t kLightDataBytes       = 128;
 inline constexpr std::size_t kGPULightBytes        = 80;  // 5 * vec4
 inline constexpr std::size_t kPTPushConstantsBytes = 256;

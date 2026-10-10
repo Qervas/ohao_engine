@@ -112,6 +112,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
     std::vector<LightDesc> sorted(lights.begin(), lights.end());
     std::stable_sort(sorted.begin(), sorted.end(),
                      [](const LightDesc& a, const LightDesc& b) { return a.order < b.order; });
+    m_descs = sorted;
 
     // ---- Raster (ported from VulkanRenderer::updateLightBuffer) ----------------
     std::vector<LightData> raster;

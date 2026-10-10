@@ -1,4 +1,5 @@
 #include "runtime/application.hpp"
+#include "ecs/render_extract.hpp"
 #include <chrono>
 #include <iostream>
 
@@ -15,6 +16,8 @@ bool Application::initialize(const AppConfig& cfg) {
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);
+    m_world = std::make_unique<ecs::World>();
+    ecs::installRenderExtract(*m_world, m_renderer->renderScene());
     return true;
 }
 
@@ -40,8 +43,10 @@ RunReport Application::run(const GameHooks& hooks) {
         const float fixedDt = m_clock.fixedDtSeconds();
         for (int i = 0; i < tick.steps; ++i)
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
-        if (hooks.update)
-            hooks.update(*this, std::chrono::duration<float>(tick.frameDt).count(), tick.alpha);
+        const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
+        if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
+        // Transforms, then the render extract into the RenderScene.
+        m_world->update(frameDt);
 
         const VkExtent2D ext = m_window.framebufferExtent();
         if (ext.width != 0 && ext.height != 0) {     // minimized: simulate, don't render
@@ -66,6 +71,7 @@ RunReport Application::run(const GameHooks& hooks) {
 }
 
 uint64_t Application::shutdown() {
+    m_world.reset();   // releases its RenderScene slots while the RenderScene exists
     if (m_renderer) {
         m_renderer->shutdown();   // device and surface go before the window
         m_validationAtShutdown = m_renderer->validationMessageCount();

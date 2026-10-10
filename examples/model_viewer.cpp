@@ -9,16 +9,14 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "scene/asset/model_loader.hpp"
 #include "render/deferred/deferred_renderer.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
-#include "scene/component/light_component.hpp"
+#include "ecs/render_extract.hpp"
+#include "ecs/spawn.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -32,27 +30,6 @@ using ohao::examples::parseSpp;
 using ohao::examples::argOr;
 using ohao::examples::applyDenoiseOverride;
 using ohao::examples::resolveMode;
-
-void addWall(Scene* scene, const std::string& name,
-             glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
-             glm::vec3 normal, glm::vec3 color) {
-    auto actor = scene->createActor(name);
-    auto model = std::make_shared<Model>();
-    uint32_t base = 0;
-    auto mkv = [&](glm::vec3 pos) {
-        Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
-        v.texCoord = {0,0}; v.tangent = {1,0,0,1};
-        v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
-        return v;
-    };
-    model->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
-    model->indices = {0,1,2, 0,2,3};
-    auto mesh = actor->addComponent<MeshComponent>();
-    mesh->setModel(model); mesh->setVisible(true);
-    auto mat = actor->addComponent<MaterialComponent>();
-    mat->getMaterial().baseColor = color;
-    mat->getMaterial().roughness = 0.95f;
-}
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -88,47 +65,56 @@ int main(int argc, char* argv[]) {
         std::cerr << "[ModelLoader] " << loadedModel.error() << "\n";
     }
 
-    // Compute framing (room size, camera, lights) from model bounds
-    FrameResult frame;
-    if (loaded) {
-        frame = SceneFramer::computeFraming(model->vertices);
-    } else {
-        frame.roomHalfSize = 15.0f;
-        frame.modelScale = 1.0f;
-        frame.modelPosition = glm::vec3(0);
-        frame.modelRotation = glm::quat(1, 0, 0, 0);
-        frame.cameraPosition = {0, 0, 25};
-        frame.cameraFov = 45.0f;
+    if (!loaded) {
+        // EXIT, do not carry on. Rendering an empty scene after a failed load
+        // writes a perfectly valid PNG of nothing, and a caller that checks the
+        // exit code and the file's existence -- which is exactly what
+        // tests/golden/render_golden.py checks -- sees a successful render.
+        // The metal_rough_spheres golden scene sat in that state undetected:
+        // its .glb was absent, every run produced an empty frame, and the
+        // corpus reported a large pixel difference rather than a missing asset.
+        std::cerr << "Failed to load: " << modelPath << std::endl
+                  << "model_viewer renders nothing without a model; refusing to "
+                     "write an empty image that would read as a successful render."
+                  << std::endl;
+        return 2;
     }
+
+    // Compute framing (room size, camera, lights) from model bounds
+    const FrameResult frame = SceneFramer::computeFraming(model->vertices);
     const float S = frame.roomHalfSize;
 
-    auto scene = std::make_unique<Scene>("Model Viewer");
+    // Creation order is draw order and light order. Declared after the renderer: the
+    // World releases its RenderScene slots first.
+    ecs::World world;
+    ecs::installRenderExtract(world, renderer.renderScene());
+    const auto spawn = [&](const Model& m, const std::string& name, const ecs::Transform& t,
+                           const render::MaterialDesc& mat) {
+        return ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), m, name, t, &mat);
+    };
 
     // Helper: create a solid quad (wall/floor/furniture face)
     auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
                        glm::vec3 normal, glm::vec3 color, float roughness) {
-        auto actor = scene->createActor(name);
-        auto m = std::make_shared<Model>();
+        Model m;
         auto mkv = [&](glm::vec3 pos) {
             Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
             v.texCoord = {0,0}; v.tangent = {1,0,0,1};
             v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
             return v;
         };
-        m->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
-        m->indices = {0,1,2, 0,2,3};
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(m); mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = color;
-        mat->getMaterial().roughness = roughness;
+        m.vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
+        m.indices = {0,1,2, 0,2,3};
+        render::MaterialDesc mat;
+        mat.baseColor = color;
+        mat.roughness = roughness;
+        spawn(m, name, ecs::Transform{}, mat);
     };
 
     // Helper: create a box (6 faces) for furniture
     auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
                       glm::vec3 color, float roughness, float metallic = 0.0f) {
-        auto actor = scene->createActor(name);
-        auto m = std::make_shared<Model>();
+        Model m;
         auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
             Vertex v{}; v.position = pos; v.normal = n; v.color = color;
             v.texCoord = {0,0}; v.tangent = {1,0,0,1};
@@ -143,16 +129,15 @@ int main(int argc, char* argv[]) {
         int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
         glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
         for (int f = 0; f < 6; f++) {
-            uint32_t base = (uint32_t)m->vertices.size();
-            for (int k = 0; k < 4; k++) m->vertices.push_back(mkv(c[faces[f][k]], normals[f]));
-            m->indices.insert(m->indices.end(), {base,base+1,base+2, base,base+2,base+3});
+            uint32_t base = (uint32_t)m.vertices.size();
+            for (int k = 0; k < 4; k++) m.vertices.push_back(mkv(c[faces[f][k]], normals[f]));
+            m.indices.insert(m.indices.end(), {base,base+1,base+2, base,base+2,base+3});
         }
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(m); mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = color;
-        mat->getMaterial().roughness = roughness;
-        mat->getMaterial().metallic = metallic;
+        render::MaterialDesc mat;
+        mat.baseColor = color;
+        mat.roughness = roughness;
+        mat.metallic = metallic;
+        spawn(m, name, ecs::Transform{}, mat);
     };
 
     // === BEDROOM SCENE ===
@@ -187,128 +172,33 @@ int main(int argc, char* argv[]) {
     glm::vec3 nsColor(0.22f, 0.14f, 0.07f);
     addBox("Nightstand", {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, nsColor, 0.45f);
 
-    if (loaded) {
-        float scale = frame.modelScale;
-        glm::quat rotation = frame.modelRotation;
-        glm::vec3 position = frame.modelPosition;
-
-        // Split model into per-material sub-models for correct multi-material rendering
-        bool hasMultipleMaterials = model->materialPerTriangle.size() > 0 &&
-            *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end()) > 0;
-
-        if (hasMultipleMaterials) {
-            // Group triangles by material
-            uint32_t maxMat = *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end());
-            for (uint32_t matIdx = 0; matIdx <= maxMat; matIdx++) {
-                auto subModel = std::make_shared<Model>();
-
-                // Collect triangles for this material
-                for (size_t tri = 0; tri < model->materialPerTriangle.size(); tri++) {
-                    if (model->materialPerTriangle[tri] != matIdx) continue;
-                    for (int k = 0; k < 3; k++) {
-                        uint32_t oldIdx = model->indices[tri * 3 + k];
-                        uint32_t newIdx = static_cast<uint32_t>(subModel->vertices.size());
-                        subModel->vertices.push_back(model->vertices[oldIdx]);
-                        subModel->indices.push_back(newIdx);
-                    }
-                    subModel->materialPerTriangle.push_back(0);  // local: sub-model has 1 material at index 0
-                }
-                if (subModel->vertices.empty()) continue;
-
-                // Copy material data for this material index
-                if (matIdx < model->materialColors.size())
-                    subModel->materialColors.push_back(model->materialColors[matIdx]);
-                if (matIdx < model->materialMetallic.size())
-                    subModel->materialMetallic.push_back(model->materialMetallic[matIdx]);
-
-                // Copy only THIS material's textures
-                int albedoIdx = (matIdx < model->materialTextureIndex.size()) ? model->materialTextureIndex[matIdx] : -1;
-                int normalIdx = (matIdx < model->materialNormalTexIndex.size()) ? model->materialNormalTexIndex[matIdx] : -1;
-                int roughMetalIdx = (matIdx < model->materialRoughMetalTexIndex.size()) ? model->materialRoughMetalTexIndex[matIdx] : -1;
-                int emissiveIdx = (matIdx < model->materialEmissiveTexIndex.size()) ? model->materialEmissiveTexIndex[matIdx] : -1;
-                if (albedoIdx >= 0 && albedoIdx < static_cast<int>(model->albedoTextures.size())) {
-                    subModel->albedoTextures.push_back(model->albedoTextures[albedoIdx]);
-                    subModel->materialTextureIndex.push_back(0);
-                } else {
-                    subModel->materialTextureIndex.push_back(-1);
-                }
-                if (normalIdx >= 0 && normalIdx < static_cast<int>(model->normalTextures.size())) {
-                    subModel->normalTextures.push_back(model->normalTextures[normalIdx]);
-                    subModel->materialNormalTexIndex.push_back(0);
-                } else {
-                    subModel->materialNormalTexIndex.push_back(-1);
-                }
-                if (roughMetalIdx >= 0 && roughMetalIdx < static_cast<int>(model->roughMetalTextures.size())) {
-                    subModel->roughMetalTextures.push_back(model->roughMetalTextures[roughMetalIdx]);
-                    subModel->materialRoughMetalTexIndex.push_back(0);
-                } else {
-                    subModel->materialRoughMetalTexIndex.push_back(-1);
-                }
-                if (emissiveIdx >= 0 && emissiveIdx < static_cast<int>(model->emissiveTextures.size())) {
-                    subModel->emissiveTextures.push_back(model->emissiveTextures[emissiveIdx]);
-                    subModel->materialEmissiveTexIndex.push_back(0);
-                } else {
-                    subModel->materialEmissiveTexIndex.push_back(-1);
-                }
-
-                auto actor = scene->createActor("Mesh_" + std::to_string(matIdx));
-                actor->getTransform()->setRotation(rotation);
-                actor->getTransform()->setScale(glm::vec3(scale));
-                actor->getTransform()->setPosition(position);
-
-                auto mesh = actor->addComponent<MeshComponent>();
-                mesh->setModel(subModel); mesh->setVisible(true);
-
-                auto mat = actor->addComponent<MaterialComponent>();
-                glm::vec3 baseColor = matIdx < model->materialColors.size()
-                    ? glm::vec3(model->materialColors[matIdx]) : glm::vec3(0.8f);
-                float roughness = matIdx < model->materialColors.size()
-                    ? model->materialColors[matIdx].w : 0.5f;
-                float metallic = matIdx < model->materialMetallic.size()
-                    ? model->materialMetallic[matIdx] : 0.0f;
-                mat->getMaterial().baseColor = baseColor;
-                mat->getMaterial().roughness = roughness;
-                mat->getMaterial().metallic = metallic;
-            }
-            std::cout << "Split into " << (maxMat + 1) << " material groups" << std::endl;
-        } else {
-            // Single-material model
-            auto actor = scene->createActor("Model");
-            actor->getTransform()->setRotation(rotation);
-            actor->getTransform()->setScale(glm::vec3(scale));
-            actor->getTransform()->setPosition(position);
-
-            auto mesh = actor->addComponent<MeshComponent>();
-            mesh->setModel(model); mesh->setVisible(true);
-            auto mat = actor->addComponent<MaterialComponent>();
-            mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
-            mat->getMaterial().roughness = 0.5f;
-        }
-
-        std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << scale << std::endl;
+    // The model: one entity, one mesh with a submesh per material run. Its materials
+    // come from the model; the override only feeds the legacy RT GI word (and a model
+    // without materials). A single-material model keeps the old viewer's 0.8/0.7/0.6; a
+    // multi-material one uses its own material 0.
+    ecs::Transform modelTransform;
+    modelTransform.position = frame.modelPosition;
+    modelTransform.rotation = frame.modelRotation;
+    modelTransform.scale = glm::vec3(frame.modelScale);
+    const bool hasMultipleMaterials = !model->materialPerTriangle.empty() &&
+        *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end()) > 0;
+    render::MaterialDesc modelMaterial;
+    if (hasMultipleMaterials && !model->materialColors.empty()) {
+        modelMaterial.baseColor = glm::vec3(model->materialColors[0]);
+        modelMaterial.roughness = model->materialColors[0].w;
+        modelMaterial.metallic = model->materialMetallic.empty() ? 0.0f : model->materialMetallic[0];
     } else {
-        // EXIT, do not carry on. Rendering an empty scene after a failed load
-        // writes a perfectly valid PNG of nothing, and a caller that checks the
-        // exit code and the file's existence -- which is exactly what
-        // tests/golden/render_golden.py checks -- sees a successful render.
-        // The metal_rough_spheres golden scene sat in that state undetected:
-        // its .glb was absent, every run produced an empty frame, and the
-        // corpus reported a large pixel difference rather than a missing asset.
-        std::cerr << "Failed to load: " << modelPath << std::endl
-                  << "model_viewer renders nothing without a model; refusing to "
-                     "write an empty image that would read as a successful render."
-                  << std::endl;
-        return 2;
+        modelMaterial.baseColor = {0.8f, 0.7f, 0.6f};
+        modelMaterial.roughness = 0.5f;
     }
+    const entt::entity modelEntity = spawn(*model, "Model", modelTransform, modelMaterial);
+    std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
 
     // Environment map
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
 
     // Auto-framed lights (scaled to room size)
-    SceneFramer::applyLights(scene.get(), frame);
-
-    renderer.setScene(scene.get());
-    // Note: setScene() calls updateSceneBuffers() internally — no explicit call needed
+    SceneFramer::applyLights(world, frame);
 
     // Auto-framed camera
     auto& camera = renderer.getCamera();
@@ -316,38 +206,31 @@ int main(int argc, char* argv[]) {
 
     // "flip" — rotate model 180° Y (models facing away from camera)
     if (cli.flipY) {
-        const glm::quat flipRot = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
-        scene->forEachActor([&](Actor& actor) {
-            if (actor.getName().find("Mesh_") == 0 || actor.getName() == "Model") {
-                actor.getTransform()->setRotation(flipRot);
-            }
-        });
+        modelTransform.rotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
+        world.setTransform(modelEntity, modelTransform);
     }
 
     // "--print-bounds": the model's screen-space box in the path tracer's framing (the
-    // 8 corners of each model actor's world AABB through the camera the RT pass uses),
-    // for comparing renders inside and outside the model.
+    // 8 corners of the model's world AABB through the camera the RT pass uses), for
+    // comparing renders inside and outside the model.
     for (int a = 1; a < argc; ++a) {
         if (std::string_view(argv[a]) != "--print-bounds") continue;
         const glm::mat4 view = camera.getViewMatrix();
         const glm::mat4 proj = glm::perspective(glm::radians(camera.getFov()), float(W) / float(H), 0.1f, 1000.0f);
         glm::vec2 lo(1e30f), hi(-1e30f);
-        scene->forEachActor([&](Actor& actor) {
-            if (actor.getName().find("Mesh_") != 0 && actor.getName() != "Model") return;
-            auto mc = actor.getComponent<MeshComponent>();
-            if (!mc || !mc->getModel() || mc->getModel()->vertices.empty()) return;
+        if (!model->vertices.empty()) {
             glm::vec3 bmin(1e30f), bmax(-1e30f);
-            for (const auto& v : mc->getModel()->vertices) { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
-            const glm::mat4 world = actor.getTransform()->getWorldMatrix();
+            for (const auto& v : model->vertices) { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
+            const glm::mat4 toWorld = modelTransform.matrix();
             for (int c = 0; c < 8; ++c) {
                 const glm::vec3 corner((c & 1) ? bmax.x : bmin.x, (c & 2) ? bmax.y : bmin.y, (c & 4) ? bmax.z : bmin.z);
-                const glm::vec4 clip = proj * view * world * glm::vec4(corner, 1.0f);
+                const glm::vec4 clip = proj * view * toWorld * glm::vec4(corner, 1.0f);
                 const glm::vec2 ndc = glm::vec2(clip) / clip.w;
                 // Path tracer raygen: pixel row 0 is the top (ndc.y = +1).
                 const glm::vec2 px((ndc.x * 0.5f + 0.5f) * float(W), (0.5f - ndc.y * 0.5f) * float(H));
                 lo = glm::min(lo, px); hi = glm::max(hi, px);
             }
-        });
+        }
         std::cout << "BOUNDS " << lo.x << " " << lo.y << " " << hi.x << " " << hi.y << " (of " << W << "x" << H << ")\n";
     }
 
@@ -365,6 +248,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Headless: no Application drives the systems, so every frame updates the world.
+    const auto renderFrame = [&] {
+        world.update(0.0f);
+        renderer.render();
+    };
+
     std::cout << "Rendering ("
               << (cli.useDeferred ? "Deferred+RT"
                                   : (mode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline"))
@@ -379,11 +268,11 @@ int main(int argc, char* argv[]) {
         const std::string videoDir = output.substr(0, output.find_last_of('.'));
         std::filesystem::create_directories(videoDir);
 
-        for (int i = 0; i < 5; i++) renderer.render();
+        for (int i = 0; i < 5; i++) renderFrame();
 
         std::cout << "Recording " << totalFrames << " frames to " << videoDir << "/\n";
         for (int i = 0; i < totalFrames; i++) {
-            renderer.render();
+            renderFrame();
             const auto px = renderer.getPixelSpan();
             if (!px.empty()) {
                 char fname[256];
@@ -401,11 +290,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Encoding: " << mp4 << "\n";
         system(cmd.c_str());
         std::cout << "Video saved: " << mp4 << "\n";
-        scene.reset();
         return 0;
     }
 
-    for (int i = 0; i < frames; i++) renderer.render();
+    for (int i = 0; i < frames; i++) renderFrame();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms\n";
@@ -418,6 +306,4 @@ int main(int argc, char* argv[]) {
                   << (renderer.getDenoiseMode() == DenoiseMode::None ? "" : " (denoised)")
                   << ": " << output << "\n";
     }
-
-    scene.reset();
 }

@@ -11,11 +11,9 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
-#include "scene/component/light_component.hpp"
+#include "ecs/render_extract.hpp"
+#include "ecs/spawn.hpp"
+#include "scene/asset/model.hpp"
 #include "render/camera/camera.hpp"
 
 #include <iostream>
@@ -31,25 +29,38 @@ using ohao::examples::argOr;
 using ohao::examples::applyDenoiseOverride;
 using ohao::examples::resolveMode;
 
-void addWall(Scene* scene, const std::string& name,
+// A quad wall. Rough by default; `metallic`/`roughness` make the mirror walls.
+void addWall(ecs::World& world, VulkanRenderer& renderer, const std::string& name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
-             glm::vec3 normal, glm::vec3 color) {
-    auto actor = scene->createActor(name);
-    auto model = std::make_shared<Model>();
-    uint32_t base = 0;
+             glm::vec3 normal, glm::vec3 color, float roughness = 0.95f, float metallic = 0.0f) {
+    Model model;
     auto mkv = [&](glm::vec3 pos) {
         Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
         v.texCoord = {0,0}; v.tangent = {1,0,0,1};
         v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
         return v;
     };
-    model->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
-    model->indices = {0,1,2, 0,2,3};
-    auto mesh = actor->addComponent<MeshComponent>();
-    mesh->setModel(model); mesh->setVisible(true);
-    auto mat = actor->addComponent<MaterialComponent>();
-    mat->getMaterial().baseColor = color;
-    mat->getMaterial().roughness = 0.95f;
+    model.vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
+    model.indices = {0,1,2, 0,2,3};
+    render::MaterialDesc mat;
+    mat.baseColor = color;
+    mat.roughness = roughness;
+    mat.metallic = metallic;
+    ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), model, name,
+                    ecs::Transform{}, &mat);
+}
+
+// A light with the radius the old scene system defaulted to (0.5).
+void addLight(ecs::World& world, const std::string& name, ecs::LightType type, glm::vec3 position,
+              glm::vec3 color, float intensity, float radius = 0.5f) {
+    ecs::Light light;
+    light.type = type;
+    light.color = color;
+    light.intensity = intensity;
+    light.radius = radius;
+    ecs::Transform t;
+    t.position = position;
+    ecs::spawnLight(world, name, light, t);
 }
 
 int main(int argc, char* argv[]) {
@@ -74,7 +85,10 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) return 1;
 
-    auto scene = std::make_unique<Scene>("Turntable");
+    // Creation order is draw order and light order. Declared after the renderer: the
+    // World releases its RenderScene slots first.
+    ecs::World world;
+    ecs::installRenderExtract(world, renderer.renderScene());
 
     // Set up environment based on mode
     if (mode == "env") {
@@ -87,33 +101,24 @@ int main(int argc, char* argv[]) {
         glm::vec3 LBB(-S,-S,-S), RBB(S,-S,-S), LTB(-S,S,-S), RTB(S,S,-S);
         glm::vec3 LBF(-S,-S,S), RBF(S,-S,S), LTF(-S,S,S), RTF(S,S,S);
         // Side walls — red/green
-        addWall(scene.get(), "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
-        addWall(scene.get(), "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
-        addWall(scene.get(), "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
-        addWall(scene.get(), "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
+        addWall(world, renderer, "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
+        addWall(world, renderer, "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
+        addWall(world, renderer, "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
+        addWall(world, renderer, "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
         // Front + back walls — MIRROR (low roughness, high metallic)
-        addWall(scene.get(), "BackMirror",  LBB, RBB, RTB, LTB, {0,0,1},  mirror);
-        addWall(scene.get(), "FrontMirror", LBF, RBF, RTF, LTF, {0,0,-1}, mirror);
-        // Override material to mirror
-        for (auto name : {"BackMirror", "FrontMirror"}) {
-            for (auto& [id, actor] : scene->getAllActors()) {
-                if (actor->getName() == name) {
-                    auto mat = actor->getComponent<MaterialComponent>();
-                    if (mat) { mat->getMaterial().roughness = 0.02f; mat->getMaterial().metallic = 1.0f; }
-                }
-            }
-        }
+        addWall(world, renderer, "BackMirror",  LBB, RBB, RTB, LTB, {0,0,1},  mirror, 0.02f, 1.0f);
+        addWall(world, renderer, "FrontMirror", LBF, RBF, RTF, LTF, {0,0,-1}, mirror, 0.02f, 1.0f);
     } else {
         // Cornell box or dark room — add walls (open front)
         const float S = 5.0f;
         const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
         glm::vec3 LBB(-S,-S,-S), RBB(S,-S,-S), LTB(-S,S,-S), RTB(S,S,-S);
         glm::vec3 LBF(-S,-S,S), RBF(S,-S,S), LTF(-S,S,S), RTF(S,S,S);
-        addWall(scene.get(), "Back",    LBB, RBB, RTB, LTB, {0,0,1},  white);
-        addWall(scene.get(), "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
-        addWall(scene.get(), "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
-        addWall(scene.get(), "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
-        addWall(scene.get(), "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
+        addWall(world, renderer, "Back",    LBB, RBB, RTB, LTB, {0,0,1},  white);
+        addWall(world, renderer, "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
+        addWall(world, renderer, "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
+        addWall(world, renderer, "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
+        addWall(world, renderer, "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
     }
 
     // Load model
@@ -143,65 +148,55 @@ int main(int argc, char* argv[]) {
         float targetHeight = (mode == "mirror") ? 5.5f : 4.0f;
         float scale = targetHeight / modelHeight;
 
-        auto actor = scene->createActor("Model");
+        ecs::Transform t;
         bool isYUp = ((bmax.y - bmin.y) >= (bmax.z - bmin.z));
         if (isYUp) {
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
+            t.rotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
         } else {
             float zCenter = (bmin.z + bmax.z) * 0.5f;
             float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
+            t.rotation = glm::quat(glm::radians(glm::vec3(rotX, 0, 0)));
         }
-        actor->getTransform()->setScale(glm::vec3(scale));
+        t.scale = glm::vec3(scale);
 
         // Center model at origin, feet on floor (Y = -5 for Cornell, Y = 0 for env)
         glm::vec3 center = (bmin + bmax) * 0.5f;
         float floorY = (mode == "env") ? 0.0f : -5.0f;
         if (isYUp) {
-            actor->getTransform()->setPosition({-center.x*scale, floorY - bmin.y*scale, -center.z*scale});
+            t.position = {-center.x*scale, floorY - bmin.y*scale, -center.z*scale};
         } else {
             // Z-up model: after rotation, Z maps to Y
             float footZ = (bmin.z + bmax.z > 0) ? bmin.z : bmax.z;  // whichever is the "bottom"
-            actor->getTransform()->setPosition({-center.x*scale, floorY + std::abs(footZ)*scale, -center.y*scale});
+            t.position = {-center.x*scale, floorY + std::abs(footZ)*scale, -center.y*scale};
         }
 
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(model); mesh->setVisible(true);
-        actor->addComponent<MaterialComponent>();
+        const render::MaterialDesc mat{};   // the default material
+        ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), *model, "Model", t, &mat);
     }
 
     // Lighting based on mode
     if (mode == "dark") {
         // Very dim fill — emissive dominates
-        auto fill = scene->createActor("Fill");
-        auto fl = fill->addComponent<LightComponent>();
-        fl->setLightType(LightType::Sphere);
-        fl->setColor({1, 1, 1});
-        fl->setIntensity(2.0f);
-        fl->setRadius(0.3f);
-        fill->getTransform()->setPosition({4, 4, 4});
+        addLight(world, "Fill", ecs::LightType::Point, {4, 4, 4}, {1, 1, 1}, 2.0f, 0.3f);
     } else {
         // Key + fill
-        auto key = scene->createActor("Key");
-        auto kl = key->addComponent<LightComponent>();
-        kl->setLightType(LightType::Sphere);
-        kl->setColor({1, 0.95f, 0.9f});
-        kl->setIntensity((mode == "env") ? 8.0f : (mode == "mirror") ? 20.0f : 25.0f);
-        kl->setRadius(1.0f);
-        key->getTransform()->setPosition({3, 4, 3});
+        addLight(world, "Key", ecs::LightType::Point, {3, 4, 3}, {1, 0.95f, 0.9f},
+                 (mode == "env") ? 8.0f : (mode == "mirror") ? 20.0f : 25.0f, 1.0f);
 
         if (mode == "cornell") {
-            auto area = scene->createActor("CeilingPanel");
-            auto al = area->addComponent<LightComponent>();
-            al->setLightType(LightType::AreaRect);
-            al->setColor({1, 0.98f, 0.92f});
-            al->setIntensity(12.0f);
-            al->setAreaEdges({3, 0, 0}, {0, 0, 3});
-            area->getTransform()->setPosition({-1.5f, 4.99f, -1.5f});
+            ecs::Light area;   // edges are local; the entity is unrotated
+            area.type = ecs::LightType::AreaRect;
+            area.color = {1, 0.98f, 0.92f};
+            area.intensity = 12.0f;
+            area.radius = 0.5f;
+            area.areaEdge1 = {3, 0, 0};
+            area.areaEdge2 = {0, 0, 3};
+            ecs::Transform t;
+            t.position = {-1.5f, 4.99f, -1.5f};
+            ecs::spawnLight(world, "CeilingPanel", area, t);
         }
     }
 
-    renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
     applyDenoiseOverride(renderer, cli);
 
@@ -229,8 +224,10 @@ int main(int argc, char* argv[]) {
 
         renderer.resetAccumulation();
 
-        for (int s = 0; s < spp + 3; s++)
+        for (int s = 0; s < spp + 3; s++) {
+            world.update(0.0f);   // headless: no Application drives the systems
             renderer.render();
+        }
 
         char filename[256];
         snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);

@@ -1,5 +1,5 @@
 // OHAO Renderer Smoke Test
-// Minimal: init Vulkan, create scene, render 1 frame, verify output.
+// Minimal: init Vulkan, spawn a one-quad ECS scene, render 1 frame, verify output.
 // For real scenes, use examples/cornell_box or examples/model_viewer.
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
@@ -8,11 +8,11 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
+#include "ecs/render_extract.hpp"
+#include "ecs/spawn.hpp"
 #include "render/camera/camera.hpp"
+#include "render/scene/render_scene.hpp"
+#include "scene/asset/model.hpp"
 
 #include <iostream>
 #include <string>
@@ -34,26 +34,27 @@ int main(int argc, char* argv[]) {
     std::cout << "PASS: renderer init" << std::endl;
 
     // 2. Create minimal scene — single red quad
-    auto scene = std::make_unique<Scene>("SmokeTest");
-    auto actor = scene->createActor("TestQuad");
-    auto model = std::make_shared<Model>();
+    ecs::World world;   // after the renderer: released first
+    ecs::installRenderExtract(world, renderer.renderScene());
+    Model model;
     Vertex v{};
     v.normal = {0, 0, 1}; v.color = {1, 0, 0}; v.tangent = {1, 0, 0, 1};
     v.boneIndices = glm::ivec4(0); v.boneWeights = {1, 0, 0, 0};
-    v.position = {-1, -1, 0}; model->vertices.push_back(v);
-    v.position = { 1, -1, 0}; model->vertices.push_back(v);
-    v.position = { 1,  1, 0}; model->vertices.push_back(v);
-    v.position = {-1,  1, 0}; model->vertices.push_back(v);
-    model->indices = {0, 1, 2, 0, 2, 3};
-    auto mesh = actor->addComponent<MeshComponent>();
-    mesh->setModel(model);
-    mesh->setVisible(true);
-    auto mat = actor->addComponent<MaterialComponent>();
-    mat->getMaterial().baseColor = {1, 0, 0};
-
-    renderer.setScene(scene.get());
-    (void)renderer.updateSceneBuffers();
-    std::cout << "PASS: scene buffers" << std::endl;
+    v.position = {-1, -1, 0}; model.vertices.push_back(v);
+    v.position = { 1, -1, 0}; model.vertices.push_back(v);
+    v.position = { 1,  1, 0}; model.vertices.push_back(v);
+    v.position = {-1,  1, 0}; model.vertices.push_back(v);
+    model.indices = {0, 1, 2, 0, 2, 3};
+    render::MaterialDesc mat;
+    mat.baseColor = {1, 0, 0};
+    ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), model, "TestQuad",
+                    ecs::Transform{}, &mat);
+    world.update(0.0f);
+    if (renderer.renderScene().draws().empty()) {
+        std::cerr << "FAIL: the quad entity reached no RenderScene draw" << std::endl;
+        return 1;
+    }
+    std::cout << "PASS: scene entities" << std::endl;
 
     // 3. Render
     renderer.setRenderMode(RenderMode::RTOffline);

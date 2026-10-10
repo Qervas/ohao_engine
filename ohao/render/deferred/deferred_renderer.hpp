@@ -26,8 +26,6 @@ namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
-class Scene;
-
 // Full deferred rendering pipeline that orchestrates all passes
 // This is the main entry point for AAA-quality rendering
 class DeferredRenderer {
@@ -45,10 +43,8 @@ public:
     // Resize handling
     void onResize(uint32_t width, uint32_t height);
 
-    // Scene configuration. The G-buffer and CSM passes draw the RenderScene and RT
-    // shadows/GI trace its TLAS; the old Scene is still read by the RT GI pass for
-    // its bounce light.
-    void setScene(Scene* scene);
+    // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
+    // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
     void setRenderScene(const render::RenderScene* scene);
 
     // Camera configuration
@@ -155,8 +151,7 @@ private:
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
 
-    // Scene reference
-    Scene* m_scene{nullptr};
+    // Scene the passes draw (owned by VulkanRenderer)
     const render::RenderScene* m_renderScene{nullptr};
 
     // Texture manager (set before initialize)

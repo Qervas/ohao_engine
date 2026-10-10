@@ -619,7 +619,7 @@ BindlessTextureHandle BindlessTextureManager::findTexture(std::string_view key) 
 
     const std::string keyStr(key);
 
-    // Check name map first (used by deferred texture bridge)
+    // Check name map first (registerName: e.g. the legacy RT tint textures)
     auto it = m_nameToHandle.find(keyStr);
     if (it != m_nameToHandle.end()) return it->second;
 

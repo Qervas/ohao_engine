@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "runtime/clock.hpp"
 #include "runtime/input.hpp"
@@ -12,8 +13,8 @@ namespace ohao::runtime {
 
 class Application;
 
-// The game's entry points into the loop. Deliberately minimal: the ECS work
-// replaces these with ordered systems.
+// The game's entry points into the loop. Per-frame game logic can also live in
+// systems added to Application::world().
 struct GameHooks {
     std::function<void(Application&)> start;
     std::function<void(Application&, float fixedDt)> fixedUpdate;               // simulation
@@ -39,9 +40,10 @@ struct RunReport {
     double   fps{0.0};
 };
 
-// Owns the window, input and renderer and runs the loop:
-//   poll -> input -> N x fixedUpdate (fixed step) -> update -> render/present
-// Minimized windows keep simulating and skip rendering.
+// Owns the window, input, renderer and the game World, and runs the loop:
+//   poll -> input -> N x fixedUpdate (fixed step) -> update -> world.update -> render/present
+// The World's render extract feeds the renderer's RenderScene. Minimized windows keep
+// simulating and skip rendering.
 class Application {
 public:
     Application() = default;
@@ -57,6 +59,9 @@ public:
     uint64_t shutdown();
 
     [[nodiscard]] VulkanRenderer& renderer() { return *m_renderer; }
+    // The game world; valid between initialize() and shutdown(). Its render extract
+    // is installed on renderer().renderScene().
+    [[nodiscard]] ecs::World& world() { return *m_world; }
     [[nodiscard]] InputMap& input() { return m_input; }
     [[nodiscard]] Window& window() { return m_window; }
     void quit() { m_quit = true; }
@@ -66,6 +71,7 @@ private:
     Window m_window;
     InputMap m_input;
     std::unique_ptr<VulkanRenderer> m_renderer;
+    std::unique_ptr<ecs::World> m_world;   // destroyed before the renderer (it holds RenderScene slots)
     FixedStepClock m_clock;
     FrameStats m_stats;
     std::vector<InputEvent> m_events;

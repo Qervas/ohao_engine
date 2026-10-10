@@ -35,9 +35,7 @@ namespace ohao {
 
 namespace render { class RenderScene; }
 
-class Scene;
 class Camera;
-class Actor;
 class Model;
 class DeferredRenderer;
 
@@ -71,22 +69,10 @@ struct CameraUniformBuffer {
 };
 static_assert(GpuPod<CameraUniformBuffer>, "CameraUniformBuffer must be GPU POD");
 
-// Per-object push constants (matches GBuffer pass shader layout)
-struct ObjectPushConstants {
-    glm::mat4 model;
-    glm::mat4 viewProj;
-    glm::mat4 prevMVP;
-    glm::vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
-    glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
-    glm::vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
-};
-
 // LightData and MAX_LIGHTS live in render/scene/render_scene_types.hpp.
 
 // Shadow map configuration
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
-
-OHAO_ASSERT_GPU_LAYOUT(ObjectPushConstants, layout::kObjectPushConstantsBytes);
 
 // Light uniform buffer
 struct LightUniformBuffer {
@@ -101,11 +87,12 @@ struct LightUniformBuffer {
  * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
  * when initialized with a PresentTarget (see ohao/runtime/Application).
  *
- * Headless usage:
+ * The scene is renderScene(): an ecs::World with installRenderExtract feeds it
+ * (examples/cornell_box.cpp). Headless usage:
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
- *   renderer.setScene(scene);
- *   renderer.render();
+ *   ecs::installRenderExtract(world, renderer.renderScene());
+ *   world.update(0); renderer.render();
  *   const uint8_t* pixels = renderer.getPixels(); // RGBA format
  */
 class VulkanRenderer {
@@ -128,10 +115,6 @@ public:
     // Rendering
     void render();
     void resize(uint32_t width, uint32_t height);
-
-    // Scene management
-    void setScene(Scene* scene);
-    [[nodiscard]] Scene* getScene() const { return m_scene; }
 
     // Camera
     [[nodiscard]] Camera& getCamera() { return *m_camera; }
@@ -167,8 +150,8 @@ public:
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
-    /// HDRI for the path tracer and deferred reflections, loaded on the next
-    /// updateSceneBuffers (setScene) when the path changed.
+    /// HDRI for the path tracer and deferred reflections, loaded at the start of the
+    /// next render() when the path changed.
     void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
     /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into the
     /// RT light header (offset 8) every RT frame — no env re-load.
@@ -291,17 +274,6 @@ public:
     }
 
 
-    // Scene buffer management (call after modifying scene)
-    [[nodiscard]] bool updateSceneBuffers();
-
-    /// Live edit: re-read the scene's lights into the RenderScene light table (both
-    /// the raster and the RT list) without reloading the env HDR or touching BLASes.
-    /// Returns false without a scene.
-    [[nodiscard]] bool updateRTLightParams();
-
-    // Check if scene has renderable meshes
-    [[nodiscard]] bool hasSceneMeshes() const { return m_hasSceneMeshes; }
-
     // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
     // Returns false if no procedural terrain exists. outRes = square resolution.
     [[nodiscard]] bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
@@ -321,26 +293,6 @@ private:
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
     void updateLightBuffer();   // Light UBO from m_renderScene's raster lights (+ default sun)
 
-    // TEMPORARY (sub-project 2a, Tasks 7-9): scene_bridge.cpp feeds the old Scene into
-    // m_renderScene so the deferred and RT passes draw from it. Deleted in Task 9.
-    void bridgeSceneToRenderScene();   // full rebuild, in updateSceneBuffers
-    void syncBridgedScene();           // per frame: transforms, visibility, lights
-    struct BridgedModel {
-        std::shared_ptr<Model> model;                  // keeps the cache key alive
-        std::optional<render::UploadedModel> uploaded; // set once a visible actor used it
-        std::optional<render::EmissiveProxy> emissive;
-        bool emissiveKnown{false};
-    };
-    struct BridgedInstance {
-        uint64_t actorId;
-        uint32_t slot;
-        render::InstanceDesc desc;                     // desc.materials views `materials`
-        std::vector<render::MaterialHandle> materials;
-    };
-    std::unordered_map<const Model*, BridgedModel> m_bridgeModels;
-    std::vector<std::pair<render::MaterialDesc, render::MaterialHandle>> m_bridgeMaterials;
-    std::vector<BridgedInstance> m_bridgeInstances;
-    bool m_bridgeOwnsLights{false};   // the bridge's setLights is the RenderScene's current light list
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
 
 
@@ -374,9 +326,6 @@ private:
     VkDeviceMemory m_lightBufferMemory{VK_NULL_HANDLE};
     void* m_lightBufferMapped{nullptr};
 
-    // Flag to track if scene has renderable meshes
-    bool m_hasSceneMeshes{false};
-
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
     RTRealtimePipeline m_rtRealtimePipeline;
     RTOfflinePipeline m_rtOfflinePipeline;
@@ -384,7 +333,7 @@ private:
     std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
     // Environment map (env_upload.cpp): HDR image in the bindless table, its CDFs,
     // and the RT bindless view/sampler arrays rebuilt each RT frame.
-    void uploadEnvironmentMap();          // once per path; stamps env index + scale into the RenderScene
+    void uploadEnvironmentMap();          // once per path (render()); stamps env index + scale into the RenderScene
     void bindRTTextures(IRTRendererProfile& renderer);
     void destroyEnvCDFBuffers();
     [[nodiscard]] bool envMapLoaded() const noexcept {
@@ -398,6 +347,8 @@ private:
     VkDeviceMemory m_envConditionalCDFMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
+    std::string m_envMapAttemptedPath;  // path render() last handed to uploadEnvironmentMap
+    bool m_envMapChecked{false};        // render() ran uploadEnvironmentMap at least once
     VkImage m_envMapImage{VK_NULL_HANDLE};
     VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
@@ -442,8 +393,7 @@ private:
     mutable std::vector<uint8_t> m_denoisedPixelBuffer;
     mutable bool                 m_denoiseCacheValid{false};
 
-    // Scene and camera
-    Scene* m_scene{nullptr};
+    // Camera
     std::unique_ptr<Camera> m_camera;
 
     // Queue family index

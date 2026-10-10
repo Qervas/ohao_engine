@@ -4,7 +4,7 @@
  * Tests:
  *   1. EventBus  — subscribe, publish, unsubscribe, clear, typed data, multiple subscribers
  *   2. CommandHistory — execute, undo, redo, canUndo/canRedo, descriptions, clear, max history
- *   3. Scene — createActor, findActor, removeActor, getAllActors, actor count
+ *   3. Assets, meta/traits, headless deferred/path tracer, RenderScene
  */
 
 #include <atomic>
@@ -37,7 +37,10 @@
 #include "render/scene/material_table.hpp"
 #include "render/scene/model_upload.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
-#include "scene/scene_module.hpp"
+#include "ecs/render_extract.hpp"
+#include "ecs/spawn.hpp"
+#include "scene/asset/model.hpp"
+#include "scene/asset/model_loader.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -135,13 +138,13 @@ static void runEventBusTests() {
     TEST_BEGIN("typed event data (string payload)");
     {
         std::string received;
-        auto id = EventBus::instance().subscribe("actor.selected",
+        auto id = EventBus::instance().subscribe("entity.selected",
             [&](const Event& e) {
                 received = std::any_cast<std::string>(e.data);
             });
-        EventBus::instance().publish("actor.selected", std::string("MyActor"));
+        EventBus::instance().publish("entity.selected", std::string("MyEntity"));
         EventBus::instance().unsubscribe(id);
-        EXPECT(received == "MyActor", "payload should round-trip through std::any");
+        EXPECT(received == "MyEntity", "payload should round-trip through std::any");
         TEST_PASS();
     }
 
@@ -345,127 +348,11 @@ static void runCommandHistoryTests() {
 }
 
 // =============================================================================
-// SECTION 3 — SCENE
+// SECTION 3 — ASSETS (scene entities are covered by ecs_tests)
 // =============================================================================
 
-static void runSceneTests() {
-    std::cout << "\n[Scene]\n";
-
-    TEST_BEGIN("createActor adds to scene");
-    {
-        Scene scene("TestScene");
-        auto actor = scene.createActor("Box1");
-        EXPECT(actor != nullptr, "createActor should return non-null");
-        EXPECT(actor->getName() == "Box1", "actor name should match");
-        // +1 for the root "World" actor created in Scene ctor
-        EXPECT(scene.getAllActors().size() >= 1u, "scene should have at least the new actor");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("findActor by name");
-    {
-        Scene scene("TestScene");
-        scene.createActor("Sphere1");
-        auto found = scene.findActor("Sphere1");
-        EXPECT(found != nullptr, "findActor should find the created actor");
-        EXPECT(found->getName() == "Sphere1", "found actor name should match");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("findActor returns null for missing actor");
-    {
-        Scene scene("TestScene");
-        auto found = scene.findActor("DoesNotExist");
-        EXPECT(found == nullptr, "findActor should return null for unknown name");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("removeActor by name");
-    {
-        Scene scene("TestScene");
-        scene.createActor("TempActor");
-        EXPECT(scene.findActor("TempActor") != nullptr, "actor should exist before remove");
-        scene.removeActor("TempActor");
-        EXPECT(scene.findActor("TempActor") == nullptr, "actor should not exist after removeActor");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("createActor multiple actors");
-    {
-        Scene scene("Multi");
-        size_t before = scene.getAllActors().size();
-        scene.createActor("A");
-        scene.createActor("B");
-        scene.createActor("C");
-        EXPECT(scene.getAllActors().size() == before + 3, "scene should have 3 more actors");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("scene name");
-    {
-        Scene scene("MyGameScene");
-        EXPECT(scene.getName() == "MyGameScene", "scene name should match ctor arg");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("findActor by id");
-    {
-        Scene scene("IdTest");
-        auto actor = scene.createActor("IdActor");
-        uint64_t id = actor->getID();
-        auto found = scene.findActor(id);
-        EXPECT(found != nullptr, "findActor(id) should find the actor");
-        EXPECT(found->getID() == id, "found actor ID should match");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("actor tags + findActorsByTag");
-    {
-        Scene scene("TagScene");
-        auto a = scene.createActor("PropA");
-        auto b = scene.createActor("PropB");
-        a->addTag("pickup");
-        a->addTag("glow");
-        b->addTag("pickup");
-        EXPECT(a->hasTag("pickup"), "has pickup");
-        EXPECT(!b->hasTag("glow"), "B no glow");
-        auto pickups = scene.findActorsByTag("pickup");
-        EXPECT(pickups.size() == 2u, "two pickups");
-        a->removeTag("pickup");
-        EXPECT(scene.findActorsByTag("pickup").size() == 1u, "one pickup left");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("scene actorCount + contains + forEachActor");
-    {
-        Scene scene("CountScene");
-        const auto before = scene.actorCount();
-        scene.createActor("A");
-        scene.createActor("B");
-        EXPECT(scene.actorCount() == before + 2u, "actorCount");
-        EXPECT(scene.contains("A"), "contains A");
-        int visits = 0;
-        scene.forEachActor([&](Actor&) { ++visits; });
-        EXPECT(visits == static_cast<int>(scene.actorCount()), "forEach visits all");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("MeshBufferInfo on MeshComponent");
-    {
-        Scene scene("MeshBuf");
-        auto actor = scene.createActor("M");
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setBufferInfo(MeshBufferInfo{
-            .vertexOffset = 4,
-            .indexOffset = 8,
-            .indexCount = 36,
-            .vertexCount = 24,
-        });
-        auto info = mesh->getBufferInfo();
-        EXPECT(info.vertexOffset == 4u && info.indexEnd() == 44u, "buffer info");
-        EXPECT(mesh->getRenderMode() == MeshComponent::RenderMode::Solid, "default solid");
-        TEST_PASS();
-    }
+static void runAssetTests() {
+    std::cout << "\n[Assets]\n";
 
     TEST_BEGIN("ModelLoader::isSupportedExtension");
     {
@@ -547,13 +434,6 @@ void runMetaTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("ComponentType concept (MeshComponent)");
-    {
-        static_assert(ComponentType<MeshComponent>);
-        static_assert(!ComponentType<int>);
-        TEST_PASS();
-    }
-
     TEST_BEGIN("Result / VoidResult");
     {
         auto ok = Result<int>::ok(7);
@@ -568,18 +448,6 @@ void runMetaTests() {
         auto verr = err_void("fail");
         EXPECT(vok, "VoidResult ok");
         EXPECT(!verr && verr.error() == "fail", "VoidResult err");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("MeshBufferInfo GpuPod + helpers");
-    {
-        static_assert(GpuPod<MeshBufferInfo>);
-        static_assert(sizeof(MeshBufferInfo) == 16);
-        MeshBufferInfo m{.vertexOffset = 10, .indexOffset = 20, .indexCount = 6, .vertexCount = 4};
-        EXPECT(!m.empty(), "non-empty mesh");
-        EXPECT(m.indexEnd() == 26, "index end");
-        EXPECT(m.vertexEnd() == 14, "vertex end");
-        EXPECT(kEmptyMeshBuffer.empty(), "empty sentinel");
         TEST_PASS();
     }
 
@@ -1247,7 +1115,6 @@ static void runHeadlessDeferredRenderTests() {
                 TEST_FAIL("initialize");
                 return;
             }
-            renderer.setScene(nullptr);
             const glm::mat4 view =
                 glm::lookAt(glm::vec3(0, 1, 4), glm::vec3(0), glm::vec3(0, 1, 0));
             const glm::mat4 proj =
@@ -1801,28 +1668,25 @@ static void runRenderSceneTests() {
         if (!r->initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
         if (!r->isRTSupported()) { std::cout << "(no RT -- skipped) "; TEST_PASS(); return; }
         std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
-        ohao::Scene scene("rt");
-        auto actor = scene.createActor("quad");   // the XZ quad turned to face +Z, 4 units wide
-        actor->getTransform()->setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)));
-        actor->getTransform()->setScale(glm::vec3(2.0f));
-        auto model = std::make_shared<ohao::Model>();
-        model->vertices = v; model->indices = i;
-        auto mesh = actor->addComponent<ohao::MeshComponent>();
-        mesh->setModel(model);
-        mesh->setVisible(true);
-        auto mat = actor->addComponent<ohao::MaterialComponent>();
-        mat->getMaterial().baseColor = {0.9f, 0.9f, 0.9f};
-        auto lightActor = scene.createActor("light");
-        auto lc = lightActor->addComponent<ohao::LightComponent>();
-        lc->setLightType(ohao::LightType::Sphere);
-        lc->setIntensity(20.0f);
-        lightActor->getTransform()->setPosition({0, 0, 2});
-        r->setScene(&scene);
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r->renderScene());
+        ohao::Model model;
+        model.vertices = v; model.indices = i;
+        ohao::ecs::Transform quadT;   // the XZ quad turned to face +Z, 4 units wide
+        quadT.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0));
+        quadT.scale = glm::vec3(2.0f);
+        MaterialDesc quadMat;
+        quadMat.baseColor = {0.9f, 0.9f, 0.9f};
+        ohao::ecs::spawnModel(world, r->renderScene(), r->getTextureManager(), model, "quad", quadT, &quadMat);
+        ohao::ecs::Light light;
+        light.intensity = 20.0f;
+        light.radius = 0.5f;
+        ohao::ecs::spawnLight(world, "light", light, ohao::ecs::Transform{{0, 0, 2}});
         r->getCamera().setPosition({0.0f, 0.0f, 6.0f});
         r->getCamera().setRotation(0.0f, -90.0f);
         r->setRenderMode(ohao::RenderMode::RTOffline);
         if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
-        for (int k = 0; k < 6; ++k) r->render();
+        for (int k = 0; k < 6; ++k) { world.update(0.0f); r->render(); }
         RenderScene& rs = r->renderScene();
         EXPECT(rs.tlas() != VK_NULL_HANDLE, "the RenderScene built a TLAS for the path tracer");
         EXPECT_EQ(rs.rtLightCount(), 1u, "the scene's light reached the RT light list");
@@ -1854,35 +1718,28 @@ static void runRenderSceneTests() {
         }
         tm->updateDescriptorSet();
         EXPECT(last.valid() && last.index >= 1024, "a texture slot past 1024");
-        tm->registerName(last, "far_red");
 
         std::vector<ohao::Vertex> v; std::vector<uint32_t> i; makeQuad(v, i);
-        ohao::Scene scene("rt-far");
-        const auto addQuad = [&](const char* name, float x, const char* texName) {
-            auto actor = scene.createActor(name);
-            actor->getTransform()->setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)));
-            actor->getTransform()->setPosition({x, 0, 0});
-            actor->getTransform()->setScale(glm::vec3(0.9f));
-            auto model = std::make_shared<ohao::Model>();
-            model->vertices = v; model->indices = i;
-            auto mesh = actor->addComponent<ohao::MeshComponent>();
-            mesh->setModel(model);
-            mesh->setVisible(true);
-            auto mat = actor->addComponent<ohao::MaterialComponent>();
-            mat->getMaterial().baseColor = {1.0f, 1.0f, 1.0f};
-            if (texName) {
-                mat->getMaterial().useAlbedoTexture = true;
-                mat->getMaterial().albedoTexture = texName;
-            }
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r->renderScene());
+        ohao::Model model;
+        model.vertices = v; model.indices = i;
+        const auto addQuad = [&](const char* name, float x, uint32_t albedoTex) {
+            ohao::ecs::Transform t;
+            t.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0));
+            t.position = {x, 0, 0};
+            t.scale = glm::vec3(0.9f);
+            MaterialDesc mat;
+            mat.baseColor = {1.0f, 1.0f, 1.0f};
+            mat.albedoTex = albedoTex;
+            ohao::ecs::spawnModel(world, r->renderScene(), tm, model, name, t, &mat);
         };
-        addQuad("left_far_red", -1.0f, "far_red");
-        addQuad("right_plain", 1.0f, nullptr);
-        auto lightActor = scene.createActor("light");
-        auto lc = lightActor->addComponent<ohao::LightComponent>();
-        lc->setLightType(ohao::LightType::Sphere);
-        lc->setIntensity(20.0f);
-        lightActor->getTransform()->setPosition({0, 0, 2});
-        r->setScene(&scene);
+        addQuad("left_far_red", -1.0f, last.index);
+        addQuad("right_plain", 1.0f, kNoTexture);
+        ohao::ecs::Light light;
+        light.intensity = 20.0f;
+        light.radius = 0.5f;
+        ohao::ecs::spawnLight(world, "light", light, ohao::ecs::Transform{{0, 0, 2}});
 
         // A third quad straight on the RenderScene, whose material names slot 100000:
         // past every binding, it must render as its base colour (green), not crash.
@@ -1905,7 +1762,7 @@ static void runRenderSceneTests() {
         r->getCamera().setRotation(0.0f, -90.0f);
         r->setRenderMode(ohao::RenderMode::RTOffline);
         if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
-        for (int k = 0; k < 6; ++k) r->render();
+        for (int k = 0; k < 6; ++k) { world.update(0.0f); r->render(); }
         const auto px = r->getPixelSpan();
         int redLeft = 0, greenTop = 0;
         for (int y = 0; y < 64; ++y)
@@ -2006,7 +1863,7 @@ int main() {
 
     runEventBusTests();
     runCommandHistoryTests();
-    runSceneTests();
+    runAssetTests();
     runMetaTests();
     runHeadlessDeferredTests();
     runHeadlessPathTracerTests();

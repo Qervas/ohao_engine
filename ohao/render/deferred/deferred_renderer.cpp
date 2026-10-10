@@ -1,9 +1,6 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
-#include "scene/scene.hpp"
-#include "scene/component/light_component.hpp"
-#include "scene/actor/actor.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
@@ -440,17 +437,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.tlas = sceneTlas;
                 gi.instances = m_renderScene->instanceBuffer();
 
-                // Find brightest scene light for GI bounce
-                if (m_scene) {
-                    float bestIntensity = 0.0f;
-                    for (const auto& [id, actor] : m_scene->getAllActors()) {
-                        auto lc = actor->getComponent<LightComponent>();
-                        if (!lc) continue;
-                        if (lc->getIntensity() > bestIntensity) {
-                            gi.lightPos = actor->getTransform()->getPosition();
-                            gi.lightIntensity = lc->getIntensity();
-                            bestIntensity = lc->getIntensity();
-                        }
+                // Brightest scene light for the GI bounce: the first of the highest
+                // intensity in light order (emissive proxies excluded).
+                float bestIntensity = 0.0f;
+                for (const render::LightDesc& l : m_renderScene->lights()) {
+                    if (l.kind == render::LightKind::EmissiveProxy) continue;
+                    if (l.intensity > bestIntensity) {
+                        gi.lightPos = l.position;
+                        gi.lightIntensity = l.intensity;
+                        bestIntensity = l.intensity;
                     }
                 }
                 m_rtGI->setSampleCount(32); // quality over speed
@@ -719,10 +714,6 @@ void DeferredRenderer::setEnvMap(VkImageView view, VkSampler sampler) {
     if (m_lightingPass) {
         m_lightingPass->setEnvMap(view, sampler);
     }
-}
-
-void DeferredRenderer::setScene(Scene* scene) {
-    m_scene = scene;
 }
 
 void DeferredRenderer::setRenderScene(const render::RenderScene* scene) {

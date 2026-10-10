@@ -425,6 +425,7 @@ VkBuffer RenderScene::meshTable() const { return m->meshes.meshTable(); }
 VkBuffer RenderScene::materialBuffer() const { return m->materials.buffer(); }
 VkBuffer RenderScene::materialRefBuffer() const { return m->instances.materialRefBuffer(); }
 VkBuffer RenderScene::instanceBuffer() const { return m->instances.instanceBuffer(); }
+std::span<const LightDesc> RenderScene::lights() const { return m->lights.descs(); }
 std::span<const LightData> RenderScene::rasterLights() const { return m->lights.raster(); }
 VkBuffer RenderScene::rtLightBuffer() const { return m->lights.rtBuffer(); }
 uint32_t RenderScene::rtLightCount() const { return m->lights.rtCount(); }

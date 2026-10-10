@@ -1,11 +1,7 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include "scene/component/mesh_component.hpp"
-#include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
 #include "render/rt/rt_visibility.hpp"
 #include "render/scene/render_scene.hpp"
 
@@ -55,7 +51,6 @@ void VulkanRenderer::renderDeferred() {
     glm::mat4 proj = m_camera->getProjectionMatrix();
     glm::vec3 camPos = m_camera->getPosition();
 
-    m_deferredRenderer->setScene(m_scene);   // RT GI's bounce light still reads it
     m_deferredRenderer->setRenderScene(m_renderScene.get());
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
 
@@ -70,10 +65,6 @@ void VulkanRenderer::renderDeferred() {
     if (envMapLoaded()) {
         m_deferredRenderer->setEnvMap(m_envMapImageView, m_envSampler);
     }
-
-    // TEMPORARY bridge: the old Scene's live transforms, visibility and lights into
-    // the RenderScene, before recordUpdates uploads them.
-    syncBridgedScene();
 
     // Update m_lightBuffer with current scene lights (correct numLights, default fallback if empty)
     updateLightBuffer();

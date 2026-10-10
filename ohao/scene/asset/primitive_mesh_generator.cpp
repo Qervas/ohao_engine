@@ -99,51 +99,40 @@ void PrimitiveMeshGenerator::generateCube(Model& model, float size) {
     }
 }
 
-void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int segments) {
+// UV sphere: stacks latitude bands x sectors longitude segments, normal =
+// normalized position. The defaults (32 x 16) are the sphere the examples render.
+void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int sectors, int stacks) {
     model.vertices.clear();
     model.indices.clear();
-    
-    const float PI = glm::pi<float>();
-    
-    // Generate vertices
-    for (int y = 0; y <= segments; ++y) {
-        float v = (float)y / (float)segments;
-        float phi = v * PI;
-        
-        for (int x = 0; x <= segments; ++x) {
-            float u = (float)x / (float)segments;
-            float theta = u * 2.0f * PI;
-            
-            float xPos = radius * std::sin(phi) * std::cos(theta);
-            float yPos = radius * std::cos(phi);
-            float zPos = radius * std::sin(phi) * std::sin(theta);
-            
-            glm::vec3 position(xPos, yPos, zPos);
-            glm::vec3 normal = glm::normalize(position);
-            glm::vec2 uv(u, v);
-            glm::vec3 color(1.0f, 1.0f, 1.0f);
-            
-            model.vertices.push_back({ position, color, normal, uv });
+
+    for (int i = 0; i <= stacks; ++i) {
+        const float phi = glm::pi<float>() * float(i) / float(stacks);
+        const float sinPhi = std::sin(phi);
+        const float cosPhi = std::cos(phi);
+        for (int j = 0; j <= sectors; ++j) {
+            const float theta = 2.0f * glm::pi<float>() * float(j) / float(sectors);
+            const float x = std::cos(theta) * sinPhi;
+            const float y = cosPhi;
+            const float z = std::sin(theta) * sinPhi;
+            Vertex vertex;
+            vertex.position = {x * radius, y * radius, z * radius};
+            vertex.normal = {x, y, z};
+            vertex.color = {1.0f, 1.0f, 1.0f};
+            vertex.texCoord = {float(j) / sectors, float(i) / stacks};
+            model.vertices.push_back(vertex);
         }
     }
-    
-    // Generate indices
-    for (int y = 0; y < segments; ++y) {
-        for (int x = 0; x < segments; ++x) {
-            int current = y * (segments + 1) + x;
-            int right = current + 1;
-            int below = current + (segments + 1);
-            int belowRight = below + 1;
-            
-            // Upper triangle
-            model.indices.push_back(current);
-            model.indices.push_back(below);
-            model.indices.push_back(right);
-            
-            // Lower triangle
-            model.indices.push_back(right);
-            model.indices.push_back(below);
-            model.indices.push_back(belowRight);
+
+    for (int i = 0; i < stacks; ++i) {
+        for (int j = 0; j < sectors; ++j) {
+            const int first = i * (sectors + 1) + j;
+            const int second = first + sectors + 1;
+            model.indices.push_back(first);
+            model.indices.push_back(second);
+            model.indices.push_back(first + 1);
+            model.indices.push_back(second);
+            model.indices.push_back(second + 1);
+            model.indices.push_back(first + 1);
         }
     }
 }

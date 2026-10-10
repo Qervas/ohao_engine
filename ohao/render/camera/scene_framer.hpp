@@ -9,9 +9,10 @@
 #include <vector>
 #include <string>
 
+namespace ohao::ecs { class World; }
+
 namespace ohao {
 
-class Scene;
 class Camera;
 struct Vertex;
 
@@ -44,8 +45,10 @@ public:
     [[nodiscard]] static FrameResult computeFraming(const std::vector<Vertex>& vertices,
                                                     bool forceYUp = false);
 
-    // Apply lights from a FrameResult to a scene
-    static void applyLights(Scene* scene, const FrameResult& result);
+    // Spawns the FrameResult's lights as point-light entities, in list order.
+    // Defined in ohao_ecs (ecs/scene_framer_lights.cpp) so ohao_renderer stays
+    // free of the ECS; link ohao_ecs to call it.
+    static void applyLights(ecs::World& world, const FrameResult& result);
 
     // Apply camera settings from a FrameResult
     static void applyCamera(Camera& camera, const FrameResult& result);

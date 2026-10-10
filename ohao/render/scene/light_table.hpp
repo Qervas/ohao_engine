@@ -25,6 +25,8 @@ public:
     void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
+    // The last set() list, sorted by order (host copy).
+    [[nodiscard]] std::span<const LightDesc> descs() const noexcept { return m_descs; }
     [[nodiscard]] uint32_t rtCount() const noexcept { return static_cast<uint32_t>(m_rt.size()); }
     [[nodiscard]] VkBuffer rtBuffer() const noexcept { return m_rtBuffer.buffer; }
 
@@ -34,6 +36,7 @@ public:
 private:
     GpuAllocator* m_allocator{nullptr};
     GpuBuffer m_rtBuffer;
+    std::vector<LightDesc> m_descs;
     std::vector<LightData> m_raster;
     std::vector<GPULight> m_rt;
     uint32_t m_envMapTexIdx{kNoTexture};

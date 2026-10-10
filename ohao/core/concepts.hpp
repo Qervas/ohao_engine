@@ -20,13 +20,7 @@
 
 namespace ohao {
 
-class Component;
 class Command;
-
-// ─── Entity / component ─────────────────────────────────────────────────────
-
-template<typename T>
-concept ComponentType = std::derived_from<T, Component>;
 
 template<typename T>
 concept EnumType = std::is_enum_v<T>;

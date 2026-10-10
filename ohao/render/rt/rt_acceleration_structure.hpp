@@ -50,7 +50,7 @@ struct RetiredTlas {
 struct RTInstance {
     BlasHandle blasHandle = INVALID_BLAS;
     glm::mat4 transform = glm::mat4(1.0f);
-    uint32_t customIndex = 0;   // user data (e.g. actor index)
+    uint32_t customIndex = 0;   // user data (the RenderScene instance slot)
     uint32_t mask = 0xFF;       // visibility mask for ray flags
     uint32_t sbtOffset = 0;     // shader binding table offset
 };
