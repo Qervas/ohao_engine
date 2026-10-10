@@ -22,12 +22,8 @@ struct SpawnedModel {
     std::optional<EmissiveProxyLight> emissive;
 };
 
-// Registers the model's mesh (one BLAS), its materials and textures in the scene.
-// Materials and textures are derived exactly as the old deferred path did
-// (GBufferPass::execute + VulkanRenderer::uploadDeferredTextures): one material per
-// materialColors entry, submeshes from contiguous runs of materialPerTriangle. A model
-// without materialColors gets one material, `overrideMaterial` or the default.
-// `textures` may be null: the materials then carry no textures.
+// render::uploadModel (render/scene/model_upload.hpp) with the emissive proxy as an
+// ECS component. See there for the material/texture/submesh derivation rules.
 SpawnedModel uploadModel(render::RenderScene& scene, BindlessTextureManager* textures,
                          const Model& model, std::string_view debugName,
                          const render::MaterialDesc* overrideMaterial = nullptr);

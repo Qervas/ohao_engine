@@ -55,7 +55,8 @@ void VulkanRenderer::renderDeferred() {
     glm::mat4 proj = m_camera->getProjectionMatrix();
     glm::vec3 camPos = m_camera->getPosition();
 
-    m_deferredRenderer->setScene(m_scene);
+    m_deferredRenderer->setScene(m_scene);   // RT GI's bounce light still reads it
+    m_deferredRenderer->setRenderScene(m_renderScene.get());
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
 
     // Skeletal animation removed — all meshes are static.
@@ -70,10 +71,9 @@ void VulkanRenderer::renderDeferred() {
         m_deferredRenderer->setEnvMap(m_envMapImageView, m_rtTextureSampler);
     }
 
-    // Pass geometry buffers to deferred renderer
-    if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
-        m_deferredRenderer->setGeometryBuffers(m_vertexBuffer, m_indexBuffer, &m_meshBufferMap);
-    }
+    // TEMPORARY bridge: the old Scene's live transforms, visibility and lights into
+    // the RenderScene, before recordUpdates uploads them.
+    syncBridgedScene();
 
     // Update m_lightBuffer with current scene lights (correct numLights, default fallback if empty)
     updateLightBuffer();

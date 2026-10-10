@@ -228,7 +228,7 @@ static void ten_thousand_instances_one_percent_moving_under_half_a_millisecond()
     World w;
     installRenderExtract(w, r.renderScene());
     ohao::Model quad; quad.vertices.assign(3, ohao::Vertex{}); quad.vertices[1].position = {1,0,0}; quad.vertices[2].position = {0,0,1}; quad.indices = {0,1,2};
-    SpawnedModel shared = uploadModel(r.renderScene(), r.getTextureManager(), quad, "q");
+    SpawnedModel shared = ohao::ecs::uploadModel(r.renderScene(), r.getTextureManager(), quad, "q");
     std::vector<entt::entity> es;
     for (int k = 0; k < 10000; ++k) {
         auto e = w.create("i", Transform{{float(k), 0, 0}});
@@ -316,7 +316,7 @@ static void emissive_texture_yields_a_proxy_light() {
     m.emissiveTextures = {tex};
     m.materialTextureIndex = {0};
     m.materialEmissiveTexIndex = {0};
-    SpawnedModel up = uploadModel(r.renderScene(), r.getTextureManager(), m, "em");
+    SpawnedModel up = ohao::ecs::uploadModel(r.renderScene(), r.getTextureManager(), m, "em");
     CHECK(up.emissive.has_value(), "a bright emissive texture makes a proxy light");
     // 16 white pixels: lum 1 each -> totalPower 16 -> intensity 1.6 (cacheEmissiveLights).
     CHECK(std::fabs(up.emissive->intensity - 1.6f) < 1e-5f, "intensity = min(power * 0.1, 20)");

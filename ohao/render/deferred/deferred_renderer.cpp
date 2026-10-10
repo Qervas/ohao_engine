@@ -294,13 +294,13 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // Update G-Buffer pass
     if (m_gbufferPass) {
-        m_gbufferPass->setScene(m_scene);
+        m_gbufferPass->setRenderScene(m_renderScene);
         m_gbufferPass->setViewProjection(m_view, jitteredProj, m_prevViewProj);
     }
 
     // Update CSM pass
     if (m_csmPass) {
-        m_csmPass->setScene(m_scene);
+        m_csmPass->setRenderScene(m_renderScene);
         m_csmPass->setLightDirection(m_lightDirection);
         m_csmPass->setCameraData(m_view, m_proj, m_nearPlane, m_farPlane);
     }
@@ -723,17 +723,8 @@ void DeferredRenderer::setScene(Scene* scene) {
     m_scene = scene;
 }
 
-void DeferredRenderer::setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer,
-                                          const std::unordered_map<uint64_t, MeshBufferInfo>* bufferMap) {
-    // Pass geometry buffers to all rendering passes that need them
-    if (m_gbufferPass) {
-        m_gbufferPass->setGeometryBuffers(vertexBuffer, indexBuffer);
-        m_gbufferPass->setMeshBufferMap(bufferMap);
-    }
-    if (m_csmPass) {
-        m_csmPass->setGeometryBuffers(vertexBuffer, indexBuffer);
-        m_csmPass->setMeshBufferMap(bufferMap);
-    }
+void DeferredRenderer::setRenderScene(const render::RenderScene* scene) {
+    m_renderScene = scene;
 }
 
 void DeferredRenderer::setCameraData(const glm::mat4& view, const glm::mat4& proj,

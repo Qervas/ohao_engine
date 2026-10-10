@@ -19,6 +19,16 @@
 namespace ohao {
 
 bool VulkanRenderer::updateSceneBuffers() {
+    // The combined vertex/index buffers and the RT build below still feed the legacy
+    // ray-tracing path (Task 8 moves it). The deferred passes draw from m_renderScene,
+    // filled by the bridge after the legacy build: it reads the MaterialComponents
+    // that uploadDeferredTextures annotated with texture names.
+    const bool ok = updateLegacySceneBuffers();
+    bridgeSceneToRenderScene();
+    return ok;
+}
+
+bool VulkanRenderer::updateLegacySceneBuffers() {
     if (!m_scene) {
         std::cout << "Cannot update buffers - no scene exists" << std::endl;
         m_hasSceneMeshes = false;
@@ -52,7 +62,7 @@ bool VulkanRenderer::updateSceneBuffers() {
         return false;
     }
 
-    // Pre-allocate buffers
+    // Pre-allocate buffers (RT input only: createRTVertexIndexBuffers copies them)
     std::vector<Vertex> combinedVertices;
     std::vector<uint32_t> combinedIndices;
     combinedVertices.reserve(totalVertices);
@@ -183,9 +193,6 @@ bool VulkanRenderer::updateSceneBuffers() {
     // RT acceleration structures — uses separate device-local buffers (not the raster vertex/index buffers)
     m_rtAccelDirty = true;
     buildAccelerationStructures();
-
-    // Cache emissive mesh lights for deferred pipeline (avoids per-frame texture scan)
-    cacheEmissiveLights();
 
     return true;
 }

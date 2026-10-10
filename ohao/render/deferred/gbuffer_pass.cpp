@@ -1,90 +1,10 @@
 #include "gbuffer_pass.hpp"
-#include "../../scene/scene.hpp"
-#include "../../scene/actor/actor.hpp"
-#include "../../scene/component/transform_component.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
-#include "../../scene/asset/model.hpp"
-#include <stdexcept>
-#include <algorithm>
+#include "render/scene/render_scene.hpp"
+#include "scene/asset/model.hpp"
 #include <array>
-#include <iostream>
 #include <cstring>
-#include <cfloat>
-#include <vector>
 
 namespace ohao {
-
-namespace {
-
-struct MaterialDrawRange {
-    uint32_t materialIndex;
-    uint32_t firstIndex;
-    uint32_t indexCount;
-};
-
-std::vector<MaterialDrawRange> buildMaterialDrawRanges(const Model& model, const MeshBufferInfo& bufferInfo) {
-    std::vector<MaterialDrawRange> ranges;
-    const uint32_t triangleCount = bufferInfo.indexCount / 3;
-    if (triangleCount == 0) return ranges;
-
-    if (model.materialPerTriangle.empty()) {
-        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
-        return ranges;
-    }
-
-    const uint32_t cappedTriangleCount = std::min<uint32_t>(
-        triangleCount, static_cast<uint32_t>(model.materialPerTriangle.size()));
-    if (cappedTriangleCount == 0) {
-        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
-        return ranges;
-    }
-
-    uint32_t runMaterial = model.materialPerTriangle[0];
-    uint32_t runStartTriangle = 0;
-
-    for (uint32_t tri = 1; tri < cappedTriangleCount; ++tri) {
-        const uint32_t materialIndex = model.materialPerTriangle[tri];
-        if (materialIndex == runMaterial) continue;
-
-        ranges.push_back({
-            runMaterial,
-            bufferInfo.indexOffset + runStartTriangle * 3,
-            (tri - runStartTriangle) * 3
-        });
-        runMaterial = materialIndex;
-        runStartTriangle = tri;
-    }
-
-    ranges.push_back({
-        runMaterial,
-        bufferInfo.indexOffset + runStartTriangle * 3,
-        (cappedTriangleCount - runStartTriangle) * 3
-    });
-
-    if (cappedTriangleCount < triangleCount) {
-        ranges.push_back({
-            0u,
-            bufferInfo.indexOffset + cappedTriangleCount * 3,
-            (triangleCount - cappedTriangleCount) * 3
-        });
-    }
-
-    return ranges;
-}
-
-uint32_t findMaterialTextureIndex(BindlessTextureManager* textureManager,
-                                  const Actor& actor,
-                                  const char* suffix,
-                                  uint32_t materialIndex) {
-    if (!textureManager) return UINT32_MAX;
-
-    const std::string textureName = actor.getName() + "_" + suffix + "_" + std::to_string(materialIndex);
-    const auto handle = textureManager->findTexture(textureName);
-    return handle.valid() ? handle.index : UINT32_MAX;
-}
-
-}
 
 GBufferPass::~GBufferPass() {
     cleanup();
@@ -102,6 +22,7 @@ bool GBufferPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createRenderPass()) return false;
     if (!createFramebuffer()) return false;
     if (!createDescriptors()) return false;
+    if (!createSceneDescriptors()) return false;
     if (!createPipeline()) return false;
 
     return true;
@@ -132,6 +53,7 @@ void GBufferPass::cleanup() {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
     }
+    destroySceneDescriptors();
     if (m_gbufferLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_device, m_gbufferLayout, nullptr);
         m_gbufferLayout = VK_NULL_HANDLE;
@@ -148,9 +70,12 @@ void GBufferPass::cleanup() {
     destroyGBuffer();
 }
 
-void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
+void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Always run the render pass, scene or not: its clears are what every later pass
     // samples. With no scene the G-buffer is simply empty (depth 1 = all sky).
+
+    // The slot's set and camera UBO are written before the render pass begins.
+    const bool haveScene = m_renderScene && !m_renderScene->draws().empty() && updateSceneSet(frameIndex);
 
     // Begin render pass
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
@@ -186,165 +111,159 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     scissor.extent = {m_width, m_height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Bind vertex and index buffers if available
-    if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
-        VkBuffer vertexBuffers[] = {m_vertexBuffer};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    }
+    if (haveScene) {
+        // Build view frustum for culling
+        Frustum frustum;
+        frustum.extractFromViewProj(m_projection * m_view);
 
-    // Build view frustum for culling
-    Frustum frustum;
-    frustum.extractFromViewProj(m_projection * m_view);
+        const VkPipeline pipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
+                                        ? m_wireframePipeline : m_pipeline;
+        bool bound = false;
 
-    // Track which pipeline is currently bound to avoid redundant switches
-    VkPipeline currentPipeline = VK_NULL_HANDLE;
-    VkPipeline staticPipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
-                                    ? m_wireframePipeline : m_pipeline;
+        for (const render::RenderScene::Draw& draw : m_renderScene->draws()) {
+            // Frustum culling: the mesh's world-space AABB against the frustum
+            const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);
+            if (!frustum.isAABBVisible(worldAABB)) continue;
 
-    // Iterate through scene actors and render meshes
-    if (m_scene && m_meshBufferMap) {
-        const auto& actors = m_scene->getAllActors();
-        for (const auto& [actorId, actor] : actors) {
-            if (!actor) continue;
-
-            // Get mesh component
-            auto meshComp = actor->getComponent<MeshComponent>();
-            if (!meshComp || !meshComp->isVisible()) continue;
-
-            // Get transform
-            auto transformComp = actor->getComponent<TransformComponent>();
-            glm::mat4 modelMatrix = transformComp ? transformComp->getWorldMatrix() : glm::mat4(1.0f);
-
-            // Frustum culling: compute world-space AABB and test against frustum
-            auto model = actor->getModel();
-            if (model && !model->vertices.empty()) {
-                AABB localAABB;
-                localAABB.min = glm::vec3(FLT_MAX);
-                localAABB.max = glm::vec3(-FLT_MAX);
-                for (const auto& v : model->vertices) {
-                    localAABB.min = glm::min(localAABB.min, v.position);
-                    localAABB.max = glm::max(localAABB.max, v.position);
+            if (!bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                // Set 0: bindless textures; set 1: the scene.
+                const VkDescriptorSet texSet =
+                    m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
+                if (texSet != VK_NULL_HANDLE) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
                 }
-                AABB worldAABB = localAABB.transformed(modelMatrix);
-                if (!frustum.isAABBVisible(worldAABB)) {
-                    continue; // Culled - skip this actor
-                }
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_pipelineLayout, 1, 1, &m_sceneSets[frameIndex], 0, nullptr);
+                const VkBuffer vertexBuffer = m_renderScene->vertexArena();
+                const VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
+                vkCmdBindIndexBuffer(cmd, m_renderScene->indexArena(), 0, VK_INDEX_TYPE_UINT32);
+                bound = true;
             }
 
-            // Static geometry only (skeletal animation removed)
-            if (currentPipeline != staticPipeline) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, staticPipeline);
-                currentPipeline = staticPipeline;
-
-                // Bind bindless textures for static pipeline (set 0)
-                if (m_textureManager) {
-                    VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
-                    if (texSet != VK_NULL_HANDLE) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                                m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
-                    }
-                }
-            }
-
-            // Find buffer info for this actor
-            auto it = m_meshBufferMap->find(actorId);
-            if (it == m_meshBufferMap->end()) continue;
-
-            const MeshBufferInfo& bufferInfo = it->second;
-
-            auto packIdx = [](uint32_t idx) -> float {
-                float f; memcpy(&f, &idx, sizeof(float)); return f;
-            };
-            auto materialComp = actor->getComponent<MaterialComponent>();
-
-            std::vector<MaterialDrawRange> drawRanges;
-            if (model && !model->materialColors.empty()) {
-                drawRanges = buildMaterialDrawRanges(*model, bufferInfo);
-            }
-            if (drawRanges.empty()) {
-                drawRanges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
-            }
-
-            VkPipelineLayout activeLayout = m_pipelineLayout;
-            const glm::mat4 viewProj = m_projection * m_view;
-            const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;
-
-            for (const MaterialDrawRange& range : drawRanges) {
-                glm::vec3 albedo(0.8f);
-                float metallic = 0.0f;
-                float roughness = 0.5f;
-                uint32_t albedoTexIdx = UINT32_MAX;
-                uint32_t normalTexIdx = UINT32_MAX;
-                uint32_t roughMetalTexIdx = UINT32_MAX;
-                uint32_t emissiveTexIdx = UINT32_MAX;
-                float emissiveStrength = 0.0f;
-
-                const bool hasModelMaterial =
-                    model &&
-                    range.materialIndex < model->materialColors.size();
-
-                if (hasModelMaterial) {
-                    const uint32_t materialIndex = range.materialIndex;
-                    albedo = glm::vec3(model->materialColors[materialIndex]);
-                    roughness = model->materialColors[materialIndex].w;
-                    if (materialIndex < model->materialMetallic.size()) {
-                        metallic = model->materialMetallic[materialIndex];
-                    }
-
-                    albedoTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "albedo", materialIndex);
-                    normalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "normal", materialIndex);
-                    roughMetalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "roughmetal", materialIndex);
-                    emissiveTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "emissive", materialIndex);
-                    if (emissiveTexIdx != UINT32_MAX) {
-                        emissiveStrength = 1.0f;
-                    }
-                } else if (materialComp) {
-                    const auto& mat = materialComp->getMaterial();
-                    albedo = mat.baseColor;
-                    metallic = mat.metallic;
-                    roughness = mat.roughness;
-
-                    if (m_textureManager) {
-                        if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
-                            auto handle = m_textureManager->findTexture(mat.albedoTexture);
-                            if (handle.valid()) albedoTexIdx = handle.index;
-                        }
-                        if (mat.useNormalTexture && !mat.normalTexture.empty()) {
-                            auto handle = m_textureManager->findTexture(mat.normalTexture);
-                            if (handle.valid()) normalTexIdx = handle.index;
-                        }
-                        if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
-                            auto handle = m_textureManager->findTexture(mat.roughnessTexture);
-                            if (handle.valid()) roughMetalTexIdx = handle.index;
-                        }
-                        if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
-                            auto handle = m_textureManager->findTexture(mat.emissiveTexture);
-                            if (handle.valid()) emissiveTexIdx = handle.index;
-                            emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;
-                        }
-                    }
-                }
-
-                GBufferUBO ubo{};
-                ubo.model = modelMatrix;
-                ubo.viewProj = viewProj;
-                ubo.prevMVP = prevMVP;
-                ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));
-                ubo.albedoColor = glm::vec4(albedo, packIdx(normalTexIdx));
-                ubo.emissiveParams = glm::vec4(packIdx(emissiveTexIdx), emissiveStrength, 0.0f, 0.0f);
-
-                vkCmdPushConstants(cmd, activeLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0, sizeof(GBufferUBO), &ubo);
-
-                vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
-            }
+            const DrawPushConstant push{draw.materialSlot, {0u, 0u, 0u}};
+            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(DrawPushConstant), &push);
+            // firstInstance = the slot: the shaders index the instance table with it.
+            vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);
         }
     }
 
     vkCmdEndRenderPass(cmd);
+}
+
+bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
+    if (frameIndex >= MAX_FRAMES_IN_FLIGHT || m_sceneSets[frameIndex] == VK_NULL_HANDLE) return false;
+    const VkBuffer instances = m_renderScene->instanceBuffer();
+    const VkBuffer materials = m_renderScene->materialBuffer();
+    const VkBuffer materialRefs = m_renderScene->materialRefBuffer();
+    if (instances == VK_NULL_HANDLE || materials == VK_NULL_HANDLE || materialRefs == VK_NULL_HANDLE ||
+        m_renderScene->vertexArena() == VK_NULL_HANDLE || m_renderScene->indexArena() == VK_NULL_HANDLE)
+        return false;
+
+    const CameraUBO camera{m_projection * m_view, m_prevViewProj};
+    std::memcpy(m_cameraMapped[frameIndex], &camera, sizeof(camera));
+
+    // The table buffers can be replaced (arena / table growth), so the set is
+    // rewritten every frame; the slot's previous use finished at its fence wait.
+    const std::array<VkDescriptorBufferInfo, 4> infos{{
+        {instances, 0, VK_WHOLE_SIZE},
+        {materials, 0, VK_WHOLE_SIZE},
+        {materialRefs, 0, VK_WHOLE_SIZE},
+        {m_cameraBuffers[frameIndex], 0, sizeof(CameraUBO)},
+    }};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    for (uint32_t i = 0; i < writes.size(); ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_sceneSets[frameIndex];
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    return true;
+}
+
+bool GBufferPass::createSceneDescriptors() {
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    for (uint32_t i = 0; i < bindings.size(); ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_sceneLayout) != VK_SUCCESS) return false;
+
+    // Set 0 must exist in the pipeline layout for set 1 to follow it.
+    if (!m_textureManager || m_textureManager->getDescriptorSetLayout() == VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutCreateInfo emptyInfo{};
+        emptyInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        if (vkCreateDescriptorSetLayout(m_device, &emptyInfo, nullptr, &m_emptyLayout) != VK_SUCCESS) return false;
+    }
+
+    const std::array<VkDescriptorPoolSize, 2> poolSizes{{
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
+    }};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_scenePool) != VK_SUCCESS) return false;
+
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_sceneLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_scenePool;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_sceneSets.data()) != VK_SUCCESS) return false;
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = sizeof(CameraUBO);
+        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_cameraBuffers[i]) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(m_device, m_cameraBuffers[i], &req);
+        VkMemoryAllocateInfo memInfo{};
+        memInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        memInfo.allocationSize = req.size;
+        memInfo.memoryTypeIndex = findMemoryType(req.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(m_device, &memInfo, nullptr, &m_cameraMemory[i]) != VK_SUCCESS) return false;
+        vkBindBufferMemory(m_device, m_cameraBuffers[i], m_cameraMemory[i], 0);
+        if (vkMapMemory(m_device, m_cameraMemory[i], 0, sizeof(CameraUBO), 0, &m_cameraMapped[i]) != VK_SUCCESS)
+            return false;
+    }
+    return true;
+}
+
+void GBufferPass::destroySceneDescriptors() {
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (m_cameraMapped[i]) {
+            vkUnmapMemory(m_device, m_cameraMemory[i]);
+            m_cameraMapped[i] = nullptr;
+        }
+        safeDestroy(m_cameraBuffers[i]);
+        safeFree(m_cameraMemory[i]);
+    }
+    safeDestroy(m_scenePool);   // frees the sets
+    m_sceneSets.fill(VK_NULL_HANDLE);
+    safeDestroy(m_sceneLayout);
+    safeDestroy(m_emptyLayout);
 }
 
 void GBufferPass::onResize(uint32_t width, uint32_t height) {
@@ -371,11 +290,6 @@ void GBufferPass::setViewProjection(const glm::mat4& view, const glm::mat4& proj
     m_view = view;
     m_projection = proj;
     m_prevViewProj = prevViewProj;
-}
-
-void GBufferPass::setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer) {
-    m_vertexBuffer = vertexBuffer;
-    m_indexBuffer = indexBuffer;
 }
 
 bool GBufferPass::createGBuffer() {
@@ -779,27 +693,23 @@ bool GBufferPass::createPipeline() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Push constants for per-object data
+    // Push constant: the draw's material slot (fragment stage)
     VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstant.offset = 0;
-    pushConstant.size = sizeof(GBufferUBO);
+    pushConstant.size = sizeof(DrawPushConstant);
 
-    // Pipeline layout — include bindless texture descriptor set if available
-    VkDescriptorSetLayout texLayout = VK_NULL_HANDLE;
-    if (m_textureManager) {
-        texLayout = m_textureManager->getDescriptorSetLayout();
-    }
+    // Pipeline layout: set 0 = bindless textures (an empty stand-in without a
+    // texture manager), set 1 = the scene
+    const std::array<VkDescriptorSetLayout, 2> setLayouts{
+        m_emptyLayout != VK_NULL_HANDLE ? m_emptyLayout : m_textureManager->getDescriptorSetLayout(),
+        m_sceneLayout,
+    };
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    if (texLayout != VK_NULL_HANDLE) {
-        pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &texLayout;
-    } else {
-        pipelineLayoutInfo.setLayoutCount = 0;
-        pipelineLayoutInfo.pSetLayouts = nullptr;
-    }
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = setLayouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 

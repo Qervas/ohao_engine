@@ -29,6 +29,7 @@
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
 #include "render/scene/render_scene_types.hpp"
+#include "render/scene/model_upload.hpp"
 
 namespace ohao {
 
@@ -37,6 +38,7 @@ namespace render { class RenderScene; }
 class Scene;
 class Camera;
 class Actor;
+class Model;
 class DeferredRenderer;
 
 // Render mode selection
@@ -327,8 +329,28 @@ private:
     [[nodiscard]] bool createLightBuffer();   // Phase 3: Light uniform buffer
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
-    void updateLightBuffer();   // Phase 3: Collect and update lights
-    void cacheEmissiveLights(); // Scan emissive materials → cached LightData (called once per scene change)
+    void updateLightBuffer();   // Light UBO from m_renderScene's raster lights (+ default sun)
+
+    // TEMPORARY (sub-project 2a, Tasks 7-9): scene_bridge.cpp feeds the old Scene into
+    // m_renderScene so the deferred passes draw from it. Deleted in Task 9.
+    [[nodiscard]] bool updateLegacySceneBuffers();   // combined buffers + legacy RT build
+    void bridgeSceneToRenderScene();   // full rebuild, at the end of updateSceneBuffers
+    void syncBridgedScene();           // per deferred frame: transforms, visibility, lights
+    struct BridgedModel {
+        std::shared_ptr<Model> model;                  // keeps the cache key alive
+        std::optional<render::UploadedModel> uploaded; // set once a visible actor used it
+        std::optional<render::EmissiveProxy> emissive;
+        bool emissiveKnown{false};
+    };
+    struct BridgedInstance {
+        uint64_t actorId;
+        uint32_t slot;
+        render::InstanceDesc desc;                     // desc.materials views `materials`
+        std::vector<render::MaterialHandle> materials;
+    };
+    std::unordered_map<const Model*, BridgedModel> m_bridgeModels;
+    std::vector<std::pair<render::MaterialDesc, render::MaterialHandle>> m_bridgeMaterials;
+    std::vector<BridgedInstance> m_bridgeInstances;
     [[nodiscard]] bool updateAnimatedActorsForRT();
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
 
@@ -433,9 +455,6 @@ private:
     std::vector<VkImageView> m_rtBindlessViews;   // one 2D view per layer of m_rtTextureArray
     uint32_t m_rtTextureCount{0};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
-
-    // Cached emissive mesh lights (computed once during updateSceneBuffers, used per-frame)
-    std::vector<LightData> m_cachedEmissiveLights;
 
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.

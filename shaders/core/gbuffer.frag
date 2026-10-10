@@ -1,5 +1,7 @@
 #version 450
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
+#include "includes/scene/scene_data.glsl"
 
 // G-Buffer Fragment Shader
 // Outputs to multiple render targets for deferred shading
@@ -29,16 +31,15 @@ layout(location = 3) out vec2 outVelocity;
 // Bindless texture array (set 0, binding 0)
 layout(set = 0, binding = 0) uniform sampler2D textures[];
 
-// Per-object push constants (matches GBufferUBO in C++)
-// Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    mat4 viewProj;
-    mat4 prevMVP;
-    vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
-    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
-    vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
-} pc;
+layout(location = 8) flat in uint fragInstance;
+
+// Set 1 "scene": RenderScene's instance, material and material-reference tables.
+layout(set = 1, binding = 0, std430) readonly buffer Instances { InstanceGpu instances[]; };
+layout(set = 1, binding = 1, std430) readonly buffer Materials { vec4 matRows[]; };
+layout(set = 1, binding = 2, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
+
+// The draw's submesh material slot (16 bytes, fragment stage).
+layout(push_constant) uniform PushConstants { uint materialSlot; } pc;
 
 // Normal encoding using octahedron mapping for better precision
 vec2 signNotZero(vec2 v) {
@@ -53,22 +54,28 @@ vec2 encodeNormalOctahedron(vec3 n) {
 }
 
 void main() {
+    InstanceGpu inst = instances[fragInstance];
+    uint m = OHAO_MATERIAL_INDEX(inst, pc.materialSlot, materialRefs);
+    vec4 row0 = matRows[m * 3u + 0u];   // baseColor, albedoTex
+    vec4 row1 = matRows[m * 3u + 1u];   // roughness, metallic, normalTex, emissiveTex
+    vec4 row2 = matRows[m * 3u + 2u];   // roughMetalTex, emissiveStrength
+
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
 
     // Check for bindless albedo texture
-    uint albedoTexIdx = floatBitsToUint(pc.materialParams.w);
+    uint albedoTexIdx = floatBitsToUint(row0.w);
     vec3 albedo;
     if (albedoTexIdx != 0xFFFFFFFFu) {
         vec4 texColor = texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord);
         albedo = texColor.rgb * fragColor;
     } else {
         // Combine vertex color with material base color
-        albedo = fragColor * pc.albedoColor.rgb;
+        albedo = fragColor * row0.rgb;
     }
 
     // Check for bindless normal map
-    uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
+    uint normalTexIdx = floatBitsToUint(row1.z);
     if (normalTexIdx != 0xFFFFFFFFu) {
         vec2 normalUV = fragTexCoord;  // Standardize on UV0 for now, same as RT path
         vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], normalUV).rgb;
@@ -93,11 +100,11 @@ void main() {
     }
 
     // Per-pixel roughness/metallic from texture (if available)
-    float metallic = pc.materialParams.x;
-    float roughness = pc.materialParams.y;
+    float metallic = row1.y;
+    float roughness = row1.x;
     float ao = 1.0;
 
-    uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
+    uint roughMetalTexIdx = floatBitsToUint(row2.x);
     if (roughMetalTexIdx < 4096u) {
         // GLTF metallicRoughness texture — use UV0 to match RT path and standard models
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
@@ -114,10 +121,10 @@ void main() {
 
     // Sample emissive texture if available
     float emissiveLuminance = 0.0;
-    uint emissiveTexIdx = floatBitsToUint(pc.emissiveParams.x);
+    uint emissiveTexIdx = floatBitsToUint(row1.w);
     if (emissiveTexIdx < 4096u) {
         vec3 emissiveColor = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb;
-        emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * pc.emissiveParams.y;
+        emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;
     }
 
     // GBuffer1: Encoded Normal + Roughness + Emissive luminance

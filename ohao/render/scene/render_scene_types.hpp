@@ -88,6 +88,16 @@ struct LightDesc {
     uint64_t order{0};
 };
 
+// A point light approximating a mesh's emissive texture (ported from the renderer's
+// emissive auto-light). localCenter/radius are in the mesh's model space; the light
+// table turns radius into range = radius * 10.
+struct EmissiveProxy {
+    glm::vec3 localCenter{0.0f};
+    float radius{0.0f};
+    glm::vec3 color{1.0f};
+    float intensity{0.0f};
+};
+
 // std430, matches shaders/includes/scene/scene_data.glsl
 struct InstanceGpu {
     glm::mat4 world;

@@ -1,12 +1,7 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
-#include "scene/component/light_component.hpp"
-#include "scene/component/mesh_component.hpp"
-#include "scene/component/material_component.hpp"
-#include "scene/scene.hpp"
-#include "scene/actor/actor.hpp"
-#include "scene/asset/model.hpp"
 #include "render/scene/light_table.hpp"
+#include "render/scene/render_scene.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace ohao {
@@ -61,58 +56,13 @@ void VulkanRenderer::updateLightBuffer() {
     lightUbo.shadowBias = 0.005f;
     lightUbo.shadowStrength = 0.7f;
 
-    int shadowCasterIndex = -1;  // Index of first shadow-casting light
-
-    // Collect lights from scene
-    if (m_scene) {
-        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-            auto lightComp = actor->getComponent<LightComponent>();
-            if (!lightComp) continue;
-
+    // Scene lights, resolved by the RenderScene's light table (regular lights in
+    // order, the first point/spot light as shadow caster, then emissive proxies).
+    if (m_renderScene) {
+        for (const LightData& light : m_renderScene->rasterLights()) {
             if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
-
-            LightData& light = lightUbo.lights[lightUbo.numLights];
-
-            glm::vec3 worldPos = actor->getTransform()->getPosition();
-            glm::vec3 worldDir = lightComp->getDirection();
-
-            // Map: Sphere=0→Point=1, Directional=1→Dir=0, Spot=2→Spot=2
-            int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
-            light.position = glm::vec4(worldPos, static_cast<float>(deferredType));
-            light.direction = glm::vec4(worldDir, lightComp->getRange());
-            light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
-
-            float shadowMapIndex = -1.0f;
-            if (m_shadowsEnabled && shadowCasterIndex < 0) {
-                int lightType = static_cast<int>(lightComp->getLightType());
-                if (lightType == 0 || lightType == 2) {
-                    shadowMapIndex = 0.0f;
-                    shadowCasterIndex = lightUbo.numLights;
-                }
-            }
-
-            light.params = glm::vec4(
-                glm::cos(glm::radians(lightComp->getInnerConeAngle())),
-                glm::cos(glm::radians(lightComp->getOuterConeAngle())),
-                shadowMapIndex,
-                0.0f
-            );
-
-            if (shadowMapIndex >= 0.0f) {
-                light.lightSpaceMatrix = calculateLightSpaceMatrix(light);
-            } else {
-                light.lightSpaceMatrix = glm::mat4(1.0f);
-            }
-
-            lightUbo.numLights++;
+            lightUbo.lights[lightUbo.numLights++] = light;
         }
-    }
-
-    // Append cached emissive mesh lights (computed once in updateSceneBuffers)
-    for (const auto& emLight : m_cachedEmissiveLights) {
-        if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
-        lightUbo.lights[lightUbo.numLights] = emLight;
-        lightUbo.numLights++;
     }
 
     // If no lights in scene, add a default directional light (direction synced by renderDeferred)
@@ -134,73 +84,6 @@ void VulkanRenderer::updateLightBuffer() {
     }
 
     memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));
-}
-
-void VulkanRenderer::cacheEmissiveLights() {
-    m_cachedEmissiveLights.clear();
-    if (!m_scene) return;
-
-    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-        auto mc = actor->getComponent<MeshComponent>();
-        if (!mc || !mc->getModel()) continue;
-        auto model = mc->getModel();
-
-        for (size_t mi = 0; mi < model->materialEmissiveTexIndex.size(); mi++) {
-            if (model->materialEmissiveTexIndex[mi] < 0) continue;
-
-            // Compute world-space mesh center and bounding radius
-            glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-            for (const auto& v : model->vertices) {
-                bmin = glm::min(bmin, v.position);
-                bmax = glm::max(bmax, v.position);
-            }
-            glm::mat4 worldMat = actor->getTransform()->getWorldMatrix();
-            glm::vec3 center = glm::vec3(worldMat * glm::vec4((bmin + bmax) * 0.5f, 1.0f));
-            float radius = glm::length(bmax - bmin) * 0.3f;
-            float range = radius * 10.0f;
-
-            // Compute average emissive color from bright pixels
-            glm::vec3 emColor(1.0f);
-            float totalPower = 0.0f;
-            int eTexIdx = model->materialEmissiveTexIndex[mi];
-            if (eTexIdx >= 0 && eTexIdx < static_cast<int>(model->emissiveTextures.size())) {
-                const auto& etd = model->emissiveTextures[eTexIdx];
-                double r = 0, g = 0, b = 0;
-                int brightPixels = 0;
-                for (int p = 0; p < etd.width * etd.height; p++) {
-                    float pr = etd.pixels[p*4+0] / 255.0f;
-                    float pg = etd.pixels[p*4+1] / 255.0f;
-                    float pb = etd.pixels[p*4+2] / 255.0f;
-                    float lum = pr * 0.2126f + pg * 0.7152f + pb * 0.0722f;
-                    if (lum > 0.05f) {
-                        r += pr; g += pg; b += pb;
-                        brightPixels++;
-                        totalPower += lum;
-                    }
-                }
-                if (brightPixels > 0) {
-                    emColor = glm::vec3(r / brightPixels, g / brightPixels, b / brightPixels);
-                }
-            }
-
-            if (totalPower > 0.1f) {
-                float intensity = std::min(totalPower * 0.1f, 20.0f);
-
-                LightData light{};
-                light.position = glm::vec4(center, 1.0f);  // type 1 = point light
-                light.direction = glm::vec4(0, -1, 0, range);
-                light.color = glm::vec4(emColor, intensity);
-                light.params = glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
-                light.lightSpaceMatrix = glm::mat4(1.0f);
-                m_cachedEmissiveLights.push_back(light);
-
-                std::cout << "[Deferred] Emissive mesh light: " << actor->getName()
-                          << " color=(" << emColor.r << "," << emColor.g << "," << emColor.b
-                          << ") intensity=" << intensity << std::endl;
-            }
-            break;  // one light per actor
-        }
-    }
 }
 
 } // namespace ohao

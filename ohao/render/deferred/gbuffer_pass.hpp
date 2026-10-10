@@ -3,16 +3,18 @@
 #include "render_pass_base.hpp"
 #include "render/culling.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
-#include "core/common_types.hpp"
+#include "render/frame/frame_resources.hpp"
 #include <array>
-#include <unordered_map>
+
+namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
-class Scene;
-
 // G-Buffer generation pass
 // Outputs: Position, Normal, Albedo, Velocity, Depth
+// Draws RenderScene::draws(): set 0 = bindless textures, set 1 "scene" = {instances,
+// materials, material refs, camera UBO}, one set per frame slot; push constant =
+// the draw's material slot.
 class GBufferPass : public RenderPassBase {
 public:
     GBufferPass() = default;
@@ -25,13 +27,9 @@ public:
     [[nodiscard]] const char* getName() const override { return "GBufferPass"; }
 
     // Setup for rendering
-    void setScene(Scene* scene) { m_scene = scene; }
+    void setRenderScene(const render::RenderScene* scene) { m_renderScene = scene; }
     void setViewProjection(const glm::mat4& view, const glm::mat4& proj,
                           const glm::mat4& prevViewProj);
-    void setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer);
-    void setMeshBufferMap(const std::unordered_map<uint64_t, struct MeshBufferInfo>* bufferMap) {
-        m_meshBufferMap = bufferMap;
-    }
 
     // Get G-Buffer attachments for use by other passes
     [[nodiscard]] VkImageView getPositionView() const { return m_gbuffer[0].view; }
@@ -74,7 +72,12 @@ private:
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createGBuffer();
     [[nodiscard]] bool createDescriptors();
+    [[nodiscard]] bool createSceneDescriptors();
+    void destroySceneDescriptors();
     void destroyGBuffer();
+    // Rewrites the frame slot's scene set and camera UBO. False when the scene has
+    // no buffers to bind.
+    [[nodiscard]] bool updateSceneSet(uint32_t frameIndex);
 
     // G-Buffer render targets
     static constexpr uint32_t GBUFFER_COUNT = 5;
@@ -97,28 +100,35 @@ private:
     // Sampler for G-Buffer
     VkSampler m_sampler{VK_NULL_HANDLE};
 
-    // Scene reference
-    Scene* m_scene{nullptr};
+    // Scene the pass draws (owned by VulkanRenderer)
+    const render::RenderScene* m_renderScene{nullptr};
 
-    // Geometry buffers (from VulkanRenderer)
-    VkBuffer m_vertexBuffer{VK_NULL_HANDLE};
-    VkBuffer m_indexBuffer{VK_NULL_HANDLE};
-    const std::unordered_map<uint64_t, MeshBufferInfo>* m_meshBufferMap{nullptr};
+    // Set 1 "scene": layout, pool, one set + camera UBO per frame slot. The UBOs are
+    // host-visible and persistently mapped; a slot's UBO and set are rewritten only in
+    // execute(cmd, slot), after that slot's fence wait.
+    struct CameraUBO {
+        glm::mat4 viewProj;
+        glm::mat4 prevViewProj;
+    };
+    static_assert(sizeof(CameraUBO) == 128);
+    VkDescriptorSetLayout m_sceneLayout{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_emptyLayout{VK_NULL_HANDLE};   // set 0 stand-in without bindless textures
+    VkDescriptorPool m_scenePool{VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sceneSets{};
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_cameraBuffers{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> m_cameraMemory{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> m_cameraMapped{};
 
     // Dimensions
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constant data for G-Buffer rendering
-    // Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
-    struct GBufferUBO {
-        glm::mat4 model;
-        glm::mat4 viewProj;
-        glm::mat4 prevMVP;
-        glm::vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
-        glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
-        glm::vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
-    };  // 240 bytes — fits in 256-byte push constant limit
+    // Push constant: the draw's submesh material slot (matches gbuffer.frag).
+    struct DrawPushConstant {
+        uint32_t materialSlot;
+        uint32_t pad[3];
+    };
+    static_assert(sizeof(DrawPushConstant) == 16);
 
     glm::mat4 m_view;
     glm::mat4 m_projection;

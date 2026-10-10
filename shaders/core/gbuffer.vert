@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 // G-Buffer Vertex Shader
 // Transforms vertices and passes data to fragment shader for G-Buffer population
@@ -21,24 +22,24 @@ layout(location = 5) out vec4 fragTangent;
 layout(location = 6) out vec4 fragCurrentPos;
 layout(location = 7) out vec4 fragPrevPos;
 
-// Per-object push constants (matches GBufferUBO in C++)
-// Total: 240 bytes (3 mat4 + 3 vec4) — fits within 256-byte NVIDIA limit
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    mat4 viewProj;
-    mat4 prevMVP;
-    vec4 materialParams;
-    vec4 albedoColor;
-    vec4 emissiveParams;
-} pc;
+#include "includes/scene/scene_data.glsl"
+
+// Set 1 "scene": RenderScene's instance table and the frame slot's camera.
+layout(set = 1, binding = 0, std430) readonly buffer Instances { InstanceGpu instances[]; };
+layout(set = 1, binding = 3) uniform Camera { mat4 viewProj; mat4 prevViewProj; } cam;
+
+layout(location = 8) flat out uint fragInstance;
 
 void main() {
+    // firstInstance = the RenderScene slot
+    InstanceGpu inst = instances[gl_InstanceIndex];
+
     // World space position
-    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
+    vec4 worldPos = inst.world * vec4(inPosition, 1.0);
     fragWorldPos = worldPos.xyz;
 
     // Transform normal to world space (assuming uniform scaling)
-    mat3 normalMatrix = transpose(inverse(mat3(pc.model)));
+    mat3 normalMatrix = transpose(inverse(mat3(inst.world)));
     fragNormal = normalize(normalMatrix * inNormal);
     fragTangent = vec4(normalize(normalMatrix * inTangent.xyz), inTangent.w);
 
@@ -48,10 +49,11 @@ void main() {
     fragTexCoord1 = inTexCoord1;
 
     // Current frame clip position
-    fragCurrentPos = pc.viewProj * worldPos;
+    fragCurrentPos = cam.viewProj * worldPos;
 
     // Previous frame clip position for velocity calculation
-    fragPrevPos = pc.prevMVP * vec4(inPosition, 1.0);
+    fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));
 
+    fragInstance = gl_InstanceIndex;
     gl_Position = fragCurrentPos;
 }

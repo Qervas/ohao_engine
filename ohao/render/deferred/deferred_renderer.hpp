@@ -22,6 +22,8 @@
 #include <string_view>
 #include <array>
 
+namespace ohao::render { class RenderScene; }
+
 namespace ohao {
 
 class Scene;
@@ -43,12 +45,10 @@ public:
     // Resize handling
     void onResize(uint32_t width, uint32_t height);
 
-    // Scene configuration
+    // Scene configuration. The G-buffer and CSM passes draw the RenderScene; the old
+    // Scene is still read by the RT GI pass for its bounce light.
     void setScene(Scene* scene);
-
-    // Geometry buffers (from VulkanRenderer)
-    void setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer,
-                            const std::unordered_map<uint64_t, MeshBufferInfo>* bufferMap);
+    void setRenderScene(const render::RenderScene* scene);
 
     // Camera configuration
     void setCameraData(const glm::mat4& view, const glm::mat4& proj,
@@ -161,6 +161,7 @@ private:
 
     // Scene reference
     Scene* m_scene{nullptr};
+    const render::RenderScene* m_renderScene{nullptr};
 
     // Texture manager (set before initialize)
     BindlessTextureManager* m_textureManager{nullptr};

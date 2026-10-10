@@ -1,15 +1,16 @@
 #pragma once
 
 #include "render_pass_base.hpp"
-#include "core/common_types.hpp"
+#include "render/frame/frame_resources.hpp"
 #include <array>
-#include <unordered_map>
+
+namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
-class Scene;
-
-// Cascaded Shadow Map pass for directional light shadows
+// Cascaded Shadow Map pass for directional light shadows. Draws RenderScene::draws()
+// into each cascade: set 0 = the instance table (one set per frame slot), push
+// constant = the cascade's view-projection.
 class CSMPass : public RenderPassBase {
 public:
     static constexpr uint32_t CASCADE_COUNT = 4;
@@ -24,17 +25,10 @@ public:
     [[nodiscard]] const char* getName() const override { return "CSMPass"; }
 
     // Configuration
-    void setScene(Scene* scene) { m_scene = scene; }
+    void setRenderScene(const render::RenderScene* scene) { m_renderScene = scene; }
     void setLightDirection(const glm::vec3& direction) { m_lightDirection = glm::normalize(direction); }
     void setCameraData(const glm::mat4& view, const glm::mat4& proj,
                        float nearPlane, float farPlane);
-    void setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer) {
-        m_vertexBuffer = vertexBuffer;
-        m_indexBuffer = indexBuffer;
-    }
-    void setMeshBufferMap(const std::unordered_map<uint64_t, MeshBufferInfo>* bufferMap) {
-        m_meshBufferMap = bufferMap;
-    }
 
     // Split scheme: 0.0 = linear, 1.0 = logarithmic
     void setSplitLambda(float lambda) { m_splitLambda = lambda; }
@@ -56,6 +50,7 @@ private:
     [[nodiscard]] bool createFramebuffers();
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createCascadeBuffer();
+    [[nodiscard]] bool createSceneDescriptors();
 
     void calculateCascadeSplits();
     void updateCascadeMatrices();
@@ -81,13 +76,13 @@ private:
     VkDeviceMemory m_cascadeBufferMemory{VK_NULL_HANDLE};
     void* m_cascadeBufferMapped{nullptr};
 
-    // Scene reference
-    Scene* m_scene{nullptr};
+    // Scene the pass draws (owned by VulkanRenderer)
+    const render::RenderScene* m_renderScene{nullptr};
 
-    // Geometry buffers (from VulkanRenderer)
-    VkBuffer m_vertexBuffer{VK_NULL_HANDLE};
-    VkBuffer m_indexBuffer{VK_NULL_HANDLE};
-    const std::unordered_map<uint64_t, MeshBufferInfo>* m_meshBufferMap{nullptr};
+    // Set 0: the instance table, one set per frame slot, rewritten in execute(cmd, slot)
+    VkDescriptorSetLayout m_sceneLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_scenePool{VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sceneSets{};
 
     // Light and camera data
     glm::vec3 m_lightDirection{0.0f, -1.0f, 0.0f};
@@ -103,13 +98,11 @@ private:
     // Cascade data for shader
     CascadeData m_cascadeData{};
 
-    // Push constants for one draw into one cascade (matches shadow_csm.vert).
-    // 128 bytes: the push-constant size every Vulkan device guarantees.
+    // Push constant for one cascade (matches shadow_csm.vert).
     struct ShadowPushConstant {
-        glm::mat4 model;
         glm::mat4 viewProj;   // the cascade being rendered
     };
-    static_assert(sizeof(ShadowPushConstant) == 128, "must fit the guaranteed push-constant minimum");
+    static_assert(sizeof(ShadowPushConstant) == 64);
 };
 
 } // namespace ohao

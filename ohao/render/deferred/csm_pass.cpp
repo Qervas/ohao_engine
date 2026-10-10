@@ -1,15 +1,13 @@
 #include "csm_pass.hpp"
 #include <cstring>
-#include "../../scene/scene.hpp"
-#include "../../scene/actor/actor.hpp"
-#include "../../scene/component/transform_component.hpp"
-#include "scene/component/mesh_component.hpp"
+#include "render/scene/render_scene.hpp"
 #include "../../scene/asset/model.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <algorithm>
 #include <iostream>
 #include <array>
+#include <span>
 
 namespace ohao {
 
@@ -25,6 +23,7 @@ bool CSMPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createRenderPass()) return false;
     if (!createFramebuffers()) return false;
     if (!createCascadeBuffer()) return false;
+    if (!createSceneDescriptors()) return false;
     if (!createPipeline()) return false;
 
     // Initialize cascade splits
@@ -46,6 +45,9 @@ void CSMPass::cleanup() {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
+    safeDestroy(m_scenePool);   // frees the sets
+    m_sceneSets.fill(VK_NULL_HANDLE);
+    safeDestroy(m_sceneLayout);
     if (m_cascadeBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(m_device, m_cascadeBuffer, nullptr);
         m_cascadeBuffer = VK_NULL_HANDLE;
@@ -88,14 +90,34 @@ void CSMPass::cleanup() {
     }
 }
 
-void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
-    if (!m_scene) return;
+void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (!m_renderScene || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
 
     // Update cascade matrices based on current camera
     updateCascadeMatrices();
 
     // Update cascade buffer
     memcpy(m_cascadeBufferMapped, &m_cascadeData, sizeof(CascadeData));
+
+    // The slot's instance-table set, rewritten every frame: the table buffer can be
+    // replaced by growth; the slot's previous use finished at its fence wait.
+    const std::span<const render::RenderScene::Draw> draws = m_renderScene->draws();
+    const VkBuffer instances = m_renderScene->instanceBuffer();
+    const bool haveDraws = !draws.empty() && instances != VK_NULL_HANDLE &&
+                           m_renderScene->vertexArena() != VK_NULL_HANDLE &&
+                           m_renderScene->indexArena() != VK_NULL_HANDLE &&
+                           m_sceneSets[frameIndex] != VK_NULL_HANDLE;
+    if (haveDraws) {
+        const VkDescriptorBufferInfo info{instances, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_sceneSets[frameIndex];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &info;
+        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    }
 
     // Render each cascade
     for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade) {
@@ -128,56 +150,22 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
         scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Bind vertex and index buffers if available
-        if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
-            VkBuffer vertexBuffers[] = {m_vertexBuffer};
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-            vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        }
+        // Every visible draw into this cascade (no culling, as before)
+        if (haveDraws) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                                    0, 1, &m_sceneSets[frameIndex], 0, nullptr);
+            const VkBuffer vertexBuffer = m_renderScene->vertexArena();
+            const VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, m_renderScene->indexArena(), 0, VK_INDEX_TYPE_UINT32);
 
-        // Track currently bound pipeline to avoid redundant switches
-        VkPipeline currentPipeline = VK_NULL_HANDLE;
-
-        // Iterate through scene objects and render to shadow map
-        if (m_meshBufferMap) {
-            const auto& actors = m_scene->getAllActors();
-            for (const auto& [actorId, actor] : actors) {
-                if (!actor) continue;
-
-                // Get mesh component (shadow casters only)
-                auto meshComp = actor->getComponent<MeshComponent>();
-                if (!meshComp || !meshComp->isVisible()) continue;
-
-                // Get transform
-                auto transformComp = actor->getComponent<TransformComponent>();
-                glm::mat4 modelMatrix = transformComp ? transformComp->getWorldMatrix() : glm::mat4(1.0f);
-
-                // Static geometry only (skeletal animation removed)
-                VkPipeline targetPipeline = m_pipeline;
-                VkPipelineLayout targetLayout = m_pipelineLayout;
-
-                if (currentPipeline != targetPipeline) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
-                    currentPipeline = targetPipeline;
-                }
-
-                // Find buffer info for this actor
-                auto it = m_meshBufferMap->find(actorId);
-                if (it == m_meshBufferMap->end()) continue;
-
-                const MeshBufferInfo& bufferInfo = it->second;
-
-                // Set push constants
-                ShadowPushConstant push{};
-                push.model = modelMatrix;
-                push.viewProj = m_cascadeData.viewProj[cascade];
-                vkCmdPushConstants(cmd, targetLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                                   0, sizeof(ShadowPushConstant), &push);
-
-                // Draw indexed
-                vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
-                                bufferInfo.indexOffset, 0, 0);
+            const ShadowPushConstant push{m_cascadeData.viewProj[cascade]};
+            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(ShadowPushConstant), &push);
+            for (const render::RenderScene::Draw& draw : draws) {
+                // firstInstance = the slot: the shader indexes the instance table with it.
+                vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);
             }
         }
 
@@ -351,6 +339,36 @@ bool CSMPass::createCascadeBuffer() {
     return true;
 }
 
+bool CSMPass::createSceneDescriptors() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_sceneLayout) != VK_SUCCESS) return false;
+
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_scenePool) != VK_SUCCESS) return false;
+
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(m_sceneLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_scenePool;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = layouts.data();
+    return vkAllocateDescriptorSets(m_device, &allocInfo, m_sceneSets.data()) == VK_SUCCESS;
+}
+
 bool CSMPass::createPipeline() {
     // Load shaders
     // Depth-only, vertex stage only: each cascade is its own render pass into its
@@ -363,7 +381,7 @@ bool CSMPass::createPipeline() {
     shaderStages[0].module = vertShader;
     shaderStages[0].pName = "main";
 
-    // Vertex input - must use full vertex stride since we share vertex buffers
+    // Vertex input - full vertex stride: the scene's vertex arena is shared
     auto csmBindingDescs = Vertex::getBindingDescriptions();
     auto csmAttributeDescs = Vertex::getAttributeDescriptions();
 
@@ -418,14 +436,17 @@ bool CSMPass::createPipeline() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Push constants for model matrix and cascade index
+    // Push constant: the cascade's view-projection
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstant.offset = 0;
     pushConstant.size = sizeof(ShadowPushConstant);
 
+    // Set 0: the instance table
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_sceneLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
