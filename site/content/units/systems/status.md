@@ -57,16 +57,20 @@ the offline-reference standing the rest of the engine rests on.
 ## The gate that makes a status line cost something
 
 Prose is free. The part of this system with teeth is a golden-image regression
-gate: a two-scene manifest, a Python harness, and a `pre-push` hook that renders
-both scenes on the local GPU and refuses the push if either drifts. The hook
+gate: a four-scene manifest, a Python harness, and a `pre-push` hook that renders
+every scene on the local GPU and refuses the push if any drifts. The hook
 lives at that layer for a reason stated in its own header — hosted CI has no
 GPU, so the only machine that can produce a verification frame is the
 developer's.
 
 {{cite .githooks/pre-push "Cloud CI cannot do this (no GPU), so the GPU safety"}}
 
-The manifest pins both scenes at 16 spp with the denoiser explicitly disabled,
-and carries the contract that the corpus grows with every fixed bug:
+The manifest pins every scene with the denoiser explicitly disabled. Two scenes are
+path traced — the Cornell box and the DamagedHelmet, both at 16 spp — and two run the
+deferred hybrid on the same content (`cornell_box_deferred`, `damaged_helmet_deferred`),
+so the deferred pipeline is gated against its own earlier output as well. The Cornell
+command shows the shape, and the manifest carries the contract that the corpus grows
+with every fixed bug:
 
 {{cite tests/golden/manifest.json "./build/cornell_box {out} 16 --denoise=none"}}
 
@@ -109,6 +113,18 @@ committed goldens at 640×360 instead of shipping two 1080p PNGs.
 {{cite tests/golden/render_golden.py "DOWNSCALE_WIDTH = 640"}}
 :::
 
+The manifest's own header is blunter about what the tolerance buys. For a fixed
+sampler and a fixed build the renderer is deterministic, so the corpus is in practice
+a hash of an unchanged sampler with slack for the GPU floor:
+
+{{cite tests/golden/manifest.json "corpus is, in practice, a HASH of an unchanged sampler with enough slack for"}}
+
+Raising the sample count cannot turn it into an "image is still about right" test,
+because the noise of a Monte Carlo frame falls as $1/\sqrt{N}$ and a `max_abs_diff`
+of 4 is out of reach at any count anyone will wait for. What the gate catches is a
+changed shader, material or pass while the sample sequence stays put; what it cannot
+distinguish is a real regression from any change that reshuffles the sequence itself.
+
 ## Two conditions, because either one alone is blind
 
 A scene passes only when both bounds hold. Let $A$ and $G$ be candidate and
@@ -123,9 +139,13 @@ $$\max_{p,c}\bigl|A_{pc}-G_{pc}\bigr| \le \tau \quad\wedge\quad \frac{1}{N}\Bigl
 $\tau$ and $\phi$ are per-scene manifest fields, not constants of the gate: the
 harness reads `max_abs_diff` and `max_diff_frac` off each scene entry, falling
 back to `DEFAULT_MAX_ABS_DIFF = 4` / `DEFAULT_MAX_DIFF_FRAC = 0.01` only where a
-scene omits them. Both committed scenes set them explicitly, to exactly those
-defaults — so a scene added later with looser numbers would be held to a looser
-contract than the one written here.
+scene omits them. Every committed scene sets them explicitly. Three take exactly
+those defaults; the deferred helmet loosens them to 6 and 0.05, and its manifest note
+records why — it is not bit-exact run to run, with a fresh-versus-fresh max difference
+of 3 and a differing-pixel fraction near 0.026 — so a scene added later with looser
+numbers would be held to a looser contract than the one written here.
+
+{{cite tests/golden/manifest.json ""max_diff_frac": 0.05,"}}
 
 {{cite tests/golden/render_golden.py "DEFAULT_MAX_ABS_DIFF)"}}
 
@@ -133,16 +153,23 @@ The first is an $L^\infty$ bound: it catches a small region that moved a lot —
 broken material lookup, a flipped normal, a dropped light. The second bounds the
 *support* of the difference: it catches a whole-image shift of a single LSB — a
 tonemap constant nudged, a different RNG stream — which the max test can never
-see, because 1 ≤ 4. Each closes the other's blind spot. Both committed goldens
-are 640×360, so $N = 230{,}400$ and today's $\phi = 10^{-2}$ tolerates roughly
-2,300 differing pixels and no more.
+see, because 1 ≤ 4. Each closes the other's blind spot. All four committed goldens
+are 640×360, so $N = 230{,}400$ and a scene at the default $\phi = 10^{-2}$ tolerates
+roughly 2,300 differing pixels and no more; the deferred helmet's $0.05$ tolerates
+about 11,500.
 
 The harness also ships a `--selftest` mode that renders each scene twice and
 compares the two renders to each other instead of to the golden. That is not
 redundant: it measures the gate's own noise floor, which is the only way to tell
-a tolerance that is too tight from a renderer that genuinely regressed.
+a tolerance that is too tight from a renderer that genuinely regressed. The deferred
+helmet's loosened numbers are what that measurement produced.
 
 {{cite tests/golden/render_golden.py "render a second time, compare the two renders to each other"}}
+
+`--only <name>` restricts any mode to one scene, so a single scene can be checked,
+regenerated or self-tested without paying for the other three:
+
+{{cite tests/golden/render_golden.py "if only is not None and sc["name"] != only:"}}
 
 ## Where the net is soft
 
@@ -153,10 +180,11 @@ a tolerance that is too tight from a renderer that genuinely regressed.
   checkout, or a build that just broke) the hook prints a notice and exits 0, so
   an unverified push is indistinguishable from a verified one.
   {{cite .githooks/pre-push "skipping golden checks."}}
-- The corpus is still the two scenes it started with, against a manifest asking
-  for one per fixed bug. The NRD YCoCg-packing bug and the deferred black-metal
-  bug are both written up in `STATUS.md`; neither has a golden scene, so both can
-  return silently.
+- The corpus is four scenes, against a manifest asking for one per fixed bug. The
+  NRD YCoCg-packing bug and the deferred black-metal bug are both written up in
+  `STATUS.md`; neither has a scene aimed at it — the goldens run with the denoiser
+  off by construction, and the deferred scenes were captured to check the render-world
+  migration rather than the metal IBL fix — so both can return silently.
   {{cite STATUS.md@223ff7f "REBLUR expects **YCoCg + normalized hit-distance**"}}
   {{cite STATUS.md@223ff7f "Deferred metals pure black (partial)"}}
 - The gtest suites under `tests/` are not part of the gate. Most of them build by
@@ -195,13 +223,21 @@ shadow pass a descriptor-set parameter:
 {{cite docs/bugs_solved/002_shadow_descriptor_set_mismatch.md "renderShadowPass(cmd, frame.descriptorSet);"}}
 
 No `renderShadowPass` exists in the tree. The only raster shadow pass is the
-deferred cascade pass, and it has no descriptor set to mismatch: each cascade's
-view-projection reaches the vertex shader in push constants.
+deferred cascade pass, and the matrix half of the bug cannot recur in it: each
+cascade's view-projection reaches the vertex shader in a push constant recorded
+beside the draws that use it.
 
-{{cite shaders/shadow/shadow_csm.vert "view-projection rides in push constants"}}
+{{cite shaders/shadow/shadow_csm.vert "the cascade's view-projection rides in a 64-byte"}}
 
-So the archive holds one invariant that still governs live code and one that
-governs nothing, and the pointers of both have rotted. That is the general shape
+The descriptor half survives in a different shape. The pass owns one set per frame
+slot, holding the render world's instance table, and rewrites only the current slot's
+set after that slot's fence wait — the per-frame-set discipline the bug's conclusion
+asks for, held by construction rather than by a parameter.
+
+{{cite ohao/render/deferred/csm_pass.cpp "// The slot's instance-table set, rewritten every frame: the table buffer can be"}}
+
+So the archive holds one invariant that still governs live code and one whose code is
+gone though its lesson is kept, and the pointers of both have rotted. That is the general shape
 of rot here, and it is not confined to the bug log: `STATUS.md` marks skeletal
 animation 🗑️ in one row and, four sections later, still reasons about the gap the
 removed subsystem would leave behind.

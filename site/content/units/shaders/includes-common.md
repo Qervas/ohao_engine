@@ -85,7 +85,7 @@ that matters lives in a shader body.
 The C++ side pins the size at compile time; the GLSL side has no equivalent
 check, so the assert protects only half the boundary.
 
-{{cite ohao/gpu/vulkan/renderer.hpp "OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);"}}
+{{cite ohao/render/scene/render_scene_types.hpp "OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);"}}
 
 The headers that would consume `types.glsl` carry a naming contract only a
 comment enforces: `shadow_pcf.glsl` and `blinn_phong.glsl` read the light UBO by
@@ -203,5 +203,5 @@ bit-mixer, `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familia
 - `types.glsl`'s `Light` must stay field-for-field and 128 bytes aligned with C++ `LightData`. Only the C++ side is statically asserted.
 - `deferred_lighting.frag`'s inline `Light` is the struct that must stay field-for-field with C++ `LightData`; `types.glsl` is a duplicate no shader compiles. Any shader that adopts `shadow_pcf.glsl` or `blinn_phong.glsl` must declare its light UBO as `lighting` above the include, because both read that global without declaring it.
 - `brdf_ggx.glsl` gets `EPSILON` transitively through `brdf_common.glsl` → `math.glsl` → `constants.glsl` and declares none of it. That chain is required by the deferred lighting pass.
-- `constants.glsl`'s `MAX_LIGHTS 8` must match `renderer.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree.
+- `constants.glsl`'s `MAX_LIGHTS 8` must match `render_scene_types.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree.
 {{cite shaders/includes/common/constants.glsl "// See: src/renderer/offscreen/offscreen_types.hpp"}}

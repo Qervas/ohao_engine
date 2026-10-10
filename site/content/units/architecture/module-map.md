@@ -6,70 +6,99 @@ standard: v2
 figures: [architecture-module-map-link-graph]
 ---
 
-## Two graphs, and only one of them is acyclic
+## Two graphs, and only one cycle
 
 There are two dependency graphs in this tree and they do not agree. The declared
-one — what `target_link_libraries` says — is a clean layering: core at the bottom,
-scene above it, GPU above that, render on top, physics and audio hanging off the
-side. The real one, the `#include` graph, has three cycles in it. Every executable
-in the repo admits this, the examples in a single line:
+one — what `target_link_libraries` says — is a layering: core at the bottom, scene
+above it, GPU above that, render above that, the ECS above render, the runtime on
+top, physics and audio hanging off the side. The real one, the `#include` graph,
+has a single cycle in it between GPU and render. Every example in the repo admits
+this, in a single line:
 
-{{cite examples/CMakeLists.txt "-Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group"}}
+{{cite examples/CMakeLists.txt "-Wl,--start-group ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group"}}
 
 `--start-group` tells GNU ld to re-scan the enclosed archives repeatedly until no
 new undefined symbol appears. A left-to-right single pass — the default, and all a
-genuine DAG needs — would leave symbols unresolved here. That flag is not a build
-quirk; it is the load-bearing evidence for what this page is about.
+genuine DAG needs — would leave symbols unresolved here. The MSVC branch of the
+same function lists the archives without a group and adds `/FORCE:MULTIPLE`;
+`link.exe` resolves archive members without caring about order, so the cycle costs
+it nothing visible. On the GNU side the flag is not a build quirk; it is the
+load-bearing evidence for what this page is about.
 
-{{figure architecture-module-map-link-graph "Conceptual. Only the six engine archives are drawn — ohao_runtime, which sits above them and only ohao_game links, is omitted, as are third-party edges (Jolt, miniaudio, Vulkan, VMA, assimp) are omitted. Solid edges are read from the target_link_libraries calls in each module's CMakeLists.txt; dashed edges are #include lines that have no corresponding link edge. Not a measured link-time symbol graph."}}
+{{figure architecture-module-map-link-graph "Conceptual. Solid edges are read from the target_link_libraries calls in each module's CMakeLists.txt; dashed edges are #include lines that have no corresponding link edge. Third-party edges (Jolt, miniaudio, Vulkan, VMA, assimp, EnTT, GLFW) and transitive core and scene edges are omitted. Not a measured link-time symbol graph."}}
 
-## Seven archives, and a directory that is not one
+## Eight archives, and a directory that is not one
 
-`ohao/CMakeLists.txt` adds exactly seven subdirectories, and seven archives come
+`ohao/CMakeLists.txt` adds exactly eight subdirectories, and eight archives come
 out — but not one target per directory:
 
 {{cite ohao/CMakeLists.txt "add_subdirectory(render)"}}
 
 `ohao/gpu/` declares no library at all; its entire `CMakeLists.txt` is one
 `add_subdirectory(vulkan)` line, and `ohao_gpu_vulkan` is defined a level down. Two
-of the other six are conditional rather than literal: `ohao/core/` degrades to an
-`INTERFACE` library if its three `.cpp` files ever disappear, and `ohao/render/`
-omits the `STATIC` keyword, so `ohao_renderer`'s type follows `BUILD_SHARED_LIBS`
-— `OFF` in this configuration, hence static in practice.
+of the other seven are conditional rather than literal: `ohao/core/` degrades to an
+`INTERFACE` library if its `.cpp` files ever disappear, and `ohao/render/` omits
+the `STATIC` keyword, so `ohao_renderer`'s type follows `BUILD_SHARED_LIBS` — `OFF`
+in this configuration, hence static in practice.
 
 `ohao_core` is the true leaf: zero includes of scene, gpu, render, physics, audio
-or Vulkan anywhere under `ohao/core/`. `ohao_audio` is the true peripheral — core,
-glm and miniaudio, plus `Threads::Threads`, `dl` and `m` on UNIX — with no scene or
-GPU header anywhere in it:
+or Vulkan anywhere under `ohao/core/`. `ohao_audio` and `ohao_physics` are the
+true peripherals. Audio is core, glm and miniaudio, plus `Threads::Threads`, `dl`
+and `m` on UNIX:
 
 {{cite ohao/audio/CMakeLists.txt "Threads::Threads"}}
 
-Deleting it would leave the rest of `ohao/` untouched, which is not the same as
-free: every example names `ohao_audio` in the `--start-group` list above, the
-renderer smoke test links it, and `tests/audio/` exists only to exercise it.
+Physics is core, glm, nlohmann_json and Jolt, and its sources include nothing from
+scene, gpu, render or ecs — a rigid body is addressed by name and handle, not by a
+component pointer. Nothing under `ohao/` and no example includes a `physics/` or
+`audio/` header either, so deleting either archive would leave the rest of the
+tree untouched. That is not the same as free: every example names both in the
+`--start-group` list above, `tests/audio/` and the physics suites exist only to
+exercise them, and the physics archive is where that module's mass is — it carries
+194 distinct undefined `JPH::` symbols that only Jolt resolves.
 
-Not every directory under `ohao/` is a link target. Research trees outside the
-public product face carry no `add_subdirectory` line, no target and no `.cpp`
-file — they are headers reached purely through the repo-wide `-I ohao` path, so
-their cost lands in the including translation unit and they never appear in the
-archive graph at all.
+{{cite ohao/physics/CMakeLists.txt "target_link_libraries(ohao_physics PUBLIC Jolt)"}}
 
-The seventh archive is the host layer, and it stands apart from the cycles below.
-`ohao_runtime` — window, input, fixed-step clock, application loop — links core,
-the GPU archive and GLFW:
+The last two archives sit above the rest and add no edge back down. `ohao_ecs` is
+the game world — an EnTT registry, the ordered systems, the transform pass and the
+render extract. It links core, the renderer, scene, glm and EnTT, and it is the
+only archive that sees EnTT:
 
-{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_core ohao_gpu_vulkan glm glfw"}}
+{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene glm EnTT::EnTT)"}}
 
-Nothing else in `ohao/` includes a `runtime/` header, and only one executable links
-it, `ohao_game`, on top of the shared example group. So it adds a layer and no
-edge back down; the six engine archives are the whole cyclic surface.
+Every `<entt/entt.hpp>` include in the tree sits under `ohao/ecs/`; the renderer's
+side of the seam is `render::RenderScene`, a plain-struct GPU world that knows
+nothing about registries. The ECS includes render headers (`RenderScene`,
+`model_upload`, the camera framer) and calls into `libohao_renderer.a` — seven
+distinct undefined symbols in the ECS archive that only the renderer defines — and
+nothing in core, scene, gpu or render includes an `ecs/` header, so the edge points
+one way.
 
-## Cycle one: GPU calls up into render
+`ohao_runtime` — window, input, fixed-step clock, application loop — is the host
+layer. It links core, the ECS, the GPU archive and GLFW:
 
-`ohao_gpu_vulkan` links scene and core, never renderer. Yet 22 `#include` lines
-under `ohao/gpu/vulkan/` reach into `render/`, and the deepest of them sits in the
-renderer's own header. `VulkanRenderer` keeps its two RT profiles behind
-`std::unique_ptr`, which looks like insulation:
+{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_core ohao_ecs ohao_gpu_vulkan glm glfw"}}
+
+Nothing else in `ohao/` includes a `runtime/` header, and only `ohao_game` and
+`runtime_tests` link it. `Application` owns the window, the renderer and the
+`ecs::World`, so the archive is the one place where all three layers meet; it adds
+a layer and no edge back down. The engine's cyclic surface is the pair of archives
+below it, not the host.
+
+## The one cycle: GPU calls up into render
+
+`ohao_renderer` declares `ohao_gpu_vulkan` among its links, alongside scene and
+core:
+
+{{cite ohao/render/CMakeLists.txt "ohao_gpu_vulkan"}}
+
+`ohao_gpu_vulkan` declares scene and core, never renderer:
+
+{{cite ohao/gpu/vulkan/CMakeLists.txt "target_link_libraries(ohao_gpu_vulkan PUBLIC"}}
+
+Yet 21 `#include` lines under `ohao/gpu/vulkan/` reach into `render/`, and the
+deepest of them sits in the renderer's own header. `VulkanRenderer` keeps its two
+RT profiles behind `std::unique_ptr`, which looks like insulation:
 
 {{cite ohao/gpu/vulkan/renderer.hpp "std::unique_ptr<RTRealtimeRenderer> m_rtRealtimeRenderer;"}}
 
@@ -81,53 +110,27 @@ types, and their shared base holds a `PathTracer` *by value*, so every
 {{cite ohao/render/rt/rt_profile_renderer.hpp "PathTracer m_pathTracer;"}}
 
 That is not a header-only relationship. `render_dispatch.cpp` calls
-`DeferredRenderer::setScene`, `setGeometryBuffers` and friends, whose definitions
-live in `libohao_renderer.a`. So `ohao_gpu_vulkan.a` carries undefined symbols that
-only `ohao_renderer.a` provides — while `ohao_renderer` is listed *first* on the
-link line. That is precisely the ordering a single pass cannot resolve, and exactly
-why the group exists.
+`DeferredRenderer::setRenderScene`, `setCameraData` and friends, and the RT path
+hands the `RenderScene` buffers to the profile through `setSceneBuffers`; their
+definitions live in `libohao_renderer.a`. So `ohao_gpu_vulkan.a` carries 50
+distinct undefined `ohao::` symbols that only `ohao_renderer.a` provides — while
+`ohao_renderer` is listed *before* it on the link line and itself needs nine of the
+GPU archive's symbols. That is precisely the shape a single pass cannot resolve,
+and exactly why the group exists.
 
-## Cycle two: scene and physics point at each other
+The other pairs that used to complete cycles no longer do. `ohao_scene` carries no
+undefined symbol that another engine archive defines, and physics reaches nobody.
+The `Material` header under `gpu/vulkan/` is still a Vulkan-free struct,
 
-`ohao_physics` declares core, glm and nlohmann_json — and, whenever the `Jolt`
-target exists as it does here, Jolt itself, which is where the module's actual mass
-is: its archive carries 102 undefined `JPH::` symbols.
+{{cite ohao/gpu/vulkan/material.hpp "struct Material {"}}
 
-{{cite ohao/physics/CMakeLists.txt "target_link_libraries(ohao_physics PUBLIC Jolt)"}}
+and `scene/asset/model.cpp` still includes it, but uses no `Material` member — the
+loaders produce `MaterialData` — so the include is a leftover, not an edge:
 
-What it does not declare is scene. But `PhysicsComponent` derives from scene's
-`Component`, and `physics_component.cpp` pulls in the model loader's header
-outright:
+{{cite ohao/scene/asset/model.cpp "#include "gpu/vulkan/material.hpp""}}
 
-{{cite ohao/physics/components/physics_component.cpp "scene/asset/model.hpp"}}
-
-The reverse edge is just as real, though not by the mechanism the name
-`ComponentFactory` suggests: there is no name-keyed component registry anywhere in
-this tree. The factory applies a `ComponentPack` — a variadic template over
-component *types* — that lists `PhysicsComponent` among its parameters, then fetches
-the instance with `getComponent<PhysicsComponent>()` and configures it:
-
-{{cite ohao/scene/component/component_pack.hpp "using StandardObjectPack ="}}
-
-So scene compiles against physics headers and calls into `libohao_physics.a`:
-
-{{cite ohao/scene/component/component_factory.hpp "physics/components/physics_component.hpp"}}
-
-The scene archive carries undefined `PhysicsComponent::createBoxShape`,
-`setRigidBodyType`, `setPhysicsWorld` and the constructor itself.
-
-Neither target declares the other. This cycle leaves a fingerprint in the build
-files that is easy to misread: `ohao_physics` adds Vulkan's include directory while
-linking no Vulkan library and containing not one `Vk` type or `vk` call of its own.
-
-{{cite ohao/physics/CMakeLists.txt "${Vulkan_INCLUDE_DIRS}"}}
-
-The reason is `scene/asset/model.hpp`, which physics includes and which drags in
-`<vulkan/vulkan_core.h>`. On this machine the line is inert — CMake resolved
-`Vulkan_INCLUDE_DIR` to `/usr/include`, a directory the compiler searches anyway —
-so it records the dependency rather than enabling it. Move the SDK elsewhere and it
-starts carrying weight. Either way it points at the invariant this page exists to
-correct.
+Directory name is not ownership in this tree. A header living under `gpu/vulkan/`
+that links to nothing is as easy to misread as one that does.
 
 ## The only Vulkan scene owns is a vertex layout
 
@@ -140,12 +143,21 @@ and only the header propagates, so it is the one worth stating precisely:
 `Vertex` declares its own binding and attribute descriptions as static members, so
 the vertex input layout — a pipeline object — is authored by the module that owns
 the vertex struct rather than by the module that builds pipelines. Across all of
-`ohao/scene/` that costs six mentions of a `Vk*` type and zero calls to any `vk*`
-entry point: the loaders, the actor tree and the component system genuinely are
-Vulkan-free. That is a statement about ownership, not about linkage — `ohao_scene`
-puts `${Vulkan_LIBRARIES}` in its `PUBLIC` link list unconditionally, called or not.
+`ohao/scene/` — which is now only `asset/`, the model loaders and the primitive
+mesh generator — that costs six mentions of a `Vk*` type and zero calls to any
+`vk*` entry point: the loaders genuinely are Vulkan-free. That is a statement about
+ownership, not about linkage — `ohao_scene` puts `${Vulkan_LIBRARIES}` in its
+`PUBLIC` link list unconditionally, called or not.
 
 {{cite ohao/scene/CMakeLists.txt "${Vulkan_LIBRARIES}"}}
+
+`ohao_physics` still adds Vulkan's include directory while linking no Vulkan
+library and containing not one `Vk` type or `vk` call of its own:
+
+{{cite ohao/physics/CMakeLists.txt "${Vulkan_INCLUDE_DIRS}"}}
+
+Nothing in physics includes a Vulkan header any more, so the line is vestigial — it
+records a dependency that no longer exists rather than enabling one.
 
 :::why
 The alternative — describing the vertex layout in a GPU-side translation unit and
@@ -153,34 +165,12 @@ keeping scene header-clean — was not taken. What it buys is that the `offsetof
 assertions on `Vertex` sit next to the fields they guard, so reordering one of them
 breaks the build in the file where the mistake was made rather than in a distant
 pipeline TU. What it does not buy is coverage: only `position`, `color` and
-`normal` are asserted, and `Vertex` never goes through `OHAO_ASSERT_GPU_LAYOUT`, so
-there is no size assert behind them either. Reordering `texCoord1`, `tangent`,
-`boneIndices` or `boneWeights` compiles silently.
+`normal` are asserted in `model.hpp`, and `Vertex` never goes through
+`OHAO_ASSERT_GPU_LAYOUT`. The total size is pinned elsewhere — `render_scene_types.hpp`
+asserts `sizeof(Vertex) == 100` because the RT shaders read it as 25 floats — but a
+reorder of `texCoord1`, `tangent`, `boneIndices` or `boneWeights` keeps the size
+and compiles silently.
 :::
-
-## Cycle three: the GPU header that is not Vulkan, and still links
-
-The mirror-image surprise sits one directory over. `ohao/gpu/vulkan/material.hpp`
-lives in the Vulkan directory and contains no Vulkan whatsoever — glm vectors,
-`std::string` texture paths and an enum of presets:
-
-{{cite ohao/gpu/vulkan/material.hpp "struct Material {"}}
-
-So `scene/component/material_component.hpp` can include a `gpu/vulkan/` path and
-stay Vulkan-free: `Material` is a Vulkan-free *type*. It is not a Vulkan-free
-*symbol*. The six texture setters, `applyPreset` and `hasTextures` are declared in
-that header and defined out of line in `material.cpp`, so `material_component.cpp`
-calling them leaves eight undefined `ohao::Material::*` in the scene archive that
-only `libohao_gpu_vulkan.a` defines.
-
-{{cite ohao/scene/component/material_component.cpp "material.setAlbedoTexture(std::string(path));"}}
-
-That closes the third cycle, and it fails a single link pass the same way cycle one
-does: `ohao_gpu_vulkan` links `ohao_scene` `PUBLIC` and precedes it on the command
-line, so the archive that defines those symbols is scanned before the archive that
-needs them. Directory name is not ownership in this tree — one scene header is
-Vulkan-tainted, one GPU header is not, and the clean-looking one still makes an
-archive edge.
 
 ## The ABI belongs to no module at all
 
@@ -193,9 +183,8 @@ the header. `ohao_core` owns the check:
 
 It does not own the numbers. Those are constants in `ohao/gpu/layout_meta.hpp`,
 deliberately separated from the renderer so a module can assert against the GPU ABI
-without including `renderer.hpp`: 240 bytes of object push constants, 128 for
-`LightData`, 80 for `GPULight`, 256 for the path tracer's push block, 48 for one
-material row.
+without including `renderer.hpp`: 128 bytes for `LightData`, 80 for `GPULight`,
+256 for the path tracer's push block, 48 for one material row.
 
 {{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 48,"}}
 
@@ -208,8 +197,8 @@ sitting directly in `ohao/gpu/` is a source of anything:
 `layout_meta.hpp` reaches its five consumers purely through the repo-wide
 `-I ohao` path. That is the real ownership boundary,
 and it is not a module. `GPULight` is declared in `render/rt/` and written by
-`gpu/vulkan/light_upload.cpp`; neither module owns it — the 80-byte constant does,
-and both fail to compile if it drifts.
+`render/scene/light_table.cpp`; neither file owns the size — the 80-byte constant
+does, and both fail to compile if it drifts.
 
 ## Private macros are where the boundary actually bites
 
@@ -276,8 +265,9 @@ raster path is not, and the two can disagree about which build's SPIR-V they loa
 
 ## Contracts
 
-- The archive list must stay inside `-Wl,--start-group`/`--end-group`. All three cycles (gpu ↔ render, scene ↔ physics, scene ↔ gpu) need the re-scan; removing the group breaks the link, not the design.
-- Any struct crossing to a shader asserts its size via `OHAO_ASSERT_GPU_LAYOUT` against a constant in `gpu/layout_meta.hpp`. Adding a field without updating both is a compile error by construction — keep it that way. `Vertex` is the standing exception: three field offsets asserted, no size assert, five fields unguarded.
+- The archive list must stay inside `-Wl,--start-group`/`--end-group`. The one cycle (gpu ↔ render) needs the re-scan; removing the group breaks the GNU link, not the design.
+- EnTT belongs to `ohao_ecs`. No header under `render/`, `gpu/`, `scene/` or `physics/` may include `<entt/entt.hpp>` or an `ecs/` header; the ECS reaches the renderer only through `RenderScene`'s plain-struct API.
+- Any struct crossing to a shader asserts its size via `OHAO_ASSERT_GPU_LAYOUT` against a constant in `gpu/layout_meta.hpp`. Adding a field without updating both is a compile error by construction — keep it that way. `Vertex` is the standing exception: three field offsets asserted in `model.hpp` and a 100-byte size in `render_scene_types.hpp`, five fields unguarded by offset.
 - No `#ifdef`-guarded data member may appear in a header included by both `ohao_gpu_vulkan` and `ohao_renderer`. Forward-declare, or define the macro on both targets.
 - `ohao/scene/` may name `Vk*` types (vertex input descriptions only) but must not call any `vk*` entry point. This is an ownership rule, not a linkage one — `ohao_scene` links `${Vulkan_LIBRARIES}` either way.
 - Editing a `.glsl` directly under `shaders/includes/` does not trigger shader recompilation. Touch a consuming stage or clean `build/shaders/`.

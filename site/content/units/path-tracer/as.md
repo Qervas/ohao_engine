@@ -6,24 +6,29 @@ standard: v2
 figures: [path-tracer-as-triangle-addressing]
 ---
 
-## One buffer, many structures
+## One arena, many structures
 
 A bottom-level acceleration structure has to be told where its triangles live, and
 the obvious answer — give every mesh its own vertex and index buffer — is the one
-OHAO refuses. Scene upload concatenates all actors into a single vertex buffer and
-a single index buffer, rewriting each mesh's indices to be global as it goes:
-
-{{cite ohao/gpu/vulkan/scene_upload.cpp "combinedIndices.push_back(index + vertexOffset);"}}
+OHAO refuses. `RenderScene` appends every registered mesh to one shared vertex
+arena and one shared index arena, and the indices stay *mesh-local*: each mesh's
+indices count from its own first vertex, exactly as the model file wrote them. The
+mesh table entry records where the mesh sits — `vertexOffset` in vertices,
+`indexOffset` in indices, plus an offset into the per-triangle material-slot stream.
 
 Everything else in this unit falls out of that. A BLAS is built by handing the
-driver the *base* device address of both shared buffers — not a sub-range — and
-moving only the read window, through `primitiveOffset` in the build range info, to
-that mesh's slice of the index array. Because the indices already carry the vertex
-bias, the build must not apply a second one, so `firstVertex` stays at zero:
+driver the *base* device address of both arenas — not a sub-range — and moving the
+read window with `primitiveOffset` in the build range info, to that mesh's slice of
+the index arena:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "rangeInfo.firstVertex = 0;"}}
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);  // byte offset into index buffer"}}
 
-and `maxVertex` — the highest vertex index the build is permitted to touch — is
+Because the indices are mesh-local, the build has to add the vertex bias itself.
+`firstVertex` is the mesh's `vertexOffset`, and the caller supplies it:
+
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "rangeInfo.firstVertex = firstVertex;  // 0 when indices are already global"}}
+
+`maxVertex` — the highest vertex index the build is permitted to touch — is
 reconstructed as a *global* index by dividing the caller's byte offset back out by
 the stride:
 
@@ -31,86 +36,89 @@ the stride:
 
 That round trip is exact only because the byte offset was formed by multiplying by
 the same stride one call earlier — the sort of line that survives review and dies
-to a refactor.
+to a refactor. The caller is the mesh registry, which builds each BLAS at
+registration time with the arena's first-vertex bias:
 
-The payoff is in the hit shaders. `gl_InstanceCustomIndexEXT + gl_PrimitiveID`
-addresses two flat SSBOs with no load in between — the shared index buffer, at
-`globalTriID * 3`, and the per-triangle material-ID array, unscaled:
+{{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset);      // arena indices are mesh-local"}}
 
-{{cite shaders/rt/pt_closesthit.rchit "uint matID = matIDBuf.matIDs[globalTriID];"}}
+The payoff is in the hit shaders. `gl_InstanceCustomIndexEXT` is the instance's slot
+in the instance table. The closest-hit shader resolves it in three hops — slot to
+instance, instance to mesh table entry, mesh entry plus `gl_PrimitiveID` to three
+mesh-local indices, each biased by the mesh's `vertexOffset`:
 
-Vertex attributes sit a hop further out — the three indices must come back from
-`indexBuf` before `uvBuf` and `normalBuf` can be addressed at all — and material
-parameters a hop past the fetched `matID`. The shared buffer buys a flat *top-level*
-address, not a dependency-free hit path.
+{{cite shaders/rt/pt_closesthit.rchit "uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];"}}
+
+Material parameters sit a hop further out. The triangle's slot comes from the
+triangle-slot stream at `mesh.triangleSlotOffset + gl_PrimitiveID`, and the instance
+maps the slot to a material through its own reference list:
+
+{{cite shaders/rt/pt_closesthit.rchit "uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);"}}
+
+So the shared arenas buy one geometry binding per kind, not a dependency-free hit
+path: the instance and mesh loads come before any index can be read.
 
 :::why
 The rejected alternative is per-mesh buffers plus a per-instance geometry
 descriptor table the hit shaders dereference — what a bindless buffer array exists
-for, and what most engines do. OHAO took the shared buffer because that table
-collapses into arithmetic: nothing per-instance has to be loaded before the index
-and material-ID arrays can be read, and the indirection that remains is data any
-layout would fetch anyway. The price is that geometry numbering is global: no mesh
-can be re-uploaded without renumbering everything after it.
+for, and what most engines do. OHAO took the shared arena because the mesh table
+is the *only* table: one 16-byte entry per mesh, and the same table serves the
+raster passes. Keeping indices mesh-local and addressing instances by slot means
+adding or removing an instance touches one table row and one TLAS instance, with no
+renumbering of anything that follows.
 :::
 
-## The 24 bits nobody budgeted
+## The 24 bits that are a slot
 
-The field that makes the flat addressing work is `instanceCustomIndex`. The header
-still describes it as generic user data:
+The field that makes the lookup work is `instanceCustomIndex`. The header documents
+what the one producer in the tree puts there:
 
-{{cite ohao/render/rt/rt_acceleration_structure.hpp "uint32_t customIndex = 0;   // user data (e.g. actor index)"}}
+{{cite ohao/render/rt/rt_acceleration_structure.hpp "uint32_t customIndex = 0;   // user data (the RenderScene instance slot)"}}
 
-but the only producer in the tree passes the running triangle offset instead:
+and `RenderScene` writes the slot, masked to the field's width:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "globalTriOffset, instanceMask"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.instanceCustomIndex = slot & 0xFFFFFFu;   // 24 bits"}}
 
-and the hit shaders close the loop by adding the BLAS-local primitive id back on:
+`VkAccelerationStructureInstanceKHR::instanceCustomIndex` is a 24-bit bitfield, so
+the invariant is a count: no live instance slot may exceed 16,777,215. A slot is
+reused after `destroyInstance`, so the bound is on the instance table's high-water
+mark. The mask makes the limit explicit rather than letting a `uint32_t` truncate
+silently, but it does not make a wrapped slot safe — slot 16,777,216 would alias
+slot 0 and read its transform and materials. Nothing range-checks it.
 
-{{cite shaders/rt/pt_closesthit.rchit "uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;"}}
+The closest-hit shader also tags the payload with the slot
+(`payload.hitInstance = gl_InstanceCustomIndexEXT`), which lets raygen identify the
+instance a ray struck.
 
-`VkAccelerationStructureInstanceKHR::instanceCustomIndex` is a 24-bit bitfield.
-What goes into it is a *running* offset, advanced by each instance's triangle count
-as the actor walk proceeds:
-
-{{cite ohao/gpu/vulkan/rt_build.cpp "globalTriOffset += it2->second.indexCount / 3;"}}
-
-so the invariant is per-instance, not per-scene: no instance may *begin* past
-16,777,215. A scene whose last mesh is enormous can legally hold more triangles than
-that; one made of many small meshes wraps as soon as the accumulated offset does.
-Either way the failure is silent — a `uint32_t` assigned straight into the bitfield
-truncates,
-
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "vkInst.instanceCustomIndex = inst.customIndex;"}}
-
-and every hit past the wrap reads a wrong material id and wrong normals instead of
-faulting. Nothing in the class range-checks it.
-
-{{figure path-tracer-as-triangle-addressing "Conceptual layout of OHAO's triangle addressing — how one shared index buffer, per-BLAS primitiveOffset, and per-instance customIndex recombine into a global triangle id in the hit shaders. Symbolic offsets, not a captured scene."}}
+{{figure path-tracer-as-triangle-addressing "Conceptual layout of OHAO's triangle addressing — how shared vertex and index arenas, per-BLAS primitiveOffset and firstVertex, and the per-instance slot recombine into mesh-local indices in the hit shaders. Symbolic offsets, not a captured scene."}}
 
 ## Stride 100, of which 12 are read
 
 The vertex stride given to the AS builder is the raster vertex stride, unchanged:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "m_rtVertexBuffer, meshInfo.vertexCount, sizeof(Vertex),"}}
+{{cite ohao/render/scene/mesh_registry.cpp "m_vertices.buf.buffer, mesh.vertexCount, kVertexStride,"}}
 
 `Vertex` is the full interleaved raster layout — position, colour, normal, two UV
 sets, a tangent with handedness, four bone indices and four bone weights — 100
-bytes. The build reads the leading `vec3` of each one and steps over the other 88.
+bytes, and the hit shaders read it as 25 floats per vertex; a static assert pins
+the size so the two readers cannot drift:
 
-The class already ships the alternative. `createBLASFromPositions` takes a
+{{cite ohao/render/scene/render_scene_types.hpp "static_assert(sizeof(Vertex) == 100,"}}
+
+The build reads the leading `vec3` of each vertex and steps over the other 88.
+
+The class ships the alternative. `createBLASFromPositions` takes a
 tightly-packed position buffer at stride 12, documented for per-frame animated
 rebuilds:
 
 {{cite ohao/render/rt/rt_acceleration_structure.hpp "// For per-frame animated mesh BLAS — uses PREFER_FAST_BUILD."}}
 
 It has no callers anywhere in the tree, and no inlined equivalent either —
-`vkCmdBuildAccelerationStructuresKHR` appears in no other file in the engine.
-Skeletal animation was removed from the RT path and the packed variant went dormant
-with it.
+`vkCmdBuildAccelerationStructuresKHR` is recorded only inside
+`rt_acceleration_structure.cpp`. The packed variant is dormant; the arenas hold
+static meshes only.
 
-Nor is there compaction. The two builders that actually run ask for
-`PREFER_FAST_TRACE` — `createBLAS` per mesh, `buildTLAS` for the instance list:
+Nor is there compaction. The BLAS builder that actually runs asks for
+`PREFER_FAST_TRACE`, and so do both TLAS paths:
 
 {{cite ohao/render/rt/rt_acceleration_structure.cpp "PREFER_FAST_TRACE_BIT_KHR;"}}
 
@@ -126,7 +134,7 @@ build-time estimate.
 GLM stores a `mat4` column-major; `VkTransformMatrixKHR` is a row-major
 `float[3][4]`. The conversion is one transpose followed by a fixed-size copy:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "glm::mat4 t = glm::transpose(inst.transform);"}}
+{{cite ohao/render/scene/render_scene.cpp "const glm::mat4 rowMajor = glm::transpose(g.world);   // rows 0..2 = the 3x4 matrix"}}
 
 Transposing a column-major matrix makes the result's columns the original's rows,
 so the transposed object's memory reads as row 0, row 1, row 2, row 3 — four floats
@@ -134,11 +142,12 @@ each, in order. Copying `sizeof(VkTransformMatrixKHR)` = 48 bytes off the front
 takes exactly the first three rows, the affine 3×4 Vulkan wants; the layouts
 already coincide, so no per-element loop is needed. A projective bottom row would
 be discarded without warning — correct for scene transforms, silent for anything
-else.
+else. The matrix is the instance table's `world`, so a TLAS entry and the raster
+passes' model matrix are the same data.
 
 Instance flags carry exactly one bit:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "vkInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
 
 No raygen in `shaders/` requests `gl_RayFlagsCullBackFacingTrianglesEXT` or its
 front-facing twin, so the bit changes no behaviour today. What it insures against is
@@ -152,6 +161,14 @@ and the back wall hands it LBB, RBB, RTB,
 whose edge cross product points along +z, into the room. Every wall follows the same
 convention, so an interior ray already strikes the front face and back-face culling
 would never have dropped it.
+
+The mask is the other per-instance field, and it carries visibility:
+
+{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
+
+An instance that is hidden, or whose slot was released, keeps its place in the TLAS
+with mask zero, so no ray (every trace passes `0xFF`) can hit it and the slot
+numbers of the instances around it stay valid.
 
 ## Everything is opaque, so the any-hit cannot run
 
@@ -168,9 +185,10 @@ Meanwhile the any-hit stage is compiled and bound into the path tracer's hit gro
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;"}}
 
-and it contains a working alpha lookup keyed off the same global triangle id:
+and it contains a working alpha lookup, resolved through the same instance → mesh →
+triangle-slot → material chain as the closest-hit:
 
-{{cite shaders/rt/pt_anyhit.rahit "uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;"}}
+{{cite shaders/rt/pt_anyhit.rahit "uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];"}}
 
 It cannot execute. Alpha-tested transparency in the path tracer is a wired-up
 capability, not shipping behaviour; enabling it means clearing the opaque bit here
@@ -183,48 +201,59 @@ lines in this file determine whether an entire stage of the ray-tracing pipeline
 reachable at all.
 :::
 
-## The update path that never executes
+## Build or refit, inside the frame
 
-The TLAS is created with `ALLOW_UPDATE` next to `PREFER_FAST_TRACE`, and `buildTLAS`
-chooses between a full build and an in-place refit:
+The TLAS is created with `ALLOW_UPDATE` next to `PREFER_FAST_TRACE`, and the update
+path is live. `RenderScene` keeps a device-local array of
+`VkAccelerationStructureInstanceKHR`, one per instance slot, written only by staged
+copies. Every slot change recomputes its instance and decides whether the change is
+*structural* — a created or destroyed slot, a changed mask, or a changed BLAS
+reference — or merely a new transform:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "bool needsRebuild = (m_tlas == VK_NULL_HANDLE)"}}
+{{cite ohao/render/scene/render_scene.cpp "if (structural || cur.mask != vi.mask ||"}}
 
-The refit branch never runs. `buildTLAS` has one caller, `buildBLASTLAS`, whose
-first act is to tear the manager down and re-initialise it:
+At the start of the frame's command buffer, after the table copies, `recordTlas`
+chooses between the two:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "m_rtAccel->destroy();"}}
+{{cite ohao/render/scene/render_scene.cpp "const bool build = tlasStructural || rtAccel->getTLAS() == VK_NULL_HANDLE;"}}
 
-That nulls the TLAS handle, so `needsRebuild` is true on every entry, and
-`forceTlasRebuild()` — which exists to force the same outcome — has no callers.
+A transform-only frame records an `UPDATE`-mode build in place; a structural frame
+records a full build; a frame with no TLAS-relevant change records nothing. The TLAS
+covers every slot below the instance table's high-water mark, which is why released
+slots carry mask zero rather than being compacted out. Inside
+`buildTLASFromDevice` the build decision is widened once more, because an update
+must use the primitive count of the build it refines:
 
-The tempting excuse — a TLAS update must supply the same instance count as the build
-it refines, so a path invoked only on scene change could never use it — does not
-hold, because this path is not invoked only on scene change. `buildBLASTLAS` runs
-from `buildAccelerationStructures()`, which `updateSceneBuffers()` calls
-unconditionally at the end of every successful upload:
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "bool build = rebuild || m_tlas == VK_NULL_HANDLE || count != m_tlasBuiltCount;"}}
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "    buildAccelerationStructures();"}}
+Storage that is too small for the new count is replaced with headroom, and the old
+storage cannot be destroyed on the spot — earlier frames may still be tracing it.
+It goes to a retire list instead:
 
-and a live caller re-enters it with the instance list untouched. `ensureRTRenderer`
-re-uploads the same scene when a mode's RT profile is created late:
+{{cite ohao/render/rt/rt_acceleration_structure.hpp "// TLAS storage replaced by buildTLASFromDevice. Earlier frames may still trace or"}}
 
-{{cite ohao/gpu/vulkan/renderer.cpp "re-upload so materials, textures,"}}
+`RenderScene` holds the retired storage for `MAX_FRAMES_IN_FLIGHT` frames before
+destroying it. The handle the path tracer binds therefore changes only when the
+TLAS outgrows its storage, which is why `setSceneBuffers` re-reads
+`scene.tlas()` every frame, after `recordUpdates`.
 
-That is exactly the same-instance-count case a refit exists to serve. It is unreachable
-only because the teardown nulls the handle first — an oversight, not a consequence
-of the lifecycle.
+The older path that took an instance list in host memory — `clearInstances`,
+`addInstance`, `buildTLAS`, `forceTlasRebuild` — remains in the class with no
+callers. It maps and writes a host-visible instance buffer and builds with the
+BLAS scratch; nothing exercises it.
 
-## One scratch buffer, and why it currently works
+## Scratch and barriers
 
-Every build — each BLAS, then the TLAS — draws scratch memory from a single buffer
-owned by the manager, grown on demand and never shrunk:
+BLAS builds and TLAS builds draw scratch memory from different buffers. The BLAS
+builder uses a single buffer owned by the manager, grown on demand and never
+shrunk:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "VkDeviceSize alignment = 256;"}}
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "alignment = 256; // minimum for AS scratch"}}
 
 Growing it destroys the old buffer immediately. That is safe only because the
-shipping caller passes `VK_NULL_HANDLE` for the command buffer, routing every build
-through single-time commands that end in a full queue drain:
+shipping BLAS caller — the mesh registry, at load time — passes `VK_NULL_HANDLE`
+for the command buffer, routing every build through single-time commands that end in
+a full queue drain:
 
 {{cite ohao/render/rt/rt_acceleration_structure.cpp "vkQueueWaitIdle(m_queue);"}}
 
@@ -235,25 +264,37 @@ no barrier between them. `ensureScratchBuffer` is public for exactly that case �
 pre-size the scratch so no reallocation strands an already-recorded build on a freed
 address — and it has no external callers, because nothing takes that path.
 
-The one barrier the class does record sits at the end of the TLAS build:
+The TLAS builds inside frames, so it cannot use that scheme. It owns a separate
+scratch buffer that, when it must grow, is retired rather than destroyed:
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;"}}
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "const VkDeviceSize alignment = 256;"}}
 
-acceleration-structure writes to ray-tracing-shader reads. On the shipped path the
-queue drain already guarantees the ordering; the barrier is what would make a
-caller-supplied command buffer correct. Note also that the 256-byte rounding aligns
-the scratch *size*, while Vulkan's requirement is on the scratch *address*:
-`scratchData.deviceAddress` must be a multiple of
-`minAccelerationStructureScratchOffsetAlignment`. All three builds pass
-`getBufferDeviceAddress(m_scratchBuffer)` unmodified, so the code depends on
+and it records two barriers around the build. Before it, earlier frames' readers of
+the TLAS and its earlier build finish before it is rewritten in place:
+
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "before.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;"}}
+
+and after it, acceleration-structure writes are made visible to the consumer stages
+named at `init`:
+
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "after.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;"}}
+
+Those consumer stages are the ray-tracing pipeline and compute by default; the
+caller must name only stages whose extensions the device enabled. Note also that
+the 256-byte rounding aligns the scratch *size*, while Vulkan's requirement is on
+the scratch *address*: `scratchData.deviceAddress` must be a multiple of
+`minAccelerationStructureScratchOffsetAlignment`. Every build passes
+`getBufferDeviceAddress` of its scratch buffer unmodified, so the code depends on
 whatever alignment a plain `createBuffer` returns — never queried, never asserted,
 and the 256 is a hardcoded literal, not a limit read back from the device.
 
 ## Contracts
 
-- Indices in the shared RT index buffer are pre-biased by `vertexOffset` at upload, so a BLAS build must keep `firstVertex = 0`. Setting it double-biases every triangle in that mesh.
-- `instanceCustomIndex` holds the running global triangle offset, not an actor id, and it is 24 bits wide. Any instance whose starting offset passes 16,777,215 wraps silently into wrong materials and wrong normals.
-- Instances must be appended in the same actor-map order the material arrays are filled; `buildBLASTLAS` walks the map once for both, and a second, differently-ordered walk decouples triangle ids from materials.
+- Indices in the shared index arena are mesh-local, so a BLAS build must pass the mesh's `vertexOffset` as `firstVertex`. Passing zero makes every triangle in that mesh read the first mesh's vertices.
+- `instanceCustomIndex` holds the instance slot, and it is 24 bits wide. Any slot past 16,777,215 wraps onto a lower one and reads that instance's transform and materials.
+- A hidden or released instance stays in the TLAS with mask zero. The TLAS is sized to the instance table's high-water mark, so slot numbers are stable for the lifetime of a slot.
 - Geometry is flagged opaque, so `pt_anyhit.rahit` is bound but unreachable. Alpha cutout needs the flag cleared here before any shader change matters.
-- One scratch buffer serves all builds with no inter-build barrier. Recording more than one build onto a caller-supplied command buffer requires calling `ensureScratchBuffer` first and inserting your own barriers.
+- A structural change (create, destroy, mask or mesh change) forces a full TLAS build; a transform-only change refits. An update must use the instance count of the build it refines, so a changed count rebuilds.
+- Replaced TLAS storage and scratch are retired, not destroyed; the owner destroys them after the frames that may still read them have completed.
+- One scratch buffer serves all BLAS builds with no inter-build barrier, and is safe only because each build is a blocking single-time submit. Recording more than one BLAS build onto a caller-supplied command buffer requires calling `ensureScratchBuffer` first and inserting your own barriers.
 - `destroyBLAS` has no callers anywhere in the tree, so nothing below is live today — but if you add one, it leaves a tombstone rather than erasing the entry: handles stay stable, `getBlasCount()` keeps counting the dead slot, and `addInstance` silently drops any instance referencing it.

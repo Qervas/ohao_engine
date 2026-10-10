@@ -138,7 +138,7 @@ listening:
 
 That string is then copied again into `Event::type` for delivery. libstdc++ keeps
 up to 15 characters inside the string object, so every event type the tests
-actually subscribe to — `actor.selected` is the longest, at 14 — stays off the
+actually subscribe to — `entity.selected` is the longest, at exactly 15 — stays off the
 heap through both copies. The ordering bites on the dead-key path instead, where
 the key is built before the lookup that would reject it, and the suite's one
 publish to a type nobody listens for is 19 characters:

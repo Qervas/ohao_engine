@@ -56,9 +56,7 @@ no inverse, no decomposition, six adds. GLM stores column-major, so row 3 is
 Near and far are $\mathbf{m}_3 \pm \mathbf{m}_2$, and that is the line with a fuse in it.
 $\mathbf{m}_3 + \mathbf{m}_2$ is the near plane only when clip-space $z$ runs
 $-w \ldots w$ — the OpenGL convention. OHAO's camera builds its projection with plain
-`glm::perspective`, and the tree never defines `GLM_FORCE_DEPTH_ZERO_TO_ONE`:
-
-so the extraction is correct as written. Define that macro — the obvious "make GLM
+`glm::perspective`, and the tree never defines `GLM_FORCE_DEPTH_ZERO_TO_ONE`, so the extraction is correct as written. Define that macro — the obvious "make GLM
 Vulkan-native" cleanup — and exactly one plane changes. Far survives, since $z_{clip} \le
 w$ is the far boundary in both conventions; left, right, top and bottom never involved
 $z$. Near does not. Under zero-to-one depth the near boundary is $z_{clip} \ge 0$, i.e.
@@ -136,41 +134,42 @@ rejection test.
 
 ## What the cull costs to run
 
-Per frame, per actor, the GBuffer pass rebuilds the local bounding box by walking every
-vertex of the mesh:
+The bounding box is not rebuilt per frame. `RenderScene` computes a mesh's local AABB
+once, when the mesh is registered, by walking its vertices:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "localAABB.min = glm::min(localAABB.min, v.position);"}}
+{{cite ohao/render/scene/mesh_registry.cpp "mn = glm::min(mn, v.position);"}}
 
-Nothing is cached; the box is recomputed whether or not the transform moved. That is
-$O(V)$ of CPU work per actor to skip that actor's draws — plural: the loop emits one call
-per material range, so culling an actor saves as many calls as it has ranges, not one:
+and every `Draw` it hands the pass carries those bounds plus a pointer to its
+instance's world matrix. Per frame, per draw, the pass pushes the box through Arvo's
+transform and tests it:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);"}}
 
-The scan is guarded by `if (model && !model->vertices.empty())`, so actors without a model
-are never tested and always draw. At a handful of actors that is invisible; it is also why
-the technique does not scale, and what `gpu_cull.comp` was drafted to replace.
+That is a constant amount of CPU work per draw, independent of vertex count, and it
+saves the draw's single `vkCmdDrawIndexed`. The granularity is the draw, not the
+instance: an instance whose mesh has several material runs yields one `Draw` per run,
+each carrying the same box, so the same transform and test repeat once per run and
+a culled instance saves as many calls as it has runs.
 
-The scan needs `model->vertices` to stay CPU-resident after GPU upload, and it is not the
-only thing that does — picking walks the same array twice per ray, once for the world AABB
-and once for the triangles:
+`RenderScene::draws()` lists only instances flagged visible, so an invisible instance
+never reaches the cull at all, and the list is rebuilt only when the instance table
+changes: the loop the cull runs in is a plain walk of a vector.
 
-so `AABB` has two users beyond the cull: that ray-box rejection, and the engine test
-suite, which builds one by hand to exercise `isValid`, `center` and `size`.
+At a handful of instances that is invisible; it is still a serial CPU loop over every
+draw, which is what `gpu_cull.comp` was drafted to replace.
 
-{{cite tests/engine/engine_tests.cpp "AABB box{glm::vec3(-1.f), glm::vec3(1.f)};"}}
+The shadow pass makes the opposite call and does not cull at all. It draws the same
+`RenderScene` list into every cascade, in full:
 
-The shadow pass makes the opposite call and filters only on the component visibility flag:
-
-{{cite ohao/render/deferred/csm_pass.cpp "if (!meshComp || !meshComp->isVisible()) continue;"}}
+{{cite ohao/render/deferred/csm_pass.cpp "// Every visible draw into this cascade (no culling, as before)"}}
 
 That is correct rather than an oversight: an object outside the camera frustum can still
 cast a shadow into it, so camera-frustum culling of shadow casters deletes shadows.
 Culling for CSM needs the *light's* frustum per cascade, which is not implemented.
 
 :::why
-Culling on the CPU keeps the draw loop ordinary — one `vkCmdDrawIndexed` per material
-range, material indices resolved host-side into push constants. The rejected alternative,
+Culling on the CPU keeps the draw loop ordinary — one `vkCmdDrawIndexed` per draw, the
+material slot in a push constant and the instance slot in `firstInstance`. The rejected alternative,
 dispatch `gpu_cull.comp` and draw indirectly, is not blocked by the render graph, which
 hands each pass a raw `VkCommandBuffer` to record plain Vulkan into.
 
@@ -189,7 +188,7 @@ directly and nothing in the tree calls that entry point, but the standard workar
 no extension: a fixed `maxDrawCount` of command slots, with `instanceCount = 0` written
 for the culled ones.
 
-What is missing is plumbing, not a primitive: `GBufferPass` has no indirect path. A
+What is missing is plumbing, not a primitive: `GBufferPass` has no indirect path, though its inputs (instance table, mesh bounds) now live in device buffers a cull shader could read. A
 GPU cull shader and a foliage cull shader both existed and were deleted with the
 rest of the unreferenced shader tree, because neither had any C++ to fill the
 mesh-descriptor and instance buffers they read.
@@ -205,9 +204,8 @@ mesh-descriptor and instance buffers they read.
 - Plane labels (`TOP`/`BOTTOM`) are inverted relative to the screen after the Vulkan
   Y-flip. Future code reading `getPlane(index)` by name — cascade fitting, portal tests —
   inherits the swap.
-- The GBuffer cull depends on `model->vertices` staying CPU-resident. Freeing host vertex
-  data after upload turns every actor into an untested actor, and picking, which guards on
-  the same array, stops hitting anything.
+- The GBuffer cull trusts the mesh bounds captured at registration. A mesh whose vertices
+  are edited on the GPU afterwards keeps its old box, and its draws are culled against that.
 - `ohao::AABB` (`render/culling.hpp`) is constructed from `(min, max)`;
   `ohao::physics::math::AABB` (`physics/utils/physics_math.hpp`) has identical fields and
   an identical two-`vec3` signature but takes `(center, halfExtents)`. Confusing them

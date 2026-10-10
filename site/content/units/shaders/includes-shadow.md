@@ -115,15 +115,16 @@ inverted.
 The depth-write side is a single vertex stage with no fragment shader: depth arrives
 straight from the rasteriser into one 2048² layer per cascade. Each cascade is its own
 render pass into its own array-layer view, so the vertex shader needs no layer
-routing — it takes the model matrix and that cascade's view-projection as push
-constants and projects directly:
+routing — it takes that cascade's view-projection as a push constant, reads the
+object's world matrix from `RenderScene`'s instance table at `gl_InstanceIndex` (the
+draw's `firstInstance` is the instance slot), and projects directly:
 
-{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * pc.model * vec4(inPosition, 1.0);"}}
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[gl_InstanceIndex].world * vec4(inPosition, 1.0);"}}
 
-The two matrices are 128 bytes, exactly the push-constant size every Vulkan device
-guarantees, and the C++ mirror pins that size:
+The push block is a single `mat4`, 64 bytes, half the push-constant size every Vulkan
+device guarantees, and the C++ mirror pins that size:
 
-{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 128, "must fit the guaranteed push-constant minimum");"}}
+{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 64);"}}
 
 On the consuming side, the cascade map shadows directional lights only — the
 `lightType == 0` test in the deferred loop — and only when flag bit 2 is set, which
@@ -131,24 +132,24 @@ the host sets only when no RT shadow mask is bound:
 
 {{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
 
-That leaves the light UBO's own shadow fields with no reader. `updateLightBuffer`
-still tags the first light whose `LightType` casts to 0 or 2 with `params.z = 0`,
-and in the engine's enum 0 is `Sphere`, a point light:
+That leaves the light UBO's own shadow fields with no reader. The light table
+still tags the first light whose kind is Point or Spot with `params.z = 0` — the legacy
+rule, kept as is, and in the engine's enum the first kind is a point light:
 
-{{cite ohao/scene/component/light_component.hpp "Sphere = 0,       // point light with radius (soft shadows)"}}
+{{cite ohao/render/scene/render_scene_types.hpp "enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };"}}
 
 So the host marks point-or-spot lights as casters and computes a
 `lightSpaceMatrix` for them — identity for a point light, since
-`calculateLightSpaceMatrix` has no cube-map path — while the only shader that
+`lightSpaceMatrix` has no cube-map path — while the only shader that
 shadows anything ignores `params.z` and `lightSpaceMatrix` and shadows the
 directional lights instead. Only `shadow_pcf.glsl`, which nothing compiles, would
 read the tagged values.
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "// Point lights don't use a single matrix (need cube maps)"}}
+{{cite ohao/render/scene/light_table.cpp "// Point lights don't use a single matrix (need cube maps)"}}
 
 ## Contracts
 
 - `shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`, with `types.glsl` already in scope. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.
 - The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, and the shipping deferred pass does not observe it.
-- `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay `{mat4 model; mat4 viewProj;}` at 128 bytes; the C++ side is statically asserted, the GLSL side is not.
+- `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay a single `mat4 viewProj` at 64 bytes; the C++ side is statically asserted, the GLSL side is not. The vertex shader's instance-table binding (set 0, binding 0) must stay in step with `CSMPass`'s scene layout.
 - Cascade shadows apply to directional lights only, and RT shadows (bit 5) replace them outright. The host's `params.z` caster tag and per-light `lightSpaceMatrix` are read by no compiled shader.

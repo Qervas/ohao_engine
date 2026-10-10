@@ -11,7 +11,7 @@ The path tracer's bindless texture array is declared for closest-hit, any-hit an
 miss only — no raygen stage appears in binding 12's mask, and none of the three
 raygen profiles declares a sampler of its own.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,"}}
 
 Every material fact the integrator needs is therefore squeezed through a single
 `RayPayload`, redeclared field-for-field in five files: the three raygen profiles,
@@ -20,8 +20,7 @@ added to one copy and not the others does not fail to compile — it reinterpret
 the neighbouring floats.
 
 One field is already write-only. The closest-hit publishes the instance's custom
-index, which here holds a running global triangle offset rather than an actor id,
-and nothing reads it back:
+index, which here holds the instance-table slot, and nothing reads it back:
 
 {{cite shaders/rt/pt_closesthit.rchit "payload.hitInstance = gl_InstanceCustomIndexEXT;"}}
 
@@ -45,8 +44,9 @@ own emission into the sky.
 ## Rebuilding a surface from three indices
 
 The closest-hit receives barycentrics and a primitive id, nothing else. It resolves
-the triangle through the scene-wide flattened index buffer, interpolates UVs and
-vertex normals, and rotates the result to world space. When the interpolated normal
+the triangle through the instance slot, the mesh table and the shared index arena,
+reads UVs and vertex normals in place from the vertex arena as 25-float records,
+interpolates them, and rotates the result to world space. When the interpolated normal
 is degenerate — squared length under 1e-4, what a mesh carrying no vertex normals
 produces — it falls back to a box normal built from the sign of the dominant
 object-space coordinate:
@@ -57,14 +57,14 @@ A box normal is right for an axis-aligned quad and wrong for anything curved,
 which is why the two-sided flip is gated on that same branch. In the shipped
 scenes neither ever runs. Each Cornell wall is handed an explicit inward unit
 normal that `addQuad` copies into all four of its vertices, the primitive sphere
-uses its normalised position, and `rt_build.cpp` copies `Vertex::normal` verbatim
-into the RT normal buffer — so the squared length is 1, the interpolated branch
-always wins, and the fallback is dead code on the reference scene rather than the
-thing that makes it work.
+uses its normalised position, and the shader reads `Vertex::normal` verbatim out
+of the arena — so the squared length is 1, the interpolated branch always wins,
+and the fallback is dead code on the reference scene rather than the thing that
+makes it work.
 
 {{cite examples/cornell_box.cpp "v.normal = normal;"}}
-{{cite ohao/scene/component/component_factory.cpp "vertex.normal = {x, y, z};"}}
-{{cite ohao/gpu/vulkan/rt_build.cpp "normals[i] = glm::vec4(verts[i].normal, 0.0f);"}}
+{{cite ohao/scene/asset/primitive_mesh_generator.cpp "vertex.normal = {x, y, z};"}}
+{{cite shaders/rt/pt_closesthit.rchit "vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }"}}
 
 The OBJ and glTF loaders substitute `(0,1,0)` when a file carries none, so they
 cannot reach the fallback either.
@@ -81,7 +81,7 @@ vertex normal only when the mesh has a normal layer, so a mesh without one leave
 Real meshes therefore get no flip, and every TLAS instance disables triangle
 culling, so a hit from behind keeps its outward normal.
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "vkInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
 
 Nothing goes negative — every NEE branch clamps `N·V` to 0.001 — but `N·L` is
 clamped at zero, so every light on the far side contributes exactly nothing and
@@ -103,7 +103,7 @@ adjacent vertex normals differ by $\pi/16 \approx 0.196$ rad, so on an equatoria
 face the three pair terms sum to about $0.077$ and $\kappa \approx 0.6$ —
 arithmetic on those two constants, not a measurement.
 
-{{cite ohao/scene/component/component_factory.cpp "const int stacks = 16;"}}
+{{cite ohao/scene/asset/primitive_mesh_generator.hpp "static void generateSphere(Model& model, float radius = 0.5f, int sectors = 32, int stacks = 16);"}}
 {{cite shaders/rt/pt_closesthit.rchit "curv = clamp(curv * 8.0, 0.0, 1.0);"}}
 
 It fails the other direction too: a hard crease authored with split per-face
@@ -124,8 +124,9 @@ so under the default and realtime profiles the field is written and never read.
 
 ## A tangent frame that does not know about UVs
 
-The RT vertex stream carries no tangent, so normal mapping in the closest-hit
-builds an orthonormal basis from the shading normal alone — Frisvad's
+The vertex arena holds the full 100-byte `Vertex`, tangent included, but the
+closest-hit loads only the normal and the UV out of it, so normal mapping builds
+an orthonormal basis from the shading normal alone — Frisvad's
 $a = 1/(1+n_z)$ construction, which buys its speed by avoiding a normalisation and
 a square root, not a branch. The branch is unavoidable: the form is singular at
 $n_z = -1$, and the shader guards it explicitly.
@@ -153,30 +154,37 @@ bulk of most normal maps — survives either way, which is why RT renders still 
 bumpy. Directional detail does not: brushed metal, scratches and woven cloth rotate
 per pixel in the RT path and will not match the raster preview.
 
-## One descriptor array, two image formats
+## One descriptor array, one texture table
 
 The material row is three `vec4`s indexed by material id, with texture handles
-smuggled through float bit patterns and `0xFFFFFFFF` meaning "none":
+smuggled through float bit patterns and `0xFFFFFFFF` meaning "none". The id itself
+is not stored per triangle: the triangle's slot is looked up in the slot stream
+and the instance's reference list turns the slot into a material:
 
 {{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];"}}
 
-Binding 3, the per-instance buffer carrying an older sign-and-magnitude encoding,
-is still declared here and never indexed:
+The texture indices are slots in the one bindless table the G-buffer also reads.
+Albedo and emissive textures live in it as `R8G8B8A8_SRGB`, so the sampler decodes
+them to linear and the colour fetch needs no manual transfer function; normal and
+roughness-metallic textures are `UNORM`:
 
-{{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 3) readonly buffer MaterialBuffer"}}
+{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {"}}
 
-Scene textures arrive as layers of one `R8G8B8A8_UNORM` array image exposed through
-per-layer 2D views, which is why colour fetches need a manual transfer-function
-decode an `_SRGB` view would have applied for free:
+Hit shaders have no derivatives, so every fetch is a `textureLod` at level 0 at
+native resolution. One material path keeps an old behaviour on purpose. A material
+without an albedo texture carries a 1x1 `UNORM` texture of its sRGB-encoded base
+colour, and the shader multiplies the base colour by that texel after `pow(.., 2.2)`
+— so an untextured surface's base colour is applied twice. The path tracer's
+goldens render that way, and a spare lane of the material table's third row
+(`legacyRtTintTexIdx`) exists only to carry the tint texture's index:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;"}}
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= pow(sampled, vec3(2.2));"}}
+{{cite shaders/rt/pt_closesthit.rchit "albedo *= pow(textureLod(textures[nonuniformEXT(legacyTintTexIdx)], texUV, 0.0).rgb, vec3(2.2));"}}
 
 The HDR environment map sits in the *same* GLSL array as an `R32G32B32A32_SFLOAT`
 image — legal because combined-image-sampler descriptors are independent — which is
 how the miss shader reads values above 1.0 from a binding whose other entries are
-clamped to `[0,1]`. The array has a single mip level and nothing in the RT path
-computes ray differentials, so minified textures alias.
+clamped to `[0,1]`. Nothing in the RT path computes ray differentials, so minified
+textures alias.
 
 ## The miss shader is both the sky and the shadow test
 
@@ -231,7 +239,7 @@ axis agrees; both derive $u$ from $\operatorname{atan2}(d_z, d_x)$. They would s
 be consistent if the CDF's rows ran opposite to the texture's, but `EnvCDF::build`
 consumes the same `stbi_loadf` array that is memcpy'd unflipped into the image.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
 
 A direction drawn from the brightest row of the CDF is therefore looked up by the
 miss shader in the mirrored row. Engine-wide the convention splits two against two,
@@ -300,4 +308,5 @@ alone changes nothing.
 - `pt_miss.rmiss` declares a `vec4 jitter` it never reads, purely so its push-constant block size matches the layout the raygen defines. Trimming it invalidates the layout.
 - Only degenerate-normal geometry is flipped two-sided, and no shipped scene produces one; culling is disabled TLAS-wide, so a real mesh hit from behind keeps its outward normal and renders black through the `N·L` clamp.
 - Normal maps use a Frisvad basis in the path tracer and a UV-derived tangent basis in the GBuffer. Directional detail will not match between the two.
-- The closest-hit's header comment still describes a two-`vec4` material layout; the code reads three. Binding 3 is declared here and never indexed.
+- The material table is three `vec4`s per material (`layout::MaterialGpuPack`). A shader that indexes it with a stride of two reads the neighbouring material's colour as its own parameters.
+- The instance slot is the hit shaders' only handle on a hit: `gl_InstanceCustomIndexEXT` indexes the instance table, which carries the mesh and the material references. A TLAS built with any other custom index breaks every lookup silently.

@@ -5,11 +5,11 @@ title: Host lifecycle
 standard: v2
 ---
 
-## Six steps that do not commute
+## Five steps that do not commute
 
 `PathTracer` is the largest single owner of GPU state in the engine: roughly thirty
-images, a host-visible material SSBO, one descriptor set, an RT pipeline, a shader
-binding table, and five optional denoise/post backends held by pointer. `init()` runs six build
+images, a descriptor set per frame in flight, an RT pipeline, a shader
+binding table, and five optional denoise/post backends held by pointer. `init()` runs five build
 steps whose order is forced by data dependencies, not taste: `createRTPipeline`
 needs the descriptor set layout to build a pipeline layout, and
 `createShaderBindingTable` needs the finished pipeline to query group handles plus
@@ -102,32 +102,38 @@ The same incompleteness forces the constructor and destructor out of line: a
 header. Both live in `path_tracer.cpp`, the one translation unit that includes every
 backend's real header.
 
-## One descriptor set, rewritten every frame
+## One descriptor set per frame slot, rewritten every frame
 
-There is no descriptor caching and no per-frame-in-flight duplication: the pool is
-created with `maxSets = 1` and `render()` rebuilds up to 29 writes from scratch
-before every trace. The array is sized exactly to the worst case, so adding a
-binding without growing it overruns a stack buffer.
+There is no descriptor caching: the pool holds one set per frame in flight, and
+`render()` rebuilds up to thirty writes from scratch into the set of the frame slot
+it is given before every trace. The array is sized with two entries of slack above
+the worst case, so adding more than two unconditional bindings without growing it
+overruns a stack buffer.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[29] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32] = {};"}}
 
-Several of those slots are geometry SSBOs the scene may not have uploaded yet.
-Rather than skip the write and leave a descriptor undefined, every null buffer handle
-falls back to the material buffer — a 256-entry host-visible allocation that always
-exists after `init()` and therefore doubles as the universal dummy.
+The scene bindings are not owned here. `setSceneBuffers` copies the handles the
+`RenderScene` currently exposes — TLAS, arenas, tables, instance buffers and the
+light buffer — and it is called every frame after `recordUpdates`, because table
+growth and TLAS storage replacement hand out new handles. `render()` refuses to
+trace until every one of them is non-null, so there is no dummy buffer to fall back
+to.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "normalBufInfo.buffer = m_normalBuffer != VK_NULL_HANDLE ? m_normalBuffer : m_materialBuffer;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "!m_instances || !m_materialRefs || !m_lightBuffer) return;"}}
 
-Rewriting one shared set is only defined if no pending submission still references
-it, and nothing here establishes that. `renderRTPipeline()` waits on the fence of the
-frame slot it is about to reuse — frame *N−3* — and `MAX_FRAMES_IN_FLIGHT` is 3, so
-frames *N−1* and *N−2* can still be executing when `vkUpdateDescriptorSets` lands on
-the same `VkDescriptorSet`. Of the 36 bindings only binding 12 carries
-`UPDATE_AFTER_BIND`; the other 35 do not. Treat this as an open hazard rather than a
-contract: the fixes are a per-frame-in-flight set, or a wait that covers every
-in-flight submission.
+Rewriting a set is only defined if no pending submission still references it, and
+the per-slot layout is what establishes that. `renderRTPipeline()` waits on the
+fence of the frame slot it is about to reuse — frame *N−3* — and
+`MAX_FRAMES_IN_FLIGHT` is 3, so frames *N−1* and *N−2* can still be executing, but
+they read their own sets. The write lands on a set whose last user has completed.
 
 {{cite ohao/render/frame/frame_resources.hpp "waitForFrame(currentFrame) - blocks until frame N-3 completes"}}
+
+Of the 37 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the others rely on
+that per-slot ordering. The one place the ordering does not reach is a buffer the
+set *points at*: a handle that `RenderScene` replaces mid-flight stays alive in its
+retire queue for `MAX_FRAMES_IN_FLIGHT` frames, so a set still bound by an earlier
+frame never dangles.
 
 ## 256 bytes, and the word that had to hold two numbers
 
@@ -202,14 +208,14 @@ a stale "already transitioned".
 
 ## Seven images that are allocated and never bound
 
-The descriptor set layout declares 36 bindings. Bindings 29–34 are the ReSTIR GI
+The descriptor set layout declares 37 bindings, numbered 0–37 with 3 unused. Bindings 29–34 are the ReSTIR GI
 reservoir ping-pong and 35 is the DLSS specular hit-distance guide; all seven images
 are created and destroyed with the rest, and the realtime raygen declares all seven.
 It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, declared
 `readonly` and only ever `imageLoad`ed. Stores go to 32–34, the *curr* half declared
 `writeonly`, and to 35.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "for (uint32_t b = 29; b <= 34; ++b) {"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "for (uint32_t b = 29; b <= 34; ++b) add(b, IMAGE, RGEN);"}}
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0;"}}
 
@@ -220,8 +226,8 @@ as allocated-but-unwired until a writer appears.
 
 :::key
 `PathTracer` holds only *borrowed* handles for scene data. The environment CDF
-buffers, the env map view and sampler, and every geometry SSBO belong to
-`VulkanRenderer`; `destroy()` nulls the cached CDF handles rather than freeing them,
+buffers and the env map view and sampler belong to `VulkanRenderer`; the TLAS,
+arenas, tables and light buffer belong to `RenderScene`; `destroy()` nulls the cached CDF handles rather than freeing them,
 because freeing them here would double-free.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_envMarginalCDFBuffer = VK_NULL_HANDLE;"}}
@@ -231,8 +237,8 @@ because freeing them here would double-free.
 
 - `init()` must not be reordered: function pointers first, descriptor layout before pipeline layout, pipeline before SBT.
 - The two profile renderers each own a full `PathTracer`, and each `PathTracer` allocates its own set of roughly thirty images, so an eager pair doubles the render-target footprint. They are created lazily on the first `setRenderMode()` into that mode instead.
-- The single descriptor set is rewritten from the host at the top of `render()`, and bindings 13–16 flip between ping-pong views each frame, so the rewrite is not idempotent — and it is not synchronised against the two more recent submissions that may still hold the set.
-- `setMaterialAlbedos` / `setMaterialData` copy at most 256 entries and silently drop the rest — the material SSBO is a fixed 256-instance allocation.
-- `destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors, material buffer and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.
+- Each frame slot's descriptor set is rewritten from the host at the top of `render()`, and bindings 13–16 flip between ping-pong views each frame, so the rewrite is not idempotent. It is safe because the slot's fence was waited first; calling `render()` with a slot whose fence was not waited rewrites a set an earlier submission still reads.
+- `setSceneBuffers` must run every frame after `RenderScene::recordUpdates`. A handle cached from an earlier frame may belong to a buffer or TLAS that has since been replaced and retired.
+- `destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.
 - Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.
 - The `PathTracerShaderSet` defaults name `rt_pt_raygen.rgen.spv`, but both shipped profiles pass explicit sets (`..._realtime`, `..._offline`), so the default never loads in-tree.

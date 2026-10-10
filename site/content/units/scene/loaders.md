@@ -8,7 +8,7 @@ figures: [scene-loaders-routing]
 
 ## Two front doors, four parsers
 
-The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. `inverse/scene_builder.hpp` calls it directly; `model_viewer` and the windowed host `ohao_game` reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.
+The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly: `model_viewer` and the windowed host `ohao_game` reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.
 
 {{cite ohao/scene/asset/model_loader.cpp "// GLB, GLTF, DAE, etc → Assimp"}}
 {{cite examples/ohao_game.cpp "auto loaded = ModelLoader::loadResult(modelPath);"}}
@@ -79,14 +79,14 @@ A file whose meshes are positioned by node transforms — a wheel parented under
 
 {{cite ohao/scene/asset/model_fbx.cpp "geoTransform = toGlm(mesh->instances.data[0]->geometry_to_node);"}}
 
-Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult` and both `SceneFramer` callers set it on the model actor's transform, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.
+Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult`, and both callers that load through the facade copy it into the model entity's local `Transform` before spawning it, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.
 
 {{cite ohao/render/camera/scene_framer.cpp "result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));"}}
-{{cite examples/ohao_game.cpp "actor->getTransform()->setRotation(frame.modelRotation);"}}
+{{cite examples/ohao_game.cpp "t.rotation = frame.modelRotation;"}}
 
 ## Roughness arrives by four different roads
 
-All four loaders land their answer in the same slot, `materialColors[i].w`, and from there in the RT material buffer. Three of them read an authored roughness factor first; what separates them is the fallback, and the fallbacks do not agree. Let $g\in[0,1]$ be an authored glossiness and $N_s$ a Phong specular exponent. The second formula belongs to the Assimp route alone, which reads $N_s$ from `AI_MATKEY_SHININESS`; its domain is GLB/GLTF/DAE plus the FBX second pass, never OBJ, which is branched to the native parser before Assimp is reached.
+All four loaders land their answer in the same slot, `materialColors[i].w`, and from there in the `RenderScene` material table that raster and path tracer share. Three of them read an authored roughness factor first; what separates them is the fallback, and the fallbacks do not agree. Let $g\in[0,1]$ be an authored glossiness and $N_s$ a Phong specular exponent. The second formula belongs to the Assimp route alone, which reads $N_s$ from `AI_MATKEY_SHININESS`; its domain is GLB/GLTF/DAE plus the FBX second pass, never OBJ, which is branched to the native parser before Assimp is reached.
 
 $$r_{\text{gloss}} = 1 - g, \qquad r_{\text{assimp}} = 1 - \operatorname{clamp}\!\left(\frac{N_s}{1000},\, 0,\, 1\right)$$
 
@@ -109,10 +109,9 @@ tinygltf copies `pbr.roughnessFactor` straight through, then, for the `KHR_mater
 {{cite ohao/scene/asset/model_gltf.cpp "    static_cast<float>(pbr.roughnessFactor)"}}
 {{cite ohao/scene/asset/model_gltf.cpp "materialColors.back().w = 1.0f - glossiness;"}}
 
-OBJ is the fourth road and reads nothing. Its MTL parser does store `Ns` in `MaterialData::shininess`, but the only code that converts it — `Scene::importModel`, with a $1-N_s/128$ remap — has no callers anywhere in the tree; the RT material build ignores the field and stamps every material with 0.7.
+OBJ is the fourth road and reads nothing. Its MTL parser does store `Ns` in `MaterialData::shininess`, but no code outside `scene/asset` reads that field; what reaches the GPU is the `materialColors` row, and the OBJ path stamps every row's `.w` with 0.7.
 
 {{cite ohao/scene/asset/model.cpp "else if (token == "Ns") {"}}
-{{cite ohao/scene/scene.cpp "pbrMaterial.roughness = glm::clamp(1.0f - (mtlMaterial.shininess / 128.0f)"}}
 {{cite ohao/scene/asset/model.cpp "materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));"}}
 
 Per-texel roughness only appears if a `{material}_gloss_*` image is sitting beside the model, which the loader inverts and repacks into the green channel of a rough-metal texture. That lands where the closest-hit sampler looks — but the sampler *multiplies*, against that 0.7 scalar. A gloss-mapped OBJ therefore cannot exceed roughness 0.7 at any texel, and every texel is scaled to 70% of its authored value rather than used as authored.
@@ -126,18 +125,22 @@ The tinygltf path does one thing no other loader does: after decoding an albedo 
 
 {{cite ohao/scene/asset/model_gltf.cpp "// Override the material base color with the texture's average color"}}
 
-That base color is not an alternative to the texture — the closest-hit shader multiplies them:
+That base color is not an alternative to the texture — the closest-hit shader multiplies them, after the `R8G8B8A8_SRGB` sampler has decoded the texel to linear:
 
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= pow(sampled, vec3(2.2));"}}
+{{cite shaders/rt/pt_closesthit.rchit "albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;"}}
 
 So a glTF with the spec-default `baseColorFactor` of 1 renders through `ModelLoader::load` at its authored albedo, and through `env_demo`/`turntable` at roughly (mean texel) × (texel) — visibly darker, and darker in proportion to how dark the texture already is. This is the sharpest of the divergences in the figure above, and the reason to treat the tinygltf route as legacy.
 
-## The primitive generator that nothing calls
+## Procedural primitives
 
-`PrimitiveMeshGenerator` has no callers in `ohao/`, `examples/` or `tests/`. Its live twin is `ComponentFactory::generateCubeMesh` and siblings, which duplicate the same cube and UV-sphere construction inside the component layer. Worth recording before anyone deletes the wrong one: the *unused* class implements a real cylinder and a real cone, while the *used* one stubs both out.
+`PrimitiveMeshGenerator` is the fifth producer of `Model`s and the only one that reads no file. It builds a cube, a UV sphere, a platform, a cylinder and a cone, each behind a `make*` factory that returns a `shared_ptr<Model>`; `cornell_box` spawns its spheres from `makeSphere` and `ohao_game` its spinning cube from `makeCube`.
 
-{{cite ohao/scene/component/component_factory.cpp "// TODO: Implement proper cylinder mesh generation"}}
+{{cite examples/ohao_game.cpp "*PrimitiveMeshGenerator::makeCube()"}}
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {"}}
+
+What the generator fills is geometry only: none of the per-material arrays below. That is not a gap the caller has to close by hand — `render::uploadModel` treats a `Model` without `materialColors` as one submesh with one material, the caller's override material or the table's default — but it means a primitive's color always comes from the spawn call, never from the generator.
+
+{{cite ohao/render/scene/model_upload.cpp "mats.push_back(overrideMaterial ? *overrideMaterial : MaterialDesc{});"}}
 
 ## What actually crosses into the GPU layer
 
@@ -150,17 +153,17 @@ That layout carries dead weight. Skeletal animation was removed, but `boneIndice
 {{cite ohao/scene/asset/model.hpp "glm::ivec4 boneIndices{0, 0, 0, 0};"}}
 
 :::key
-The loaders' real output is not a mesh, it is a material table: six per-material arrays — `materialColors` (rgb + roughness in `.w`), `materialMetallic`, and the four texture-index arrays `materialTextureIndex`, `materialNormalTexIndex`, `materialRoughMetalTexIndex`, `materialEmissiveTexIndex` — plus `materialPerTriangle`, which is *not* parallel to them. It carries one entry per triangle and indexes into them. The RT builder walks the six by material id and the seventh by triangle, so every loader must fill all seven under one consistent material numbering, or the path tracer shades the wrong triangles with the wrong textures.
+The loaders' real output is not a mesh, it is a material table: six per-material arrays — `materialColors` (rgb + roughness in `.w`), `materialMetallic`, and the four texture-index arrays `materialTextureIndex`, `materialNormalTexIndex`, `materialRoughMetalTexIndex`, `materialEmissiveTexIndex` — plus `materialPerTriangle`, which is *not* parallel to them. It carries one entry per triangle and indexes into them. `render::uploadModel` walks the six by material id — one `MaterialDesc` per `materialColors` row, registered in the `RenderScene` material table — and the seventh by triangle, turning contiguous runs of equal ids into submeshes and copying the list itself into the mesh's triangle material-slot stream. Every loader must therefore fill all seven under one consistent material numbering, or raster and path tracer alike shade the wrong triangles with the wrong textures.
 :::
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "matColors[matIdx * 3 + 1].x = mc2.w; // roughness packed in .w of materialColors"}}
-{{cite ohao/gpu/vulkan/rt_build.cpp "int emIdx = model->materialEmissiveTexIndex[matIdx];"}}
-{{cite ohao/gpu/vulkan/rt_build.cpp "for (uint32_t mid : model->materialPerTriangle) {"}}
+{{cite ohao/render/scene/model_upload.cpp "mats[i].roughness = model.materialColors[i].w;"}}
+{{cite ohao/render/scene/model_upload.cpp "md.submeshes = materialRuns(model, triangleCount);"}}
+{{cite ohao/render/scene/model_upload.cpp "std::copy_n(model.materialPerTriangle.begin(), n, md.triangleMaterialSlot.begin());"}}
 
 ## Contracts
 
 - `materialPerTriangle.size()` must equal `indices.size()/3` at every exit. The OBJ path's alpha-card filter drops `fur`/`eyelash`/`tear` triangles *before* the per-triangle array is built, which is the only ordering that keeps this true.
-- `materialColors[i].w` is roughness, not alpha. `rt_build.cpp` reads it into the RT material buffer's roughness slot with no conversion.
+- `materialColors[i].w` is roughness, not alpha. `render::uploadModel` copies it into `MaterialDesc::roughness` with no conversion, and from there it reaches both the raster and the RT shading through the one material table.
 - OBJ material indices are assigned while iterating an `unordered_map`, so the numbering is hash order. It is self-consistent within a run, but never persist an OBJ material index across builds.
 - `repairMeshNormals` runs on every `ModelLoader::load` result and overwrites author-supplied normals. On the FBX route it never sees ufbx geometry: `model` is reassigned to `assimpModel` before the repair call, so it operates on Assimp's already-welded `GenSmoothNormals` output. Moving the repair above that reassignment would run it on triangle soup and then throw the result away. Adding a "skip if the model already has good normals" guard is not a no-op either — it would hand hard creases back to every model that currently loses them through the facade.
 - `Model::loadFromFBX` is ufbx, not Assimp, despite the header comment in `model.hpp` still saying "Assimp-based".

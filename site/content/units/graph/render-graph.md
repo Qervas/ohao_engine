@@ -25,11 +25,12 @@ barrier scheduler with a frame-graph-shaped API" will not.
 
 The six are CSM, GBuffer, SSAO, RTShadow, RTGI and DeferredLighting, in that
 order — three `addPass`, three `addComputePass`. The last two are conditional:
-`RTShadowTechnique` and `RTGITechnique` must have initialised and the TLAS must
-hold at least one instance, which on ray-tracing hardware with geometry in the
-scene is the ordinary case, not an opt-in.
+`RTShadowTechnique` and `RTGITechnique` must have initialised and `RenderScene`
+must have a built TLAS (its handle stays null without ray tracing and before the
+first build), which on ray-tracing hardware with geometry in the scene is the
+ordinary case, not an opt-in.
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtGI && m_rtAccel"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {"}}
 
 ## The graph owns nothing it schedules
 

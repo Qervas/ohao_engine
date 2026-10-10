@@ -32,7 +32,7 @@ versus cube, detected on the C++ side from vertex count — which works because
 roughness itself never reaches 1, so a magnitude of 10 or more can only be the
 flag:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "// Add 10.0 if sphere shape (roughness is always < 1, so 10+ means sphere)"}}
+{{cite ohao/render/scene/model_upload.cpp "if (model.vertices.size() > 100) packed += (packed >= 0 ? 10.0f : -10.0f);"}}
 
 `unpackHitPbr` still honours both rules, gating the sign one on `.y` being near
 zero — the signature of a producer that never filled the metallic channel:
@@ -46,18 +46,18 @@ positive and never near 10:
 
 {{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
 
-The *encoding* is not dead, though — only its route into the payload is. Two
-loops in `rt_build.cpp` still build the signed, shifted float and push it
-through `setMaterialData()` into the path tracer's binding 3:
+The *encoding* is not dead, though — only its route into the payload is.
+`giMaterialLegacyPacked` still builds the signed, shifted float, per model, and the
+render extractor copies it into the instance table's `giAlbedoPacked.a`:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "// Keep historic packing for any code still reading instance materials."}}
+{{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
 
-Nothing reads it. All three raygens and `pt_closesthit.rchit` declare
-`MaterialBuffer` at binding 3 and none of them ever indexes `materialBuf`; the
-only shader in the tree that does is `rt_gi.rchit`, on the deferred GI
-technique's own descriptor set. So the format has a live producer and no
-consumer — which is the reason the decoder's shape is worth understanding before
-touching it, not the reachability of its branches.
+Nothing reads it. The only shader in the tree that indexes that field is `rt_gi.rchit`,
+on the deferred GI technique's own descriptor set, and it takes `.rgb` only. The path
+tracer's raygens and closest-hit do not declare a per-instance material word at all;
+they read materials from the shared table at binding 10. So the format has a live
+producer and no consumer — which is the reason the decoder's shape is worth
+understanding before touching it, not the reachability of its branches.
 
 ## The refactor that left two decodes behind
 
@@ -226,7 +226,7 @@ raygens, and by nothing else:
 The default offline `PathTracer` raygen, `pt_raygen.rgen`, does not include it.
 NRD packing is a profile feature, not something the flagship offline tracer does.
 
-## rt_masks.glsl has no readers, and its masks cull nothing
+## rt_masks.glsl has no readers, and its ray masks pick nothing
 
 The third header defines two ray-mask constants and pins them to their C++ twin:
 
@@ -239,33 +239,29 @@ one:
 
 {{cite shaders/rt/rt_gi.rgen "uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)"}}
 
-The mask also selects nothing at runtime. Vulkan intersects an instance when
-`rayMask & instanceMask` is non-zero, and the one `addInstance` call in the TLAS
-build hands every instance 0xFF:
+The ray mask also selects nothing among live geometry. Vulkan intersects an instance
+when `rayMask & instanceMask` is non-zero, and the TLAS staging in `RenderScene` hands
+every visible instance 0xFF:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "uint32_t instanceMask = rt::MASK_STATIC_ONLY;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
 
-`0x01 & 0xFF` is non-zero, so the "static only" ray hits everything;
-`MASK_ANIMATED = 0x00` exists in `rt_visibility.hpp` and is never assigned. A
-second, independent cull was written to work around exactly that: the GI
-closest-hit shader treats an instance as a miss when the alpha of its
-per-instance material entry falls below 0.5, and records why:
+`0x01 & 0xFF` is non-zero, so the "static only" ray hits every visible instance;
+`MASK_ANIMATED = 0x00` exists in `rt_visibility.hpp` and is never assigned, and the
+instance-mask constants there are no longer referenced by the TLAS code at all.
 
-{{cite shaders/rt/rt_gi.rchit "Workaround for RTX 5070 driver bug: traceRayEXT cull mask is ignored."}}
+What the mask does do is hide. An invisible or released instance gets mask 0, which no
+ray mask intersects, so it is removed from every trace — shadows, GI and the path
+tracer alike. A change of mask counts as a structural TLAS change, so toggling an
+instance's visibility rebuilds the acceleration structure instead of refitting it.
+There is no longer a second, shader-side cull for animated instances: the GI
+closest-hit returns albedo and distance for every hit it is given.
 
-That test never fires either. The buffer is filled with alpha 1.0 at creation,
-and the one `setMaterialAlbedos` call in the TLAS build passes albedos only,
-leaving the optional `flags` vector empty — so every instance is written back at
-alpha 1.0:
+{{cite shaders/rt/rt_gi.rchit "giPayload = vec4(albedo, gl_HitTEXT);"}}
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "float alpha = (i < flags.size()) ? flags[i] : 1.0f;"}}
-
-There is nothing to mark in any case; the same TLAS build records that skeletal
-animation is gone and every mesh is static. Four layers describe a visibility
-mechanism — GLSL header, C++ header, inline literals, and a driver-bug
-workaround beneath them — and none of them removes an instance from a trace.
-Keep the file against the day an instance really does need hiding; do not read it
-as a description of what the tracer does.
+Keep the header against the day a ray mask really needs to select a subset; do not
+read it as a description of what the tracer does today. The comment above `rayMask`
+in `rt_gi.rgen` ("animated instances have bit 0 clear") describes geometry the engine
+no longer has.
 
 ## Contracts
 

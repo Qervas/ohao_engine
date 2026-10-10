@@ -68,9 +68,18 @@ under the same shader build. The pair that must stay in
 lockstep is `gbuffer.frag`'s encoder against the header's *decoder*; the header's
 encoder is dead weight.
 
-Bindless texture indices reach the shader by bit-copy rather than conversion:
+Where the material comes from is part of the same story. The fragment shader reads the
+draw's submesh material slot from a push constant, resolves it through the instance's
+material-reference list into a row of `RenderScene`'s material table, and loads three
+`vec4`s from it: base colour and albedo texture, roughness, metallic, normal and emissive
+textures, and the rough/metal texture and emissive strength. The same table feeds the
+path tracer, so the two renderers cannot disagree about which material a triangle has.
+A slot the instance has no reference for falls back to material 0.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "float f; memcpy(&f, &idx, sizeof(float)); return f;"}}
+Bindless texture indices reach the shader by bit-copy rather than conversion; the table
+packer reinterprets each uint32 as a float:
+
+{{cite ohao/render/scene/material_table.cpp "const auto bits = [](uint32_t u) { return std::bit_cast<float>(u); };"}}
 
 so `UINT32_MAX` arrives as a quiet NaN and is recovered with `floatBitsToUint`.
 Nothing does arithmetic on the lane, so the pattern survives intact — but the two
@@ -95,7 +104,7 @@ and B, so an asset that packs nothing into R darkens by whatever sits there.
 There is no emissive attachment. Emission is collapsed to a single Rec. 709
 luminance scalar and hidden in the alpha of the normal target:
 
-{{cite shaders/core/gbuffer.frag "emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * pc.emissiveParams.y;"}}
+{{cite shaders/core/gbuffer.frag "emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;"}}
 
 and the lighting pass re-tints that scalar with the surface albedo:
 
@@ -103,22 +112,20 @@ and the lighting pass re-tints that scalar with the surface albedo:
 
 So an emitter can only glow in its own base colour — a blue LED on a white
 housing renders as a white glow of the right brightness. And it cannot glow
-*hard*: `pc.emissiveParams.y` is only ever 0.0 or exactly `1.0f` — no C++ path
-raises it — and the bindless textures it multiplies are 8-bit
+*hard*: the strength lane, `row2.y`, is set to exactly `1.0f` for any material that has
+an emissive texture and left at 0 otherwise — model upload has no other path that raises
+it — and the bindless textures it multiplies are 8-bit
 (`R8G8B8A8_SRGB`/`_UNORM`), so the luminance is bounded by 1.0. The half-float
 alpha has HDR headroom nothing in this pipeline can fill.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;"}}
+{{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
 
-That line carries the sharper upstream limitation, though not by the route it
-looks like: it sits inside a branch already guarded on
-`mat.useEmissiveTexture && !mat.emissiveTexture.empty()`, and the `findTexture`
-call above it can still miss, leaving strength 1.0 with `emissiveTexIdx` at
-`UINT32_MAX`. The shader gates on the *index*, not the strength, so a material
-with a nonzero emissive factor and no resolvable emissive map contributes nothing
-at all here.
+The sharper limitation is upstream of the shader: a material has no emissive colour
+factor at all, only a texture index and that strength. The shader gates on the
+*index*, so a material without a resolvable emissive map contributes nothing here
+regardless of what the source asset's emissive factor said.
 
-## Velocity: right about Vulkan, wrong about objects
+## Velocity: right about Vulkan, and about objects
 
 The motion vector is the raw NDC difference, halved, with no vertical flip.
 
@@ -129,14 +136,14 @@ $uv = 0.5\,ndc + 0.5$ in both axes and the halved difference *is* the UV delta
 `taa_resolve.frag` subtracts to find history. A GL-derived version needs a `y`
 negate here; this one must not.
 
-Two things it does not capture. The "previous" matrix pairs last frame's
-view-projection with the **current** model matrix:
+The "previous" position pairs last frame's view-projection with the instance's
+**previous** world matrix, read from the instance table in the vertex shader:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;"}}
+{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));"}}
 
-so only camera motion is encoded — a moving actor reprojects as though static and
-TAA smears it. And the current projection is Halton-jittered for TAA while the
-stored previous one is not:
+so a moving object is reprojected from where it was, and TAA's history follows it
+rather than smearing it. What it does not capture is the other half of the pair: the
+current projection is Halton-jittered for TAA while the stored previous one is not:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;"}}
 
@@ -182,7 +189,7 @@ The loop runs `min(pc.lightCount, MAX_LIGHTS)` times, and `MAX_LIGHTS` is 8, so
 the deferred path shades at most eight lights per pixel however many the scene
 holds. (The shader's comment sources that constant from `offscreen_renderer.hpp`,
 a file that is not in the tree; the matching C++ value lives in
-`ohao/gpu/vulkan/renderer.hpp`.) Point and spot lights use a windowed
+`ohao/render/scene/render_scene_types.hpp`.) Point and spot lights use a windowed
 inverse-square:
 
 $$\mathrm{atten}(d) = \frac{\big[\mathrm{clamp}\!\left(1 - (d/r)^4,\ 0,\ 1\right)\big]^{2}}{\max(d^{2},\ 0.01)}$$
@@ -238,12 +245,12 @@ deferred path ever evaluates:
 Nor is there prefiltering to fall back *from*. The env image the deferred pass
 receives is created with a single mip level and viewed with `levelCount = 1`:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "imgInfo.mipLevels = 1;"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "imgInfo.mipLevels = 1;"}}
 
 and the sampler handed over beside it is a zero-initialised
 `VkSamplerCreateInfo` that never assigns `maxLod`, leaving it 0.0:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "vkCreateSampler(m_device, &samplerInfo, nullptr, &m_rtTextureSampler);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "VkSamplerCreateInfo info{};"}}
 
 Both `textureLod` calls therefore clamp to mip 0 — and their third argument is an
 absolute LOD, not a bias. The `roughness * 9.0` specular tap and the fixed `9.0`

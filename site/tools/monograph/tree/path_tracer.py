@@ -48,7 +48,7 @@ MODULE = {
         ),
         page(
             'bindings',
-            'Descriptor map 0–35',
+            'Descriptor map 0–37',
             'Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.',
             files=['ohao/render/rt/path_tracer_descriptors.cpp', 'site/assets/plates/pt_bindings.svg'],
             design=['Binding 0: TLAS. 1–2: accum + output. 3: materials. 11: GPULight SSBO.', '17–18: env CDF. 19–26: motion, depth, roughness, split radiance/albedo AOVs.', '29–34: ReSTIR reservoir ping-pong images (realtime).', '35: DLSS hit-distance guide when DenoiseMode::DLSSRR.', 'Descriptor writes must match GLSL layout(set=0, binding=N) exactly — silent black if wrong.'],

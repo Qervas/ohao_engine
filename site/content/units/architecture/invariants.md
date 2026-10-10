@@ -27,25 +27,28 @@ canonical constant.
 
 {{cite ohao/core/concepts.hpp "must be trivially copyable standard-layout for GPU"}}
 
-Five call sites carry the macro, covering `ObjectPushConstants` (240 bytes),
-`LightData` (128), `PTPushConstants` (256), `GPULight` (80) and `MeshBufferInfo`
-(16). The same contract is asserted five more times without it: each of the four
-push-constant structs of `NrdCinematicPost`, which compiles only with NRD
-enabled, gets a bare `static_assert` on its byte size,
+Three call sites carry the macro, covering `LightData` (128 bytes),
+`PTPushConstants` (256) and `GPULight` (80). The same contract is asserted twelve
+more times without it: each of the four push-constant structs of
+`NrdCinematicPost`, which compiles only with NRD enabled, gets a bare
+`static_assert` on its byte size,
 
 {{cite ohao/render/rt/denoise/nrd_cinematic.cpp "sizeof(CompositePC) == 176"}}
 
+the deferred pass structs (`ShadowPushConstant`, `CameraUBO`, `DrawPushConstant`)
+get one each, the `RenderScene` table rows (`InstanceGpu` 160, `MeshGpu` 16, the
+material `Pack` against `MaterialGpuPack::kBytes`) and `Vertex` (100) get one each,
 and `PBRMaterialParams` gets a `% 16 == 0` alignment assert beside its `GpuPod`
-check. Ten host-side size or alignment assertions, then — and all ten are
+check. Fifteen host-side size or alignment assertions, then — and all fifteen are
 assertions about C++ types, evaluated by the C++ compiler. No build step reflects
 the compiled SPIR-V. Set against the surface they guard — the path tracer alone
-declares a thirty-six-entry descriptor set layout, and the buffers behind those
-entries are re-declared independently in the raygen, closest-hit, any-hit and
-miss stages —
+declares a thirty-seven-entry descriptor set layout whose binding numbers run to
+37, and the buffers behind those entries are re-declared independently in the
+raygen, closest-hit, any-hit and miss stages —
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "VkDescriptorSetLayoutBinding bindings[36] = {};"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(37, BUFFER, HIT);"}}
 
-ten host-side checks are still a thin instrument. They catch *someone added
+fifteen host-side checks are still a thin instrument. They catch *someone added
 a float to the struct*. They are blind to *someone reordered the GLSL block*, and
 blind by construction rather than by omission.
 
@@ -70,7 +73,10 @@ runs real scenes with the variable set and fails on any message, warning or erro
 {{cite tests/validation/check_validation.py "run real scenes under VK_LAYER_KHRONOS_validation and fail on"}}
 
 and two `engine_tests` cases set it around `initialize()` and assert that a
-deferred resize — SSAO, TAA and bloom included — leaves the layer silent.
+deferred resize — SSAO, TAA and bloom included — leaves the layer silent. A third
+route is `ohao_game` itself: `Application::shutdown` returns the validation
+messages seen over the whole run including teardown, so a windowed run with the
+variable set exits nonzero on any report.
 
 {{cite tests/engine/engine_tests.cpp "the validation layer reports nothing across the resize"}}
 
@@ -84,77 +90,69 @@ raster path. The checker's scene list is those two runs, each passed the
 and the path tracer runs under validation only when a person types the command.
 Do so — `OHAO_VALIDATION=1 cornell_box out.png 1 --denoise=none`, the default
 offline mode — and the layer reports exactly one VUID, and it is the failure class
-this page is about. The path tracer's layout flags binding 12 as the
+this page is about. The path tracer's layout flags binding 12 — the bindless texture table — as the
 variable-count binding,
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |"}}
 
-while bindings up to 35 are declared behind it, and Vulkan permits the flag only
+while bindings up to 37 are declared behind it, and Vulkan permits the flag only
 on the highest-numbered binding
 (`VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-pBindingFlags-03004`). The
-comment directly above the assignment states the rule the code breaks. The error
-has survived because the one automated validation run never builds this layout.
+layer names binding 37 as the one that should carry it. The error has survived
+because the one automated validation run never builds this layout.
 
 ## The pixel tier is real and coarse
 
-The golden corpus renders two scenes with the denoiser disabled, so what is pinned
-is raw deterministic beauty rather than a filter's output:
+The golden corpus renders four scenes with the denoiser disabled, so what is
+pinned is raw deterministic beauty rather than a filter's output: the Cornell box
+and the damaged helmet, each once as an offline path trace and once through the
+deferred hybrid pipeline.
 
 {{cite tests/golden/manifest.json "./build/cornell_box {out} 16 --denoise=none"}}
 
-and compares them after downscaling to 640 px wide,
+{{cite tests/golden/manifest.json "./build/cornell_box {out} 4 deferred --denoise=none"}}
+
+Each is compared after downscaling to 640 px wide,
 
 {{cite tests/golden/render_golden.py "DOWNSCALE_WIDTH = 640"}}
 
-against two thresholds that must **both** hold: a per-channel maximum of 4 LSB
-and an allowance of 1 % differing pixels.
+against two thresholds that must **both** hold: a per-channel maximum and an
+allowance of differing pixels. The defaults are 4 LSB and 1 %; the deferred helmet
+carries its own looser pair, 6 LSB and 5 %, because it is not bit-exact from run
+to run.
 
 {{cite tests/golden/render_golden.py "return s is not None and s["}}
 
-The conjunction is stricter than the 1 % headline suggests. `max_abs` is a single
+The conjunction is stricter than the percentage suggests. `max_abs` is a single
 maximum over the whole frame, so a change that moves one compare-resolution
-channel by 5 LSB fails regardless of how little area it touches. Sparseness alone
-saves nothing; only a change that is simultaneously sub-threshold in magnitude
-*and* sparse gets through.
+channel past the limit fails regardless of how little area it touches. Sparseness
+alone saves nothing; only a change that is simultaneously sub-threshold in
+magnitude *and* sparse gets through.
 
 Where the tier is genuinely coarse is resolution and coverage. The 1920→640
 reduction is a bilinear resample, so a difference confined to a handful of
 full-resolution pixels is averaged against its neighbours before the maximum is
-taken. And the corpus is two scenes, both offline path traces into a closed box —
-nothing in it renders the deferred pipeline, a denoiser, or an HDR environment. The
-manifest's own comment concedes the shape of that problem, asking that every fixed
-bug add a scene so it cannot silently regress.
+taken. And the corpus is two scenes in two pipelines, with no denoiser output and
+no scene that exercises the ECS beyond spawning meshes and lights. The manifest's
+own comment concedes the shape of that problem, asking that every fixed bug add a
+scene so it cannot silently regress.
 
 The 4-LSB tolerance is justified in the harness as absorbing a floating-point
 floor from non-associative GPU reduction order,
 
 {{cite tests/golden/render_golden.py "DEFAULT_MAX_ABS_DIFF = 4"}}
 
-which is the standard argument, and the floor the docstring quotes is stated for a
-1920×1080 frame — before the downscale. At the resolution the harness actually
-compares at, the ghost does not show up here: `--selftest`, which renders each scene twice
-and diffs the two renders against each other, reports `max_abs=0 diff_px=0` on
-both. Two consecutive renders are bit-identical at 640 px.
+which is the standard argument. `--selftest` renders each scene twice and diffs
+the two renders against each other: both path-traced scenes and the deferred
+Cornell box come back at `max_abs=0 diff_px=0`, bit-identical. The deferred helmet
+does not — it reports `max_abs=2` over about three percent of compare-resolution
+pixels against itself, which is why its limits are wider. Against the stored
+goldens all four pass.
 
-The corpus was red for a long time, and the two scenes were red for completely
-different reasons — which is the part worth keeping.
-
-`cornell_box` was stale. Its golden was written on 2026-07-14 and 78 commits had
-since touched `shaders/` or `ohao/render/`; a run scored `max_abs=101` against a
-limit of 4, with 99.96 % of compare-resolution pixels differing. The selftest ruled
-out nondeterminism, so it was real drift — but putting the old and new goldens side
-by side shows the structure is identical. It is noise reshuffling plus a brighter,
-tighter light spot on the back wall, not a broken renderer.
-
-`metal_rough_spheres` was not drift at all. Its model did not exist, and
-`model_viewer` rendered an empty frame and exited 0, so the harness scored a
-picture of nothing against a golden full of spheres. See `systems/tests` for how
-that stayed invisible and what closes it.
-
-Both are now green at `max_abs=0`, on refreshed goldens and a scene that loads a
-tracked asset. That is a hash of an unchanged sampler rather than a tolerance the
-image has slack inside — the manifest says so at length, and says why no sample
-count fixes it.
+The two path-traced goldens are a hash of an unchanged sampler rather than a
+tolerance the image has slack inside — the manifest says so at length, and says why
+no sample count fixes it. See `systems/tests` for how a golden can go red for a
+reason that is not a renderer change, and what closes it.
 
 ## And nothing starts any of them
 
@@ -177,21 +175,32 @@ that judges a finished image, and it is coarse and manual.
 
 Two shapes account for nearly all of them.
 
-**Positional joins.** No array on the ray-tracing path carries a key. Each TLAS
-instance's custom index is a running triangle count accumulated by one traversal
-of the scene's `unordered_map`,
+**Slot joins.** The ray-tracing path no longer joins arrays by a running walk of the
+scene. Each TLAS instance's custom index is the instance's slot in the
+`RenderScene` table,
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "globalTriOffset += it2->second.indexCount / 3;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.instanceCustomIndex = slot & 0xFFFFFFu;"}}
 
-and the hit shaders recover a global triangle id by adding `gl_PrimitiveID` to it,
-then use that single number to index the shared index buffer and the per-triangle
-material table.
+and the hit shaders use that single number to fetch the instance row, which names
+the mesh, its index range and its material refs.
 
-{{cite shaders/rt/pt_closesthit.rchit "uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;"}}
+{{cite shaders/rt/pt_closesthit.rchit "InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];"}}
 
-The join is correct only because several independent walks over that same map
-admit the same actors in the same order. Nothing downstream can detect a
-mismatch — there is no id to compare against.
+That makes the instance key explicit — the same slot addresses the TLAS entry, the
+instance row and the draw list — but two positional joins survive underneath it.
+The per-triangle material slot is read at `triangleSlotOffset + gl_PrimitiveID`,
+so the slot stream must run parallel to the mesh's index order:
+
+{{cite shaders/rt/pt_closesthit.rchit "uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];"}}
+
+and the slot indexes the instance's material refs, with anything past the ref count
+falling back to material 0 rather than failing:
+
+{{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
+
+Registration checks the first (a stream of the wrong length is logged and padded or
+truncated) and clamps the second to 64 refs per instance. Neither mismatch is
+visible in the picture except as a wrong material.
 
 **Hand-copied constants.** The frame-ring depth is named once,
 
@@ -200,40 +209,42 @@ mismatch — there is no id to compare against.
 and then re-typed as a bare `+ 3` wherever a caller drives the render loop itself,
 because the pixel buffer it reads back is the frame submitted three renders ago:
 
-{{cite examples/turntable.cpp "for (int s = 0; s < spp + 3; s++)"}}
+{{cite examples/turntable.cpp "for (int s = 0; s < spp + 3; s++) {"}}
 
 Four offline examples spell it that way. Change the named constant and four
-call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity
-reversed: it *has* a canonical name,
+call sites quietly render the wrong sample count. The no-texture sentinel shows the
+same pattern with the polarity reversed. The producers use a named constant,
+`render::kNoTexture`, but there are now two more names for the same value —
 
 {{cite ohao/gpu/layout_meta.hpp "kNoTexture = 0xFFFFFFFFu;"}}
 
-and no callers. Every producer re-types the value instead — `0xFFFFFFFFu` in the
-RT material upload, `UINT32_MAX` in the raster push-constant fill, the literal
-again in each shader that tests it. The value is load-bearing in a dozen places
-and spelled two ways; the named constant is decoration.
+in the layout header, and `NO_TEXTURE` in `scene_data.glsl` — and neither has a
+caller. The shaders that test the value re-type `0xFFFFFFFFu` instead. The value is
+load-bearing in a dozen places and spelled four ways; two of the named constants
+are decoration.
 
 Two ordering rules round out the set, and both are repaired in code rather than
-asserted. A path-tracer profile is created lazily, so a scene upload that ran
-before the profile existed has to be replayed into the new descriptor set:
+asserted. A new HDRI joins the one bindless texture table, so frames in flight must
+finish before it is registered:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// forEachRTRenderer was a no-op then — re-upload so materials, textures,"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "new HDRI joins the bindless table, so frames in flight must finish"}}
 
-and the light buffer's 16-byte header is re-`memset` to `0xFF` on every upload, so
-the environment-map index has to be stamped back in even on the path where the HDR
-itself is not reloaded:
+and the RT light buffer's 16-byte header — count, environment index, intensity
+scale — is rebuilt whole from the light table's own members on every upload, so the
+index and scale have to be held there, not written into the buffer:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "allocated light buffer (header is memset to 0xFF each upload)."}}
+{{cite ohao/render/scene/light_table.cpp "const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,"}}
 
 :::why
-Positional arrays are the right call and should not be "fixed". Giving each
-triangle a key — an actor id or material handle stored beside the index — buys a
-second SSBO fetch in the closest-hit shader, on the hottest path in the engine, to
-defend against a class of bug that a human catches the first time they look at the
-render. The rejected alternative is not free and its benefit is small. What the
-choice really costs is that the ordering contract now lives in prose instead of in
-a type; the cheap way to buy it back is a debug-only parallel array of actor ids
-compared once per upload, not a key column in the hot path.
+The per-triangle slot stream is positional on purpose and should not be "fixed".
+Giving each triangle a key — a mesh id or material handle stored beside the index —
+buys a second SSBO fetch in the closest-hit shader, on the hottest path in the
+engine, to defend against a class of bug that a human catches the first time they
+look at the render. The instance level already has its key (the slot); the
+triangle level does not need one. What the choice really costs is that the
+ordering contract lives in the registration check and in prose instead of in a
+type; the cheap way to buy it back is a debug-only comparison at registration, not
+a key column in the hot path.
 :::
 
 :::key
@@ -247,8 +258,7 @@ code, not as something the build guarantees.
 
 ## Contracts
 
-- The geometry walk and the material-ID walk must admit the same actors in the same order. They currently do not use the same predicate: geometry upload requires `isVisible()`, the material-ID walk does not. One hidden mesh shifts every later instance's material lookup, and no mechanism in the audit above can see it.
+- A mesh's triangle material-slot stream must hold exactly one entry per triangle, in index order. Registration logs a length mismatch and pads or truncates; the picture is the only other symptom. An instance holds at most 64 material refs, and a slot beyond its ref count resolves to material 0.
 - `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples encode this as a literal `+ 3`; changing the constant without changing all four silently changes sample counts.
-- A lazily created RT profile owns no scene data until `updateSceneBuffers()` is replayed into it. `setScene()` and `updateSceneBuffers()` usually run before any `PathTracer` exists, and `forEachRTRenderer` iterates nothing when no profile is alive, so without the replay the new profile's descriptors are never written at all.
-- The light buffer's header is rewritten on every upload, so the env-map index and intensity scale must be re-stamped even when the HDR is not reloaded — otherwise the environment silently disappears on the next scene change.
-- Adding a descriptor binding numbered above 12 to the RT layout invalidates the variable-count flag on binding 12. Only the validation layer will tell you, and only if `OHAO_VALIDATION` is set in the environment.
+- The RT light buffer header (count, environment index, intensity scale) is rebuilt from the light table's members on every upload. Set the index and scale through `RenderScene::setEnvMapTextureIndex` and `setEnvIntensity`; writing the buffer directly is overwritten on the next upload.
+- The variable-count flag on binding 12 of the path tracer's layout already violates the highest-binding rule, because bindings run to 37. Any fix moves the texture table to the highest-numbered binding and updates the `binding = 12` declarations in the shaders with it. Only the validation layer reports it, and only if `OHAO_VALIDATION` is set in the environment.

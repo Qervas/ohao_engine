@@ -43,8 +43,9 @@ every body's position as the origin.
 
 {{cite ohao/physics/backend/physics_backend.hpp "BodyHandle createBody(const BodyCreationInfo&) override { return m_nextHandle++; }"}}
 
-A caller that writes backend transforms back onto its actors therefore does not
-get a frozen scene — it gets every rigid body snapped to the origin. The process
+A caller that writes backend transforms back onto the things that own the bodies
+therefore does not get a frozen scene — it gets every rigid body snapped to the
+origin. The process
 survives; the scene does not.
 
 ## What is allowed to cross the boundary
@@ -234,15 +235,19 @@ plane at the body origin, and the case never reads `ShapeInfo::planeNormal` or
 
 {{cite ohao/physics/backend/jolt/jolt_backend.cpp "JPH::BoxShapeSettings settings(JPH::Vec3(100.0f, 0.01f, 100.0f));"}}
 
-Those two fields are not dead. `PhysicsComponent::setCollisionShape` fills them
-from a user-authored `PlaneShape` and hands the result to `setShape`, which routes
-straight back into `createJoltShape`. So an angled or offset plane collider
-arrives at the backend intact and leaves it as a slab in the body's own XZ plane,
-centred on the body origin — orientation and offset discarded without a word. The
-finite footprint, anything leaving it falling past the "ground", is the smaller
-half of that loss.
+Those two fields are not dead, but they carry nothing. The only code that fills
+them is the world's body-creation translator, and it writes a constant: the plane
+case sets the normal to +Y and never reads the `PlaneShape`'s own normal or
+distance, and the distance keeps its default of zero.
 
-{{cite ohao/physics/components/physics_component.cpp "info.planeNormal = plane->getNormal();"}}
+{{cite ohao/physics/world/physics_world.cpp "info.shape.planeNormal = glm::vec3(0, 1, 0);"}}
+
+So an angled or offset plane collider is flattened before it reaches the backend
+and leaves it as a slab in the body's own XZ plane, centred on the body origin —
+orientation and offset discarded without a word. The finite footprint, anything
+leaving it falling past the "ground", is the smaller half of that loss. The
+backend's `setShape` entry point routes back into `createJoltShape` with the same
+result, but nothing in the tree calls it.
 
 `HEIGHTFIELD` is lossy the other way: it takes its sample count from the X
 dimension alone, reading `heightfieldSizeZ` only for a `> 1` check.

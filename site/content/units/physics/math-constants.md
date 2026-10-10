@@ -116,16 +116,15 @@ into the body creation settings and keep one source of truth. It was not taken.
 The price is visible above: the engine carries two disagreeing inertia
 implementations, and nothing the simulation does can tell them apart.
 
-`inertia::*` is not idle, though. Every `PhysicsComponent::setMass` — scene
-import and `ComponentFactory` both call it on load — reaches
-`RigidBody::calculateInertiaFromShape`, which builds a shape tensor and inverts
-it through `inertia::calculateInverse` for the mirror `RigidBody`. Nothing then
-reads the result. `getAngularMomentum` has no callers; `getKineticEnergy`'s only
+`inertia::*` is not idle, though. Every `RigidBody::setMass` and every
+`RigidBody::setCollisionShape` reaches `RigidBody::calculateInertiaFromShape`,
+which builds a shape tensor and inverts it through `inertia::calculateInverse`
+for the mirror `RigidBody`. Nothing then reads the result. `getAngularMomentum` has no callers; `getKineticEnergy`'s only
 caller is `RigidBody::updateSleepState`, which has none of its own; and
 `getWorldInverseInertiaTensor` is reached only from `RigidBody::integrate`, which
-has no callers, and `RigidBody::applyImpulse`, whose only route in is
-`PhysicsComponent::applyImpulse` — an unused public entry point. So the tensor is
-computed for every body on every load and consumed by nobody.
+has no callers, and `RigidBody::applyImpulse`, whose only caller in the tree is
+the Python test binding. So the tensor is computed whenever a body's mass or shape
+is set and consumed by nobody.
 :::
 
 ## The helper that lost to its own inlined copy

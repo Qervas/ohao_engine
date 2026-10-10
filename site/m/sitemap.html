@@ -37,11 +37,11 @@
 </ul>
 <h2 class="gloss-group">02 · Scene</h2><ul class="prose">
 <li><a href="scene.html"><strong>Hub</strong> — scene.html</a></li>
-<li><a href="scene/actors.html">Actors &amp; hierarchy</a> — Actor as SceneObject with parent/children and lifecycle.</li>
-<li><a href="scene/components.html">Components</a> — Mesh, Material, Light, Transform, factory packs.</li>
-<li><a href="scene/loaders.html">Asset loaders</a> — GLTF (tinygltf), FBX (Assimp), OBJ custom, primitives.</li>
-<li><a href="scene/scene-api.html">Scene API</a> — createActor, lookup, tags, physics world ownership, serialize hooks.</li>
-<li><a href="scene/transform.html">Transform math</a> — TRS composition and world matrix used by upload/TLAS.</li>
+<li><a href="scene/world.html">ECS world &amp; hierarchy</a> — EnTT registry, ordered systems, Parent/Children with cycle rejection, subtree destroy.</li>
+<li><a href="scene/transform-system.html">Transform propagation</a> — Parent-first world matrices, prevWorld motion history, the patch rule and verifyTransforms.</li>
+<li><a href="scene/render-extract.html">Render extract</a> — Registry to RenderScene: slots in creation order, dirty uploads, lights, stale mesh handles.</li>
+<li><a href="scene/render-scene.html">RenderScene</a> — Mesh arenas with one BLAS per mesh, material/instance/light tables, per-slot staging, retire queue, TLAS build vs refit.</li>
+<li><a href="scene/loaders.html">Asset loaders</a> — Assimp (GLB/GLTF), ufbx + Assimp (FBX), native OBJ, tinygltf direct route, procedural primitives.</li>
 </ul>
 <h2 class="gloss-group">03 · GPU / Vulkan</h2><ul class="prose">
 <li><a href="gpu.html"><strong>Hub</strong> — gpu.html</a></li>
@@ -81,7 +81,7 @@
 <li><a href="path-tracer/as.html">Acceleration structures</a> — BLAS/TLAS API, rebuild vs update.</li>
 <li><a href="path-tracer/raygen.html">Raygen integrator</a> — Stages A/B/C, NEE, dual-lobe, AOV writes.</li>
 <li><a href="path-tracer/hit-miss.html">Hit &amp; miss shaders</a> — closesthit materials, anyhit alpha, miss env.</li>
-<li><a href="path-tracer/bindings.html">Descriptor map 0–35</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
+<li><a href="path-tracer/bindings.html">Descriptor map 0–37</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
 <li><a href="path-tracer/restir.html">ReSTIR GI reservoirs</a> — Ping-pong reservoir planes on bindings 29–34.</li>
 </ul>
 <h2 class="gloss-group">07 · Sampling</h2><ul class="prose">

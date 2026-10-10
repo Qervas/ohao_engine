@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 · Scene · RenderScene — OHAO Monograph</title>
+  <meta name="description" content="Mesh arenas with one BLAS per mesh, material/instance/light tables, per-slot staging, retire queue, TLAS build vs refit." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="scene/render-scene" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../scene.html">← Module hub</a> · RenderScene</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">scene</p>
+          <h1>RenderScene</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Mesh arenas with one BLAS per mesh, material/instance/light tables, per-slot staging, retire queue, TLAS build vs refit.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#a-persistent-render-world">A persistent render world</a></li><li><a href="#mesh-arenas-one-blas-per-mesh">Mesh arenas, one BLAS per mesh</a></li><li><a href="#material-table">Material table</a></li><li><a href="#instance-table-slots-free-list-material-references">Instance table: slots, free list, material references</a></li><li><a href="#lights-one-list-two-layouts">Lights: one list, two layouts</a></li><li><a href="#staging-per-frame-slot-and-the-retire-queue">Staging per frame slot, and the retire queue</a></li><li><a href="#tlas-build-versus-refit">TLAS: build versus refit</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="a-persistent-render-world">A persistent render world</h2></div>
+<div class="prose reveal">
+<p>`render::RenderScene` is the GPU-side copy of the scene that every pass reads: deferred G-buffer and shadows, the path tracer, RT shadows and RT GI. It is owned by `VulkanRenderer`, has no EnTT dependency, and is persistent — nothing in it is rebuilt per frame. It holds four tables behind one facade:</p>
+<p>| Table | Holds | Lifetime of an entry | |---|---|---| | `MeshRegistry` | vertex/index arenas, triangle material slots, mesh table, one BLAS per mesh | forever (append-only) | | `MaterialTable` | 48-byte material packs | forever (append-only) | | `InstanceTable` | one `InstanceGpu` + material reference list per slot | create → destroy, slot reused | | `LightTable` | the light list in raster and RT layouts | replaced wholesale per `setLights` |</p>
+<div class="citation-chip"><code class="citation-code">// The persistent GPU render world: mesh arenas (one BLAS per mesh), a material</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.hpp#L14" target="_blank" rel="noopener">ohao/render/scene/render_scene.hpp:14</a></div>
+<p>Host-side edits only mark entries dirty. Device-local tables are written exclusively by copies that `recordUpdates` records at the start of a frame&#x27;s command buffer, from a staging buffer that belongs to that frame slot.</p>
+</div>
+<div class="section-rule"><h2 id="mesh-arenas-one-blas-per-mesh">Mesh arenas, one BLAS per mesh</h2></div>
+<div class="prose reveal">
+<p>Every registered mesh is appended to four shared device-local arenas: vertices (the 100-byte `Vertex`), mesh-local `uint32` indices, one material slot per triangle, and a 16-byte `MeshGpu` entry. Draws address a mesh through `vertexOffset`/`firstIndex`; ray-tracing hit shaders through the mesh table. The arenas start large — one million vertices, four million indices — so the vertex arena alone reserves 100 MiB of device memory before the first mesh arrives:</p>
+<div class="citation-chip"><code class="citation-code">constexpr VkDeviceSize kInitialVertices      = 1u &lt;&lt; 20;   // 1 Mi</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L11" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:11</a></div>
+<p>Registration is load-time work and is synchronous. It validates the mesh (every index below the vertex count, every submesh range inside the index buffer, a triangle-slot list of the right length — padded with slot 0 and logged if not), uploads it through its own staging buffer on a one-shot command buffer, and waits for the queue. An arena that must grow is replaced by one sized to twice the *required* element count, $c&#x27; = 2(u + n)$ for $u$ used and $n$ incoming; the old contents are copied on the same command buffer and the old buffer goes to the retire queue, because earlier frames may still be reading it.</p>
+<p>The BLAS is built after the copy, against the arena at the mesh&#x27;s offsets, and is shared by every instance of the mesh. It survives later arena growth untouched:</p>
+<div class="citation-chip"><code class="citation-code">// A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L248" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:248</a></div>
+<p>Meshes are never unregistered. Every handle is issued at generation 0, and `info()` rejects any other generation, so a `MeshHandle` is valid for the life of the `RenderScene` or never.</p>
+</div>
+<div class="section-rule"><h2 id="material-table">Material table</h2></div>
+<div class="prose reveal">
+<p>A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture index; roughness, metallic, normal and emissive texture indices; rough-metal texture index, emissive strength and the legacy RT tint texture index. Texture indices are bit-cast into float lanes and point into the one bindless texture table. Index 0 is registered at initialisation as the default material, and is what every unknown or missing material resolves to — including every material registered after the table is full:</p>
+<div class="citation-chip"><code class="citation-code">return MaterialHandle{0, 0};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/material_table.cpp#L48" target="_blank" rel="noopener">ohao/render/scene/material_table.cpp:48</a></div>
+<p>The table is append-only and never grows. Uploading a model registers one material per `materialColors` row whether or not an identical pack already exists, so 4096 is a budget on materials *loaded*, not materials distinct.</p>
+</div>
+<div class="section-rule"><h2 id="instance-table-slots-free-list-material-references">Instance table: slots, free list, material references</h2></div>
+<div class="prose reveal">
+<p>An instance is one 160-byte `InstanceGpu` — `world`, `prevWorld`, mesh index, material-reference offset and count, a visibility flag, and the legacy RT GI albedo word — plus a fixed block of 64 material indices at `slot * 64` in a second buffer. Submesh $k$ of instance $s$ shades with</p>
+<div class="math-block">$$
+m(s,k) = \begin{cases} \text{refs}[\,64s + k\,] & k < \text{count}_s \\ 0 & \text{otherwise} \end{cases}
+$$</div>
+<p>which is how a `MeshRenderer` with fewer materials than submeshes falls back to the default material without ever reading past its block. The same rule is the shader macro every consumer uses:</p>
+<div class="citation-chip"><code class="citation-code">((slot) &lt; (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/scene_data.glsl#L18" target="_blank" rel="noopener">shaders/includes/scene/scene_data.glsl:18</a></div>
+<p>Material handles are bounds-checked when written: an index at or past the table&#x27;s count becomes 0. Lists longer than 64 are truncated with a one-time log.</p>
+<p>Slots come from a free list that always returns the lowest released slot, and the table grows by doubling from 1024. Every write builds the new `InstanceGpu` and compares it with the current bytes; only a difference marks the slot dirty, and the material block is compared and marked separately. Uploads coalesce dirty slots into contiguous runs, one copy per run. Destroying an instance clears its flags, so the GPU copy reads as invisible until the slot is reused.</p>
+<p>`draws()` — the raster draw list, one entry per visible instance × submesh — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates.</p>
+</div>
+<div class="section-rule"><h2 id="lights-one-list-two-layouts">Lights: one list, two layouts</h2></div>
+<div class="prose reveal">
+<p>`setLights` stable-sorts the list by `order` and resolves it once into both consumers&#x27; formats. The raster array keeps at most eight `LightData` entries in a host copy for the light uniform buffer; the RT buffer holds a 16-byte header — count, environment-map texture index, environment intensity — and up to 64 `GPULight`s. In both, emissive proxies are placed after all regular lights, so a scene with many emissive models cannot crowd its authored lights out of the eight raster slots. The RT bytes are compared with the previous upload and only re-uploaded when they differ.</p>
+</div>
+<div class="section-rule"><h2 id="staging-per-frame-slot-and-the-retire-queue">Staging per frame slot, and the retire queue</h2></div>
+<div class="prose reveal">
+<p>`recordUpdates` sums every table&#x27;s pending bytes, makes sure the current frame slot&#x27;s host-visible staging buffer is at least that large, and records the copies between two global barriers: one ordering them after earlier frames&#x27; shader reads and copies, one ordering every shader stage — and the acceleration-structure build — after them.</p>
+<div class="citation-chip"><code class="citation-code">// One host-visible staging buffer per frame slot: the slot&#x27;s fence guarantees</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L32" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:32</a></div>
+<p>One staging buffer per frame slot, not one shared, because the renderer waits on the slot&#x27;s fence before calling `recordUpdates`: the buffer it is about to overwrite is the one the GPU finished with `MAX_FRAMES_IN_FLIGHT` frames ago. A buffer replaced mid-flight — a grown arena, a grown instance table, TLAS storage or scratch — is not destroyed but stamped with a retire frame:</p>
+<div class="citation-chip"><code class="citation-code">retireQueue.push_back(Retired{frameCounter + MAX_FRAMES_IN_FLIGHT, b, {}});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L60" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:60</a></div>
+<p>`onFrameRetired` advances the counter once per frame, after the slot&#x27;s fence wait, and destroys every entry whose frame has come. With three frames in flight, a replaced buffer outlives every command buffer that could have referenced it.</p>
+</div>
+<div class="section-rule"><h2 id="tlas-build-versus-refit">TLAS: build versus refit</h2></div>
+<div class="prose reveal">
+<p>The TLAS spans every slot below the instance table&#x27;s high-water mark. Each slot&#x27;s `VkAccelerationStructureInstanceKHR` is kept in a host mirror and in a device buffer; the instance custom index is the slot, and a released or invisible slot gets mask 0 so rays skip it. Converting the column-major world matrix to Vulkan&#x27;s row-major 3×4 is a transpose and a 48-byte copy.</p>
+<div class="citation-chip"><code class="citation-code">vi.instanceCustomIndex = slot &amp; 0xFFFFFFu;   // 24 bits</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L92" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:92</a></div>
+<p>Every instance change restages that slot and classifies it. A create, a destroy, a changed mask or a changed BLAS reference is *structural*; a changed transform alone is not. After the frame&#x27;s copies, `recordTlas` builds if anything structural happened or no TLAS exists yet, refits if only transforms changed, and records nothing for a still scene:</p>
+<div class="citation-chip"><code class="citation-code">const bool build = tlasStructural || rtAccel-&gt;getTLAS() == VK_NULL_HANDLE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L154" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:154</a></div>
+<p>Both are recorded into the frame&#x27;s command buffer; nothing is submitted separately. A refit keeps the tree topology of the last build and only re-fits its bounds, so it is cheap but its quality decays as instances travel away from where the build placed them. Nothing here schedules a periodic rebuild: an instance that moves every frame and nothing else — `ohao_game`&#x27;s spinning cube — is refit indefinitely until some structural change forces a build. A failed allocation leaves the instance data uploaded and sets the structural flag, so the next frame&#x27;s build covers what this frame missed. `stats().lastTlasOp` records which of build, refit or nothing the last frame took, and the engine tests assert each case.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The RenderScene&#x27;s correctness rests on one discipline: no device-local table is ever written from the host. Every write is a recorded copy from staging owned by the current frame slot, and every buffer a previous frame could still read is retired, not destroyed. That is what lets instances move every frame while up to three frames are in flight, without per-frame descriptor rewrites or a blocking upload.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Call `recordUpdates` at the start of the frame&#x27;s command buffer, after the slot&#x27;s fence wait and after the ECS update; bind the scene&#x27;s buffers *after* it, because table growth and TLAS reallocation replace buffer handles.</li>
+<li>`registerMesh` is blocking and idles the queue. It belongs at load time; calling it per frame stalls the GPU.</li>
+<li>The custom index keeps 24 bits of the slot; slots at or above $2^{24}$ alias. Nothing enforces that bound.</li>
+<li>`materialIndexFor(slot, k)` mirrors the shader&#x27;s fallback on the host, so CPU-side code resolves a submesh&#x27;s material exactly as the GPU will.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/scene/render_scene.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/mesh_registry.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/material_table.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/scene/scene_data.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/instance_table.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/light_table.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/render_scene_types.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="render-extract.html"><div class="label">← Prev</div><div class="title">Render extract</div></a><a class="next" href="loaders.html"><div class="label">Next →</div><div class="title">Asset loaders</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

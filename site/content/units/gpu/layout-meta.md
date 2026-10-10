@@ -7,23 +7,23 @@ standard: v2
 
 ## A boundary with no type checker
 
-Between `vkCmdPushConstants` and a GLSL `layout(push_constant)` block there is no
-type. The driver copies bytes; the shader casts them to whatever its own
-declaration says they are. Nothing in the Vulkan API, the SPIR-V validator or the
-C++ compiler compares the two, and a mismatch yields neither a validation error nor
-a crash — it yields a plausible wrong image. `layout_meta.hpp` converts the one
-part of that risk that is mechanically checkable, the byte size of the C++ side,
-into a compile error. Six canonical constants live there. Two are written as the
-arithmetic the shader ABI implies:
+Between a GPU buffer write and a GLSL block there is no type. The driver copies
+bytes; the shader casts them to whatever its own declaration says they are. Nothing in
+the Vulkan API, the SPIR-V validator or the C++ compiler compares the two, and a
+mismatch yields neither a validation error nor a crash — it yields a plausible wrong
+image. `layout_meta.hpp` converts the one part of that risk that is mechanically
+checkable, the byte size of the C++ side, into a compile error. Five canonical
+constants live there. Four are bare literals — `kGPULightBytes` is `80` with
+`// 5 * vec4` beside it, `kPTPushConstantsBytes` a bare `256` — so the number and its
+justification can drift apart unwatched. The fifth is the arithmetic the material
+pack implies:
 
-{{cite ohao/gpu/layout_meta.hpp "inline constexpr std::size_t kObjectPushConstantsBytes ="}}
+{{cite ohao/gpu/layout_meta.hpp "kMaterialVec4s * sizeof(glm::vec4);"}}
 
-The other four are literals — `kGPULightBytes` is `80` with `// 5 * vec4` beside
-it, `kPTPushConstantsBytes` a bare `256` — so for those the number and its
-justification can drift apart unwatched. Nor is the header purely declarative:
-`MaterialGpuPack` adds two constexpr accessors for the three-`vec4` material
-stride and pins them with static asserts against hand-computed answers, so an edit
-to `kMaterialVec4s` fails here rather than in a shader.
+Nor is the header purely declarative: `MaterialGpuPack` adds two constexpr accessors
+for the three-`vec4` material stride and pins them with static asserts against
+hand-computed answers, so an edit to `kMaterialVec4s` fails here rather than in a
+shader.
 
 ## What the two assertions actually prove
 
@@ -44,26 +44,35 @@ does not formally exist.
 Neither assertion says anything about the other side of the boundary — both are
 statements about C++ types, evaluated by the C++ compiler, and no build step
 reflects the SPIR-V. The macro catches *someone added a float to the struct* and
-is blind to *someone reordered the GLSL block*. Five structs carry it:
-`ObjectPushConstants` at 240 bytes, `LightData` at 128, `GPULight` at 80,
-`PTPushConstants` at 256, `MeshBufferInfo` at 16. The last has no GLSL block to
-reorder: every use is a CPU-side draw range — `vkCmdDrawIndexed` arguments, BLAS
-geometry offsets — and nothing uploads it. It carries the macro for the
-trivial-copyability half alone.
+is blind to *someone reordered the GLSL block*. Three structs carry it:
+`LightData` at 128 bytes, `GPULight` at 80 and `PTPushConstants` at 256. The first
+rides in the deferred light UBO, the second in the path tracer's light SSBO; only
+the third crosses a push-constant boundary.
 
-## The two blocks above the guaranteed floor
+The structs that make up the render world's tables are guarded by plain
+`static_assert(sizeof(...) == N)` instead, which proves the size and nothing about
+`GpuPod`:
+
+{{cite ohao/render/scene/render_scene_types.hpp "static_assert(sizeof(InstanceGpu) == 160);"}}
+
+`InstanceGpu` (160), `MeshGpu` (16), `Vertex` (100, which the RT shaders read as 25
+floats) and the G-buffer's `CameraUBO` (128) are pinned this way. The practical
+difference is small — each is a plain aggregate — but it means the macro's
+trivially-copyable half is applied to three of the structs the GPU reads and not to
+the rest.
+
+## The one block above the guaranteed floor
 
 Vulkan guarantees only 128 bytes of push-constant space; anything above that is a
-device capability, not a promise. Two of the five contracts sit above the floor by
-design — 240 bytes for the raster per-draw block, 256 for the path tracer's — and
-no code queries `maxPushConstantsSize`; across `ohao/`, `shaders/` and `examples/`
-the identifier occurs once, inside a comment. On a minimum-spec device the failure
-surfaces at pipeline-layout creation, not at compile time.
+device capability, not a promise. Exactly one contract sits above the floor — the
+path tracer's 256 — and no code queries `maxPushConstantsSize`; across `ohao/`,
+`shaders/` and `examples/` the identifier occurs once, inside a comment. On a
+minimum-spec device the failure surfaces at pipeline-layout creation, not at compile
+time. The raster blocks are far below the line: the G-buffer pushes 16 bytes and the
+shadow pass 64.
 
-Only one of the two is actually at a ceiling. The raster block still has 16
-bytes of headroom under the 256 the code assumes. The path-tracer block has none:
-when a per-frame sample count had to reach the raygen shaders there was no room
-for another field:
+The path-tracer block is also the one with no headroom. When a per-frame sample
+count had to reach the raygen shaders there was no room for another field:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "256-byte device maxPushConstantsSize, so we cannot append a field"}}
 
@@ -75,103 +84,105 @@ The base and offline raygens mask the high bits off; the realtime raygen loops o
 them. A size contract that is exactly satisfied has stopped being a check and
 become a design constraint.
 
-## The asserted struct nothing pushes
+## The per-draw block that shrank to a slot
 
-The raster per-draw block is where the macro and the code have parted ways.
-`ObjectPushConstants` is the struct `layout_meta.hpp` sizes and `renderer.hpp`
-asserts at 240 bytes, with its lane meanings written beside each field:
+The raster per-draw contract is a single `uint`, padded to a 16-byte multiple.
+Per-object state lives in tables the shaders index, and the push constant only names
+which submesh material slot the draw uses:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "OHAO_ASSERT_GPU_LAYOUT(ObjectPushConstants, layout::kObjectPushConstantsBytes);"}}
+{{cite ohao/render/deferred/gbuffer_pass.hpp "static_assert(sizeof(DrawPushConstant) == 16);"}}
 
-Nothing in `ohao/` pushes it, declares a variable of it, or takes its `sizeof`
-outside that assertion. The only raster pipeline that takes a per-draw push block is
-the G-buffer pass, and it pushes a struct of its own. The assertion therefore pins
-the size of a type with no consumer, while the block that does cross the boundary
-every draw goes unchecked. Both still agree today — the next section shows they are
-byte clones — but only by coincidence of two hand-written declarations.
+`gbuffer.frag` declares only the four bytes it reads, so the block it declares is
+shorter than the range the pass pushes:
 
-## The live block the macro never touched
+{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint materialSlot; } pc;"}}
 
-The deferred pass is where packer and shader agree, and the macro has nothing to
-do with it. `GBufferPass` never touches `ObjectPushConstants`; it declares its own
-`GBufferUBO`, a field-for-field byte clone, unasserted and unlinked to
-`layout_meta.hpp`:
+That is legal — a shader may declare a prefix of the pushed range — but it means the
+size assertion pins the C++ struct, not the GLSL block, and the three padding words
+exist only to keep the range at a 16-byte multiple. The material slot is not a
+material: the shader resolves it through the instance's reference list, so the
+contract that matters is the table layout below, not the push block.
 
-{{cite ohao/render/deferred/gbuffer_pass.hpp "};  // 240 bytes — fits in 256-byte push constant limit"}}
+The instance table is the boundary that carries the weight. `InstanceGpu` is declared
+once in C++ and once in `scene_data.glsl`, whose header names its twin:
 
-The comment immediately above that struct says "Total: 224 bytes (3 mat4 + 2
-vec4)". It is three `mat4`s and three `vec4`s — 240 — and the shader carries the
-same 224:
+{{cite shaders/includes/scene/scene_data.glsl "// Matches ohao/render/scene/render_scene_types.hpp (std430)."}}
 
-{{cite shaders/core/gbuffer.frag "// Total: 224 bytes (3 mat4 + 2 vec4)"}}
+Six shaders include that file — both G-buffer stages, the shadow vertex shader, and
+the path tracer's closest-hit, any-hit and GI closest-hit — so a layout edit has to
+be made in exactly two places, and only the C++ half is size-checked. The
+declaration is shared across shaders but not across the language boundary.
 
-A stale byte count shared between a C++ header and a shader header is precisely
-what the size assert exists to make impossible, and it is sitting on the one
-per-draw block in the tree that has no size assert.
+## One packer, two readers
 
-What the pass does get right is the packing. C++ packs two floats and two bit-cast
-texture indices —
+The material rows are where the deferred and path-traced pipelines meet. The G-buffer
+pass and the path tracer read the same 48-byte rows out of one storage buffer, and
+one function writes them:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));"}}
+{{cite ohao/render/scene/material_table.cpp "d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),"}}
 
-— and `gbuffer.frag` pulls each lane out of the position the packer put it in:
+The size of a row is asserted against `MaterialGpuPack::kBytes`:
 
-{{cite shaders/core/gbuffer.frag "uint albedoTexIdx = floatBitsToUint(pc.materialParams.w);"}}
+{{cite ohao/render/scene/material_table.hpp "static_assert(sizeof(Pack) == layout::MaterialGpuPack::kBytes);"}}
 
-Note the order: metallic in `.x`, roughness in `.y`, the roughness-metallic index
-in `.z`, the albedo index in `.w`. The path tracer's material row 1 holds
-`(roughness, metallic, normalTexIdx, emissiveTexIdx)`; its albedo index lives in
-row 0's `.a` and its roughness-metallic index in row 2's `.x`:
+but which float is which lane is not, and each reader restates it in a comment beside
+its own decode — in `gbuffer.frag`:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "matColors[i * 3 + 1].z = packIdx"}}
+{{cite shaders/core/gbuffer.frag "vec4 row1 = matRows[m * 3u + 1u];   // roughness, metallic, normalTex, emissiveTex"}}
 
-Both are "two floats then two packed indices", both 16 bytes, and all four lanes
-disagree. Hand-porting one to the other exchanges roughness with metallic *and*
-hands the normal and emissive maps to the code expecting the roughness-metallic
-and albedo maps — at full frame rate, every assertion green.
+and in the closest-hit shader:
+
+{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)"}}
+
+All three agree today. Because there is a single packer the two pipelines cannot
+disagree about lane order, but the agreement is three hand-written copies of one
+diagram, with the size assert as the only mechanical witness. A reordered row needs
+three coordinated edits and fails only as wrong pixels.
 
 ## Two sentinel decoders in one shader
 
-Inside `gbuffer.frag` that encoding is decoded two different ways. Albedo and
+Inside `gbuffer.frag` the "no texture" value is decoded two different ways. Albedo and
 normal compare against the sentinel; roughness-metallic and emissive compare
 against a magnitude instead:
 
 {{cite shaders/core/gbuffer.frag "    if (roughMetalTexIdx < 4096u) {"}}
 
-4096 is not arbitrary — it is the bindless array's default capacity:
+4096 is not arbitrary — it is the bindless array's capacity as the renderer
+constructs the manager:
 
-{{cite ohao/gpu/vulkan/bindless_texture_manager.hpp "                    GpuAllocator* allocator, uint32_t maxTextures = 4096,"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,"}}
 
 The two tests agree on every value the packer produces, so this is not a live bug;
-it is a hazard in two directions. `< 4096u` rejects the garbage a drifted push
-block supplies and `!= 0xFFFFFFFFu` does not — so if `GBufferUBO` and the shader
-block ever fall out of step, the albedo and normal lookups pass the sentinel test
-for essentially any float that lands in their lanes and index `textures[]` with its
-bit pattern, while the other two reject it. And the bound is a literal, so raising
-`maxTextures` past 4096 hides the high descriptors from two of the four lookups
-and leaves them visible to the other two.
+it is a hazard in two directions. `< 4096u` rejects a garbage lane and
+`!= 0xFFFFFFFFu` does not — so if a lane ever carries an arbitrary bit pattern, the
+albedo and normal lookups pass the sentinel test and index `textures[]` with it,
+while the other two reject it. And the bound is a literal, so raising `maxTextures`
+past 4096 hides the high descriptors from two of the four lookups and leaves them
+visible to the other two. The path tracer's closest-hit does not share the hazard:
+it clamps every index against a specialisation constant that tracks the capacity
+actually bound.
 
-## What `Material` actually delivers
+{{cite shaders/rt/pt_closesthit.rchit "uint boundTexture(uint idx) { return idx < OHAO_BINDLESS_COUNT ? idx : 0xFFFFFFFFu; }"}}
 
-The CPU authoring struct in `material.hpp` carries thirty-one members — index of
-refraction, transmission, clear coat, subsurface colour and radius, normal
-intensity, height scale, nine texture paths and the seven `use*` flags gating
-them, and a thirteen-value preset enum whose `Custom` case is an explicit no-op,
-leaving twelve presets. Eight of the thirty-one reach a GPU buffer: base colour,
-roughness and metallic as numbers; four of the nine texture paths — albedo,
-normal, roughness, emissive — resolved through `BindlessTextureManager` and
-bit-cast into the G-buffer push block, with the same four indices packed into the
-path tracer's material rows; and `emissive`, collapsed to a
-boolean, and on the deferred path only inside the emissive-texture branch:
+## What reaches the GPU from a material
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;"}}
+The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
+roughness, metallic, four bindless texture indices (albedo, normal, roughness-metallic,
+emissive), an emissive strength and the path tracer's tint-texture index — nine
+members packed into twelve floats, the last of them unused.
 
-No pipeline reads `Material`'s `ior`, `transmission`, `clearCoat`, `subsurface`,
-`normalIntensity` or `heightScale`; the only code that touches them is
-`material.cpp`'s own presets, so `applyPreset()` on `Type::Glass` sets a
-transmission of 0.9 that nothing samples. Nothing checks that gap, because there
-is nothing to check against: `Material` is not a GPU struct and carries no layout
-assertion.
+{{cite ohao/render/scene/render_scene_types.hpp "uint32_t legacyRtTintTex{kNoTexture};"}}
+
+The authoring struct in `material.hpp` is a different thing. `Material` carries
+thirty-one members — index of refraction, transmission, clear coat, subsurface colour
+and radius, normal intensity, height scale, nine texture paths and the seven `use*`
+flags gating them, and a thirteen-value preset enum whose `Custom` case is an
+explicit no-op, leaving twelve presets. None of them reach a GPU buffer: nothing
+outside `material.cpp` constructs a `Material`, and the render world takes a
+`MaterialDesc` instead. The preset constructors still run if called — `Type::Glass`
+sets a transmission of 0.9 — but no pipeline has a field to receive it. Nothing
+checks that gap, because there is nothing to check against: `Material` is not a GPU
+struct and carries no layout assertion.
 
 ## A material system that was finished and never connected
 
@@ -182,7 +193,8 @@ feature mask, a `MaterialInstance` with clamped setters and dirty tracking, and 
 materials, builds its own descriptor set layout and flushes only the dirty rows.
 Outside `tests/renderer/renderer_pipeline_tests.cpp` nothing in `ohao/` or
 `examples/` constructs a `MaterialManager`, and no block in `shaders/` declares a
-matching layout. Its guard reflects that — not the engine macro but a weaker pair,
+matching layout. The render world's `MaterialTable` is a separate, smaller design
+that is wired in. Its guard reflects that — not the engine macro but a weaker pair,
 `GpuPod` plus a modulo:
 
 {{cite ohao/gpu/vulkan/material_instance.hpp "static_assert(sizeof(PBRMaterialParams) % 16 == 0"}}
@@ -195,17 +207,16 @@ end, wrong strength the day one appears.
 Sizes are pinned from a constants header rather than derived from the shaders. The
 alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
-not just totals. The toolchain already supports the include half:
+not just totals. The toolchain already supports the include half, and the render
+world uses it: `scene_data.glsl` is included by six shaders. But
 `shaders/includes/common/types.glsl` declares the 128-byte `Light` struct once,
 and no shader includes it — `deferred_lighting.frag`, the one shader that reads
 `LightData`, includes only `encoding.glsl` and `brdf_ggx.glsl` and re-declares the
-same struct by hand, so the one shared-declaration mechanism in the tree is routed
-around by the pipeline that ships. Its cost is that
+same struct by hand. Shared declaration is therefore in use where the scene tables
+are new and routed around where the light block is old. Its cost is that
 every C++ struct becomes downstream of shader preprocessing and layout questions
 become runtime failures. OHAO took the cheap half — one place to edit a size,
-review for everything else. An asserted `ObjectPushConstants` that nothing pushes,
-beside an unasserted `GBufferUBO` that every draw pushes, is the bill for the half
-it skipped.
+review for everything else.
 :::
 
 :::key
@@ -218,9 +229,10 @@ changed meaning, a shader block written against an older struct — passes it.
 ## Contracts
 
 - `PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended. `params.w` carries `samplesPerFrame` in its high 16 bits and `maxBounces` in its low 16; the realtime raygen unpacks the high half, base and offline mask it off.
-- Nothing queries `maxPushConstantsSize`, and two of the five asserted structs exceed Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
-- `ObjectPushConstants` is asserted at 240 bytes and used by nothing else. A size or lane change made there reaches no shader; the per-draw contract that matters is `GBufferUBO` against `gbuffer.vert`/`gbuffer.frag`.
-- `GBufferPass::GBufferUBO` is a byte clone of `ObjectPushConstants` with no `OHAO_ASSERT_GPU_LAYOUT` and no link to `layout_meta.hpp`. Its own header comment says both 224 and 240 bytes, and `gbuffer.frag` copied the 224. Editing either struct leaves the other silent.
-- The deferred per-draw block orders lanes `(metallic, roughness, roughMetalTexIdx, albedoTexIdx)`; the path tracer's material row 1 orders them `(roughness, metallic, normalTexIdx, emissiveTexIdx)`. All four lanes differ, and neither ordering is asserted against its shader.
-- `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track `BindlessTextureManager`'s `maxTextures` by hand.
+- Nothing queries `maxPushConstantsSize`, and the path tracer's block exceeds Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
+- Three structs carry `OHAO_ASSERT_GPU_LAYOUT` (`LightData`, `GPULight`, `PTPushConstants`); `InstanceGpu`, `MeshGpu`, `Vertex`, `CameraUBO` and `DrawPushConstant` are size-checked with a bare `static_assert`. A layout edit must update the C++ struct, its GLSL twin and the assert together.
+- `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; six shaders read the GLSL copy. Only the C++ side is size-checked.
+- `MaterialTable::pack` is the only writer of the three-`vec4` material row; `gbuffer.frag` and `pt_closesthit.rchit` each decode it by hand. The row size is asserted, the lane order is not.
+- `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand; the path tracer's equivalent is a specialisation constant.
+- `Material` in `material.hpp` has no GPU consumer; add a field to `MaterialDesc`, not to `Material`, to reach a shader.
 - `PBRMaterialParams` is guarded only by `sizeof % 16 == 0`. If a shader ever binds it, replace that with an exact-byte `OHAO_ASSERT_GPU_LAYOUT` first.

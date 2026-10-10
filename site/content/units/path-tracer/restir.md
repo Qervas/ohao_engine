@@ -40,7 +40,7 @@ raygen dispatch can read-modify-write without aliasing itself:
 They occupy a contiguous six-binding block in the path tracer's set 0: 29–31
 prev, 32–34 curr.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "for (uint32_t b = 29; b <= 34; ++b) {"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "for (uint32_t b = 29; b <= 34; ++b) add(b, IMAGE, RGEN);"}}
 
 The price is unconditional: six `R32G32B32A32_SFLOAT` images at render resolution
 — 96 bytes per pixel, roughly 190 MiB at 1920×1080.
@@ -179,26 +179,21 @@ any neighbour is folded in; the spatial result is shading-only:
 {{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(currGIReservoir0, pixel, vec4(merged.xs, merged.M));"}}
 {{cite shaders/rt/pt_raygen_realtime.rgen "GIReservoir spatialR = merged;"}}
 
-## The wiring HEAD no longer has
+## The host wiring that does not exist
 
-Everything above is live GLSL and the layout still reserves 29–34, but the host
-code that joined them is gone: the descriptor update in `PathTracer::render`
-builds a 29-entry write array and stops at binding 28, and no `dstBinding` above
-28 exists anywhere in the tree.
+Everything above is live GLSL and the layout still reserves 29–34, but no host
+code joins them: the descriptor update in `PathTracer::render`
+builds a 32-entry write array whose last image write is binding 28; the only
+`dstBinding` above 28 is the pair of `RenderScene` buffers at 36 and 37, and none
+in 29–35 exists anywhere in the tree.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[29] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32] = {};"}}
 
 `m_giReservoirViews` appears only at image creation and destruction, no barrier
 moves those images to `VK_IMAGE_LAYOUT_GENERAL`, and `m_giReservoirWriteIndex` is
 assigned `0` in three places and incremented in none — the ping-pong cannot
 alternate. The shader's four `PT_FLAG_RESTIRGI_*` bits, 5–8 of `pc.control.x`,
 are set by nothing.
-
-No commit deleted this. The merge `c894ebf` took `path_tracer_render.cpp` from a
-branch forked at `1910fd9`, two hours before ReSTIR landed in `cd87dea`: parent
-`a726db3` still holds `writes[40]` and a live `m_giReservoirWriteIndex = 1u -
-m_giReservoirWriteIndex`; the merge result holds neither, and `cornell_box` drops
-from nine `restir` matches to one, `restir_probe` with it.
 
 Bindings 29–34 carry no `PARTIALLY_BOUND` flag — that is on binding 12 alone — so
 this is not a legal "optional descriptor" configuration. A statically-used
@@ -210,7 +205,7 @@ it is not characterised here.
 The storage-image pool is sized to exactly the 25 storage-image bindings, six of
 them reservoir planes:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25},"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25 * kSets},"}}
 
 No slack: a 26th storage image added without editing that literal fails
 `vkAllocateDescriptorSets` with `VK_ERROR_OUT_OF_POOL_MEMORY` at startup, nowhere
@@ -218,17 +213,17 @@ near the cause.
 
 The second edge predates ReSTIR but the reservoir block widened it. Vulkan
 requires `VARIABLE_DESCRIPTOR_COUNT` on the set's highest-numbered binding; here
-it sits on the bindless texture array at 12, with 23 higher-numbered bindings
-above:
+it sits on the bindless texture array at 12, with 25 higher-numbered bindings
+above (13–37):
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |"}}
 
-The comment directly above that line still claims the flag is on "the LAST
-binding only".
+The allocation requests the full declared count for it, so the flag elides
+nothing.
 
 ## Contracts
 
 - $\hat p$ must be re-evaluated at the current primary hit before the held sample is shaded. Reusing the stored $\hat p$, or a stale `W`, distorts the GI while still looking smooth.
 - The spatial pass must not write back into the ping-pong planes; persisting it compounds sample correlation until the GI bakes.
 - Bindings 29–34 must be written every frame with prev/curr swapped and the images in `VK_IMAGE_LAYOUT_GENERAL` before the raygen runs. Neither happens in HEAD.
-- The `{STORAGE_IMAGE, 25}` entry is exact: bump it with `bindings[36]`, `flagsInfo.bindingCount` and `layoutInfo.bindingCount`. The `29..34` loop assumes array index equals binding number.
+- The `{STORAGE_IMAGE, 25 * kSets}` entry is exact: bump it whenever a storage-image `add(...)` is added to the layout. The `29..34` loop adds the six planes in binding order, so the plane index equals the binding number minus 29.

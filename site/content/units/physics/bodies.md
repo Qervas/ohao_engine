@@ -93,30 +93,28 @@ maps DYNAMIC and KINEMATIC bodies through the same switch. A wired mesh path wou
 serve static level geometry and would have to refuse everything else.
 
 Nothing exercises the path either way. The only `setMesh` call in the tree is a unit
-test checking the struct's own fields, and no actor reaches
-`createCollisionShapeFromModel`: its sole caller is
-`ComponentFactory::setupPhysicsShapeFromMesh`, which has no call sites of its own.
+test checking the struct's own fields:
 
-{{cite ohao/scene/component/component_factory.cpp "physics->createCollisionShapeFromModel(*model);"}}
+{{cite tests/engine/engine_tests.cpp "shape.setMesh(verts, inds);"}}
 
-The other three routes to a `TriangleMeshShape` — `ShapeFactory::createTriangleMesh`,
-`createQuad`, `createIcosphere` — are uncalled as well. The box fallback is a trap set
-for the first caller, not a defect anyone is currently hitting.
+No code builds a collision shape from a loaded model any more, and the routes to a
+`TriangleMeshShape` — `ShapeFactory::createTriangleMesh`, `createQuad`,
+`createIcosphere` — are uncalled. The box fallback is a trap set for the first
+caller, not a defect anyone is currently hitting.
 
-## Two converters, and they disagree
+## One converter, and it flattens the plane
 
-`PhysicsComponent` carries a *second* `CollisionShape → ShapeInfo` converter, used when
-a shape is swapped on a body that already exists in the backend. It handles the awkward
-cases differently: unsupported types, triangle meshes included, become a fixed unit cube.
+`buildCreationInfo` is the only `CollisionShape → ShapeInfo` converter in the tree.
+It handles the awkward cases by sizing a box: a triangle mesh, and any type it has no
+case for, becomes a box with half-extents `shape->getSize() * 0.5f` — a number the
+next section shows is *not* the mesh's bounds size.
 
-{{cite ohao/physics/components/physics_component.cpp "info.halfExtents = glm::vec3(0.5f);"}}
+{{cite ohao/physics/world/physics_world.cpp "// Default to box with the shape's size"}}
 
-So a mesh body gets a box with half-extents `shape->getSize() * 0.5f` at creation — a
-number the next section shows is *not* the mesh's bounds size — and a 1×1×1 box if the
-same shape is re-assigned later. The two also disagree on planes: `PhysicsComponent`
-forwards the authored normal and distance, `buildCreationInfo` hardcodes +Y and never
-touches `planeDistance`. The divergence is invisible because the Jolt shape factory
-reads neither field and always builds the same thing:
+Planes get the same treatment from the other side: the case hardcodes +Y and never
+reads the authored normal or distance, never touches `planeDistance`. The loss would
+be invisible even if it did, because the Jolt shape factory reads neither field and
+always builds the same thing:
 
 {{cite ohao/physics/backend/jolt/jolt_backend.cpp "JPH::BoxShapeSettings settings(JPH::Vec3(100.0f, 0.01f, 100.0f));"}}
 
@@ -193,29 +191,25 @@ response at all — instead of the infinity or NaN you would notice.
 {{cite ohao/physics/utils/physics_math.cpp "return glm::inverse(tensor);"}}
 {{cite ohao/physics/common/physics_constants.cpp "result[0][0] = (glm::abs(tensor[0][0]) > constants::EPSILON) ? 1.0f / tensor[0][0] : 0.0f;"}}
 
-Nothing in the sources or the CMake files picks a winner, but the outcome is not
-ambiguous in practice: every binary in the tree gets the `physics_math.cpp` set.
-Disassemble `build/interactive`, `build/cornell_box`, `build/model_viewer` or
-`build/renderer_test` and `calculateCapsuleTensor` calls `calculateCylinderTensor`,
-then `calculateSphereTensor`, then `operator+` — the 80/20 form — while
-`calculateInverse` is nothing but a call into `glm::inverse`. The
-`physics_constants.cpp` copies never link at all: `inertia::combine`, the one symbol
-that file does not share, is absent from all four symbol tables. So the live cylinder
-spin axis is Y.
+Nothing in the sources or the CMake files picks a winner. Which copy a given binary
+resolves to is decided by the linker, not by the code, and the `/FORCE:MULTIPLE`
+option the link lines carry turns a double definition into a warning rather than an
+error. This page does not claim which set is live: the two disagree on the cylinder
+spin axis, the capsule split and the degenerate-axis inverse, so a shape's inertia
+depends on a choice no file in the tree makes.
 
-That uniformity was not chosen, and the blast radius is small only because the tensor
-is engine-side-only. It stops being small the moment someone wires the tensor through
-to `BodyCreationInfo`.
+The blast radius is small only because the tensor is engine-side-only. It stops being
+small the moment someone wires the tensor through to `BodyCreationInfo`.
 
 ## Writing to the wrong side of the mirror
 
 Force works; impulse does not. `applyForce` deposits into `m_accumulatedForce` and
 `m_accumulatedTorque`, which `stepFixed` pushes to the backend before stepping and
 `syncBodiesFromBackend` clears after — a clean one-step accumulator. `applyImpulse`
-edits `m_linearVelocity` and `m_angularVelocity` in place instead, and
-`PhysicsComponent` forwards straight into it without touching the backend.
+edits `m_linearVelocity` and `m_angularVelocity` in place instead, and nothing
+forwards the result to the backend.
 
-{{cite ohao/physics/components/physics_component.cpp "m_rigidBody->applyImpulse(impulse, relativePos);"}}
+{{cite ohao/physics/dynamics/rigid_body.cpp "m_linearVelocity += impulse * m_invMass;"}}
 
 For a DYNAMIC body that already has a Jolt counterpart, those velocities are
 overwritten from Jolt on the next sync, so the impulse evaporates. Two routes escape
@@ -226,10 +220,10 @@ forward:
 
 {{cite ohao/physics/world/physics_world.cpp "// Push any pending velocity set before the backend body existed"}}
 
-That window is real: `PhysicsComponent::createRigidBody` registers with the backend
-only when a shape is already attached, so a body whose shape arrives later has no Jolt
-counterpart until the next `stepFixed`, and anything `applyImpulse` wrote in between
-becomes its initial velocity.
+That window is real: `PhysicsWorld::createRigidBody(name)` only records the body. It
+enters the backend at the next `stepFixed` (or an explicit `flushPendingBodies`), and
+only once it has a shape, so anything `applyImpulse` wrote before then becomes its
+initial velocity.
 
 Reads are lossy in the other direction. Both velocity setters clamp:
 
@@ -257,7 +251,7 @@ which makes `sleepingBodies`, computed as total minus active, the STATIC body co
 a measure of how much level geometry the scene has, not of anything Jolt decided.
 
 :::why
-The mirror could have been deleted — components could hold a `BodyHandle` and call
+The mirror could have been deleted — callers could hold a `BodyHandle` and call
 straight through to `IPhysicsBackend`, which is what most engines with a third-party
 solver do. Keeping `RigidBody` buys a body description the null backend, the profile
 snapshot system and the force registry can all read with no solver present, and lets
@@ -267,9 +261,10 @@ every field has two homes and only some are reconciled each step.
 
 ## Contracts
 
-- A body with no `CollisionShape` never enters the backend: both `createRigidBody`'s registration and `syncPendingBodiesToBackend` skip shapeless bodies, so it stays a mirror record and never moves. Setting the shape later is fine; the next step picks it up.
-- `Scene` owns the `PhysicsWorld`, injects it into each `PhysicsComponent`, then calls `initialize()`. Reverse that order and `createRigidBody` finds no world and silently does nothing until `setPhysicsWorld` runs.
-- Scale is deliberately *not* synced from `TransformComponent`; the shape is baked into Jolt at creation, so it must be authored at final size (`createBoxShape` with pre-scaled half-extents).
+- A body with no `CollisionShape` never enters the backend: `syncPendingBodiesToBackend` skips shapeless bodies, so it stays a mirror record and never moves. Setting the shape later is fine; the next step picks it up.
+- A body is addressed by the `shared_ptr<RigidBody>` that `createRigidBody(name)` returned and, once registered, by its backend `BodyHandle`. The name is a label only; `resolveHandleName` maps a handle back to it. The body knows no entity, component or transform owner.
+- Nothing synchronises a body with an ECS entity yet. Position and rotation live on the `RigidBody` and are overwritten from Jolt each step; an entity's `Transform` is neither read into the body nor written from it, so a game that wants both must copy them itself.
+- Scale is not part of a body; the shape is baked into Jolt at creation, so it must be authored at final size (a box shape with pre-scaled half-extents).
 - Capsule height means total height including both caps, consistently: the shape derives $h_{\text{cyl}} = \max(0, h - 2r)$ and the Jolt converter re-derives the same half-cylinder height from `info.height`. Passing a cylinder-only height silently shortens the capsule by $2r$.
 - Mass is clamped to $[10^{-3}, 10^{6}]$ kg for non-static bodies and forced to zero for STATIC. The density-driven auto-mass path (AABB volume × material density, default 1000 kg/m³) is reachable only after a STATIC→DYNAMIC flip — the only way `m_mass` reaches zero on a movable body — and it inherits the AABB bug above: only box and sphere shapes hand it a correct volume.
 - `CollisionShapeLike`, the C++20 concept in `collision_shape.hpp`, constrains nothing today; every dispatch goes through the virtual `ShapeType` switch instead.

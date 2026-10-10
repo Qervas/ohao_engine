@@ -54,7 +54,7 @@ shipping `[INFO] Error: Profile '…' already exists` on stdout.
 
 ## Wired but never exercised
 
-All 69 call sites materialise a `source_location` and thread it through the
+All 24 call sites materialise a `source_location` and thread it through the
 forwarder into `emit`, which discards it: the flag that would print it
 initialises off,
 
@@ -85,18 +85,18 @@ no callers anywhere: the reachable surface of this class is the five macros.
 
 ## Four logging conventions in one engine
 
-Ten `.cpp` files log through the facade, 69 call sites, all in `physics/` and
-`scene/`. The renderer does not participate: under `ohao/`, 56 files write
-`std::cout` directly (346 lines) and 51 write `std::cerr` directly (287 lines),
+Five `.cpp` files log through the facade, 24 call sites, all in `physics/`. The
+renderer does not participate: under `ohao/`, 36 files write
+`std::cout` directly (148 lines) and 49 write `std::cerr` directly (252 lines),
 while `audio/` uses `fprintf`. Those raw writes do separate severity — Vulkan
 device setup puts its failure on stderr and its success on stdout five lines
 later, just without the facade:
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "Failed to create logical device with RT extensions"}}
 
-So a callback installed here would capture `physics/`'s facade traffic, under a
-third of `scene/`'s log output (30 facade calls against 78 raw lines), and nothing
-from Vulkan or the path tracer. The header also includes `core/concepts.hpp` for a
+So a callback installed here would capture `physics/`'s facade traffic and nothing
+else: `scene/` writes 59 raw lines and no facade calls, and nothing from Vulkan or
+the path tracer would reach it. The header also includes `core/concepts.hpp` for a
 `to_underlying` it never calls, costing every logging TU a
 `<concepts>`/`<ranges>`/`<span>` pull-in.
 

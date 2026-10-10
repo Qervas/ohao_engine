@@ -211,14 +211,15 @@ cosine, darkening a band near the terminator by an amount no BRDF term accounts
 for.
 
 Finally the ray mask. The raygen traces with `0x01`, commented "static geometry
-only", but every TLAS instance is currently built with `MASK_STATIC_ONLY`, which
-is `0xFF`:
+only". The `RenderScene` builds every live, visible TLAS instance with mask
+`0xFF`, and a hidden or released slot with zero:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "uint32_t instanceMask = rt::MASK_STATIC_ONLY;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
 
-so the filter passes everything, and the companion `MASK_ANIMATED = 0x00` has no
-users at all since skeletal geometry left the RT path. The masking machinery is a
-live hook for a distinction the tree no longer draws.
+so the filter passes every visible instance and rejects exactly the ones that
+should cast nothing. It is a visibility switch, not a static-versus-dynamic
+distinction: the companion `MASK_ANIMATED = 0x00` in `rt_visibility.hpp` has no
+users at all, since skeletal geometry left the RT path.
 
 :::key
 This is a boolean visibility average, not a shadow with radiance in it.
@@ -230,7 +231,7 @@ pulled out of an integral it does not commute with.
 
 ## Contracts
 
-- `RTShadowTechnique::resize()` exists and satisfies the `ShadowTechniqueLike` concept, but `DeferredRenderer::onResize` never calls it — it resizes `m_rtGI` and not `m_rtShadow`. After a window resize the mask keeps its init extent while `vkCmdTraceRaysKHR` dispatches at the new one, so stores past the old extent are discarded and the lighting pass samples a mask that no longer registers with the screen.
+- `DeferredRenderer::onResize` forwards the new extent to `m_rtShadow` as well as `m_rtGI`; a new RT technique that owns a screen-sized target must be added to that list, or its output keeps its `init()` extent while `vkCmdTraceRaysKHR` dispatches at the new one and the lighting pass samples a mask that no longer registers with the screen.
 - The GBuffer sampler is created on the first `render()` and destroyed only in `destroy()`; the descriptor set rewritten during recording is the one for the caller's `frameSlot`, one of `MAX_FRAMES_IN_FLIGHT`. Both hold only while the caller passes the frame-ring slot whose fence it has just waited on.
 - The pre-trace transition uses `oldLayout = VK_IMAGE_LAYOUT_UNDEFINED` with `srcStageMask = TOP_OF_PIPE`. Discarding the contents is fine — every pixel is written unconditionally each dispatch — but that barrier does not wait on last frame's fragment-shader reads of the same image.
 - `setRTShadowMask` must run after the per-frame reset and before the lighting pass records, and only when `rendered()` is true — today from the RTShadow pass's own callback, which the graph records before `DeferredLighting`. The setter only stores `m_rtShadowView`; the flag bit the fragment shader branches on and the descriptor at binding 14 are both derived from that member when the lighting pass records. Hand it over later and that frame records with bit 5 clear and the dummy view bound.

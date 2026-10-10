@@ -123,7 +123,7 @@ The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
 `applyCamera` has two callers. The other, the windowed host `ohao_game`, builds no
 room at all — one floor quad at y = −S under the model:
 
-{{cite examples/ohao_game.cpp "m->vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};"}}
+{{cite examples/ohao_game.cpp "m.vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};"}}
 
 and then takes the framer's camera and light rig unchanged, so its fly camera
 starts at z = 1.7·S like `model_viewer`'s still one does:
@@ -156,10 +156,11 @@ configuration the other three comments exist to rule out.
 
 {{cite examples/model_viewer.cpp "nsX + 3.0f, -S + bedH * 1.5f"}}
 
-Those radii travel intact: the light component's radius becomes the RT light
-record's `dirAndParam.w`, which the raygen reads as the sphere radius.
+Those radii travel intact. `spawnFramedLights` makes each one a point-light entity
+whose `radius` is the framer's number, and the light table copies that radius into the
+RT light record's `dirAndParam.w`, which the raygen reads as the sphere radius.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "float dirParam = lc->getRadius();"}}
+{{cite ohao/render/scene/light_table.cpp "float dirParam = d.radius;"}}
 
 The reason the clearances matter is visible in the next-event estimator — and
 *which* estimator depends on the profile. `RenderMode::RTOffline` selects
@@ -225,4 +226,4 @@ bug, not a lighting tweak.
 - Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.
 - `FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.
 - Only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
-- On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `applyLights` silently adds nothing.
+- On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `spawnFramedLights` silently spawns nothing.

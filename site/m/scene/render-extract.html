@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 · Scene · Render extract — OHAO Monograph</title>
+  <meta name="description" content="Registry to RenderScene: slots in creation order, dirty uploads, lights, stale mesh handles." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="scene/render-extract" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../scene.html">← Module hub</a> · Render extract</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">scene</p>
+          <h1>Render extract</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Registry to RenderScene: slots in creation order, dirty uploads, lights, stale mesh handles.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-one-bridge-from-registry-to-gpu">The one bridge from registry to GPU</a></li><li><a href="#what-marks-work">What marks work</a></li><li><a href="#one-update-five-steps">One update, five steps</a></li><li><a href="#slot-ownership">Slot ownership</a></li><li><a href="#lights-in-creation-order">Lights, in creation order</a></li><li><a href="#stale-and-unknown-mesh-handles">Stale and unknown mesh handles</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-one-bridge-from-registry-to-gpu">The one bridge from registry to GPU</h2></div>
+<div class="prose reveal">
+<p>The renderer never includes EnTT. Everything it draws or traces lives in a `render::RenderScene`, and the only code that writes entity state into it is the `render_extract` system, installed by `ecs::installRenderExtract`. It runs once per `World::update`, immediately after the transform system, and is incremental: it does nothing for an entity that did not change.</p>
+<div class="citation-chip"><code class="citation-code">void installRenderExtract(World&amp; world, render::RenderScene&amp; scene);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.hpp#L23" target="_blank" rel="noopener">ohao/ecs/render_extract.hpp:23</a></div>
+<p>Installation is guarded by a flag in the registry context, so a second call on the same world logs and returns rather than registering a second set of signal handlers and a second owner for the same slots. The state lives in an `ExtractState` held by `shared_ptr` inside the system&#x27;s closure — its lifetime is the system&#x27;s, and the system&#x27;s lifetime is the world&#x27;s.</p>
+</div>
+<div class="section-rule"><h2 id="what-marks-work">What marks work</h2></div>
+<div class="prose reveal">
+<p>The extract keeps no list of &quot;renderables to check&quot;. Work arrives as the `RenderDirty` tag and as EnTT signals it connects at construction:</p>
+<ul>
+<li>`MeshRenderer` constructed or updated → `RenderDirty` on the entity.</li>
+<li>`MeshRenderer` or `RenderSlot` destroyed → the entity&#x27;s slot is queued for release.</li>
+<li>`Light` or `EmissiveProxyLight` constructed, updated or destroyed → the light list is marked dirty.</li>
+<li>The transform system tags `RenderDirty` on every entity whose world matrix it recomputed, including the settle frame after a move.</li>
+</ul>
+<div class="citation-chip"><code class="citation-code">reg.on_update&lt;MeshRenderer&gt;().connect&lt;&amp;ExtractState::markRenderDirty&gt;(this);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L41" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:41</a></div>
+<p>The same write rule as `Transform` follows: a `MeshRenderer` change must go through `patch` or `replace`. Hiding an entity with `get&lt;MeshRenderer&gt;().visible = false` is not seen — the instance stays visible, in raster and in the TLAS, until something else dirties the entity.</p>
+</div>
+<div class="section-rule"><h2 id="one-update-five-steps">One update, five steps</h2></div>
+<div class="prose reveal">
+<p>**1. Releases.** Destroy signals do not call into the `RenderScene`; they only queue. The queued slots are released first, and for an entity that is still alive the step repairs its components — a stale `RenderSlot` left by a removed `MeshRenderer` is removed, and an entity that lost only its `RenderSlot` but still has a `MeshRenderer` is re-dirtied so it gets a new one.</p>
+<p>**2–3. Updates and creations.** Every `RenderDirty` entity with a `MeshRenderer`, a `WorldTransform` and a usable mesh is either updated in place, if it already owns a slot, or collected for creation. Collected entities are sorted by their `CreationOrder` before any slot is requested:</p>
+<div class="citation-chip"><code class="citation-code">// Slots in creation order, independent of pool iteration order.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L102" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:102</a></div>
+<p>Slot numbers are not cosmetic. A slot is the instance&#x27;s index in the instance buffer, its `firstInstance` in raster draws and its `instanceCustomIndex` in the TLAS, so the order in which entities receive slots fixes the order of everything downstream. EnTT&#x27;s `view&lt;RenderDirty&gt;()` iterates the tag&#x27;s pool, whose order depends on the history of insertions and swap-and-pop removals; sorting by the never-recycled creation sequence makes a scene built by the same code get the same slots on every run.</p>
+<p>Because releases run before creations, a slot freed this update is the first one handed to this update&#x27;s first new entity — the instance table reuses the lowest free slot. The `RenderScene` treats that as a structural change and rebuilds the TLAS rather than refitting it, so the reused slot never inherits the old instance&#x27;s BLAS reference.</p>
+<p>**4. Clear.** `RenderDirty` is cleared on every entity, including those the extract skipped.</p>
+<p>**5. Lights.** If a light component changed, or any `RenderDirty` entity carries one, the whole light list is rebuilt.</p>
+</div>
+<div class="section-rule"><h2 id="slot-ownership">Slot ownership</h2></div>
+<div class="prose reveal">
+<p>The extract records which entity it gave each slot to, and it only ever updates a slot whose owner matches:</p>
+<div class="citation-chip"><code class="citation-code">if (rs-&gt;slot &lt; m_owner.size() &amp;&amp; m_owner[rs-&gt;slot] == e)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L96" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:96</a></div>
+<p>`RenderSlot` is an ordinary component, visible to game code, but it is the extract&#x27;s alone to write. The owner check means a hand-written or copied `RenderSlot` can never redirect another entity&#x27;s instance; the cost is that an entity carrying a forged one is neither updated (owner mismatch) nor given a real slot (it already has a `RenderSlot`), and simply never renders.</p>
+<p>Teardown is the same ownership read in reverse. `World`&#x27;s member order destroys its systems before its registry, so `ExtractState`&#x27;s destructor still has a live registry to disconnect from, and it destroys every instance it owns and clears the light list it set. That is why the host must drop the world before the renderer:</p>
+<div class="citation-chip"><code class="citation-code">m_world.reset();   // releases its RenderScene slots while the RenderScene exists</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/application.cpp#L74" target="_blank" rel="noopener">ohao/runtime/application.cpp:74</a></div>
+</div>
+<div class="section-rule"><h2 id="lights-in-creation-order">Lights, in creation order</h2></div>
+<div class="prose reveal">
+<p>A rebuild walks every `Light` and every `EmissiveProxyLight` with a `WorldTransform` and resolves them to world space. Position is the world matrix&#x27;s translation column; direction is the entity&#x27;s $-Z$ axis carried through the upper 3×3 basis $B$ and renormalised; an area rectangle&#x27;s edges go through $B$ unnormalised:</p>
+<div class="math-block">$$
+\mathbf{d} = \frac{B\,(0,0,-1)^{\mathsf T}}{\lVert B\,(0,0,-1)^{\mathsf T}\rVert}, \qquad \mathbf{e}_i^{\text{world}} = B\,\mathbf{e}_i
+$$</div>
+<p>so scaling an area light&#x27;s entity scales its emitting area, and with it the area term the RT light carries. An `EmissiveProxyLight`&#x27;s centre goes through the full world matrix, but its radius does not: a model spawned at scale 3 keeps the proxy radius computed from its unscaled vertices.</p>
+<div class="citation-chip"><code class="citation-code">d.direction = glm::normalize(basis * glm::vec3(0.0f, 0.0f, -1.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L146" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:146</a></div>
+<div class="citation-chip"><code class="citation-code">d.position = glm::vec3(wt.world * glm::vec4(p.localCenter, 1.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L161" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:161</a></div>
+<p>Each `LightDesc` carries its entity&#x27;s creation sequence as `order`, and the light table stable-sorts on it. The order is load-bearing, not tidiness: the raster light buffer holds eight lights, and the first point or spot light in it is the one that gets the shadow map. With pool order instead, destroying an unrelated light could change which lights are in the eight and which one casts shadows.</p>
+<div class="citation-chip"><code class="citation-code">std::stable_sort(sorted.begin(), sorted.end(),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/light_table.cpp#L113" target="_blank" rel="noopener">ohao/render/scene/light_table.cpp:113</a></div>
+<p>A moving light rebuilds the whole list twice — on the move frame and on its settle frame — because it is `RenderDirty` both times. The second rebuild produces identical RT bytes, and the light table compares them and uploads nothing.</p>
+</div>
+<div class="section-rule"><h2 id="stale-and-unknown-mesh-handles">Stale and unknown mesh handles</h2></div>
+<div class="prose reveal">
+<p>An entity whose `MeshHandle` the `RenderScene` does not recognise is skipped: no slot, no draw, no TLAS instance. Each distinct handle is reported once, keyed on its index and generation, so a thousand entities sharing one bad handle produce one line:</p>
+<div class="citation-chip"><code class="citation-code">if (!meshUsable(mr-&gt;mesh)) continue;   // stale/unknown: skipped, logged once</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L93" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:93</a></div>
+<p>In this tree &quot;stale&quot; mostly means &quot;never valid&quot;. The mesh registry never unregisters a mesh and issues every handle at generation 0, so the handles that fail are the default `MeshRenderer{}` handle, the empty handle `registerMesh` returns when it rejects a mesh, and handles taken from a different `RenderScene`. Material handles are not checked here; the instance table maps any unknown material index to the default material instead.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The skip is final until something re-dirties the entity. Step 4 clears `RenderDirty` on skipped entities too, so assigning a valid mesh later has to go through `patch&lt;MeshRenderer&gt;()` — which it must anyway — for the entity to be picked up.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The `RenderScene` must outlive the `World`. Destroying the world releases its slots and clears its lights through the scene.</li>
+<li>At most one extract per world. One `RenderScene` may serve several worlds, but each world&#x27;s light rebuild replaces the whole light list, so only one of them can own lights.</li>
+<li>A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `Application` loop destroys in its update hook and runs `World::update` before `render()`, so it never renders in that gap.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/ecs/render_extract.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/render_extract.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/application.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/light_table.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/spawn.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/spawn.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/framing.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="transform-system.html"><div class="label">← Prev</div><div class="title">Transform propagation</div></a><a class="next" href="render-scene.html"><div class="label">Next →</div><div class="title">RenderScene</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

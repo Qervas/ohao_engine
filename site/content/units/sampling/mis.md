@@ -99,9 +99,10 @@ A variance hack, not an MIS term. For genuine point and directional lights the
 absence is correct: a delta light cannot be
 hit by a BSDF sample, so there is no second estimator to weight against. But the RT
 light buffer holds more than delta lights — emissive meshes become sphere-light
-proxies on upload:
+proxies when a model is uploaded, and the light table appends them after the
+regular lights:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "// Auto-generate lights from emissive materials"}}
+{{cite ohao/render/scene/light_table.cpp "gl.positionAndType = glm::vec4(d.position, 0.0f);  // sphere type"}}
 
 and those meshes still emit when a chain ray lands on them, because the closest-hit
 shader writes their emissive texture into `payload.color` and the raygen adds it to

@@ -26,7 +26,7 @@ struct Light {
     mat4 lightSpaceMatrix;
 };
 
-#define MAX_LIGHTS 8  // Must match C++ MAX_LIGHTS in offscreen_renderer.hpp
+#define MAX_LIGHTS 8  // Must match C++ MAX_LIGHTS in ohao/render/scene/render_scene_types.hpp
 
 layout(set = 0, binding = 5) uniform LightingUBO {
     Light lights[MAX_LIGHTS];

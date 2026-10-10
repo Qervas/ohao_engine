@@ -80,7 +80,7 @@ void main() {
     vec3 indirectLight = vec3(0.0);
     uint rayFlags = gl_RayFlagsOpaqueEXT;
 
-    // Only hit static geometry — animated instances have bit 0 clear
+    // Ray mask 0x01 intersects every visible instance (mask 0xFF); hidden or released slots have mask 0 and are skipped
     uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)
 
     for (uint s = 0u; s < sampleCount; s++) {

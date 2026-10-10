@@ -87,8 +87,8 @@ two. The reconciliation happens in `buildCreationInfo`, which picks the static o
 
 Dynamic friction therefore never reaches the solver: a sliding box resists with
 the same coefficient that held it at rest, and the stick–slip drop the material
-pair describes is not simulated. `PhysicsComponent::setFriction` is honest about
-this and writes one value into both fields. Surface roughness has no reader at all:
+pair describes is not simulated. The backend's own `setFriction(handle, value)` is
+honest about this: it takes a single scalar. Surface roughness has no reader at all:
 `getRoughness()` is called from nowhere in `ohao/`, `examples/` or `tests/`, and the
 only code that touches the field writes it. Despite the name it has no connection
 to the renderer's GGX roughness either; the two live in unrelated structs.
@@ -133,13 +133,11 @@ own accessors do carry hard-coded fallbacks for a null material:
 
 {{cite ohao/physics/dynamics/rigid_body.cpp "return m_material ? m_material->getRestitution() : 0.3f;"}}
 
-but `PhysicsComponent` does not. Its null path assigns `getDefault()` and then
-copy-constructs from `*material` with no second check — and under a nullptr-returning
-lookup `getDefault()` returns null forever, since nothing else populates `"Default"`.
-That change trades a silent wrong value for a dereference of null. The cheap honest
-version is a log line at the auto-create site.
-
-{{cite ohao/physics/components/physics_component.cpp "void PhysicsComponent::setRestitution(float restitution) {"}}
+but the copy-then-edit pattern a per-body tweak needs does not: it assigns
+`getDefault()` and copy-constructs from `*material` with no second check — and under
+a nullptr-returning lookup `getDefault()` returns null forever, since nothing else
+populates `"Default"`. That change trades a silent wrong value for a dereference of
+null. The cheap honest version is a log line at the auto-create site.
 :::
 
 ## One Default, aliased by every body
@@ -150,20 +148,21 @@ points at the *same* `PhysicsMaterial` object.
 
 {{cite ohao/physics/dynamics/rigid_body.cpp "m_material = MaterialLibrary::getInstance().getDefault();"}}
 
-`PhysicsComponent` respects that: its setters copy the material before editing, so
-one body's tweak stays local, and then push the scalar to the backend so the live
-Jolt body agrees.
+The safe way to tweak one body is to copy the material, edit the copy and hand it
+back through `setPhysicsMaterial`, which only stores the pointer:
 
-{{cite ohao/physics/components/physics_component.cpp "newMaterial->setRestitution(restitution);"}}
+{{cite ohao/physics/dynamics/rigid_body.hpp "void setPhysicsMaterial(std::shared_ptr<PhysicsMaterial> material) { m_material = material; }"}}
 
-The Python test bindings take the other route — they mutate through the shared
-pointer in place.
+Nothing pushes the result to the backend, so the live Jolt body keeps the scalars it
+was created with unless the caller also calls the backend's `setFriction` or
+`setRestitution` on the body's handle. The Python test bindings take the other
+route — they mutate through the shared pointer in place.
 
 {{cite tests/python/physics_bindings.cpp "mat->setDynamicFriction(friction * 0.8f);"}}
 
 Setting friction on one body from a Python harness therefore rewrites the
-library's "Default" for every other body still aliasing it, and, unlike the
-component path, never propagates to the backend at all. Both halves of that are
+library's "Default" for every other body still aliasing it, and never propagates to
+the backend at all. Both halves of that are
 invisible until a test asserts on a body it did not touch.
 
 ## Density's one live path
@@ -225,8 +224,8 @@ observable in a simulation.
 ## Contracts
 
 - `initializePredefinedMaterials()` has no caller and `getMaterial()` auto-creates on a miss, so every preset getter currently returns constructor defaults. Adding the initializer call would move nothing today: `"Default"` is the only name any code asks for, and the initializer builds it with (1000, 0.3, 0.6, 0.4, 0.5) — the constructor's own values. It starts mattering only when something calls `getSteel()` and friends, which nothing does.
-- Every `RigidBody` built without an explicit material shares the library's single "Default" instance. Mutating through `getPhysicsMaterial()` edits all of them; copy first, as `PhysicsComponent` does.
-- Of the material's own fields, `buildCreationInfo` transmits static friction and restitution directly, and density only indirectly — via `info.mass`, which Jolt installs as `mMassPropertiesOverride.mMass` for DYNAMIC bodies. Dynamic friction, roughness and both combine modes are never transmitted. After a body exists, editing any material field has no backend effect except through `PhysicsComponent::setRestitution`/`setFriction`, which explicitly push to the backend.
+- Every `RigidBody` built without an explicit material shares the library's single "Default" instance. Mutating through `getPhysicsMaterial()` edits all of them; copy first, then `setPhysicsMaterial` the copy.
+- Of the material's own fields, `buildCreationInfo` transmits static friction and restitution directly, and density only indirectly — via `info.mass`, which Jolt installs as `mMassPropertiesOverride.mMass` for DYNAMIC bodies. Dynamic friction, roughness and both combine modes are never transmitted. After a body exists, editing any material field has no backend effect; only an explicit call to the backend's `setRestitution` or `setFriction` on the body's handle pushes a scalar.
 
 {{cite ohao/physics/world/physics_world.cpp "info.mass = body->getMass();"}}
 

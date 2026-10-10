@@ -20,7 +20,7 @@ for those three images, not as descriptor indices. Inside the cinematic pipeline
 each is `set = 0`, bindings 0–2; slots 29–34 of the RT descriptor set layout hold
 ReSTIR GI reservoir planes.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "29-31: prev reservoir planes 0-2"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "29-31: ReSTIR GI prev reservoir planes 0-2"}}
 
 Only surface pixels pass through binding 29. The composite reads the depth AOV
 first and, where the primary ray missed, rebuilds a world-space direction from

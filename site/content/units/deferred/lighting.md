@@ -65,10 +65,11 @@ Each record is 128 bytes and 72 of them are dead here. Sixty-four are the per-li
 `lightSpaceMatrix`, never read because cascade shadows resolve through
 `cascades.viewProj[]` from a separate UBO instead.
 
-{{cite ohao/gpu/vulkan/renderer.hpp "alignas(16) glm::mat4 lightSpaceMatrix;"}}
+{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)"}}
 
-The other eight are `params.z` and `params.w`: the CPU packs a shadow-map index into
-`.z` every frame, `.w` was never given a meaning, and the shader touches only `.x`
+The other eight are `params.z` and `params.w`: `RenderScene`'s light table packs a
+shadow-map index into `.z` (and a `lightSpaceMatrix` for the one light it picks as
+shadow caster, identity for the rest), `.w` was never given a meaning, and the shader touches only `.x`
 and `.y`, the two spot-cone cosines.
 
 {{cite shaders/core/deferred_lighting.frag "light.params.x, light.params.y);"}}
@@ -181,7 +182,7 @@ roughness, on an assumption stated in its own comment:
 The only producer of the view that ever reaches binding 15 creates that image with
 one mip level, and builds a single-level view over it:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "imgInfo.mipLevels = 1;"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "imgInfo.mipLevels = 1;"}}
 
 Every `textureLod` therefore clamps to mip 0. Roughness does not blur the
 environment reflection, and the diffuse term — a single texel fetched at LOD 9

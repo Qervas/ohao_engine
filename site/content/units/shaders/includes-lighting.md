@@ -150,7 +150,7 @@ pipeline depends on: type, range, intensity and shadow-map index ride in the `w`
 and `params` channels of four `vec4`s, followed by a 64-byte light-space matrix —
 128 bytes per light, `std140`-compatible by construction.
 
-{{cite ohao/gpu/vulkan/renderer.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
+{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
 {{cite shaders/includes/common/types.glsl "vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
 
 ## Contracts

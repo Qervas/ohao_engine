@@ -95,19 +95,20 @@ shadows breaking — and why alpha cutout is silently dead with them.
 
 ## What the closest hit decodes, and the 24-bit fuse
 
-`pt_closesthit.rchit` resolves a triangle by adding two numbers:
+`pt_closesthit.rchit` resolves a triangle through the instance table. The TLAS instance's
+custom index is the `RenderScene` slot, and the shader uses it to fetch the instance, its
+mesh, and the mesh-local indices into the shared vertex and index arenas:
 
-{{cite shaders/rt/pt_closesthit.rchit "uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;"}}
+{{cite shaders/rt/pt_closesthit.rchit "InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];"}}
 
-That works only because the host concatenates every actor's triangles into one
-global index / UV / material-ID array and stores each instance's base offset in
-`instanceCustomIndex`.
+The host stages that field when it builds each TLAS instance:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "globalTriOffset += it2->second.indexCount / 3;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.instanceCustomIndex = slot & 0xFFFFFFu;   // 24 bits"}}
 
-That field is 24 bits wide in `VkAccelerationStructureInstanceKHR`, so the scheme
-wraps past 16,777,216 triangles — unchecked, and the symptom would be geometry
-sampling another mesh's material.
+The field is 24 bits wide in `VkAccelerationStructureInstanceKHR`, so the scheme wraps
+past 16,777,216 instance slots — masked rather than checked, and the symptom would be a
+hit reading another instance's mesh and material. The fuse is now on instances, not
+triangles, which moves it far out of reach of any scene the engine builds today.
 
 The RT vertex streams carry no tangent, so normal mapping builds a Frisvad basis
 from the shading normal alone.
@@ -162,7 +163,7 @@ header words are free real estate — and a hand-maintained union across four
 shader declarations and the C++ file that fills them, with nothing enforcing
 agreement.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkDeviceSize lightDataOffset = 16;  // align GPULight array to 16 bytes"}}
+{{cite ohao/render/scene/light_table.hpp "static constexpr VkDeviceSize kHeaderBytes = 16;"}}
 
 ## Splitting one path in two so a denoiser can see it
 
@@ -283,12 +284,13 @@ per pixel and never resolves:
 {{cite shaders/rt/rt_shadow.rgen "float r1 = hash(vec2(pixel) + vec2(float(s) * 7.13, float(s) * 13.37));"}}
 
 Both trace with ray mask `0x01` under comments claiming static-only visibility.
-That filter is inert — every TLAS instance is tagged `MASK_STATIC_ONLY`, which is
-0xFF — so the GI closest-hit works around it in the payload, keying "static" off a
-flag smuggled into the material's alpha channel.
+That filter selects nothing among live geometry — every visible TLAS instance is
+tagged 0xFF, and invisible ones 0, which no ray mask intersects — so the GI closest-hit
+has no static/animated distinction left to draw: it returns the hit instance's albedo
+and distance unconditionally.
 
-{{cite ohao/render/rt/rt_visibility.hpp "constexpr uint32_t MASK_STATIC_ONLY    = 0xFF;"}}
-{{cite shaders/rt/rt_gi.rchit "float isStatic = materialBuf.materials[gl_InstanceID].a;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
+{{cite shaders/rt/rt_gi.rchit "giPayload = vec4(albedo, gl_HitTEXT);"}}
 
 ## The rest of shaders/rt, and which of it runs
 

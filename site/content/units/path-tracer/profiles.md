@@ -279,7 +279,7 @@ interactive sample count and — for Atrous and DLSS-RR only — the user's
 `renderRTPipeline` calls `prepareRTSceneForFrame` first and records the trace
 afterwards, so the value is overwritten before any raygen can read it.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline, false);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline);"}}
 
 :::key
 The profile constants are authoritative every frame, not just at startup. A
@@ -291,7 +291,7 @@ profile's value.
 
 ## Contracts
 
-- Both profile renderers are created lazily by `ensureRTRenderer` and released only in `VulkanRenderer::shutdown`. Switching modes at runtime leaves two full `PathTracer` instances resident, each owning its own set of over twenty screen-sized storage images (roughly half of them RGBA32F), and `forEachRTRenderer` re-uploads materials, textures and lights to both.
+- Both profile renderers are created lazily by `ensureRTRenderer` and released only in `VulkanRenderer::shutdown`. Switching modes at runtime leaves two full `PathTracer` instances resident, each owning its own set of over twenty screen-sized storage images (roughly half of them RGBA32F), and `forEachRTRenderer` applies resizes and render seeds to both. Scene data is not duplicated: both read the one `RenderScene` and the one bindless table.
 - `setRenderSettings` must be called between frames, never inside a command buffer: a change of DLSS render scale makes it wait on device idle and reallocate every render target.
 - `preferAccumulation` and `allowExternalDenoiser` exist in the struct and in the traits, but no code reads them to change behaviour — they appear only in the profile log line. Do not add logic that assumes they are already honoured. {{cite ohao/gpu/vulkan/renderer.cpp "externalDenoiser="}}
 - The offline profile's freedom from firefly clamping depends on two independent conditions (flag clear, threshold zero). Restoring the struct default of 10.0 without also clearing the flag would silently bias reference renders. {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;"}}

@@ -90,9 +90,11 @@ also a footgun: ~6 MB next to a sub-500 KB golden, and `.gitignore` covers only
 
 ## Which shader the goldens actually gate
 
-The manifest is two scenes invoked through the example binaries with the denoiser
+The manifest is four scenes invoked through the example binaries with the denoiser
 explicitly off: the harness pins raw deterministic beauty, treating denoised
-output as a separate, unpinned concern.
+output as a separate, unpinned concern. Two scenes are path traced and two are the
+deferred hybrid on the same content, `cornell_box_deferred` and
+`damaged_helmet_deferred`.
 
 {{cite tests/golden/manifest.json "./build/cornell_box {out} 16 --denoise=none"}}
 
@@ -118,18 +120,26 @@ realtime raygen includes.
 
 {{cite shaders/rt/pt_raygen_offline.rgen "includes/rt/nrd_frontend.glsl"}}
 
-What has no golden is `pt_raygen_realtime.rgen` itself, the deferred rasteriser,
-every denoised path, and the PCG branch of `sampler_api.glsl` — the sampler is a
-specialization constant baked at pipeline creation, and the offline profile bakes
-Sobol, so the branch the realtime settings ask for is never executed under the
-gate.
+What has no golden is `pt_raygen_realtime.rgen` itself, every denoised path, and
+the PCG branch of `sampler_api.glsl` — the sampler is a specialization constant
+baked at pipeline creation, and the offline profile bakes Sobol, so the branch the
+realtime settings ask for is never executed under the gate.
+
+The deferred pair covers the other half. They render the G-buffer, the cascaded
+shadow pass, deferred lighting, the post chain and, where the device supports it, the
+RT shadows and GI, and they check the render-world migration against the previous
+renderer's own output: `cornell_box_deferred` was captured before that migration and
+`damaged_helmet_deferred` serves the same purpose on the helmet. The deferred helmet is
+looser than the rest, with its own tolerances, because its render is not bit-exact run
+to run.
 
 The `16` is spp, not frames — `cornell_box` renders `samples + 3`, so the golden
-pins 19 accumulation frames.
+pins 19 accumulation frames. The deferred scenes pass `deferred` and a small sample
+count, and the count is ignored: the same line fixes a deferred run at ten frames.
 
 {{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
 
-Both scenes now run on a fresh clone, which was not true for two months and is
+All four scenes run on a fresh clone, which was not true for two months and is
 worth the paragraph.
 
 The second scene used to invoke `model_viewer` on
@@ -153,7 +163,7 @@ uniformly coloured image is not a render of a scene.
 The scene itself is now `damaged_helmet`, on `assets/test_models/DamagedHelmet.glb`
 — tracked, 3.7 MB, and the same kind of subject: a metal/rough glTF under an HDRI.
 
-{{cite tests/golden/manifest.json "assets/test_models/DamagedHelmet.glb"}}
+{{cite tests/golden/manifest.json "./build/model_viewer assets/test_models/DamagedHelmet.glb {out} 16 --denoise=none"}}
 
 ## Where the gate runs, and why not in CI
 
@@ -230,25 +240,40 @@ have provided nobody reads its `ALL PASS` as a claim about the image.
 
 {{cite tests/renderer/renderer_test.cpp "=== ALL PASS ==="}}
 
-`engine_tests` runs eight sections. Three are the ones its header comment names —
-`EventBus`, `CommandHistory`, `Scene`. The fourth, `runMetaTests`, is the only place
-the renderer's compile-time contracts are exercised at all:
-fifteen cases covering RT profile traits (offline four bounces, realtime two),
+`engine_tests` runs nine sections. Two are the ones its header comment numbers first —
+`EventBus` and `CommandHistory` — and a third, `Assets`, checks the loader's extension
+list; scene entities are covered by `ecs_tests`. The fourth, `runMetaTests`, is the only
+place the renderer's compile-time contracts are exercised at all:
+fourteen cases covering RT profile traits (offline four bounces, realtime two),
 `DenoiseModeTraits` against their runtime mirrors, `RTFeatureFlags` and
 `makeFeatureSettings`, `applyDenoisePolicy` and the jitter / fresh-sample /
 AOV-accumulation predicates, `as_span` and `span_covers_image`, `Result` and
-`VoidResult`, render-graph handles with culling AABBs and the camera, and physics
-handles with `ShapeInfo`.
+`VoidResult`, render-graph handles with culling AABBs and the camera, physics
+handles with `ShapeInfo`, and a rigid body that exists and carries a name with no
+scene component behind it.
 
 {{cite tests/engine/engine_tests.cpp "void runMetaTests() {"}}
 
-The other four stand up real Vulkan with no swapchain: the deferred pipeline, the
+Four more stand up real Vulkan with no swapchain: the deferred pipeline, the
 path tracer on an RT-capable device, a headless frame recorded, submitted and read
 back, and the renderer's resize and refusal paths — two of those resize cases with
 the validation layer on, failing on what the layer reports. Each reports itself
 skipped, not passed, when the machine has no device or no layer.
 
 {{cite tests/engine/engine_tests.cpp "static void runHeadlessDeferredRenderTests() {"}}
+
+The ninth section drives the persistent render world on a real device:
+
+{{cite tests/engine/engine_tests.cpp "static void runRenderSceneTests() {"}}
+
+twelve cases covering mesh registration with its AABB, table entry and BLAS; static
+instances uploading once while moving ones upload in proportion; missing material
+references falling back to the default; instance-table and mesh-arena growth without
+destroying a buffer a frame still reads; the raster shadow-caster rule; a material edit
+reaching the packed table row; the 1×1 tint textures being shared per encoded colour;
+the path tracer tracing the render world; texture slots past 1024 reaching the tracer;
+a moved instance refitting the TLAS; and a slot released and reused in one frame
+forcing a rebuild.
 
 Its `EXPECT` macro `return`s from the enclosing section function, so the first
 failure silently skips the rest of that section; the exit code is still non-zero,
@@ -274,6 +299,15 @@ and AABB math) and `audio_system_tests` (13 cases over the miniaudio wrapper's v
 and handle state). They share `engine_tests`' hand-rolled `TEST_BEGIN`/`TEST_PASS`
 harness rather than GoogleTest, and each is a plain `main` returning non-zero on
 failure.
+
+Two more binaries cover the entity layer and the windowed host. `ecs_tests` (20
+cases) checks transform propagation and hierarchy rules — parenting, cyclic
+`setParent` rejection, subtree destruction, system order — and, on a headless
+renderer that it skips when no device exists, the render extract: slot creation and
+release, lights following transforms in creation order, a model's materials becoming
+submeshes, an emissive texture yielding a proxy light, and unknown mesh handles being
+skipped. `runtime_tests` (21 cases) needs no GPU: it pins the fixed-step clock, the
+input action map and the swapchain-selection helpers.
 
 {{cite CMakeLists.txt "option(BUILD_PHYSICS_TESTS"}}
 
@@ -313,15 +347,16 @@ far — logging each feature checked against a committed reference render. Nothi
 scripts it; it is a review artifact, not a gate.
 
 :::key
-The whole automated image-quality net is two 640×360 PNGs, compared under two
-tolerances, by a hook a developer must opt into, on a machine with a GPU — and one
-of the two scenes has no committed input asset, so on a fresh clone it is one PNG.
-Judge this suite by what executes, not by what is checked in.
+The whole automated image-quality net is four 640×360 PNGs, compared under two
+tolerances, by a hook a developer must opt into, on a machine with a GPU. Every scene
+loads only tracked assets, so on a fresh clone all four run — but only where the hook
+is installed and the engine built. Judge this suite by what executes, not by what is
+checked in.
 :::
 
 ## Contracts
 
 - Re-enabling temporal reprojection in `pt_raygen_offline.rgen` does not merely change the goldens, it makes them unreproducible: the race has no defined ordering, so `--selftest` starts failing against itself.
-- The harness must run from the repository root — manifest commands and golden paths are repo-relative, and `subprocess.run` is given `./build/cornell_box` verbatim. From anywhere else it raises an uncaught `FileNotFoundError` and the harness dies with a traceback; the "render produced no output" branch never fires, because it presumes the command ran and exited 0. The pre-push hook sidesteps this by `cd`-ing to the toplevel first.
+- The harness must run from the repository root — manifest commands and golden paths are repo-relative. The executable is resolved through the per-configuration subdirectories and the `.exe` suffix, so `./build/cornell_box` finds `build/Release/cornell_box.exe`; one that is genuinely absent is reported as a scene FAIL (`could not launch …`), not a traceback. The pre-push hook sidesteps the working-directory requirement by `cd`-ing to the toplevel first.
 - Goldens must come from `--update`, which stores the downscaled image. One regenerated at full resolution is a shape mismatch, reported cleanly as `size mismatch vs golden` in check mode. `--selftest` never opens the golden at all — it renders twice and diffs actual against actual — but it dereferences its stats dict unguarded, so if the two renders of one command ever disagree in shape it raises instead of reporting.
 - Adding a manifest scene is the only way a fixed bug becomes non-regressible; nothing else in the tree gates an image.

@@ -181,7 +181,7 @@ class MonographStructureTest(unittest.TestCase):
             ("materials", "ggx.html"),
             ("physics", "forces.html"),
             ("audio", "system.html"),
-            ("scene", "actors.html"),
+            ("scene", "world.html"),
             ("hybrid", "shadow-technique.html"),
             ("core", "event-bus.html"),
         ):
@@ -229,7 +229,7 @@ class MonographStructureTest(unittest.TestCase):
         """Each core module chapter documents a real workflow, not only a file list."""
         checks = {
             "gpu.html": ["createInstance", "initialize", "renderDeferred", "buildBLASTLAS", "FIG. GPU"],
-            "scene.html": ["createActor", "initialize", "PhysicsWorld", "Hand-off"],
+            "scene.html": ["World", "RenderScene", "render_extract", "Hand-off"],
             "architecture.html": ["End-to-end", "Invariants", "ensureRTRenderer"],
             "deferred.html": ["renderDeferred", "m_renderGraph", "CSM", "GBuffer"],
             "path-tracer.html": ["ensureRTRenderer", "host-life", "nee-walk", "traceRays"],

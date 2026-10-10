@@ -11,9 +11,9 @@ A conventional Vulkan renderer allocates one descriptor set per material and
 rebinds it before every draw. `BindlessTextureManager` replaces that with a single
 descriptor set holding one `COMBINED_IMAGE_SAMPLER` array of 4096 elements, bound
 once per pass rather than once per draw. A material stops owning descriptors and
-starts owning a *name* — a `std::string` per map — which the draw loop resolves to a
-`uint32_t` array index and packs into a push constant. Nothing durable holds the
-index; it is rebuilt every frame.
+starts owning *indices* — four `uint32_t` array slots stored in its row of the
+render world's material table, which the shader reads back and uses to subscript
+the array. The manager is the only owner of the images behind them.
 
 Three descriptor-indexing flags make that legal. `VARIABLE_DESCRIPTOR_COUNT` moves
 the array size to `vkAllocateDescriptorSets` time; `PARTIALLY_BOUND` makes the 4093
@@ -37,60 +37,62 @@ dynamically uniform and every access must be wrapped in `nonuniformEXT`.
 {{cite ohao/gpu/vulkan/device_setup.cpp "features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;"}}
 
 :::why
-The engine ships both plausible answers, which makes the trade-off unusually easy to
-read. The path tracer uses a *texture array*: one layered `VkImage`, so every layer
-shares an extent and format and sources are resampled to fit. This manager uses a
-*descriptor array*: separate images of arbitrary size, format and mip count, unified
-only by an index. That costs a Vulkan 1.2 feature set and non-uniform indexing, and
-buys keeping a 4096² albedo and a 1×1 default in one lookup without rescaling either.
+A layered `VkImage` (a *texture array*) is the other plausible answer: every layer
+shares an extent and format, so sources are resampled to fit, and a 1×1 fallback costs
+as much as the largest map. This manager uses a *descriptor array*: separate images of
+arbitrary size, format and mip count, unified only by an index. That costs a Vulkan
+1.2 feature set and non-uniform indexing, and buys keeping a 4096² albedo and a 1×1
+default in one lookup without rescaling either. The path tracer takes the same
+indices: one table, one numbering, read by both pipelines.
 :::
 
-## One consumer, at set 0
+## One raster consumer, at set 0
 
 The manager's set has exactly one raster consumer: the G-buffer pass. Its pipeline
-has no UBO set at all — matrices and material scalars arrive as push constants — so
-the bindless layout is its only set, at index 0.
+layout has two sets — the bindless table at index 0 and, at index 1, the "scene" set
+holding RenderScene's instance, material and material-reference buffers plus the
+frame slot's camera UBO. The pass binds both once, on the first visible draw:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "// Bind bindless textures for static pipeline (set 0)"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "// Set 0: bindless textures; set 1: the scene."}}
 
-The bind sits inside the pipeline-switch guard of the draw loop, so the set is bound
-once per pipeline change, not once per draw. With a single static pipeline that is
-once per pass.
+The bind sits behind a `bound` flag, not inside the draw loop proper, so the sets are
+bound once per pass rather than once per draw — every submesh is a draw of the shared
+vertex and index arenas, and the sets do not change between them.
 
 Vulkan lets a set layout sit at any index — it carries no index of its own — but the
-GLSL does not: `gbuffer.frag` names `layout(set = 0, binding = 0)`. Adding a UBO set
-in front of the bindless one shifts bindless to set 1 while the shader still names
-set 0, which presents a uniform buffer where the SPIR-V wants a combined image
-sampler — a descriptor-type mismatch validation rejects at
-`vkCreateGraphicsPipelines`. That failure is loud. The silent one is the `< 4096u`
-guard in the next section.
+GLSL does not: `gbuffer.frag` names `layout(set = 0, binding = 0)` for the textures
+and `set = 1` for the scene buffers. Swapping the two in the pipeline layout presents
+a storage buffer where the SPIR-V wants a combined image sampler — a descriptor-type
+mismatch validation rejects at `vkCreateGraphicsPipelines`. That failure is loud. The
+silent one is the `< 4096u` guard in the next section.
 
 {{cite shaders/core/gbuffer.frag "layout(set = 0, binding = 0) uniform sampler2D textures[];"}}
 
-The push constant is the other half of the contract, and it agrees on both sides: the
-pass pushes a 240-byte `GBufferUBO` of three `mat4` then three `vec4`, and
-`gbuffer.frag` declares the same block field for field. The texture indices travel in
-the `w` lanes of `materialParams` and `albedoColor` and the `x` lane of
-`emissiveParams`, as `uint32_t` bit patterns packed into floats.
+The push constant does not carry the indices. The pass pushes a 16-byte
+block carrying one `uint`, the draw's submesh material slot, and the fragment shader
+resolves it through the instance's reference list into a row of the material buffer;
+the four texture indices come out of that row, not out of the push block. The draw's
+instance rides in `firstInstance`, so the vertex stage indexes the same instance table
+with `gl_InstanceIndex`.
 
-{{cite ohao/render/deferred/gbuffer_pass.hpp "};  // 240 bytes — fits in 256-byte push constant limit"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
 
 Startup order is load-bearing: the manager must be handed to `DeferredRenderer`
-before the G-buffer pass builds its pipeline, because the pipeline layout includes the
-bindless set only if a manager is present at that moment. If the manager's own
-initialisation fails, `VulkanRenderer` resets it to null and carries on, and the
-G-buffer pipeline layout is built with zero sets — while `gbuffer.frag` still
-declares and samples the set-0 array. That is not a graceful untextured mode; it is a
-pipeline layout that does not cover its shader, which validation reports at pipeline
-creation.
+before the G-buffer pass builds its pipeline, because the layout at index 0 is the
+manager's only if a manager is present at that moment. If the manager's own
+initialisation fails, `VulkanRenderer` resets it to null and carries on, and the pass
+puts an empty stand-in layout at index 0 so the scene set can still sit at index 1 —
+while `gbuffer.frag` still declares and samples the set-0 array. That is not a
+graceful untextured mode; it is a pipeline layout whose set 0 does not cover its
+shader, which validation reports at pipeline creation.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "pipelineLayoutInfo.setLayoutCount = 0;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "m_emptyLayout != VK_NULL_HANDLE ? m_emptyLayout : m_textureManager->getDescriptorSetLayout(),"}}
 
 ## Two sentinels, one of them fragile
 
-`UINT32_MAX` is the "no texture" value. C++ packs it into a float via `memcpy` for
-the push constant; the shader recovers it with `floatBitsToUint`. Albedo and normal
-are guarded against exactly that sentinel.
+`UINT32_MAX` is the "no texture" value. The material table stores each index as a
+float bit pattern (`std::bit_cast`), and the shader recovers it with
+`floatBitsToUint`. Albedo and normal are guarded against exactly that sentinel.
 
 {{cite shaders/core/gbuffer.frag "if (albedoTexIdx != 0xFFFFFFFFu) {"}}
 
@@ -98,44 +100,50 @@ Roughness/metallic and emissive are not. They use a range test instead:
 
 {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}}
 
-That literal `4096` is the `maxTextures` default argument the renderer happens to
+That literal `4096` is the `maxTextures` argument the renderer happens to
 pass. Raising the array capacity to, say, 8192 would leave every roughness-metallic
 and emissive texture in slots ≥ 4096 silently ignored — no validation error, just
 materials that quietly fall back to their scalar parameters.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,"}}
 
-## Strings as the binding key
+## Indices in a table, names as a side door
 
-Nothing stores a handle on the material. What the material component holds per map is
-a `std::string`:
+Nothing stores a texture name on a material. The model upload loads each of a
+material's maps with `loadTextureFromMemory` and writes the returned slot straight
+into the `MaterialDesc` field for that kind of map:
 
-{{cite ohao/gpu/vulkan/material.hpp "std::string albedoTexture;                 // Base color/diffuse texture"}}
+{{cite ohao/render/scene/model_upload.cpp "mats[mi].*field = h.index;"}}
 
-The upload path names each texture `<actorName>_albedo_<materialIndex>` and writes
-that string into the material component; the draw loop rebuilds the identical string,
-hashes it back to a slot, and packs the index into that draw's push constant. The
-`uint32_t` exists only between those two statements.
+and the material table packs those fields, bit-cast, into the row both pipelines read:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "matComp->getMaterial().albedoTexture = texName;"}}
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const auto handle = textureManager->findTexture(textureName);"}}
-{{cite ohao/render/deferred/gbuffer_pass.cpp "ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));"}}
+{{cite ohao/render/scene/material_table.cpp "d.baseColor.r, d.baseColor.g, d.baseColor.b, bits(d.albedoTex),"}}
 
-Two actors with the same name therefore share textures, and renaming an actor
-detaches its textures with no error. The indirection buys something real:
-`registerName` aliases many keys onto one handle, which is how `light_upload.cpp`
-points several material slots at a single uploaded image. That aliasing is
-also why unloading cannot just erase by `tex.name` — it must scan both maps for every
-key still pointing at the freed slot.
+Strings survive in exactly two places, both of them keys for the manager's own
+lookup tables. The path tracer's tint textures — a 1×1 texture per distinct encoded
+base colour — are named after the colour so that every material of that colour finds
+the one already uploaded, and the environment map is registered as `ohao_env_map`.
+`registerName` is what aliases a key onto an existing handle, which is why unloading
+cannot just erase by `tex.name` — it must scan both maps for every key still pointing
+at the freed slot.
 
+{{cite ohao/render/scene/model_upload.cpp "textures->registerName(h, name);"}}
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "if (it->second.index == handle.index) it = m_nameToHandle.erase(it);"}}
+
+Nothing deduplicates the model textures themselves: the upload walks materials, not
+the model's texture pool, so two materials pointing at the same pooled image upload it
+twice into two slots.
 
 ## A valid handle is not a successful upload
 
 Every failure path in `loadTextureFromMemory` — image creation failed, free list
 exhausted — returns `getDefaultTexture(type)`, and those defaults are real, valid
-handles. A caller checking only `handle.valid()` registers the 1×1 default under the
-actor's texture name and renders a surface that looks like a deliberate material.
+handles. The model upload checks only that:
+
+{{cite ohao/render/scene/model_upload.cpp "if (h.valid()) {"}}
+
+so a failed upload stores the 1×1 default's slot into the material and renders a
+surface that looks like a deliberate material.
 
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "case BindlessTextureType::Metallic:"}}
 
@@ -219,28 +227,39 @@ Both copies also take the *first* `HOST_VISIBLE` memory type without requiring
 `HOST_COHERENT`, and neither calls `vkFlushMappedMemoryRanges`. On desktop discrete
 GPUs that type is coherent in practice, so it works; it is not portable by spec.
 
-## What the path tracer uses instead
+## The path tracer reads the same table through its own set
 
-The stage flags on the binding are the tell: `FRAGMENT | COMPUTE`, with no ray
-tracing stages.
+The stage flags on the manager's binding are the tell: `FRAGMENT | COMPUTE`, with no
+ray tracing stages.
 
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;"}}
 
-This set cannot be bound to the RT pipeline, and it is not. `rt_build.cpp` builds a
-separate layered `VK_FORMAT_R8G8B8A8_UNORM` image, creates a single-layer view per
-slice, and hands the view array straight to the path tracer's own descriptor at
-set 0, binding 12. The renderer owns those per-layer views in `m_rtBindlessViews` and
-destroys them with the rest of the RT scene resources, on re-upload and at shutdown.
+This set cannot be bound to the RT pipeline, and it is not. Instead each RT frame the
+renderer copies the table's *views* into a parallel array: slot `i` of the array is
+bindless index `i`, up to the highest slot in use, with holes filled by the default
+white texture so the array is dense. The environment map's slot gets its own sampler;
+every other slot gets the manager's default one.
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "renderer.setBindlessTextures(bindlessViews, bindlessSamplers);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "const uint32_t count = m_textureManager->usedSlotEnd();"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "renderer.setBindlessTextures(m_rtTextureViews, m_rtTextureSamplers);"}}
+
+The path tracer writes those into binding 12 of its own descriptor set. The binding
+is sized to the manager's capacity — `ensureRTRenderer` passes `getMaxTextures()` —
+and is a variable-count, update-after-bind array, with every element below the
+capacity written (entries past the table's views repeat view 0) so no index reads an
+unwritten descriptor.
+
+{{cite ohao/gpu/vulkan/renderer.cpp "slot->setBindlessCapacity(m_textureManager ? m_textureManager->getMaxTextures()"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,"}}
 {{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 12) uniform sampler2D textures[];"}}
 
-Both use `nonuniformEXT` and the same `0xFFFFFFFF` sentinel, which makes them read as
-one system in the shader source. They are two, with independent slot numbering: an
-index meaning "brick albedo" in the GBuffer means something unrelated in
-closest-hit.
+Both pipelines use `nonuniformEXT` and the same `0xFFFFFFFF` sentinel, and — unlike a
+separate layered image — they share one slot numbering: an index meaning "brick
+albedo" in the G-buffer means the same image in closest-hit. What differs is the
+descriptor, not the identity. Two sets name the same images, and a texture upload
+reaches the path tracer only when the next RT frame rebuilds the array.
 
-## Two entry points nothing calls
+## Two entry points, one caller
 
 `loadTexture(path, …)` — the `stb_image` entry point that decodes from disk and picks
 `R8G8B8A8_SRGB` for albedo/emissive and `UNORM` for everything else — has no callers.
@@ -248,30 +267,39 @@ Model loaders decode textures themselves, so the shipping path is
 `loadTextureFromMemory`, where the caller supplies the format. The *policy* survives
 at the call sites (SRGB for albedo and emissive, UNORM for normal and rough-metal);
 only the function encoding it is unreachable. `loadTexture` is also the sole entry
-point that deduplicates by key, which is why two actors sharing a model upload the
+point that deduplicates by key, which is why two models sharing an image upload the
 same pixels twice.
 
-`registerExternalTexture` has no callers either, and carries a latent bug worth
-knowing before someone wires it up: it nulls `image` and `memory` so cleanup skips
-them, but `cleanup()` destroys every non-null view unconditionally, including one it
-does not own.
+`registerExternalTexture` has exactly one caller: the environment-map upload, which
+creates the HDR image itself and hands the manager only its view. The function nulls
+`image` and `memory` so cleanup skips them, but `cleanup()` destroys every non-null
+view unconditionally — so after registration the *manager* owns the view and the
+renderer owns the image and its memory.
 
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "tex.image = VK_NULL_HANDLE;  // External, don't destroy"}}
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "        if (tex.view != VK_NULL_HANDLE) {"}}
 
+The renderer's teardown follows that split: it unloads the slot, which destroys the
+view, and then frees the image and memory itself.
+
+{{cite ohao/gpu/vulkan/env_upload.cpp "// The bindless table owns the view once registered: unloading it destroys the view."}}
+
+Registering a view the caller also destroys would double-free it; the contract is that
+a registered view is surrendered.
+
 :::key
 The index in a material is a slot in this manager's free list, not an identity. It is
-reused after `unloadTexture`, unrelated to the path tracer's layer numbering, and
-handed out even when the upload failed. Treat a non-`UINT32_MAX` index as "something
-is bound here", never as "the texture I asked for is bound here".
+reused after `unloadTexture`, shared by the G-buffer and the path tracer, and handed
+out even when the upload failed. Treat a non-`UINT32_MAX` index as "something is
+bound here", never as "the texture I asked for is bound here".
 :::
 
 ## Contracts
 
-- The manager must be set on `DeferredRenderer` before the G-buffer pass initialises, or the bindless layout is absent from the G-buffer pipeline layout while `gbuffer.frag` still samples it.
-- The layout is set **0** in the G-buffer pipeline; adding a set in front of it requires editing `layout(set = …)` in `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
-- `GBufferUBO` and `gbuffer.frag`'s push-constant block must stay field-for-field identical; the texture indices are read from fixed lanes of the last three `vec4`s.
+- The manager must be set on `DeferredRenderer` before the G-buffer pass initialises, or set 0 of the G-buffer pipeline layout is an empty stand-in while `gbuffer.frag` still samples it.
+- The bindless layout is set **0** and the scene set is set **1** in the G-buffer pipeline; reordering them requires editing the `layout(set = …)` lines in `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
+- The pass's push constant is the draw's material slot only; texture indices come from the material row. Adding a per-draw texture lane means editing `DrawPushConstant` and the fragment shader's block together.
 - `updateDescriptorSet()` never needs an external call — every load path runs it before returning. After an **unload** it is not just unnecessary but ineffective: the loop skips null-view slots, so the freed element still names a destroyed `VkImageView` until a load reuses that slot. An unloaded index must not be sampled.
 - `unloadTexture` issues its own `vkDeviceWaitIdle` before destroying the image and view: nothing else in the manager tracks whether an in-flight submission may still sample them. Dropping that stall to speed up a texture-swapping loop reintroduces a use-after-free.
-- The `< 4096u` guards in `gbuffer.frag` hard-code the `maxTextures` default. Raising capacity without editing those two lines silently drops rough-metal and emissive textures above slot 4095.
-- Texture identity is the string `<actorName>_<suffix>_<materialIndex>`. Duplicate actor names alias their textures; renaming an actor unbinds them with no diagnostic.
+- The `< 4096u` guards in `gbuffer.frag` hard-code the `maxTextures` argument. Raising capacity without editing those two lines silently drops rough-metal and emissive textures above slot 4095.
+- The path tracer's binding 12 is rebuilt from the table every RT frame and sized to `getMaxTextures()`; a view registered with `registerExternalTexture` belongs to the manager from that moment.

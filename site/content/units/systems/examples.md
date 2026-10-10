@@ -8,9 +8,12 @@ standard: v2
 ## A scene is a `main()`
 
 OHAO has no scene file format. There is no loader that turns a `.scene` into
-actors, and nothing under `ohao/scene/` deserialises anything but a mesh asset.
-A scene exists only as the C++ that constructs it — `createActor`, then a
-`MeshComponent`, a `MaterialComponent`, a `LightComponent`.
+entities, and nothing under `ohao/scene/` deserialises anything but a mesh asset.
+A scene exists only as the C++ that constructs it — an `ecs::World`, then
+`ecs::spawnModel` for each mesh (which registers the geometry and materials with the
+renderer's `RenderScene` and creates an entity carrying a `MeshRenderer`) and
+`ecs::spawnLight` for each light. The drivers install the render extract on the world
+once, and from then on `world.update()` is what turns entity edits into GPU state.
 
 `examples/` builds four offline binaries and one windowed host. The four
 offline ones are half scene description, half harness. `cornell_box` writes its walls as raw `Vertex` quads and stacks twelve
@@ -219,33 +222,32 @@ that is not `RTRealtime` — including `Deferred`.
 
 {{cite examples/turntable.cpp "(rtMode == RenderMode::RTRealtime ? "}}
 
-## One model, N actors
+## One model, one entity, N submeshes
 
-`model_viewer` splits a multi-material model into one actor per material. The
-regroup rebuilds geometry per triangle: three fresh vertices pushed for every
-triangle, indices numbered consecutively. The sub-model comes out fully
-unwelded — `vertexCount = 3 × triangleCount` — so a shared vertex is re-emitted
-once per incident triangle, which on a closed manifold is its valence, about
-six.
+`model_viewer` spawns a multi-material model as a single entity. `uploadModel` does
+the splitting that the renderer needs, on the index buffer rather than the geometry:
+it walks the per-triangle material list and emits one submesh per contiguous run of
+equal materials, so the vertex data stays welded and the mesh keeps one BLAS.
 
-{{cite examples/model_viewer.cpp "subModel->vertices.push_back(model->vertices[oldIdx]);"}}
+{{cite ohao/render/scene/model_upload.cpp "std::vector<SubmeshDesc> materialRuns(const Model& model, uint32_t triangleCount) {"}}
 
-Worth knowing before copying that pattern: neither of the two render paths
-`model_viewer` can select requires the split. The RT material table already
-carries per-triangle material IDs, offset per model, and the GBuffer pass already
-subdivides each actor's index range into per-material draw ranges.
+The entity's `MeshRenderer` lists one material handle per submesh, in submesh order,
+and the driver spawns the whole model in one call:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "drawRanges = buildMaterialDrawRanges(*model, bufferInfo);"}}
+{{cite examples/model_viewer.cpp "const entt::entity modelEntity = spawn(*model, "Model", modelTransform, modelMaterial);"}}
 
-Nor is there a third path that would. `render()` runs the RT pipeline when the
-mode has one, its renderer exists and an acceleration structure was built, and
-`renderDeferred()` otherwise — including on a device without ray tracing, where
-`setRenderMode` refuses the RT switch and the mode stays `Deferred`.
+Both render paths the driver can select read that one description. The G-buffer pass
+draws one call per submesh, and the path tracer finds a triangle's material through
+the per-triangle slot stream. Neither needs the model pre-split. `render()` runs the
+RT pipeline when the mode has one, its renderer exists and the render world reports
+ray tracing, and `renderDeferred()` otherwise — including on a device without ray
+tracing, where `setRenderMode` refuses the RT switch and the mode stays `Deferred`.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "renderDeferred();"}}
 
-So the split is paid for in vertex count and BLAS entries on every run and buys
-nothing on either path.
+The cost to keep in mind runs the other way: a model whose triangles alternate
+between materials produces one submesh per alternation, and each is a draw call in the
+raster passes.
 
 :::key
 The frame you last rendered is not the frame you saved. Both the RT and the
@@ -260,6 +262,6 @@ buffer or refuses to accumulate into it.
 
 - Under `--denoise=none`, `render()` must be called `spp + MAX_FRAMES_IN_FLIGHT` times to land `spp` accumulated samples in the host buffer. The same loop hands OIDN `spp + 3` samples and `Atrous`/`DLSSRR` exactly 1. If the ring depth ever changes, every driver's `+ 3` is wrong and only `--denoise=none` output will show it.
 - Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.
-- The `Scene` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the scene second, so reverse-order destruction of locals gets it right; `cornell_box` and `model_viewer` also call `scene.reset()` explicitly. Swapping those two declarations tears down Vulkan resources still referenced by actors.
+- The `ecs::World` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the world second, so reverse-order destruction of locals gets it right; the render extract releases its instances and lights from the `RenderScene` as the world goes. Swapping those two declarations would make the extract release into a render world that has already been shut down.
 - `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.
 - An unknown trailing flag is silently ignored by `parseRenderFlags` and by `env_demo`'s own parser — typos degrade to defaults rather than failing the run.

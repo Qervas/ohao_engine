@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 · Scene · Transform propagation — OHAO Monograph</title>
+  <meta name="description" content="Parent-first world matrices, prevWorld motion history, the patch rule and verifyTransforms." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="scene/transform-system" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../scene.html">← Module hub</a> · Transform propagation</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">scene</p>
+          <h1>Transform propagation</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Parent-first world matrices, prevWorld motion history, the patch rule and verifyTransforms.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#two-passes-in-a-fixed-order">Two passes, in a fixed order</a></li><li><a href="#parent-first-without-a-sort">Parent-first without a sort</a></li><li><a href="#motion-history-prevworld-and-the-settle-frame">Motion history: prevWorld and the settle frame</a></li><li><a href="#the-patch-rule-and-its-check">The patch rule and its check</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="two-passes-in-a-fixed-order">Two passes, in a fixed order</h2></div>
+<div class="prose reveal">
+<p>`updateTransforms` is the first system every `World::update` runs. It does two things, and the order between them is the whole design of the motion history:</p>
+<p>1. **Settle.** Every entity tagged `MovedLastFrame` that is *not* dirty again this frame gets `prevWorld = world`, loses the tag, and is tagged `RenderDirty`. 2. **Propagate.** Every `TransformDirty` entity with no dirty ancestor is a root; each root&#x27;s subtree is recomputed.</p>
+<div class="citation-chip"><code class="citation-code">// 1. Last frame&#x27;s movers that did not move again: prevWorld catches up.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L48" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:48</a></div>
+<div class="citation-chip"><code class="citation-code">if (!hasDirtyAncestor(reg, e)) roots.push_back(e);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L61" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:61</a></div>
+<p>Settling first matters for an entity that moves on consecutive frames: it is still `TransformDirty`, so the settle pass skips it and the propagate pass rotates `world` into `prevWorld` itself. Settle only ever touches entities that stopped.</p>
+</div>
+<div class="section-rule"><h2 id="parent-first-without-a-sort">Parent-first without a sort</h2></div>
+<div class="prose reveal">
+<p>The world matrix of entity $e$ with parent $p$ is</p>
+<div class="math-block">$$
+W_e = W_p\,M_{\text{local}}(e), \qquad W_{\text{root}} = M_{\text{local}}(\text{root})
+$$</div>
+<p>and the only ordering requirement is that $W_p$ is current before $W_e$ is computed. The system gets that without sorting anything by depth. Each root is walked depth-first from an explicit stack: an entity&#x27;s world is computed *before* its children are pushed, so by the time a child is popped its parent&#x27;s `WorldTransform` already holds this frame&#x27;s value.</p>
+<div class="citation-chip"><code class="citation-code">const glm::mat4 world = parentWorld(reg, e) * reg.get&lt;Transform&gt;(e).matrix();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L23" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:23</a></div>
+<p>Children are pushed unconditionally — a moved parent moves its whole subtree, whether or not any child was edited. Root selection is what keeps the work linear in the dirty subtrees: an entity with a dirty ancestor is not a root, because the ancestor&#x27;s walk will reach it, so no subtree is computed twice in one update. The price is the ancestor test itself, one `Parent` lookup per level for every dirty entity:</p>
+<div class="math-block">$$
+\text{cost} = \sum_{e\,\in\,\text{dirty}} \operatorname{depth}(e) \;+\; \sum_{r\,\in\,\text{roots}} |\operatorname{subtree}(r)|
+$$</div>
+<p>For the flat scenes every example builds — no entity has a parent — the first sum is zero and the second is the number of entities that changed.</p>
+<p>An entity whose parent is gone, or has no `WorldTransform` yet, composes against identity rather than failing:</p>
+<div class="citation-chip"><code class="citation-code">if (const auto* wt = reg.try_get&lt;WorldTransform&gt;(p-&gt;entity)) return wt-&gt;world;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L14" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:14</a></div>
+</div>
+<div class="section-rule"><h2 id="motion-history-prevworld-and-the-settle-frame">Motion history: prevWorld and the settle frame</h2></div>
+<div class="prose reveal">
+<p>Each recompute of an entity that already has a `WorldTransform` copies the old matrix into `prevWorld` before writing the new one, and tags `MovedLastFrame`:</p>
+<div class="citation-chip"><code class="citation-code">wt-&gt;prevWorld = wt-&gt;world;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L25" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:25</a></div>
+<p>The G-buffer vertex shader projects the vertex through both, so an object&#x27;s own displacement between frames lands in the velocity buffer:</p>
+<div class="citation-chip"><code class="citation-code">fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L55" target="_blank" rel="noopener">shaders/core/gbuffer.vert:55</a></div>
+<p>The settle pass exists because the GPU copy of an instance is only rewritten when something marks it `RenderDirty`. Without it, an object that moves once and stops would keep its last `prevWorld ≠ world` pair on the GPU indefinitely, and the velocity buffer would report the final step&#x27;s motion on every later frame. With it, a single move costs exactly two instance uploads: the move frame, carrying the displacement, and the next frame, carrying `prevWorld = world` and zero velocity.</p>
+<p>`MovedLastFrame` is set on *every* recompute, not only when the matrix changed: re-patching a `Transform` with its current value, or reparenting under an identity parent, still costs the two-frame tail. Nothing reaches the GPU for it, though — the instance table compares the new `InstanceGpu` against the old bytes and marks nothing dirty when they match.</p>
+<div class="citation-chip"><code class="citation-code">if (std::memcmp(&amp;cur, &amp;g, sizeof(g)) != 0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/instance_table.cpp#L92" target="_blank" rel="noopener">ohao/render/scene/instance_table.cpp:92</a></div>
+<p>Every recomputed entity is tagged `RenderDirty`, renderable or not. That is how a moved `Light` reaches the light rebuild: the render extract treats any `RenderDirty` entity carrying a light as a reason to rebuild the light list.</p>
+</div>
+<div class="section-rule"><h2 id="the-patch-rule-and-its-check">The patch rule and its check</h2></div>
+<div class="prose reveal">
+<p>`TransformDirty` is set by EnTT&#x27;s update signal on `Transform`, which fires for `patch`, `replace` and `emplace_or_replace` — and not for a write through the reference `get&lt;Transform&gt;()` returns. Such a write changes the local transform and leaves the world matrix, the GPU instance and the TLAS on the old pose, with nothing logged.</p>
+<div class="citation-chip"><code class="citation-code">// a plain get&lt;&gt;() write is not tracked (see verifyTransforms).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/components.hpp#L17" target="_blank" rel="noopener">ohao/ecs/components.hpp:17</a></div>
+<p>`verifyTransforms` is the detector. For every entity that has both transforms and is not dirty, it rebuilds $W_p M_{\text{local}}$ and compares it element by element with the stored `world`; any element off by more than $10^{-4}$ counts the entity once.</p>
+<div class="citation-chip"><code class="citation-code">if (std::fabs(expect[c][r] - wt.world[c][r]) &gt; 1e-4f) { ++bad; goto next; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/transform_system.cpp#L73" target="_blank" rel="noopener">ohao/ecs/transform_system.cpp:73</a></div>
+<p>It compares against the parent&#x27;s *stored* world, not a recomputed one, so an untracked write to a parent is counted once — at the parent — and its children, still consistent with the parent&#x27;s stale matrix, are not. The count therefore names the entities that were written wrongly, not everything that is visibly wrong.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`verifyTransforms` is a function, not a build mode: no system or frame loop calls it, and the only caller in the tree is the ECS test suite. The patch rule is enforced by convention and by tests that seed exactly one bad write; a game that wants the check at run time has to call it itself.</p></div>
+<div class="citation-chip"><code class="citation-code">CHECK(verifyTransforms(w.registry()) == 1, &quot;an untracked write is reported&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/ecs/ecs_tests.cpp#L101" target="_blank" rel="noopener">tests/ecs/ecs_tests.cpp:101</a></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`updateTransforms` clears `TransformDirty` and sets `RenderDirty`; it never clears `RenderDirty`. The render extract clears it, so a world without the extract installed accumulates the tag on every entity that ever moved.</li>
+<li>The first update after `create` emplaces `WorldTransform{world, world}` and does not tag `MovedLastFrame`: spawning is not motion.</li>
+<li>Propagation is single-threaded and runs on the caller&#x27;s thread inside `World::update`. Nothing else may touch the registry concurrently.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/ecs/transform_system.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/instance_table.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/components.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/ecs/ecs_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/transform_system.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="world.html"><div class="label">← Prev</div><div class="title">ECS world &amp; hierarchy</div></a><a class="next" href="render-extract.html"><div class="label">Next →</div><div class="title">Render extract</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -59,16 +59,18 @@ default of 4. The rate is 60 Hz, hard.
 Phase 1 creates backend bodies for any `RigidBody` lacking one — deferred
 registration, because a body is usually constructed before its shape and final
 transform exist. A shapeless body is skipped every tick until it gets geometry,
-so a mis-authored component quietly fails to simulate rather than crashing.
+so a mis-authored body quietly fails to simulate rather than crashing.
 
 {{cite ohao/physics/world/physics_world.cpp "if (!body->getCollisionShape()) continue;"}}
 
-Just before creation the transform component is re-read into the mirror. The
-comment records the bug that put it there: callers set an actor's position
-*after* `createActorWithComponents` returns, so a body registered at
-component-init time would otherwise be born at the origin and fall from there.
+Creation reads the mirror's position and rotation exactly as they stand at that
+moment, and nothing re-reads an owner's transform for it:
 
-{{cite ohao/physics/world/physics_world.cpp "comp->updateRigidBodyFromTransform();"}}
+{{cite ohao/physics/world/physics_world.cpp "auto info = buildCreationInfo(body.get());"}}
+
+A body is addressed by name and handle and knows no entity, so the caller must set
+its position before the tick that first sees a shape. A body registered with an
+unset position is born at the origin and falls from there.
 
 Phase 2 runs the `ForceRegistry` — wind, buoyancy, springs, force volumes — into
 each body's CPU accumulator. Phase 3 pushes that accumulator down as one
@@ -137,18 +139,14 @@ whole point of a plane:
 
 {{cite ohao/physics/backend/jolt/jolt_backend.cpp "JPH::BoxShapeSettings settings(JPH::Vec3(100.0f, 0.01f, 100.0f));"}}
 
-`buildCreationInfo` is also not the only translator. `PhysicsComponent::setCollisionShape`
-runs a second, divergent one — `collisionShapeToShapeInfo` — and pushes its
-result at the same backend through the public `getBackend()` handle:
+`buildCreationInfo` is also the only translator. A mesh, or any type without a
+case, falls to a box sized from the shape's own `getSize()`:
 
-{{cite ohao/physics/components/physics_component.cpp "m_physicsWorld->getBackend()->setShape(m_rigidBody->getBackendHandle(), shapeInfo);"}}
+{{cite ohao/physics/world/physics_world.cpp "// Default to box with the shape's size"}}
 
-That copy *does* forward a plane's real normal and distance, which the backend
-then discards anyway; and it has no `TRIANGLE_MESH` case at all, so a mesh falls
-through `default:` to a fixed 0.5-half-extent unit cube rather than its own
-bounds. Two paths into one backend, disagreeing on both shapes that degrade.
-
-{{cite ohao/physics/components/physics_component.cpp "// Default to box for unsupported types"}}
+The backend's `setShape` entry point could take a second `ShapeInfo` for a live
+body, but nothing builds one or calls it; `RigidBody::setCollisionShape` updates
+the mirror and its inertia and never reaches the backend body.
 
 The one route to genuinely non-convex collision is the terrain heightfield, and
 it works because it bypasses `buildCreationInfo` and assembles its own
@@ -238,17 +236,17 @@ appears to accept it is a compatibility template that discards its argument:
 
 {{cite ohao/physics/world/physics_world.hpp "bool initialize(const T& /*unused_settings*/) { initialize(); return true; }"}}
 
-`Scene`'s constructor is its only caller, immediately after constructing the
-world — which already ran `initialize()`:
+Nothing calls that overload now, but the world's constructor already ran
+`initialize()`, so a later call would be a second one. The re-entry guard tests for
+`STOPPED`:
 
-{{cite ohao/scene/scene.cpp "physicsWorld->initialize(settings);"}}
+{{cite ohao/physics/world/physics_world.cpp "if (m_state != SimulationState::STOPPED) {"}}
 
-The re-entry guard tests for `STOPPED`, but `STOPPED` means both "never
-initialised" and "initialised and idle", so the second call reruns everything: a
-fresh Jolt backend replaces the first, and `ProfileManager` and `ForceDebugger`
-become new instances. Harmless today — no bodies exist yet at that point — but on
-a populated world it would leave every `RigidBody` holding a handle into a
-destroyed Jolt system.
+but `STOPPED` means both "never initialised" and "initialised and idle", so the
+second call reruns everything: a fresh Jolt backend replaces the first, and
+`ProfileManager` and `ForceDebugger` become new instances. Harmless on an empty
+world, but on a populated one it would leave every `RigidBody` holding a handle
+into a destroyed Jolt system.
 
 Gravity collides the same way. The backend applies it itself:
 
@@ -267,18 +265,15 @@ cancel a value held inside Jolt.
 
 `step()` returns immediately unless the state is exactly `RUNNING`. `resume()`
 only lifts `PAUSED` and `pause()` only leaves `RUNNING`, so the sole route out of
-`STOPPED` is `setSimulationState` — which no call site in `ohao/` uses.
-`Scene::updatePhysics` would step the world:
+`STOPPED` is `setSimulationState` — which no call site in `ohao/` uses. And no
+host steps the world in the first place: `Application` runs the game's fixed and
+per-frame hooks, then `ecs::World::update`, then the renderer, and none of the
+engine's systems owns a `PhysicsWorld`. There is no ECS physics sync yet — no
+system copies a body's pose onto an entity's `Transform`, or an entity's onto the
+body — so a game that wants physics has to create the world, step it from its own
+hook and do that copy itself.
 
-{{cite ohao/scene/scene.cpp "physicsWorld->stepSimulation(deltaTime);"}}
-
-except that it never executes. Its only caller is `VulkanRenderer::updatePhysics`,
-and nothing calls *that* — no example, no render loop. This is unreached code
-sitting above the state check, not a per-frame tick that early-returns.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "m_scene->updatePhysics(deltaTime);"}}
-
-Two harnesses do drive the world, and neither arrives through `Scene`. The Python
+Two harnesses do drive the world, and neither is a host. The Python
 binding layer's `start()` flips the state before the test suite pumps
 `world.step(1/60)`:
 
@@ -295,8 +290,8 @@ otherwise running one full `stepFixed(m_fixedTimestep)` from `STOPPED`:
 So the heading is literal rather than figurative: the world simulates plenty
 under test, it simply never enters `RUNNING` outside the Python bindings. That is
 the honest scope of this unit today — a headless kernel exercised by the
-analytical-solution and invariant tests, wired into `Scene` but reached by no
-renderer example. `SimulationState::STEPPING` is never assigned anywhere, and the
+analytical-solution and invariant tests, reached by no example and by no part of
+the game host. `SimulationState::STEPPING` is never assigned anywhere, and the
 free function that counts it as live has no call site in `ohao/` at all; the
 member predicates are `isRunning()` and `isPaused()`, and neither knows about it.
 
@@ -309,6 +304,6 @@ member predicates are `isRunning()` and `isPaused()`, and neither knows about it
 - Force accumulators are cleared each tick, and any resultant below 0.01 N is dropped by the push threshold.
 - `flushPendingBodies()` must run before constraint creation. An unflushed body yields `INVALID_BODY`, which makes `createConstraint` return `INVALID_CONSTRAINT` as `body1` — and, worse, is read as *fixed to world* as `body2`.
 - One terrain heightfield per world: `addTerrainHeightfield` destroys the previous body before creating the new one. It files that body on object layer 1024 — a mask where an index belongs — so it sits outside the 16×16 matrix and none of the terrain collision exclusions apply to it.
-- Changing a shape through `PhysicsComponent::setCollisionShape` takes a different translator than body creation does. The two agree on box, sphere, capsule and cylinder and disagree on mesh; both lose the plane.
+- A shape is translated once, at body creation. `RigidBody::setCollisionShape` after the body is in the backend changes the mirror's inertia and nothing else, and the plane is flattened to +Y either way.
 - `initialize()` is not idempotent on a populated world — it rebuilds the backend while every `RigidBody` keeps its stale handle.
 - `PhysicsWorldFactory`, `PhysicsManager` and `PhysicsProfiler` are declared in the header with no definitions anywhere in the tree. Using them, including the `PROFILE_PHYSICS` macro, is a link error, not a feature.

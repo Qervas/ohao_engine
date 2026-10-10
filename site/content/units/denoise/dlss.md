@@ -222,14 +222,14 @@ realtime raygen ends with an `imageStore` into it, and the wrapper forwards it a
 `pInSpecularHitDistance` whenever the view handle is non-null. It is detached at both
 ends.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "bindings[35].binding         = 35;"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)"}}
 
 The write side breaks first. The RT descriptor set is updated by exactly one
-`vkUpdateDescriptorSets`, fed by a fixed `VkWriteDescriptorSet writes[29]` array whose
-highest `dstBinding` is 28 — so binding 35 is declared and never populated, and the
+`vkUpdateDescriptorSets`, fed by a fixed `VkWriteDescriptorSet writes[32]` array whose
+last image `dstBinding` is 28 and none of whose writes targets 35 — so binding 35 is declared and never populated, and the
 shader store has no descriptor through which to reach `m_specHitDistImage`:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[29]"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32]"}}
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(specHitDistAOV, pixel, vec4(specHitDist, 0.0, 0.0, 0.0));"}}
 

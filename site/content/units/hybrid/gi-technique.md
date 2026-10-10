@@ -86,54 +86,55 @@ contributes even with a wall between it and the lamp: indirect light leaks throu
 geometry.
 
 A fourth hides in the choice of light. That single light is whichever the deferred
-renderer ranks brightest that frame:
+renderer ranks brightest that frame, scanning the `RenderScene`'s light list:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (lc->getIntensity() > bestIntensity)"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (l.intensity > bestIntensity) {"}}
 
-The loop compares intensity and reads nothing else — never `getLightType()`, though
-the enum has four members:
+The loop compares intensity and reads the light's kind only to skip emissive
+proxies — it never distinguishes the four real kinds of the enum:
 
-{{cite ohao/scene/component/light_component.hpp "Directional = 1,"}}
+{{cite ohao/render/scene/render_scene_types.hpp "enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };"}}
 
 Whatever wins is handed to the shader as a position and a scalar, the position being
-the light actor's transform. A directional sun therefore becomes a point lamp parked
-at that transform with $1/(1+d^2)$ falloff: wrong incident direction and wrong
+the light's world position. A directional sun therefore becomes a point lamp parked
+at that position with $1/(1+d^2)$ falloff: wrong incident direction and wrong
 falloff at every bounce point, not merely dim. For one point lamp the single-light
 restriction itself costs nothing. With two comparable lights roughly half the
 indirect energy is absent, and the bleed colour snaps when the ranking flips.
 
-## Two filters for geometry that no longer exists
+## One ray mask, and what it rejects
 
 The raygen traces with a visibility mask of `0x01`, meaning "static geometry only":
 
 {{cite shaders/rt/rt_gi.rgen "uint rayMask = 0x01;"}}
 
 Vulkan intersects an instance when `ray_mask & instance_mask` is non-zero. Every
-instance the TLAS builder adds gets `MASK_STATIC_ONLY`, which is `0xFF`, because
-skeletal animation was removed from the engine:
+live, visible instance in the `RenderScene`'s TLAS gets mask `0xFF`, so the AND
+passes; a hidden instance or a released slot gets zero, so the AND rejects it:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "uint32_t instanceMask = rt::MASK_STATIC_ONLY;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
 
-so the AND never rejects anything. Underneath it sits a *second*, independent
-filter — the source comment reports `traceRayEXT`'s cull mask being ignored on an
-RTX 5070, so the same test was re-implemented in the hit shader as an alpha test
-on the material buffer:
+The mask therefore does one job today — it keeps hidden geometry out of the
+bounce — and the bit `0x01` never distinguishes static from dynamic, because the
+engine has no skeletal animation to separate. The host-side header still names the
+constant, but nothing includes it — the TLAS code writes the literal `0xFF`:
 
-{{cite shaders/rt/rt_gi.rchit "if (isStatic < 0.5) {"}}
+{{cite ohao/render/rt/rt_visibility.hpp "constexpr uint32_t MASK_STATIC_ONLY    = 0xFF;  // static geometry — visible to everything"}}
 
-That one is inert too. The alpha comes from an optional `flags` argument
-defaulting to 1.0, and the technique's only caller passes albedos alone:
-
-{{cite ohao/render/rt/rt_gi_technique.cpp "float alpha = (i < flags.size()) ? flags[i] : 1.0f;"}}
-{{cite ohao/gpu/vulkan/rt_build.cpp "if (gi) gi->setMaterialAlbedos(materialAlbedos);"}}
-
-Both mechanisms still execute — the mask in TLAS traversal, the alpha test on
-every hit — and neither can currently reject anything. Worth knowing before
-someone "fixes" the workaround by wiring flags in and discovers half the scene
-stopped bleeding. The header meant to keep the two sides in sync,
+The hit shader does no filtering of its own. It reads the instance's albedo by the
+TLAS custom index and returns it; nothing in it can reject a hit, so a hit the
+traversal reports always counts as a bounce surface. The header meant to keep the
+mask constants in sync across host and shader,
 `shaders/rt/includes/rt_masks.glsl`, has no `#include` anywhere in the tree: the two
 raygen shaders that use the mask, `rt_gi.rgen` and `rt_shadow.rgen`, each spell
 `0x01` as a literal.
+
+The albedo itself comes from the instance table, not from a per-actor buffer
+filled by the TLAS build loop. Its home is `InstanceGpu::giAlbedoPacked`, whose
+`rgb` the closest-hit reads; the `.a` lane is a packed roughness and metallic that
+nothing reads:
+
+{{cite shaders/rt/rt_gi.rchit "vec3 albedo = instances[gl_InstanceCustomIndexEXT].giAlbedoPacked.rgb;"}}
 
 ## A temporal filter of one lerp
 
@@ -316,7 +317,7 @@ in what the hit shader is permitted to know, which is one `vec4`.
 ## Contracts
 
 - The raygen multiplies indirect light by the receiving surface's albedo before writing. Any consumer of binding 11 must not multiply by albedo again.
-- The material buffer is indexed by `gl_InstanceID`, so `setMaterialAlbedos` must receive albedos in exactly TLAS instance order — the build loop collects both in one pass for that reason. Instances past the supplied list keep the 0.8 grey default, but only as far as index 255: the SSBO is 256 `vec4`s, the descriptor's `range` matches, the closest-hit shader clamps nothing, and the TLAS build loop caps instance count at nothing. Instance 256 reads past the bound range, on a device created without `robustBufferAccess`.
+- The bounce albedo is `InstanceGpu::giAlbedoPacked.rgb`, read from binding 6 by `gl_InstanceCustomIndexEXT`, which is the `RenderScene` instance slot. It travels on `InstanceDesc` (default 0.73 grey), so a spawner that wants a coloured bounce must set it when it creates or updates the instance; nothing derives it from the material.
 - `setSSGITexture` must run after the per-frame reset and before the lighting pass records — today from the RTGI pass's callback, which the graph records first — or that frame's lighting pass takes the dummy view and never raises the SSGI flag bit. Hand over the view only when `rendered()` is true.
 - `resize()` releases and re-clears the history image but keeps the frame counter, so the first frame after it blends at 0.3 against zeros. Resetting `m_frameIndex` there would restore the bootstrap weight.
 - The sky test is `worldPos == vec3(0.0) && posSample.a == 0.0`, matching the GBuffer0 clear exactly, so a surface at the world origin with metallic 0 gets no GI.

@@ -178,30 +178,36 @@ framebuffer:
 {{cite ohao/render/deferred/csm_pass.cpp "framebufferInfo.layers = 1;"}}
 
 `CSMPass::execute` loops over the four cascades, begins the depth-only render pass on
-that cascade's framebuffer, and redraws every visible mesh. Nothing routes primitives
-to a layer: the framebuffer already *is* the layer. The pipeline therefore has a
-vertex stage and nothing else — no geometry shader, no fragment shader, no descriptor
-set — and the vertex shader projects straight into the cascade being rendered:
+that cascade's framebuffer, and redraws every `RenderScene` draw. Nothing routes
+primitives to a layer: the framebuffer already *is* the layer. The pipeline therefore
+has a vertex stage and nothing else — no geometry shader, no fragment shader — and
+the vertex shader projects straight into the cascade being rendered. The object's
+world matrix is not pushed per draw; it is read from `RenderScene`'s instance table,
+indexed by the draw's `firstInstance`, which the pass sets to the instance slot:
 
-{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * pc.model * vec4(inPosition, 1.0);"}}
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[gl_InstanceIndex].world * vec4(inPosition, 1.0);"}}
 
-The cascade's matrix travels in push constants next to the model matrix, re-pushed
-per draw from the `m_cascadeData` the same `execute` just recomputed:
+The instance table is the pipeline's only descriptor set: one set per frame slot,
+holding the storage buffer, rewritten each `execute` because the table buffer can be
+replaced when it grows. The cascade's matrix travels as a single push constant,
+pushed once per cascade rather than once per draw, from the `m_cascadeData` the same
+`execute` just recomputed:
 
-{{cite ohao/render/deferred/csm_pass.cpp "push.viewProj = m_cascadeData.viewProj[cascade];"}}
+{{cite ohao/render/deferred/csm_pass.cpp "const ShadowPushConstant push{m_cascadeData.viewProj[cascade]};"}}
 
 :::why
-Two `mat4`s are exactly 128 bytes, the push-constant size every Vulkan device must
-support, and the header pins it with a `static_assert`. Push constants are recorded
-into the command buffer by value, so the shadow raster needs no per-frame buffer and
-no descriptor set to keep in step with frames in flight. A single-pass layered
-variant (a geometry shader or `gl_Layer` from the vertex stage broadcasting to all
-four layers) would cut the draw count by four, but needs a layered framebuffer and
-either a GS stage or `shaderOutputLayer`; at four cascades the plain loop is the
-portable choice.
+The cascade matrix is the only thing that changes between the four passes, so it is
+the only thing that needs to ride in the command buffer: 64 bytes, half of the
+128-byte push-constant size every Vulkan device must support, pinned by a
+`static_assert`. Everything per-object lives in the instance table, which the G-buffer
+pass reads too, so the shadow raster and the main view cannot disagree about where an
+object is. A single-pass layered variant (a geometry shader or `gl_Layer` from the
+vertex stage broadcasting to all four layers) would cut the draw count by four, but
+needs a layered framebuffer and either a GS stage or `shaderOutputLayer`; at four
+cascades the plain loop is the portable choice.
 :::
 
-{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 128"}}
+{{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 64);"}}
 
 The same matrices also go to the *sampling* side: `execute` memcpys `m_cascadeData`
 into the persistently-mapped cascade UBO, and `DeferredRenderer` hands that buffer
@@ -217,5 +223,5 @@ all four array layers rather than layer 0 alone.
 
 - `setCameraData` must receive the **unjittered** projection. `DeferredRenderer` passes `m_proj` while the GBuffer pass gets `jitteredProj`; a jittered matrix would nudge every cascade sphere each frame and defeat the texel snapping.
 - The lighting shader applies CSM only to lights of type 0 (directional) and only when flag bit 2 is set. Point and spot lights are unshadowed on this path.
-- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from push constants recorded into its own command buffer.
+- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from a push constant recorded into its own command buffer, and its instance-table set is per frame slot.
 - The shadow sampler is created with `compareEnable = VK_TRUE` and `VK_COMPARE_OP_LESS_OR_EQUAL`, but binding 6 is declared `sampler2DArray` (not `sampler2DArrayShadow`) and the shader compares depths itself. The comparison state is dead, and Vulkan requires a compare-enabled sampler to be used with depth-compare instructions.

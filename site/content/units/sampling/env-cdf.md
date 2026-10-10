@@ -23,7 +23,7 @@ copied into a `DEVICE_LOCAL` image and waited on. The build is the last read of
 the host copy before `stbi_image_free` drops it, not a step on the way to the
 upload:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
 
 Out come a conditional CDF per row (W floats × H rows) and a marginal CDF over
 rows (H floats), handed to every RT profile with the map's width, height and
@@ -232,7 +232,7 @@ raygen and miss stages both, and both shaders reference them statically — so
 something must be bound there in every scene, including a Cornell box with no
 HDRI at all.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "// 17: Env marginal CDF (storage buffer) — accessed by raygen + miss"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "add(17, BUFFER, RGEN | MISS);   // env marginal CDF"}}
 
 :::why
 Rather than compile a second pipeline (or specialise the raygen) for the no-env
@@ -243,7 +243,7 @@ pipeline, one layout, two four-byte allocations — against the alternative of
 doubling the shader permutation count to save eight bytes.
 :::
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "float v = 1.0f; memcpy(dp, &v, sizeof(float));"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "const float v = 1.0f; std::memcpy(dp, &v, sizeof(float));"}}
 {{cite ohao/render/rt/path_tracer.hpp "// control.w = envCDFWidth. If 0, shader must skip env importance sampling."}}
 
 The builder has a second degenerate case. A completely black row sums to zero, so
@@ -272,22 +272,21 @@ The HDR image is staged through a transfer buffer into `DEVICE_LOCAL` memory. Th
 CDFs are not: they are allocated `HOST_VISIBLE | HOST_COHERENT`, mapped,
 memcpy'd, and left there for the GPU to binary-search in place.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "void* dp; vkMapMemory(m_device, outMem, 0, sz, 0, &dp);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "void* dp = nullptr; vkMapMemory(m_device, outMem, 0, sz, 0, &dp);"}}
 
 For a 4096×2048 map the conditional table alone is 8.4 M floats — 32 MiB — of
 randomly-accessed data on a heap whose residency depends on which memory type the
 driver reports first for those flags.
 
-The buffers are destroyed only in `VulkanRenderer::shutdown`. The branch that
-builds them fires whenever the requested env path differs from the loaded one,
-and it overwrites `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` without
-destroying the previous pair — so switching HDRIs at runtime leaks both tables
-and the env image behind them. Loading one environment and keeping it, which is
-what every shipped example does, never hits this.
+The branch that builds them fires whenever the requested env path differs from the
+loaded one. It first idles the graphics queue and destroys the previous env image,
+because frames in flight may still sample it, and `destroyEnvCDFBuffers` frees the
+previous CDF pair before the new one is uploaded — so switching HDRIs at runtime
+replaces both tables rather than leaking them. The same two calls run at shutdown.
 
 ## Contracts
 
-- Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `light_upload` allocates is what makes that unreachable.
+- Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `env_upload.cpp` allocates is what makes that unreachable.
 - Width, height and integral travel in push constants (`control.w`, `tuning.y`, `tuning.z`), not in the buffers. A `control.w` of 0 means "skip env importance sampling entirely", not "the map is 0 wide".
 - `sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row's centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so for the RT pipeline's own pairing the balance weights do not sum to exactly one for BSDF-sampled directions. The fault is in the *pairing*, not in either function: route both sides of a balance weight through the same `pdfEnvMap` and the weights do sum to one. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness.
 - The CDF is rebuilt only when the environment *path* changes, so `envIntensity` relighting never touches it — correctly, since a uniform scale leaves the normalised distribution identical.

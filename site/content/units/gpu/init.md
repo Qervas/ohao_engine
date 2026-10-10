@@ -194,9 +194,10 @@ rather than loudly.
 {{cite ohao/gpu/vulkan/device_setup.cpp "vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &canPresent);"}}
 
 - `BindlessTextureManager` must be handed to `DeferredRenderer` before the deferred
-  renderer initialises. The G-buffer pass builds its pipeline layout with the bindless
-  set only if it has a manager at that moment; without one the layout has zero sets
-  and `gbuffer.frag`'s `set = 0, binding = 0` texture array has nothing behind it.
+  renderer initialises. The G-buffer pass puts the manager's layout at set 0 of its
+  pipeline layout only if it has a manager at that moment; without one set 0 is an
+  empty stand-in layout (so the scene set can still sit at set 1) and `gbuffer.frag`'s
+  `set = 0, binding = 0` texture array has nothing behind it.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_deferredRenderer->setTextureManager(m_textureManager.get());"}}
 
@@ -208,14 +209,19 @@ rather than loudly.
 {{cite ohao/gpu/vulkan/renderer.cpp "if (m_presentTarget && !createPresentation()) {"}}
 
 A fourth step is notable for its absence rather than its position. `initialize()`
-builds only the acceleration-structure manager; the realtime and offline
-`PathTracer`s are constructed lazily on `setRenderMode`, because each holds beauty
-plus a full AOV set at render resolution and building both eagerly can exhaust VRAM
-at 4K. `ensureRTRenderer` pays for that by re-running `updateSceneBuffers()` after a
-profile is created, which would otherwise start with empty material, texture, light
-and AS buffers.
+builds the render world — which creates and owns the acceleration structures when the
+device supports them — but not the realtime and offline `PathTracer`s. Those are
+constructed lazily on `setRenderMode`, because each holds beauty plus a full AOV set at
+render resolution and building both eagerly can exhaust VRAM at 4K. Creating one costs
+nothing else: the scene's tables, textures and lights already live in the render world
+and are bound to the tracer on every RT frame, so `ensureRTRenderer` has nothing to
+re-upload.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "// RenderScene (prepareRTSceneForFrame / renderRTPipeline): nothing to re-upload."}}
+
+The render world is created after the deferred renderer and before presentation: it
+needs the device, queue and command pool, and it is told whether `VK_KHR_ray_query` was
+enabled, because that decides which shader stages its TLAS-build barrier may name.
 
 ## Contracts
 
@@ -230,7 +236,7 @@ and AS buffers.
   `createLogicalDevice`, or neither present support nor `VK_KHR_swapchain` is
   guaranteed.
 - `DeferredRenderer::setTextureManager` must run before `DeferredRenderer::initialize`,
-  or the G-buffer pipeline layout has no bindless set.
+  or set 0 of the G-buffer pipeline layout is an empty stand-in with no bindless table.
 - `validationEnabled() == false` means validation did not run, not that it passed.
 - Only one queue is created. A second needs a change to the queue create info
   (`queueCount`, or another `VkDeviceQueueCreateInfo`), not just a `vkGetDeviceQueue`

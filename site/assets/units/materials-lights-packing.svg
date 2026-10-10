@@ -76,12 +76,12 @@
   <line x1="14" y1="208" x2="706" y2="208" stroke="#3d4a58" stroke-dasharray="2 4"/>
   <text x="14" y="230" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">The same slider, two integers</text>
 
-  <text x="120" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">LightComponent = GPULight w</text>
+  <text x="120" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">LightKind = GPULight w</text>
   <text x="580" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">LightData.position.w</text>
 
   <!-- left column -->
   <rect x="30" y="262" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="120" y="277" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">0  Sphere</text>
+  <text x="120" y="277" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">0  Point</text>
   <rect x="30" y="290" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
   <text x="120" y="305" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">1  Directional</text>
   <rect x="30" y="318" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>

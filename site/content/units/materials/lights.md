@@ -8,59 +8,64 @@ figures: [materials-lights-packing]
 
 ## The same integer means two different lights
 
-A scene author sets one thing: a `LightComponent` whose `LightType` runs Sphere = 0,
+A scene author sets one thing: a `Light` component whose `LightType` runs Point = 0,
 Directional = 1, Spot = 2, AreaRect = 3.
 
-{{cite ohao/scene/component/light_component.hpp "Sphere = 0,       // point light with radius"}}
+{{cite ohao/ecs/components.hpp "enum class LightType : uint8_t { Point, Directional, Spot, AreaRect };"}}
 
-Neither light buffer ends up holding only those. Both pipelines also synthesise one light
-per actor whose material carries an emissive texture — the ray-traced side stamps it in as
-a sphere at the mesh centre, the deferred side as a point light — so every count on this
-page is scene lights plus emissive stand-ins:
+Render extraction resolves each one against its world transform into a `LightDesc`
+whose `LightKind` repeats those four and adds a fifth, `EmissiveProxy`:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "gl.positionAndType = glm::vec4(center, 0.0f);  // sphere type"}}
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "light.position = glm::vec4(center, 1.0f);  // type 1 = point light"}}
+{{cite ohao/render/scene/render_scene_types.hpp "enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };"}}
 
-The path tracer takes the component enum unmodified — the value is cast straight to
-float and dropped into `positionAndType.w`:
+Neither light buffer ends up holding only the authored lights. Model upload also
+derives one point-like stand-in per model whose material carries an emissive texture
+(`EmissiveProxyLight`, resolved to `EmissiveProxy`), and the light table writes it into
+both buffers after the real lights — the ray-traced side stamps it in as a sphere at the
+mesh centre, the deferred side as a point light — so every count on this page is scene
+lights plus emissive stand-ins:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "gl.positionAndType = glm::vec4(pos, static_cast<float>(lc->getLightType()));"}}
+{{cite ohao/render/scene/light_table.cpp "gl.positionAndType = glm::vec4(d.position, 0.0f);  // sphere type"}}
+{{cite ohao/render/scene/light_table.cpp "light.position = glm::vec4(d.position, 1.0f);  // type 1 = point light"}}
+
+The path tracer takes the kind unmodified — the enum value is cast straight to float and
+dropped into `positionAndType.w`:
+
+{{cite ohao/render/scene/light_table.cpp "gl.positionAndType = glm::vec4(d.position, static_cast<float>(static_cast<uint32_t>(d.kind)));"}}
 
 The deferred pipeline does not. Its `LightData` uses the classic raster convention,
 0 = directional, 1 = point, 2 = spot:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)"}}
+{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)"}}
 
-so `updateLightBuffer` swaps 0 and 1 on the way in. The remap is a single nested ternary:
+so `LightTable::set` swaps 0 and 1 on the way in. The remap is a single nested ternary:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 :"}}
+{{cite ohao/render/scene/light_table.cpp "const int deferredType = (d.kind == LightKind::Point) ? 1 : (d.kind == LightKind::Directional) ? 0 : 2;"}}
 
 AreaRect = 3 has no raster equivalent, so the else-arm sends it to 2, and the deferred
 lighting loop treats the rectangle as a cone — attenuated by the component's cone angles,
-30° and 45° on a default-constructed `LightComponent`, which nobody authoring an area light
+30° and 45° on a default-constructed `Light`, which nobody authoring an area light
 ever set:
 
 {{cite shaders/core/deferred_lighting.frag "attenuation *= calculateSpotAttenuation(L, normalize(light.direction.xyz),"}}
 
-Those two numbers do not come from where you would look for them. `LightComponent` declares
-default member initialisers of 15° and 30°, and its one constructor's initialiser list
-overrides them with 30° and 45°, along with the header's intensity and range. Only the
-members that list omits — `radius` and the area edges — keep the advertised defaults:
+Those two numbers are plain member initialisers on the component, and they travel
+unchanged through `LightDesc` (same defaults) into `params.x` and `params.y` as cosines:
 
-{{cite ohao/scene/component/light_component.cpp ", innerConeAngle(30.0f)"}}
+{{cite ohao/ecs/components.hpp "float innerConeDeg{30.0f};"}}
 
-The same function decides what an unlit scene looks like. With no `LightComponent` and no
-emissive light, it installs a warm default sun whose intensity is $\pi$, cancelling the
-diffuse BRDF's $1/\pi$ so that a white Lambertian surface facing it reflects its colour
-at unit scale:
+The renderer decides what an unlit scene looks like. With no light in the raster list —
+no authored light and no emissive stand-in — `updateLightBuffer` installs a warm default
+sun whose intensity is $\pi$, cancelling the diffuse BRDF's $1/\pi$ so that a white
+Lambertian surface facing it reflects its colour at unit scale:
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
 
-{{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, renderer.hpp and light_upload.cpp; the diagram is conceptual, not a memory dump."}}
+{{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, render_scene_types.hpp and light_table.cpp; the diagram is conceptual, not a memory dump."}}
 
 :::key
-`positionAndType.w` carries the LightComponent enum; `LightData.position.w` does not.
-Read either code with the other table in hand and every sphere light becomes a sun.
+`positionAndType.w` carries the `LightKind` enum; `LightData.position.w` does not.
+Read either code with the other table in hand and every point light becomes a sun.
 Area lights exist only on the ray-traced side.
 :::
 
@@ -73,22 +78,25 @@ mirror:
 {{cite ohao/render/rt/gpu_light.hpp "// 5 vec4s = 80 bytes per light, std430 layout"}}
 
 `LightData` is 128 bytes, and 64 of those are a per-light shadow matrix the path tracer has
-no use for — it traces the shadow ray instead of projecting into a map:
+no use for — it traces the shadow ray instead of projecting into a map. The light table
+fills the matrix only for the one light it picks as shadow caster (the first Point or
+Spot) and writes identity into every other slot:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "alignas(16) glm::mat4 lightSpaceMatrix;"}}
+{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)"}}
 
-The capacity story inverts too. The deferred UBO is a fixed array of `MAX_LIGHTS = 8`, and
-both loops that fill it — scene `LightComponent`s first, then the cached emissive stand-ins —
-`break` once it is full, so light nine is silently dropped and an emissive mesh can eat the
-slot a hand-placed light wanted:
+Both buffers are capped, and the caps are different kinds of number. The deferred UBO is a
+fixed array of `MAX_LIGHTS = 8`, and both loops that fill it — authored lights first, then
+the emissive stand-ins — `break` once it is full, so light nine is silently dropped and an
+emissive mesh can eat the slot a hand-placed light wanted:
 
 {{cite ohao/gpu/vulkan/renderer.hpp "LightData lights[MAX_LIGHTS];"}}
 
-The RT side declares a cap of 64 that nothing anywhere reads — the SSBO is sized from the
-collected vector at upload time, so the real limit is device memory, not the constant:
+The RT side has a real cap too. The device buffer is sized as the 16-byte header plus
+`MAX_GPU_LIGHTS = 64` lights, and a longer list is truncated with a one-time log, so the
+estimator's light count never exceeds what the buffer holds:
 
 {{cite ohao/render/rt/gpu_light.hpp "static constexpr uint32_t MAX_GPU_LIGHTS = 64;"}}
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkDeviceSize bufSize = lightDataOffset + gpuLights.size() * sizeof(GPULight);"}}
+{{cite ohao/render/scene/light_table.cpp "gpuLights.resize(MAX_GPU_LIGHTS);"}}
 
 :::why
 The obvious alternative is one union struct feeding both pipelines, and the byte counts say
@@ -101,18 +109,16 @@ cost a remap function. One pack costs bandwidth in the hot loop of both pipeline
 ## The sixteen bytes std430 hands over
 
 `GPULight` has `vec4` alignment, so std430 rounds the array base of any buffer that begins
-with a `uint` counter up to 16 regardless. The upload spends eight of those twelve leftover
-bytes — the bindless environment-map index at offset 4, an HDRI intensity scale at offset 8 —
-and leaves the last four as true padding, holding whatever the header fill left there:
+with a `uint` counter up to 16 regardless. The light table spends three of those four words —
+the light count, the bindless environment-map index at offset 4, an HDRI intensity scale at
+offset 8 — and fills the last with an all-ones constant rather than leaving it as padding:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkDeviceSize lightDataOffset = 16;"}}
+{{cite ohao/render/scene/light_table.cpp "const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,"}}
 
-The header is cleared to all-ones first, which makes the environment-map slot read
-`0xFFFFFFFF` — the sentinel the miss shader tests for "no HDRI" — before the real count is
-written over the first four bytes and the intensity scale over the third word:
+The environment-map slot defaults to the no-texture sentinel, `0xFFFFFFFF` — the value the
+miss shader tests for "no HDRI":
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "memset(mapped, 0xFF, 16);"}}
-{{cite ohao/gpu/vulkan/light_upload.cpp "memcpy(static_cast<uint8_t*>(mapped) + 8, &m_envIntensityScale, sizeof(float));"}}
+{{cite ohao/render/scene/light_table.hpp "uint32_t m_envMapTexIdx{kNoTexture};"}}
 
 Binding 11 is declared four times across the ray-tracing stages, in two shapes. All three
 raygen shaders name only `lightCount` and let std430 alignment skip the rest of the header.
@@ -124,20 +130,18 @@ multiplies it.
 {{cite shaders/rt/pt_miss.rmiss "float envIntensity;   // HDRI scale"}}
 {{cite shaders/rt/pt_miss.rmiss "payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb * envS;"}}
 
-That side channel creates the sharpest ordering constraint on the page. `uploadLightBuffer`
-destroys and reallocates the buffer on every call, so nothing in the header survives a
-re-upload; even when the HDR reload is skipped because the path is unchanged, both the index
-and the intensity scale have to be stamped back into the fresh header, or the scene loses its
-sky the moment a light moves:
-
-{{cite ohao/gpu/vulkan/light_upload.cpp "allocated light buffer (header is memset to 0xFF each upload)."}}
+That side channel is owned by the table, not by the upload. The index and the scale are held
+as members, `setEnvMapTextureIndex` and `setEnvIntensity` mark the table dirty only when the
+value actually changes, and the header is rewritten whole with the stored values whenever
+anything is dirty. A light edit therefore re-uploads the header with the sky still in it, and
+there is no re-stamping step to forget.
 
 ## Radiance divided by a sphere the light may not be
 
 `dirAndParam.w` is overloaded: the packer fills it with the sphere radius, then, two lines
-later, overwrites it with the inner cone angle in degrees when the type is Spot.
+later, overwrites it with the inner cone angle in degrees when the kind is Spot.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "float dirParam = lc->getRadius();"}}
+{{cite ohao/render/scene/light_table.cpp "float dirParam = d.radius;"}}
 
 The bounce-0 next-event-estimation block of the default `pt_raygen.rgen` converts intensity
 to radiance *before* it branches on type, using the surface area of a sphere of that radius:
@@ -157,11 +161,11 @@ for sphere, directional, spot and area respectively. The $4\pi r^2$ reappears in
 sphere and spot weights and cancels, which is why growing a sphere light softens its shadow
 without brightening it. It does not cancel for the other two: a directional light's
 brightness and a rect light's brightness both scale as $1/r^2$ in a radius that means
-nothing for either shape. The radius is one of the members the constructor leaves alone, so
-it really is 0.5 by default, which makes the divisor $4\pi r^2$ exactly $\pi$ — so out of the
-box both shapes are quietly *darkened* by $1/\pi$:
+nothing for either shape. The component's default radius is 0.1, which makes the divisor
+$4\pi r^2 \approx 0.126$ — so out of the box both shapes are quietly *brightened* roughly
+eightfold relative to the intensity that was authored:
 
-{{cite ohao/scene/component/light_component.hpp "float radius = 0.5f;"}}
+{{cite ohao/ecs/components.hpp "float radius{0.1f};"}}
 
 The spot branch is worse than a scale factor. It reads `dirAndParam.w` twice in the same
 block — once through `cos(radians(...))` as an angle, which is correct, and once unconverted
@@ -231,9 +235,9 @@ common light types in the engine.
 
 ## Contracts
 
-- The environment-map index at byte 4 and the intensity scale at byte 8 die with the buffer on every `uploadLightBuffer`. Both must be re-stamped after the reallocation even when the HDR is not reloaded, or the sky goes black on the next light edit.
-- `positionAndType.w` is the raw `LightType`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.
+- `positionAndType.w` is the raw `LightKind`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.
 - `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot. Every spot branch in all three raygens reads both meanings; only the angle reading is correct.
-- Both buffers are filled from `LightComponent`s *and* from lights synthesised per emissive-textured actor. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the deferred eight-slot budget is shared between them.
-- The deferred UBO holds exactly eight lights and drops the rest without warning; the RT SSBO is sized at upload and ignores its own `MAX_GPU_LIGHTS = 64`.
+- Both buffers are filled from authored `Light`s *and* from emissive stand-ins. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the deferred eight-slot budget is shared between them.
+- The deferred UBO holds exactly eight lights and drops the rest without warning; the RT SSBO holds 64 and truncates with a one-time log.
+- The environment-map index and intensity scale are members of the light table, and the 16-byte header is rewritten whole whenever any of them, or the light list, changes. Code that writes binding 11 by any other route would have to reproduce that header.
 - The estimator multiplies by `lightCount` because it selects one light uniformly. Replacing uniform selection with importance sampling means replacing that factor with the real inverse density.

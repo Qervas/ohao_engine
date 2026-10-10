@@ -164,16 +164,16 @@ post-hoc, and even it is not inert.
   torque vector in the visualization list and no line in the body breakdown.
   {{cite ohao/physics/debug/force_debugger.cpp "if (bodyIt != m_bodyStats.end()) {"}}
 - The per-body row is keyed on the `RigidBody*` address, but the label printed
-  beside it is a *different* pointer: `getBodyName` returns the
-  `PhysicsComponent*` in decimal whenever the body has one, and every body the
-  world owns does — `createRigidBody` returns `nullptr` for a null component, so
-  the raw-body fallback below is unreachable for any body in the world. The code's
-  own comment concedes the name should be the entity's.
-  {{cite ohao/physics/debug/force_debugger.cpp "std::to_string(reinterpret_cast<size_t>(component));"}}
-  So one body is identified by two unrelated addresses, neither stable across
-  runs, while `RigidBody` already carries a monotonic `m_uniqueId` — which
-  `SimulationProfile` uses for exactly this purpose and the debugger never asks
-  for. {{cite ohao/physics/dynamics/rigid_body.hpp "uint32_t getUniqueId() const"}}
+  beside it comes from somewhere else: `getBodyName` returns the body's name when
+  one was given to `createRigidBody`, and only falls back to the body's address in
+  decimal when it was not.
+  {{cite ohao/physics/debug/force_debugger.cpp "if (!body->getName().empty()) return body->getName();"}}
+  So a named body is keyed by an address that changes every run and labelled by a
+  string that is stable only as long as callers keep names unique — nothing
+  enforces it — and an unnamed one is labelled by the key itself. `RigidBody`
+  already carries a monotonic `m_uniqueId`, which `SimulationProfile` uses for
+  exactly this purpose and the debugger never asks for.
+  {{cite ohao/physics/dynamics/rigid_body.hpp "uint32_t getUniqueId() const"}}
   The lookup is also a linear `std::find_if` over the per-body vector, so
   recording costs O(forces x bodies).
 

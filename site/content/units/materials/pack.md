@@ -8,15 +8,17 @@ figures: [materials-pack-matrow]
 
 ## A struct that exists on only one side
 
-There is no material struct on the GPU. Binding 10 of the path-tracer descriptor
-set is a flat array of `vec4` and nothing else:
+There is no material struct on the GPU. The path tracer binds the table as a flat
+array of `vec4` and nothing else:
 
-{{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 10) readonly buffer MatColorBuffer"}}
+{{cite shaders/rt/pt_closesthit.rchit "layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer"}}
 
-A material is therefore a convention rather than a type: three consecutive vec4s,
-twelve float lanes, and a meaning per lane that every producer and consumer has
-to agree on independently. The closest-hit shader reassembles the row by hand,
-one indexed load per slot, before it knows what any lane holds:
+The G-buffer fragment shader binds the *same buffer* in its own set under a different
+name and the same element type, `vec4 matRows[]`. A material is therefore a convention
+rather than a type: three consecutive vec4s, twelve float lanes, and a meaning per
+lane that the producer and each consumer have to agree on independently. The
+closest-hit shader reassembles the row by hand, one indexed load per slot, before it
+knows what any lane holds:
 
 {{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];"}}
 
@@ -26,20 +28,20 @@ derived from the slot count — `kMaterialBytes = kMaterialVec4s * sizeof(glm::v
 
 {{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 48"}}
 
+The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 12>`, and a
+`static_assert` equates its size with `MaterialGpuPack::kBytes`.
+
 ## Integers that have to travel as floats
 
 Four of the twelve lanes hold bindless texture indices — uint32 values in an
-array whose element type is float. `packIdx` folds a signed layer index and the
-"no texture" case onto one uint32:
+array whose element type is float — and a fifth, the legacy RT tint texture, sits in
+row 2. `pack` reinterprets the bits instead of converting the value:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "uint32_t u = (idx >= 0) ? static_cast<uint32_t>(idx) : 0xFFFFFFFFu;"}}
+{{cite ohao/render/scene/material_table.cpp "const auto bits = [](uint32_t u) { return std::bit_cast<float>(u); };"}}
 
-and then reinterprets the bits instead of converting the value:
-
-{{cite ohao/gpu/vulkan/rt_build.cpp "float f; memcpy(&f, &u, sizeof(float)); return f;"}}
-
-The closest-hit shader reverses that with `floatBitsToUint` before testing
-against the missing-texture sentinel:
+The "no texture" case is the all-ones uint32, `kNoTexture`, and it goes through the
+same cast. The closest-hit shader reverses it with `floatBitsToUint` before testing
+against the sentinel:
 
 {{cite shaders/rt/pt_closesthit.rchit "if (diffuseTexIdx != 0xFFFFFFFFu) {"}}
 
@@ -60,62 +62,56 @@ that multiplied, interpolated, or ran
 under flush-to-zero there would not crash; it would silently repoint the scene's
 textures.
 
-## Three passes fill one buffer, and device memory is the only copy
+## One writer, and the indices exist before the row does
 
-The pack is never assembled in one place. `uploadRTMaterialBuffers()` builds the
-rows first, all four index lanes set to the sentinel, from a function-local
-vector destroyed at the end of the call. `uploadRTTextureArray()` runs second — it
-cannot run earlier, because bindless layer indices do not exist until the texture
-array is built — maps the same allocation and patches only the index lanes:
+The pack is assembled in exactly one place. `MaterialTable::pack` turns a
+`MaterialDesc` into its twelve lanes in a single expression, and `add` appends the
+row to a host array and marks its index dirty:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "matColors[i * 3 + 2].x = packIdx("}}
+{{cite ohao/render/scene/material_table.cpp "m_packs.push_back(pack(desc));"}}
 
-That order is fixed by the caller:
+That is possible because a `MaterialDesc` already holds finished bindless indices by
+the time it is registered. `uploadModel` loads each model texture into the bindless
+manager first — all albedo, then normal, rough/metal, emissive, one upload per
+material — writes the returned index into the material's field, and only then
+registers the material. A row is never written with sentinels and patched later, and
+no lane has two writers:
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "    uploadRTMaterialBuffers();"}}
+{{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
 
-No assertion enforces it. The patch loop's only precondition is that the buffer
-exists and the layer table is non-empty, so an inverted order would skip every
-real index in silence rather than crash:
+The host array is the only CPU copy, and device memory is written only by copies the
+frame records. `recordUploads` walks the dirty set, coalesces contiguous indices into
+runs, and records one copy per run through the frame slot's staging buffer:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "if (m_rtMatColorBuffer && m_rtMatColorMemory && !globalMatTexLayer.empty())"}}
+{{cite ohao/render/scene/material_table.cpp "batch.upload(m_buffer.buffer, VkDeviceSize{first} * sizeof(Pack), &m_packs[first],"}}
 
-The third visit is `updateRTMaterialParams()`, which pushes new albedo, roughness
-and metallic without rebuilding acceleration structures. It has no caller in the
-tree today — the loop that re-shaded a scene per view per loss sample was removed
-with the module it belonged to — so this is a visit the packing has to remain
-correct for rather than one it currently takes. Because the texture indices live in the same rows and exist nowhere
-on the CPU, that pass has to write component by component:
+so a host write can never race a frame still reading the table. Row 0 is registered
+at initialisation as the default `MaterialDesc{}`, and it is the fallback twice over:
+an instance whose material list is shorter than a submesh's slot resolves to it, and
+a registration into a full table (capacity 4096) logs once and returns it.
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "matColors[matIdx * 3 + 1].x = mc2.w;"}}
+{{cite ohao/render/scene/material_table.hpp "static constexpr uint32_t kCapacity = 4096;"}}
 
-Replacing those scalar stores with whole-`vec4` assignments — the obvious
-tidy-up — would zero `.z` and `.w`, and bit pattern 0 is not the sentinel: it is
-texture index 0. Every material would start sampling whichever image landed on
-bindless layer 0 — wrong textures, not black.
+Which row a hit uses is decided per instance, not per material: the closest-hit
+shader reads the triangle's slot from the mesh's slot stream, then the instance's
+material-reference list, with the same `OHAO_MATERIAL_INDEX` macro the G-buffer uses,
+so raster and RT cannot disagree about which material a triangle has.
 
-The three passes also disagree about which actors count.
-`uploadRTMaterialBuffers()` and `uploadRTTextureArray()` both take every actor
-that has a model; the solver pass additionally skips the invisible ones:
+Row 2 carries one lane that only the path tracer reads. `legacyRtTintTex` is a 1×1
+texture of the material's sRGB-encoded base colour, which the closest-hit multiplies
+in when the material has no albedo texture, to reproduce the old RT texture array that
+gave every untextured material one. The raster passes never look at it.
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "if (!mc || !mc->getModel() || !mc->isVisible()) continue;"}}
-
-`matIdx` is a running counter over whatever survives that filter, so one hidden
-actor slides every later material short of the row the build pass gave it.
-Nothing goes out of bounds — the loop stops at `m_rtMatCount` — and the solver
-writes its albedo, roughness and metallic into the wrong materials.
-
-{{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by which of the three upload passes writes each lane. Lane names and writer passes read from layout_meta.hpp and rt_build.cpp; not a memory capture."}}
+{{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
 
 :::why
 Interleaving the indices into the float rows keeps a whole material inside one
-binding. The alternative — a parallel SSBO of uints beside the colours — needs
-no bit-casting and no NaN/subnormal discipline, but costs a second descriptor
-binding and a second buffer to keep in step across all three upload passes,
-including the solver loop that re-maps the pack once per rendered view. It does
-not save a fetch: the closest-hit already issues three separate loads from
-binding 10 before it decodes a single index. OHAO pays for the one binding with
-the standing rule that four of the twelve lanes are opaque bits.
+binding, and it lets raster and RT share it. The alternative — a parallel SSBO of
+uints beside the colours — needs no bit-casting and no NaN/subnormal discipline, but
+costs a second descriptor binding per consumer and a second buffer to keep in step.
+It does not save a fetch: the closest-hit already issues three separate loads from the
+table before it decodes a single index. OHAO pays for the one binding with the
+standing rule that five of the twelve lanes are opaque bits.
 :::
 
 ## The constants that are load-bearing, and the ones that are decoration
@@ -126,31 +122,27 @@ the stride by hand, and a canonical `kNoTexture`:
 {{cite ohao/gpu/layout_meta.hpp "static constexpr uint32_t    kNoTexture = 0xFFFFFFFFu;"}}
 
 Grep says otherwise. `byteOffset` and `vec4Count` are called only by their own
-self-asserts and by `tests/engine/engine_tests.cpp`; `kNoTexture` is referenced
-nowhere outside its own header.
-`rt_build.cpp` — the only file that writes binding 10 — spells `0xFFFFFFFFu` out
-three times instead: twice while building the sentinel rows, once inside
-`packIdx`. The bit-cast idiom is copied further, into `gbuffer_pass.cpp`, but that
-packs indices into the deferred per-draw push constants, never into this buffer,
-and takes its sentinel from `UINT32_MAX`. Every consumer hardcodes the stride 3. The drift is already
-in the tree:
+self-asserts and by `tests/engine/engine_tests.cpp`; `MaterialGpuPack::kNoTexture`
+is referenced nowhere outside its own header. The renderer has a second
+`kNoTexture` of its own in the scene types, with the same value, and that is the one
+every producer uses:
 
-{{cite ohao/gpu/vulkan/rt_build.cpp "allMatColors has 2 vec4s per material, so divide by 2 for material count"}}
+{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kNoTexture = 0xFFFFFFFFu;"}}
 
-That comment survives from the two-vec4 era and sits directly above a division by
-3. The static asserts are still worth having, but they are a lock, not a
-derivation: editing `kMaterialVec4s` breaks the build instead of updating the
-strides, because the strides are in the .cpp files.
+Every consumer hardcodes the stride 3 — `matRows[m * 3u + 0u]` in the G-buffer,
+`matID * 3u` in the closest-hit — so the static asserts are a lock, not a
+derivation: editing `kMaterialVec4s` breaks the build on the C++ side instead of
+updating the shader strides, because the strides are in the shaders.
 
 ## A header that only looks like padding
 
 The light SSBO plays the same game with a sharper move. `GPULight` is five vec4s,
 80 bytes, and the raygen shaders declare binding 11 as `{ uint lightCount;
 GPULight lights[]; }`. Under std430 a struct of vec4s aligns to 16, so the array
-cannot begin at offset 4 — it begins at 16, and the writer hardcodes exactly
-that:
+cannot begin at offset 4 — it begins at 16, and the light table names exactly that
+as its header size:
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkDeviceSize lightDataOffset = 16;"}}
+{{cite ohao/render/scene/light_table.hpp "static constexpr VkDeviceSize kHeaderBytes = 16;"}}
 
 The 12 bytes between the count and the first light look like alignment slack.
 They are not. `pt_miss.rmiss` declares the *same binding* as a different block —
@@ -159,16 +151,16 @@ intensity out of that gap:
 
 {{cite shaders/rt/pt_miss.rmiss "uint envMapTexIdx;"}}
 
-One buffer, two structurally different views chosen per shader stage. The header
-is initialised by a 16-byte memset of 0xFF so that `envMapTexIdx` defaults to the
-same sentinel the material pack uses:
+One buffer, two structurally different views chosen per shader stage. The header is
+written whole whenever the table is dirty: the light count, the environment index,
+the intensity scale and a sentinel word.
 
-{{cite ohao/gpu/vulkan/light_upload.cpp "memset(mapped, 0xFF, 16);"}}
+{{cite ohao/render/scene/light_table.cpp "const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,"}}
 
-and because that memset runs on *every* light upload, the environment index has
-to be re-stamped afterwards or the miss shader loses the HDRI — a coupling
-between the light path and the environment path that no struct definition hints
-at.
+The environment index and intensity are stored in the light table itself
+(`setEnvMapTextureIndex`, `setEnvIntensity`), and changing either marks the table
+dirty, so a rebuild of the lights cannot lose them. What remains of the coupling is
+its shape: a miss shader reading words that a light-list type owns.
 
 ## What the layout assertion cannot see
 
@@ -187,10 +179,11 @@ The same header carries a constant that reads like a hard limit and is not one:
 
 {{cite ohao/render/rt/gpu_light.hpp "static constexpr uint32_t MAX_GPU_LIGHTS = 64;"}}
 
-Nothing references it. The RT light buffer is sized from the collected vector,
-and the shaders clamp their light choice against `lightBuf.lightCount`, never
-against 64. The deferred side is the opposite case — its cap is a fixed array
-length, so it genuinely bounds the loop:
+Unlike the old build, something does reference it: the light table sizes the
+device buffer as the header plus 64 lights and truncates a longer list with a
+one-time log. The shaders clamp their light choice against `lightBuf.lightCount`,
+which is already post-truncation. The deferred side is the same kind of bound — its
+cap is a fixed array length, so it genuinely bounds the loop:
 
 {{cite ohao/gpu/vulkan/renderer.hpp "LightData lights[MAX_LIGHTS];"}}
 
@@ -201,7 +194,7 @@ shows the price. `dirAndParam.w` is a radius for sphere lights and an inner cone
 angle in degrees for spot lights:
 
 {{cite ohao/render/rt/gpu_light.hpp "w=param (sphere:radius, spot:innerAngle)"}}
-{{cite ohao/gpu/vulkan/light_upload.cpp "dirParam = lc->getInnerConeAngle();"}}
+{{cite ohao/render/scene/light_table.cpp "dirParam = d.innerConeDeg;"}}
 
 The shader-side copy of that struct has already lost half the documentation:
 
@@ -225,10 +218,10 @@ sphere, so the shadow-ray direction, the distance feeding $1/d^2$, and the cone
 falloff evaluated along the scattered direction all move with $r$. With the
 default cone:
 
-{{cite ohao/scene/component/light_component.hpp "float innerConeAngle = 15.0f;"}}
+{{cite ohao/ecs/components.hpp "float innerConeDeg{30.0f};"}}
 
 a spot light aims its shadow ray at a uniformly random point on a sphere of
-radius 15 *world units* around the light, then evaluates the cone falloff along
+radius 30 *world units* around the light, then evaluates the cone falloff along
 that scattered direction. Nothing is out of range, no assertion fires, the pack
 is exactly 80 bytes, and the units are wrong.
 
@@ -242,10 +235,9 @@ size contract that passes.
 
 ## Contracts
 
-- `uploadRTMaterialBuffers()` must run before `uploadRTTextureArray()`: the first writes sentinel index lanes, the second is the only code that ever writes real bindless indices. No assertion enforces it — inverted, the patch's non-empty guard skips the write in silence and every material keeps the sentinel.
-- `updateRTMaterialParams()` must write individual components. Whole-vec4 stores zero the packed texture indices, and 0 is a valid index, not the sentinel.
-- `updateRTMaterialParams()` skips invisible mesh actors while both build passes take them, so its running `matIdx` desynchronises from the row layout the moment one actor is hidden, and it patches the wrong materials.
-- Nothing may do arithmetic on the four index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
-- The light-buffer header is memset to 0xFF on every `uploadLightBuffer()`, so `m_envMapTexIdx` must be re-stamped after each rebuild or `pt_miss.rmiss` reads "no environment map".
+- A `MaterialDesc` must carry finished bindless indices when it is registered. The table has no second pass that patches texture lanes in, so a texture uploaded after `registerMaterial` never reaches the row.
+- Nothing may do arithmetic on the five index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
+- Row 0 is the default material and the fallback for a short material list and a full table. Code that registers materials must not assume a returned handle is distinct from 0.
+- The light-buffer header is written by `LightTable::recordUploads`, whole, whenever the table is dirty. The environment index and intensity live in the table, so a light rebuild keeps them; anything else writing binding 11 would have to reproduce the 16-byte header.
 - The GLSL `GPULight` lives in three hand-maintained raygen copies. `OHAO_ASSERT_GPU_LAYOUT` sees none of them, and no test reflects the SPIR-V.
-- `MAX_GPU_LIGHTS` is documentation, not a bound. The RT light SSBO is sized from the scene.
+- `MAX_GPU_LIGHTS` bounds the RT light list: the device buffer is sized for 64 and a longer list is truncated with a log.

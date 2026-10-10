@@ -6,37 +6,44 @@ standard: v2
 figures: [systems-build-shader-artifact-path]
 ---
 
-## Six archives and one edge nobody declared
+## Eight archives and one edge nobody declared
 
-`ohao/CMakeLists.txt` is six `add_subdirectory` lines and a comment; each leaf
+`ohao/CMakeLists.txt` is eight `add_subdirectory` lines and a comment; each leaf
 directory globs its own sources into a static library. The *declared* dependency
-graph is a clean DAG — `ohao_renderer` → `ohao_gpu_vulkan` → `ohao_scene` →
-`ohao_core`. The *reference* graph is not. `VulkanRenderer`, compiled into
-`ohao_gpu_vulkan`, owns a `std::unique_ptr<DeferredRenderer>` and calls through it
-every frame, while `DeferredRenderer` is compiled into `ohao_renderer`:
+graph is a clean DAG — `ohao_runtime` → `ohao_ecs` → `ohao_renderer` →
+`ohao_gpu_vulkan` → `ohao_scene` → `ohao_core`. The *reference* graph is not.
+`VulkanRenderer`, compiled into `ohao_gpu_vulkan`, owns a
+`std::unique_ptr<DeferredRenderer>` and calls through it every frame, while
+`DeferredRenderer` is compiled into `ohao_renderer`:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setScene(m_scene);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setRenderScene(m_renderScene.get());"}}
 
-That back edge is never told to CMake. A static archive is scanned once, in the
+That back edge is never told to CMake. A GNU static archive is scanned once, in the
 order it appears on the link line, and by the time `ld` reaches
 `libohao_gpu_vulkan.a` it has already discarded the `ohao_renderer` members it now
 needs. The examples and the standalone `renderer_test` therefore hand the linker the
 whole set as one re-scannable group instead of an ordered list:
 
-{{cite examples/CMakeLists.txt "-Wl,--start-group ohao_renderer ohao_gpu_vulkan"}}
+{{cite examples/CMakeLists.txt "-Wl,--start-group ohao_ecs ohao_renderer ohao_gpu_vulkan"}}
+
+The MSVC branch of the same function lists the archives without a group and takes
+`/FORCE:MULTIPLE` where the GNU branch takes `--allow-multiple-definition`:
+
+{{cite examples/CMakeLists.txt "target_link_options(${name} PRIVATE /FORCE:MULTIPLE)"}}
 
 The workaround is copied per call site rather than expressed once as a dependency, and
 the copies have drifted. `tests/shadow_system` (off by default) links `ohao_renderer`
-and `ohao_scene` in plain order with no group at all, and `tests/engine`,
-`tests/physics` and `tests/force_generators` open a group they never close.
+and `ohao_scene` in plain order with no group at all, and on the GNU branch
+`tests/engine`, `tests/physics` and `tests/force_generators` open a group they never
+close.
 
 {{cite tests/shadow_system/CMakeLists.txt "target_link_libraries(shadow_system_tests PRIVATE"}}
 
 The second link flag is doing quieter damage. `STB_IMAGE_IMPLEMENTATION` is expanded
-with external linkage in three translation units that land in three different archives
-— the bindless texture uploader in `ohao_gpu_vulkan`, the IBL prefilter in
-`ohao_renderer`, and the GLTF loader in `ohao_scene` — so `stbi_load` and friends are
-defined three times before the executable's own object file is even considered.
+with external linkage in two translation units that land in two different archives
+— the bindless texture uploader in `ohao_gpu_vulkan` and the GLTF loader in
+`ohao_scene` — so `stbi_load` and friends are defined twice before the executable's
+own object file is even considered.
 
 `stb_image_write` duplicates the same way and is the more immediate per-executable
 trigger: `model_gltf.cpp` expands it inside `ohao_scene`, and so does every
@@ -58,6 +65,14 @@ linker saw first.
 :::
 
 {{cite examples/CMakeLists.txt "target_link_options(${name} PRIVATE -Wl,--allow-multiple-definition)"}}
+
+The same trade appears in one more place. NRD's NRI backend carries its own build of
+the Vulkan Memory Allocator with the same global symbols, and under
+`/FORCE:MULTIPLE` whichever object the linker pulls first wins. `ohao_gpu_vulkan` marks
+`vmaCreateAllocator` as a required symbol on its *interface*, so every consumer pulls
+OHAO's object before NRI's regardless of library order:
+
+{{cite ohao/gpu/vulkan/CMakeLists.txt "target_link_options(ohao_gpu_vulkan INTERFACE /INCLUDE:vmaCreateAllocator)"}}
 
 ## Optional SDKs, and the one that changes a class layout
 
@@ -95,20 +110,24 @@ DLSS build, far from the cause.
 ## What is actually optional
 
 It is tempting to read the option list as "the heavy dependencies are all
-switchable". The top-level file declares nine `option()`s, and seven of them are test
+switchable". The top-level file declares eleven `option()`s, and nine of them are test
 suites and the Python bindings; the only dependency switches are `OHAO_NRD` and
-`OHAO_DLSS`. OIDN is a hard
-`find_package(... REQUIRED)`, so a machine without OpenImageDenoise cannot configure
-the renderer at all:
+`OHAO_DLSS`. OpenImageDenoise is neither: it is looked up quietly, and its absence
+only turns the OIDN backend into a stub. `ohao_renderer` defines `OHAO_OIDN_ENABLED`
+only when the package was found, and the denoise entry point compiles to a warning and
+a `false` return otherwise:
 
-{{cite ohao/render/CMakeLists.txt@223ff7f "find_package(OpenImageDenoise REQUIRED)"}}
+{{cite ohao/render/CMakeLists.txt "find_package(OpenImageDenoise QUIET)"}}
 
-`glslc` is likewise `find_program` plus a fatal error, which means you cannot
-configure even a C++-only build without the Vulkan SDK's shader compiler on `PATH`:
+So a machine without OIDN configures and builds the whole renderer; it just cannot
+denoise with OIDN, and the default offline profile — which asks for it — gets an
+undenoised image. `glslc` is the opposite: `find_program` plus a fatal error, which
+means you cannot configure even a C++-only build without the Vulkan SDK's shader
+compiler on `PATH`:
 
 {{cite shaders/CMakeLists.txt "glslc shader compiler not found"}}
 
-Jolt and Assimp are unconditional FetchContent; the `if(TARGET Jolt)` guards
+Jolt, Assimp and EnTT are unconditional FetchContent; the `if(TARGET Jolt)` guards
 scattered through `ohao/physics` and the example function are a fallback for a fetch
 that produced no target, not a user-facing switch. "Bare build" in this tree means
 *without the two NVIDIA denoisers* — nothing more.
@@ -165,19 +184,17 @@ this pattern:
 {{cite shaders/CMakeLists.txt "/includes/**/*.glsl"}}
 
 The same `DEPENDS` list also names the output *directory*, created by its own custom
-command. In the generated Makefile that prerequisite is written as the relative path
-`shaders` — which is already the name GNU make has for the custom target — so
-`build.make` literally contains `shaders: shaders`, and every module rule
-lists `shaders` as a prerequisite of a file inside `shaders`. Make prints a *circular
-dependency dropped* line for each and ignores the edges. The ordering constraint
-the `DEPENDS` was written to express is therefore not enforced at all; it survives only
-because the directory already exists by the time `glslc` runs.
+command. Under the Makefile generators that prerequisite is written as the relative
+path `shaders` — which is already the name GNU make has for the custom target — so the
+generated rules list `shaders` as a prerequisite of a file inside `shaders`, and make
+prints a *circular dependency dropped* line for each and ignores the edges. The
+ordering constraint the `DEPENDS` was written to express is therefore not enforced
+there; it survives only because the directory already exists by the time `glslc` runs.
 
-Nothing rebuilds as a consequence. Make dropped the edge, and even where such an edge
-is honoured it would be inert: overwriting an existing file in place does not advance
-its directory's mtime. Two consecutive `--target shaders` invocations here compile zero
-modules and change no timestamps — the target is a genuine fixpoint, which is exactly
-why the missing `pbr_unpack.glsl` edge above is dangerous rather than merely redundant.
+Even where such an edge is honoured it would be inert: overwriting an existing file in
+place does not advance its directory's mtime. The target is a genuine fixpoint — a
+second `--target shaders` with nothing changed compiles nothing — which is exactly why
+a missing include edge is dangerous rather than merely redundant.
 
 The flat directory is never pruned. When a shader source is deleted or renamed, its
 old `.spv` stays in the output directory: no rule produces it any more and none
@@ -191,66 +208,63 @@ of the default build in its own right:
 
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
-It is reached only because two test targets name it as a dependency, which is also
+It is reached only because one test target names it as a dependency, which is also
 what makes `cmake --build build` — the "build all" invocation — produce SPIR-V at
 all:
 
 {{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
 The `bin/shaders/` prefix the C++ paths name *first* is written by exactly one rule
-anywhere in the tree, and that rule now hangs off the `shaders` target itself rather
-than off a consumer — two consumers copying into one destination raced under `-j8`:
+anywhere in the tree, and that rule hangs off the `shaders` target itself rather
+than off a consumer — two consumers copying into one destination raced under `-j8`.
+It resolves the runtime directory per generator: `<config>/bin/shaders` under the
+multi-config Visual Studio generators, `bin/shaders` beside the executables under the
+single-config ones.
 
 {{cite shaders/CMakeLists.txt "COMMENT "Copying shader SPVs to runtime output directory""}}
 
-Configure with both `-DBUILD_RENDERER_TESTS=OFF` and `-DBUILD_DIFF_TESTS=OFF` and
-nothing asks for the target at all, so nothing populates it. What rescues the
-documented invocations is a three-entry search list inside the SPV loader. All three
-entries are relative paths resolved against the *working* directory, and the second is
-the CMake output tree:
+Configure with `-DBUILD_RENDERER_TESTS=OFF` and nothing asks for the target at all, so
+nothing populates it. What rescues the documented invocations is a three-entry search
+list inside the SPV loader. All three entries are relative paths resolved against the
+*working* directory; the second is the CMake output tree and the third the
+Visual Studio per-config runtime tree:
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "build/shaders/"}}
 
-Entry 2 is why `./build/cornell_box` works from the repo root — but only when entry 1
-misses, and entry 1 is not a fixed miss. It is the raw `bin/shaders/…` string baked
-into `PathTracerShaderSet`, tried verbatim before any fallback:
+Entry 2 is why `./build/cornell_box` works from the repo root on a single-config
+build, and entry 3 is why `build/Release/cornell_box.exe` does on Windows — but only
+when entry 1 misses, and entry 1 is not a fixed miss. It is the raw `bin/shaders/…`
+string baked into `PathTracerShaderSet`, tried verbatim before any fallback:
 
 {{cite ohao/render/rt/path_tracer.hpp "bin/shaders/rt_pt_raygen.rgen.spv"}}
 
-In this working tree a repo-root `bin/shaders/` does exist, holding six `rt_pt_*.spv`
-files from an older build. Run from the repo root, the path tracer loads those, not
-what `--target shaders` just produced. Today they happen to be byte-identical to the
-current output; nothing keeps them that way. No rule writes that directory — the
-`POST_BUILD` step above targets `build/bin/shaders/` — and `bin/` is untracked and not
-covered by `.gitignore`, so it is neither refreshed nor swept away. The interesting
-failure is not "no shader found"; it is a silently stale shader that outranks a fresh
-one.
+A `bin/shaders/` directory in the working directory therefore outranks the build's
+output. No rule writes a repo-root `bin/`, and a stray one is neither refreshed nor
+swept away. The interesting failure is not "no shader found"; it is a silently stale
+shader that outranks a fresh one.
 
 {{figure systems-build-shader-artifact-path "Conceptual — the producer and consumer paths for one shader, with names and search order read from shaders/CMakeLists.txt, tests/renderer/CMakeLists.txt and path_tracer_pipeline.cpp. Not a captured build log."}}
 
-## The build type you cannot override
+## The build type is a default, not a setting
 
-Line 11 of the top-level file sets the build type unconditionally:
+The top-level file sets a build type only when it has to. A single-config generator
+given no `CMAKE_BUILD_TYPE` is defaulted to Debug; a multi-config generator such as
+Visual Studio is left alone and picks the configuration at build time with `--config`.
 
 {{cite CMakeLists.txt "set(CMAKE_BUILD_TYPE Debug)"}}
 
-An unqualified `set` creates a *normal* variable, which shadows the cache entry for
-this directory and everything reached through `add_subdirectory`. Passing
-`-DCMAKE_BUILD_TYPE=Release` populates the cache and is then ignored: on a minimal
-reproduction the subdirectory reports `Debug`, the compile line carries `-O0`, and
-`NDEBUG` is never defined. In the configured tree here all 98 translation units under
-`ohao/` compile with `-g -g -O0` — the duplicated `-g` because the next line appends
-to CMake's own `CMAKE_CXX_FLAGS_DEBUG` rather than replacing it.
-
-Nothing is broken by this — it is a deliberate default for a renderer under active
-development — but it means any wall-clock figure taken from a stock OHAO build is an
-`-O0` figure, and a release build of this engine does not currently exist as a
-supported configuration.
+An explicit `-DCMAKE_BUILD_TYPE=Release` is honoured. The `-g -O0` appended to
+`CMAKE_CXX_FLAGS_DEBUG` is added for non-MSVC compilers only, so it rides the Debug
+configuration and nothing else. The consequence is the usual one for a default: a
+stock single-config configure with no build type produces an `-O0` build, and any
+wall-clock figure taken from it is an `-O0` figure. Name the configuration you are
+measuring.
 
 ## Contracts
 
 - `external/cmake/nri.cmake` must be included before `nrd.cmake`, or NRI's cache options are set after NRD's FetchContent has already consumed them.
 - `OHAO_DLSS_ENABLED` must be defined on **both** `ohao_renderer` and `ohao_gpu_vulkan`. It is `PRIVATE` on each, so removing either definition silently desynchronises `sizeof(PathTracer)` between the two archives.
-- The `shaders` target is not in `all`. `cmake --build build --target shaders` must be run explicitly, and `build/bin/shaders/` exists only as a side effect of building `renderer_test`.
+- The `shaders` target is not in `all`. It is built by `cmake --build build` only through `renderer_test`'s dependency on it; with `BUILD_RENDERER_TESTS=OFF` it must be requested with `--target shaders`.
 - Every source glob except the NRD-integration one lacks `CONFIGURE_DEPENDS`; adding a `.cpp` or a `.rgen` requires re-running `cmake` before it is compiled at all.
-- The path tracer's SPV loader tries `bin/shaders/<name>` relative to the CWD *before* `build/shaders/`. A leftover `bin/shaders/` in the working directory silently shadows every freshly compiled raygen, miss and hit shader.
+- The path tracer's SPV loader tries `bin/shaders/<name>` relative to the CWD *before* `build/shaders/` and `build/Release/bin/shaders/`. A leftover `bin/shaders/` in the working directory silently shadows every freshly compiled raygen, miss and hit shader.
+- A new executable that links the engine must list `ohao_ecs` and `ohao_renderer` alongside the other archives (inside the group on GNU) and carry the matching multiple-definition option, or stb's duplicate symbols fail the link.

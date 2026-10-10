@@ -55,29 +55,29 @@ window.OHAO_NAV_TREE = [
     "href": "m/scene.html",
     "children": [
       {
-        "id": "scene/actors",
-        "title": "Actors & hierarchy",
-        "href": "m/scene/actors.html"
+        "id": "scene/world",
+        "title": "ECS world & hierarchy",
+        "href": "m/scene/world.html"
       },
       {
-        "id": "scene/components",
-        "title": "Components",
-        "href": "m/scene/components.html"
+        "id": "scene/transform-system",
+        "title": "Transform propagation",
+        "href": "m/scene/transform-system.html"
+      },
+      {
+        "id": "scene/render-extract",
+        "title": "Render extract",
+        "href": "m/scene/render-extract.html"
+      },
+      {
+        "id": "scene/render-scene",
+        "title": "RenderScene",
+        "href": "m/scene/render-scene.html"
       },
       {
         "id": "scene/loaders",
         "title": "Asset loaders",
         "href": "m/scene/loaders.html"
-      },
-      {
-        "id": "scene/scene-api",
-        "title": "Scene API",
-        "href": "m/scene/scene-api.html"
-      },
-      {
-        "id": "scene/transform",
-        "title": "Transform math",
-        "href": "m/scene/transform.html"
       }
     ]
   },
@@ -244,7 +244,7 @@ window.OHAO_NAV_TREE = [
       },
       {
         "id": "path-tracer/bindings",
-        "title": "Descriptor map 0\u201335",
+        "title": "Descriptor map 0\u201337",
         "href": "m/path-tracer/bindings.html"
       },
       {

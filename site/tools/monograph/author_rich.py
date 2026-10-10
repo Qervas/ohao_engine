@@ -118,60 +118,65 @@ KNOWLEDGE: dict[str, dict] = {
         ],
         "why": "Debuggability without dragging ImGui or similar into every library target.",
     },
-    "scene/actors": {
+    "scene/world": {
         "what": [
-            "Actor is the scene graph node: identity, name, parent/children, lifecycle, and a bag of components. Transform is always present.",
+            "World owns an EnTT registry and an explicitly ordered system list. Entities are created with Name, Transform, Children, TransformDirty and a never-recycled CreationOrder.",
         ],
         "how": [
-            "construct → addComponent → initialize → start → update → destroy",
-            "Hierarchy walks update world transforms before mesh/physics consumers read them.",
-            "Actor::Ptr is shared ownership from Scene maps.",
+            "create → setParent / setTransform → update(dt) runs systems in insertion order → destroy(subtree)",
+            "setParent walks the new parent's ancestors and rejects cycles; the local transform is kept.",
+            "destroy detaches, then destroys the subtree children-before-parents.",
         ],
-        "why": "Composition over deep inheritance: renderers iterate MeshComponents, not class hierarchies.",
-        "contracts": ["Transform always present on Actor", "Scene owns actor maps by id and name"],
+        "why": "An explicit system order is verifiable by reading one vector; CreationOrder gives deterministic slot and light order that recycled entity ids cannot.",
+        "contracts": ["Write Transform via patch or setTransform", "Destroy parented entities via World::destroy, not the raw registry"],
     },
-    "scene/components": {
+    "scene/transform-system": {
         "what": [
-            "Components are pure data + light behavior: Mesh, Material, Light, Transform, Physics. Factories and packs spawn common kits.",
+            "updateTransforms recomputes WorldTransform for dirty subtrees parent-first, keeps prevWorld for motion vectors, and tags RenderDirty.",
         ],
         "how": [
-            "component.hpp base; specialized headers for mesh/material/light/transform.",
-            "component_factory / component_pack create primitives with sensible defaults for demos.",
+            "Settle: last frame's movers that stopped get prevWorld = world and one more RenderDirty.",
+            "Roots are TransformDirty entities with no dirty ancestor; each subtree is walked depth-first from a stack.",
+            "verifyTransforms counts untagged entities whose world disagrees with parent world x local.",
         ],
-        "why": "Upload and physics query components by type; no virtual draw() on actors.",
+        "why": "Per-object motion vectors need last frame's world matrix, and the GPU copy is only rewritten on change, so a stopped object needs one settle upload.",
+        "contracts": ["verifyTransforms is called only by tests", "Spawning is not motion: first WorldTransform has prevWorld = world"],
+    },
+    "scene/render-extract": {
+        "what": [
+            "The render_extract system moves renderables and lights from the registry into the RenderScene, incrementally.",
+        ],
+        "how": [
+            "Release queued slots → update owned slots / collect new renderables → create instances sorted by CreationOrder → clear RenderDirty → rebuild lights if touched.",
+            "EnTT signals on MeshRenderer, RenderSlot, Light and EmissiveProxyLight mark the work.",
+            "Unknown mesh handles are skipped and logged once per handle.",
+        ],
+        "why": "The renderer never includes EnTT; one owner of slot assignment keeps slot numbers, TLAS custom indices and light order deterministic.",
+        "contracts": ["RenderScene outlives the World", "At most one extract per World", "RenderSlot is written only by the extract"],
+    },
+    "scene/render-scene": {
+        "what": [
+            "RenderScene is the persistent GPU render world: mesh arenas with one BLAS per mesh, material, instance and light tables, and the TLAS.",
+        ],
+        "how": [
+            "registerMesh uploads and builds the BLAS synchronously at load time; arenas grow by copy and retire the old buffer.",
+            "recordUpdates copies dirty table bytes from the frame slot's staging buffer, then builds or refits the TLAS in the frame.",
+            "onFrameRetired destroys buffers retired MAX_FRAMES_IN_FLIGHT frames ago.",
+        ],
+        "why": "Per-frame work scales with what changed, and no host write can race a frame in flight.",
+        "contracts": ["Bind scene buffers after recordUpdates", "registerMesh is blocking, load time only", "Structural changes rebuild the TLAS; transforms alone refit"],
     },
     "scene/loaders": {
         "what": [
-            "Asset loaders parse GLTF (tinygltf), FBX (Assimp), OBJ, and procedural primitives into Mesh/Material components — never Vulkan objects.",
+            "Asset loaders parse GLB/GLTF (Assimp, or tinygltf on the direct route), FBX (ufbx then Assimp), OBJ (native) and procedural primitives into a Model: geometry plus per-material arrays.",
         ],
         "how": [
-            "Detect format → parse meshes/materials/textures → up-axis fix → fill components.",
-            "model_loader.hpp is the facade; model_gltf.cpp / model_fbx.cpp / model.cpp specialize.",
-            "primitive_mesh_generator builds cornell-style boxes and spheres without files.",
+            "ModelLoader::load picks the parser by extension; loadResult wraps it with path/extension/empty checks.",
+            "repairMeshNormals runs on every facade result.",
+            "render::uploadModel turns the Model into one mesh with submeshes, one material per materialColors row, and bindless textures.",
         ],
-        "why": "Keeping loaders Vulkan-free means offline tools and tests can load scenes without a GPU.",
-        "contracts": ["No VkDevice in scene/asset", "Textures referenced by path/index for later bindless upload"],
-    },
-    "scene/scene-api": {
-        "what": [
-            "Scene owns actors, registries, optional PhysicsWorld, tags, and descriptor metadata for serialization hooks.",
-        ],
-        "how": [
-            "createActor / createActorWithComponents / addActor / removeActor",
-            "find by id, name, or tag; forEach helpers for non-hot iteration",
-            "update(dt) walks actors then steps physics if present",
-        ],
-        "why": "One ownership root prevents dangling components and double physics worlds.",
-    },
-    "scene/transform": {
-        "what": [
-            "TRS transform math: local matrix from translation/rotation/scale; world matrix via parent chain. Upload and TLAS read world only.",
-        ],
-        "how": [
-            "Dirty flags recompute world matrices on demand during update or upload.",
-            "Used by MeshComponent world poses and physics sync.",
-        ],
-        "why": "TLAS instances need stable world matrices; recomputing every frame without dirty flags is free performance loss.",
+        "why": "Loaders create no Vulkan objects, so the GPU boundary is a single upload function.",
+        "contracts": ["No VkDevice in scene/asset", "materialPerTriangle has one entry per triangle under the same material numbering as the per-material arrays"],
     },
     "gpu/renderer-facade": {
         "what": [
@@ -224,14 +229,14 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "gpu/scene-upload": {
         "what": [
-            "Scene upload walks MeshComponents into VB/IB maps, packs material rows, dual-packs lights for deferred vs path tracer, and prepares env handles.",
+            "RenderScene is the only place geometry, materials, instances and lights become GPU state: meshes and materials are registered at load time, instance and light edits are staged per frame.",
         ],
         "how": [
-            "scene_upload.cpp builds interleaved geometry and MeshBufferInfo map.",
-            "light_upload.cpp packs LightComponents into GPULight SSBO and deferred LightData.",
-            "No Vulkan types remain in scene/ — this boundary owns the conversion.",
+            "registerMesh / uploadModel append to shared device-local arenas, build one BLAS per mesh and block on the queue.",
+            "createInstance / updateInstance / destroyInstance / setLights only mark host rows dirty; recordUpdates stages them through the frame slot's buffer and records one copy per contiguous run.",
+            "Replaced buffers go to a retire queue and are destroyed MAX_FRAMES_IN_FLIGHT frames later.",
         ],
-        "why": "Upload is the only place scene becomes GPU state; keeping it explicit makes TLAS/material lockstep enforceable.",
+        "why": "Upload is the only place scene data becomes GPU state; keeping it explicit makes TLAS/material lockstep enforceable.",
     },
     "gpu/rt-build": {
         "what": [
@@ -468,7 +473,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "path-tracer/bindings": {
         "what": [
-            "Descriptor set 0 map bindings 0–35: TLAS, accum, materials, lights, env CDF, AOVs, ReSTIR 29–34, DLSS hit-dist 35.",
+            "Descriptor set 0 map bindings 0–37: TLAS, accum, materials, lights, env CDF, AOVs, ReSTIR 29–34, DLSS hit-dist 35, RenderScene tables 36–37.",
         ],
         "how": [
             "path_tracer_descriptors.cpp writes all slots; GLSL layout(set=0,binding=N) must match exactly.",

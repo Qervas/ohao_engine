@@ -10,8 +10,9 @@ figures: [architecture-request-path-frame-ring]
 
 OHAO has no editor host. The offline examples — `cornell_box`, `model_viewer`,
 `env_demo`, `turntable` — are thin `main()`s over one sequence: construct a `VulkanRenderer` at a fixed output size, bring
-up the device, build a `Scene` out of plain CPU components, hand the scene over,
-choose a `RenderMode`, then loop `render()` and read the pixels back. `cornell_box`
+up the device, create an `ecs::World` and wire its render extract to the renderer's
+`RenderScene`, spawn entities, choose a `RenderMode`, then loop
+`world.update()` and `render()` and read the pixels back. `cornell_box`
 is the shortest complete instance of it, and it shows the one convention that
 surprises people reading the CLI: the output resolution is a compile-time constant
 in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer` and
@@ -22,91 +23,112 @@ in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer`
 The windowed host, `ohao_game`, runs the same sequence through `ohao_runtime`'s
 `Application` with two substitutions: the renderer is sized from the window's
 framebuffer extent and initialised against a present target, and the loop presents
-to a swapchain instead of reading pixels back.
+to a swapchain instead of reading pixels back. `Application` also owns the
+`ecs::World` and installs the extract itself:
 
 {{cite ohao/runtime/application.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
 
-Scene construction touches no Vulkan at all — walls, spheres, and twelve sphere
-lights are built as `MeshComponent` / `MaterialComponent` / `LightComponent` on
-actors, with the renderer already alive but not yet aware of them. `setScene()` is
-where CPU scene data crosses into GPU memory in every shipped driver, and the
-crossing is conditional:
+Scene construction is a handful of `spawn` calls. `spawnModel` registers the mesh
+and its materials with the `RenderScene` — an upload and a BLAS build, blocking, at
+load time — and returns an entity carrying a `MeshRenderer` that holds the
+handles:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_initialized && m_scene) {"}}
+{{cite ohao/ecs/spawn.hpp "entt::entity spawnModel(World& world, render::RenderScene& scene, BindlessTextureManager* textures,"}}
 
-Invert the first two calls — build the scene and `setScene()` it before
-`initialize()` — and nothing complains. The pointer is stored, the upload is
-skipped, and `initialize()` never retries it, so `m_vertexBuffer` stays null.
-`renderDeferred` hands geometry to the deferred passes only when that handle is
-live, and the GBuffer pass has nothing to bind without it:
+`spawnLight` makes an entity with a `Light`. Neither call touches a command buffer,
+and neither makes anything visible yet: an entity reaches the screen only after a
+`world.update()`.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {"}}
+## The frame, from game hooks to passes
 
-The rest of the pass chain runs anyway, and the Preetham sky pass is on by default,
-so what lands is an empty sky-lit frame — not black, and not an error either.
+One frame is the same chain in every host. In `ohao_game` the loop runs the
+fixed-step game hook zero or more times, the per-frame hook once, then the world,
+then the renderer:
+
+{{cite ohao/runtime/application.cpp "m_world->update(frameDt);"}}
+
+The headless drivers have no `Application`, so they call `world.update(0.0f)` before
+each `render()` themselves. The world runs its systems in exactly the order they
+were added. The first is structural, added by the constructor:
+
+{{cite ohao/ecs/world.cpp "addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });"}}
+
+`TransformSystem` recomputes `WorldTransform` for every dirty entity and its
+descendants, parents first, and tags the movers `RenderDirty`. The render extract
+is installed straight after it and consumes those tags:
+
+{{cite ohao/ecs/render_extract.cpp "world.addSystemAfter("transform", "render_extract","}}
+
+It releases the slots of vanished renderables, creates an instance for every
+renderable without one — in creation order, so slot numbers are deterministic —
+rewrites the moved ones, and rebuilds the light list when a light changed. All of
+that is host-side: `createInstance`, `updateInstance` and `setLights` edit the
+`RenderScene`'s tables and mark entries dirty. Nothing reaches device memory until
+the renderer records its frame. There the first thing in the command buffer, ahead
+of every pass, is the `RenderScene`'s own update:
+
+{{cite ohao/render/scene/render_scene.hpp "void recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot);"}}
+
+`recordUpdates` copies the dirty instance, material and light rows from the frame
+slot's staging buffer into the device-local tables, then builds or refits the TLAS.
+The slot's fence has already been waited on, so a host edit can never race a frame
+still in flight. The deferred chain follows it in the same command buffer; on the
+RT path the profile is handed the freshly updated buffers first:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->setSceneBuffers(*m_renderScene);"}}
+
+So the order is game hooks → `TransformSystem` → `RenderExtract` →
+`RenderScene::recordUpdates` → passes, and every arrow is a one-way hand-off.
+
+Two mistakes in that order fail silently. `renderScene()` dereferences the
+renderer's `RenderScene` without a check, and that object exists only after
+`initialize()` has run:
+
+{{cite ohao/gpu/vulkan/renderer.hpp "[[nodiscard]] render::RenderScene& renderScene() { return *m_renderScene; }"}}
+
+Call it first and you hold a null reference. And an entity spawned into a world
+whose extract was never installed keeps its mesh and materials in the scene but
+never gets an instance, so no pass has anything to draw. The rest of the chain runs
+anyway, and the Preetham sky pass is on by default, so what lands is an empty
+sky-lit frame — not black, and not an error either.
 
 {{cite ohao/render/deferred/deferred_renderer.hpp "bool      m_skyEnabled{true};"}}
 
-The RT modes survive the same mistake by accident, for a reason that deserves its
-own movement.
+Teardown runs the same chain backwards. The world holds `RenderScene` slots, so it
+goes first, while the scene still exists:
 
-## Why the scene is uploaded twice
+{{cite ohao/runtime/application.cpp "// releases its RenderScene slots while the RenderScene exists"}}
+
+## Why ray tracing has nothing to replay
 
 `setRenderMode()` is where ray tracing actually comes into existence. The renderer
 deliberately does *not* create a path tracer during `initialize()`:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "(eager dual init at 4K can OOM)."}}
 
-So at `setScene()` time — which in every shipped example precedes
-`setRenderMode()` — there is no `PathTracer` to bind anything to. The upload runs
-in full anyway: `buildAccelerationStructures()` copies vertex and index data into
-device-local RT buffers, extracts per-vertex normals and UVs, uploads per-triangle
-material IDs and the three-vec4-per-material colour table, builds the bindless
-texture array, uploads the light SSBO plus environment map, and builds BLAS and
-TLAS.
+What it does create is the `RenderScene`, which owns the BLAS per mesh and the TLAS
+over the instance table whether or not any path tracer exists. So a profile created
+later has nothing to catch up on: the scene data lives in the render world, not in
+the profile. `ensureRTRenderer` constructs the profile and returns, with a comment
+saying why nothing else is needed:
 
-{{cite ohao/gpu/vulkan/scene_upload.cpp "createRTVertexIndexBuffers();"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "Scene buffers, textures and lights are bound every RT frame from the"}}
 
-Every step that has something to hand the path tracer — material data, material
-buffers, bindless textures, the normal/UV/light buffers — does so through
-`forEachRTRenderer`, which walks two `unique_ptr` slots, and at that moment both
-are null, so all of it lands nowhere. The iterator is *almost* the only door. The
-only direct profile references across the three upload files sit in the
-environment-map path, which asks the offline tracer — never the realtime one — for
-its current bindless view and sampler lists so the env texture can take the next
-free slot:
-
-{{cite ohao/gpu/vulkan/light_upload.cpp "auto views = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessImageViews()"}}
-
-`setBindlessTextures` assigns rather than appends, so in a realtime-only run that
-ternary reads an empty list, the env map lands at index 0, and the one-entry array
-goes back through `forEachRTRenderer` over the material textures
-`uploadRTTextureArray` installed moments earlier in the same call.
-
-The repair for the null-profile upload is explicit: after lazily constructing the
-profile, `ensureRTRenderer` marks the acceleration structures dirty and re-runs the
-entire upload — it is the second of `updateSceneBuffers()`'s callers, not a private
-back door.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (created && m_scene && m_initialized) {"}}
-
-A default `cornell_box` run therefore builds its BLAS and TLAS twice and uploads
-its textures twice. Only the second pass is the one the tracer reads. Note the
-guard: the re-upload is conditional on a scene already existing, so a driver that
-selected its RT mode *before* `setScene()` would pay the cost once — the duplicate
-exists purely to rescue the scene-first order every example uses.
+Each RT frame the renderer binds the tables, the bindless texture list and the
+environment resources into the profile's descriptor set before dispatch. A driver
+may therefore select its mode before or after spawning — both orders cost the same,
+one upload, and neither needs a replay.
 
 :::why
 The rejected alternative is eager construction: build both the realtime and the
-offline `PathTracer` in `initialize()` so `setScene()` binds them on the first
-pass. It lost on memory. Each profile owns a beauty image plus the full AOV set
-at output resolution — motion vectors, depth, roughness, split diffuse/specular
-radiance, albedo, normal-roughness — and the source states the hazard as a
-possibility, not a measurement: eager dual init *can* OOM at 4K. No shipped driver
-renders at 4K, so at the resolutions the examples actually hardcode the avoided
-cost is a projection, not observed history. OHAO still pays one redundant scene
-upload at startup rather than hold a second full-resolution path tracer that most
-runs never dispatch.
+offline `PathTracer` in `initialize()`. It lost on memory. Each profile owns a
+beauty image plus the full AOV set at output resolution — motion vectors, depth,
+roughness, split diffuse/specular radiance, albedo, normal-roughness — and the
+source states the hazard as a possibility, not a measurement: eager dual init *can*
+OOM at 4K. No shipped driver renders at 4K, so at the resolutions the examples
+actually hardcode the avoided cost is a projection, not observed history. Lazy
+construction is cheap to keep because scene data no longer lives in the profile:
+creating one later copies nothing.
 :::
 
 Mode selection can also fail closed. If RT is unavailable, `setRenderMode` prints
@@ -146,7 +168,8 @@ the pipeline and lands on the requested budget with nothing wasted.
 
 Deferred takes the other branch of that ternary and renders a fixed count that
 ignores the sample argument entirely — in raster mode the spp number on the
-command line does nothing. The constant is per-driver, not engine-wide: ten in
+command line does nothing. The headless deferred path reads back through the same
+ring, so its fixed count only has to exceed the ring depth. The constant is per-driver, not engine-wide: ten in
 `cornell_box`, thirty in `model_viewer`.
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
@@ -162,8 +185,8 @@ tonemaps into that same image — so neither needs a readback of its own.
 {{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||"}}
 
 NRD takes the second, and it touches neither the ring nor the accumulator: it
-copies the tracer's RGBA8 tonemapped image — descriptor binding 30, already
-denoised and tonemapped on the GPU — straight into host memory behind a
+copies the tracer's RGBA8 tonemapped image — already denoised and tonemapped on
+the GPU — straight into host memory behind a
 `vkQueueWaitIdle` on the graphics queue.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "VkImage srcImage = getNrdTonemappedAOVImage();"}}
@@ -200,9 +223,12 @@ An override a driver configured once does not survive even to its first dispatch
 `renderRTPipeline` calls `prepareRTSceneForFrame` — the function that performs that
 reset — before it records the command buffer that dispatches the tracer:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline, false);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "prepareRTSceneForFrame(pipeline);"}}
 
-Four values are explicitly re-injected around the reset — anisotropy strength and
+The same call is where the frame's scene-side bindings are refreshed — the light
+buffer, the bindless texture list, the environment CDFs and the HDRI scale — so it
+is the single per-frame seam between the renderer and the `RenderScene`. Four values
+are explicitly re-injected around the reset — anisotropy strength and
 rotation, subsurface strength, and the realtime per-frame sample count:
 
 {{cite ohao/gpu/vulkan/renderer.cpp "so restore the user's choice here (same pattern as aniso/SSS preservation)."}}
@@ -232,19 +258,19 @@ down would buy it nothing.
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
 
 :::key
-Full scene uploads funnel through one routine — `updateSceneBuffers()` — reached
-from `setScene()`, from `ensureRTRenderer()`, and directly by callers that mutate a
-live scene, and there is one authority over RT behaviour (the active
-`IRTRenderPipeline`, reasserted every frame). Ordering
-mistakes around the upload fail *silently* — a skipped upload, a refused mode, a
-stale override — never with an error. When an OHAO driver renders an empty frame or
-ignores a flag, suspect call order before suspecting the shaders.
+Scene data reaches the GPU along one chain — game hooks, `TransformSystem`,
+`RenderExtract`, `RenderScene::recordUpdates`, passes — and there is one authority
+over RT behaviour (the active `IRTRenderPipeline`, reasserted every frame). Ordering
+mistakes around the chain fail *silently* — an extract that was never installed, a
+refused mode, a stale override — never with an error. When an OHAO driver renders an
+empty frame or ignores a flag, suspect call order before suspecting the shaders.
 :::
 
 ## Contracts
 
-- `initialize()` must precede `setScene()`. Reversed, the upload is skipped with no error; it is repaired only by a later `setRenderMode()` into an RT mode (via `ensureRTRenderer`) or by calling the public `updateSceneBuffers()` yourself.
+- `initialize()` must precede `renderScene()`. Before it, the `RenderScene` does not exist and the accessor returns a null reference.
+- Install the render extract (`ecs::installRenderExtract`, or let `Application` do it) before expecting entities on screen, and run `world.update()` before every `render()`. Spawning uploads a mesh and its materials; only the extract makes an instance of it.
+- The `RenderScene` must outlive the `ecs::World`. `Application` resets the world first; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
 - `setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.
 - In the modes that return the ring buffer (None, Atrous, DLSSRR) the pixels trail the GPU by `MAX_FRAMES_IN_FLIGHT` calls. Reading them after fewer than four `render()` calls returns a staging slot that was never written.
 - Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the `getDefaultSettings()` reset inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.
-- The scene must be destroyed before the renderer. In `cornell_box` reverse declaration order already guarantees this — the `VulkanRenderer` is declared above the `unique_ptr<Scene>` — so the explicit `scene.reset()` before `return` is belt-and-braces, not the mechanism.

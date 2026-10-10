@@ -24,7 +24,7 @@ The counter is incremented only in `copyDeferredOutputToPixelBuffer`; the RT bod
 
 ## Three modes, two of which can be refused
 
-`RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — a pipeline descriptor for the mode, a live renderer profile, and an acceleration-structure manager — and falls through to deferred if any is missing.
+`RenderMode` is one raster mode (Deferred) and two ray-traced ones (RTRealtime, RTOffline). The RT branch of `render()` is guarded by three separate conditions — a pipeline descriptor for the mode, a live renderer profile, and ray-tracing support reported by the render world — and falls through to deferred if any is missing.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (const auto* rtPipeline = getRTPipeline(m_renderMode);"}}
 
@@ -54,17 +54,17 @@ Reading `rt_pt_raygen.rgen` and concluding "that is what RTOffline runs" is the 
 ## Why the path tracer is not built during initialize()
 
 :::why
-`initialize()` builds the device, the deferred renderer and the acceleration-structure manager, but no `PathTracer`. Each profile owns one, and a `PathTracer` declares nineteen scalar `VkImage` members: beauty and accumulation; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the cinematic chain's pre-DoF and final tonemapped LDR; and the DLSS-RR HDR colour output — plus four image *arrays*: three bloom mips, ping-pong surface and shading history, and a 3×2 GI reservoir set. Only the DLSS output is `#ifdef`-guarded; the other eighteen are unconditional.
+`initialize()` builds the device, the deferred renderer and the render world (which owns the acceleration structures), but no `PathTracer`. Each profile owns one, and a `PathTracer` declares nineteen scalar `VkImage` members: beauty and accumulation; the albedo and normal guide pair; nine denoiser guide AOVs (motion, depth, roughness, diffuse and specular radiance, diffuse albedo, specular colour, packed normal-roughness, specular hit distance); NRD's denoised diffuse and specular and its composed HDR; the cinematic chain's pre-DoF and final tonemapped LDR; and the DLSS-RR HDR colour output — plus four image *arrays*: three bloom mips, ping-pong surface and shading history, and a 3×2 GI reservoir set. Only the DLSS output is `#ifdef`-guarded; the other eighteen are unconditional.
 
 {{cite ohao/render/rt/path_tracer.hpp "VkImage        m_dlssColorOutImage"}}
 
 Constructing both profiles eagerly doubles all of it. The rejected alternative is stated in the code: eager dual init can exhaust device memory at 4K.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "// created lazily on setRenderMode() (eager dual init at 4K can OOM)."}}
 
-The cost of laziness is a re-upload. Scenes are normally uploaded by `setScene()` long before any profile exists, and the upload paths fan out through `forEachRTRenderer`, which was a no-op at the time. So `ensureRTRenderer` marks the acceleration structure dirty and re-runs the whole scene upload when it creates a profile.
+Laziness costs the scene nothing. Meshes, materials, textures and lights live in the render world from the moment they are registered, whether or not a profile exists, and each RT frame binds the world's buffers, its TLAS and the bindless texture views to the tracer. `ensureRTRenderer` therefore has no upload to repeat: the only thing it passes along is the texture table's capacity, so the tracer's binding 12 is sized to cover every index a material can hold.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (created && m_scene && m_initialized) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "// RenderScene (prepareRTSceneForFrame / renderRTPipeline): nothing to re-upload."}}
 :::
 
 `ensureRTRenderer` is public but has no caller outside the class: `setRenderMode` is its only invocation in the tree. The header documents what it does and why it is lazy, and says nothing about who else is meant to call it.
@@ -160,7 +160,7 @@ Below that sits the bulk of the translation unit — more than half of `renderer
 - On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — a headless `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
 - A presenting renderer's deferred frames never reach `m_pixelBuffer`. Read pixels from a headless renderer; `readbackCopyCount()` stays 0 in windowed deferred mode and a nonzero count there is a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
-- `resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale: any caller holding bound descriptors must force a full scene rebind afterwards.
+- `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
 - Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.
 - `getPixels()` is not reentrant with GPU work in flight: on the NRD and OIDN branches it allocates a command buffer, submits and waits on the graphics queue. It skips that whenever `m_denoiseCacheValid` still holds, so only the first call after each `render()` costs the stall.
 - `getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for out-of-tree consumers.

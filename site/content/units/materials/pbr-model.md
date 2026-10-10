@@ -164,7 +164,7 @@ distinct geometry treatments in the tree:
 - **Path-tracer realtime VNDF indirect** uses height-correlated Smith
   (`smithG2overG1GGX`), which needs no remap.
 - **Deferred image-based lighting** precomputes the split-sum BRDF integral with a
-  *different* remap, `(a*a)/2`, into a LUT that the deferred lighting pass samples:
+  *different* remap, `(a*a)/2`, into a LUT that the deferred lighting pass samples.
 
 The only thing that is genuinely dead here is the *named* `geometrySchlickGGX`
 function in `brdf_ggx.glsl` (no callers); the identical `(r+1)^2/8` math it

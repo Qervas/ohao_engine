@@ -167,26 +167,26 @@ from the world origin to the camera. Any non-metallic surface passing exactly
 through the world origin is already misclassified today.
 :::
 
-## What the velocity vector does not see
+## What the velocity vector sees
 
 The vertex stage carries two clip positions; the fragment stage differences them
 into a screen-space UV delta:
 
 {{cite shaders/core/gbuffer.frag "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
 
-Two asymmetries are baked into that subtraction. First, the previous-frame
-matrix is built from the *current* model matrix, so an object that moved between
-frames contributes nothing:
+The previous position is the vertex pushed through the instance's *previous* world
+matrix and the previous frame's view-projection, both read on the GPU:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;"}}
+{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));"}}
 
-This is a camera-motion buffer. TAA and any denoiser downstream reprojects a
-moving object as if it were static and rejects its history on the colour clamp
-instead — visible as loss of temporal accumulation on animated geometry rather
-than as smearing.
+So the buffer carries object motion as well as camera motion. `prevWorld` is
+maintained by the ECS transform system: when an entity's transform changes, its old
+world matrix becomes `prevWorld`; on the next frame in which it does not change
+again, `prevWorld` catches up to `world`, so a mover that stops reports zero motion
+one frame later rather than carrying a stale delta forever.
 
-Second, the current frame's projection is TAA-jittered before it reaches the
-pass, while the stored previous view-projection is not:
+One asymmetry remains. The current frame's projection is TAA-jittered before it
+reaches the pass, while the stored previous view-projection is not:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;"}}
 
@@ -196,55 +196,60 @@ metric, motion blur, a DLSS motion input — must account for that term.
 
 ## The per-draw path
 
-Draw granularity is one material run, not one mesh. `buildMaterialDrawRanges`
-run-length-encodes the model's per-triangle material IDs and emits a
-push-constant update plus a `vkCmdDrawIndexed` per run, so a mesh whose triangles
-already arrive grouped by material costs a handful of draws and one with
-interleaved materials costs one draw per group. Nothing in the engine does the
+Draw granularity is one material run of one instance, not one mesh. When a model is
+uploaded, `materialRuns` run-length-encodes its per-triangle material IDs into
+submeshes; `RenderScene` expands every visible instance into one `Draw` per submesh,
+and the pass issues a push-constant update plus a `vkCmdDrawIndexed` per draw. A mesh
+whose triangles already arrive grouped by material costs a handful of draws and one
+with interleaved materials costs one draw per group. Nothing in the engine does the
 grouping: the loaders append `materialPerTriangle` in traversal order, one GLTF
-primitive or one Assimp mesh at a time, and no sort by material exists anywhere
-in the asset pipeline. Runs are grouped by construction or not at all.
+primitive or one Assimp mesh at a time, and no sort by material exists anywhere in
+the asset pipeline. Runs are grouped by construction or not at all.
+
+{{cite ohao/render/scene/model_upload.cpp "std::vector<SubmeshDesc> materialRuns(const Model& model, uint32_t triangleCount) {"}}
 
 {{cite ohao/scene/asset/model_gltf.cpp "materialPerTriangle.push_back(matIdx);"}}
 
-Each run resolves its four bindless texture slots by building a string and
-hashing it:
+The draw carries almost nothing. The push constant is the submesh's material *slot*,
+16 bytes in the fragment stage, and `firstInstance` is set to the instance's slot:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const std::string textureName = actor.getName()"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
 
-`findTexture` then copies that string into a second one before probing up to two
-maps:
+The vertex shader reads the instance (world and previous world matrices) from the
+storage buffer at `gl_InstanceIndex`; the fragment shader reads it again through a
+flat varying and turns the pair (instance, material slot) into a row of the material
+table. The instance owns a list of material references; a slot past the end of the
+list falls back to material 0, the default material, rather than reading out of
+bounds:
 
-{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "const std::string keyStr(key);"}}
+{{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
 
-So at least eight string constructions and four to eight hash lookups per
-material run per frame, to recover four integers that do not change between
-frames. The convention `<actor>_<slot>_<materialIndex>` couples the loader's
-naming to this pass; rename either side and textures fall back silently to the
-flat material colour.
+Three 16-byte rows per material then give base colour and albedo texture, roughness,
+metallic, normal and emissive textures, and the rough/metal texture and emissive
+strength. Texture indices are bindless slots stored as float bits and recovered with
+`floatBitsToUint`. Nothing is resolved by name: the only per-frame descriptor work is
+rewriting the slot's scene set, since the table buffers can be replaced when they
+grow.
 
-Frustum culling scales worse. The local AABB is recomputed from every vertex of
-the model, every frame, for every actor, with nothing cached on the mesh:
+Frustum culling is a per-draw AABB test. The mesh's local bounds are computed once,
+at registration, by a single pass over its vertices:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "localAABB.min = glm::min(localAABB.min, v.position);"}}
+{{cite ohao/render/scene/mesh_registry.cpp "mn = glm::min(mn, v.position);"}}
 
-The cull test itself is correct; the O(vertices) preamble in front of it is not
-amortised. The CPU cost of deciding whether to skip a draw therefore scales with
-the vertex count of the draw being skipped, and is paid again next frame whether
-or not the actor or the camera moved.
+Each `Draw` carries those bounds and a pointer to its instance's world matrix, so the
+pass only transforms the box and tests it against the frustum:
 
-The push-constant block is 240 bytes:
+{{cite ohao/render/deferred/gbuffer_pass.cpp "const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);"}}
 
-{{cite ohao/render/deferred/gbuffer_pass.hpp "};  // 240 bytes"}}
+The CPU cost of skipping a draw is therefore constant in the vertex count. The test
+runs per submesh draw, so a mesh with many material runs repeats the same AABB
+transform once per run.
 
-Vulkan guarantees only 128. This pass needs nearly twice the floor, and nothing
-in the tree queries `maxPushConstantsSize` before creating the layout. On a
-conformant-but-minimal device the range is a Valid Usage violation
-(`VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00294`), which is
-undefined behaviour rather than a required error return. The validation layers
-report it; the spec does not oblige `vkCreatePipelineLayout` to fail, so whether
-this degrades loudly or silently depends on how the device was launched. Sixteen
-bytes of headroom remain on a 256-byte device.
+The push-constant block is 16 bytes, an eighth of the 128-byte floor Vulkan
+guarantees, so the pass has no device-limit hazard to check for. The per-pass data
+that is not per-draw — the camera's current and previous view-projection — lives in a
+128-byte uniform buffer, one per frame slot, host-visible and persistently mapped,
+written in `execute` after that slot's fence wait.
 
 ## The descriptor set nobody reads
 
@@ -268,9 +273,9 @@ and nobody holds a stale one only because nobody holds one at all.
 ## Contracts
 
 - GBuffer0's clear value `(0,0,0,0)` *is* the coverage bit, tested by exact float equality in four of its five readers. Changing the clear colour or the attachment order breaks all four with no diagnostic; changing the position's space leaves the test intact and breaks the two ray-tracing readers instead.
-- `m_prevViewProj` must still hold last frame's value when `setViewProjection` runs, and must not be refreshed until the frame ends. Refresh it first and `prevMVP` is built from this frame's *unjittered* `m_proj * m_view` while the vertex stage transforms with the *jittered* projection, so velocity collapses to the sub-pixel jitter delta rather than to zero — TAA keeps reprojecting, onto itself.
-- Velocity encodes camera motion only and includes the current frame's TAA jitter. It is not an object-motion vector.
-- The pass requires `maxPushConstantsSize >= 240`, above the 128-byte Vulkan floor, and never checks it.
+- `m_prevViewProj` must still hold last frame's value when `setViewProjection` runs, and must not be refreshed until the frame ends. Refresh it first and the previous clip position is built from this frame's *unjittered* `m_proj * m_view` while the current one uses the *jittered* projection, so camera-induced velocity collapses to the sub-pixel jitter delta rather than to zero — TAA keeps reprojecting, onto itself.
+- Velocity encodes camera and object motion (through `prevWorld`) and includes the current frame's TAA jitter.
+- The only per-draw state is a 16-byte fragment push constant (the material slot) plus `firstInstance` = the instance slot; the instance and its material list come from `RenderScene`, so the pass is only as correct as `RenderScene::draws()`.
 - Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
 - Backface culling is disabled (`VK_CULL_MODE_NONE`), so every closed mesh rasterises both faces and the depth test alone resolves them.
 - `execute()` begins the render pass, and so performs all five clears, every frame — with no scene bound only the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run the render pass, scene or not: its clears are what every later pass"}}
