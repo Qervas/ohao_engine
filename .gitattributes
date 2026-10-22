@@ -3,3 +3,8 @@
 # narrow -- a repo-wide "text=auto" here would renormalise every tracked
 # file on the next checkout, which is not a change to make in passing.
 *.sh text eol=lf
+
+# Canonical engine output is compared byte-for-byte and is LF by definition: goldens
+# of generated schemas and scene files must check out exactly as the engine writes them.
+tests/reflect/golden/** text eol=lf
+*.ohscene text eol=lf

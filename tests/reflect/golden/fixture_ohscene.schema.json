@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ohao:ohscene:1",
+  "title": "OHAO scene (.ohscene), document version 1",
+  "description": "Generated from the engine type registry; schemaHash 7302b4233810fef4. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "type": "object",
+  "required": ["format", "version", "entities"],
+  "properties": {
+    "format": { "const": "ohao.scene" },
+    "version": { "const": 1 },
+    "components": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+    "entities": { "type": "array", "items": { "$ref": "#/$defs/Entity" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "EntityId": {
+      "description": "Stable entity id: 16 lowercase hex digits, never all zero.",
+      "type": "string",
+      "pattern": "^(?!0{16})[0-9a-f]{16}$"
+    },
+    "AssetRef": {
+      "description": "Asset reference: project-relative path with '/' separators; guid once the asset database exists.",
+      "type": "object",
+      "required": ["path"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "guid": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "Entity": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/EntityId" },
+        "Everything": { "$ref": "#/$defs/Everything" },
+        "Marker": { "$ref": "#/$defs/Marker" }
+      },
+      "additionalProperties": { "type": "object" }
+    },
+    "Shape": { "description": "Outline shape", "enum": ["Circle", "Square", "Triangle"] },
+    "Inner": {
+      "description": "A nested struct",
+      "type": "object",
+      "properties": {
+        "weight": {
+          "description": "Blend weight",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "count": {
+          "description": "How many",
+          "default": 2,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 100 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpherePrimT": {
+      "description": "Sphere primitive",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Radius",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "sectors": {
+          "description": "Longitude segments",
+          "default": 32,
+          "allOf": [{ "type": "integer", "minimum": 3, "maximum": 1024 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LabelPrim": {
+      "description": "Text primitive",
+      "type": "object",
+      "properties": {
+        "text": { "description": "Label text", "default": "hi", "allOf": [{ "type": "string" }] }
+      },
+      "additionalProperties": false
+    },
+    "Everything": {
+      "description": "Every field kind at once",
+      "type": "object",
+      "properties": {
+        "flag": { "description": "A switch", "default": true, "allOf": [{ "type": "boolean" }] },
+        "i": {
+          "description": "Signed count",
+          "default": -3,
+          "allOf": [{ "type": "integer", "minimum": -10, "maximum": 10 }]
+        },
+        "u": {
+          "description": "Unsigned count",
+          "default": 7,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "big": {
+          "description": "A 64-bit key",
+          "default": "0123456789abcdef",
+          "allOf": [{ "type": "string", "pattern": "^[0-9a-f]{16}$" }]
+        },
+        "f": { "description": "A distance", "default": 0.1, "allOf": [{ "type": "number" }] },
+        "name": {
+          "description": "Display name",
+          "default": "quote\" back\\ nl\n",
+          "allOf": [{ "type": "string" }]
+        },
+        "v2": {
+          "description": "Screen offset",
+          "default": [1, 2],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+          ]
+        },
+        "color": {
+          "description": "Tint",
+          "default": [0.5, 0.25, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "colour": {
+          "description": "Deprecated name of 'color'.",
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "v4": {
+          "description": "Plane",
+          "default": [0, 0, 0, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+          ]
+        },
+        "rot": {
+          "description": "Orientation",
+          "default": [0, 0, 0, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+          ]
+        },
+        "shape": {
+          "description": "Outline",
+          "default": "Square",
+          "allOf": [{ "$ref": "#/$defs/Shape" }]
+        },
+        "inner": {
+          "description": "Nested value",
+          "default": { "weight": 1, "count": 2 },
+          "allOf": [{ "$ref": "#/$defs/Inner" }]
+        },
+        "list": {
+          "description": "Nested values",
+          "default": [{ "weight": 1, "count": 2 }, { "weight": 2.5, "count": 4 }],
+          "allOf": [{ "type": "array", "items": { "$ref": "#/$defs/Inner" } }]
+        },
+        "maybe": {
+          "description": "Optional asset",
+          "default": null,
+          "allOf": [{ "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/AssetRef" }] }]
+        },
+        "prim": {
+          "description": "Primitive choice",
+          "default": { "SpherePrimT": { "radius": 0.5, "sectors": 32 } },
+          "allOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": { "SpherePrimT": { "$ref": "#/$defs/SpherePrimT" } },
+                  "required": ["SpherePrimT"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "LabelPrim": { "$ref": "#/$defs/LabelPrim" } },
+                  "required": ["LabelPrim"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          ]
+        },
+        "asset": {
+          "description": "Asset file",
+          "default": { "path": "assets/a.glb" },
+          "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        },
+        "target": {
+          "description": "Another entity",
+          "default": null,
+          "allOf": [{ "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/EntityId" }] }]
+        },
+        "weights": {
+          "description": "Per-item weights",
+          "default": [0.25, -0],
+          "allOf": [{ "type": "array", "items": { "type": "number" } }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Marker": {
+      "description": "One per world",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Marker size",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "size": {
+          "description": "Deprecated name of 'radius'.",
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

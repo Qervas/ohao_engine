@@ -1,0 +1,5 @@
+add_executable(reflect_tests reflect_tests.cpp)
+target_compile_features(reflect_tests PRIVATE cxx_std_20)
+target_link_libraries(reflect_tests PRIVATE ohao_reflect pfr_test_only)
+target_compile_definitions(reflect_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME ReflectTests COMMAND reflect_tests)

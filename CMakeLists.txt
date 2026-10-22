@@ -165,4 +165,10 @@ if(BUILD_ECS_TESTS)
     add_subdirectory(tests/ecs)
 endif()
 
+option(BUILD_REFLECT_TESTS "Build reflection tests (registry, schema export, dependency rule)" ON)
+if(BUILD_REFLECT_TESTS)
+    include(${CMAKE_SOURCE_DIR}/external/cmake/pfr.cmake)
+    add_subdirectory(tests/reflect)
+endif()
+
 

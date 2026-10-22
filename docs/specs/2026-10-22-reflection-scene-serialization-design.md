@@ -186,8 +186,11 @@ the editor. Simulation and rendering never go through it.
   - `.color()`, `.angle()`, `.hidden()`, `.readOnly()`.
   - `.alias("oldName")` is a name accepted on load.
 - **Per type:** `version` (starting at 1), `upgrade(from, fn)`, `.singleton()` (at most
-  one per world), and `.skip(&T::m, "reason")` for a member deliberately not
-  serialized.
+  one per world), `.component()` (a top-level block in scene files), `.runtime()` (in
+  the catalogue, never serialized), and `.skip("name", &T::m, "reason")` for a member
+  deliberately not serialized.
+- **Entity handles:** reflect never includes EnTT. A handle type becomes an `EntityRef`
+  field through a `reflect::ValueTraits<H>` specialization that the ECS provides.
 
 ```cpp
 // ohao/ecs/scene_types.cpp (shape, not final code)
@@ -224,7 +227,9 @@ both canonical and deterministic:
   - per field: name, kind, default, `min`/`max`, `uiRange`, unit, doc and aliases;
   - enum values with their docs.
 
-  It also lists the API method table and the error-code table (see "API layer"). It
+  A field's `unit` is a name from the catalogue's `units` list, `"1"` when it is
+  explicitly dimensionless, or `null`. The API method table and the error-code table
+  (see "API layer") join the catalogue in the steps that create them (3 and 5). It
   carries a `schemaHash`: a 64-bit FNV-1a of the canonical catalogue. Agents compare it
   to detect a changed engine.
 - **`ohscene.schema.json`**, a JSON Schema (draft 2020-12) for `.ohscene` documents.
@@ -928,12 +933,14 @@ All verified by running, none estimated.
 Each step ends with the engine running and every suite green.
 
 1. `ohao_reflect`: registry, typed codegen, attributes, catalogue and JSON Schema
-   export. Boost.PFR (test-only), simdjson and unordered_dense fetched with pinned tags.
-   Tests 1, 12 (partly), 13.
-2. `EntityId` (splitmix64 generator, `seedIds`, `findById`). Register all current
-   authoring components with docs, units and limits. Test 5.
-3. Canonical writer (pretty and compact), simdjson reader, two-phase load, structured
-   validation, error corpus. Tests 2–4, 6, 7.
+   export, the canonical writer (compact + pretty). Boost.PFR (test-only) fetched with a
+   pinned tag. Tests 1, 12 (partly), 13. *(Done 2026-10-22. Each other dependency is
+   fetched by the step that first uses it, so no step carries an unused one.)*
+2. `EntityId` (splitmix64 generator, `seedIds`, `findById`; unordered_dense fetched
+   here). Register all current authoring components with docs, units and limits.
+   Test 5.
+3. simdjson reader (fetched here), two-phase load, structured validation, error corpus.
+   Tests 2–4, 6, 7.
 4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8.
 5. `ohao/api`: commands with inverses, query, the method table. Test 9.
 6. Columnar snapshot/restore, `scene_bench` and the budgets. Tests 10 and 19 for the
