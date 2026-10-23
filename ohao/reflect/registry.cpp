@@ -5,8 +5,8 @@
 namespace ohao::reflect {
 
 namespace {
-constexpr std::array<std::string_view, 17> kUnits = {
-    "m", "m/s", "m/s2", "rad", "deg", "s", "kg", "N", "px",
+constexpr std::array<std::string_view, 18> kUnits = {
+    "m", "m/s", "m/s2", "rad", "deg", "deg/s", "s", "kg", "N", "px",
     "linear-rgb", "srgb", "lux", "cd", "lm", "nits", "ratio", "Hz",
 };
 } // namespace

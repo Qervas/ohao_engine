@@ -113,6 +113,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("intensity", &Environment::intensity).doc("Multiplier on the image's radiance").unitless().min(0.0)
             .uiRange(0.0, 10.0);
 
+    r.type<Spin>("Spin").component().host(makeComponentOps<Spin>())
+        .doc("Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs "
+             "before the transform system on every world update).")
+        .field("axis", &Spin::axis).doc("Rotation axis in the entity's local frame; any length (normalized), "
+                                        "zero for no rotation").unitless()
+        .field("degreesPerSecond", &Spin::degreesPerSecond).doc("Turn rate; negative turns the other way")
+            .unit("deg/s").uiRange(-720.0, 720.0);
+
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 
     r.type<MeshHandle>("MeshHandle").runtime()

@@ -1,13 +1,14 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "09c1994f17ed6680",
+  "schemaHash": "cd877b3e889be65a",
   "units": [
     "m",
     "m/s",
     "m/s2",
     "rad",
     "deg",
+    "deg/s",
     "s",
     "kg",
     "N",

@@ -22,7 +22,8 @@ namespace {
 using ecs::OwnedValue;
 
 constexpr std::string_view kOps[] = {"entity.create",    "entity.destroy",   "entity.reparent",
-                                     "component.set",    "component.remove", "field.set"};
+                                     "component.set",    "component.remove", "field.set",
+                                     "entity.duplicate"};
 
 struct Batch {
     Session::Impl& s;
@@ -622,9 +623,104 @@ bool fieldSet(Batch& b, const JsonNode& cmd) {
     return true;
 }
 
+// A copy of an entity (and by default its subtree) with fresh ids and creation order: every
+// saved component and preserved unknown component. The copy goes under `parent` (default:
+// the source's parent), named `name` (default: the source's name); its descendants keep
+// their names. Parent references inside the subtree point at the copies; any other entity
+// reference keeps its target. A subtree holding a singleton (Camera, Environment) cannot
+// be copied. Inverse: entity.destroy of the copy.
+bool entityDuplicate(Batch& b, const JsonNode& cmd) {
+    constexpr std::string_view op = "entity.duplicate";
+    if (!checkKeys(b.doc, cmd, {"op", "id", "name", "parent", "recursive"}, op, b.ctx)) return false;
+    DecodeContext& ctx = b.ctx;
+    bool recursive = true;
+    std::string_view name;
+    const bool hasName = b.doc.member(cmd, "name") != nullptr;
+    if (!optBool(b.doc, cmd, "recursive", ctx, recursive) || !optString(b.doc, cmd, "name", ctx, name)) return false;
+    const entt::entity src = target(b, cmd, op);
+    if (src == entt::null) return false;
+    entt::entity parent = parentOf(b, src);
+    const JsonNode* pn = b.doc.member(cmd, "parent");
+    if (pn) {
+        uint64_t pid = 0;
+        if (!readRef(b, "parent", *pn, true, pid)) return false;
+        parent = entt::null;
+        if (pid != 0 && (parent = live(b, "parent", *pn, pid, "E_PARENT_MISSING")) == entt::null) return false;
+    }
+
+    // The entities to copy, pre-order in child order (every parent before its children).
+    std::vector<entt::entity> order;
+    for (std::vector<entt::entity> stack{src}; !stack.empty();) {
+        const entt::entity cur = stack.back();
+        stack.pop_back();
+        order.push_back(cur);
+        if (const auto* ch = recursive ? b.reg().try_get<ecs::Children>(cur) : nullptr)
+            stack.insert(stack.end(), ch->entities.rbegin(), ch->entities.rend());
+    }
+    if (parent != entt::null && std::find(order.begin(), order.end(), parent) != order.end()) {
+        ctx.push("parent");
+        ctx.error("E_PARENT_CYCLE", *pn, "the copy cannot go under an entity it copies",
+                  "a parent outside the copied subtree", ctx.gotText(*pn));
+        ctx.pop();
+        return false;
+    }
+    // The saved component types to copy (Name, Transform and Parent are set by the copy).
+    std::vector<const TypeInfo*> types;
+    for (const TypeInfo* t : b.s.types.types()) {
+        if (!t->serialized || t->role != reflect::TypeRole::Component || !ecs::componentOps(*t)) continue;
+        if (t == b.s.tName || t == b.s.tTransform || t == b.s.tParent) continue;
+        if (t->singleton)
+            for (const entt::entity e : order)
+                if (ecs::componentOps(*t)->tryGet(b.reg(), e)) {
+                    ctx.error("E_SINGLETON", cmd,
+                              "entity " + hex16(b.s.world.idOf(e)) + " has " + t->name + ", which allows one per world",
+                              "a subtree without " + t->name);
+                    return false;
+                }
+        types.push_back(t);
+    }
+
+    // Apply. Nothing below can fail. Values are copied out before each emplace: a pool
+    // may grow (and move its values) when the copy is added to it.
+    ecs::World& world = b.s.world;
+    std::vector<std::pair<entt::entity, entt::entity>> copies;   // source -> copy
+    copies.reserve(order.size());
+    for (const entt::entity e : order) {
+        const std::string copyName = (e == src && hasName) ? std::string(name) : b.reg().get<ecs::Name>(e).value;
+        const ecs::Transform local = b.reg().get<ecs::Transform>(e);
+        const entt::entity c = world.create(copyName, local);
+        for (const TypeInfo* t : types) {
+            const ecs::ComponentOps* ops = ecs::componentOps(*t);
+            if (const void* v = ops->tryGet(b.reg(), e)) {
+                OwnedValue copy(t, v);
+                ops->emplace(b.reg(), c, copy.get());
+            }
+        }
+        if (const auto* p = b.reg().try_get<ecs::PreservedComponents>(e)) {
+            ecs::PreservedComponents kept = *p;
+            b.reg().emplace<ecs::PreservedComponents>(c, std::move(kept));
+        }
+        entt::entity copyParent = parent;
+        if (e != src) {
+            const entt::entity orig = parentOf(b, e);
+            copyParent = std::find_if(copies.begin(), copies.end(), [&](const auto& m) { return m.first == orig; })->second;
+        }
+        if (copyParent != entt::null) world.setParent(c, copyParent);
+        copies.emplace_back(e, c);
+    }
+    b.created[b.index] = world.idOf(copies.front().second);
+    if (b.wantInverse) {
+        invBegin(b, "entity.destroy", b.created[b.index]);
+        b.inv.endObject();
+    }
+    return true;
+}
+
 using CommandFn = bool (*)(Batch&, const JsonNode&);
 constexpr CommandFn kCommandFns[] = {entityCreate, entityDestroy, entityReparent,
-                                     componentSet, componentRemove, fieldSet};
+                                     componentSet, componentRemove, fieldSet,
+                                     entityDuplicate};
+static_assert(std::size(kCommandFns) == std::size(kOps), "one function per op, in kOps order");
 
 bool applyOne(Batch& b, const JsonNode& cmd) {
     if (cmd.type != JsonType::Object) {

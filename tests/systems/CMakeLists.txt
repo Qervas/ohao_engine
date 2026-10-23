@@ -1,0 +1,8 @@
+add_executable(systems_tests systems_tests.cpp)
+target_compile_features(systems_tests PRIVATE cxx_std_20)
+target_link_libraries(systems_tests PRIVATE ohao_api)
+target_compile_definitions(systems_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_link_options(systems_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_test(NAME SystemsTests COMMAND systems_tests)

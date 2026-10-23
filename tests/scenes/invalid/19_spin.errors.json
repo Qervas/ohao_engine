@@ -1,0 +1,6 @@
+[
+  { "code": "E_TYPE", "path": "/entities/0/Spin/axis" },
+  { "code": "E_TYPE", "path": "/entities/1/Spin/axis" },
+  { "code": "E_UNKNOWN_FIELD", "path": "/entities/2/Spin/degreesPerSec", "suggestion": "degreesPerSecond" },
+  { "code": "E_TYPE", "path": "/entities/3/Spin/degreesPerSecond" }
+]

@@ -159,4 +159,13 @@ struct Environment {
     float intensity{1.0f};
 };
 
+// ---- engine-provided behaviour (ecs/spin_system.hpp; run by every World) -------------------
+
+// Turns the entity about an axis of its own local frame at a constant rate. The spin
+// system writes Transform::rotation each update, before the transform system.
+struct Spin {
+    glm::vec3 axis{0.0f, 1.0f, 0.0f};   // local frame; normalized when applied; zero: no turn
+    float degreesPerSecond{90.0f};      // negative turns the other way
+};
+
 } // namespace ohao::ecs

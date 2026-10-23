@@ -695,7 +695,8 @@ static void t13_no_reflection_on_hot_paths() {
             if (e.is_regular_file()) files.push_back(e.path());
     for (const char* f : {"ohao/ecs/transform_system.cpp", "ohao/ecs/transform_system.hpp",
                           "ohao/ecs/render_extract.cpp", "ohao/ecs/render_extract.hpp",
-                          "ohao/ecs/instantiate.cpp", "ohao/ecs/instantiate.hpp"})
+                          "ohao/ecs/instantiate.cpp", "ohao/ecs/instantiate.hpp",
+                          "ohao/ecs/spin_system.cpp", "ohao/ecs/spin_system.hpp"})
         if (fs::exists(root / f)) files.push_back(root / f);
     CHECK(files.size() > 50, "the renderer and GPU sources were found");
     std::vector<std::string> hits;

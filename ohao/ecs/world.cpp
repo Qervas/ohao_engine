@@ -1,4 +1,5 @@
 #include "ecs/world.hpp"
+#include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -47,7 +48,11 @@ World::World() : m_idGen{randomSeed(), 0} {
     m_registry.storage<TransformDirty>();
     m_registry.on_destroy<Parent>().connect<&World::onParentDestroyed>(this);
     m_registry.on_destroy<Children>().connect<&World::onChildrenDestroyed>(this);
-    // Structural: transforms are always propagated before any other system runs.
+    // Engine-provided behaviour first: these move entities, so they run before the
+    // transform system and their changes reach the GPU the same update.
+    addSystem("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
+    // Structural: transforms are propagated before every host system (instantiate is
+    // inserted right before it, the render extract right after).
     addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });
 }
 

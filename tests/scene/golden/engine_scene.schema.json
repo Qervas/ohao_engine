@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 44e08107a6524c9a. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 99c31cef530c678d. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -37,7 +37,8 @@
         "MeshSource": { "$ref": "#/$defs/MeshSource" },
         "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" },
         "Camera": { "$ref": "#/$defs/Camera" },
-        "Environment": { "$ref": "#/$defs/Environment" }
+        "Environment": { "$ref": "#/$defs/Environment" },
+        "Spin": { "$ref": "#/$defs/Spin" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -494,6 +495,25 @@
           "description": "Multiplier on the image's radiance",
           "default": 1,
           "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Spin": {
+      "description": "Turns the entity about an axis of its own frame at a constant rate (the spin system, which runs before the transform system on every world update).",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "Rotation axis in the entity's local frame; any length (normalized), zero for no rotation",
+          "default": [0, 1, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "degreesPerSecond": {
+          "description": "Turn rate; negative turns the other way",
+          "default": 90,
+          "allOf": [{ "type": "number" }]
         }
       },
       "additionalProperties": false

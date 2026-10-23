@@ -172,4 +172,10 @@ void writeFields(const Environment& v, const Environment* omit, FieldSink& out) 
     if (!omit || !same(v.intensity, omit->intensity)) t.f32("\"intensity\"", v.intensity);
 }
 
+void writeFields(const Spin& v, const Spin* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || !same(v.axis, omit->axis)) vec3(t, "\"axis\"", v.axis);
+    if (!omit || !same(v.degreesPerSecond, omit->degreesPerSecond)) t.f32("\"degreesPerSecond\"", v.degreesPerSecond);
+}
+
 } // namespace ohao::ecs

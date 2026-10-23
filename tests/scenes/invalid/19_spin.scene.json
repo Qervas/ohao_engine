@@ -1,0 +1,10 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    { "id": "0000000000000191", "Spin": { "axis": 1 } },
+    { "id": "0000000000000192", "Spin": { "axis": [0, 1] } },
+    { "id": "0000000000000193", "Spin": { "degreesPerSec": 45 } },
+    { "id": "0000000000000194", "Spin": { "degreesPerSecond": "fast" } }
+  ]
+}

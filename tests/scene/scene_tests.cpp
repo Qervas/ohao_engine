@@ -280,6 +280,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<InstantiateError>(r, checked);
     ok &= complete<ecs::Camera>(r, checked);
     ok &= complete<Environment>(r, checked);
+    ok &= complete<Spin>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -296,7 +297,7 @@ static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
-                              "Environment"}) {
+                              "Environment", "Spin"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -430,6 +431,9 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             w.registry().emplace<MaterialOverride>(e, MaterialOverride{{unit(), unit(), unit()}, unit(), unit(),
                                                                        pickFloat(rng, true)});
         }
+        if (rng() % 6 == 0)
+            w.registry().emplace<Spin>(e, Spin{{pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)},
+                                               pickFloat(rng, false)});
         es.push_back(e);
         depth.push_back(d);
     }

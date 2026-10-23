@@ -269,6 +269,10 @@ static void t09_each_command_applies_and_returns_its_inverse() {
          [](const World& w) { return w.registry().get<Parent>(byHex(w, kShade)).entity == byHex(w, kRoom); }},
         {R"({"op":"field.set","id":"1000000000000003","path":"/Name/value","value":"Star"})",
          [](const World& w) { return w.registry().get<Name>(byHex(w, kSun)).value == "Star"; }},
+        {R"({"op":"entity.duplicate","id":"1000000000000002"})",
+         [](const World& w) { return w.idCount() == 6; }},
+        {R"({"op":"entity.duplicate","id":"1000000000000002","recursive":false,"parent":null,"name":"Lamp 2"})",
+         [](const World& w) { return w.idCount() == 5; }},
     };
     for (const Case& c : kCases) {
         World w;
@@ -283,6 +287,52 @@ static void t09_each_command_applies_and_returns_its_inverse() {
         const Reply u = undo(s, r);
         CHECK(u.ok() && save(w) == before, "its inverse restores the save byte-identically");
     }
+}
+
+// entity.duplicate (step 10, the add-an-API-command recipe followed once).
+static void t09_duplicate_copies_a_subtree_with_fresh_ids() {
+    World w;
+    loadFile(w, "rooms.scene.json");
+    w.seedIds(5);
+    api::Session s(w, engineTypes());
+    const std::string before = save(w);
+    // The whole Room tree under a new name, then an edit of the copy through "$0".
+    const Reply r = applyBatch(s, R"([{"op":"entity.duplicate","id":"1000000000000001","name":"Room B"},
+                                      {"op":"field.set","id":"$0","path":"/Transform/position/0","value":20}])");
+    if (!r.ok()) std::printf("\n      %s", r.text.c_str());
+    CHECK(r.ok() && w.idCount() == 7, "Room, Lamp and Shade are copied");
+    const entt::entity room2 = w.findById(std::stoull(r.str("/result/results/0"), nullptr, 16));
+    CHECK(room2 != entt::null && w.registry().get<Name>(room2).value == "Room B" &&
+              !w.registry().all_of<Parent>(room2) && w.registry().get<Transform>(room2).position.x == 20.0f,
+          "the result is the copy's id; it is named, a root like its source, and editable as $0");
+    const auto& kids = w.registry().get<Children>(room2).entities;
+    CHECK(kids.size() == 1 && w.registry().get<Name>(kids[0]).value == "Lamp" &&
+              w.registry().get<Light>(kids[0]).intensity == 12.5f &&
+              w.registry().get<Light>(kids[0]).type == LightType::Spot,
+          "the copied Lamp hangs under the copy, with its Light");
+    const auto& grand = w.registry().get<Children>(kids[0]).entities;
+    CHECK(grand.size() == 1 && w.registry().get<Name>(grand[0]).value == "Shade" &&
+              w.registry().get<Transform>(grand[0]).scale == glm::vec3(0.5f),
+          "and the copied Shade under the copied Lamp");
+    CHECK(w.registry().get<Children>(byHex(w, kLamp)).entities.size() == 1, "the source tree is untouched");
+    const Reply u = undo(s, r);
+    CHECK(u.ok() && save(w) == before, "the inverse removes the copy: byte-identical save");
+
+    const Reply cycle = applyBatch(s, R"([{"op":"entity.duplicate","id":"1000000000000002","parent":"1000000000000004"}])");
+    CHECK(cycle.code() == "E_PARENT_CYCLE" && cycle.str("/error/data/0/path") == "/commands/0/parent" &&
+              save(w) == before,
+          "a copy cannot go under an entity it copies");
+    CHECK(Reply(s.call("world.apply", R"({"commands":[{"op":"entity.create","name":"Cam","parent":"1000000000000004",)"
+                                      R"("components":{"Camera":{}}}]})")).ok(),
+          "(a camera under the Shade)");
+    const Reply single = applyBatch(s, R"([{"op":"entity.duplicate","id":"1000000000000002"}])");
+    CHECK(single.code() == "E_SINGLETON" && w.idCount() == 5, "a subtree holding a singleton cannot be copied");
+    CHECK(applyBatch(s, R"([{"op":"entity.duplicate","id":"1000000000000002","recursive":false}])").ok() &&
+              w.idCount() == 6,
+          "the entity alone can");
+    CHECK(applyBatch(s, R"([{"op":"entity.duplicate","id":"1000000000000002","deep":true}])").code() ==
+              "E_UNKNOWN_FIELD",
+          "unknown members are refused");
 }
 
 static void t09_failing_command_rolls_back_the_batch() {
@@ -911,6 +961,7 @@ int main() {
     RUN(t09_schema_get_includes_methods);
     RUN(t09_render_capture_needs_a_host_and_checks_its_params);
     RUN(t09_each_command_applies_and_returns_its_inverse);
+    RUN(t09_duplicate_copies_a_subtree_with_fresh_ids);
     RUN(t09_failing_command_rolls_back_the_batch);
     RUN(t09_batch_then_inverse_is_byte_identical);
     RUN(t09_command_built_world_saves_like_the_file);
