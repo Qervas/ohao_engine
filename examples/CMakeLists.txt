@@ -23,6 +23,7 @@ function(ohao_example name)
     if(TARGET Jolt)
         target_link_libraries(${name} PRIVATE Jolt)
     endif()
+    add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V
 endfunction()
 
 ohao_example(cornell_box)

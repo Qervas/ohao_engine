@@ -9,7 +9,7 @@ component, the spin system, `entity.duplicate` and `systems_tests` are the resul
 ## Libraries
 
 All under `ohao/`, each a static library with its own `CMakeLists.txt`. Sources are
-globbed: re-run the CMake configure step after adding a file.
+globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
 | Library | Directory | Depends on | What it owns |
 |---|---|---|---|
@@ -179,21 +179,25 @@ $ build/Release/api_tests.exe > /dev/null
 Followed for `systems_tests`.
 
 1. `tests/<name>/<name>_tests.cpp`:
-   - copy the `CHECK`/`RUN` harness from `tests/api/api_tests.cpp`;
+   - `#include "common/harness.hpp"` for `CHECK`/`RUN`;
    - one `static void` function per test, named for what it proves;
-   - `main` runs them, prints `Results: P/T passed`, then the one-line JSON summary
-     `{"suite","passed","failed","failures":[…]}`;
-   - it returns nonzero on any failure.
+   - `main` runs them and ends with `return ohao::test::finish("<name>_tests");`, which
+     prints `Results: P/T passed` and the one-line JSON summary
+     `{"suite","passed","failed","failures":[…]}` and returns nonzero on any failure.
 2. `tests/<name>/CMakeLists.txt`:
    - `add_executable`, then `target_link_libraries` with the narrowest library that
-     covers it;
+     covers it, plus `ohao_test_harness`;
    - `OHAO_SOURCE_DIR` as a compile definition if it reads repo files;
    - `/FORCE:MULTIPLE /IGNORE:4088` on MSVC;
-   - `add_test`;
+   - `ohao_add_test(<name>_tests LABEL quick COMMAND <name>_tests)` (`LABEL gpu GPU` if it
+     creates a device; `LOCKS <name>` for any fixed scratch path it shares with another
+     test);
    - `add_dependencies(<target> shaders)` if it renders.
 3. The root `CMakeLists.txt`: an `option(BUILD_<NAME>_TESTS … ON)` and
-   `add_subdirectory(tests/<name>)` next to the others. Re-run the configure step.
-4. List it in the gates of `AGENTS.md` and in the `verify` skill.
+   `add_subdirectory(tests/<name>)` next to the others.
+4. List it in the gates of `AGENTS.md` and in the `verify` skill. `python tools/check.py`
+   runs it from then on; `check_tests` fails if the executable is built but not
+   registered.
 
 ```console
 $ build/Release/systems_tests.exe | tail -n 1

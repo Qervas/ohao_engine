@@ -5,4 +5,4 @@ target_compile_definitions(api_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR
 if(MSVC)
     target_link_options(api_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
-add_test(NAME ApiTests COMMAND api_tests)
+ohao_add_test(api_tests LABEL quick COMMAND api_tests)

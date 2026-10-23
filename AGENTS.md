@@ -26,20 +26,44 @@ $ C:/Users/djmax/scoop/shims/cmake --build build --config Release -j6   # slow
 $ C:/Users/djmax/scoop/shims/cmake --build build --config Release --target shaders   # slow
 ```
 
-- **Re-run the configure step after adding a source file or directory**: sources are
-  globbed, so a new `.cpp` is invisible until CMake runs again.
-- **The `shaders` target is manual.** Nothing depends on it and it is not in `ALL`, so a
-  green build can run stale SPIR-V. Build it whenever anything under `shaders/` changes.
-  (`ohao`, `renderer_test` and the `*_gpu_test` targets depend on it; the examples,
-  `engine_tests` and `ecs_tests` do not.)
+- **Sources are globbed with `CONFIGURE_DEPENDS`**: a new `.cpp` or shader under a
+  globbed directory is picked up by the next build, which re-runs the configure step
+  itself. A new directory or target still needs a `CMakeLists.txt` edit.
+- **The `shaders` target is not in `ALL`**, but every target that loads SPIR-V depends on
+  it (the `ohao` CLI, the examples, the rendering tests), so building any of them builds
+  the shaders. `python tools/check.py` builds it first regardless.
 - Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`, named by
   flattening the path (`rt/pt_raygen.rgen` → `rt_pt_raygen.rgen.spv`).
 
 ## Gates
 
+**One command builds and runs everything:**
+
+```console
+$ python tools/check.py   # slow
+$ python tools/check.py --all   # slow
+```
+
+It finds the real CMake (refusing conda's), configures if needed, builds the `shaders`
+target and then everything with at most 6 jobs, runs every CTest test with the chosen
+labels, and writes one verdict: `build/check/check.json`, also the last line it prints
+(`{ok, labels, build, doctor, tests: [{name, labels, ok, seconds, passed, failed,
+failures, tail}], counts}`), plus `build/check/junit.xml` and the logs beside them. A
+failing test's entry carries the last 40 lines of its output. Exit 0 = all passed, 1 =
+something failed, 2 = the environment is wrong (the message says how).
+
+- **Labels** (one per test, `cmake/ohao_tests.cmake`): `quick` (CPU), `gpu`, `docs` — the
+  default set — and `golden`, `bench`, `slow`, which `--all` adds. `--labels gpu,docs`
+  picks your own set; `ctest --test-dir build -C Release -L quick` works without the
+  script. GPU tests never run two at once; benchmarks run alone.
+- **Registering a new suite:** `ohao_add_test(<name> LABEL <label> [GPU] COMMAND <exe>)`
+  in its `CMakeLists.txt`, and end its `main` with `ohao::test::finish(...)` from
+  `tests/common/harness.hpp` (or its `CHECK`/`RUN` macros), so the summary line is
+  there. `check_tests` fails if a test executable is built but not registered.
+
 Every suite exits 0 on success and nonzero on any failure; that is the pass criterion.
-The newer suites end with one JSON line, `{"suite", "passed", "failed", "failures"}`.
-Run what your change touches, and all of it before a commit that touches shared code.
+Every suite ends with one JSON line, `{"suite", "passed", "failed", "failures"}`. The
+commands below run single suites by hand.
 
 CPU suites (no GPU):
 
@@ -57,6 +81,7 @@ $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
+$ python tests/check/check_tests.py > /dev/null
 ```
 
 | Suite | Covers |
@@ -68,6 +93,7 @@ $ python tests/reflect/check_scene_schema.py > /dev/null
 | `systems_tests` | engine-provided systems (spin) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
+| `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
 
 GPU suites and harnesses (each creates a Vulkan device):
 
@@ -111,8 +137,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 
 ## Gotchas that have cost this project time
 
-- conda's `cmake` shadows the real one; use the scoop shim (above).
-- A new `.cpp` needs a re-configure; a shader change needs `--target shaders`.
+- conda's `cmake` shadows the real one; use the scoop shim (above). `tools/check.py`
+  refuses conda's.
+- Tests run in parallel under CTest: a test that writes a fixed path (a scratch
+  directory under `build/`, a file in `%TEMP%`) races another copy of itself. Give it a
+  per-process name or a `LOCKS` entry in its registration.
 - **Git Bash rewrites arguments that start with `/`** into Windows paths. Write
   `ohao query --fields Transform/position`, not `/Transform/position`.
 - **Line endings:** `core.autocrlf` is on. Byte-compared files (goldens, scene files,

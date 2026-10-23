@@ -9,6 +9,8 @@ target_include_directories(renderer_test PRIVATE
     ${Vulkan_INCLUDE_DIRS}
     ${stb_SOURCE_DIR}
 )
+target_compile_definitions(renderer_test PRIVATE OHAO_BINARY_DIR="${CMAKE_BINARY_DIR}")
+target_link_libraries(renderer_test PRIVATE ohao_test_harness)
 
 if(MSVC)
     target_link_libraries(renderer_test PRIVATE
@@ -103,39 +105,28 @@ if(MSVC)
 endif()
 add_dependencies(deferred_determinism_gpu_test shaders)
 
-# Env CDF unit test
+# The small GoogleTest suites (CPU). ohao_gtest_main prints the harness's JSON line.
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp
 )
-target_include_directories(env_cdf_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(env_cdf_test PRIVATE gtest gtest_main)
-if(UNIX)
-    target_link_libraries(env_cdf_test PRIVATE pthread)
-endif()
-include(GoogleTest)
-gtest_discover_tests(env_cdf_test)
-
-# Sobol + Owen scramble unit tests (Feature 1.2)
-add_executable(sobol_test sobol_test.cpp
+add_executable(sobol_test sobol_test.cpp   # Sobol + Owen scramble
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
 )
-target_include_directories(sobol_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(sobol_test PRIVATE gtest gtest_main)
-if(UNIX)
-    target_link_libraries(sobol_test PRIVATE pthread)
-endif()
-include(GoogleTest)
-gtest_discover_tests(sobol_test)
-
-# Denoise parse unit test (Denoiser Sub-plan 1)
 add_executable(denoise_parse_test denoise_parse_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
 )
-target_include_directories(denoise_parse_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(denoise_parse_test PRIVATE gtest gtest_main)
-if(UNIX)
-    target_link_libraries(denoise_parse_test PRIVATE pthread)
-endif()
-include(GoogleTest)
-gtest_discover_tests(denoise_parse_test)
+foreach(t env_cdf_test sobol_test denoise_parse_test)
+    target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+    target_link_libraries(${t} PRIVATE ohao_gtest_main)
+    if(UNIX)
+        target_link_libraries(${t} PRIVATE pthread)
+    endif()
+    ohao_add_test(${t} LABEL quick COMMAND ${t})
+endforeach()
+
+# The GPU suites above: one device each, never two at once.
+ohao_add_test(renderer_test LABEL gpu GPU COMMAND renderer_test)
+foreach(t instantiate_gpu_test scene_view_gpu_test restore_render_gpu_test deferred_determinism_gpu_test)
+    ohao_add_test(${t} LABEL gpu GPU COMMAND ${t})
+endforeach()

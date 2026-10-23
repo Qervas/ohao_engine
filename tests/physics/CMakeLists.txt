@@ -25,8 +25,8 @@ endif()
 if(TARGET Jolt)
     target_link_libraries(physics_backend_tests PRIVATE Jolt)
 endif()
+target_link_libraries(physics_backend_tests PRIVATE ohao_test_harness)
 
-# Add test to CTest
-add_test(NAME PhysicsBackendTests COMMAND physics_backend_tests)
+ohao_add_test(physics_backend_tests LABEL quick COMMAND physics_backend_tests)
 
 message(STATUS "Physics backend tests configured")

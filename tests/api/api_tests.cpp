@@ -25,6 +25,14 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+static int processId() { return _getpid(); }
+#else
+#include <unistd.h>
+static int processId() { return static_cast<int>(getpid()); }
+#endif
+
 namespace fs = std::filesystem;
 using namespace ohao;
 using namespace ohao::ecs;
@@ -786,7 +794,8 @@ static void t09_scene_methods_load_save_validate() {
     const Reply inline_(s.call("scene.save"));
     CHECK(inline_.json("/result/scene") == save(w, reflect::JsonLayout::Compact),
           "scene.save without a path returns the compact scene as an object");
-    const fs::path out = fs::temp_directory_path() / "ohao_api_test.scene.json";
+    // Per process: CTest and the doc checker can run this suite at the same time.
+    const fs::path out = fs::temp_directory_path() / ("ohao_api_test_" + std::to_string(processId()) + ".scene.json");
     const Reply file(s.call("scene.save", "{\"path\":\"" + out.generic_string() + "\"}"));
     CHECK(file.ok() && readFile(out) == save(w), "with a path it writes the pretty file");
     fs::remove(out);

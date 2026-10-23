@@ -23,7 +23,8 @@ endif()
 if(TARGET Jolt)
     target_link_libraries(force_generator_tests PRIVATE Jolt)
 endif()
+target_link_libraries(force_generator_tests PRIVATE ohao_test_harness)
 
-add_test(NAME ForceGeneratorTests COMMAND force_generator_tests)
+ohao_add_test(force_generator_tests LABEL quick COMMAND force_generator_tests)
 
 message(STATUS "Force generator tests configured")

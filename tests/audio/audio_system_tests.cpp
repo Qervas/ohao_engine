@@ -14,6 +14,11 @@
 
 #include "audio/audio_system.hpp"
 
+#include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
+
+#include <string>
+#include <vector>
+
 using namespace ohao;
 
 // =============================================================================
@@ -24,10 +29,13 @@ static int testsRun = 0;
 static int testsPassed = 0;
 static int testsFailed = 0;
 static int testsSkipped = 0;
+static std::string g_currentTest;            // the TEST_BEGIN name, for the failure list
+static std::vector<std::string> g_failures;  // reported in the JSON summary line
 
 #define TEST_BEGIN(name) \
     do { \
         testsRun++; \
+        g_currentTest = (name); \
         std::cout << "  TEST: " << name << "... " << std::flush; \
     } while(0)
 
@@ -40,6 +48,7 @@ static int testsSkipped = 0;
 #define TEST_FAIL(msg) \
     do { \
         testsFailed++; \
+        g_failures.push_back(g_currentTest + ": " + std::string(msg)); \
         std::cout << "\033[31mFAIL: " << msg << "\033[0m" << std::endl; \
     } while(0)
 
@@ -366,5 +375,6 @@ void runAllTests() {
 
 int main() {
     runAllTests();
-    return testsFailed > 0 ? 1 : 0;
+    std::cout << std::flush;
+    return ohao::test::finish("audio_system_tests", testsPassed, testsFailed, g_failures);
 }

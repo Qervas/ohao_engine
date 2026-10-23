@@ -8,18 +8,7 @@
 #include "runtime/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
 
-static int g_pass = 0, g_fail = 0;
-#define CHECK(expr, msg)                                                                     \
-    do {                                                                                     \
-        if (!(expr)) { std::printf("    FAIL: %s  [%s]\n", msg, #expr); ++g_fail; return; }  \
-    } while (0)
-#define RUN(fn)                                                       \
-    do {                                                              \
-        std::printf("  %-52s", #fn);                                  \
-        int f0 = g_fail;                                              \
-        fn();                                                         \
-        if (g_fail == f0) { ++g_pass; std::printf("PASS\n"); }        \
-    } while (0)
+#include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
 
 using namespace ohao::runtime;
 using namespace std::chrono_literals;
@@ -299,6 +288,6 @@ int main() {
     RUN(choose_image_count_unlimited_max);
     RUN(choose_extent_uses_desired_when_surface_defers);
     RUN(zero_extent_means_minimized);
-    std::printf("\nResults: %d/%d passed\n", g_pass, g_pass + g_fail);
-    return g_fail == 0 ? 0 : 1;
+    std::printf("\n");
+    return ohao::test::finish("runtime_tests");
 }

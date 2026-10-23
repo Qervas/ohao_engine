@@ -8,7 +8,7 @@ else()
     message(STATUS "OpenImageDenoise: not found — renderer configures without OIDN")
 endif()
 
-file(GLOB_RECURSE RENDERER_SOURCES
+file(GLOB_RECURSE RENDERER_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )

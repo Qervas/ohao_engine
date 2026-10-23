@@ -13,9 +13,9 @@ target_include_directories(audio_system_tests PRIVATE
 target_link_libraries(audio_system_tests PRIVATE
     ohao_audio
     glm
+    ohao_test_harness
 )
 
-# Add test to CTest
-add_test(NAME AudioSystemTests COMMAND audio_system_tests)
+ohao_add_test(audio_system_tests LABEL quick COMMAND audio_system_tests)
 
 message(STATUS "Audio system tests configured")

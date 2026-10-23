@@ -18,18 +18,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 
-static int g_pass = 0, g_fail = 0;
-#define CHECK(expr, msg)                                                                     \
-    do {                                                                                     \
-        if (!(expr)) { std::printf("    FAIL: %s  [%s]\n", msg, #expr); ++g_fail; return; }  \
-    } while (0)
-#define RUN(fn)                                                       \
-    do {                                                              \
-        std::printf("  %-52s", #fn);                                  \
-        int f0 = g_fail;                                              \
-        fn();                                                         \
-        if (g_fail == f0) { ++g_pass; std::printf("PASS\n"); }        \
-    } while (0)
+#include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
 
 using namespace ohao::ecs;
 
@@ -511,6 +500,5 @@ int main() {
     RUN(unknown_mesh_handles_are_skipped_not_fatal);
     RUN(patched_gi_material_reuploads_the_instance);
     RUN(world_outlives_an_explicit_renderer_shutdown);
-    std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
-    return g_fail == 0 ? 0 : 1;
+    return ohao::test::finish("ecs_tests");
 }

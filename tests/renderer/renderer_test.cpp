@@ -1,6 +1,8 @@
 // OHAO Renderer Smoke Test
 // Minimal: init Vulkan, spawn a one-quad ECS scene, render 1 frame, verify output.
 // For real scenes, use examples/cornell_box or examples/model_viewer.
+//
+//   renderer_test [out.png]    default: <build>/renderer_test.png; last line is a JSON summary
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -14,24 +16,42 @@
 #include "render/scene/render_scene.hpp"
 #include "scene/asset/model.hpp"
 
+#include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
+
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace ohao;
 
+namespace {
+
+int g_passed = 0, g_failed = 0;
+std::vector<std::string> g_failures;
+
+bool check(bool ok, const char* what) {
+    std::cout << (ok ? "PASS: " : "FAIL: ") << what << std::endl;
+    if (ok) ++g_passed;
+    else {
+        ++g_failed;
+        g_failures.emplace_back(what);
+    }
+    return ok;
+}
+
+int finish() { return ohao::test::finish("renderer_test", g_passed, g_failed, g_failures); }
+
+} // namespace
+
 int main(int argc, char* argv[]) {
-    std::string output = argc > 1 ? argv[1] : "smoke_test.png";
+    const std::string output = argc > 1 ? argv[1] : std::string(OHAO_BINARY_DIR) + "/renderer_test.png";
     uint32_t W = 640, H = 480;
 
     std::cout << "=== OHAO Renderer Smoke Test ===" << std::endl;
 
     // 1. Initialize renderer
     VulkanRenderer renderer(W, H);
-    if (!renderer.initialize()) {
-        std::cerr << "FAIL: renderer init" << std::endl;
-        return 1;
-    }
-    std::cout << "PASS: renderer init" << std::endl;
+    if (!check(renderer.initialize(), "renderer init")) return finish();
 
     // 2. Create minimal scene — single red quad
     ecs::World world;   // after the renderer: released first
@@ -50,24 +70,15 @@ int main(int argc, char* argv[]) {
     ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), model, "TestQuad",
                     ecs::Transform{}, &mat);
     world.update(0.0f);
-    if (renderer.renderScene().draws().empty()) {
-        std::cerr << "FAIL: the quad entity reached no RenderScene draw" << std::endl;
-        return 1;
-    }
-    std::cout << "PASS: scene entities" << std::endl;
+    if (!check(!renderer.renderScene().draws().empty(), "the quad entity reaches a RenderScene draw")) return finish();
 
     // 3. Render
     renderer.setRenderMode(RenderMode::RTOffline);
     renderer.render();
-    std::cout << "PASS: render frame" << std::endl;
+    const uint8_t* pixels = renderer.getPixels();
+    check(pixels != nullptr, "a frame renders to pixels");
 
     // 4. Save
-    const uint8_t* pixels = renderer.getPixels();
-    if (pixels) {
-        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
-        std::cout << "PASS: saved " << output << std::endl;
-    }
-
-    std::cout << "=== ALL PASS ===" << std::endl;
-    return 0;
+    if (pixels) check(stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4) != 0, "the frame is written as a PNG");
+    return finish();
 }

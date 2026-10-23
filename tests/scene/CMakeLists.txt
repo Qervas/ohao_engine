@@ -6,4 +6,4 @@ target_compile_definitions(scene_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_D
 if(MSVC)
     target_link_options(scene_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
-add_test(NAME SceneTests COMMAND scene_tests)
+ohao_add_test(scene_tests LABEL quick COMMAND scene_tests)

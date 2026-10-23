@@ -28,7 +28,9 @@ endif()
 if(TARGET Jolt)
     target_link_libraries(engine_tests PRIVATE Jolt)
 endif()
+target_link_libraries(engine_tests PRIVATE ohao_test_harness)
+add_dependencies(engine_tests shaders)   # it renders headless frames
 
-add_test(NAME EngineTests COMMAND engine_tests)
+ohao_add_test(engine_tests LABEL gpu GPU COMMAND engine_tests)
 
 message(STATUS "Engine tests configured")

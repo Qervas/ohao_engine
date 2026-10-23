@@ -37,6 +37,12 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# Tests: every suite, harness and gate is a CTest test with one label (cmake/ohao_tests.cmake).
+# `python tools/check.py` is the one entry point that builds and runs them.
+enable_testing()
+set(Python3_FIND_REGISTRY LAST)   # the `python` on PATH first: the one the harnesses run under
+include(${CMAKE_SOURCE_DIR}/cmake/ohao_tests.cmake)
+
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -185,4 +191,6 @@ endif()
 # The ohao CLI (validate, fmt, apply, query, summary, run, schema) and its render host.
 add_subdirectory(tools/ohao)
 
+# The harnesses and gates that are not one suite's executable (needs every target above).
+ohao_register_harness_tests()
 

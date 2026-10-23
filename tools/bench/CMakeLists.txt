@@ -5,5 +5,6 @@ target_compile_definitions(scene_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_D
 if(MSVC)
     target_link_options(scene_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()
-add_test(NAME SceneBench COMMAND scene_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/scene_budgets.json)
-set_tests_properties(SceneBench PROPERTIES LABELS bench)
+# The budget gate. Alone (RUN_SERIAL): other tests running beside it would be its noise.
+ohao_add_test(scene_bench LABEL bench SERIAL TIMEOUT 1200
+    COMMAND scene_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/scene_budgets.json)

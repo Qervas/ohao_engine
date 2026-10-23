@@ -6,7 +6,7 @@ if(NOT GLSLC)
 endif()
 
 # Find all shader files (including subdirectories)
-file(GLOB_RECURSE SHADER_SOURCES
+file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.vert"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.frag"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"
@@ -28,7 +28,7 @@ add_custom_command(
 )
 
 # Find include files for dependency tracking (all subdirectories)
-file(GLOB_RECURSE SHADER_INCLUDES
+file(GLOB_RECURSE SHADER_INCLUDES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/water/*.glsl"
 )
