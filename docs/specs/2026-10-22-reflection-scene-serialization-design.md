@@ -625,7 +625,8 @@ through this table, so there is exactly one implementation of each operation.
     `missing`, not an error.
   - **Projection:** without `fields`, each entity is its compact file form (defaults
     omitted unless `defaults: true`). `fields: ["/Light", "/Transform/position"]` gives
-    whole components or single fields (always written, even when default). Runtime
+    whole components (defaults omitted unless `defaults: true`) or single fields (always
+    written, even when default: they were asked for by name). Runtime
     components can be projected too (`/WorldTransform/world`). `fields: []` gives ids
     only.
 - **`world.summary`:**
