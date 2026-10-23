@@ -28,20 +28,6 @@ build/
 .cache/
 .ropeproject/
 
-# Godot
-godot_editor/project/.godot/
-godot_editor/.sconsign.dblite
-godot_editor/bin/
-*.import
-
-# Static libraries (build output)
-godot_editor/*.a
-shaders/*.a
-
-# External build artifacts
-godot_editor/external/
-shaders/external/
-
 # Legacy
 external/imgui
 
@@ -89,7 +75,7 @@ tools/dlss_probe/dlss_probe
 tools/dlss_probe/ngx_appdata/
 
 
-# Shelved local work (SVBRDF lab, render outputs, Godot-era editor).
+# Shelved local work (SVBRDF lab, render outputs, older experiments).
 # Not part of the engine; kept out of git deliberately.
 _backup/
 smoke_test.png

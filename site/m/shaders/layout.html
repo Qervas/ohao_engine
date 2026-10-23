@@ -33,7 +33,7 @@
         <p>core / rt / postprocess / compute / includes / shadow / particles.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#ninety-two-lines-of-cmake-and-no-permutation-system">Ninety-two lines of CMake and no permutation system</a></li><li><a href="#the-flattening-that-became-an-abi">The flattening that became an ABI</a></li><li><a href="#where-the-spir-v-is-and-how-each-pipeline-finds-it">Where the SPIR-V is, and how each pipeline finds it</a></li><li><a href="#the-dependency-edge-that-is-missing">The dependency edge that is missing</a></li><li><a href="#two-files-named-pbr-unpack-glsl">Two files named pbr_unpack.glsl</a></li><li><a href="#the-other-compiler-still-in-the-tree">The other compiler, still in the tree</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#ninety-two-lines-of-cmake-and-no-permutation-system">Ninety-two lines of CMake and no permutation system</a></li><li><a href="#the-flattening-that-became-an-abi">The flattening that became an ABI</a></li><li><a href="#where-the-spir-v-is-and-how-each-pipeline-finds-it">Where the SPIR-V is, and how each pipeline finds it</a></li><li><a href="#the-dependency-edge-that-is-missing">The dependency edge that is missing</a></li><li><a href="#two-files-named-pbr-unpack-glsl">Two files named pbr_unpack.glsl</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="ninety-two-lines-of-cmake-and-no-permutation-system">Ninety-two lines of CMake and no permutation system</h2></div>
@@ -72,9 +72,9 @@
 <p>and because the runtime output directory is the binary directory itself, that destination is `build/bin/shaders/` (or `build/&lt;CONFIG&gt;/bin/shaders/` under a multi-config generator):</p>
 <div class="citation-chip"><code class="citation-code">set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L41" target="_blank" rel="noopener">CMakeLists.txt:41</a></div>
 <p>The copy belongs to the `shaders` target rather than to each consumer because two POST_BUILD `copy_directory` commands writing the same destination race under `-j8`; the consumers only declare a dependency on it:</p>
-<div class="citation-chip"><code class="citation-code">add_dependencies(renderer_test shaders)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/CMakeLists.txt#L44" target="_blank" rel="noopener">tests/renderer/CMakeLists.txt:44</a></div>
+<div class="citation-chip"><code class="citation-code">add_dependencies(renderer_test shaders)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/CMakeLists.txt#L43" target="_blank" rel="noopener">tests/renderer/CMakeLists.txt:43</a></div>
 <p>`renderer_test` is configured by default, so an ordinary configure-and-build produces both trees:</p>
-<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L115" target="_blank" rel="noopener">CMakeLists.txt:115</a></div>
+<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L109" target="_blank" rel="noopener">CMakeLists.txt:109</a></div>
 <p>The loader&#x27;s first candidate is the literal string, unmodified; its second strips the directory and retries under `build/shaders/`:</p>
 <div class="citation-chip"><code class="citation-code">std::vector&lt;std::string&gt; searchPaths = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L17" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:17</a></div>
 <p>So rung one hits when the process working directory is `build/`, and rung two hits when it is the repository root. Two directories work, not one — and they are not interchangeable. The mirror is a `copy_directory` snapshot taken when the `shaders` target finishes, and `copy_directory` only ever adds, so the mirror accumulates its own stale modules independently of the compile directory: the two can disagree in *both* directions, each holding outputs the other does not.</p>
@@ -103,16 +103,6 @@
 <p>A quoted include is resolved relative to the *including file&#x27;s* directory before any `-I` root is consulted, and `shaders/rt/` has an `includes/` of its own — so `glslc -M` reports that the raygens compile `shaders/rt/includes/pbr_unpack.glsl` and never touch the copy under `shaders/includes/`. Neither the include roots nor the flat naming rule are involved; the winner is decided by directory adjacency.</p>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>Combine the two facts above and you get a silent-failure machine: edit the top-level `includes/pbr_unpack.glsl` and (a) it is the wrong copy — the raygens read the `rt/includes/` one — and (b) even editing the right copy triggers no recompilation, because neither file is in the dependency glob. The build will report success and the SPIR-V will be unchanged.</p></div>
 </div>
-<div class="section-rule"><h2 id="the-other-compiler-still-in-the-tree">The other compiler, still in the tree</h2></div>
-<div class="prose reveal">
-<p>`compile_shaders.sh` arrived in the same commit as the CMake flattening rule and uses the same `${subdir}_${name}.spv` convention, so the two agree on output names for one-level directories. They agree on very little else. The script walks a fixed directory list:</p>
-<div class="citation-chip"><code class="citation-code">for subdir in core shadow postprocess compute debug; do</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compile_shaders.sh#L56" target="_blank" rel="noopener">shaders/compile_shaders.sh:56</a></div>
-<p>`debug/` does not exist, and `rt/`, `particles/` and `overlay/` are absent — so it covers 15 of the 40 sources and compiles no ray-tracing stage at all. It uses `glslangValidator` with a single include root and no `--target-env`, where CMake uses `glslc` with two roots and targets Vulkan 1.3:</p>
-<div class="citation-chip"><code class="citation-code">if glslangValidator -V -I&quot;$SHADER_DIR&quot; -o &quot;$output&quot; &quot;$input&quot; 2&gt;&amp;1; then</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compile_shaders.sh#L41" target="_blank" rel="noopener">shaders/compile_shaders.sh:41</a></div>
-<p>The compiler swap has a concrete consequence: `glslc` enables `GL_GOOGLE_include_directive` implicitly, `glslangValidator` requires the shader to declare it. Replaying the script&#x27;s exact invocation over the four directories it walks, 14 files compile and exactly one fails — `shaders/postprocess/ssr.comp`, which uses `#include` without the `#extension` line. The script exits non-zero on a tree the real build compiles cleanly.</p>
-<p>Each output is then copied into a Godot editor project, whose destination the script `mkdir -p`s first — so running it today recreates a directory tree the engine deleted:</p>
-<div class="citation-chip"><code class="citation-code">GODOT_DIR=&quot;${SHADER_DIR}/../godot_editor/project/bin/shaders&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compile_shaders.sh#L15" target="_blank" rel="noopener">shaders/compile_shaders.sh:15</a></div>
-</div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
@@ -137,7 +127,6 @@
         <div class="row"><code>ohao/render/deferred/render_pass_base.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/render_pass_base.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compile_shaders.sh</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

@@ -77,7 +77,6 @@ FetchContent_MakeAvailable(stb)
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/fonts)
 
 # Copy assets
 add_custom_target(copy_assets ALL
@@ -89,12 +88,7 @@ add_custom_target(copy_assets ALL
         ${CMAKE_SOURCE_DIR}/assets/models/cornell_box.mtl
         ${CMAKE_BINARY_DIR}/assets/models/cornell_box.mtl
 
-    # Copy FontAwesome font for UI icons
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/fonts/fa-solid-900.ttf
-        ${CMAKE_BINARY_DIR}/assets/fonts/fa-solid-900.ttf
-
-    COMMENT "Copying assets and fonts to build directory"
+    COMMENT "Copying assets to build directory"
 )
 
 

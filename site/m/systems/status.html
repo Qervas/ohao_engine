@@ -115,7 +115,7 @@ $$</div>
 <li>The gtest suites under `tests/` are not part of the gate. Most of them build by</li>
 </ul>
 <p>default, but nothing invokes them unprompted: the hook&#x27;s only command is the golden harness, and the repository&#x27;s single GitHub workflow publishes this site. They defend code — `parseDenoiseMode`, the environment CDF, the Sobol sequence — only when a human runs the binaries.</p>
-<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L115" target="_blank" rel="noopener">CMakeLists.txt:115</a></div>
+<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L109" target="_blank" rel="noopener">CMakeLists.txt:109</a></div>
 <div class="citation-chip"><code class="citation-code">python3 tests/golden/render_golden.py tests/golden/manifest.json</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/.githooks/pre-push#L20" target="_blank" rel="noopener">.githooks/pre-push:20</a></div>
 <ul>
 <li>`STATUS.md` lists the missing GPU-less cloud workflow as an open limitation</li>

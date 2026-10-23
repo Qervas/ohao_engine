@@ -92,7 +92,7 @@ ctest --test-dir build --output-on-failure</pre></div>
 
       <div class="section-rule"><h2 id="sh">Shaders</h2></div>
       <div class="prose reveal">
-        <p><code>shaders/</code> CMake + <code>compile_shaders.sh</code> produce SPIR-V under <code>build/shaders</code> / <code>bin/shaders</code>. PathTracer searches several relative paths for SPVs at runtime. Sampler type is a raygen specialization constant at pipeline create.</p>
+        <p>The <code>shaders</code> CMake target (<code>shaders/CMakeLists.txt</code>) produces SPIR-V under <code>build/shaders</code> / <code>bin/shaders</code>. PathTracer searches several relative paths for SPVs at runtime. Sampler type is a raygen specialization constant at pipeline create.</p>
       </div>
 
       <div class="section-rule"><h2 id="ex">Examples (the exercises)</h2></div>

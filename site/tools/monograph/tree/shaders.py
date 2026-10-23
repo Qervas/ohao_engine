@@ -12,7 +12,7 @@ MODULE = {
             'layout',
             'Shader tree layout',
             'core / rt / postprocess / compute / includes / shadow / particles.',
-            files=['shaders/CMakeLists.txt', 'shaders/compile_shaders.sh'],
+            files=['shaders/CMakeLists.txt'],
             design=['SPIR-V outputs to build/shaders or bin/shaders; PathTracer searches multiple relative paths.', 'Active sources only — shaders/_disabled is archival and not in the build graph.', 'Include path: GL_GOOGLE_include_directive with shaders/ as root.'],
         ),
         page(

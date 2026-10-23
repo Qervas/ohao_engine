@@ -4,7 +4,7 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 ## Current — C++20 hybrid Vulkan renderer
 
-Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
+Standalone pure-C++ engine. Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
 ### Removed
 
@@ -77,7 +77,7 @@ Requires CMake 3.20+, Vulkan 1.3+ with RT extensions, a **C++20** compiler.
 
 ### [0.2.0] — Godot GDExtension phase
 
-Transitioned to a Godot 4.x GDExtension plugin (`OhaoViewport`, editor integration). That host path is no longer the primary product line; the tree is the standalone Vulkan hybrid above.
+Transitioned to a Godot 4.x GDExtension plugin (`OhaoViewport`, editor integration). That host, its editor and its SCons build were deleted on 2026-04-08 (`5bf6615f`); OHAO is its own engine, the standalone Vulkan hybrid above.
 
 ### [0.1.0] — Initial standalone
 

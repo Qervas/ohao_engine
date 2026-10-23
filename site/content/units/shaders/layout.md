@@ -206,35 +206,6 @@ recompilation, because neither file is in the dependency glob. The build will
 report success and the SPIR-V will be unchanged.
 :::
 
-## The other compiler, still in the tree
-
-`compile_shaders.sh` arrived in the same commit as the CMake flattening rule and
-uses the same `${subdir}_${name}.spv` convention, so the two agree on output
-names for one-level directories. They agree on very little else. The script walks
-a fixed directory list:
-
-{{cite shaders/compile_shaders.sh "for subdir in core shadow postprocess compute debug; do"}}
-
-`debug/` does not exist, and `rt/`, `particles/` and `overlay/` are absent — so it
-covers 15 of the 40 sources and compiles no ray-tracing stage at all. It uses
-`glslangValidator` with a single include root and no `--target-env`, where CMake
-uses `glslc` with two roots and targets Vulkan 1.3:
-
-{{cite shaders/compile_shaders.sh "if glslangValidator -V -I"$SHADER_DIR""}}
-
-The compiler swap has a concrete consequence: `glslc` enables
-`GL_GOOGLE_include_directive` implicitly, `glslangValidator` requires the shader
-to declare it. Replaying the script's exact invocation over the four directories
-it walks, 14 files compile and exactly one fails —
-`shaders/postprocess/ssr.comp`, which uses `#include` without the `#extension`
-line. The script exits non-zero on a tree the real build compiles cleanly.
-
-Each output is then copied into a Godot editor project, whose destination the
-script `mkdir -p`s first — so running it today recreates a directory tree the
-engine deleted:
-
-{{cite shaders/compile_shaders.sh "GODOT_DIR="${SHADER_DIR}/../godot_editor/project/bin/shaders""}}
-
 ## Contracts
 
 - The `shaders` target is declared without `ALL`, so it is not a root of the default build in its own right. It is pulled in through `add_dependencies` from the `ohao` CLI, which is always configured, and from `renderer_test` and the `*_gpu_test` targets, which means a plain `cmake --build build` does recompile shaders; a build of only an example does not. `--target shaders` remains the only way to say it directly. {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}

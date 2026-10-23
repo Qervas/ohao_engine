@@ -1,7 +1,6 @@
-# OHAO Renderer Standalone Tests
-# Run the Vulkan renderer WITHOUT Godot — pure C++ verification.
+# OHAO renderer tests
 
-# Standalone renderer test — builds scene, renders to PNG
+# renderer_test: builds a scene headless and renders it to PNG
 add_executable(renderer_test renderer_test.cpp)
 target_compile_features(renderer_test PRIVATE cxx_std_20)
 

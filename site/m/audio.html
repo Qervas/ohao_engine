@@ -115,7 +115,7 @@
 
       <div class="section-rule"><h2 id="listener">Listener sync</h2></div>
       <div class="prose reveal">
-        <p><code>setListenerPosition(pos, forward, up)</code> → <code>ma_engine_listener_set_*</code> on listener 0. Call every frame from camera. Godot host docs: synced automatically.</p>
+        <p><code>setListenerPosition(pos, forward, up)</code> → <code>ma_engine_listener_set_*</code> on listener 0. Call every frame from camera; nothing in the engine calls it for you yet.</p>
       </div>
       <div class="why-callout reveal"><div class="why-label">Why camera = ears</div>
         <p>Spatial audio without matching viewpoint feels “wrong room” even when emitter coordinates are correct.</p>
