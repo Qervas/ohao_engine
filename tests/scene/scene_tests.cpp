@@ -603,6 +603,187 @@ static void t07_unknown_fields_fail_and_near_misses_warn() {
           "a component name one typo from Light is kept but warned about");
 }
 
+// ---- step 4: versioning and migrations ------------------------------------------------------
+
+// A test-only component at version 3. Its history:
+//   v1: { "power": f32, "mode": "warm"|"cool" }
+//   v2: "power" renamed to "intensity"
+//   v3: mode values capitalized ("Warm"|"Cool")
+struct TestLamp {
+    float intensity{1.0f};
+    std::string mode{"Warm"};
+};
+
+static void registerLampTypes(reflect::TypeRegistry& r, bool withFirstUpgrade = true) {
+    registerSceneTypes(r);
+    auto b = r.type<TestLamp>("TestLamp", 3).component().host(makeComponentOps<TestLamp>())
+                 .doc("Test-only component with two migrations")
+                 .field("intensity", &TestLamp::intensity).doc("Brightness").unitless().min(0.0)
+                 .field("mode", &TestLamp::mode).doc("Warm or Cool");
+    if (withFirstUpgrade)
+        b.upgrade(1, [](reflect::JsonValue& v, std::string& why) {
+            if (!v.find("power")) return true;   // defaulted field: nothing to rename
+            if (!v.rename("power", "intensity")) {
+                why = "both power and intensity are present";
+                return false;
+            }
+            return true;
+        });
+    b.upgrade(2, [](reflect::JsonValue& v, std::string& why) {
+        reflect::JsonValue* mode = v.find("mode");
+        if (!mode) return true;
+        if (mode->text() == "warm") *mode = reflect::JsonValue::string("Warm");
+        else if (mode->text() == "cool") *mode = reflect::JsonValue::string("Cool");
+        else {
+            why = "unknown mode '" + std::string(mode->text()) + "'";
+            return false;
+        }
+        return true;
+    });
+}
+
+static const reflect::TypeRegistry& lampTypes() {
+    static reflect::TypeRegistry r;
+    static const bool once = (registerLampTypes(r), true);
+    (void)once;
+    return r;
+}
+
+static void t08_registrations_have_every_upgrade() {
+    CHECK(reflect::lint(engineTypes()).empty(), "engine registrations lint clean (no missing upgrades)");
+    CHECK(reflect::lint(lampTypes()).empty(), "a version-3 component with upgrades from 1 and 2 lints clean");
+    reflect::TypeRegistry gap;
+    registerLampTypes(gap, false);
+    bool reported = false;
+    for (const auto& s : reflect::lint(gap)) reported |= s.find("TestLamp: version 3 needs .upgrade(1") != std::string::npos;
+    CHECK(reported, "a missing upgrade step is a lint error");
+    CHECK(reflect::exportCatalogue(lampTypes()).find(R"("readsVersions": [1, 2, 3])") != std::string::npos,
+          "the catalogue lists every file version a component loads");
+    CHECK(reflect::exportCatalogue(gap).find(R"("readsVersions": [2, 3])") != std::string::npos,
+          "and leaves out versions with no upgrade path");
+}
+
+static void t08_old_components_are_upgraded_on_load() {
+    const std::string v1 = R"({"format":"ohao.scene","version":1,"components":{"TestLamp":1},"entities":[
+{"id":"00000000000000a1","TestLamp":{"power":3,"mode":"warm"}},
+{"id":"00000000000000a2","TestLamp":{"mode":"cool","power":0.5}}]})";
+    World w;
+    auto r = loadScene(w, v1, lampTypes());
+    CHECK(r, "a version-1 file loads into a version-3 engine");
+    const auto& a = w.registry().get<TestLamp>(w.findById(0xa1));
+    const auto& b = w.registry().get<TestLamp>(w.findById(0xa2));
+    CHECK(a.intensity == 3.0f && a.mode == "Warm" && b.intensity == 0.5f && b.mode == "Cool",
+          "both steps ran: power -> intensity, then the mode values");
+    const auto& up = r.value().upgraded;
+    CHECK(up.size() == 1 && up[0].component == "TestLamp" && up[0].from == 1 && up[0].to == 3 && up[0].count == 2,
+          "the report lists the upgrade once per component type, with its count");
+    const auto saved = saveScene(w, lampTypes());
+    CHECK(saved && saved.value().find(R"("TestLamp": 3)") != std::string::npos &&
+              saved.value().find(R"("intensity": 3, "mode": "Warm")") != std::string::npos,
+          "saving writes the current version");
+    World w2;
+    CHECK(loadScene(w2, saved.value(), lampTypes()) && saveScene(w2, lampTypes()).value() == saved.value(),
+          "the upgraded file then round-trips with no further upgrade");
+    CHECK(validateScene(v1, lampTypes()).upgraded.size() == 1, "validation reports the upgrade it would apply");
+
+    const std::string v2 = R"({"format":"ohao.scene","version":1,"components":{"TestLamp":2},"entities":[
+{"id":"00000000000000a3","TestLamp":{"intensity":2,"mode":"cool"}}]})";
+    World w3;
+    auto r3 = loadScene(w3, v2, lampTypes());
+    CHECK(r3 && r3.value().upgraded[0].from == 2 && w3.registry().get<TestLamp>(w3.findById(0xa3)).mode == "Cool",
+          "a version-2 file runs only the remaining step");
+}
+
+static void t08_failed_upgrades_and_their_errors() {
+    World w;
+    auto r = loadScene(w, R"({"format":"ohao.scene","version":1,"components":{"TestLamp":1},"entities":[
+{"id":"00000000000000a1","TestLamp":{"power":1,"mode":"neon"}}]})",
+                       lampTypes());
+    CHECK(!r && r.error().size() == 1 && r.error()[0].code == "E_UPGRADE" && r.error()[0].path == "/entities/0/TestLamp",
+          "an upgrade that rejects the data is E_UPGRADE at the component");
+    CHECK(r.error()[0].message.find("unknown mode 'neon'") != std::string::npos, "with the upgrade's reason");
+    CHECK(w.idCount() == 0 && w.registry().storage<entt::entity>().in_use() == 0, "and the world is untouched");
+
+    const auto report = validateScene(R"({"format":"ohao.scene","version":1,"components":{"TestLamp":1},"entities":[
+{"id":"00000000000000a1",
+ "TestLamp":{"power":-1,"mode":"warm"}}]})",
+                                      lampTypes());
+    CHECK(report.errors.size() == 1 && report.errors[0].code == "E_RANGE" &&
+              report.errors[0].path == "/entities/0/TestLamp/intensity",
+          "a bad value found after upgrading keeps its (upgraded) path");
+    CHECK(report.errors[0].line == 3 && report.errors[0].message.find("after upgrading TestLamp from version 1") !=
+                                             std::string::npos,
+          "and points at the original block, saying it was upgraded");
+}
+
+static void t08_newer_or_unreachable_versions_are_rejected() {
+    const auto newer = validateScene(R"({"format":"ohao.scene","version":1,"components":{"TestLamp":4},"entities":[]})",
+                                     lampTypes());
+    CHECK(newer.errors.size() == 1 && newer.errors[0].code == "E_COMPONENT_VERSION" &&
+              newer.errors[0].path == "/components/TestLamp" && newer.errors[0].expected == "one of: 1, 2, 3",
+          "a version newer than the engine's is E_COMPONENT_VERSION, listing what it reads");
+    reflect::TypeRegistry gap;
+    registerLampTypes(gap, false);
+    const auto v1 = validateScene(R"({"format":"ohao.scene","version":1,"components":{"TestLamp":1},"entities":[
+{"id":"00000000000000a1","TestLamp":{"power":1}}]})",
+                                  gap);
+    CHECK(v1.errors.size() == 1 && v1.errors[0].code == "E_COMPONENT_VERSION",
+          "a version with no upgrade path is rejected (once, at the header)");
+    CHECK(validateScene(R"({"format":"ohao.scene","version":1,"components":{"TestLamp":2},"entities":[
+{"id":"00000000000000a1","TestLamp":{"intensity":1,"mode":"warm"}}]})",
+                        gap)
+              .ok(),
+          "while a version that has a path still loads");
+}
+
+static void t08_v1_corpus_loads_with_expected_values() {
+    const auto loadV1 = [](World& w, const char* file) {
+        auto r = loadScene(w, readFile(kScenes / "v1" / file), engineTypes());
+        if (!r) std::printf("\n      %s: %s", file, diagnosticsJson(r.error()).c_str());
+        return static_cast<bool>(r);
+    };
+    {
+        World w;
+        CHECK(loadV1(w, "rooms.ohscene"), "rooms.ohscene loads");
+        const auto& reg = w.registry();
+        const auto room = w.findById(0x1000000000000001), lamp = w.findById(0x1000000000000002);
+        const auto sun = w.findById(0x1000000000000003), shade = w.findById(0x1000000000000004);
+        CHECK(reg.get<Name>(room).value == "Room" && reg.get<Transform>(room).scale == glm::vec3(10, 3, 8), "room");
+        CHECK(reg.get<Parent>(lamp).entity == room && reg.get<Parent>(shade).entity == lamp, "hierarchy");
+        const auto& l = reg.get<Light>(lamp);
+        CHECK(l.type == LightType::Spot && l.intensity == 12.5f && l.color == glm::vec3(1.0f, 0.85f, 0.6f) &&
+                  l.innerConeDeg == 20.0f && l.outerConeDeg == 35.0f,
+              "the spot light's values");
+        CHECK(reg.get<Light>(sun).type == LightType::Directional && reg.get<Transform>(sun).rotation.w == 0.8660254f &&
+                  reg.get<Transform>(sun).rotation.x == -0.5f,
+              "the sun, rotation in [x, y, z, w] order");
+        CHECK(reg.get<Transform>(lamp).position == glm::vec3(1.5f, 2.25f, -0.5f), "positions");
+    }
+    {
+        World w;
+        CHECK(loadV1(w, "agent_minimal.ohscene"), "agent_minimal.ohscene loads");
+        const auto& reg = w.registry();
+        const auto panel = w.findById(0xb1), child = w.findById(0xb2), bare = w.findById(0xb3);
+        const auto& l = reg.get<Light>(panel);
+        CHECK(l.type == LightType::AreaRect && l.areaEdge1 == glm::vec3(2, 0, 0) && l.intensity == 1.0f &&
+                  l.areaEdge2 == glm::vec3(0, 0, 1),
+              "given fields are read, missing ones take defaults");
+        CHECK(reg.get<Name>(panel).value.empty() && reg.get<Transform>(panel).scale == glm::vec3(1.0f),
+              "missing Name/Transform take defaults");
+        CHECK(reg.get<Parent>(child).entity == panel && reg.get<Name>(child).value == "Panel child", "member order is free");
+        CHECK(bare != entt::null && !reg.all_of<Light>(bare), "an entity with only an id");
+    }
+    {
+        World w;
+        CHECK(loadV1(w, "preserved.ohscene"), "preserved.ohscene loads");
+        const auto speaker = w.findById(0xc1);
+        const auto& p = w.registry().get<PreservedComponents>(speaker).entries;
+        CHECK(p.size() == 1 && p[0].name == "AudioSource" && p[0].version == 2 &&
+                  p[0].json == R"({"clip":{"path":"assets/audio/hum.ogg"},"volume":0.4,"loop":true})",
+              "an unknown component keeps its value and header version");
+    }
+}
+
 // ---- informational benchmark (step 6 gates the real budget) -------------------------------
 
 static void bench_scene_save_load_10k() {
@@ -736,6 +917,11 @@ int main(int argc, char** argv) {
     RUN(t06_errors_are_capped_at_one_hundred);
     RUN(t07_unknown_components_survive_byte_identically);
     RUN(t07_unknown_fields_fail_and_near_misses_warn);
+    RUN(t08_registrations_have_every_upgrade);
+    RUN(t08_old_components_are_upgraded_on_load);
+    RUN(t08_failed_upgrades_and_their_errors);
+    RUN(t08_newer_or_unreachable_versions_are_rejected);
+    RUN(t08_v1_corpus_loads_with_expected_values);
     RUN(bench_write_authoring_components);
     RUN(bench_scene_save_load_10k);
 

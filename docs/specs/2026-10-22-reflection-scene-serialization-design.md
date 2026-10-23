@@ -224,7 +224,8 @@ both canonical and deterministic:
 - **`ohao_schema.json`**, the agent-facing catalogue. It lists every type, saved or
   runtime, marked `"serialized": true|false`. For each type it gives:
   - the version, the doc string and whether it is a singleton;
-  - its upgrade history;
+  - its upgrade history, as `readsVersions`: every file version the engine loads (the
+    current one plus each older version with a complete upgrade path);
   - per field: name, kind, default, `min`/`max`, `uiRange`, unit, doc and aliases;
   - enum values with their docs.
 
@@ -496,7 +497,7 @@ file.)
   | Group | Codes |
   |---|---|
   | Files | `E_IO` |
-  | Parsing and document | `E_PARSE`, `E_FORMAT`, `E_VERSION_UNSUPPORTED`, `E_COMPONENT_VERSION`, `E_WORLD_NOT_EMPTY` |
+  | Parsing and document | `E_PARSE`, `E_FORMAT`, `E_VERSION_UNSUPPORTED`, `E_COMPONENT_VERSION`, `E_UPGRADE`, `E_WORLD_NOT_EMPTY` |
   | Values | `E_UNKNOWN_FIELD`, `E_DUPLICATE_KEY`, `E_TYPE`, `E_ENUM`, `E_RANGE`, `E_NONFINITE` |
   | References | `E_ENTITY_NOT_FOUND` (an entity reference other than `Parent`) |
   | Warnings | `W_UNKNOWN_COMPONENT` |
@@ -516,10 +517,33 @@ file.)
 - **Each component has its own version.** Registering version N requires upgrade
   functions `1→2 … (N-1)→N`, operating on a small internal JSON tree before decoding.
   The load report lists every upgrade applied.
+  - Registration is `.upgrade(from, fn)` with
+    `reflect::Upgrade = std::function<bool(JsonValue&, std::string& error)>`.
+    `JsonValue` is reflect's small owning, mutable JSON value: `find`, `set`, `erase`,
+    `rename` (position kept), `asFloat`/`asInt`, and canonical number constructors.
+  - `lint()` reports every missing step, so a version bump without its migration fails
+    the registration tests.
+  - **On load**, the file header's version decides, per component type:
+    - the current version is decoded directly; current files never touch the upgrade
+      code;
+    - an older version with a complete path has each block copied into a `JsonValue`
+      and upgraded step by step. The result goes through the ordinary typed decoder on
+      a side document. Its errors keep their JSON Pointer path, point at the original
+      block's line, and say "after upgrading …";
+    - a newer version, or an older one with no path, is `E_COMPONENT_VERSION`, whose
+      `expected` lists the readable versions.
+  - An upgrade that rejects the data is `E_UPGRADE`, with its reason.
+  - All of this is phase 1, so a failed or rejected migration leaves the world
+    untouched.
+  - `LoadReport::upgraded` and `ValidationReport::upgraded` list
+    `{component, from, to, count}` once per component type.
 - **A rename** is an `alias`, and adding a defaulted field needs no bump. **Removing or
   retyping** a field does need a bump.
 - **Migration corpus:** `tests/scenes/v1/*.ohscene` is never regenerated, and every
-  future build must load it.
+  future build must load it with the values the test asserts:
+  - `rooms.ohscene`: canonical, a hierarchy of every saved v1 component;
+  - `agent_minimal.ohscene`: minimal, with no header, defaults and free member order;
+  - `preserved.ohscene`: an unknown component with its header version.
 
 ## API layer (`ohao/api`) — the one API for humans and agents
 
@@ -969,7 +993,7 @@ Each step ends with the engine running and every suite green.
 3. simdjson reader (fetched here), two-phase load, structured validation, error corpus.
    Tests 2–4, 6, 7. *(Done 2026-10-23. Also: the single-pass pretty writer, fast_float
    for float parsing, and the error-code table in the catalogue.)*
-4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8.
+4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8. *(Done 2026-10-23.)*
 5. `ohao/api`: commands with inverses, query, the method table. Test 9.
 6. Columnar snapshot/restore, `scene_bench` and the budgets. Tests 10 and 19 for the
    operations that exist so far.

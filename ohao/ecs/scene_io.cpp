@@ -78,9 +78,58 @@ struct Decoded {
     std::vector<DecodedEntity> entities;
     std::vector<reflect::PendingRef> refs;
     std::size_t preserved{0};
+    std::vector<UpgradeApplied> upgraded;
     std::vector<Diagnostic> errors;
     std::vector<Diagnostic> warnings;
 };
+
+// Component types the file wrote with an older version (and that can be upgraded),
+// mapped to that version. Empty for current files: they never take the upgrade path.
+using OldVersions = ankerl::unordered_dense::map<const TypeInfo*, uint32_t>;
+
+// Decodes a block written by an older version: copy it into a mutable value, run each
+// upgrade step, then decode the result with the ordinary typed decoder on a side
+// document. Errors keep their JSON Pointer path and point at the original block. All of
+// this is phase 1: nothing touches the world.
+void decodeUpgraded(void* obj, const TypeInfo& t, uint32_t fromVersion, const JsonDocument& doc, const JsonNode& c,
+                    uint32_t entityIndex, DecodeContext& ctx) {
+    if (c.type != JsonType::Object) {
+        reflect::readStruct(obj, t, c, ctx);   // reports the E_TYPE
+        return;
+    }
+    reflect::JsonValue value = reflect::toValue(doc, c);
+    for (uint32_t from = fromVersion; from < t.version; ++from) {
+        std::string why;
+        if (!(*t.upgradeFrom(from))(value, why)) {
+            ctx.error("E_UPGRADE", c,
+                      t.name + " upgrade " + std::to_string(from) + " -> " + std::to_string(from + 1) + " failed: " + why,
+                      t.name + " as written by version " + std::to_string(from), ctx.gotText(c));
+            return;
+        }
+    }
+    const JsonDocument sub = reflect::toDocument(std::move(value));
+    DecodeContext sctx(sub);
+    sctx.entity = ctx.entity;
+    sctx.component = &t;
+    sctx.push("entities");
+    sctx.push(entityIndex);
+    sctx.push(c.key);
+    reflect::readStruct(obj, t, sub.root(), sctx);
+    const std::string note = " (after upgrading " + t.name + " from version " + std::to_string(fromVersion) + ")";
+    for (Diagnostic& e : sctx.errors) {
+        e.offset = c.offset;
+        e.message += note;
+        ctx.report(std::move(e));
+    }
+    for (Diagnostic& w : sctx.warnings) {
+        w.offset = c.offset;
+        ctx.warnings.push_back(std::move(w));
+    }
+    for (reflect::PendingRef& r : sctx.refs) {
+        r.offset = c.offset;
+        ctx.refs.push_back(std::move(r));
+    }
+}
 
 bool sortByOffset(std::vector<Diagnostic>& v) {
     const bool overflow = !v.empty() && v.back().code == "E_TOO_MANY_ERRORS";
@@ -97,7 +146,9 @@ std::string hexId(uint64_t id) {
 
 void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeRegistry& r,
                     const ankerl::unordered_dense::map<std::string_view, uint32_t>& headerVersions,
-                    const ankerl::unordered_dense::set<const TypeInfo*>& skipTypes, DecodeContext& ctx, Decoded& out) {
+                    const ankerl::unordered_dense::set<const TypeInfo*>& skipTypes, const OldVersions& oldVersions,
+                    DecodeContext& ctx, Decoded& out) {
+    ankerl::unordered_dense::map<const TypeInfo*, std::size_t> upgradeCounts;
     const TypeInfo* parentType = r.find<Parent>();
     std::vector<std::string_view> knownNames;
     ankerl::unordered_dense::map<std::string_view, const TypeInfo*> byName;
@@ -168,7 +219,13 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                                   "at most one " + t->name);
                     OwnedValue v(t);
                     ctx.component = t;
-                    reflect::readStruct(v.get(), *t, c, ctx);
+                    const auto old = oldVersions.empty() ? oldVersions.end() : oldVersions.find(t);
+                    if (old == oldVersions.end()) {
+                        reflect::readStruct(v.get(), *t, c, ctx);
+                    } else {
+                        decodeUpgraded(v.get(), *t, old->second, doc, c, i, ctx);
+                        ++upgradeCounts[t];
+                    }
                     ctx.component = nullptr;
                     de.components.push_back(std::move(v));
                 }
@@ -204,6 +261,9 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
         ctx.pop();
     }
     ctx.pop();
+    for (const TypeInfo* t : r.types())
+        if (const auto n = upgradeCounts.find(t); n != upgradeCounts.end())
+            out.upgraded.push_back(UpgradeApplied{t->name, oldVersions.at(t), t->version, n->second});
 
     // References: every target must exist. Parents must not form cycles.
     ankerl::unordered_dense::map<uint64_t, std::size_t> parentRef;   // child id -> ref index
@@ -320,6 +380,7 @@ Decoded decode(std::string_view text, const TypeRegistry& r) {
         // Header: the version each component was written with.
         ankerl::unordered_dense::map<std::string_view, uint32_t> headerVersions;
         ankerl::unordered_dense::set<const TypeInfo*> skipTypes;
+        OldVersions oldVersions;
         if (components) {
             ctx.push("components");
             if (components->type != JsonType::Object) {
@@ -333,13 +394,23 @@ Decoded decode(std::string_view text, const TypeRegistry& r) {
                     if (reflect::readInt(m, ctx, 1, UINT32_MAX, v)) {
                         headerVersions[m.key] = static_cast<uint32_t>(v);
                         const TypeInfo* t = r.find(m.key);
+                        const auto fileVersion = static_cast<uint32_t>(v);
                         if (t && t->serialized && t->role == reflect::TypeRole::Component &&
-                            static_cast<uint32_t>(v) != t->version) {
-                            ctx.error("E_COMPONENT_VERSION", m,
-                                      t->name + " version " + std::to_string(v) + " cannot be read by this engine (" +
-                                          t->name + " is version " + std::to_string(t->version) + ")",
-                                      std::to_string(t->version), std::string(m.text));
-                            skipTypes.insert(t);
+                            fileVersion != t->version) {
+                            if (fileVersion < t->version && t->canUpgradeFrom(fileVersion)) {
+                                oldVersions.emplace(t, fileVersion);
+                            } else {
+                                const std::string why = fileVersion > t->version
+                                                            ? " was written by a newer engine"
+                                                            : " has no upgrade path to version " + std::to_string(t->version);
+                                std::string readable;
+                                for (uint32_t k = 1; k <= t->version; ++k)
+                                    if (k == t->version || t->canUpgradeFrom(k))
+                                        readable += (readable.empty() ? "" : ", ") + std::to_string(k);
+                                ctx.error("E_COMPONENT_VERSION", m, t->name + " version " + std::to_string(v) + why,
+                                          "one of: " + readable, std::string(m.text));
+                                skipTypes.insert(t);
+                            }
                         }
                     }
                     ctx.pop();
@@ -352,7 +423,7 @@ Decoded decode(std::string_view text, const TypeRegistry& r) {
             ctx.error("E_TYPE", *entities, "\"entities\" is an array", "array", ctx.gotText(*entities));
             ctx.pop();
         } else {
-            decodeEntities(doc, *entities, r, headerVersions, skipTypes, ctx, out);
+            decodeEntities(doc, *entities, r, headerVersions, skipTypes, oldVersions, ctx, out);
         }
     }
 
@@ -448,7 +519,7 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
 
 ValidationReport validateScene(std::string_view text, const TypeRegistry& types) {
     Decoded d = decode(text, types);
-    return ValidationReport{std::move(d.errors), std::move(d.warnings)};
+    return ValidationReport{std::move(d.errors), std::move(d.warnings), std::move(d.upgraded)};
 }
 
 Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_view text, const TypeRegistry& types) {
@@ -497,6 +568,7 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
     LoadReport report;
     report.entities = d.entities.size();
     report.preservedUnknown = d.preserved;
+    report.upgraded = std::move(d.upgraded);
     report.warnings = std::move(d.warnings);
     return R::ok(std::move(report));
 }

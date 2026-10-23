@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "9af20ec189a3e022",
+  "schemaHash": "fd1e607dede56599",
   "units": [
     "m",
     "m/s",
@@ -34,7 +34,11 @@
     },
     {
       "code": "E_COMPONENT_VERSION",
-      "meaning": "A component's version in the file differs from the engine's and no upgrade applies."
+      "meaning": "A component's version in the file is newer than the engine's, or older with no upgrade path."
+    },
+    {
+      "code": "E_UPGRADE",
+      "meaning": "An upgrade (migration) rejected a component written by an older version."
     },
     {
       "code": "E_UNKNOWN_FIELD",
@@ -89,6 +93,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "weight",
@@ -134,6 +139,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "radius",
@@ -179,6 +185,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "text",
@@ -207,6 +214,7 @@
       "serialized": true,
       "singleton": false,
       "version": 2,
+      "readsVersions": [1, 2],
       "fields": [
         {
           "name": "flag",
@@ -524,6 +532,7 @@
       "serialized": true,
       "singleton": true,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "radius",
@@ -552,6 +561,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "frames",

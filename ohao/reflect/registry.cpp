@@ -44,6 +44,19 @@ const FieldInfo* TypeInfo::field(std::string_view fieldName) const {
     return nullptr;
 }
 
+const Upgrade* TypeInfo::upgradeFrom(uint32_t from) const {
+    for (const auto& [f, fn] : upgrades)
+        if (f == from) return &fn;
+    return nullptr;
+}
+
+bool TypeInfo::canUpgradeFrom(uint32_t from) const {
+    if (from == 0 || from > version) return false;
+    for (uint32_t v = from; v < version; ++v)
+        if (!upgradeFrom(v)) return false;
+    return true;
+}
+
 const EnumValue* EnumInfo::findByValue(int64_t v) const {
     for (const auto& e : values)
         if (e.value == v) return &e;

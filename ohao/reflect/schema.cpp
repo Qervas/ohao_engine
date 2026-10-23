@@ -74,6 +74,11 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, const uint64_t* ha
         w.key("serialized"); w.boolean(t->serialized);
         w.key("singleton"); w.boolean(t->singleton);
         w.key("version"); w.int64(t->version);
+        w.key("readsVersions");   // file versions this engine loads (older ones are upgraded)
+        w.beginArray();
+        for (uint32_t v = 1; v <= t->version; ++v)
+            if (v == t->version || t->canUpgradeFrom(v)) w.int64(v);
+        w.endArray();
         w.key("fields");
         w.beginArray();
         for (const auto& f : t->fields) {
@@ -274,6 +279,10 @@ std::vector<std::string> lint(const TypeRegistry& r) {
         if (t->doc.empty()) issues.push_back(t->name + ": type has no doc");
         if (t->role == TypeRole::Component && t->fields.empty() && t->serialized)
             issues.push_back(t->name + ": serialized component with no fields");
+        for (uint32_t v = 1; t->serialized && v < t->version; ++v)
+            if (!t->upgradeFrom(v))
+                issues.push_back(t->name + ": version " + std::to_string(t->version) + " needs .upgrade(" +
+                                 std::to_string(v) + ", ...) so version-" + std::to_string(v) + " files still load");
         for (const auto& f : t->fields) {
             if (f.attrs.doc.empty()) issues.push_back(t->name + "." + f.name + ": field has no doc");
             if (needsUnit(*t, f) && f.attrs.unit.empty() && !f.attrs.unitless)

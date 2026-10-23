@@ -156,7 +156,11 @@ static void registerFixture(TypeRegistry& r, std::string_view everythingDoc = "E
         .field("asset", &Everything::asset).doc("Asset file")
         .field("target", &Everything::target).doc("Another entity").readOnly()
         .field("weights", &Everything::weights).doc("Per-item weights").unitless()
-        .skip("cache", &Everything::cache, "derived each frame");
+        .skip("cache", &Everything::cache, "derived each frame")
+        .upgrade(1, [](JsonValue& v, std::string&) {   // v1 called the distance "dist"
+            if (v.find("dist")) v.rename("dist", "f");
+            return true;
+        });
     r.type<Marker>("Marker").component().singleton().doc("One per world")
         .field("radius", &Marker::radius).doc("Marker size").unit("m").min(0.0).uiRange(0.0, 10.0).step(0.1).alias("size");
     r.type<RuntimeCache>("RuntimeCache").component().runtime().doc("Per-frame cache, never saved")
@@ -665,6 +669,65 @@ static void decoder_floats_match_from_chars() {
     CHECK(ctx.errors.size() == 3 && ctx.errors[0].code == "E_RANGE", "each out-of-range number is one E_RANGE");
 }
 
+// ---- t08: what migrations edit --------------------------------------------------------------
+
+static void t08_json_value_edits() {
+    JsonValue o = JsonValue::object();
+    o.set("power", JsonValue::number(2.5f));
+    o.set("mode", JsonValue::string("warm"));
+    o.set("tags", JsonValue::array());
+    o.find("tags")->items().push_back(JsonValue::number(int64_t{7}));
+    CHECK(o.rename("power", "weight"), "rename keeps the member");
+    CHECK(!o.rename("mode", "weight"), "rename refuses to overwrite");
+    CHECK(o.keys()[0] == "weight", "and keeps its position");
+    CHECK(o.find("weight")->asFloat() == 2.5f && !o.find("mode")->asFloat(), "asFloat on numbers only");
+    CHECK(o.find("tags")->items()[0].asInt() == 7 && !JsonValue::number(0.5f).asInt(), "asInt on integers only");
+    CHECK(o.erase("mode") && !o.erase("mode"), "erase once");
+    o.set("weight", JsonValue::number(0.1f));
+    JsonWriter w;
+    writeJson(w, o);
+    CHECK(w.str() == R"({"weight":0.1,"tags":[7]})", "set replaces in place; numbers are canonical tokens");
+    CHECK(JsonValue::number(std::numeric_limits<float>::infinity()).isNull(), "a non-finite number becomes null");
+}
+
+static void t08_upgraded_values_decode_through_the_typed_path() {
+    TypeRegistry r;
+    registerFixture(r);
+    JsonValue v = JsonValue::object();
+    v.set("count", JsonValue::number(int64_t{42}));
+    v.set("weight", JsonValue::numberToken("0.25"));
+    const JsonDocument doc = toDocument(std::move(v));
+    DecodeContext ctx(doc);
+    Inner out;
+    readStruct(&out, *r.find<Inner>(), doc.root(), ctx);
+    CHECK(ctx.errors.empty() && out.count == 42 && out.weight == 0.25f, "a document built from a value decodes");
+    JsonValue bad = JsonValue::object();
+    bad.set("count", JsonValue::number(int64_t{500}));
+    const JsonDocument badDoc = toDocument(std::move(bad));
+    DecodeContext badCtx(badDoc);
+    readStruct(&out, *r.find<Inner>(), badDoc.root(), badCtx);
+    CHECK(badCtx.errors.size() == 1 && badCtx.errors[0].code == "E_RANGE", "and is validated like any other input");
+}
+
+static void t08_upgrade_registration_is_checked() {
+    TypeRegistry r;
+    const Upgrade noop = [](JsonValue&, std::string&) { return true; };
+    r.type<Marker>("Marker", 3).doc("d").field("radius", &Marker::radius).doc("r").unit("m")
+        .upgrade(0, noop)            // no version 0
+        .upgrade(3, noop)            // 3 is current, not an upgrade source
+        .upgrade(1, noop)
+        .upgrade(1, noop)            // twice
+        .upgrade(2, Upgrade{});      // no function
+    const auto& e = r.errors();
+    CHECK(contains(e, "upgrade from version 0 is outside [1, 3)"), "version 0 is rejected");
+    CHECK(contains(e, "upgrade from version 3 is outside [1, 3)"), "the current version is rejected");
+    CHECK(contains(e, "upgrade from version 1 is registered twice"), "duplicates are rejected");
+    CHECK(contains(e, "upgrade from version 2 has no function"), "empty functions are rejected");
+    CHECK(contains(lint(r), "Marker: version 3 needs .upgrade(2"), "so version 2 has no path, and lint says so");
+    CHECK(r.find<Marker>()->canUpgradeFrom(1) == false && r.find<Marker>()->canUpgradeFrom(3),
+          "a path needs every step; the current version needs none");
+}
+
 static void bench_float_parse() {
     std::vector<std::string> texts;
     std::mt19937 rng(9);
@@ -746,6 +809,9 @@ int main(int argc, char** argv) {
     RUN(t12_catalogue_is_deterministic_and_hashed);
     RUN(t12_catalogue_matches_golden);
     RUN(t12_scene_json_schema_matches_golden);
+    RUN(t08_json_value_edits);
+    RUN(t08_upgraded_values_decode_through_the_typed_path);
+    RUN(t08_upgrade_registration_is_checked);
     RUN(t13_no_reflection_on_hot_paths);
     RUN(t13_reflect_depends_on_glm_and_std_only);
     RUN(bench_typed_write);

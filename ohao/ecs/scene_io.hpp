@@ -32,16 +32,25 @@ struct SaveReport {
     std::vector<Diagnostic> warnings;
 };
 
+// One component type migrated on load: `count` blocks went from version `from` to `to`.
+struct UpgradeApplied {
+    std::string component;
+    uint32_t from{0};
+    uint32_t to{0};
+    std::size_t count{0};
+};
+
 struct LoadReport {
     std::size_t entities{0};
-    std::size_t preservedUnknown{0};      // unknown component blocks kept as-is
-    std::vector<std::string> upgraded;    // components migrated on load (step 4)
+    std::size_t preservedUnknown{0};          // unknown component blocks kept as-is
+    std::vector<UpgradeApplied> upgraded;     // in registration order
     std::vector<Diagnostic> warnings;
 };
 
 struct ValidationReport {
     std::vector<Diagnostic> errors;
     std::vector<Diagnostic> warnings;
+    std::vector<UpgradeApplied> upgraded;     // what a load would migrate
     [[nodiscard]] bool ok() const noexcept { return errors.empty(); }
 };
 

@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "952925f8588ecb1f",
+  "schemaHash": "cee89f77e694bda0",
   "units": [
     "m",
     "m/s",
@@ -34,7 +34,11 @@
     },
     {
       "code": "E_COMPONENT_VERSION",
-      "meaning": "A component's version in the file differs from the engine's and no upgrade applies."
+      "meaning": "A component's version in the file is newer than the engine's, or older with no upgrade path."
+    },
+    {
+      "code": "E_UPGRADE",
+      "meaning": "An upgrade (migration) rejected a component written by an older version."
     },
     {
       "code": "E_UNKNOWN_FIELD",
@@ -106,6 +110,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "value",
@@ -134,6 +139,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "position",
@@ -196,6 +202,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "entity",
@@ -224,6 +231,7 @@
       "serialized": true,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "type",
@@ -388,6 +396,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "index",
@@ -433,6 +442,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "index",
@@ -478,6 +488,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "entities",
@@ -506,6 +517,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "world",
@@ -551,6 +563,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "mesh",
@@ -613,6 +626,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "slot",
@@ -641,6 +655,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "localCenter",
@@ -720,6 +735,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "packed",
@@ -748,6 +764,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "seq",
@@ -776,6 +793,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "name",
@@ -838,6 +856,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [
         {
           "name": "entries",
@@ -866,6 +885,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [],
       "skipped": []
     },
@@ -876,6 +896,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [],
       "skipped": []
     },
@@ -886,6 +907,7 @@
       "serialized": false,
       "singleton": false,
       "version": 1,
+      "readsVersions": [1],
       "fields": [],
       "skipped": []
     }

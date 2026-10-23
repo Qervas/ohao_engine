@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,6 +13,11 @@ namespace ohao::reflect {
 class JsonWriter;
 class DecodeContext;
 struct JsonNode;
+class JsonValue;
+
+// Migrates one component value from version `from` to `from + 1`, in place, before it
+// is decoded. Returns false and sets `error` to reject the old data (E_UPGRADE).
+using Upgrade = std::function<bool(JsonValue& value, std::string& error)>;
 
 // What a reflected value is. Every field of a registered type has exactly one kind.
 enum class Kind : uint8_t {
@@ -97,6 +103,8 @@ struct TypeInfo {
     bool singleton{false};    // at most one per world
     std::vector<FieldInfo> fields;          // registration order = file order
     std::vector<SkippedField> skipped;      // members deliberately not serialized
+    // One upgrade per older version, from -> from + 1; version N needs 1 .. N-1.
+    std::vector<std::pair<uint32_t, Upgrade>> upgrades;
 
     std::size_t size{0};
     std::size_t align{0};
@@ -110,6 +118,10 @@ struct TypeInfo {
     std::shared_ptr<const void> host;
 
     [[nodiscard]] const FieldInfo* field(std::string_view fieldName) const;
+    // The upgrade from `from` to `from + 1`, or null.
+    [[nodiscard]] const Upgrade* upgradeFrom(uint32_t from) const;
+    // True when every step from `from` up to the current version is registered.
+    [[nodiscard]] bool canUpgradeFrom(uint32_t from) const;
 };
 
 struct EnumValue {

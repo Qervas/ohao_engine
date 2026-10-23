@@ -88,12 +88,13 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 20> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 21> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
     {"E_VERSION_UNSUPPORTED", "The document version is not one this engine reads."},
-    {"E_COMPONENT_VERSION", "A component's version in the file differs from the engine's and no upgrade applies."},
+    {"E_COMPONENT_VERSION", "A component's version in the file is newer than the engine's, or older with no upgrade path."},
+    {"E_UPGRADE", "An upgrade (migration) rejected a component written by an older version."},
     {"E_UNKNOWN_FIELD", "A member the type does not have, or a runtime-only component in a file."},
     {"E_DUPLICATE_KEY", "The same member appears twice in one object."},
     {"E_TYPE", "A value of the wrong JSON type or shape."},

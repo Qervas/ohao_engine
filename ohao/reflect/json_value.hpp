@@ -5,6 +5,8 @@
 // never through a double.
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -45,5 +47,52 @@ void writeJson(JsonWriter& w, const JsonDocument& doc, const JsonNode& n);
 
 // JSON's number grammar: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
 [[nodiscard]] bool isJsonNumber(std::string_view token, bool* isInteger = nullptr) noexcept;
+
+// A small owning, mutable JSON value: what component upgrades (migrations) edit before
+// the upgraded data is decoded. Numbers keep their token text, like JsonNode. Object
+// member order is kept.
+class JsonValue {
+public:
+    JsonValue() = default;   // null
+    [[nodiscard]] static JsonValue boolean(bool b);
+    [[nodiscard]] static JsonValue numberToken(std::string token);   // a valid JSON number
+    [[nodiscard]] static JsonValue number(float v);                  // canonical shortest form
+    [[nodiscard]] static JsonValue number(int64_t v);
+    [[nodiscard]] static JsonValue string(std::string s);
+    [[nodiscard]] static JsonValue array();
+    [[nodiscard]] static JsonValue object();
+
+    [[nodiscard]] JsonType type() const noexcept { return m_type; }
+    [[nodiscard]] bool isNull() const noexcept { return m_type == JsonType::Null; }
+    [[nodiscard]] bool asBool() const noexcept { return m_bool; }
+    [[nodiscard]] std::string_view text() const noexcept { return m_text; }   // number token / string
+    [[nodiscard]] std::optional<float> asFloat() const;     // numbers only, correctly rounded
+    [[nodiscard]] std::optional<int64_t> asInt() const;     // integer numbers only
+
+    // Array elements, or object member values (parallel to the keys).
+    [[nodiscard]] std::vector<JsonValue>& items() noexcept { return m_items; }
+    [[nodiscard]] const std::vector<JsonValue>& items() const noexcept { return m_items; }
+    [[nodiscard]] const std::vector<std::string>& keys() const noexcept { return m_keys; }
+
+    // Objects. A missing key: find() returns null, erase()/rename() return false.
+    [[nodiscard]] JsonValue* find(std::string_view key);
+    [[nodiscard]] const JsonValue* find(std::string_view key) const;
+    JsonValue& set(std::string_view key, JsonValue v);   // replaces in place, or appends
+    bool erase(std::string_view key);
+    bool rename(std::string_view from, std::string_view to);   // keeps the position; false if `to` exists
+
+private:
+    JsonType m_type{JsonType::Null};
+    bool m_bool{false};
+    std::string m_text;
+    std::vector<JsonValue> m_items;
+    std::vector<std::string> m_keys;
+};
+
+[[nodiscard]] JsonValue toValue(const JsonDocument& doc, const JsonNode& n);
+void writeJson(JsonWriter& w, const JsonValue& v);
+// A read-only document over a value (its nodes point into the document's own copy), so
+// upgraded data goes through the same typed decoder as everything else. Offsets are 0.
+[[nodiscard]] JsonDocument toDocument(JsonValue v);
 
 } // namespace ohao::reflect

@@ -49,6 +49,8 @@ public:
     TypeBuilder& runtime();      // listed in the catalogue, never serialized
     TypeBuilder& singleton();    // at most one per world
     TypeBuilder& host(std::shared_ptr<const void> data) { m_t.host = std::move(data); return *this; }
+    // Registers the migration from version `from` to `from + 1` (1 <= from < version).
+    TypeBuilder& upgrade(uint32_t from, Upgrade fn);
 
     template <class M>
     TypeBuilder& field(std::string_view name, M T::*member);
@@ -235,6 +237,16 @@ TypeBuilder<T>& TypeBuilder<T>::doc(std::string_view text) {
 }
 
 template <class T> TypeBuilder<T>& TypeBuilder<T>::component() { m_t.role = TypeRole::Component; return *this; }
+
+template <class T>
+TypeBuilder<T>& TypeBuilder<T>::upgrade(uint32_t from, Upgrade fn) {
+    const std::string where = "type " + m_t.name + ": upgrade from version " + std::to_string(from);
+    if (from == 0 || from >= m_t.version) m_r.error(where + " is outside [1, " + std::to_string(m_t.version) + ")");
+    else if (m_t.upgradeFrom(from)) m_r.error(where + " is registered twice");
+    else if (!fn) m_r.error(where + " has no function");
+    else m_t.upgrades.emplace_back(from, std::move(fn));
+    return *this;
+}
 template <class T> TypeBuilder<T>& TypeBuilder<T>::runtime() { m_t.serialized = false; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::singleton() { m_t.singleton = true; return *this; }
 
