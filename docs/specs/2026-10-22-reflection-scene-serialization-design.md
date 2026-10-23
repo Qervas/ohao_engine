@@ -900,7 +900,7 @@ steps 7 and 8. Until then bench10k has the components that exist:
 - 3.2 MB pretty.
 
 The generator gains the new components as they land, and steps 7 and 8 re-run the gate
-on the full scene. The 3.2 MB scene passes with about 15–20% headroom on save and
+on the full scene. The 3.2 MB scene passes with about 17% headroom on save and 24% on
 validate (step 6 change record), so the full scene needs more codec speed or a budget
 ruling then.
 
@@ -922,9 +922,10 @@ ruling then.
     bench10k samples.
   - Both therefore start with caches cold from the other scene. This tests that the
     work per entity does not grow with the scene.
-  - Against the warm, standalone bench10k medians, bench100k operations are about
-    23–26× slower. That is the scene outgrowing the CPU caches (32 MB of text, a 25 MB
-    world), not per-entity work growing, and it is recorded in `scene_bench.json`.
+  - Against the warm, standalone bench10k medians, the codec and restore operations are
+    22–27× slower at bench100k, and snapshot 18×. That is the scene outgrowing the CPU
+    caches (32 MB of text, a 25 MB world), not per-entity work growing, and it is
+    recorded in `scene_bench.json`.
 - **Recorded, not gated:**
   - process wall time of `ohao validate` and `ohao run --steps 1` on bench10k;
   - load-to-first-frame of the Cornell scene with rendering.
@@ -1247,8 +1248,8 @@ Each step ends with the engine running and every suite green.
 - **The budgets were estimates until step 6 measured them.** They were sized from
   simdjson and `to_chars` throughput with headroom. Step 6 met all of them on the
   current 3.2 MB bench10k after profiling (a new reader, warm memory, a faster pretty
-  writer, validation that skips unused conversions). Save and validate keep only about
-  15–20% headroom, so the full ~5 MB scene of steps 7–8 is the real test. A budget change
+  writer, validation that skips unused conversions). Save keeps only about 17% headroom
+  and validate 24%, so the full ~5 MB scene of steps 7–8 is the real test. A budget change
   needs Frank's OK.
 - **Windows timing noise.** Medians of 50 after warm-up, high process priority, and p95
   reported. The gate compares medians only.
