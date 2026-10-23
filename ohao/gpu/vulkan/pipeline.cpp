@@ -1,5 +1,6 @@
 #include "renderer_impl.hpp"
 #include "scene/asset/model.hpp"
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -19,7 +20,7 @@ VkShaderModule VulkanRenderer::loadShaderModule(std::string_view filepath) {
         if (file.is_open()) break;
     }
     if (!file.is_open()) {
-        std::cerr << "Failed to open shader file: " << pathStr << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to open shader file: {}", pathStr);
         return VK_NULL_HANDLE;
     }
 
@@ -38,11 +39,11 @@ VkShaderModule VulkanRenderer::loadShaderModule(std::string_view filepath) {
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        std::cerr << "Failed to create shader module!" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create shader module!");
         return VK_NULL_HANDLE;
     }
 
-    std::cout << "Loaded shader: " << pathStr << std::endl;
+    OHAO_LOG(Debug, gpu, "Loaded shader: {}", pathStr);
     return shaderModule;
 }
 

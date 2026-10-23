@@ -18,8 +18,9 @@
 #include <array>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
 #include <vector>
+
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -175,7 +176,7 @@ struct AtrousDenoiser::Impl {
     bool createComputePipeline(const std::string& spvName, VkPipelineLayout layout, VkPipeline& outPipe) {
         auto spv = readShaderSpv(spvName);
         if (spv.empty()) {
-            std::cerr << "[svgf] failed to load " << spvName << "\n";
+            OHAO_LOG(Error, render, "svgf: failed to load {}", spvName);
             return false;
         }
         VkShaderModuleCreateInfo smInfo{};
@@ -184,7 +185,7 @@ struct AtrousDenoiser::Impl {
         smInfo.pCode    = reinterpret_cast<const uint32_t*>(spv.data());
         VkShaderModule shaderModule = VK_NULL_HANDLE;
         if (vkCreateShaderModule(device, &smInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-            std::cerr << "[svgf] vkCreateShaderModule failed for " << spvName << "\n";
+            OHAO_LOG(Error, render, "svgf: vkCreateShaderModule failed for {}", spvName);
             return false;
         }
         VkPipelineShaderStageCreateInfo stage{};
@@ -199,7 +200,7 @@ struct AtrousDenoiser::Impl {
         VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &outPipe);
         vkDestroyShaderModule(device, shaderModule, nullptr);
         if (r != VK_SUCCESS) {
-            std::cerr << "[svgf] vkCreateComputePipelines failed for " << spvName << "\n";
+            OHAO_LOG(Error, render, "svgf: vkCreateComputePipelines failed for {}", spvName);
             return false;
         }
         return true;
@@ -237,7 +238,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
 
     // --- Pass 1 (temporal): 11 storage-image bindings ---
     if (!makeSetLayout(11, I.temporalSetLayout)) {
-        std::cerr << "[svgf] temporal set layout failed\n"; return false;
+        OHAO_LOG(Error, render, "svgf: temporal set layout failed"); return false;
     }
     {
         VkPushConstantRange pc{};
@@ -250,7 +251,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges    = &pc;
         if (vkCreatePipelineLayout(device, &pl, nullptr, &I.temporalPipelineLayout) != VK_SUCCESS) {
-            std::cerr << "[svgf] temporal pipeline layout failed\n"; return false;
+            OHAO_LOG(Error, render, "svgf: temporal pipeline layout failed"); return false;
         }
     }
     if (!I.createComputePipeline("rt_rt_svgf_temporal.comp.spv", I.temporalPipelineLayout, I.temporalPipeline))
@@ -258,7 +259,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
 
     // --- Pass 2 (à-trous): 7 storage-image bindings ---
     if (!makeSetLayout(7, I.atrousSetLayout)) {
-        std::cerr << "[svgf] atrous set layout failed\n"; return false;
+        OHAO_LOG(Error, render, "svgf: atrous set layout failed"); return false;
     }
     {
         VkPushConstantRange pc{};
@@ -271,7 +272,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges    = &pc;
         if (vkCreatePipelineLayout(device, &pl, nullptr, &I.atrousPipelineLayout) != VK_SUCCESS) {
-            std::cerr << "[svgf] atrous pipeline layout failed\n"; return false;
+            OHAO_LOG(Error, render, "svgf: atrous pipeline layout failed"); return false;
         }
     }
     if (!I.createComputePipeline("rt_rt_svgf_atrous.comp.spv", I.atrousPipelineLayout, I.atrousPipeline))
@@ -288,7 +289,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         poolInfo.pPoolSizes    = &poolSize;
         poolInfo.maxSets       = 1 + kNumIterations;
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &I.descriptorPool) != VK_SUCCESS) {
-            std::cerr << "[svgf] descriptor pool failed\n"; return false;
+            OHAO_LOG(Error, render, "svgf: descriptor pool failed"); return false;
         }
         VkDescriptorSetAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -296,7 +297,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         ai.descriptorSetCount = 1;
         ai.pSetLayouts        = &I.temporalSetLayout;
         if (vkAllocateDescriptorSets(device, &ai, &I.temporalSet) != VK_SUCCESS) {
-            std::cerr << "[svgf] temporal set alloc failed\n"; return false;
+            OHAO_LOG(Error, render, "svgf: temporal set alloc failed"); return false;
         }
         std::array<VkDescriptorSetLayout, kNumIterations> layouts;
         layouts.fill(I.atrousSetLayout);
@@ -306,7 +307,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         ai2.descriptorSetCount = kNumIterations;
         ai2.pSetLayouts        = layouts.data();
         if (vkAllocateDescriptorSets(device, &ai2, I.atrousSets) != VK_SUCCESS) {
-            std::cerr << "[svgf] atrous set alloc failed\n"; return false;
+            OHAO_LOG(Error, render, "svgf: atrous set alloc failed"); return false;
         }
     }
 
@@ -319,7 +320,7 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
         ok = ok && I.createImage(kRGBA16F, I.colorImg[i],      I.colorMem[i],      I.colorView[i]);
         ok = ok && I.createImage(kR16F,    I.varImg[i],        I.varMem[i],        I.varView[i]);
     }
-    if (!ok) { std::cerr << "[svgf] image allocation failed\n"; return false; }
+    if (!ok) { OHAO_LOG(Error, render, "svgf: image allocation failed"); return false; }
 
     I.imagesInitialized = false;
     I.parity            = 0;
@@ -329,9 +330,9 @@ bool AtrousDenoiser::initialize(VkDevice device, VkPhysicalDevice physicalDevice
     if (const char* e = std::getenv("OHAO_SVGF_SIGMAN")) I.sigmaNormal = static_cast<float>(std::atof(e));
     if (const char* e = std::getenv("OHAO_SVGF_SIGMAD")) I.sigmaDepth  = static_cast<float>(std::atof(e));
 
-    std::cout << "[svgf] pipeline ready @ " << width << "x" << height
-              << "  sigmaL=" << I.sigmaL << " sigmaN=" << I.sigmaNormal << " sigmaD=" << I.sigmaDepth
-              << " (temporal + " << kNumIterations << "-tap variance-guided a-trous)\n";
+    OHAO_LOG(Info, render, "svgf: pipeline ready @ {}x{}  sigmaL={} sigmaN={} sigmaD={}"
+                           " (temporal + {}-tap variance-guided a-trous)",
+             width, height, I.sigmaL, I.sigmaNormal, I.sigmaDepth, kNumIterations);
     return true;
 }
 

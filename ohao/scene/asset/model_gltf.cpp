@@ -4,7 +4,7 @@
 #include "tiny_gltf.h"
 
 #include "scene/asset/model.hpp"
-#include <iostream>
+#include "core/log.hpp"
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -27,13 +27,13 @@ bool Model::loadFromGLTF(std::string_view filename) {
     }
 
     if (!warn.empty()) {
-        std::cerr << "GLTF Warning: " << warn << std::endl;
+        OHAO_LOG(Warn, asset, "GLTF warning: {}", warn);
     }
     if (!err.empty()) {
-        std::cerr << "GLTF Error: " << err << std::endl;
+        OHAO_LOG(Error, asset, "GLTF error: {}", err);
     }
     if (!loaded) {
-        std::cerr << "Failed to load GLTF: " << path << std::endl;
+        OHAO_LOG(Error, asset, "Failed to load GLTF: {}", path);
         return false;
     }
 
@@ -326,18 +326,18 @@ bool Model::loadFromGLTF(std::string_view filename) {
     // Dump first material's extension keys for debugging
     if (!gltfModel.materials.empty()) {
         const auto& mat0 = gltfModel.materials[0];
-        std::cout << "  Mat0 extensions:";
-        for (const auto& [key, val] : mat0.extensions) std::cout << " " << key;
-        std::cout << std::endl;
-        std::cout << "  Mat0 extras keys:";
+        std::string mat0Extensions;
+        for (const auto& [key, val] : mat0.extensions) { mat0Extensions += " "; mat0Extensions += key; }
+        OHAO_LOG(Debug, asset, "  Mat0 extensions:{}", mat0Extensions);
+        std::string mat0ExtrasKeys;
         if (mat0.extras.IsObject()) {
-            for (const auto& key : mat0.extras.Keys()) std::cout << " " << key;
+            for (const auto& key : mat0.extras.Keys()) { mat0ExtrasKeys += " "; mat0ExtrasKeys += key; }
         }
-        std::cout << std::endl;
+        OHAO_LOG(Debug, asset, "  Mat0 extras keys:{}", mat0ExtrasKeys);
         // Check non-PBR texture slots
-        std::cout << "  Mat0 normalTex=" << mat0.normalTexture.index
-                  << " occlusionTex=" << mat0.occlusionTexture.index
-                  << " emissiveTex=" << mat0.emissiveTexture.index << std::endl;
+        OHAO_LOG(Debug, asset, "  Mat0 normalTex={} occlusionTex={} emissiveTex={}",
+                 mat0.normalTexture.index, mat0.occlusionTexture.index,
+                 mat0.emissiveTexture.index);
     }
 
     // Extract per-material base colors AND textures from GLTF materials
@@ -426,9 +426,8 @@ bool Model::loadFromGLTF(std::string_view filename) {
                         static_cast<float>(avgB),
                         materialColors.back().w  // keep roughness
                     );
-                    std::cout << "  Material " << mi << " (" << gltfMat.name << "): tex "
-                              << td.width << "x" << td.height
-                              << " avg=(" << avgR << "," << avgG << "," << avgB << ")" << std::endl;
+                    OHAO_LOG(Debug, asset, "  Material {} ({}): tex {}x{} avg=({},{},{})",
+                             mi, gltfMat.name, td.width, td.height, avgR, avgG, avgB);
 
                     materialTextureIndex.push_back(static_cast<int>(albedoTextures.size()));
                     albedoTextures.push_back(std::move(td));
@@ -536,12 +535,12 @@ bool Model::loadFromGLTF(std::string_view filename) {
             materialEmissiveTexIndex.push_back(emTexFound);
         }
 
-        std::cout << "  Material " << mi << " (" << gltfMat.name << "): "
-                  << "diffuse=" << (materialTextureIndex.back() >= 0 ? "tex" : "color")
-                  << " normal=" << (materialNormalTexIndex.back() >= 0 ? "tex" : "none")
-                  << " roughMetal=" << (materialRoughMetalTexIndex.back() >= 0 ? "tex" : "scalar")
-                  << " emissive=" << (materialEmissiveTexIndex.back() >= 0 ? "tex" : "none")
-                  << std::endl;
+        OHAO_LOG(Debug, asset, "  Material {} ({}): diffuse={} normal={} roughMetal={} emissive={}",
+                 mi, gltfMat.name,
+                 (materialTextureIndex.back() >= 0 ? "tex" : "color"),
+                 (materialNormalTexIndex.back() >= 0 ? "tex" : "none"),
+                 (materialRoughMetalTexIndex.back() >= 0 ? "tex" : "scalar"),
+                 (materialEmissiveTexIndex.back() >= 0 ? "tex" : "none"));
     }
     if (materialColors.empty()) {
         materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
@@ -552,18 +551,15 @@ bool Model::loadFromGLTF(std::string_view filename) {
         materialEmissiveTexIndex.push_back(-1);
     }
 
-    std::cout << "GLTF loaded: " << path
-              << " (" << vertices.size() << " vertices, " << indices.size() << " indices, "
-              << materialColors.size() << " materials, "
-              << albedoTextures.size() << " textures, "
-              << gltfModel.images.size() << " images, "
-              << gltfModel.textures.size() << " gltf textures)" << std::endl;
+    OHAO_LOG(Info, asset, "GLTF loaded: {} ({} vertices, {} indices, {} materials, {} textures, {} images, {} gltf textures)",
+             path, vertices.size(), indices.size(), materialColors.size(),
+             albedoTextures.size(), gltfModel.images.size(), gltfModel.textures.size());
 
     // Skeletal animation removed — skins and animations are no longer loaded.
     // Bone weights remain in the Vertex struct as inert data.
 
-    std::cout << "GLTF loaded: " << path << " (" << vertices.size() << " vertices, "
-              << indices.size() << " indices, " << materials.size() << " materials)" << std::endl;
+    OHAO_LOG(Info, asset, "GLTF loaded: {} ({} vertices, {} indices, {} materials)",
+             path, vertices.size(), indices.size(), materials.size());
 
     return !vertices.empty();
 }

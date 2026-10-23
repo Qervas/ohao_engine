@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <iostream>
 #include <set>
+
+#include "core/log.hpp"
 
 namespace ohao::render {
 
@@ -124,7 +125,7 @@ struct RenderScene::Impl {
             while (cap < instances.highWater()) cap *= 2;
             GpuBuffer bigger = createTlasInstanceBuffer(cap);
             if (!bigger.isValid()) {
-                std::cerr << "[RenderScene] TLAS instance buffer allocation failed (" << cap << " slots)\n";
+                OHAO_LOG(Error, render, "RenderScene: TLAS instance buffer allocation failed ({} slots)", cap);
                 return false;
             }
             const VkBufferCopy copy{0, 0, VkDeviceSize{tlasCapacity} * kTlasInstanceBytes};
@@ -182,7 +183,7 @@ struct RenderScene::Impl {
             allocator.destroyBuffer(staging[slot]);
             staging[slot] = GpuBuffer{};
             stagingCapacity[slot] = 0;
-            std::cerr << "[RenderScene] staging allocation failed (" << cap << " bytes)\n";
+            OHAO_LOG(Error, render, "RenderScene: staging allocation failed ({} bytes)", cap);
             return false;
         }
         stagingCapacity[slot] = cap;
@@ -214,7 +215,7 @@ bool RenderScene::initialize(const InitInfo& info) {
     if (m->initialized) return true;
     m->info = info;
     if (!m->allocator.initialize(info.instance, info.physical, info.device)) {
-        std::cerr << "[RenderScene] GpuAllocator initialization failed\n";
+        OHAO_LOG(Error, render, "RenderScene: GpuAllocator initialization failed");
         return false;
     }
     if (info.rayTracing) {
@@ -227,7 +228,7 @@ bool RenderScene::initialize(const InitInfo& info) {
         m->rtAccel = std::make_unique<RTAccelerationStructure>();
         if (!m->rtAccel->init(info.device, info.physical, info.queue, info.queueFamily, info.commandPool,
                               consumers)) {
-            std::cout << "[RenderScene] ray tracing unavailable: meshes get no BLAS\n";
+            OHAO_LOG(Warn, render, "RenderScene: ray tracing unavailable: meshes get no BLAS");
             m->rtAccel.reset();
         }
     }
@@ -242,7 +243,7 @@ bool RenderScene::initialize(const InitInfo& info) {
     if (m->rt()) {
         m->tlasInstances = m->createTlasInstanceBuffer(InstanceTable::kInitialCapacity);
         if (!m->tlasInstances.isValid()) {
-            std::cerr << "[RenderScene] TLAS instance buffer allocation failed\n";
+            OHAO_LOG(Error, render, "RenderScene: TLAS instance buffer allocation failed");
             shutdown();
             return false;
         }
@@ -306,7 +307,7 @@ MaterialHandle RenderScene::registerMaterial(const MaterialDesc& desc) {
 uint32_t RenderScene::createInstance(const InstanceDesc& desc) {
     if (!m->initialized) return kInvalidIndex;
     if (!m->meshes.info(desc.mesh)) {
-        std::cerr << "[RenderScene] createInstance: unknown mesh handle\n";
+        OHAO_LOG(Error, render, "RenderScene: createInstance: unknown mesh handle");
         return kInvalidIndex;
     }
     const uint32_t slot = m->instances.create(desc, m->materials.count());
@@ -317,11 +318,11 @@ uint32_t RenderScene::createInstance(const InstanceDesc& desc) {
 void RenderScene::updateInstance(uint32_t slot, const InstanceDesc& desc) {
     if (!m->initialized) return;
     if (!m->meshes.info(desc.mesh)) {
-        std::cerr << "[RenderScene] updateInstance: unknown mesh handle\n";
+        OHAO_LOG(Error, render, "RenderScene: updateInstance: unknown mesh handle");
         return;
     }
     if (!m->instances.live(slot)) {
-        std::cerr << "[RenderScene] updateInstance on dead slot " << slot << " ignored\n";
+        OHAO_LOG(Warn, render, "RenderScene: updateInstance on dead slot {} ignored", slot);
         return;
     }
     m->instances.update(slot, desc, m->materials.count());

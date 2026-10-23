@@ -1,7 +1,7 @@
 #include "sss_pass.hpp"
 #include "gbuffer_pass.hpp"
 #include <array>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -24,7 +24,7 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createDescriptors()) return false;
     if (!createComputePipeline()) return false;
 
-    std::cout << "SSSPass: Initialized" << std::endl;
+    OHAO_LOG(Info, render, "SSSPass: initialized");
     return true;
 }
 
@@ -123,7 +123,7 @@ bool SSSPass::createDescriptors() {
 
 bool SSSPass::createComputePipeline() {
     VkShaderModule shader = loadShaderModule("postprocess_sss_blur.comp.spv");
-    if (!shader) { std::cerr << "SSSPass: shader not found" << std::endl; return false; }
+    if (!shader) { OHAO_LOG(Error, render, "SSSPass: shader not found"); return false; }
 
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;

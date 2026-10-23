@@ -1,4 +1,5 @@
 #include "renderer_impl.hpp"
+#include "core/log.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -47,8 +48,8 @@ bool VulkanRenderer::createInstance() {
         for (const auto& l : layers)
             if (std::strcmp(l.layerName, validationLayers[0]) == 0) installed = true;
         if (!installed) {
-            std::cerr << "[OHAO] validation requested but VK_LAYER_KHRONOS_validation is not installed"
-                      << std::endl;
+            OHAO_LOG(Error, validation,
+                     "validation requested but VK_LAYER_KHRONOS_validation is not installed");
             wantValidation = false;
         }
     }
@@ -58,7 +59,7 @@ bool VulkanRenderer::createInstance() {
         m_enabledInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         createInfo.enabledExtensionCount = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
         createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
-        std::cout << "[OHAO] Validation layers ENABLED" << std::endl;
+        OHAO_LOG(Info, validation, "Validation layers ENABLED");
     }
 
 #ifdef OHAO_DLSS_ENABLED
@@ -74,8 +75,8 @@ bool VulkanRenderer::createInstance() {
         if (!has) m_enabledInstanceExtensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
         createInfo.enabledExtensionCount   = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
         createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
-        std::cout << "[DLSS] instance ext requested: "
-                  << VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME << std::endl;
+        OHAO_LOG(Debug, gpu, "DLSS: instance ext requested: {}",
+                 VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     }
 #endif
 
@@ -90,7 +91,9 @@ bool VulkanRenderer::createInstance() {
                              VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                          VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
-        mi.pfnUserCallback = [](VkDebugUtilsMessageSeverityFlagBitsEXT,
+        // Every message goes to the `validation` channel as "<VUID> | <text>", stamped with
+        // the frame it happened in; tests/validation/check_validation.py reads these lines.
+        mi.pfnUserCallback = [](VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                 VkDebugUtilsMessageTypeFlagsEXT,
                                 const VkDebugUtilsMessengerCallbackDataEXT* data,
                                 void* user) -> VkBool32 {
@@ -98,7 +101,10 @@ bool VulkanRenderer::createInstance() {
             log->count.fetch_add(1);
             const char* msg = (data && data->pMessage) ? data->pMessage : "";
             const char* vuid = (data && data->pMessageIdName) ? data->pMessageIdName : "-";
-            std::cerr << "[validation] " << vuid << " | " << msg << std::endl;
+            if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                OHAO_LOG(Error, validation, "{} | {}", vuid, msg);
+            else
+                OHAO_LOG(Warn, validation, "{} | {}", vuid, msg);
             std::lock_guard<std::mutex> lock(log->mutex);
             if (log->first.size() < 256) log->first.emplace_back(msg);
             return VK_FALSE;
@@ -116,7 +122,7 @@ bool VulkanRenderer::pickPhysicalDevice() {
     vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
 
     if (deviceCount == 0) {
-        std::cerr << "No Vulkan-capable GPU found" << std::endl;
+        OHAO_LOG(Error, gpu, "no Vulkan-capable GPU found");
         return false;
     }
 
@@ -131,8 +137,8 @@ bool VulkanRenderer::pickPhysicalDevice() {
     for (const auto& device : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(device, &props);
-        std::cout << "Found GPU: " << props.deviceName
-                  << " (type=" << props.deviceType << ")" << std::endl;
+        OHAO_LOG(Debug, gpu, "found GPU: {} (type={})", props.deviceName,
+                 static_cast<int>(props.deviceType));
 
         // Find graphics queue family
         uint32_t queueFamilyCount = 0;
@@ -146,8 +152,7 @@ bool VulkanRenderer::pickPhysicalDevice() {
                     VkBool32 canPresent = VK_FALSE;
                     vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &canPresent);
                     if (!canPresent) {
-                        std::cout << "  graphics queue family " << i
-                                  << " cannot present to this surface" << std::endl;
+                        OHAO_LOG(Debug, gpu, "graphics queue family {} cannot present to this surface", i);
                         continue;
                     }
                 }
@@ -168,7 +173,7 @@ bool VulkanRenderer::pickPhysicalDevice() {
         m_graphicsQueueFamily = bestQueueFamily;
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-        std::cout << "Selected GPU: " << props.deviceName << std::endl;
+        OHAO_LOG(Info, gpu, "selected GPU: {}", props.deviceName);
         return true;
     }
 
@@ -237,10 +242,10 @@ bool VulkanRenderer::createLogicalDevice() {
             if (already(e)) continue;
             if (supported(e)) {
                 m_enabledDeviceExtensions.push_back(e);
-                std::cout << "[DLSS] enabling device ext: " << e << std::endl;
+                OHAO_LOG(Debug, gpu, "DLSS: enabling device ext: {}", e);
             } else {
-                std::cerr << "[DLSS] device ext NOT supported by selected GPU (DLSS-RR will be unavailable): "
-                          << e << std::endl;
+                OHAO_LOG(Warn, gpu,
+                         "DLSS: device ext NOT supported by selected GPU (DLSS-RR will be unavailable): {}", e);
             }
         }
     }
@@ -284,17 +289,18 @@ bool VulkanRenderer::createLogicalDevice() {
 
         if (rayQuerySupported) {
             m_enabledDeviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
-            std::cout << "[caps] enabling optional device ext: " << VK_KHR_RAY_QUERY_EXTENSION_NAME << std::endl;
+            OHAO_LOG(Debug, gpu, "caps: enabling optional device ext: {}", VK_KHR_RAY_QUERY_EXTENSION_NAME);
         } else {
-            std::cerr << "[caps] optional device ext NOT supported by selected GPU: "
-                       << VK_KHR_RAY_QUERY_EXTENSION_NAME << std::endl;
+            OHAO_LOG(Warn, gpu, "caps: optional device ext NOT supported by selected GPU: {}",
+                     VK_KHR_RAY_QUERY_EXTENSION_NAME);
         }
         if (bufferAtomicAddSupported) {
             m_enabledDeviceExtensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
-            std::cout << "[caps] enabling optional device ext: " << VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME << std::endl;
+            OHAO_LOG(Debug, gpu, "caps: enabling optional device ext: {}",
+                     VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         } else {
-            std::cerr << "[caps] optional device ext NOT supported by selected GPU: "
-                       << VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME << std::endl;
+            OHAO_LOG(Warn, gpu, "caps: optional device ext NOT supported by selected GPU: {}",
+                     VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
     }
 
@@ -385,12 +391,12 @@ bool VulkanRenderer::createLogicalDevice() {
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
     if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS) {
-        std::cerr << "[OHAO] Failed to create logical device with RT extensions" << std::endl;
+        OHAO_LOG(Error, gpu, "failed to create logical device with RT extensions");
         return false;
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
-    std::cout << "[OHAO] Logical device created with RT extensions" << std::endl;
+    OHAO_LOG(Info, gpu, "logical device created with RT extensions");
     return true;
 }
 
@@ -415,8 +421,8 @@ bool VulkanRenderer::initializeFrameResources() {
                                                stagingBufferSize);
 
     if (success) {
-        std::cout << "Multi-frame rendering enabled with "
-                  << MAX_FRAMES_IN_FLIGHT << " frames in flight" << std::endl;
+        OHAO_LOG(Debug, gpu, "multi-frame rendering enabled with {} frames in flight",
+                 MAX_FRAMES_IN_FLIGHT);
     }
 
     return success;

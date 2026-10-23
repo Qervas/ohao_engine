@@ -2,7 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
-#include <iostream>
+
+#include "core/log.hpp"
 
 namespace ohao::render {
 
@@ -48,7 +49,7 @@ bool InstanceTable::createGpuBuffers(uint32_t capacity, GpuBuffer& instances, Gp
     if (!instances.isValid() || !refs.isValid()) {
         m_allocator->destroyBuffer(instances);
         m_allocator->destroyBuffer(refs);
-        std::cerr << "[RenderScene] instance table allocation failed (" << capacity << " slots)\n";
+        OHAO_LOG(Error, render, "RenderScene: instance table allocation failed ({} slots)", capacity);
         return false;
     }
     return true;
@@ -69,8 +70,8 @@ void InstanceTable::write(uint32_t slot, const InstanceDesc& desc, uint32_t mate
     if (desc.materials.size() > kMaxMaterialRefsPerInstance) {
         static bool logged = false;
         if (!logged) {
-            std::cerr << "[RenderScene] instance with " << desc.materials.size() << " materials: only the first "
-                      << kMaxMaterialRefsPerInstance << " are used\n";
+            OHAO_LOG(Warn, render, "RenderScene: instance with {} materials: only the first {} are used",
+                     desc.materials.size(), kMaxMaterialRefsPerInstance);
             logged = true;
         }
     }
@@ -129,7 +130,7 @@ uint32_t InstanceTable::create(const InstanceDesc& desc, uint32_t materialCount)
 
 void InstanceTable::update(uint32_t slot, const InstanceDesc& desc, uint32_t materialCount) {
     if (!live(slot)) {
-        std::cerr << "[RenderScene] updateInstance on dead slot " << slot << " ignored\n";
+        OHAO_LOG(Warn, render, "RenderScene: updateInstance on dead slot {} ignored", slot);
         return;
     }
     write(slot, desc, materialCount);

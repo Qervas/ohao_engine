@@ -1,7 +1,7 @@
 #include "particle_system.hpp"
 #include "../deferred/render_pass_base.hpp"
 #include <array>
-#include <iostream>
+#include "core/log.hpp"
 #include <fstream>
 #include <cstring>
 
@@ -28,7 +28,7 @@ bool ParticleSystem::initialize(VkDevice device, VkPhysicalDevice physicalDevice
     if (!createDescriptors()) return false;
     if (!createComputePipelines()) return false;
 
-    std::cout << "ParticleSystem: Initialized with " << maxParticles << " max particles" << std::endl;
+    OHAO_LOG(Info, render, "ParticleSystem: initialized with {} max particles", maxParticles);
     return true;
 }
 
@@ -279,14 +279,14 @@ bool ParticleSystem::createComputePipelines() {
     if (!createComputePipeline(basePath + "particles_particle_emit.comp.spv",
                                 m_computeDescriptorLayout, sizeof(EmitPushConstants),
                                 m_emitPipeline, m_emitPipelineLayout)) {
-        std::cerr << "ParticleSystem: Failed to create emit pipeline" << std::endl;
+        OHAO_LOG(Error, render, "ParticleSystem: Failed to create emit pipeline");
         return false;
     }
 
     if (!createComputePipeline(basePath + "particles_particle_update.comp.spv",
                                 m_computeDescriptorLayout, sizeof(UpdatePushConstants),
                                 m_updatePipeline, m_updatePipelineLayout)) {
-        std::cerr << "ParticleSystem: Failed to create update pipeline" << std::endl;
+        OHAO_LOG(Error, render, "ParticleSystem: Failed to create update pipeline");
         return false;
     }
 
@@ -308,7 +308,7 @@ bool ParticleSystem::createRenderPipeline(VkRenderPass renderPass) {
     if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
         if (vertShader) vkDestroyShaderModule(m_device, vertShader, nullptr);
         if (fragShader) vkDestroyShaderModule(m_device, fragShader, nullptr);
-        std::cerr << "ParticleSystem: Failed to load render shaders" << std::endl;
+        OHAO_LOG(Error, render, "ParticleSystem: Failed to load render shaders");
         return false;
     }
 
@@ -419,11 +419,11 @@ bool ParticleSystem::createRenderPipeline(VkRenderPass renderPass) {
     vkDestroyShaderModule(m_device, fragShader, nullptr);
 
     if (result != VK_SUCCESS) {
-        std::cerr << "ParticleSystem: Failed to create render pipeline" << std::endl;
+        OHAO_LOG(Error, render, "ParticleSystem: Failed to create render pipeline");
         return false;
     }
 
-    std::cout << "ParticleSystem: Render pipeline created" << std::endl;
+    OHAO_LOG(Debug, render, "ParticleSystem: render pipeline created");
     return true;
 }
 
@@ -658,7 +658,7 @@ VkShaderModule ParticleSystem::loadShaderModule(std::string_view path) {
     const std::string pathStr(path);
     std::ifstream file(pathStr, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "ParticleSystem: Failed to open shader: " << pathStr << std::endl;
+        OHAO_LOG(Error, render, "ParticleSystem: Failed to open shader: {}", pathStr);
         return VK_NULL_HANDLE;
     }
 

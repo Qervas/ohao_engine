@@ -2,7 +2,7 @@
 #include "../../gpu/vulkan/gpu_allocator.hpp"
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include "core/log.hpp"
 #include <cstring>
 #include <string_view>
 #include <span>
@@ -42,7 +42,7 @@ bool BindlessTextureManager::initialize(VkDevice device, VkPhysicalDevice physic
     };
 
     if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
-        std::cerr << "Failed to create bindless texture command pool" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create bindless texture command pool");
         return false;
     }
 
@@ -61,7 +61,7 @@ bool BindlessTextureManager::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
-    std::cout << "BindlessTextureManager initialized with capacity: " << maxTextures << std::endl;
+    OHAO_LOG(Info, gpu, "BindlessTextureManager initialized with capacity: {}", maxTextures);
     return true;
 }
 
@@ -132,7 +132,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     };
 
     if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_defaultSampler) != VK_SUCCESS) {
-        std::cerr << "Failed to create bindless texture sampler" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create bindless texture sampler");
         return false;
     }
 
@@ -163,7 +163,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     layoutInfo.pBindings = &binding;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
-        std::cerr << "Failed to create bindless descriptor set layout" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create bindless descriptor set layout");
         return false;
     }
 
@@ -182,7 +182,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     };
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
-        std::cerr << "Failed to create bindless descriptor pool" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create bindless descriptor pool");
         return false;
     }
 
@@ -201,7 +201,7 @@ bool BindlessTextureManager::createDescriptorResources() {
     allocInfo.pSetLayouts = &m_descriptorSetLayout;
 
     if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate bindless descriptor set" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to allocate bindless descriptor set");
         return false;
     }
 
@@ -230,7 +230,7 @@ bool BindlessTextureManager::createDefaultTextures() {
 
     updateDescriptorSet();
 
-    std::cout << "Default bindless textures created" << std::endl;
+    OHAO_LOG(Debug, gpu, "Default bindless textures created");
     return true;
 }
 
@@ -318,7 +318,7 @@ bool BindlessTextureManager::createDefaultNormalTexture() {
 uint32_t BindlessTextureManager::allocateSlot() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_freeSlots.empty()) {
-        std::cerr << "No free texture slots available" << std::endl;
+        OHAO_LOG(Error, gpu, "No free texture slots available");
         return UINT32_MAX;
     }
 
@@ -347,7 +347,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(std::string_view path,
     VkFormat format;
 
     if (!loadTextureData(path, type, data, width, height, format)) {
-        std::cerr << "Failed to load texture: " << path << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to load texture: {}", path);
         return getDefaultTexture(type);
     }
 
@@ -727,7 +727,7 @@ bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, u
 
     VkDeviceSize imageSize = width * height * 4;
     if (data.size_bytes() < static_cast<size_t>(imageSize)) {
-        std::cerr << "createTextureImage: pixel span smaller than width*height*4" << std::endl;
+        OHAO_LOG(Error, gpu, "createTextureImage: pixel span smaller than width*height*4");
         return false;
     }
 

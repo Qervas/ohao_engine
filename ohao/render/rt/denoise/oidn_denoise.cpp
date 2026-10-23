@@ -4,7 +4,7 @@
 #endif
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -17,12 +17,12 @@ bool oidnDenoise(std::span<float> beauty, std::span<const float> albedo,
     (void)width;
     (void)height;
     (void)hdr;
-    std::cerr << "[OIDN] built without OpenImageDenoise — skipping\n";
+    OHAO_LOG(Warn, render, "OIDN: built without OpenImageDenoise — skipping");
     return false;
 #else
     const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
     if (beauty.size() < pixelCount * 3u) {
-        std::cerr << "[OIDN] beauty buffer too small\n";
+        OHAO_LOG(Error, render, "OIDN: beauty buffer too small");
         return false;
     }
 
@@ -44,11 +44,11 @@ bool oidnDenoise(std::span<float> beauty, std::span<const float> albedo,
 
     const char* errorMessage = nullptr;
     if (device.getError(errorMessage) != oidn::Error::None) {
-        std::cerr << "[OIDN] Error: " << errorMessage << std::endl;
+        OHAO_LOG(Error, render, "OIDN: error: {}", errorMessage ? errorMessage : "(no message)");
         return false;
     }
 
-    std::cout << "[OIDN] Denoised " << width << "x" << height << std::endl;
+    OHAO_LOG(Debug, render, "OIDN: denoised {}x{}", width, height);
     return true;
 #endif
 }

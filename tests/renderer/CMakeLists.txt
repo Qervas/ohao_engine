@@ -116,6 +116,7 @@ add_executable(sobol_test sobol_test.cpp   # Sobol + Owen scramble
 add_executable(denoise_parse_test denoise_parse_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
 )
+target_link_libraries(denoise_parse_test PRIVATE ohao_core)   # parse warnings go to the logger
 foreach(t env_cdf_test sobol_test denoise_parse_test)
     target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
     target_link_libraries(${t} PRIVATE ohao_gtest_main)

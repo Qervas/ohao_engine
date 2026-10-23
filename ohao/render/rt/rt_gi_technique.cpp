@@ -1,4 +1,5 @@
 #include "rt_gi_technique.hpp"
+#include "core/log.hpp"
 #include <fstream>
 #include <cstring>
 #include <algorithm>
@@ -67,31 +68,31 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_height = height;
 
     if (!loadFunctionPointers()) {
-        std::cerr << "[RTGI] Failed to load RT function pointers" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to load RT function pointers");
         return false;
     }
 
     if (!createOutputImage()) {
-        std::cerr << "[RTGI] Failed to create output image" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create output image");
         return false;
     }
 
     if (!createDescriptorResources()) {
-        std::cerr << "[RTGI] Failed to create descriptor resources" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create descriptor resources");
         return false;
     }
 
     if (!createRTPipeline()) {
-        std::cerr << "[RTGI] Failed to create RT pipeline" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create RT pipeline");
         return false;
     }
 
     if (!createShaderBindingTable()) {
-        std::cerr << "[RTGI] Failed to create SBT" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create SBT");
         return false;
     }
 
-    std::cout << "[RTGI] Initialized (" << width << "x" << height << ")" << std::endl;
+    OHAO_LOG(Info, render, "RTGI: initialized ({}x{})", width, height);
     return true;
 }
 
@@ -256,7 +257,7 @@ bool RTGITechnique::createRTPipeline() {
     auto rchitCode = readFile("bin/shaders/rt_rt_gi.rchit.spv");
 
     if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
-        std::cerr << "[RTGI] Failed to load RT shader SPVs" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to load RT shader SPVs");
         return false;
     }
 
@@ -334,7 +335,7 @@ bool RTGITechnique::createRTPipeline() {
     layoutInfo.pPushConstantRanges = &pushRange;
 
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        std::cerr << "[RTGI] Failed to create pipeline layout" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create pipeline layout");
         return false;
     }
 
@@ -357,11 +358,11 @@ bool RTGITechnique::createRTPipeline() {
     vkDestroyShaderModule(m_device, rchitModule, nullptr);
 
     if (result != VK_SUCCESS) {
-        std::cerr << "[RTGI] Failed to create RT pipeline (err=" << result << ")" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to create RT pipeline (err={})", static_cast<int>(result));
         return false;
     }
 
-    std::cout << "[RTGI] RT pipeline created" << std::endl;
+    OHAO_LOG(Debug, render, "RTGI: RT pipeline created");
     return true;
 }
 
@@ -388,7 +389,7 @@ bool RTGITechnique::createShaderBindingTable() {
     std::vector<uint8_t> handles(groupCount * handleSize);
     if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
                                               handles.size(), handles.data()) != VK_SUCCESS) {
-        std::cerr << "[RTGI] Failed to get shader group handles" << std::endl;
+        OHAO_LOG(Error, render, "RTGI: failed to get shader group handles");
         return false;
     }
 
@@ -459,8 +460,8 @@ bool RTGITechnique::createShaderBindingTable() {
 
     m_callRegion = {};  // not used
 
-    std::cout << "[RTGI] SBT created (handleSize=" << handleSize
-              << ", aligned=" << handleSizeAligned << ")" << std::endl;
+    OHAO_LOG(Debug, render, "RTGI: SBT created (handleSize={}, aligned={})",
+             handleSize, handleSizeAligned);
     return true;
 }
 

@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <cstring>
-#include <iostream>
 #include <vector>
+#include "core/log.hpp"
 #include <glm/gtc/type_ptr.hpp>
 
 // nrd_denoise.hpp / nrd_compose.hpp are safe to include unconditionally; their
@@ -65,8 +65,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
                 m_dlssRR.reset();
             }
         } else {
-            std::cerr << "[DLSS-RR] init skipped/failed (no VkInstance or NGX init failed)"
-                         " — falling back to raw output\n";
+            OHAO_LOG(Warn, render, "DLSS-RR: init skipped/failed (no VkInstance or NGX init failed)"
+                                   " — falling back to raw output");
             m_dlssRR.reset();
         }
     }

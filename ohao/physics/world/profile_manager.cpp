@@ -1,5 +1,5 @@
 #include "profile_manager.hpp"
-#include "core/console_widget.hpp"
+#include "core/log.hpp"
 #include <algorithm>
 
 namespace ohao {
@@ -14,7 +14,7 @@ SimulationProfile* ProfileManager::createProfile(std::string_view name,
 
     // Check if profile with this name already exists
     if (profileExists(key)) {
-        OHAO_LOG("Error: Profile '" + key + "' already exists");
+        OHAO_LOG(Error, physics, "Profile '{}' already exists", key);
         return nullptr;
     }
 
@@ -30,14 +30,14 @@ SimulationProfile* ProfileManager::createProfile(std::string_view name,
     // Rebuild cached name list
     rebuildProfileNamesList();
 
-    OHAO_LOG("Created profile: " + key);
+    OHAO_LOG(Info, physics, "Created profile: {}", key);
     return profilePtr;
 }
 
 bool ProfileManager::deleteProfile(std::string_view name) {
     auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
-        OHAO_LOG("Warning: Cannot delete non-existent profile '" + std::string(name) + "'");
+        OHAO_LOG(Warn, physics, "Cannot delete non-existent profile '{}'", name);
         return false;
     }
 
@@ -49,7 +49,7 @@ bool ProfileManager::deleteProfile(std::string_view name) {
     m_profiles.erase(it);
     rebuildProfileNamesList();
 
-    OHAO_LOG("Deleted profile: " + std::string(name));
+    OHAO_LOG(Info, physics, "Deleted profile: {}", name);
     return true;
 }
 
@@ -60,13 +60,13 @@ bool ProfileManager::renameProfile(std::string_view oldName, std::string_view ne
     // Check if old profile exists
     auto it = m_profiles.find(oldKey);
     if (it == m_profiles.end()) {
-        OHAO_LOG("Error: Profile '" + oldKey + "' not found");
+        OHAO_LOG(Error, physics, "Profile '{}' not found", oldKey);
         return false;
     }
 
     // Check if new name already exists
     if (profileExists(newKey)) {
-        OHAO_LOG("Error: Profile '" + newKey + "' already exists");
+        OHAO_LOG(Error, physics, "Profile '{}' already exists", newKey);
         return false;
     }
 
@@ -81,25 +81,25 @@ bool ProfileManager::renameProfile(std::string_view oldName, std::string_view ne
     // Rebuild cached name list
     rebuildProfileNamesList();
 
-    OHAO_LOG("Renamed profile: '" + oldKey + "' -> '" + newKey + "'");
+    OHAO_LOG(Info, physics, "Renamed profile: '{}' -> '{}'", oldKey, newKey);
     return true;
 }
 
 void ProfileManager::setActiveProfile(std::string_view name) {
     auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
-        OHAO_LOG("Warning: Cannot set active profile to non-existent '" + std::string(name) + "'");
+        OHAO_LOG(Warn, physics, "Cannot set active profile to non-existent '{}'", name);
         m_activeProfile = nullptr;
         return;
     }
 
     m_activeProfile = it->second.get();
-    OHAO_LOG("Active profile set to: " + std::string(name));
+    OHAO_LOG(Info, physics, "Active profile set to: {}", name);
 }
 
 void ProfileManager::captureToActive(const std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies) {
     if (!m_activeProfile) {
-        OHAO_LOG("Warning: No active profile to capture to");
+        OHAO_LOG(Warn, physics, "No active profile to capture to");
         return;
     }
 
@@ -108,7 +108,7 @@ void ProfileManager::captureToActive(const std::vector<std::shared_ptr<dynamics:
 
 void ProfileManager::restoreFromActive(std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies) {
     if (!m_activeProfile) {
-        OHAO_LOG("Warning: No active profile to restore from");
+        OHAO_LOG(Warn, physics, "No active profile to restore from");
         return;
     }
 

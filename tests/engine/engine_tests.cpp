@@ -495,10 +495,10 @@ void runMetaTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("to_underlying(LogLevel)");
+    TEST_BEGIN("to_underlying(log::Level)");
     {
-        EXPECT(to_underlying(LogLevel::Error) == 2, "LogLevel underlying");
-        EXPECT(logLevelName(LogLevel::Warning) == "WARNING", "log level name");
+        EXPECT(to_underlying(log::Level::Error) == 4, "log::Level underlying");
+        EXPECT(log::levelName(log::Level::Warn) == "warn", "log level name");
         TEST_PASS();
     }
 

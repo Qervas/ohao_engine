@@ -6,8 +6,8 @@
 
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <vector>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -41,7 +41,7 @@ bool PathTracer::createRTPipeline() {
     auto rahitCode = readFile(m_shaderSet.anyHitSpv);
 
     if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
-        std::cerr << "[PathTracer] Failed to load RT shader SPVs" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to load RT shader SPVs");
         return false;
     }
     bool hasAnyHit = !rahitCode.empty();
@@ -158,7 +158,7 @@ bool PathTracer::createRTPipeline() {
     layoutInfo.pPushConstantRanges = &pushRange;
 
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        std::cerr << "[PathTracer] Failed to create pipeline layout" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create pipeline layout");
         vkDestroyShaderModule(m_device, rgenModule, nullptr);
         vkDestroyShaderModule(m_device, rmissModule, nullptr);
         vkDestroyShaderModule(m_device, rchitModule, nullptr);
@@ -186,11 +186,11 @@ bool PathTracer::createRTPipeline() {
     if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
 
     if (result != VK_SUCCESS) {
-        std::cerr << "[PathTracer] Failed to create RT pipeline (err=" << result << ")" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline (err={})", static_cast<int>(result));
         return false;
     }
 
-    std::cout << "[PathTracer] RT pipeline created" << std::endl;
+    OHAO_LOG(Debug, render, "PathTracer: RT pipeline created");
     return true;
 }
 
@@ -219,7 +219,7 @@ bool PathTracer::createShaderBindingTable() {
     std::vector<uint8_t> handles(groupCount * handleSize);
     if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
                                               handles.size(), handles.data()) != VK_SUCCESS) {
-        std::cerr << "[PathTracer] Failed to get shader group handles" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to get shader group handles");
         return false;
     }
 
@@ -290,8 +290,8 @@ bool PathTracer::createShaderBindingTable() {
 
     m_callRegion = {};  // not used
 
-    std::cout << "[PathTracer] SBT created (handleSize=" << handleSize
-              << ", aligned=" << handleSizeAligned << ")" << std::endl;
+    OHAO_LOG(Debug, render, "PathTracer: SBT created (handleSize={}, aligned={})",
+             handleSize, handleSizeAligned);
     return true;
 }
 

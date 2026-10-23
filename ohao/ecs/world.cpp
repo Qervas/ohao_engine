@@ -1,11 +1,11 @@
 #include "ecs/world.hpp"
 #include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
+#include "core/log.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
-#include <iostream>
 #include <random>
 
 namespace ohao::ecs {
@@ -89,7 +89,7 @@ void World::onIdConstructed(entt::registry& r, entt::entity e) {
     }
     const uint64_t id = r.get<EntityId>(e).value;
     if (!m_byId.try_emplace(id, e).second)
-        std::cerr << "[ecs] EntityId " << id << " emplaced on a second entity; use World::createWithId\n";
+        OHAO_LOG(Error, ecs, "EntityId {} emplaced on a second entity; use World::createWithId", id);
 }
 
 void World::onIdDestroyed(entt::registry& r, entt::entity e) {
@@ -221,10 +221,11 @@ void World::update(float dt) {
     if (m_transformMismatches == 0) {
         m_transformMismatches = verifyTransforms(m_registry);
         if (m_transformMismatches != 0)
-            std::cerr << "[ecs] " << m_transformMismatches
-                      << " entities have a WorldTransform that disagrees with their Transform: a "
-                         "Transform was written without registry.patch<Transform>() or "
-                         "World::setTransform() (reported once per World)\n";
+            OHAO_LOG(Warn, ecs,
+                     "{} entities have a WorldTransform that disagrees with their Transform: a "
+                     "Transform was written without registry.patch<Transform>() or "
+                     "World::setTransform() (reported once per World)",
+                     m_transformMismatches);
     }
 #endif
     for (auto& [name, fn] : m_systems) fn(*this, dt);

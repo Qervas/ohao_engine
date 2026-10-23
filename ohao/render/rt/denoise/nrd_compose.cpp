@@ -7,8 +7,9 @@
 
 #include <array>
 #include <fstream>
-#include <iostream>
 #include <vector>
+
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -74,7 +75,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings    = bindings.data();
     if (VkResult r = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_impl->setLayout); r != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateDescriptorSetLayout failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: vkCreateDescriptorSetLayout failed: {}", static_cast<int>(r));
         return false;
     }
 
@@ -84,7 +85,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     plInfo.setLayoutCount = 1;
     plInfo.pSetLayouts    = &m_impl->setLayout;
     if (VkResult r = vkCreatePipelineLayout(device, &plInfo, nullptr, &m_impl->pipelineLayout); r != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreatePipelineLayout failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: vkCreatePipelineLayout failed: {}", static_cast<int>(r));
         return false;
     }
 
@@ -93,7 +94,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     // shaders/rt/nrd_compose.comp → build/shaders/rt_nrd_compose.comp.spv.
     auto spv = readShaderSpv("rt_nrd_compose.comp.spv");
     if (spv.empty()) {
-        std::cerr << "[NRD compose] failed to load rt_nrd_compose.comp.spv\n";
+        OHAO_LOG(Error, render, "NRD compose: failed to load rt_nrd_compose.comp.spv");
         return false;
     }
     VkShaderModuleCreateInfo smInfo{};
@@ -102,7 +103,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     smInfo.pCode    = reinterpret_cast<const uint32_t*>(spv.data());
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     if (VkResult r = vkCreateShaderModule(device, &smInfo, nullptr, &shaderModule); r != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateShaderModule failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: vkCreateShaderModule failed: {}", static_cast<int>(r));
         return false;
     }
 
@@ -121,7 +122,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                                                     &m_impl->pipeline);
     vkDestroyShaderModule(device, shaderModule, nullptr);
     if (pipeResult != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateComputePipelines failed: " << int(pipeResult) << "\n";
+        OHAO_LOG(Error, render, "NRD compose: vkCreateComputePipelines failed: {}", static_cast<int>(pipeResult));
         return false;
     }
 
@@ -136,7 +137,7 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     poolInfo.pPoolSizes    = &poolSize;
     poolInfo.maxSets       = 1;
     if (VkResult r = vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_impl->descriptorPool); r != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateDescriptorPool failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: vkCreateDescriptorPool failed: {}", static_cast<int>(r));
         return false;
     }
 
@@ -146,11 +147,11 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     dsai.descriptorSetCount = 1;
     dsai.pSetLayouts        = &m_impl->setLayout;
     if (VkResult r = vkAllocateDescriptorSets(device, &dsai, &m_impl->descriptorSet); r != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkAllocateDescriptorSets failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: vkAllocateDescriptorSets failed: {}", static_cast<int>(r));
         return false;
     }
 
-    std::cout << "[NRD compose] pipeline ready @ " << width << "x" << height << std::endl;
+    OHAO_LOG(Info, render, "NRD compose: pipeline ready @ {}x{}", width, height);
     return true;
 }
 

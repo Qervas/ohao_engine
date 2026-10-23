@@ -1,6 +1,6 @@
 #include "render_pass_base.hpp"
 #include <fstream>
-#include <iostream>
+#include "core/log.hpp"
 #include <stdexcept>
 
 namespace ohao {
@@ -243,7 +243,7 @@ bool RenderPassBase::reloadComputeShader(std::string_view absoluteSpvPath,
     const std::string pathStr(absoluteSpvPath);
     std::ifstream file(pathStr, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "reloadComputeShader: failed to open " << pathStr << std::endl;
+        OHAO_LOG(Error, render, "reloadComputeShader: failed to open {}", pathStr);
         return false;
     }
     size_t fileSize = static_cast<size_t>(file.tellg());
@@ -254,7 +254,7 @@ bool RenderPassBase::reloadComputeShader(std::string_view absoluteSpvPath,
 
     VkShaderModule shaderModule = createShaderModule(code);
     if (shaderModule == VK_NULL_HANDLE) {
-        std::cerr << "reloadComputeShader: invalid SPIR-V" << std::endl;
+        OHAO_LOG(Error, render, "reloadComputeShader: invalid SPIR-V");
         return false;
     }
 
@@ -279,7 +279,7 @@ bool RenderPassBase::reloadComputeShader(std::string_view absoluteSpvPath,
 
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(m_device, shaderModule, nullptr);
-        std::cerr << "reloadComputeShader: pipeline layout creation failed" << std::endl;
+        OHAO_LOG(Error, render, "reloadComputeShader: pipeline layout creation failed");
         return false;
     }
 
@@ -301,11 +301,11 @@ bool RenderPassBase::reloadComputeShader(std::string_view absoluteSpvPath,
     vkDestroyShaderModule(m_device, shaderModule, nullptr);
 
     if (result != VK_SUCCESS) {
-        std::cerr << "reloadComputeShader: pipeline creation failed" << std::endl;
+        OHAO_LOG(Error, render, "reloadComputeShader: pipeline creation failed");
         return false;
     }
 
-    std::cout << "reloadComputeShader: success for " << getName() << std::endl;
+    OHAO_LOG(Info, render, "reloadComputeShader: success for {}", getName());
     return true;
 }
 

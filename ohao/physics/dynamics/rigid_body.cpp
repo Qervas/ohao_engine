@@ -3,7 +3,7 @@
 #include "physics/collision/shapes/sphere_shape.hpp"
 #include "physics/collision/shapes/cylinder_shape.hpp"
 #include "physics/collision/shapes/capsule_shape.hpp"
-#include "core/console_widget.hpp"
+#include "core/log.hpp"
 
 namespace ohao {
 namespace physics {
@@ -353,17 +353,17 @@ void RigidBody::updateMassProperties() {
 void RigidBody::validateState() {
     // Ensure all values are finite
     if (!math::isFinite(m_position)) {
-        OHAO_LOG_ERROR("RigidBody position is not finite, resetting to origin");
+        OHAO_LOG(Error, physics, "RigidBody position is not finite, resetting to origin");
         m_position = glm::vec3(0.0f);
     }
     
     if (!math::isFinite(m_linearVelocity)) {
-        OHAO_LOG_ERROR("RigidBody linear velocity is not finite, resetting to zero");
+        OHAO_LOG(Error, physics, "RigidBody linear velocity is not finite, resetting to zero");
         m_linearVelocity = glm::vec3(0.0f);
     }
     
     if (!math::isFinite(m_angularVelocity)) {
-        OHAO_LOG_ERROR("RigidBody angular velocity is not finite, resetting to zero");
+        OHAO_LOG(Error, physics, "RigidBody angular velocity is not finite, resetting to zero");
         m_angularVelocity = glm::vec3(0.0f);
     }
     

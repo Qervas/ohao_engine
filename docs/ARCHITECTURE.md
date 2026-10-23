@@ -13,7 +13,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
 | Library | Directory | Depends on | What it owns |
 |---|---|---|---|
-| `ohao_core` | `core/` | glm | the event bus, command history, `Result`, concepts, small shared types |
+| `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the event bus, command history, `Result`, concepts, small shared types |
 | `ohao_reflect` | `reflect/` | glm (fast_float privately) | the type registry, schema/catalogue export, the JSON writer, reader and layout, typed decode/encode. Knows nothing of ECS or GPU. |
 | `ohao_scene` | `scene/` | assimp, tinygltf, ufbx | asset loading into CPU `Model`s, procedural meshes |
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_scene`, `ohao_core`, Vulkan, VMA | device and queues, `VulkanRenderer` (the facade), frame resources, bindless textures, the allocator |
@@ -25,7 +25,8 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_host` | `tools/ohao/` | `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the GPU side of `render.capture` |
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
-`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` (`tools/bench`).
+`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` and `log_bench`
+(`tools/bench`).
 
 Dependency rules:
 
@@ -40,6 +41,13 @@ Dependency rules:
   nothing from `reflect/` or `api/`. `reflect_tests` (t13) enforces it.
 - **The API is GPU-free.** Anything that needs a renderer is a host handler
   (`Session::setRenderHandler`), installed by a program that owns one.
+- **The engine prints only through the logger.** `OHAO_LOG(level, channel, fmt, args...)`
+  (`core/log.hpp`): levels `Trace` … `Error`, channels `render`, `gpu`, `validation`,
+  `ecs`, `asset`, `physics`, `audio`, `api`, `rpc`, `runtime`, a `std::format` string.
+  Below the threshold a call costs one load and a compare; records go to a 4,096-record
+  ring and to stderr as `<L> <channel>: <message>`. Nothing under `ohao/` writes to
+  stdout, `std::cerr` or `printf`; `reflect_tests` (`sp4_t02`) enforces it.
+  `OHAO_LOG_LEVEL=debug` shows the detail lines.
 
 ## One frame
 

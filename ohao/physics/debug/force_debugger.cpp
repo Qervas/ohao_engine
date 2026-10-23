@@ -1,6 +1,6 @@
 #include "force_debugger.hpp"
 #include "physics/forces/force_registry.hpp"
-#include "core/console_widget.hpp"
+#include "core/log.hpp"
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -188,7 +188,9 @@ void ForceDebugger::logForceStatistics() const {
         log << "Visualization time: " << std::fixed << std::setprecision(3) << m_profilingData.visualizationTimeMs << " ms\n";
     }
     
-    OHAO_LOG_INFO(log.str());
+    std::string text = log.str();
+    while (!text.empty() && text.back() == '\n') text.pop_back();
+    OHAO_LOG(Info, physics, "{}", text);
 }
 
 void ForceDebugger::logBodyForceBreakdown() const {
@@ -206,7 +208,9 @@ void ForceDebugger::logBodyForceBreakdown() const {
         }
         log << "\n";
         
-        OHAO_LOG_DEBUG(log.str());
+        std::string text = log.str();
+        while (!text.empty() && text.back() == '\n') text.pop_back();
+        OHAO_LOG(Debug, physics, "{}", text);
     }
 }
 
@@ -272,9 +276,9 @@ void ForceDebugger::saveForceReport(std::string_view filename) const {
     if (file.is_open()) {
         file << generateForceReport();
         file.close();
-        OHAO_LOG_INFO("Force report saved to: " + path);
+        OHAO_LOG(Info, physics, "Force report saved to: {}", path);
     } else {
-        OHAO_LOG_ERROR("Failed to save force report to: " + path);
+        OHAO_LOG(Error, physics, "Failed to save force report to: {}", path);
     }
 }
 

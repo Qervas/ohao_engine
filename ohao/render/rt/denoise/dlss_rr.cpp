@@ -18,10 +18,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <string>
 #include <vector>
 #include <sys/stat.h>
+
+#include "core/log.hpp"
 
 namespace ohao {
 namespace {
@@ -121,16 +122,16 @@ bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
         appDataDirW.c_str(), instance, physicalDevice, device,
         vkGetInstanceProcAddr, vkGetDeviceProcAddr, &commonInfo, NVSDK_NGX_Version_API);
     if (NVSDK_NGX_FAILED(initRes)) {
-        std::cerr << "[DLSS-RR] NGX init FAILED: result=0x" << std::hex << (unsigned)initRes
-                  << std::dec << " (" << ngxResultName(initRes) << ")\n";
+        OHAO_LOG(Error, render, "DLSS-RR: NGX init failed: result={:#x} ({})",
+                 (unsigned)initRes, ngxResultName(initRes));
         return false;
     }
 
     NVSDK_NGX_Parameter* params = nullptr;
     NVSDK_NGX_Result capRes = NVSDK_NGX_VULKAN_GetCapabilityParameters(&params);
     if (NVSDK_NGX_FAILED(capRes) || !params) {
-        std::cerr << "[DLSS-RR] GetCapabilityParameters FAILED: result=0x" << std::hex
-                  << (unsigned)capRes << std::dec << " (" << ngxResultName(capRes) << ")\n";
+        OHAO_LOG(Error, render, "DLSS-RR: GetCapabilityParameters failed: result={:#x} ({})",
+                 (unsigned)capRes, ngxResultName(capRes));
         NVSDK_NGX_VULKAN_Shutdown1(m_device);
         return false;
     }
@@ -144,11 +145,17 @@ bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
         params->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver, &needsDriver);
         params->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor, &minMaj);
         params->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor, &minMin);
-        std::cerr << "[DLSS-RR] SuperSamplingDenoising NOT available: FeatureInitResult=0x"
-                  << std::hex << (unsigned)initResultRaw << std::dec << " ("
-                  << ngxResultName((NVSDK_NGX_Result)initResultRaw) << ")";
-        if (needsDriver) std::cerr << " — NeedsUpdatedDriver, require >= " << minMaj << "." << minMin;
-        std::cerr << "\n";
+        if (needsDriver) {
+            OHAO_LOG(Warn, render,
+                     "DLSS-RR: SuperSamplingDenoising NOT available: FeatureInitResult={:#x} ({})"
+                     " — NeedsUpdatedDriver, require >= {}.{}",
+                     (unsigned)initResultRaw, ngxResultName((NVSDK_NGX_Result)initResultRaw),
+                     minMaj, minMin);
+        } else {
+            OHAO_LOG(Warn, render,
+                     "DLSS-RR: SuperSamplingDenoising NOT available: FeatureInitResult={:#x} ({})",
+                     (unsigned)initResultRaw, ngxResultName((NVSDK_NGX_Result)initResultRaw));
+        }
         NVSDK_NGX_VULKAN_DestroyParameters(params);
         NVSDK_NGX_VULKAN_Shutdown1(m_device);
         return false;
@@ -156,7 +163,7 @@ bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
 
     m_ngxParams   = params;
     m_initialized = true;
-    std::cout << "[DLSS-RR] NGX init OK" << std::endl;
+    OHAO_LOG(Info, render, "DLSS-RR: NGX init OK");
     return true;
 }
 
@@ -165,7 +172,7 @@ bool DlssRR::createFeature(VkCommandBuffer cmd,
                            uint32_t outW, uint32_t outH,
                            DlssQuality quality) {
     if (!m_initialized || !m_ngxParams) {
-        std::cerr << "[DLSS-RR] createFeature called before successful initialize()\n";
+        OHAO_LOG(Error, render, "DLSS-RR: createFeature called before successful initialize()");
         return false;
     }
     if (m_featureHandle) return true;  // already created
@@ -211,16 +218,15 @@ bool DlssRR::createFeature(VkCommandBuffer cmd,
         m_device, cmd, /*creationNodeMask*/ 0x1, /*visibilityNodeMask*/ 0x1,
         &handle, params, &createParams);
     if (NVSDK_NGX_FAILED(r) || !handle) {
-        std::cerr << "[DLSS-RR] feature creation FAILED: result=0x" << std::hex << (unsigned)r
-                  << std::dec << " (" << ngxResultName(r) << ")\n";
+        OHAO_LOG(Error, render, "DLSS-RR: feature creation failed: result={:#x} ({})",
+                 (unsigned)r, ngxResultName(r));
         return false;
     }
 
     m_featureHandle = handle;
     m_renderW = renderW; m_renderH = renderH; m_outW = outW; m_outH = outH;
-    std::cout << "[DLSS-RR] feature created " << renderW << "x" << renderH
-              << " (out " << outW << "x" << outH << ", preset " << dlssQualityName(quality) << ")"
-              << std::endl;
+    OHAO_LOG(Info, render, "DLSS-RR: feature created {}x{} (out {}x{}, preset {})",
+             renderW, renderH, outW, outH, dlssQualityName(quality));
     return true;
 }
 
@@ -305,8 +311,8 @@ bool DlssRR::evaluate(VkCommandBuffer cmd, const EvalInputs& in) {
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(
         cmd, static_cast<NVSDK_NGX_Handle*>(m_featureHandle), params, &evalParams);
     if (NVSDK_NGX_FAILED(r)) {
-        std::cerr << "[DLSS-RR] evaluate FAILED: result=0x" << std::hex << (unsigned)r
-                  << std::dec << " (" << ngxResultName(r) << ")\n";
+        OHAO_LOG(Error, render, "DLSS-RR: evaluate failed: result={:#x} ({})",
+                 (unsigned)r, ngxResultName(r));
         return false;
     }
     return true;
@@ -328,7 +334,7 @@ bool DlssRR::createTonemapPipeline() {
     layoutInfo.bindingCount = 2;
     layoutInfo.pBindings    = bindings;
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_tmSetLayout) != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkCreateDescriptorSetLayout failed\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreateDescriptorSetLayout failed");
         return false;
     }
 
@@ -345,13 +351,13 @@ bool DlssRR::createTonemapPipeline() {
     plInfo.pushConstantRangeCount = 1;
     plInfo.pPushConstantRanges    = &pcRange;
     if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_tmPipelineLayout) != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkCreatePipelineLayout failed\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreatePipelineLayout failed");
         return false;
     }
 
     auto spv = readShaderSpv("compute_dlss_tonemap.comp.spv");
     if (spv.empty()) {
-        std::cerr << "[DLSS-RR] tonemap: failed to load compute_dlss_tonemap.comp.spv\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: failed to load compute_dlss_tonemap.comp.spv");
         return false;
     }
     VkShaderModuleCreateInfo smInfo{};
@@ -360,7 +366,7 @@ bool DlssRR::createTonemapPipeline() {
     smInfo.pCode    = reinterpret_cast<const uint32_t*>(spv.data());
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     if (vkCreateShaderModule(m_device, &smInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkCreateShaderModule failed\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreateShaderModule failed");
         return false;
     }
 
@@ -376,7 +382,7 @@ bool DlssRR::createTonemapPipeline() {
     VkResult pr = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &m_tmPipeline);
     vkDestroyShaderModule(m_device, shaderModule, nullptr);
     if (pr != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkCreateComputePipelines failed: " << int(pr) << "\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreateComputePipelines failed: {}", int(pr));
         return false;
     }
 
@@ -389,7 +395,7 @@ bool DlssRR::createTonemapPipeline() {
     poolInfo.pPoolSizes    = &poolSize;
     poolInfo.maxSets       = 1;
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_tmDescriptorPool) != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkCreateDescriptorPool failed\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkCreateDescriptorPool failed");
         return false;
     }
     VkDescriptorSetAllocateInfo dsai{};
@@ -398,10 +404,10 @@ bool DlssRR::createTonemapPipeline() {
     dsai.descriptorSetCount = 1;
     dsai.pSetLayouts        = &m_tmSetLayout;
     if (vkAllocateDescriptorSets(m_device, &dsai, &m_tmDescriptorSet) != VK_SUCCESS) {
-        std::cerr << "[DLSS-RR] tonemap: vkAllocateDescriptorSets failed\n";
+        OHAO_LOG(Error, render, "DLSS-RR: tonemap: vkAllocateDescriptorSets failed");
         return false;
     }
-    std::cout << "[DLSS-RR] tonemap pipeline ready" << std::endl;
+    OHAO_LOG(Info, render, "DLSS-RR: tonemap pipeline ready");
     return true;
 }
 

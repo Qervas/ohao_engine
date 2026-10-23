@@ -1,7 +1,7 @@
 #include "gizmo_pass.hpp"
 #include <array>
 #include <cstring>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -21,11 +21,11 @@ bool GizmoPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_geometryDirty = true;
 
     if (!createPipeline()) {
-        std::cerr << "GizmoPass: Failed to create pipeline" << std::endl;
+        OHAO_LOG(Error, render, "GizmoPass: Failed to create pipeline");
         return false;
     }
     if (!createVertexBuffers()) {
-        std::cerr << "GizmoPass: Failed to create vertex buffers" << std::endl;
+        OHAO_LOG(Error, render, "GizmoPass: Failed to create vertex buffers");
         return false;
     }
 
@@ -96,7 +96,7 @@ void GizmoPass::setTargetImage(VkImage image, VkImageView imageView) {
     fbInfo.layers = 1;
 
     if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_framebuffer) != VK_SUCCESS) {
-        std::cerr << "GizmoPass: Failed to create framebuffer" << std::endl;
+        OHAO_LOG(Error, render, "GizmoPass: Failed to create framebuffer");
         m_framebuffer = VK_NULL_HANDLE;
     }
 }
@@ -204,7 +204,7 @@ bool GizmoPass::createPipeline() {
     VkShaderModule fragShader = loadShaderModule("overlay_gizmo.frag.spv");
 
     if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
-        std::cerr << "GizmoPass: Failed to load shaders" << std::endl;
+        OHAO_LOG(Error, render, "GizmoPass: Failed to load shaders");
         if (vertShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, vertShader, nullptr);
         if (fragShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, fragShader, nullptr);
         return false;

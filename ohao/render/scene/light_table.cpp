@@ -7,7 +7,8 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
-#include <iostream>
+
+#include "core/log.hpp"
 
 namespace ohao::render {
 
@@ -96,7 +97,7 @@ bool LightTable::initialize(GpuAllocator& allocator) {
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                         AllocationUsage::GpuOnly);
     if (!m_rtBuffer.isValid()) {
-        std::cerr << "[RenderScene] light buffer allocation failed\n";
+        OHAO_LOG(Error, render, "RenderScene: light buffer allocation failed");
         return false;
     }
     m_dirty = true;   // the first frame writes the header
@@ -203,8 +204,8 @@ void LightTable::set(std::span<const LightDesc> lights) {
     if (gpuLights.size() > MAX_GPU_LIGHTS) {
         static bool logged = false;
         if (!logged) {
-            std::cerr << "[RenderScene] " << gpuLights.size() << " RT lights: only the first "
-                      << MAX_GPU_LIGHTS << " are used\n";
+            OHAO_LOG(Warn, render, "RenderScene: {} RT lights: only the first {} are used",
+                     gpuLights.size(), MAX_GPU_LIGHTS);
             logged = true;
         }
         gpuLights.resize(MAX_GPU_LIGHTS);

@@ -17,9 +17,10 @@
 #include <array>
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <vector>
 #include <string>
+
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -151,7 +152,7 @@ bool createFallbackEnv(VkDevice device, VkPhysicalDevice physicalDevice,
 VkShaderModule loadShader(VkDevice device, const char* spvName) {
     auto spv = readShaderSpv(spvName);
     if (spv.empty()) {
-        std::cerr << "[NRD cinematic] failed to load " << spvName << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: failed to load {}", spvName);
         return VK_NULL_HANDLE;
     }
     VkShaderModuleCreateInfo smInfo{};
@@ -160,7 +161,7 @@ VkShaderModule loadShader(VkDevice device, const char* spvName) {
     smInfo.pCode    = reinterpret_cast<const uint32_t*>(spv.data());
     VkShaderModule sm = VK_NULL_HANDLE;
     if (vkCreateShaderModule(device, &smInfo, nullptr, &sm) != VK_SUCCESS) {
-        std::cerr << "[NRD cinematic] vkCreateShaderModule failed for " << spvName << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: vkCreateShaderModule failed for {}", spvName);
         return VK_NULL_HANDLE;
     }
     return sm;
@@ -441,19 +442,19 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     I.bloomH2        = (I.bloomH1 + 1) / 2;
 
     if (!createExtractPipeline(I)) {
-        std::cerr << "[NRD cinematic] createExtractPipeline failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: createExtractPipeline failed");
         return false;
     }
     if (!createBlurPipeline(I)) {
-        std::cerr << "[NRD cinematic] createBlurPipeline failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: createBlurPipeline failed");
         return false;
     }
     if (!createCompositePipeline(I)) {
-        std::cerr << "[NRD cinematic] createCompositePipeline failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: createCompositePipeline failed");
         return false;
     }
     if (!createDoFPipeline(I)) {
-        std::cerr << "[NRD cinematic] createDoFPipeline failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: createDoFPipeline failed");
         return false;
     }
 
@@ -477,7 +478,7 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     poolInfo.pPoolSizes    = poolSizes.data();
     poolInfo.maxSets       = 5;
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &I.descriptorPool) != VK_SUCCESS) {
-        std::cerr << "[NRD cinematic] vkCreateDescriptorPool failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: vkCreateDescriptorPool failed");
         return false;
     }
 
@@ -492,7 +493,7 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     ai.descriptorSetCount = 5;
     ai.pSetLayouts        = layouts;
     if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS) {
-        std::cerr << "[NRD cinematic] vkAllocateDescriptorSets failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: vkAllocateDescriptorSets failed");
         return false;
     }
     I.extractSet   = sets[0];
@@ -505,15 +506,13 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     if (!createFallbackEnv(device, physicalDevice,
                             I.fallbackEnvImage, I.fallbackEnvMemory,
                             I.fallbackEnvView, I.fallbackEnvSampler)) {
-        std::cerr << "[NRD cinematic] createFallbackEnv failed" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: createFallbackEnv failed");
         return false;
     }
 
-    std::cout << "[NRD cinematic] pipeline ready @ " << width << "x" << height
-              << "  bloom mips: " << I.bloomW0 << "x" << I.bloomH0
-              << ", "             << I.bloomW1 << "x" << I.bloomH1
-              << ", "             << I.bloomW2 << "x" << I.bloomH2
-              << "  (4.G+4.J: bloom + grade + camera DoF)" << std::endl;
+    OHAO_LOG(Info, render, "NRD cinematic: pipeline ready @ {}x{}  bloom mips: {}x{}, {}x{}, {}x{}"
+                           "  (4.G+4.J: bloom + grade + camera DoF)",
+             width, height, I.bloomW0, I.bloomH0, I.bloomW1, I.bloomH1, I.bloomW2, I.bloomH2);
     return true;
 }
 

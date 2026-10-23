@@ -2,6 +2,7 @@
 #include "miniaudio.h"
 
 #include "audio_system.hpp"
+#include "core/log.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -37,8 +38,7 @@ bool AudioSystem::initialize() {
 
     const ma_result result = ma_engine_init(&config, engine.get());
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "[OHAO Audio] ma_engine_init FAILED: %d\n", result);
-        fflush(stderr);
+        OHAO_LOG(Error, audio, "ma_engine_init FAILED: {}", static_cast<int>(result));
         return false;
     }
 
@@ -76,7 +76,7 @@ SoundHandle AudioSystem::playSound(std::string_view path, SoundCategory category
     const ma_result result = ma_sound_init_from_file(
         m_engine.get(), pathStr.c_str(), flags, nullptr, nullptr, sound.get());
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", pathStr.c_str(), result);
+        OHAO_LOG(Error, audio, "Failed to load '{}' (error {})", pathStr, static_cast<int>(result));
         return INVALID_SOUND_HANDLE;
     }
 
@@ -116,7 +116,7 @@ SoundHandle AudioSystem::playSoundAt(std::string_view path, const glm::vec3& pos
     const ma_result result = ma_sound_init_from_file(
         m_engine.get(), pathStr.c_str(), 0, nullptr, nullptr, sound.get());
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", pathStr.c_str(), result);
+        OHAO_LOG(Error, audio, "Failed to load '{}' (error {})", pathStr, static_cast<int>(result));
         return INVALID_SOUND_HANDLE;
     }
 

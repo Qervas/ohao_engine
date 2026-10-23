@@ -1,5 +1,7 @@
 #include "ecs/instantiate.hpp"
 
+#include "core/log.hpp"
+
 #include "render/scene/model_upload.hpp"
 #include "render/scene/render_scene.hpp"
 #include "scene/asset/model.hpp"
@@ -10,7 +12,6 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -235,8 +236,7 @@ private:
         m_reg.emplace_or_replace<InstantiateError>(e, InstantiateError{code, message});
         const uint64_t id = m_world.idOf(e);
         if (m_logged.insert(std::to_string(id) + code + message).second)
-            std::cerr << "[ecs] instantiate: entity " << std::hex << id << std::dec << ": " << code << ": " << message
-                      << "\n";
+            OHAO_LOG(Error, ecs, "instantiate: entity {:#x}: {}: {}", id, code, message);
     }
 
     // What instantiate put on the entity.
@@ -279,7 +279,7 @@ private:
 void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backend, AssetResolver& assets) {
     auto& reg = world.registry();
     if (reg.ctx().contains<InstantiateInstalled>()) {
-        std::cerr << "[ecs] installInstantiate called twice on one World; ignored\n";
+        OHAO_LOG(Warn, ecs, "installInstantiate called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<InstantiateInstalled>();

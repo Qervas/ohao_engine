@@ -49,7 +49,7 @@
 // Character
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 
-#include <iostream>
+#include "core/log.hpp"
 #include <thread>
 #include <cstring>
 #include <cmath>
@@ -260,7 +260,7 @@ static void ensureJoltGlobalInit() {
     JPH::RegisterTypes();
 
     s_joltGlobalInit = true;
-    std::cout << "[Jolt] Global initialization complete" << std::endl;
+    OHAO_LOG(Info, physics, "Jolt: global initialization complete");
 }
 
 // ============================================================================
@@ -337,17 +337,16 @@ bool JoltPhysicsBackend::initialize(const PhysicsWorldConfig& config) {
         m_collisionSteps = 1;
         m_initialized = true;
 
-        std::cout << "[Jolt] Backend initialized ("
-                  << numThreads << " threads, "
-                  << maxBodies << " max bodies, 16-layer collision)" << std::endl;
+        OHAO_LOG(Info, physics, "Jolt: backend initialized ({} threads, {} max bodies, 16-layer collision)",
+                 numThreads, maxBodies);
         return true;
 
     } catch (const std::exception& e) {
-        std::cerr << "[Jolt] Init failed: " << e.what() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: init failed: {}", e.what());
         shutdown();
         return false;
     } catch (...) {
-        std::cerr << "[Jolt] Init failed with unknown error" << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: init failed with unknown error");
         shutdown();
         return false;
     }
@@ -403,7 +402,7 @@ void JoltPhysicsBackend::shutdown() {
     m_broadPhaseLayerInterface.reset();
 
     m_initialized = false;
-    std::cout << "[Jolt] Backend shut down" << std::endl;
+    OHAO_LOG(Info, physics, "Jolt: backend shut down");
 }
 
 // ============================================================================
@@ -499,7 +498,7 @@ void JoltPhysicsBackend::step(float deltaTime) {
             }
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Jolt] Step error: " << e.what() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: step error: {}", e.what());
     }
 }
 
@@ -513,7 +512,7 @@ BodyHandle JoltPhysicsBackend::createBody(const BodyCreationInfo& info) {
     try {
         JPH::ShapeRefC shape = createJoltShape(info.shape);
         if (!shape) {
-            std::cerr << "[Jolt] Failed to create shape" << std::endl;
+            OHAO_LOG(Error, physics, "Jolt: failed to create shape");
             return INVALID_BODY;
         }
 
@@ -557,7 +556,7 @@ BodyHandle JoltPhysicsBackend::createBody(const BodyCreationInfo& info) {
         );
 
         if (bodyId.IsInvalid()) {
-            std::cerr << "[Jolt] Failed to create body (max bodies reached?)" << std::endl;
+            OHAO_LOG(Error, physics, "Jolt: failed to create body (max bodies reached?)");
             return INVALID_BODY;
         }
 
@@ -569,7 +568,7 @@ BodyHandle JoltPhysicsBackend::createBody(const BodyCreationInfo& info) {
         return handle;
 
     } catch (const std::exception& e) {
-        std::cerr << "[Jolt] createBody error: " << e.what() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: createBody error: {}", e.what());
         return INVALID_BODY;
     }
 }
@@ -1206,7 +1205,7 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
             }
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Jolt] createConstraint error: " << e.what() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: createConstraint error: {}", e.what());
         return INVALID_CONSTRAINT;
     }
 
@@ -1336,7 +1335,7 @@ CharacterHandle JoltPhysicsBackend::createCharacter(const CharacterCreationInfo&
         return handle;
 
     } catch (const std::exception& e) {
-        std::cerr << "[Jolt] createCharacter error: " << e.what() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: createCharacter error: {}", e.what());
         return INVALID_CHARACTER;
     }
 }
@@ -1571,7 +1570,7 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
     }
 
     if (result.HasError()) {
-        std::cerr << "[Jolt] Shape error: " << result.GetError().c_str() << std::endl;
+        OHAO_LOG(Error, physics, "Jolt: shape error: {}", result.GetError().c_str());
         JPH::BoxShapeSettings fallback(JPH::Vec3(0.5f, 0.5f, 0.5f));
         result = fallback.Create();
     }

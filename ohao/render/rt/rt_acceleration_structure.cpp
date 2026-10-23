@@ -1,4 +1,5 @@
 #include "rt_acceleration_structure.hpp"
+#include "core/log.hpp"
 #include <cstring>
 #include <mutex>
 #include <algorithm>
@@ -33,14 +34,14 @@ bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDev
     }
 
     if (!hasAS || !hasRTPipeline) {
-        std::cerr << "[RT] Acceleration structure or ray tracing pipeline extension not available" << std::endl;
+        OHAO_LOG(Warn, render, "RT: acceleration structure or ray tracing pipeline extension not available");
         m_supported = false;
         return false;
     }
 
     // Load function pointers
     if (!loadFunctionPointers()) {
-        std::cerr << "[RT] Failed to load RT function pointers" << std::endl;
+        OHAO_LOG(Error, render, "RT: failed to load RT function pointers");
         m_supported = false;
         return false;
     }
@@ -62,9 +63,9 @@ bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDev
     // information.
     static std::once_flag rtPropertiesReported;
     std::call_once(rtPropertiesReported, [this]() {
-        std::cout << "[RT] Ray tracing supported!" << std::endl;
-        std::cout << "[RT]   maxRayRecursionDepth: " << m_rtPipelineProperties.maxRayRecursionDepth << std::endl;
-        std::cout << "[RT]   shaderGroupHandleSize: " << m_rtPipelineProperties.shaderGroupHandleSize << std::endl;
+        OHAO_LOG(Info, render, "RT: ray tracing supported!");
+        OHAO_LOG(Debug, render, "RT:   maxRayRecursionDepth: {}", m_rtPipelineProperties.maxRayRecursionDepth);
+        OHAO_LOG(Debug, render, "RT:   shaderGroupHandleSize: {}", m_rtPipelineProperties.shaderGroupHandleSize);
     });
 
     m_supported = true;
@@ -264,7 +265,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                       entry.buffer, entry.memory)) {
-        std::cerr << "[RT] Failed to create BLAS buffer" << std::endl;
+        OHAO_LOG(Error, render, "RT: failed to create BLAS buffer");
         return INVALID_BLAS;
     }
 
@@ -276,7 +277,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 
     if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &entry.handle) != VK_SUCCESS) {
-        std::cerr << "[RT] Failed to create BLAS" << std::endl;
+        OHAO_LOG(Error, render, "RT: failed to create BLAS");
         destroyBuffer(entry.buffer, entry.memory);
         return INVALID_BLAS;
     }
@@ -314,8 +315,8 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     BlasHandle handle = static_cast<BlasHandle>(m_blasEntries.size());
     m_blasEntries.push_back(entry);
 
-    std::cout << "[RT] BLAS " << handle << " created: " << vertexCount << " verts, "
-              << primitiveCount << " tris" << std::endl;
+    OHAO_LOG(Debug, render, "RT: BLAS {} created: {} verts, {} tris",
+             handle, vertexCount, primitiveCount);
 
     return handle;
 }
@@ -590,7 +591,7 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
         if (!createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory)) {
             destroyBuffer(buffer, memory);
-            std::cerr << "[RT] TLAS scratch allocation failed (" << size << " bytes)" << std::endl;
+            OHAO_LOG(Error, render, "RT: TLAS scratch allocation failed ({} bytes)", size);
             return false;
         }
         // An earlier frame's build may still be using the old scratch.
@@ -623,7 +624,7 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newBuffer, newMemory)) {
             destroyBuffer(newBuffer, newMemory);
-            std::cerr << "[RT] TLAS storage allocation failed (" << newStorage << " bytes)" << std::endl;
+            OHAO_LOG(Error, render, "RT: TLAS storage allocation failed ({} bytes)", newStorage);
             return false;
         }
         VkAccelerationStructureCreateInfoKHR createInfo{};
@@ -634,7 +635,7 @@ bool RTAccelerationStructure::buildTLASFromDevice(VkCommandBuffer cmd, VkDeviceA
         dst = VK_NULL_HANDLE;
         if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &dst) != VK_SUCCESS) {
             destroyBuffer(newBuffer, newMemory);
-            std::cerr << "[RT] TLAS creation failed" << std::endl;
+            OHAO_LOG(Error, render, "RT: TLAS creation failed");
             return false;
         }
     }

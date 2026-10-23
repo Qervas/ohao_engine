@@ -1,6 +1,6 @@
 #include "gpu/vulkan/swapchain.hpp"
 #include <algorithm>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -63,8 +63,8 @@ bool Swapchain::build(VkExtent2D desired, VkSwapchainKHR old) {
     VkFormatProperties fp{};
     vkGetPhysicalDeviceFormatProperties(m_physical, fmt.format, &fp);
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) {
-        std::cerr << "[Swapchain] surface format " << fmt.format << " cannot be a blit destination"
-                  << std::endl;
+        OHAO_LOG(Error, gpu, "Swapchain: surface format {} cannot be a blit destination",
+                 static_cast<int>(fmt.format));
         retire();
         return false;
     }

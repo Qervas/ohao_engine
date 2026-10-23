@@ -1,7 +1,7 @@
 #include "ssr_pass.hpp"
 #include "gbuffer_pass.hpp"
 #include <array>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -29,7 +29,7 @@ bool SSRPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_params.maxDistance = 20.0f;
     m_params.thickness = 0.05f;
 
-    std::cout << "SSRPass: Initialized (" << m_width << "x" << m_height << ")" << std::endl;
+    OHAO_LOG(Info, render, "SSRPass: initialized ({}x{})", m_width, m_height);
     return true;
 }
 
@@ -123,7 +123,7 @@ bool SSRPass::createDescriptors() {
 bool SSRPass::createComputePipeline() {
     VkShaderModule shader = loadShaderModule("postprocess_ssr.comp.spv");
     if (shader == VK_NULL_HANDLE) {
-        std::cerr << "SSRPass: Failed to load ssr.comp.spv" << std::endl;
+        OHAO_LOG(Error, render, "SSRPass: Failed to load ssr.comp.spv");
         return false;
     }
 

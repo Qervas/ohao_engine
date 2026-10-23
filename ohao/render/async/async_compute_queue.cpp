@@ -1,5 +1,5 @@
 #include "async_compute_queue.hpp"
-#include <iostream>
+#include "core/log.hpp"
 #include <algorithm>
 
 namespace ohao {
@@ -17,7 +17,7 @@ bool AsyncComputeQueue::initialize(VkDevice device, VkPhysicalDevice physicalDev
     // Get compute queue
     vkGetDeviceQueue(m_device, computeQueueFamily, computeQueueIndex, &m_computeQueue);
     if (!m_computeQueue) {
-        std::cerr << "Failed to get compute queue" << std::endl;
+        OHAO_LOG(Error, render, "Failed to get compute queue");
         return false;
     }
 
@@ -29,7 +29,7 @@ bool AsyncComputeQueue::initialize(VkDevice device, VkPhysicalDevice physicalDev
         return false;
     }
 
-    std::cout << "AsyncComputeQueue initialized on queue family " << computeQueueFamily << std::endl;
+    OHAO_LOG(Debug, render, "AsyncComputeQueue initialized on queue family {}", computeQueueFamily);
     return true;
 }
 
@@ -71,7 +71,7 @@ bool AsyncComputeQueue::createCommandPool() {
     poolInfo.queueFamilyIndex = m_computeQueueFamily;
 
     if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
-        std::cerr << "Failed to create async compute command pool" << std::endl;
+        OHAO_LOG(Error, render, "Failed to create async compute command pool");
         return false;
     }
 
@@ -89,7 +89,7 @@ bool AsyncComputeQueue::createTimelineSemaphore() {
     semaphoreInfo.pNext = &typeInfo;
 
     if (vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_timelineSemaphore.semaphore) != VK_SUCCESS) {
-        std::cerr << "Failed to create timeline semaphore" << std::endl;
+        OHAO_LOG(Error, render, "Failed to create timeline semaphore");
         return false;
     }
 
@@ -114,7 +114,7 @@ VkCommandBuffer AsyncComputeQueue::allocateCommandBuffer() {
 
     VkCommandBuffer cmd;
     if (vkAllocateCommandBuffers(m_device, &allocInfo, &cmd) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate async compute command buffer" << std::endl;
+        OHAO_LOG(Error, render, "Failed to allocate async compute command buffer");
         return VK_NULL_HANDLE;
     }
 

@@ -1,6 +1,6 @@
 #include "render_graph.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
-#include <iostream>
+#include "core/log.hpp"
 #include <algorithm>
 #include <queue>
 #include <stdexcept>
@@ -193,7 +193,7 @@ bool RenderGraph::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     m_physicalDevice = physicalDevice;
     m_allocator = allocator;
 
-    std::cout << "Render graph initialized" << std::endl;
+    OHAO_LOG(Debug, render, "Render graph initialized");
     return true;
 }
 
@@ -385,7 +385,7 @@ bool RenderGraph::compile() {
     }
 
     if (m_passes.empty()) {
-        std::cerr << "RenderGraph: No passes to compile" << std::endl;
+        OHAO_LOG(Error, render, "RenderGraph: No passes to compile");
         return false;
     }
 
@@ -410,7 +410,7 @@ bool RenderGraph::compile() {
 
 void RenderGraph::execute(VkCommandBuffer cmd) {
     if (!m_compiled) {
-        std::cerr << "RenderGraph: Not compiled" << std::endl;
+        OHAO_LOG(Error, render, "RenderGraph: Not compiled");
         return;
     }
 
@@ -743,7 +743,7 @@ void RenderGraph::createRenderPasses() {
         };
 
         if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &pass.vulkanRenderPass) != VK_SUCCESS) {
-            std::cerr << "Failed to create render pass for: " << pass.name << std::endl;
+            OHAO_LOG(Error, render, "Failed to create render pass for: {}", pass.name);
         }
     }
 }
@@ -775,7 +775,7 @@ void RenderGraph::createFramebuffers() {
         };
 
         if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &pass.vulkanFramebuffer) != VK_SUCCESS) {
-            std::cerr << "Failed to create framebuffer for: " << pass.name << std::endl;
+            OHAO_LOG(Error, render, "Failed to create framebuffer for: {}", pass.name);
         }
     }
 }
@@ -807,7 +807,7 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
     };
 
     if (vkCreateImage(m_device, &imageInfo, nullptr, &physical.image) != VK_SUCCESS) {
-        std::cerr << "Failed to create image: " << desc.name << std::endl;
+        OHAO_LOG(Error, render, "Failed to create image: {}", desc.name);
         return false;
     }
 
@@ -823,7 +823,7 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
     };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &physical.memory) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate image memory: " << desc.name << std::endl;
+        OHAO_LOG(Error, render, "Failed to allocate image memory: {}", desc.name);
         vkDestroyImage(m_device, physical.image, nullptr);
         physical.image = VK_NULL_HANDLE;
         return false;
@@ -852,7 +852,7 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
     };
 
     if (vkCreateImageView(m_device, &viewInfo, nullptr, &physical.view) != VK_SUCCESS) {
-        std::cerr << "Failed to create image view: " << desc.name << std::endl;
+        OHAO_LOG(Error, render, "Failed to create image view: {}", desc.name);
         vkDestroyImage(m_device, physical.image, nullptr);
         vkFreeMemory(m_device, physical.memory, nullptr);
         physical.image = VK_NULL_HANDLE;
@@ -887,7 +887,7 @@ bool RenderGraph::allocateBuffer(BufferHandle handle) {
     };
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &physical.buffer) != VK_SUCCESS) {
-        std::cerr << "Failed to create buffer: " << desc.name << std::endl;
+        OHAO_LOG(Error, render, "Failed to create buffer: {}", desc.name);
         return false;
     }
 

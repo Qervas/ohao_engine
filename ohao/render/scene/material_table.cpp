@@ -1,7 +1,8 @@
 #include "render/scene/material_table.hpp"
 
 #include <bit>
-#include <iostream>
+
+#include "core/log.hpp"
 
 namespace ohao::render {
 
@@ -12,7 +13,7 @@ bool MaterialTable::initialize(GpuAllocator& allocator) {
                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                       AllocationUsage::GpuOnly);
     if (!m_buffer.isValid()) {
-        std::cerr << "[RenderScene] material table allocation failed\n";
+        OHAO_LOG(Error, render, "RenderScene: material table allocation failed");
         return false;
     }
     m_packs.reserve(kCapacity);
@@ -41,8 +42,8 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
     if (m_packs.size() >= kCapacity) {
         static bool logged = false;
         if (!logged) {
-            std::cerr << "[RenderScene] material table full (" << kCapacity
-                      << "): further materials use the default material\n";
+            OHAO_LOG(Warn, render, "RenderScene: material table full ({}): further materials use the default material",
+                     kCapacity);
             logged = true;
         }
         return MaterialHandle{0, 0};

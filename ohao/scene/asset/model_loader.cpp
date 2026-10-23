@@ -12,7 +12,8 @@
 
 #include "stb_image.h"
 
-#include <iostream>
+#include "core/log.hpp"
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -127,9 +128,8 @@ static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<u
 
     size_t uniquePositions = smoothNormals.size();
     if (isTriangleSoup || changed > vertices.size() / 10) {
-        std::cout << "[ModelLoader] Mesh repair: " << vertices.size() << " vertices → "
-                  << uniquePositions << " unique positions, "
-                  << changed << " normals smoothed" << std::endl;
+        OHAO_LOG(Info, asset, "ModelLoader: mesh repair: {} vertices -> {} unique positions, {} normals smoothed",
+                 vertices.size(), uniquePositions, changed);
     }
 }
 
@@ -149,7 +149,7 @@ std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
         if (model) {
             auto assimpModel = loadAssimp(path);
             if (assimpModel && !assimpModel->vertices.empty()) {
-                std::cout << "[ModelLoader] FBX: using Assimp geometry (better mesh cleanup)" << std::endl;
+                OHAO_LOG(Info, asset, "ModelLoader: FBX: using Assimp geometry (better mesh cleanup)");
                 // Keep ufbx textures if Assimp didn't find any (ufbx extracts embedded textures better)
                 if (assimpModel->albedoTextures.empty() && !model->albedoTextures.empty()) {
                     assimpModel->albedoTextures = std::move(model->albedoTextures);
@@ -160,7 +160,7 @@ std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
                     assimpModel->materialNormalTexIndex = std::move(model->materialNormalTexIndex);
                     assimpModel->materialRoughMetalTexIndex = std::move(model->materialRoughMetalTexIndex);
                     assimpModel->materialEmissiveTexIndex = std::move(model->materialEmissiveTexIndex);
-                    std::cout << "[ModelLoader] Kept ufbx textures (" << assimpModel->albedoTextures.size() << " albedo)" << std::endl;
+                    OHAO_LOG(Info, asset, "ModelLoader: kept ufbx textures ({} albedo)", assimpModel->albedoTextures.size());
                 }
                 model = assimpModel;
             }
@@ -288,7 +288,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
 
     const aiScene* scene = importer.ReadFile(pathStr, flags);
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
-        std::cerr << "[ModelLoader] Assimp error: " << importer.GetErrorString() << std::endl;
+        OHAO_LOG(Error, asset, "ModelLoader: Assimp error: {}", importer.GetErrorString());
         return nullptr;
     }
 
@@ -296,10 +296,9 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     model->setSourcePath(pathStr);
     std::string modelDir = std::filesystem::path(pathStr).parent_path().string();
 
-    std::cout << "[ModelLoader] Assimp: " << scene->mNumMeshes << " meshes, "
-              << scene->mNumMaterials << " materials, "
-              << scene->mNumTextures << " textures, "
-              << scene->mNumAnimations << " animations" << std::endl;
+    OHAO_LOG(Info, asset, "ModelLoader: Assimp: {} meshes, {} materials, {} textures, {} animations",
+             scene->mNumMeshes, scene->mNumMaterials, scene->mNumTextures,
+             scene->mNumAnimations);
 
     // --- Materials ---
     uint32_t numMats = scene->mNumMaterials;
@@ -356,11 +355,12 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         model->materialEmissiveTexIndex[m] = loadAssimpTexture(scene, mat,
             aiTextureType_EMISSIVE, modelDir, model->emissiveTextures);
 
-        std::cout << "  Material " << m << " (" << matName.C_Str() << "): "
-                  << "diffuse=" << (model->materialTextureIndex[m] >= 0 ? "tex" : "color")
-                  << " normal=" << (model->materialNormalTexIndex[m] >= 0 ? "tex" : "none")
-                  << " roughMetal=" << (model->materialRoughMetalTexIndex[m] >= 0 ? "tex" : "none")
-                  << " rough=" << roughness << " metal=" << metallic << std::endl;
+        OHAO_LOG(Debug, asset, "  Material {} ({}): diffuse={} normal={} roughMetal={} rough={} metal={}",
+                 m, matName.C_Str(),
+                 (model->materialTextureIndex[m] >= 0 ? "tex" : "color"),
+                 (model->materialNormalTexIndex[m] >= 0 ? "tex" : "none"),
+                 (model->materialRoughMetalTexIndex[m] >= 0 ? "tex" : "none"),
+                 roughness, metallic);
     }
 
     // --- Geometry + Bone Weights ---
@@ -448,11 +448,9 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     (void)nextJointIdx;
     (void)inverseBindMatrices;
 
-    std::cout << "[ModelLoader] Loaded: " << pathStr << " ("
-              << model->vertices.size() << " verts, "
-              << model->indices.size() << " indices, "
-              << numMats << " materials, "
-              << model->albedoTextures.size() << " textures)" << std::endl;
+    OHAO_LOG(Info, asset, "ModelLoader: loaded: {} ({} verts, {} indices, {} materials, {} textures)",
+             pathStr, model->vertices.size(), model->indices.size(), numMats,
+             model->albedoTextures.size());
     return model;
 }
 

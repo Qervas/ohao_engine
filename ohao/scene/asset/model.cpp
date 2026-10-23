@@ -2,7 +2,6 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +11,7 @@
 #include <vulkan/vulkan_core.h>
 #include "scene/asset/model.hpp"
 #include "gpu/vulkan/material.hpp"
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -98,7 +98,7 @@ bool Model::loadFromOBJ(std::string_view filename) {
 
         std::ifstream file{sourcePath};
         if (!file.is_open()) {
-            std::cerr << "Failed to open file: " << sourcePath << std::endl;
+            OHAO_LOG(Error, asset, "Failed to open file: {}", sourcePath);
             return false;
         }
 
@@ -115,19 +115,19 @@ bool Model::loadFromOBJ(std::string_view filename) {
                     sourcePath.substr(0, lastSlash + 1) : "";
                 std::string fullMtlPath = directory + mtlFilename;
 
-                std::cout << "Loading material file: " << fullMtlPath << std::endl;
+                OHAO_LOG(Debug, asset, "Loading material file: {}", fullMtlPath);
                 try {
                     loadMTL(fullMtlPath);
                 } catch (const std::exception& e) {
-                    std::cout << "Warning: Failed to load MTL file: " << e.what() << std::endl;
-                    std::cout << "Using default materials instead." << std::endl;
+                    OHAO_LOG(Warn, asset, "Failed to load MTL file: {}", e.what());
+                    OHAO_LOG(Warn, asset, "Using default materials instead.");
                     setupDefaultMaterial();
                 }
             }
             else if (type == "usemtl") {
                 iss >> currentMaterial;
                 if (materials.find(currentMaterial) == materials.end()) {
-                    std::cout << "Warning: Material '" << currentMaterial << "' not found, using default" << std::endl;
+                    OHAO_LOG(Warn, asset, "Material '{}' not found, using default", currentMaterial);
                     currentMaterial = "default";
                 }
             }
@@ -197,7 +197,7 @@ bool Model::loadFromOBJ(std::string_view filename) {
             }
         }
         if (vertices.empty() || indices.empty()) {
-            std::cerr << "No geometry data loaded from OBJ file" << std::endl;
+            OHAO_LOG(Error, asset, "No geometry data loaded from OBJ file");
             return false;
         }
 
@@ -227,7 +227,7 @@ bool Model::loadFromOBJ(std::string_view filename) {
             if (removed > 0) {
                 indices = std::move(newIndices);
                 materialAssignments = std::move(newAssignments);
-                std::cout << "Filtered " << removed << " alpha-card triangles (fur/eyelash/tear)" << std::endl;
+                OHAO_LOG(Info, asset, "Filtered {} alpha-card triangles (fur/eyelash/tear)", removed);
             }
         }
 
@@ -265,8 +265,8 @@ bool Model::loadFromOBJ(std::string_view filename) {
                                 stbi_image_free(pixels);
                                 texLayerIdx = static_cast<int>(albedoTextures.size());
                                 albedoTextures.push_back(std::move(td));
-                                std::cout << "  OBJ Material " << idx << " (" << name
-                                          << "): tex " << w << "x" << h << " from " << fname << std::endl;
+                                OHAO_LOG(Debug, asset, "  OBJ Material {} ({}): tex {}x{} from {}",
+                                         idx, name, w, h, fname);
                             }
                             break;
                         }
@@ -274,8 +274,8 @@ bool Model::loadFromOBJ(std::string_view filename) {
                 }
                 materialTextureIndex.push_back(texLayerIdx);
                 if (texLayerIdx < 0) {
-                    std::cout << "  OBJ Material " << idx << " (" << name << "): color=("
-                              << mat.diffuse.r << "," << mat.diffuse.g << "," << mat.diffuse.b << ")" << std::endl;
+                    OHAO_LOG(Debug, asset, "  OBJ Material {} ({}): color=({},{},{})",
+                             idx, name, mat.diffuse.r, mat.diffuse.g, mat.diffuse.b);
                 }
 
                 // 4.L v4: auto-discover normal + gloss maps next to the diff
@@ -300,8 +300,8 @@ bool Model::loadFromOBJ(std::string_view filename) {
                                 stbi_image_free(pixels);
                                 normalIdx = static_cast<int>(normalTextures.size());
                                 normalTextures.push_back(std::move(td));
-                                std::cout << "  OBJ Material " << idx << " (" << name
-                                          << "): normal " << w << "x" << h << " from " << fname << std::endl;
+                                OHAO_LOG(Debug, asset, "  OBJ Material {} ({}): normal {}x{} from {}",
+                                         idx, name, w, h, fname);
                             }
                         }
                         // Gloss map → repack as (1, 1-gloss, 0, 255) into roughMetal slot
@@ -323,8 +323,8 @@ bool Model::loadFromOBJ(std::string_view filename) {
                                 td.pixels = std::move(packed);
                                 roughMetalIdx = static_cast<int>(roughMetalTextures.size());
                                 roughMetalTextures.push_back(std::move(td));
-                                std::cout << "  OBJ Material " << idx << " (" << name
-                                          << "): gloss→rough " << w << "x" << h << " from " << fname << std::endl;
+                                OHAO_LOG(Debug, asset, "  OBJ Material {} ({}): gloss->rough {}x{} from {}",
+                                         idx, name, w, h, fname);
                             }
                         }
                     }
@@ -346,13 +346,12 @@ bool Model::loadFromOBJ(std::string_view filename) {
             }
         }
 
-        std::cout << "OBJ loaded: " << vertices.size() << " vertices, "
-                  << indices.size() << " indices, "
-                  << materialColors.size() << " materials" << std::endl;
+        OHAO_LOG(Info, asset, "OBJ loaded: {} vertices, {} indices, {} materials",
+                 vertices.size(), indices.size(), materialColors.size());
 
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "Error during model import: " << e.what() << std::endl;
+        OHAO_LOG(Error, asset, "Error during model import: {}", e.what());
         return false;
     }
 }
@@ -421,14 +420,14 @@ bool Model::loadMTL(std::string_view filename) {
 
         std::ifstream file{path};
         if (!file.is_open()) {
-            std::cerr << "Failed to open material file: " << path << std::endl;
+            OHAO_LOG(Error, asset, "Failed to open material file: {}", path);
             return false;
         }
 
         MaterialData* currentMaterial = nullptr;
         std::string line;
 
-        std::cout << "Loading MTL file: " << path << std::endl;
+        OHAO_LOG(Debug, asset, "Loading MTL file: {}", path);
 
         while (std::getline(file, line)) {
             std::istringstream iss(line);
@@ -451,20 +450,18 @@ bool Model::loadMTL(std::string_view filename) {
                 currentMaterial->opacity = 1.0f;
                 currentMaterial->illum = 2;
 
-                std::cout << "Defined new material: " << name << std::endl;
+                OHAO_LOG(Debug, asset, "Defined new material: {}", name);
             }
             else if (currentMaterial != nullptr) {
                 if (token == "Ka") {
                     iss >> currentMaterial->ambient.x >> currentMaterial->ambient.y >> currentMaterial->ambient.z;
-                    std::cout << "  Ambient: " << currentMaterial->ambient.x << " "
-                            << currentMaterial->ambient.y << " "
-                            << currentMaterial->ambient.z << std::endl;
+                    OHAO_LOG(Debug, asset, "  Ambient: {} {} {}", currentMaterial->ambient.x,
+                             currentMaterial->ambient.y, currentMaterial->ambient.z);
                 }
                 else if (token == "Kd") {
                     iss >> currentMaterial->diffuse.x >> currentMaterial->diffuse.y >> currentMaterial->diffuse.z;
-                    std::cout << "  Diffuse: " << currentMaterial->diffuse.x << " "
-                            << currentMaterial->diffuse.y << " "
-                            << currentMaterial->diffuse.z << std::endl;
+                    OHAO_LOG(Debug, asset, "  Diffuse: {} {} {}", currentMaterial->diffuse.x,
+                             currentMaterial->diffuse.y, currentMaterial->diffuse.z);
                 }
                 else if (token == "Ks") {
                     iss >> currentMaterial->specular.x >> currentMaterial->specular.y >> currentMaterial->specular.z;
@@ -484,9 +481,8 @@ bool Model::loadMTL(std::string_view filename) {
                 else if (token == "Ke"){
                     iss >> currentMaterial->emission.x >> currentMaterial->emission.y >> currentMaterial->emission.z;
                     currentMaterial->isLight = glm::length(currentMaterial->emission) > 0.0f;
-                    std::cout << "  Emission: " << currentMaterial->emission.x << " "
-                            << currentMaterial->emission.y << " "
-                            << currentMaterial->emission.z << std::endl;
+                    OHAO_LOG(Debug, asset, "  Emission: {} {} {}", currentMaterial->emission.x,
+                             currentMaterial->emission.y, currentMaterial->emission.z);
                 }
                 else if (token == "Light_Position") {
                     iss >> currentMaterial->lightPosition.x
@@ -501,43 +497,43 @@ bool Model::loadMTL(std::string_view filename) {
                     std::string texturePath;
                     iss >> texturePath;
                     currentMaterial->diffuseTexture = texturePath;
-                    std::cout << "  Diffuse texture: " << texturePath << std::endl;
+                    OHAO_LOG(Debug, asset, "  Diffuse texture: {}", texturePath);
                 }
                 else if (token == "map_Ka") {
                     std::string texturePath;
                     iss >> texturePath;
                     currentMaterial->ambientTexture = texturePath;
-                    std::cout << "  Ambient texture: " << texturePath << std::endl;
+                    OHAO_LOG(Debug, asset, "  Ambient texture: {}", texturePath);
                 }
                 else if (token == "map_Ks") {
                     std::string texturePath;
                     iss >> texturePath;
                     currentMaterial->specularTexture = texturePath;
-                    std::cout << "  Specular texture: " << texturePath << std::endl;
+                    OHAO_LOG(Debug, asset, "  Specular texture: {}", texturePath);
                 }
                 else if (token == "map_Bump" || token == "bump") {
                     std::string texturePath;
                     iss >> texturePath;
                     currentMaterial->normalTexture = texturePath;
-                    std::cout << "  Normal texture: " << texturePath << std::endl;
+                    OHAO_LOG(Debug, asset, "  Normal texture: {}", texturePath);
                 }
                 else if (token == "map_d" || token == "map_disp") {
                     std::string texturePath;
                     iss >> texturePath;
                     currentMaterial->heightTexture = texturePath;
-                    std::cout << "  Height texture: " << texturePath << std::endl;
+                    OHAO_LOG(Debug, asset, "  Height texture: {}", texturePath);
                 }
             }
         }
         if (materials.empty()) {
-            std::cerr << "No materials loaded from MTL file" << std::endl;
+            OHAO_LOG(Error, asset, "No materials loaded from MTL file");
             return false;
         }
 
-        std::cout << "Successfully loaded " << materials.size() << " materials" << std::endl;
+        OHAO_LOG(Info, asset, "Successfully loaded {} materials", materials.size());
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "Error during MTL import: " << e.what() << std::endl;
+        OHAO_LOG(Error, asset, "Error during MTL import: {}", e.what());
         return false;
     }
 }
@@ -546,15 +542,15 @@ bool Model::loadMTL(std::string_view filename) {
 void
 Model::assignMaterialColors() {
     if (materialAssignments.empty()) {
-        std::cout << "No material assignments found, using default colors" << std::endl;
+        OHAO_LOG(Warn, asset, "No material assignments found, using default colors");
         for (auto& vertex : vertices) {
             vertex.color = glm::vec3(0.8f);
         }
         return;
     }
 
-    std::cout << "Assigning colors to " << vertices.size() << " vertices with "
-              << materialAssignments.size() << " material assignments (indexed mesh)" << std::endl;
+    OHAO_LOG(Debug, asset, "Assigning colors to {} vertices with {} material assignments (indexed mesh)",
+             vertices.size(), materialAssignments.size());
 
     // Initialize all vertices with default color
     glm::vec3 defaultColor(0.8f, 0.8f, 0.8f);
@@ -573,7 +569,7 @@ Model::assignMaterialColors() {
         
         // Check if we have a material assignment for this face
         if (faceIndex >= materialAssignments.size()) {
-            std::cout << "Face " << faceIndex << " has no material assignment, using default color" << std::endl;
+            OHAO_LOG(Debug, asset, "Face {} has no material assignment, using default color", faceIndex);
             continue;
         }
 
@@ -582,8 +578,8 @@ Model::assignMaterialColors() {
         auto matIt = materials.find(matName.empty() ? "default" : matName);
         
         if (matIt == materials.end()) {
-            std::cout << "Face " << std::hex << faceIndex << std::dec 
-                     << ": Material '" << matName << "' not found, using default color" << std::endl;
+            OHAO_LOG(Debug, asset, "Face {:#x}: Material '{}' not found, using default color",
+                     faceIndex, matName);
             continue;
         }
         
@@ -602,13 +598,12 @@ Model::assignMaterialColors() {
         
         // Only log occasionally for large models to reduce console spam
         if (faceIndex % 1000 == 0 || faceIndex < 10) {
-            std::cout << "Face " << std::hex << faceIndex << std::dec 
-                     << ": Assigned material '" << matName << "' with color: " 
-                     << materialColor.x << ", " << materialColor.y << ", " << materialColor.z << std::endl;
+            OHAO_LOG(Debug, asset, "Face {:#x}: Assigned material '{}' with color: {}, {}, {}",
+                     faceIndex, matName, materialColor.x, materialColor.y, materialColor.z);
         }
     }
-    
-    std::cout << "Finished assigning colors to indexed mesh" << std::endl;
+
+    OHAO_LOG(Debug, asset, "Finished assigning colors to indexed mesh");
 }
 
 void Model::setupDefaultMaterial() {
@@ -624,7 +619,7 @@ void Model::setupDefaultMaterial() {
     defaultMaterial.isLight = false;
 
     materials["default"] = defaultMaterial;
-    std::cout << "Created default material" << std::endl;
+    OHAO_LOG(Debug, asset, "Created default material");
 }
 
 }//namespace

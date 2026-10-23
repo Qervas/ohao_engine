@@ -1,7 +1,7 @@
 #include "runtime/application.hpp"
 #include "ecs/render_extract.hpp"
 #include <chrono>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao::runtime {
 
@@ -12,7 +12,7 @@ bool Application::initialize(const AppConfig& cfg) {
     const VkExtent2D ext = m_window.framebufferExtent();
     m_renderer = std::make_unique<VulkanRenderer>(ext.width, ext.height);
     if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {
-        std::cerr << "[App] renderer initialization failed" << std::endl;
+        OHAO_LOG(Error, runtime, "App: renderer initialization failed");
         return false;
     }
     m_renderer->setRenderMode(RenderMode::Deferred);

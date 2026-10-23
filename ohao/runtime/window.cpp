@@ -1,7 +1,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include "runtime/window.hpp"
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao::runtime {
 
@@ -9,11 +9,11 @@ static Window* self(GLFWwindow* w) { return static_cast<Window*>(glfwGetWindowUs
 
 bool Window::create(const WindowConfig& cfg) {
     if (!glfwInit()) {
-        std::cerr << "[Window] glfwInit failed" << std::endl;
+        OHAO_LOG(Error, runtime, "Window: glfwInit failed");
         return false;
     }
     if (!glfwVulkanSupported()) {
-        std::cerr << "[Window] GLFW found no Vulkan loader" << std::endl;
+        OHAO_LOG(Error, runtime, "Window: GLFW found no Vulkan loader");
         glfwTerminate();
         return false;
     }
@@ -22,7 +22,7 @@ bool Window::create(const WindowConfig& cfg) {
     m_window = glfwCreateWindow(static_cast<int>(cfg.width), static_cast<int>(cfg.height),
                                 cfg.title.c_str(), nullptr, nullptr);
     if (!m_window) {
-        std::cerr << "[Window] glfwCreateWindow failed" << std::endl;
+        OHAO_LOG(Error, runtime, "Window: glfwCreateWindow failed");
         glfwTerminate();
         return false;
     }

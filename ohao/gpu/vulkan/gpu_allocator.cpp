@@ -12,7 +12,7 @@
 #define VMA_IMPLEMENTATION
 #include "gpu_allocator.hpp"
 
-#include <iostream>
+#include "core/log.hpp"
 #include <cstring>
 
 namespace ohao {
@@ -87,11 +87,11 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
 
     VkResult result = vmaCreateAllocator(&allocatorInfo, &m_allocator);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to create VMA allocator: " << result << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create VMA allocator: {}", static_cast<int>(result));
         return false;
     }
 
-    std::cout << "VMA allocator initialized successfully" << std::endl;
+    OHAO_LOG(Debug, gpu, "VMA allocator initialized successfully");
     return true;
 }
 
@@ -102,8 +102,8 @@ void GpuAllocator::shutdown() {
 
     // Print final stats before shutdown
     if (m_stats.currentUsage > 0) {
-        std::cerr << "Warning: GPU memory leak detected - "
-                  << m_stats.currentUsage << " bytes still allocated" << std::endl;
+        OHAO_LOG(Warn, gpu, "GPU memory leak detected - {} bytes still allocated",
+                 m_stats.currentUsage);
         printStats();
     }
 
@@ -154,7 +154,7 @@ GpuBuffer GpuAllocator::createBuffer(
     );
 
     if (vk_failed(vkResult)) {
-        std::cerr << "Failed to create VMA buffer: " << vk_result_name(vkResult) << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create VMA buffer: {}", vk_result_name(vkResult));
         return result;
     }
 
@@ -246,7 +246,7 @@ GpuImage GpuAllocator::createImage(
     );
 
     if (vkResult != VK_SUCCESS) {
-        std::cerr << "Failed to create VMA image: " << vkResult << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create VMA image: {}", static_cast<int>(vkResult));
         return result;
     }
 
@@ -293,7 +293,7 @@ void* GpuAllocator::mapBuffer(GpuBuffer& buffer) {
     void* data = nullptr;
     VkResult result = vmaMapMemory(m_allocator, buffer.allocation.allocation, &data);
     if (result != VK_SUCCESS) {
-        std::cerr << "Failed to map VMA buffer: " << result << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to map VMA buffer: {}", static_cast<int>(result));
         return nullptr;
     }
 
@@ -330,14 +330,14 @@ void GpuAllocator::invalidateBuffer(GpuBuffer& buffer, VkDeviceSize offset, VkDe
 }
 
 void GpuAllocator::printStats() const {
-    std::cout << "=== GPU Allocator Stats ===" << std::endl;
-    std::cout << "Total allocated: " << (m_stats.totalAllocated / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Total freed: " << (m_stats.totalFreed / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Current usage: " << (m_stats.currentUsage / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Peak usage: " << (m_stats.peakUsage / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Allocations: " << m_stats.allocationCount << std::endl;
-    std::cout << "Frees: " << m_stats.freeCount << std::endl;
-    std::cout << "===========================" << std::endl;
+    OHAO_LOG(Debug, gpu, "=== GPU Allocator Stats ===");
+    OHAO_LOG(Debug, gpu, "Total allocated: {} MB", m_stats.totalAllocated / 1024.0 / 1024.0);
+    OHAO_LOG(Debug, gpu, "Total freed: {} MB", m_stats.totalFreed / 1024.0 / 1024.0);
+    OHAO_LOG(Debug, gpu, "Current usage: {} MB", m_stats.currentUsage / 1024.0 / 1024.0);
+    OHAO_LOG(Debug, gpu, "Peak usage: {} MB", m_stats.peakUsage / 1024.0 / 1024.0);
+    OHAO_LOG(Debug, gpu, "Allocations: {}", m_stats.allocationCount);
+    OHAO_LOG(Debug, gpu, "Frees: {}", m_stats.freeCount);
+    OHAO_LOG(Debug, gpu, "===========================");
 }
 
 VmaMemoryUsage GpuAllocator::toVmaUsage(AllocationUsage usage) const noexcept {

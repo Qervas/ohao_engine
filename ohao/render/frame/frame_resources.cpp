@@ -1,5 +1,5 @@
 #include "frame_resources.hpp"
-#include <iostream>
+#include "core/log.hpp"
 #include <cstring>
 #include <stdexcept>
 
@@ -48,25 +48,25 @@ bool FrameResourceManager::initialize(
     m_physicalDevice = physicalDevice;
 
     if (!createCommandBuffers(commandPool)) {
-        std::cerr << "Failed to create per-frame command buffers" << std::endl;
+        OHAO_LOG(Error, render, "Failed to create per-frame command buffers");
         return false;
     }
 
     if (!createSyncObjects()) {
-        std::cerr << "Failed to create per-frame sync objects" << std::endl;
+        OHAO_LOG(Error, render, "Failed to create per-frame sync objects");
         return false;
     }
 
     if (stagingBufferSize > 0) {
         if (!createStagingBuffers(stagingBufferSize)) {
-            std::cerr << "Failed to create per-frame staging buffers" << std::endl;
+            OHAO_LOG(Error, render, "Failed to create per-frame staging buffers");
             return false;
         }
     }
 
     m_initialized = true;
-    std::cout << "FrameResourceManager initialized with " << MAX_FRAMES_IN_FLIGHT
-              << " frames in flight" << std::endl;
+    OHAO_LOG(Debug, render, "FrameResourceManager initialized with {} frames in flight",
+             MAX_FRAMES_IN_FLIGHT);
     return true;
 }
 
@@ -218,11 +218,11 @@ bool FrameResourceManager::resizeStagingBuffers(size_t newSize) {
 
     // Create new staging buffers with new size
     if (!createStagingBuffers(newSize)) {
-        std::cerr << "Failed to recreate staging buffers on resize" << std::endl;
+        OHAO_LOG(Error, render, "Failed to recreate staging buffers on resize");
         return false;
     }
 
-    std::cout << "Staging buffers resized to " << newSize << " bytes" << std::endl;
+    OHAO_LOG(Debug, render, "Staging buffers resized to {} bytes", newSize);
     return true;
 }
 

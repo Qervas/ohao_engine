@@ -8,8 +8,9 @@
 #ifdef OHAO_NRD_ENABLED
 
 #include <NRD.h>
-#include <iostream>
+#include <cstdio>
 #include <cstring>
+#include "core/log.hpp"
 
 // NRDIntegration + NRI are linked into ohao_renderer only when
 // OHAO_NRD_INTEGRATION_AVAILABLE is defined (see ohao/render/CMakeLists.txt).
@@ -128,12 +129,12 @@ bool NrdDenoiser::initialize(VkInstance                      instance,
 
     nrd::Result r = m_impl->integration.RecreateVK(integrationDesc, instanceCreationDesc, vkDesc);
     if (r != nrd::Result::SUCCESS) {
-        std::cerr << "[NRD] Integration::RecreateVK failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD: Integration::RecreateVK failed: {}", static_cast<int>(r));
         return false;
     }
     m_impl->integrationReady = true;
-    std::cout << "[NRD] integration ready @ " << width << "x" << height
-              << " (NRI-backed REBLUR_DIFFUSE_SPECULAR)" << std::endl;
+    OHAO_LOG(Info, render, "NRD: integration ready @ {}x{} (NRI-backed REBLUR_DIFFUSE_SPECULAR)",
+             width, height);
     return true;
 #else
     // Legacy 4.B path: headless NRD instance, denoise() unavailable.
@@ -147,11 +148,11 @@ bool NrdDenoiser::initialize(VkInstance                      instance,
 
     nrd::Result result = nrd::CreateInstance(desc, m_impl->rawInstance);
     if (result != nrd::Result::SUCCESS) {
-        std::cerr << "[NRD] CreateInstance failed: " << int(result) << std::endl;
+        OHAO_LOG(Error, render, "NRD: CreateInstance failed: {}", static_cast<int>(result));
         return false;
     }
-    std::cout << "[NRD] initialized for " << width << "x" << height
-              << " (no NRDIntegration — denoise() will no-op)" << std::endl;
+    OHAO_LOG(Info, render, "NRD: initialized for {}x{} (no NRDIntegration — denoise() will no-op)",
+             width, height);
     return true;
 #endif
 }
@@ -207,7 +208,7 @@ bool NrdDenoiser::setCommonSettings(const NrdCameraInputs& in) {
     nrd::Result r = nrd::SetCommonSettings(*m_impl->rawInstance, s);
 #endif
     if (r != nrd::Result::SUCCESS) {
-        std::cerr << "[NRD] SetCommonSettings failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD: SetCommonSettings failed: {}", static_cast<int>(r));
         return false;
     }
     return true;
@@ -220,7 +221,7 @@ void NrdDenoiser::setInputResources(const NrdInputResources& resources) {
 bool NrdDenoiser::setReblurSettings(const NrdReblurProfile& p) {
 #ifdef OHAO_NRD_INTEGRATION_AVAILABLE
     if (!m_impl->integrationReady) {
-        std::cerr << "[NRD] setReblurSettings() called before initialize()" << std::endl;
+        OHAO_LOG(Error, render, "NRD: setReblurSettings() called before initialize()");
         return false;
     }
     nrd::ReblurSettings s {};  // start from NRD defaults — we override a subset
@@ -236,7 +237,7 @@ bool NrdDenoiser::setReblurSettings(const NrdReblurProfile& p) {
     const nrd::Identifier id = 0;
     const nrd::Result r = m_impl->integration.SetDenoiserSettings(id, &s);
     if (r != nrd::Result::SUCCESS) {
-        std::cerr << "[NRD] SetDenoiserSettings(REBLUR) failed: " << int(r) << std::endl;
+        OHAO_LOG(Error, render, "NRD: SetDenoiserSettings(REBLUR) failed: {}", static_cast<int>(r));
         return false;
     }
     return true;
@@ -249,7 +250,7 @@ bool NrdDenoiser::setReblurSettings(const NrdReblurProfile& p) {
 bool NrdDenoiser::denoise(VkCommandBuffer cmd) {
 #ifdef OHAO_NRD_INTEGRATION_AVAILABLE
     if (!m_impl->integrationReady) {
-        std::cerr << "[NRD] denoise() called before integration ready" << std::endl;
+        OHAO_LOG(Error, render, "NRD: denoise() called before integration ready");
         return false;
     }
 
@@ -302,7 +303,7 @@ bool NrdDenoiser::denoise(VkCommandBuffer cmd) {
     return true;
 #else
     (void)cmd;
-    std::cerr << "[NRD] denoise() no-op: OhaoNRDIntegration not linked" << std::endl;
+    OHAO_LOG(Debug, render, "NRD: denoise() no-op: OhaoNRDIntegration not linked");
     return false;
 #endif
 }

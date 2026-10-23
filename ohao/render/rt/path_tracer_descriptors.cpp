@@ -3,8 +3,8 @@
 
 #include "path_tracer.hpp"
 
-#include <iostream>
 #include <vector>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -28,8 +28,9 @@ bool PathTracer::createDescriptorResources() {
                                          indexing.maxDescriptorSetUpdateAfterBindSampledImages,
                                          indexing.maxDescriptorSetUpdateAfterBindSamplers, perStageResources});
         if (limit > 0 && m_bindlessCapacity > limit) {
-            std::cerr << "[PathTracer] bindless texture capacity " << m_bindlessCapacity
-                      << " exceeds the device's update-after-bind limit; clamped to " << limit << "\n";
+            OHAO_LOG(Warn, render, "PathTracer: bindless texture capacity {}"
+                                   " exceeds the device's update-after-bind limit; clamped to {}",
+                     m_bindlessCapacity, limit);
             m_bindlessCapacity = limit;
         }
     }

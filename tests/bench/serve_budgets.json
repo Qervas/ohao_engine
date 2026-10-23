@@ -1,0 +1,11 @@
+{
+  "comment": "Sub-project 4 spec 'Performance / Budgets'. Medians, Release, reference machine. Step 4 adds the logger's; step 6 adds the rest. Changing a budget needs Frank's OK.",
+  "budgetsNs": {
+    "log_below_threshold": 5,
+    "log_ring_80": 300
+  },
+  "noise": {
+    "maxCalibrationSlowdown": 1.25,
+    "maxExternalCorePct": 50
+  }
+}

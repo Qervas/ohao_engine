@@ -1,7 +1,7 @@
 #include "path_tracer.hpp"
 #include "render/scene/render_scene.hpp"
 
-#include <iostream>
+#include "core/log.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -91,31 +91,31 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_historyFrameCount = 0;
 
     if (!loadFunctionPointers()) {
-        std::cerr << "[PathTracer] Failed to load RT function pointers" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to load RT function pointers");
         return false;
     }
 
     if (!createImages()) {
-        std::cerr << "[PathTracer] Failed to create output images" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create output images");
         return false;
     }
 
     if (!createDescriptorResources()) {
-        std::cerr << "[PathTracer] Failed to create descriptor resources" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
         return false;
     }
 
     if (!createRTPipeline()) {
-        std::cerr << "[PathTracer] Failed to create RT pipeline" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create RT pipeline");
         return false;
     }
 
     if (!createShaderBindingTable()) {
-        std::cerr << "[PathTracer] Failed to create SBT" << std::endl;
+        OHAO_LOG(Error, render, "PathTracer: failed to create SBT");
         return false;
     }
 
-    std::cout << "[PathTracer] Initialized (" << width << "x" << height << ")" << std::endl;
+    OHAO_LOG(Info, render, "PathTracer: initialized ({}x{})", width, height);
 
 #ifdef OHAO_NRD_ENABLED
     // NRD / à-trous / cinematic passes are sized to OUTPUT res: they only run in
@@ -133,26 +133,25 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         // + production prepass radii give visibly cleaner output.
         NrdDenoiser::NrdReblurProfile profile{};
         const bool ok = m_nrdDenoiser->setReblurSettings(profile);
-        std::cout << "[NRD] persistent instance ready @ " << m_width << "x" << m_height
-                  << (ok ? " (T4: production ReblurSettings applied)"
-                         : " (T4: ReblurSettings apply FAILED — defaults in use)")
-                  << std::endl;
+        OHAO_LOG(Info, render, "NRD: persistent instance ready @ {}x{}{}", m_width, m_height,
+                 ok ? " (T4: production ReblurSettings applied)"
+                    : " (T4: ReblurSettings apply FAILED — defaults in use)");
     } else {
         if (instance == VK_NULL_HANDLE) {
-            std::cerr << "[NRD] no VkInstance provided — skipping NRD init (caller should plumb it)" << std::endl;
+            OHAO_LOG(Warn, render, "NRD: no VkInstance provided — skipping NRD init (caller should plumb it)");
         } else {
-            std::cerr << "[NRD] persistent instance init FAILED — disabling NRD path" << std::endl;
+            OHAO_LOG(Error, render, "NRD: persistent instance init failed — disabling NRD path");
         }
         m_nrdDenoiser.reset();
     }
     m_nrdCompositor = std::make_unique<NrdCompositor>();
     if (!m_nrdCompositor->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-        std::cerr << "[NRD compose] init FAILED — compose pass will be skipped" << std::endl;
+        OHAO_LOG(Error, render, "NRD compose: init failed — compose pass will be skipped");
         m_nrdCompositor.reset();
     }
     m_cinematicPost = std::make_unique<NrdCinematicPost>();
     if (!m_cinematicPost->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-        std::cerr << "[NRD cinematic] init FAILED — cinematic pass will be skipped" << std::endl;
+        OHAO_LOG(Error, render, "NRD cinematic: init failed — cinematic pass will be skipped");
         m_cinematicPost.reset();
     }
 #else
@@ -165,7 +164,7 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     // Atrous, so None/OIDN/NRD are unaffected.
     m_atrousDenoiser = std::make_unique<AtrousDenoiser>();
     if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-        std::cerr << "[atrous] init FAILED — --denoise=atrous will pass through noisy beauty\n";
+        OHAO_LOG(Error, render, "atrous: init failed — --denoise=atrous will pass through noisy beauty");
         m_atrousDenoiser.reset();
     }
 
@@ -250,7 +249,7 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     if (m_atrousDenoiser) {
         m_atrousDenoiser->shutdown();
         if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
-            std::cerr << "[svgf] resize re-init FAILED — atrous will pass through noisy beauty\n";
+            OHAO_LOG(Error, render, "svgf: resize re-init failed — atrous will pass through noisy beauty");
             m_atrousDenoiser.reset();
         }
     }
@@ -349,9 +348,8 @@ void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
     m_giReservoirInitialized[1] = false;
     m_giReservoirWriteIndex     = 0;
 
-    std::cout << "[PathTracer] render res " << m_width << "x" << m_height
-              << " → output " << m_outW << "x" << m_outH
-              << " (scale " << m_dlssRenderScale << ")" << std::endl;
+    OHAO_LOG(Info, render, "PathTracer: render res {}x{} → output {}x{} (scale {})",
+             m_width, m_height, m_outW, m_outH, m_dlssRenderScale);
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────

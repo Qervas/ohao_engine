@@ -81,6 +81,7 @@ CPU suites (no GPU):
 
 ```console
 $ build/Release/runtime_tests.exe > /dev/null
+$ build/Release/log_tests.exe > /dev/null
 $ build/Release/reflect_tests.exe > /dev/null
 $ build/Release/scene_tests.exe > /dev/null
 $ build/Release/api_tests.exe > /dev/null
@@ -101,7 +102,8 @@ $ python tests/doctor/check_doctor.py > /dev/null
 | Suite | Covers |
 |---|---|
 | `runtime_tests` | the runtime shell without a window: fixed-step clock, input actions, swapchain choices |
-| `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule |
+| `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
+| `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
 | `api_tests` | methods, commands and inverses, queries, summaries |
 | `systems_tests` | engine-provided systems (spin) |
@@ -127,6 +129,7 @@ $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
+$ build/Release/log_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -136,8 +139,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
   captures.
-- **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included.
-  `check_validation.py` renders deferred Cornell and the helmet under the layers;
+- **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
+  is a record on the logger's `validation` channel, on stderr as
+  `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
+  `... repeated N more times`). `check_validation.py` renders deferred Cornell and the
+  helmet under the layers;
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
 - **Render goldens** (`tests/golden/manifest.json`, 10 scenes: 5 examples, 5 through
   `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
@@ -152,7 +158,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   drift by 1 LSB on a few pixels across sessions with identical SPIR-V; never compare
   their md5s across days.
 - **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
-  results in `build/scene_bench.json`. A budget changes only by Frank's ruling.
+  results in `build/scene_bench.json`. `log_bench --check`: the logger's budgets in
+  `tests/bench/serve_budgets.json`, results in `build/log_bench.json`. `log_bench`
+  times a calibration loop before and after its blocks and records every other process
+  that used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json`
+  (written by `log_bench --calibrate` on a quiet machine) or beside other busy processes
+  is `noisy`, exit 2: rerun it, it is neither a pass nor a regression. A budget changes
+  only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   guide and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
   `docs/agents/skills/` until they are installed there; see its README).
@@ -227,6 +239,9 @@ $ cd site && python -c "from tools.monograph.build import build; build()" > /dev
   the owner's say-so.
 - **Forward only.** Old code and docs are reference, not something to preserve: delete
   what is dead, and describe the tree as it is, not its history.
+- **Engine code logs through `OHAO_LOG(level, channel, fmt, args...)`** (`core/log.hpp`),
+  never `std::cout`/`std::cerr`/`printf`; `reflect_tests` fails on a print under `ohao/`.
+  Per-item and per-frame detail is `Debug` (shown with `OHAO_LOG_LEVEL=debug`).
 - **Performance is a gate.** New hot paths come with a benchmark or a budget; reflection
   never runs per frame (the ECS system sources may not include `reflect/` or `api/`;
   `reflect_tests` enforces it).

@@ -7,6 +7,7 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -97,27 +98,27 @@ bool VulkanRenderer::initialize() {
 
     try {
         if (!createInstance()) {
-            std::cerr << "Failed to create Vulkan instance" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to create Vulkan instance");
             return false;
         }
         if (m_presentTarget) {
             m_surface = m_presentTarget->createSurface ? m_presentTarget->createSurface(m_instance)
                                                        : VK_NULL_HANDLE;
             if (m_surface == VK_NULL_HANDLE) {
-                std::cerr << "Failed to create window surface" << std::endl;
+                OHAO_LOG(Error, gpu, "Failed to create window surface");
                 return false;
             }
         }
         if (!pickPhysicalDevice()) {
-            std::cerr << "Failed to pick physical device" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to pick physical device");
             return false;
         }
         if (!createLogicalDevice()) {
-            std::cerr << "Failed to create logical device" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to create logical device");
             return false;
         }
         if (!createCommandPool()) {
-            std::cerr << "Failed to create command pool" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to create command pool");
             return false;
         }
 
@@ -125,20 +126,20 @@ bool VulkanRenderer::initialize() {
         m_textureManager = std::make_unique<BindlessTextureManager>();
         if (!m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,
                                            m_graphicsQueueFamily, m_graphicsQueue)) {
-            std::cerr << "Failed to initialize BindlessTextureManager (textures unavailable)" << std::endl;
+            OHAO_LOG(Warn, gpu, "Failed to initialize BindlessTextureManager (textures unavailable)");
             m_textureManager.reset();
         } else {
-            std::cout << "BindlessTextureManager initialized" << std::endl;
+            OHAO_LOG(Debug, gpu, "BindlessTextureManager initialized");
         }
 
 if (!createLightBuffer()) {
-            std::cerr << "Failed to create light buffer" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to create light buffer");
             return false;
         }
 
         // Initialize multi-frame resources for pipelined rendering
         if (!initializeFrameResources()) {
-            std::cerr << "Failed to initialize frame resources" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to initialize frame resources");
             return false;
         }
 
@@ -155,7 +156,7 @@ if (!createLightBuffer()) {
             m_deferredRenderer->setTextureManager(m_textureManager.get());
         }
         if (!initializeDeferredRenderer()) {
-            std::cerr << "Failed to initialize deferred renderer" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to initialize deferred renderer");
             return false;
         }
 
@@ -167,24 +168,24 @@ if (!createLightBuffer()) {
         if (!m_renderScene->initialize(render::RenderScene::InitInfo{
                 m_instance, m_physicalDevice, m_device, m_graphicsQueue, m_graphicsQueueFamily,
                 m_commandPool, /*rayTracing=*/true, m_rayQueryEnabled})) {
-            std::cerr << "Failed to initialize RenderScene" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to initialize RenderScene");
             m_renderScene.reset();
             return false;
         }
 
         if (m_presentTarget && !createPresentation()) {
-            std::cerr << "Failed to create swapchain" << std::endl;
+            OHAO_LOG(Error, gpu, "Failed to create swapchain");
             return false;
         }
 
         m_initialized = true;
 
-        std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
-        std::cout << "Ray tracing: " << (isRTSupported() ? "enabled" : "disabled") << std::endl;
+        OHAO_LOG(Info, gpu, "VulkanRenderer initialized: {}x{}", m_width, m_height);
+        OHAO_LOG(Info, gpu, "Ray tracing: {}", isRTSupported() ? "enabled" : "disabled");
         return true;
 
     } catch (const std::exception& e) {
-        std::cerr << "VulkanRenderer initialization failed: " << e.what() << std::endl;
+        OHAO_LOG(Error, gpu, "VulkanRenderer initialization failed: {}", e.what());
         return false;
     }
 }
@@ -307,12 +308,12 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
         if (!slot->init(m_device, m_physicalDevice, m_width, m_height,
                         m_instance, m_graphicsQueueFamily,
                         m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
-            std::cout << "RT " << label << " renderer: init failed" << std::endl;
+            OHAO_LOG(Error, gpu, "RT {} renderer: init failed", label);
             slot.reset();
             return false;
         }
         slot->setRenderSeed(m_renderSeed);   // a seed set before this renderer existed
-        std::cout << "RT " << label << " renderer: ready" << std::endl;
+        OHAO_LOG(Info, gpu, "RT {} renderer: ready", label);
         return true;
     };
 
@@ -337,7 +338,7 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
     const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
     if (rtPipeline) {
         if (!ensureRTRenderer(mode)) {
-            std::cerr << "Path tracing not available, staying in current mode" << std::endl;
+            OHAO_LOG(Warn, gpu, "Path tracing not available, staying in current mode");
             return;
         }
         m_rtSettings = rtPipeline->getDefaultSettings();
@@ -346,7 +347,7 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
 
     m_renderMode = mode;
     const char* names[] = {"Deferred", "RTRealtime", "RTOffline"};
-    std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
+    OHAO_LOG(Info, gpu, "Render mode set to: {}", names[static_cast<int>(mode)]);
 }
 
 void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
@@ -354,12 +355,12 @@ void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
     applyRTRenderSettings();
 
     const char* profileName = (m_rtSettings.profile == RTRenderProfile::Realtime) ? "Realtime" : "Offline";
-    std::cout << "RT profile set to: " << profileName
-              << " (maxBounces=" << m_rtSettings.maxBounces
-              << ", accumulation=" << (m_rtSettings.preferAccumulation ? "preferred" : "reduced")
-              << ", AOVs=" << (m_rtSettings.enableAuxiliaryAOVs ? "on" : "off")
-              << ", externalDenoiser=" << (m_rtSettings.allowExternalDenoiser ? "allowed" : "off")
-              << ")" << std::endl;
+    OHAO_LOG(Info, gpu,
+             "RT profile set to: {} (maxBounces={}, accumulation={}, AOVs={}, externalDenoiser={})",
+             profileName, m_rtSettings.maxBounces,
+             m_rtSettings.preferAccumulation ? "preferred" : "reduced",
+             m_rtSettings.enableAuxiliaryAOVs ? "on" : "off",
+             m_rtSettings.allowExternalDenoiser ? "allowed" : "off");
 }
 
 void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
@@ -562,8 +563,8 @@ bool VulkanRenderer::createPresentation() {
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, f, &fp);
         if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)) {
-            std::cerr << "[present] deferred output format " << f << " cannot be a blit source"
-                      << std::endl;
+            OHAO_LOG(Error, gpu, "present: deferred output format {} cannot be a blit source",
+                     static_cast<int>(f));
             return false;
         }
     }
@@ -576,9 +577,8 @@ bool VulkanRenderer::createPresentation() {
     si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     for (auto& sem : m_imageAcquired)
         if (vkCreateSemaphore(m_device, &si, nullptr, &sem) != VK_SUCCESS) return false;
-    std::cout << "[present] swapchain " << m_swapchain->extent().width << "x"
-              << m_swapchain->extent().height << ", " << m_swapchain->imageCount() << " images"
-              << std::endl;
+    OHAO_LOG(Info, gpu, "present: swapchain {}x{}, {} images", m_swapchain->extent().width,
+             m_swapchain->extent().height, m_swapchain->imageCount());
     return true;
 }
 
@@ -602,17 +602,17 @@ float VulkanRenderer::gpuFrameMs() const noexcept {
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {
-    std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
+    OHAO_LOG(Debug, gpu, "VulkanRenderer: Creating DeferredRenderer...");
     if (!m_deferredRenderer) {
         m_deferredRenderer = std::make_unique<DeferredRenderer>();
     }
-    std::cout << "VulkanRenderer: Calling DeferredRenderer::initialize()..." << std::endl;
+    OHAO_LOG(Debug, gpu, "VulkanRenderer: Calling DeferredRenderer::initialize()...");
     if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
-        std::cerr << "VulkanRenderer: DeferredRenderer::initialize() failed!" << std::endl;
+        OHAO_LOG(Error, gpu, "VulkanRenderer: DeferredRenderer::initialize() failed!");
         m_deferredRenderer.reset();
         return false;
     }
-    std::cout << "VulkanRenderer: DeferredRenderer initialized, resizing to " << m_width << "x" << m_height << std::endl;
+    OHAO_LOG(Info, gpu, "VulkanRenderer: DeferredRenderer initialized, resizing to {}x{}", m_width, m_height);
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setExposure(0.6f);
@@ -660,7 +660,7 @@ const uint8_t* VulkanRenderer::getPixels() const {
         (void)rw; (void)rh;  // readback fills them; size is implicit in the buffer.
         auto* self = const_cast<VulkanRenderer*>(this);
         if (!self->readbackNrdTonemapped(rgba, rw, rh)) {
-            std::cerr << "[Denoise] NRD readback failed — returning noisy pixels\n";
+            OHAO_LOG(Error, gpu, "Denoise: NRD readback failed — returning noisy pixels");
             return m_pixelBuffer.data();
         }
         m_denoisedPixelBuffer = std::move(rgba);
@@ -678,7 +678,7 @@ const uint8_t* VulkanRenderer::getPixels() const {
     uint32_t rw = 0, rh = 0;
     auto* self = const_cast<VulkanRenderer*>(this);
     if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
-        std::cerr << "[Denoise] readbackHDRBuffers failed — returning noisy pixels\n";
+        OHAO_LOG(Error, gpu, "Denoise: readbackHDRBuffers failed — returning noisy pixels");
         return m_pixelBuffer.data();
     }
     auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
@@ -692,7 +692,7 @@ const uint8_t* VulkanRenderer::getPixels() const {
         denoised = ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
                                       rw, rh, /*hdr*/ true);
         if (!denoised) {
-            std::cerr << "[Denoise] OIDN failed — returning noisy pixels\n";
+            OHAO_LOG(Error, gpu, "Denoise: OIDN failed — returning noisy pixels");
             return m_pixelBuffer.data();
         }
     }

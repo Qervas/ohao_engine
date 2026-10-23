@@ -2,7 +2,7 @@
 #include "physics/dynamics/rigid_body.hpp"
 #include <algorithm>
 #include <chrono>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 namespace physics {
@@ -163,20 +163,17 @@ void ForceRegistry::resetStats() {
 }
 
 void ForceRegistry::logForceRegistrations() const {
-    std::cout << "=== Force Registry Status ===" << std::endl;
-    std::cout << "Total registrations: " << m_forceRegistrations.size() << std::endl;
-    std::cout << "Active registrations: " << getActiveForceCount() << std::endl;
-    
+    OHAO_LOG(Info, physics, "=== Force Registry Status ===");
+    OHAO_LOG(Info, physics, "Total registrations: {}", m_forceRegistrations.size());
+    OHAO_LOG(Info, physics, "Active registrations: {}", getActiveForceCount());
+
     for (const auto& [id, registration] : m_forceRegistrations) {
-        std::cout << "ID: " << id 
-                  << ", Name: '" << registration->name << "'"
-                  << ", Type: " << registration->generator->getName()
-                  << ", Enabled: " << (registration->enabled ? "Yes" : "No")
-                  << ", Target bodies: " << registration->targetBodies.size()
-                  << ", Priority: " << registration->generator->getPriority()
-                  << std::endl;
+        OHAO_LOG(Debug, physics, "ID: {}, Name: '{}', Type: {}, Enabled: {}, Target bodies: {}, Priority: {}",
+                 id, registration->name, registration->generator->getName(),
+                 (registration->enabled ? "Yes" : "No"),
+                 registration->targetBodies.size(), registration->generator->getPriority());
     }
-    std::cout << "=== End Registry Status ===" << std::endl;
+    OHAO_LOG(Info, physics, "=== End Registry Status ===");
 }
 
 std::vector<std::string> ForceRegistry::getForceNames() const {

@@ -1,5 +1,5 @@
 #include "simulation_profile.hpp"
-#include "core/console_widget.hpp"
+#include "core/log.hpp"
 #include <sstream>
 #include <iomanip>
 
@@ -33,7 +33,7 @@ void SimulationProfile::capture(const std::vector<std::shared_ptr<dynamics::Rigi
     }
 
     m_creationTime = std::chrono::system_clock::now();
-    OHAO_LOG("Profile '" + m_name + "' captured " + std::to_string(m_bodySnapshots.size()) + " bodies");
+    OHAO_LOG(Info, physics, "Profile '{}' captured {} bodies", m_name, m_bodySnapshots.size());
 }
 
 void SimulationProfile::restore(std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies) {
@@ -45,7 +45,7 @@ void SimulationProfile::restore(std::vector<std::shared_ptr<dynamics::RigidBody>
         uint32_t bodyId = body->getUniqueId();
         auto it = m_bodyIdToIndex.find(bodyId);
         if (it == m_bodyIdToIndex.end()) {
-            OHAO_LOG("Warning: Body " + std::to_string(bodyId) + " not found in profile '" + m_name + "'");
+            OHAO_LOG(Warn, physics, "Body {} not found in profile '{}'", bodyId, m_name);
             continue;
         }
 
@@ -67,7 +67,7 @@ void SimulationProfile::restore(std::vector<std::shared_ptr<dynamics::RigidBody>
         restoredCount++;
     }
 
-    OHAO_LOG("Profile '" + m_name + "' restored " + std::to_string(restoredCount) + " bodies");
+    OHAO_LOG(Info, physics, "Profile '{}' restored {} bodies", m_name, restoredCount);
 }
 
 std::string SimulationProfile::getCreationTimeString() const {

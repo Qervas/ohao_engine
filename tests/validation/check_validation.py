@@ -11,8 +11,11 @@ then reports every later command, so the FIRST message is the one to read; this
 script prints it.
 
 The engine installs its own debug messenger (OHAO_VALIDATION=1), which replaces
-the layer's default printing. Every message arrives on stderr as
-    [validation] <VUID> | <message>
+the layer's default printing. Every message goes to the logger's `validation`
+channel and arrives on stderr as
+    W validation: <VUID> | <message>        (E for an error-severity message)
+with identical consecutive messages folded into one line followed by
+    W validation: ... repeated <N> more times
 and the engine confirms the layer loaded with "Validation layers ENABLED". A run
 without that confirmation did not check anything and is reported as such.
 
@@ -42,7 +45,23 @@ SCENES = [
       "deferred", "--denoise=none"]),
 ]
 
-MSG = re.compile(r"^\[validation\] ([^|]*?) \| (.*)$", re.M)
+LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)
+MSG = re.compile(r"^([^|]*?) \| (.*)$")
+REPEAT = re.compile(r"^\.\.\. repeated (\d+) more times$")
+
+
+def messages(log):
+    """-> [(vuid, text)], one per message, repeats unfolded."""
+    out = []
+    for body in LINE.findall(log):
+        m = MSG.match(body)
+        if m:
+            out.append((m.group(1), m.group(2)))
+            continue
+        r = REPEAT.match(body)
+        if r and out:
+            out.extend([out[-1]] * int(r.group(1)))
+    return out
 
 
 def run(name, argv, verbose):
@@ -55,7 +74,7 @@ def run(name, argv, verbose):
     log = r.stdout + r.stderr
     if "Validation layers ENABLED" not in log:
         return None, f"{name}: validation layer did not load -- check NOT run", {"name": name, "status": "skip"}
-    msgs = MSG.findall(log)
+    msgs = messages(log)
     counts = {}
     for v, _ in msgs:
         counts[v] = counts.get(v, 0) + 1

@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iostream>
 #include <string>
+
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -21,14 +22,14 @@ DenoiseMode parseDenoiseMode(std::string_view s) {
     if (lower == "none")  return DenoiseMode::None;
     if (lower == "oidn")  return DenoiseMode::OIDN;
     if (lower == "optix") {
-        std::cerr << "[Denoise] --denoise=optix is no longer supported — falling back to OIDN\n";
+        OHAO_LOG(Warn, render, "Denoise: --denoise=optix is no longer supported — falling back to OIDN");
         return DenoiseMode::OIDN;
     }
     if (lower == "nrd") {
 #ifdef OHAO_NRD_ENABLED
         return DenoiseMode::NRD;
 #else
-        std::cerr << "[Denoise] --denoise=nrd requested but OHAO_NRD=OFF at build time — falling back to None\n";
+        OHAO_LOG(Warn, render, "Denoise: --denoise=nrd requested but OHAO_NRD=OFF at build time — falling back to None");
         return DenoiseMode::None;
 #endif
     }
@@ -37,13 +38,12 @@ DenoiseMode parseDenoiseMode(std::string_view s) {
 #ifdef OHAO_DLSS_ENABLED
         return DenoiseMode::DLSSRR;
 #else
-        std::cerr << "[Denoise] --denoise=" << lower
-                  << " requested but OHAO_DLSS=OFF at build time — falling back to None\n";
+        OHAO_LOG(Warn, render, "Denoise: --denoise={} requested but OHAO_DLSS=OFF at build time — falling back to None",
+                 lower);
         return DenoiseMode::None;
 #endif
     }
-    std::cerr << "[Denoise] Unknown mode '" << s
-              << "' — falling back to None\n";
+    OHAO_LOG(Warn, render, "Denoise: unknown mode '{}' — falling back to None", s);
     return DenoiseMode::None;
 }
 

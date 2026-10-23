@@ -6,10 +6,9 @@
 #include "physics/collision/shapes/sphere_shape.hpp"
 #include "physics/collision/shapes/capsule_shape.hpp"
 #include "physics/collision/shapes/cylinder_shape.hpp"
-#include "core/console_widget.hpp"
+#include "core/log.hpp"
 #include <chrono>
 #include <algorithm>
-#include <iostream>
 
 namespace ohao {
 namespace physics {
@@ -55,10 +54,10 @@ void PhysicsWorld::initialize() {
     m_backend = backend::createPhysicsBackend("jolt");
     if (m_backend) {
         if (m_backend->initialize(m_config)) {
-            std::cout << "[PhysicsWorld] Using backend: " << m_backend->getName() << std::endl;
+            OHAO_LOG(Info, physics, "PhysicsWorld: using backend: {}", m_backend->getName());
         } else {
-            std::cerr << "[PhysicsWorld] Backend '" << m_backend->getName()
-                      << "' failed to initialize, falling back to null" << std::endl;
+            OHAO_LOG(Warn, physics, "PhysicsWorld: backend '{}' failed to initialize, falling back to null",
+                     m_backend->getName());
             m_backend = std::make_unique<backend::NullPhysicsBackend>();
             m_backend->initialize(m_config);
         }
@@ -95,7 +94,7 @@ void PhysicsWorld::shutdown() {
 }
 
 void PhysicsWorld::reset() {
-    OHAO_LOG("Resetting physics world");
+    OHAO_LOG(Info, physics, "Resetting physics world");
 
     // Stop simulation
     m_state = SimulationState::STOPPED;
@@ -106,7 +105,7 @@ void PhysicsWorld::reset() {
     // If we have an active profile, restore from it
     if (m_profileManager && m_profileManager->hasActiveProfile()) {
         m_profileManager->restoreFromActive(m_rigidBodies);
-        OHAO_LOG("Physics world reset to active profile");
+        OHAO_LOG(Info, physics, "Physics world reset to active profile");
     } else {
         // No profile - clear all velocities and forces
         for (auto& body : m_rigidBodies) {
@@ -116,7 +115,7 @@ void PhysicsWorld::reset() {
                 body->clearForces();
             }
         }
-        OHAO_LOG("Physics world reset (no profile, cleared velocities)");
+        OHAO_LOG(Info, physics, "Physics world reset (no profile, cleared velocities)");
     }
 
 }

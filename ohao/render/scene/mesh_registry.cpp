@@ -3,7 +3,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstring>
-#include <iostream>
+
+#include "core/log.hpp"
 
 namespace ohao::render {
 
@@ -58,7 +59,7 @@ bool MeshRegistry::createArena(Arena& a, VkDeviceSize elemSize, VkDeviceSize cap
     a.used = 0;
     a.buf = m_ctx.allocator->createBuffer(elemSize * capacity, usage, AllocationUsage::GpuOnly);
     if (!a.buf.isValid()) {
-        std::cerr << "[RenderScene] arena allocation failed (" << elemSize * capacity << " bytes)\n";
+        OHAO_LOG(Error, render, "RenderScene: arena allocation failed ({} bytes)", elemSize * capacity);
         return false;
     }
     return true;
@@ -73,7 +74,7 @@ bool MeshRegistry::reserve(Arena& a, VkDeviceSize count, VkCommandBuffer cmd,
     GpuBuffer bigger = m_ctx.allocator->createBuffer(a.elemSize * newCapacity, a.usage,
                                                      AllocationUsage::GpuOnly);
     if (!bigger.isValid()) {
-        std::cerr << "[RenderScene] arena growth failed (" << a.elemSize * newCapacity << " bytes)\n";
+        OHAO_LOG(Error, render, "RenderScene: arena growth failed ({} bytes)", a.elemSize * newCapacity);
         return false;
     }
     if (a.used > 0) {
@@ -129,7 +130,7 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
                                       uint32_t& grown) {
     if (!m_ctx.allocator || !m_vertices.buf.isValid()) return {};
     if (data.vertices.empty() || data.indices.empty()) {
-        std::cerr << "[RenderScene] registerMesh '" << data.debugName << "': no geometry\n";
+        OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': no geometry", data.debugName);
         return {};
     }
     const auto vertexCount = static_cast<uint32_t>(data.vertices.size());
@@ -138,8 +139,8 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
 
     for (uint32_t idx : data.indices) {
         if (idx >= vertexCount) {
-            std::cerr << "[RenderScene] registerMesh '" << data.debugName
-                      << "': index " << idx << " out of range (" << vertexCount << " vertices)\n";
+            OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': index {} out of range ({} vertices)",
+                     data.debugName, idx, vertexCount);
             return {};
         }
     }
@@ -152,8 +153,8 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     if (mesh.submeshes.empty()) mesh.submeshes.push_back(SubmeshDesc{0, indexCount, 0});
     for (const SubmeshDesc& s : mesh.submeshes) {
         if (static_cast<uint64_t>(s.firstIndex) + s.indexCount > indexCount) {
-            std::cerr << "[RenderScene] registerMesh '" << data.debugName
-                      << "': submesh range past the index count\n";
+            OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': submesh range past the index count",
+                     data.debugName);
             return {};
         }
     }
@@ -162,9 +163,8 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     std::vector<uint32_t> triangleSlots(triangleCount, 0u);
     if (!data.triangleMaterialSlot.empty()) {
         if (data.triangleMaterialSlot.size() != triangleCount) {
-            std::cerr << "[RenderScene] registerMesh '" << data.debugName << "': "
-                      << data.triangleMaterialSlot.size() << " triangle slots for "
-                      << triangleCount << " triangles (missing = slot 0)\n";
+            OHAO_LOG(Warn, render, "RenderScene: registerMesh '{}': {} triangle slots for {} triangles (missing = slot 0)",
+                     data.debugName, data.triangleMaterialSlot.size(), triangleCount);
         }
         const std::size_t n = std::min<std::size_t>(triangleCount, data.triangleMaterialSlot.size());
         std::copy_n(data.triangleMaterialSlot.begin(), n, triangleSlots.begin());
@@ -188,7 +188,7 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
                                                       AllocationUsage::CpuToGpu, true);
     if (!staging.isValid() || !staging.getMappedData()) {
         m_ctx.allocator->destroyBuffer(staging);
-        std::cerr << "[RenderScene] registerMesh '" << data.debugName << "': staging allocation failed\n";
+        OHAO_LOG(Error, render, "RenderScene: registerMesh '{}': staging allocation failed", data.debugName);
         return {};
     }
 

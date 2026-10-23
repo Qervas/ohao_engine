@@ -1,5 +1,5 @@
 #include "material_instance.hpp"
-#include <iostream>
+#include "core/log.hpp"
 #include <cstring>
 #include <algorithm>
 #include <string>
@@ -168,7 +168,7 @@ bool MaterialManager::initialize(VkDevice device, VkPhysicalDevice physicalDevic
         return false;
     }
 
-    std::cout << "MaterialManager initialized with capacity: " << maxMaterials << std::endl;
+    OHAO_LOG(Debug, gpu, "MaterialManager initialized with capacity: {}", maxMaterials);
     return true;
 }
 
@@ -219,7 +219,7 @@ bool MaterialManager::createMaterialBuffer() {
     };
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_materialBuffer) != VK_SUCCESS) {
-        std::cerr << "Failed to create material buffer" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create material buffer");
         return false;
     }
 
@@ -246,7 +246,7 @@ bool MaterialManager::createMaterialBuffer() {
     };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_materialMemory) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate material buffer memory" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to allocate material buffer memory");
         return false;
     }
 
@@ -274,7 +274,7 @@ bool MaterialManager::createDescriptorResources() {
     };
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
-        std::cerr << "Failed to create material descriptor set layout" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create material descriptor set layout");
         return false;
     }
 
@@ -292,7 +292,7 @@ bool MaterialManager::createDescriptorResources() {
     };
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
-        std::cerr << "Failed to create material descriptor pool" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to create material descriptor pool");
         return false;
     }
 
@@ -305,7 +305,7 @@ bool MaterialManager::createDescriptorResources() {
     };
 
     if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate material descriptor set" << std::endl;
+        OHAO_LOG(Error, gpu, "Failed to allocate material descriptor set");
         return false;
     }
 
@@ -351,7 +351,7 @@ MaterialTemplate* MaterialManager::getTemplate(std::string_view name) {
 
 MaterialInstance* MaterialManager::createInstance(const MaterialTemplate* templ) {
     if (m_freeSlots.empty()) {
-        std::cerr << "No free material slots" << std::endl;
+        OHAO_LOG(Error, gpu, "No free material slots");
         return nullptr;
     }
 

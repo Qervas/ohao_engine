@@ -1,7 +1,7 @@
 #include "bloom_pass.hpp"
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -109,7 +109,7 @@ void BloomPass::onResize(uint32_t width, uint32_t height) {
 
     destroyMipChain();   // also destroys the per-mip framebuffers
     if (!createMipChain() || !createFramebuffers() || !createDescriptors()) {
-        std::cerr << "BloomPass: resize to " << width << "x" << height << " failed; bloom disabled" << std::endl;
+        OHAO_LOG(Error, render, "BloomPass: resize to {}x{} failed; bloom disabled", width, height);
     }
 }
 

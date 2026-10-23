@@ -1,5 +1,6 @@
 #include "physics/backend/physics_backend.hpp"
-#include <iostream>
+#include "core/log.hpp"
+#include <exception>
 #include <string_view>
 
 #if OHAO_HAS_JOLT
@@ -15,25 +16,23 @@ std::unique_ptr<IPhysicsBackend> createPhysicsBackend(std::string_view preferred
     if (preferred == "jolt" || preferred == "auto" || preferred.empty()) {
         try {
             auto jolt = std::make_unique<JoltPhysicsBackend>();
-            std::cout << "[Physics] Created Jolt backend" << std::endl;
+            OHAO_LOG(Info, physics, "Physics: created Jolt backend");
             return jolt;
         } catch (const std::exception& e) {
-            std::cerr << "[Physics] Failed to create Jolt backend: " << e.what()
-                      << ", falling back to null" << std::endl;
+            OHAO_LOG(Error, physics, "Physics: failed to create Jolt backend: {}, falling back to null",
+                     e.what());
         } catch (...) {
-            std::cerr << "[Physics] Failed to create Jolt backend (unknown error)"
-                      << ", falling back to null" << std::endl;
+            OHAO_LOG(Error, physics, "Physics: failed to create Jolt backend (unknown error), falling back to null");
         }
     }
 #else
     if (preferred == "jolt") {
-        std::cerr << "[Physics] Jolt backend requested but not compiled in"
-                  << ", using null backend" << std::endl;
+        OHAO_LOG(Warn, physics, "Physics: Jolt backend requested but not compiled in, using null backend");
     }
 #endif
 
     // Null backend - always available, zero dependencies
-    std::cout << "[Physics] Using null backend (physics disabled)" << std::endl;
+    OHAO_LOG(Info, physics, "Physics: using null backend (physics disabled)");
     return std::make_unique<NullPhysicsBackend>();
 }
 

@@ -4,8 +4,9 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "stb_image.h"
 
+#include "core/log.hpp"
+
 #include <cstring>
-#include <iostream>
 
 namespace ohao {
 
@@ -47,7 +48,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
         int ew = 0, eh = 0, ec = 0;
         float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
         if (!hdrPixels) {
-            std::cerr << "[RT] env map: failed to load " << m_envMapPath << "\n";
+            OHAO_LOG(Error, gpu, "RT: env map: failed to load {}", m_envMapPath);
         } else {
             // Replacing an earlier env map: frames in flight may still sample it.
             if (m_envMapImage != VK_NULL_HANDLE) {
@@ -71,7 +72,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
             VkDeviceMemory envMem = VK_NULL_HANDLE;
             bool ok = vkCreateImage(m_device, &imgInfo, nullptr, &envImage) == VK_SUCCESS &&
                       envImage != VK_NULL_HANDLE;
-            if (!ok) std::cerr << "[RT] env map: vkCreateImage failed for " << m_envMapPath << "\n";
+            if (!ok) OHAO_LOG(Error, gpu, "RT: env map: vkCreateImage failed for {}", m_envMapPath);
             if (ok) {
                 VkMemoryRequirements emr{};
                 vkGetImageMemoryRequirements(m_device, envImage, &emr);
@@ -82,7 +83,8 @@ void VulkanRenderer::uploadEnvironmentMap() {
                                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
                 ok = vkAllocateMemory(m_device, &eai, nullptr, &envMem) == VK_SUCCESS && envMem != VK_NULL_HANDLE;
                 if (!ok) {
-                    std::cerr << "[RT] env map: OOM allocating " << emr.size << " bytes for " << m_envMapPath << "\n";
+                    OHAO_LOG(Error, gpu, "RT: env map: OOM allocating {} bytes for {}",
+                             static_cast<uint64_t>(emr.size), m_envMapPath);
                     vkDestroyImage(m_device, envImage, nullptr);
                 }
             }
@@ -204,8 +206,8 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 };
                 uploadCDFBuffer(envCDF.marginalCDF(), m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
                 uploadCDFBuffer(envCDF.conditionalCDF(), m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
-                std::cout << "[RT] Env CDF built: " << ew << "x" << eh
-                          << " integral=" << envCDF.integral() << std::endl;
+                OHAO_LOG(Debug, gpu, "RT: Env CDF built: {}x{} integral={}", ew, eh,
+                         envCDF.integral());
 
                 // Into the one bindless table. The manager now owns the view.
                 const BindlessTextureHandle h =
@@ -215,8 +217,8 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 m_envMapHeight = static_cast<uint32_t>(eh);
                 m_envMapIntegral = envCDF.integral();
                 m_envMapLoadedPath = m_envMapPath;
-                std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
-                          << " (bindless idx=" << m_envMapTexIdx << ")" << std::endl;
+                OHAO_LOG(Info, gpu, "RT: Environment map loaded: {}x{} (bindless idx={})", ew, eh,
+                         m_envMapTexIdx);
             }
             stbi_image_free(hdrPixels);
         }

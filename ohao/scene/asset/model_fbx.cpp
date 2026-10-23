@@ -11,7 +11,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#include <iostream>
+#include "core/log.hpp"
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -98,17 +99,16 @@ bool Model::loadFromFBX(std::string_view filename) {
     ufbx_error error;
     ufbx_scene* scene = ufbx_load_file(path.c_str(), &opts, &error);
     if (!scene) {
-        std::cerr << "ufbx error: " << error.description.data << std::endl;
+        OHAO_LOG(Error, asset, "ufbx error: {}", error.description.data);
         return false;
     }
 
     sourcePath = path;
     std::string modelDir = std::filesystem::path(path).parent_path().string();
 
-    std::cout << "FBX: " << scene->meshes.count << " meshes, "
-              << scene->materials.count << " materials, "
-              << scene->textures.count << " textures, "
-              << scene->anim_stacks.count << " animations" << std::endl;
+    OHAO_LOG(Info, asset, "FBX: {} meshes, {} materials, {} textures, {} animations",
+             scene->meshes.count, scene->materials.count, scene->textures.count,
+             scene->anim_stacks.count);
 
     // --- Materials ---
     uint32_t numMats = static_cast<uint32_t>(scene->materials.count);
@@ -184,9 +184,8 @@ bool Model::loadFromFBX(std::string_view filename) {
         if (mat->fbx.normal_map.texture) texMaps += "fbx_normal ";
         if (texMaps.empty()) texMaps = "none";
 
-        std::cout << "  Material " << mi << " (" << mat->name.data << "): "
-                  << "maps=[" << texMaps << "] rough=" << roughness
-                  << std::endl;
+        OHAO_LOG(Debug, asset, "  Material {} ({}): maps=[{}] rough={}",
+                 mi, mat->name.data, texMaps, roughness);
     }
 
     // --- Meshes ---
@@ -307,11 +306,8 @@ bool Model::loadFromFBX(std::string_view filename) {
     (void)nextJointIdx;
     ufbx_free_scene(scene);
 
-    std::cout << "FBX loaded: " << path << " ("
-              << vertices.size() << " vertices, "
-              << indices.size() << " indices, "
-              << numMats << " materials, "
-              << albedoTextures.size() << " textures)" << std::endl;
+    OHAO_LOG(Info, asset, "FBX loaded: {} ({} vertices, {} indices, {} materials, {} textures)",
+             path, vertices.size(), indices.size(), numMats, albedoTextures.size());
     return true;
 }
 

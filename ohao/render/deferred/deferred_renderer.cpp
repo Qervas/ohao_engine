@@ -2,7 +2,7 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include <iostream>
+#include "core/log.hpp"
 #include <array>
 #include <cmath>
 #include <vector>
@@ -20,7 +20,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_width = 1920;
     m_height = 1080;
 
-    std::cout << "DeferredRenderer: Initializing..." << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: initializing...");
 
     // Initialize G-Buffer pass
     m_gbufferPass = std::make_unique<GBufferPass>();
@@ -28,26 +28,26 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_gbufferPass->setTextureManager(m_textureManager);
     }
     if (!m_gbufferPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: GBufferPass failed" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: GBufferPass failed");
         return false;
     }
-    std::cout << "DeferredRenderer: GBufferPass OK" << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: GBufferPass OK");
 
     // Initialize CSM pass
     m_csmPass = std::make_unique<CSMPass>();
     if (!m_csmPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: CSMPass failed" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: CSMPass failed");
         return false;
     }
-    std::cout << "DeferredRenderer: CSMPass OK" << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: CSMPass OK");
 
     // Initialize deferred lighting pass
     m_lightingPass = std::make_unique<DeferredLightingPass>();
     if (!m_lightingPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: LightingPass failed" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: LightingPass failed");
         return false;
     }
-    std::cout << "DeferredRenderer: LightingPass OK" << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: LightingPass OK");
 
     // Connect G-Buffer to lighting
     m_lightingPass->setGBufferPass(m_gbufferPass.get());
@@ -61,9 +61,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_sssPass = std::make_unique<SSSPass>();
     if (m_sssPass->initialize(device, physicalDevice)) {
         m_sssPass->setGBufferPass(m_gbufferPass.get());
-        std::cout << "DeferredRenderer: SSSPass OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: SSSPass OK");
     } else {
-        std::cerr << "DeferredRenderer: SSSPass failed (non-fatal)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: SSSPass failed (non-fatal)");
         m_sssPass.reset();
     }
 
@@ -71,27 +71,27 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_ssrPass = std::make_unique<SSRPass>();
     if (m_ssrPass->initialize(device, physicalDevice)) {
         m_ssrPass->setGBufferPass(m_gbufferPass.get());
-        std::cout << "DeferredRenderer: SSRPass OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: SSRPass OK");
     } else {
-        std::cerr << "DeferredRenderer: SSRPass failed (non-fatal)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: SSRPass failed (non-fatal)");
         m_ssrPass.reset();
     }
 
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
     if (!m_postProcessing->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: PostProcessing failed" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: PostProcessing failed");
         return false;
     }
-    std::cout << "DeferredRenderer: PostProcessing OK" << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: PostProcessing OK");
 
     // Initialize gizmo pass (transform handles)
     m_gizmoPass = std::make_unique<GizmoPass>();
     if (!m_gizmoPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: GizmoPass failed (non-fatal)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: GizmoPass failed (non-fatal)");
         m_gizmoPass.reset();
     } else {
-        std::cout << "DeferredRenderer: GizmoPass OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: GizmoPass OK");
     }
 
     // Connect depth/normal/velocity/albedo/position for post-processing
@@ -102,31 +102,31 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize particle system
     m_particleSystem = std::make_unique<ParticleSystem>();
     if (!m_particleSystem->initialize(device, physicalDevice, 65536)) {
-        std::cerr << "DeferredRenderer: ParticleSystem failed (non-fatal)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: ParticleSystem failed (non-fatal)");
         m_particleSystem.reset();
     } else {
         // Create render pass, framebuffer, and render pipeline for particle rendering
         if (createParticleRenderPass() && createParticleFramebuffer()) {
             if (m_particleSystem->initRenderPipeline(m_particleRenderPass)) {
-                std::cout << "DeferredRenderer: ParticleSystem OK" << std::endl;
+                OHAO_LOG(Debug, render, "DeferredRenderer: ParticleSystem OK");
             } else {
-                std::cerr << "DeferredRenderer: Particle render pipeline failed (non-fatal)" << std::endl;
+                OHAO_LOG(Warn, render, "DeferredRenderer: Particle render pipeline failed (non-fatal)");
             }
         } else {
-            std::cerr << "DeferredRenderer: Particle render pass/framebuffer failed (non-fatal)" << std::endl;
+            OHAO_LOG(Warn, render, "DeferredRenderer: Particle render pass/framebuffer failed (non-fatal)");
         }
     }
 
     // Initialize sky pass (Preetham analytical sky)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: SkyPass failed (non-fatal)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: SkyPass failed (non-fatal)");
         m_skyPass.reset();
     } else {
         m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
                                 m_lightingPass->getOutputImage());
         m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        std::cout << "DeferredRenderer: SkyPass OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: SkyPass OK");
     }
 
     // Initialize render graph and import all pass outputs
@@ -139,9 +139,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_rtShadow = std::make_unique<RTShadowTechnique>();
     if (m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
         m_useRTShadows = true;
-        std::cout << "DeferredRenderer: RTShadow OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: RTShadow OK");
     } else {
-        std::cout << "DeferredRenderer: RTShadow not available (using CSM fallback)" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: RTShadow not available (using CSM fallback)");
         m_rtShadow.reset();
     }
 
@@ -149,13 +149,13 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_rtGI = std::make_unique<RTGITechnique>();
     if (m_rtGI->init(device, physicalDevice, m_width, m_height)) {
         m_useRTGI = true;
-        std::cout << "DeferredRenderer: RTGI OK" << std::endl;
+        OHAO_LOG(Debug, render, "DeferredRenderer: RTGI OK");
     } else {
-        std::cout << "DeferredRenderer: RTGI not available" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: RTGI not available");
         m_rtGI.reset();
     }
 
-    std::cout << "DeferredRenderer: Fully initialized" << std::endl;
+    OHAO_LOG(Info, render, "DeferredRenderer: fully initialized");
     return true;
 }
 
@@ -217,7 +217,7 @@ bool DeferredRenderer::initGpuTiming() {
     m_timestampPeriod = props.limits.timestampPeriod;  // nanoseconds per tick
 
     if (m_timestampPeriod == 0.0f) {
-        std::cerr << "DeferredRenderer: GPU does not support timestamps" << std::endl;
+        OHAO_LOG(Warn, render, "DeferredRenderer: GPU does not support timestamps");
         m_gpuTimingEnabled = false;
         return false;
     }
@@ -229,7 +229,7 @@ bool DeferredRenderer::initGpuTiming() {
     poolInfo.queryCount = GPU_TIMER_COUNT * 2;
 
     if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_timestampPool) != VK_SUCCESS) {
-        std::cerr << "DeferredRenderer: Failed to create timestamp query pool" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create timestamp query pool");
         m_gpuTimingEnabled = false;
         return false;
     }
@@ -239,7 +239,7 @@ bool DeferredRenderer::initGpuTiming() {
     m_passTimingNames.fill(nullptr);
     m_passTimingCount = 0;
 
-    std::cout << "DeferredRenderer: GPU timing enabled (period=" << m_timestampPeriod << "ns)" << std::endl;
+    OHAO_LOG(Info, render, "DeferredRenderer: GPU timing enabled (period={}ns)", m_timestampPeriod);
     return true;
 }
 
@@ -961,8 +961,7 @@ void DeferredRenderer::importGraphTextures() {
             VK_IMAGE_LAYOUT_UNDEFINED);
     }
 
-    std::cout << "DeferredRenderer: RenderGraph re-imported textures ("
-              << w << "x" << h << ")" << std::endl;
+    OHAO_LOG(Debug, render, "DeferredRenderer: RenderGraph re-imported textures ({}x{})", w, h);
 }
 
 bool DeferredRenderer::createParticleRenderPass() {
@@ -1022,7 +1021,7 @@ bool DeferredRenderer::createParticleRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_particleRenderPass) != VK_SUCCESS) {
-        std::cerr << "DeferredRenderer: Failed to create particle render pass" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create particle render pass");
         return false;
     }
 
@@ -1049,7 +1048,7 @@ bool DeferredRenderer::createParticleFramebuffer() {
     fbInfo.layers = 1;
 
     if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_particleFramebuffer) != VK_SUCCESS) {
-        std::cerr << "DeferredRenderer: Failed to create particle framebuffer" << std::endl;
+        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create particle framebuffer");
         return false;
     }
 
@@ -1152,21 +1151,21 @@ bool DeferredRenderer::reloadShaderForPass(std::string_view passName, std::strin
     for (const auto& e : entries) {
         if (passName == e.name) {
             if (!e.pass) {
-                std::cerr << "DeferredRenderer::reloadShader: pass '" << passName << "' not initialized" << std::endl;
+                OHAO_LOG(Error, render, "DeferredRenderer::reloadShader: pass '{}' not initialized", passName);
                 return false;
             }
             bool ok = e.pass->reloadShader(spvPath);
             if (ok) {
-                std::cout << "DeferredRenderer: hot-reloaded shader for " << passName << std::endl;
+                OHAO_LOG(Info, render, "DeferredRenderer: hot-reloaded shader for {}", passName);
             } else {
-                std::cerr << "DeferredRenderer: hot-reload FAILED for " << passName
-                          << " (pass doesn't support hot-reload or SPV invalid)" << std::endl;
+                OHAO_LOG(Error, render, "DeferredRenderer: hot-reload FAILED for {} (pass doesn't support hot-reload or SPV invalid)",
+                         passName);
             }
             return ok;
         }
     }
 
-    std::cerr << "DeferredRenderer::reloadShader: unknown pass '" << passName << "'" << std::endl;
+    OHAO_LOG(Error, render, "DeferredRenderer::reloadShader: unknown pass '{}'", passName);
     return false;
 }
 

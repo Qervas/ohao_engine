@@ -1,9 +1,9 @@
 #include "ecs/render_extract.hpp"
 #include "ecs/components.hpp"
 #include "render/scene/render_scene.hpp"
+#include "core/log.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <unordered_set>
@@ -188,8 +188,9 @@ private:
     void warnOnce(render::MeshHandle h, const char* what) {
         const uint64_t key = (uint64_t{h.index} << 32) | h.generation;
         if (!m_warned.insert(key).second) return;
-        std::cerr << "[ecs] render_extract: " << what << " (mesh index " << h.index << ", generation "
-                  << h.generation << "); entities using it are not rendered\n";
+        OHAO_LOG(Warn, ecs,
+                 "render_extract: {} (mesh index {}, generation {}); entities using it are not rendered",
+                 what, h.index, h.generation);
     }
 
     void markRenderDirty(entt::registry& reg, entt::entity e) { reg.emplace_or_replace<RenderDirty>(e); }
@@ -223,7 +224,7 @@ private:
 void installRenderExtract(World& world, render::RenderScene& scene) {
     auto& reg = world.registry();
     if (reg.ctx().contains<RenderExtractInstalled>()) {
-        std::cerr << "[ecs] installRenderExtract called twice on one World; ignored\n";
+        OHAO_LOG(Warn, ecs, "installRenderExtract called twice on one World; ignored");
         return;
     }
     reg.ctx().emplace<RenderExtractInstalled>();

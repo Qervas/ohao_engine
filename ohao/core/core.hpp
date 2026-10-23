@@ -10,6 +10,6 @@
 #include "core/command.hpp"
 #include "core/common_types.hpp"
 #include "core/concepts.hpp"
-#include "core/console_widget.hpp"
 #include "core/event_bus.hpp"
+#include "core/log.hpp"
 #include "core/result.hpp"

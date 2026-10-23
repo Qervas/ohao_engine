@@ -820,6 +820,96 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
     CHECK(allUsed, "every allowlist entry still matches (remove the ones that do not)");
 }
 
+// ---- sub-project 4, test 2 (print part, step 4): the engine prints only through the logger --
+// Every engine message goes through OHAO_LOG (ohao/core/log.hpp), so it reaches the ring,
+// carries a level and channel, and never lands on stdout, which `ohao serve` keeps for the
+// protocol. Tests and tools keep their own output; this covers ohao/ only.
+
+static const std::vector<std::string> kPrintTokens = {
+    "std::cout", "std::cerr", "std::clog", "std::wcout", "std::wcerr", "printf(", "fprintf(",
+    "vprintf(", "vfprintf(", "wprintf(", "puts(", "fputs(", "putchar(", "stdout", "stderr"};
+
+static bool identChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+// Code only (what follows `//` is a comment). A token counts only as a whole word:
+// snprintf( is not printf(, my_stdout is not stdout. One hit per line (the first token).
+static std::vector<NondeterminismHit> printHits(const std::string& file, const std::string& text) {
+    std::vector<NondeterminismHit> hits;
+    std::istringstream in(text);
+    std::string line;
+    int n = 0;
+    while (std::getline(in, line)) {
+        ++n;
+        const std::string code = line.substr(0, line.find("//"));
+        bool hit = false;
+        for (const auto& t : kPrintTokens) {
+            for (auto at = code.find(t); at != std::string::npos && !hit; at = code.find(t, at + 1)) {
+                if (at > 0 && (identChar(code[at - 1]) || code[at - 1] == '.')) continue;
+                const auto end = at + t.size();
+                if (identChar(t.back()) && end < code.size() && identChar(code[end])) continue;
+                hits.push_back({file, n, t, line});
+                hit = true;
+            }
+            if (hit) break;
+        }
+    }
+    return hits;
+}
+
+static void sp4_t02_lint_finds_prints() {
+    const std::string sample =
+        "std::cout << x;\n"
+        "std::snprintf(buf, n, \"%d\", 1);   // formatting, not printing\n"
+        "fprintf(stderr, \"x\");\n"
+        "// std::cerr in a comment is fine\n"
+        "int my_stdout = 0; obj.puts(1);\n"
+        "std::printf(\"%d\", 2);\n";
+    const auto hits = printHits("sample.cpp", sample);
+    CHECK(hits.size() == 3, "finds std::cout, fprintf (once per line) and std::printf; skips snprintf, comments, "
+                            "my_stdout and a member puts");
+    CHECK(hits.size() == 3 && hits[0].line == 1 && hits[1].line == 3 && hits[2].line == 6, "reports the right lines");
+}
+
+static void sp4_t02_engine_prints_only_through_the_logger() {
+    const fs::path root(OHAO_SOURCE_DIR);
+    struct Allowed {
+        const char* file;
+        const char* token;
+        const char* why;
+    };
+    static const Allowed allowed[] = {
+        {"ohao/core/log.cpp", "stderr", "the logger's stderr sink"},
+    };
+    std::vector<NondeterminismHit> offending;
+    std::vector<int> allowedUsed(std::size(allowed), 0);
+    std::size_t files = 0;
+    for (const auto& e : fs::recursive_directory_iterator(root / "ohao")) {
+        const auto ext = e.path().extension();
+        if (!e.is_regular_file() || (ext != ".cpp" && ext != ".hpp" && ext != ".h")) continue;
+        ++files;
+        const std::string rel = fs::relative(e.path(), root).generic_string();
+        for (auto& h : printHits(rel, readFile(e.path()))) {
+            bool ok = false;
+            for (std::size_t i = 0; i < std::size(allowed); ++i)
+                if (rel == allowed[i].file && h.token == allowed[i].token) {
+                    ok = true;
+                    ++allowedUsed[i];
+                }
+            if (!ok) offending.push_back(std::move(h));
+        }
+    }
+    CHECK(files > 200, "the engine sources were found");
+    for (const auto& h : offending) std::printf("\n      %s:%d: %s", h.file.c_str(), h.line, h.text.c_str());
+    CHECK(offending.empty(), "no std::cout, std::cerr, printf or stdout/stderr under ohao/ outside the logger");
+    bool allUsed = true;
+    for (std::size_t i = 0; i < std::size(allowed); ++i)
+        if (allowedUsed[i] == 0) {
+            allUsed = false;
+            std::printf("\n      stale allowlist entry: %s %s (%s)", allowed[i].file, allowed[i].token, allowed[i].why);
+        }
+    CHECK(allUsed, "every allowlist entry still matches (remove the ones that do not)");
+}
+
 // ---- informational benchmark (not gated in step 1) -----------------------------------------
 
 static void bench_typed_write() {
@@ -1058,6 +1148,8 @@ int main(int argc, char** argv) {
     RUN(t13_reflect_depends_on_glm_and_std_only);
     RUN(sp4_t02_lint_finds_nondeterminism);
     RUN(sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems);
+    RUN(sp4_t02_lint_finds_prints);
+    RUN(sp4_t02_engine_prints_only_through_the_logger);
     RUN(bench_typed_write);
     RUN(bench_float_format);
     RUN(bench_float_parse);

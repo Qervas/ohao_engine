@@ -4,6 +4,7 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/rt_visibility.hpp"
 #include "render/scene/render_scene.hpp"
+#include "core/log.hpp"
 
 namespace ohao {
 
@@ -12,6 +13,7 @@ namespace ohao {
 
 void VulkanRenderer::renderDeferred() {
     if (!m_deferredRenderer) return;
+    log::setFrame(++m_framesStarted);
 
     // Rebuild the swapchain BEFORE taking a frame slot. Recreating resizes the
     // renderer, which idles the device and resets m_currentFrame; doing it after
@@ -30,7 +32,7 @@ void VulkanRenderer::renderDeferred() {
         const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
         if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
         if (acq == Swapchain::Acquire::Error) {
-            std::cerr << "[present] vkAcquireNextImageKHR failed" << std::endl;
+            OHAO_LOG(Error, gpu, "present: vkAcquireNextImageKHR failed");
             return;
         }
     } else if (frame.stagingBufferMapped) {
@@ -213,6 +215,7 @@ void VulkanRenderer::blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t
 void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer || !isRTSupported()) return;
+    log::setFrame(++m_framesStarted);
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
@@ -301,7 +304,7 @@ void VulkanRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
     if (!m_deferredRenderer->finalOutputIsRGBA8()) {
         static bool warned = false;
         if (!warned) {
-            std::cerr << "[ohao] deferred readback skipped: tonemapping is off, the final image is HDR\n";
+            OHAO_LOG(Warn, gpu, "deferred readback skipped: tonemapping is off, the final image is HDR");
             warned = true;
         }
         return;

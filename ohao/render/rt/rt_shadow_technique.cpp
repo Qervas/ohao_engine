@@ -1,4 +1,5 @@
 #include "rt_shadow_technique.hpp"
+#include "core/log.hpp"
 #include <fstream>
 #include <cstring>
 #include <algorithm>
@@ -67,31 +68,31 @@ bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_height = height;
 
     if (!loadFunctionPointers()) {
-        std::cerr << "[RTShadow] Failed to load RT function pointers" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to load RT function pointers");
         return false;
     }
 
     if (!createOutputImage()) {
-        std::cerr << "[RTShadow] Failed to create output image" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create output image");
         return false;
     }
 
     if (!createDescriptorResources()) {
-        std::cerr << "[RTShadow] Failed to create descriptor resources" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create descriptor resources");
         return false;
     }
 
     if (!createRTPipeline()) {
-        std::cerr << "[RTShadow] Failed to create RT pipeline" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create RT pipeline");
         return false;
     }
 
     if (!createShaderBindingTable()) {
-        std::cerr << "[RTShadow] Failed to create SBT" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create SBT");
         return false;
     }
 
-    std::cout << "[RTShadow] Initialized (" << width << "x" << height << ")" << std::endl;
+    OHAO_LOG(Info, render, "RTShadow: initialized ({}x{})", width, height);
     return true;
 }
 
@@ -207,7 +208,7 @@ bool RTShadowTechnique::createRTPipeline() {
     auto rahitCode = readFile("bin/shaders/rt_rt_shadow.rahit.spv");
 
     if (rgenCode.empty() || rmissCode.empty() || rahitCode.empty()) {
-        std::cerr << "[RTShadow] Failed to load RT shader SPVs" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to load RT shader SPVs");
         return false;
     }
 
@@ -285,7 +286,7 @@ bool RTShadowTechnique::createRTPipeline() {
     layoutInfo.pPushConstantRanges = &pushRange;
 
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        std::cerr << "[RTShadow] Failed to create pipeline layout" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create pipeline layout");
         return false;
     }
 
@@ -308,11 +309,11 @@ bool RTShadowTechnique::createRTPipeline() {
     vkDestroyShaderModule(m_device, rahitModule, nullptr);
 
     if (result != VK_SUCCESS) {
-        std::cerr << "[RTShadow] Failed to create RT pipeline (err=" << result << ")" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to create RT pipeline (err={})", static_cast<int>(result));
         return false;
     }
 
-    std::cout << "[RTShadow] RT pipeline created" << std::endl;
+    OHAO_LOG(Debug, render, "RTShadow: RT pipeline created");
     return true;
 }
 
@@ -340,7 +341,7 @@ bool RTShadowTechnique::createShaderBindingTable() {
     std::vector<uint8_t> handles(groupCount * handleSize);
     if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
                                               handles.size(), handles.data()) != VK_SUCCESS) {
-        std::cerr << "[RTShadow] Failed to get shader group handles" << std::endl;
+        OHAO_LOG(Error, render, "RTShadow: failed to get shader group handles");
         return false;
     }
 
@@ -411,8 +412,8 @@ bool RTShadowTechnique::createShaderBindingTable() {
 
     m_callRegion = {};  // not used
 
-    std::cout << "[RTShadow] SBT created (handleSize=" << handleSize
-              << ", aligned=" << handleSizeAligned << ")" << std::endl;
+    OHAO_LOG(Debug, render, "RTShadow: SBT created (handleSize={}, aligned={})",
+             handleSize, handleSizeAligned);
     return true;
 }
 

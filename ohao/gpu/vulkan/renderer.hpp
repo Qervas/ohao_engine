@@ -333,6 +333,7 @@ private:
     // Multi-frame rendering (ring buffer)
     FrameResourceManager m_frameResources;
     uint32_t m_currentFrame{0};
+    uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts
 
     // Light uniform buffers, one per frame slot (host-visible, persistently mapped)
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_lightBuffers{};
