@@ -39,6 +39,8 @@ $ build/Release/sobol_test.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
+$ python tests/golden/test_golden_diff.py > /dev/null
+$ python tests/doctor/check_doctor.py > /dev/null
 ```
 
 ## 2. GPU gates (a minute or two; when rendering, ECS, scene or API code changed)
@@ -53,6 +55,7 @@ $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
+$ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 ```
 
@@ -66,8 +69,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 
 ## Judging a failure
 
-- **A golden** fails: run it alone (`--only NAME`) and look at the `.actual.png` written
-  beside the golden. Never widen a tolerance. The deferred scenes are exact: any
+- **A golden** fails: look at `build/golden_diff/<name>.heat.png` (where and how much)
+  and `<name>.crop.png` (expected | actual | heat of the worst region), or read the
+  `regions` in `--json`; run it alone with `--only NAME`. Never widen a tolerance. The deferred scenes are exact: any
   difference there is a change. In the path-traced scenes, a change that perturbs the
   sample sequence moves every pixel by the noise; that is not proof of a regression, and
   `--update` is right only after you have looked.
@@ -78,3 +82,5 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   component changes `schemaHash`), rerun with `--update` (CLI) or fix the doc, and check
   that the diff is only what you meant.
 - **Device lost (-4) everywhere** after a crash is a wedged GPU, not your change: reboot.
+  `build/Release/ohao doctor` says so (`gpu.wedged`), and names any other environment
+  problem (stale SPIR-V, missing assets, conda's cmake, missing Python modules) with its fix.

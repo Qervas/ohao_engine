@@ -766,6 +766,21 @@ For each failing scene (or every scene with `--heatmaps all`), `render_golden.py
 `--selftest --json` reports the measured run-to-run floor per scene, so "is this my change
 or noise?" has a number.
 
+*As built (step 3), with two corrections:*
+- **The crop is at the compare resolution, not full resolution.** The goldens are stored
+  downscaled to 640 px wide, so there is no full-resolution expected image to crop. The
+  strip is expected | actual | heat at 640-px scale, 4x nearest-neighbour.
+- **The crop is bounded.** Scattered noise (the realtime path tracer's) merges into one
+  region as large as the image; a 4x crop of it would be several thousand pixels wide,
+  too costly to look at. A region larger than 96x64 is cropped to a 96x64 window centred
+  on its largest difference, so a strip is at most 1168x256.
+- Regions are connected components (4-neighbour) of 16x16-pixel cells; the JSON lists the
+  4 largest and a `more_regions` count. The heatmap is per-pixel max channel difference,
+  black where equal, then dark red to white (any difference at least 191 red, the largest
+  white). `render_golden.py` and `check_validation.py` print the shared summary line, and
+  CTest runs them with `--json` into `build/golden_diff/golden.json` and
+  `build/check_validation.json`.
+
 ### `ohao doctor`
 
 `ohao doctor [--cpu-only]` prints `{ok, checks: [{id, ok, level, detail, fix?}]}` and
@@ -778,6 +793,18 @@ exits 0 (warnings allowed) or 1. Checks:
 - `tools.glslc`, `tools.cmake` (warns when `PATH`'s cmake is conda's), `python.deps`;
 - `gpu.wedged`: a 64x64 deferred frame within 2 s; after a crash the GPU has stayed wedged
   until reboot, and this says so instead of letting 30 s renders look like regressions.
+
+*As built (step 3):* the verdict is printed inside the CLI's envelope, `{"result": {ok,
+cpuOnly, checks}}`, like every other `ohao` command (the spec showed the bare object).
+Each check names its failure `level`: `error` (exit 1: the Vulkan instance and device,
+shaders, assets, glslc, the GPU probe) or `warn` (ray tracing, the validation layer,
+conda's cmake, the Python modules). `--shader-dir` and `--spirv-dir` point the shader
+checks at another tree (the test uses fake ones); the SPIR-V checked is the copy the
+engine loads, `<exe dir>/bin/shaders`. `#include` resolution follows glslc: a quoted
+include in the including file's directory first, then `shaders/` and `shaders/includes/`;
+an include that resolves nowhere is named in the detail. `tools/check.py` runs the doctor
+with `--cpu-only` unless a `gpu` or `golden` label is selected, and stops (no tests) when
+it fails; `--no-doctor` skips it.
 
 ### Recipes added to `docs/ARCHITECTURE.md`
 
@@ -852,8 +879,16 @@ CPU (no device):
      exactly one known label.
 4. **Golden harness:** synthetic image pairs with known differences give the expected
    max_abs, regions and heatmap pixels; `--json` shape.
+   - *As built (step 3):* `tests/golden/test_golden_diff.py` (quick, 11 checks), including
+     the bounded crop of a large region and an end-to-end run of the harness on a fake
+     manifest whose command copies a prepared PNG (failing scene: regions, heatmap, crop,
+     summary line; passing scene: no images unless `--heatmaps all`; selftest floor).
 5. **Doctor:** a fake shader tree (temp directory) with one stale and one missing SPIR-V
    is reported exactly; JSON shape; `--cpu-only` skips the device checks.
+   - *As built (step 3):* `tests/doctor/check_doctor.py` (quick, 7 checks: missing,
+     stale through a quoted include, stale through two includes via the include root,
+     a newer source, an unresolved include, the shape and `--cpu-only`, the real tree)
+     and `--gpu` (gpu, the device checks pass on this machine).
 6. **Logger:** level filtering, ring wrap and `dropped`, repeat collapse, channel filter,
    `since` paging, concurrent writers (no torn records), sink routing.
 7. **JSON-RPC framing:** CRLF, partial reads across buffer boundaries, oversize lines,
@@ -960,6 +995,11 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
      monograph) are left for a cleanup with their units.
 3. **Golden diffs and doctor.** `render_golden.py`/`check_validation.py` `--json`,
    heatmaps, regions, selftest floor; `ohao doctor`; `check.py` runs doctor. Tests 4, 5.
+   - *Done 2026-10-23.* See the as-built notes under "Golden diffs an agent can read" and
+     "`ohao doctor`" (the crop is at the compare resolution and bounded; the doctor's
+     verdict is in the CLI envelope). Also fixed: `check.py` read the wrong CMake cache key
+     for the harnesses' Python interpreter (`Python3_EXECUTABLE`; FindPython keeps it as
+     `_Python3_EXECUTABLE`), so its module check used whichever Python ran it.
 4. **Logger.** `ohao/core/log`; every engine print migrated; validation messages into
    their channel; the print lint. Test 6, test 2 (print part); log budgets measured.
 5. **Protocol core and headless `ohao serve`.** `ohao_rpc` (framing, ordering, errors,

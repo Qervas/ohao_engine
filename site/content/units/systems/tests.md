@@ -399,6 +399,21 @@ a scratch directory under `build/` hold a common lock as well: the CLI check wri
 their own build tree, a failing test must fail the check and arrive with its summary and
 tail, and every test executable the build produces must be registered.
 
+Before any test runs, the check asks `ohao doctor` whether the machine can run them at
+all: the Vulkan device, stale or missing SPIR-V (following each shader's includes the way
+glslc resolves them), missing assets, conda's cmake, the harnesses' Python modules, and a
+64x64 deferred frame that must render within 2 s, so a GPU wedged after a crash is named
+as such rather than surfacing as slow renders everywhere:
+
+{{cite tools/ohao/doctor.cpp "if (frameMs <= 2000.0 && image)"}}
+
+A failing golden no longer says only that it failed. `render_golden.py --json` lists, per
+scene, the statistics, the tolerance and up to four regions where the image changed, and
+writes a heatmap and an expected | actual | heat crop of the worst region into
+`build/golden_diff/`, which an agent can open.
+
+{{cite tests/golden/render_golden.py "def regions(d, limit=MAX_REGIONS):"}}
+
 ## What only looks wired up
 
 Two things under `tests/` look like tests and are not.
