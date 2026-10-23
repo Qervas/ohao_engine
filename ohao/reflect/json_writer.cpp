@@ -44,16 +44,25 @@ void JsonWriter::beforeValue() {
     }
     if (m_afterKey) { m_afterKey = false; return; }
     if (m_frames.empty()) { m_nextColumn = 0; return; }
+    if (m_frames.back().hasChildren) resolvePending(true);   // the previous child is followed by a comma
     Frame& f = m_frames.back();
-    if (f.hasChildren) {
-        resolvePending(true);   // the previous child is followed by a comma
+    // Already longer than a line can hold: it will break, so break it now and write the
+    // rest of its children directly in broken form.
+    if (!f.broken && f.column + (static_cast<uint32_t>(m_out.size()) - f.start) + 1u > m_width) breakOpenFrames();
+    const uint32_t indent = 2u * (f.depth + 1u);
+    if (f.broken) {
+        if (f.hasChildren) m_out.push_back(',');
+        f.hasChildren = true;
+        m_out.push_back('\n');
+        m_out.append(indent, ' ');
+    } else if (f.hasChildren) {
         m_seps.push_back(static_cast<uint32_t>(m_out.size()));
         m_out.append(", ", 2);
     } else {
         f.hasChildren = true;
         if (f.object) m_out.push_back(' ');
     }
-    m_nextColumn = 2u * (f.depth + 1u);
+    m_nextColumn = indent;
 }
 
 void JsonWriter::openContainer(bool object) {
@@ -63,9 +72,10 @@ void JsonWriter::openContainer(bool object) {
         m_needComma = false;
         return;
     }
+    const bool root = m_frames.empty();   // the root always breaks
     m_frames.push_back(Frame{static_cast<uint32_t>(m_out.size()), m_nextColumn,
                              static_cast<uint32_t>(m_seps.size()), 0,
-                             static_cast<uint16_t>(m_frames.size()), object, false, false});
+                             static_cast<uint16_t>(m_frames.size()), object, false, root});
     m_out.push_back(object ? '{' : '[');
 }
 
@@ -78,33 +88,67 @@ void JsonWriter::closeContainer(bool object) {
     resolvePending(false);   // the last child is followed by the closing bracket
     Frame f = m_frames.back();
     m_frames.pop_back();
+    if (f.broken) {
+        if (f.hasChildren) {
+            m_out.push_back('\n');
+            m_out.append(2u * f.depth, ' ');
+        }
+        m_out.push_back(object ? '}' : ']');
+        return;   // its parent is broken too (breakOpenFrames keeps that invariant)
+    }
     if (f.hasChildren && f.object) m_out.append(" }", 2);
     else m_out.push_back(object ? '}' : ']');
     f.end = static_cast<uint32_t>(m_out.size() - 1);
-    if (m_frames.empty()) {   // the root always breaks
-        if (f.hasChildren) breakContainer(f);
-        m_seps.resize(f.sepBegin);
-        return;
-    }
     // Whether it fits depends on a trailing comma we only learn from the next token.
     m_pending = f;
     m_hasPending = true;
 }
 
-// Decides the layout of the last closed container. It still sits at the tail of the
-// buffer: nothing has been written after it.
+// Decides the layout of the last closed one-line container. It still sits at the tail of
+// the buffer: nothing has been written after it.
 void JsonWriter::resolvePending(bool trailingComma) {
     if (!m_hasPending) return;
     m_hasPending = false;
     const Frame& p = m_pending;
     const uint32_t oneLine = p.end - p.start + 1;
-    const bool fits = !p.hasChildren ||
-                      (!p.brokenChild && p.column + oneLine + (trailingComma ? 1u : 0u) <= m_width);
-    if (!fits) {
-        breakContainer(p);
-        m_frames.back().brokenChild = true;
+    const bool fits = !p.hasChildren || p.column + oneLine + (trailingComma ? 1u : 0u) <= m_width;
+    if (fits) {
+        m_seps.resize(p.sepBegin);
+        return;
     }
+    breakContainer(p);
     m_seps.resize(p.sepBegin);
+    breakOpenFrames();   // a broken child breaks its parent, and so on up
+}
+
+// Breaks the open frames that are still on one line, innermost first, up to the first
+// broken one. Innermost first: an inner frame's content is the tail of its parent's, so
+// breaking it never moves anything the outer frames still need (their separators lie
+// before it), and broken frames need no positions at all.
+void JsonWriter::breakOpenFrames() {
+    for (std::size_t i = m_frames.size(); i-- > 0 && !m_frames[i].broken;) {
+        Frame& f = m_frames[i];
+        const uint32_t indent = 2u * (f.depth + 1u);
+        if (f.hasChildren) {
+            const uint32_t contentBegin = f.start + (f.object ? 2u : 1u);   // after "{ " / "["
+            m_scratch.assign(m_out.data() + contentBegin, m_out.size() - contentBegin);
+            m_out.resize(f.start + 1);
+            std::size_t pos = 0;
+            for (std::size_t k = f.sepBegin; k < m_seps.size(); ++k) {
+                const std::size_t sep = m_seps[k] - contentBegin;
+                m_out.push_back('\n');
+                m_out.append(indent, ' ');
+                m_out.append(m_scratch, pos, sep - pos);
+                m_out.push_back(',');
+                pos = sep + 2;
+            }
+            m_out.push_back('\n');
+            m_out.append(indent, ' ');
+            m_out.append(m_scratch, pos, std::string::npos);
+        }
+        m_seps.resize(f.sepBegin);
+        f.broken = true;
+    }
 }
 
 // Rewrites the container at the tail from its one-line form to one child per line. Its

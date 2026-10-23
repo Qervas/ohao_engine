@@ -487,21 +487,34 @@ file.)
 ### Loading and validation
 
 - **Two-phase.**
-  1. Parse (simdjson On-Demand, in `ohao_ecs`) into a small read-only JSON tree
+  1. Parse (`ohao_ecs/json_parse`) into a small read-only JSON tree
      (`reflect::JsonDocument`, which keeps each number's raw token), then decode the
      whole document into typed per-component values. All errors are collected here, up
      to 100 in document order, then `E_TOO_MANY_ERRORS`.
-     - A per-thread `JsonParser` keeps the simdjson parser, the padded input and the
-       tree storage warm, so repeated loads allocate nothing once warm.
+     - *Revised in step 6:* the reader is a single-pass, strict RFC 8259 parser with an
+       explicit stack (1024 levels), writing the tree directly: number tokens and
+       unescaped strings are views into the text, escaped strings go to an arena, and
+       whitespace is skipped 16 bytes at a time. UTF-8 is validated up front with
+       simdjson's SIMD validator, simdjson's only remaining use. It replaced simdjson
+       On-Demand plus a tree builder, which spent most of its time in the per-value API:
+       parsing bench10k went from 6.8 to 3.6 ms.
+     - A per-thread `JsonParser` keeps the input copy and the tree storage warm, and so
+       does the decoder for its large tables (references, decoded values, ids): repeated
+       loads allocate nothing once warm. (Vectors over ~512 KB go back to Windows when
+       freed and page-fault again on the next use; that alone cost over 1 ms per 10k load.)
      - Floats are parsed from their tokens with fast_float, which is correctly rounded
        and gives `std::from_chars<float>` results bit for bit, faster. Overflow and
        underflow are `E_RANGE`.
+     - Validation keeps nothing it decodes, so for a field without limits a number is
+       only checked to fit a float, from its decimal exponent; tokens near either end of
+       the float range are converted. The verdict is the same as a load's (tested).
   2. Only if phase 1 reports no errors, create entities in file order and emplace
      components.
 
   The destination world is never partially modified. Emplacing fires the normal
   signals, so dirty tagging, instantiate and extract need no special load path.
-  `Parent` is applied after all entities exist, through `World::setParent`.
+  `Parent` is applied after all entities exist, through `World::attach`: `setParent`
+  without the ancestor walk, valid because phase 1 already rejected cycles.
 - **Unknown components** are kept in `PreservedComponents` as canonical compact JSON
   text and written back on save, with the version from the file header. An unknown
   *field* inside a known component is an error (`E_UNKNOWN_FIELD`) with a suggestion.
@@ -538,7 +551,7 @@ file.)
   | Warnings | `W_UNKNOWN_COMPONENT` |
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
   | Assets | `E_ASSET_NOT_FOUND` (with `--check-assets`) |
-  | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH` (and `E_ENTITY_NOT_FOUND` for command targets) |
+  | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH`, `E_SNAPSHOT_UNKNOWN` (and `E_ENTITY_NOT_FOUND` for command targets) |
   | Limits | `E_TOO_MANY_ERRORS` |
 
   Warnings use the same shape with `W_` codes. `line`/`column` are present for file
@@ -609,8 +622,8 @@ through this table, so there is exactly one implementation of each operation.
 | `world.query` | `{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}` → `{entities, count, missing?, next?}` |
 | `world.apply` | `{commands}` (one atomic batch) → `{applied, results, inverse}` |
 | `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` |
-| `world.snapshot` | `{name}` → `{name, entities, bytes}` (step 6) |
-| `world.restore` | `{name}` → `{created, destroyed, changed}` (step 6) |
+| `world.snapshot` | `{name}` → `{name, entities, bytes}`. Captures in memory under that name; an existing snapshot of that name is overwritten, reusing its memory. |
+| `world.restore` | `{name}` → `{created, destroyed, changed, frame}`. The snapshot is kept; restoring it again is cheap. An unknown name is `E_SNAPSHOT_UNKNOWN`. |
 | `render.capture` | `{path, mode, spp, width, height, denoise}` → `{path, ms}`. The renderer is initialized lazily on first use. (step 9) |
 
 - `scene` is the scene as a JSON object: it costs no string escaping, which matters
@@ -806,24 +819,52 @@ Performance is a gate, not a follow-up. There are four rules.
    per value and no `std::any`.
 3. **The agent's hot loop never touches text.** Step, query, commands, snapshot and
    restore work in memory. Text is for authoring, interchange and git.
-4. **Snapshots are columnar and memcpy-friendly.**
-   - **Capture:** a snapshot stores the entity table (`EntityId`, `CreationOrder`, the
-     ID-generator counter, the frame counter) plus one column per registered component
-     type, holding row indices and values.
-     - Trivially copyable components (`Transform`, `Light`, `Camera`,
-       `MaterialOverride`) are captured with one `memcpy` of the EnTT packed storage.
-     - `Parent` is stored as row indices.
-     - Non-trivial components (`Name`, `MeshSource`, `Environment`,
+4. **Snapshots are columnar and memcpy-friendly** (`ohao/ecs/snapshot.hpp`, built in
+   step 6).
+   - **What is captured:** the authoring state of every entity with an `EntityId`.
+     - The entity table, in creation order: `EntityId`, `CreationOrder`, the parent row,
+       and the child rows in `Children` order (so sibling order comes back exactly).
+     - One column per saved component (`Parent` excepted; it is the parent row), plus
+       `PreservedComponents`. A column holds the values in EnTT packed order and each
+       value's row.
+     - The ID generator `(seed, counter)`, the next creation sequence and the caller's
+       frame counter.
+   - **Not captured:** derived runtime components (`Children`, `WorldTransform`, render
+     slots and GPU handles). Their owners rebuild them from the restored components,
+     driven by the same signals as any edit (setParent keeps `Children`; a changed
+     `Transform` is tagged dirty; instantiate (step 7) rebuilds `MeshRenderer` from
+     `MeshSource`). Simulation state that must survive a restore therefore lives in a
+     saved component. Entities without an `EntityId` are left alone.
+   - **Capture:**
+     - Trivially copyable components (`Transform`, `Light`, later `Camera` and
+       `MaterialOverride`) are copied with one `memcpy` per EnTT storage page.
+     - Non-trivial components (`Name`, later `MeshSource` and `Environment`, and
        `PreservedComponents`) are captured by typed copy.
+     - Everything is read in packed order, which for a world built by `World::create`
+       is creation order: no sparse or hash lookup per entity.
+     - Capturing over an existing snapshot reuses its memory. The API's
+       `world.snapshot` does that for a name it already holds.
    - **Restore** diffs instead of rebuilding:
-     - ID sets are merge-compared.
-     - Only missing entities are created (with their saved `CreationOrder`, so draw and
-       light order are exact) and only extra ones destroyed.
-     - Values are compared per row (`memcmp` or typed `==`), and only rows that differ
-       are written through `replace`.
+     - Snapshot rows are matched to live entities by position first (an unchanged
+       world holds row r at packed position r), then by id.
+     - Only missing entities are created, with their id, `Name`, `Transform` and saved
+       `CreationOrder`, so draw and light order are exact. Only extra ones are destroyed,
+       with `registry().destroy`, so a snapshot entity re-parented under an extra one is
+       detached rather than destroyed with it.
+     - Values are compared per row (bit-exact per registered field, the save's
+       equality). Only rows that differ are written, through `emplace`, `replace` or
+       `remove`.
+     - Changed parents are detached first and then attached, so no intermediate state
+       has a cycle. Then each `Children` list is put back in the snapshot's order. When
+       the restore attached every link itself, in row order, and the snapshot's lists are
+       in row order, that check is skipped.
+     - The ID generator and creation sequence are restored, so new ids repeat.
 
-     Downstream systems therefore see only real changes: a restore of an unchanged
-     world uploads **zero** instance bytes to the GPU.
+     Downstream systems therefore see only real changes: an unchanged restore writes no
+     component (tested by counting signals), so it uploads **zero** instance bytes to
+     the GPU.
+   - Result: `{created, destroyed, changed}`, where `changed` counts component writes
+     and reparents on entities that existed before the restore.
    - **Cooked format later:** the column layout *is* the future cooked binary layout
      (little-endian, `schemaHash`-stamped, string table for non-trivial columns).
      `ohao cook` will be "load text → snapshot → write columns", and a cooked load will
@@ -834,7 +875,14 @@ Performance is a gate, not a follow-up. There are four rules.
 Measured by `scene_bench` (Release) on the reference machine, Frank's dev laptop
 (confirmed 2026-10-22):
 - median of 50 iterations after 5 warm-ups, p95 also reported;
-- single thread, no GPU.
+- single thread, no GPU, high process priority.
+- *Added in step 6:* the operations run interleaved, one of each per round, so a slow
+  phase of the machine (thermal throttling, background load) lands on all of them
+  instead of skewing one. Run to run, this laptop varies by up to ±50%, so medians
+  measured one operation at a time were not comparable.
+- After timing, every operation runs once more and its result is checked (the save
+  round-trips, the restores reproduce the scene, and so on). A benchmark of broken code
+  fails.
 
 Scene `bench10k` is generated with a fixed seed:
 - 10,000 entities: 9,900 renderables (`Name`, `Transform`, `MeshSource` primitive,
@@ -842,6 +890,19 @@ Scene `bench10k` is generated with a fixed seed:
 - 1 camera and 1 environment;
 - hierarchy depth up to 8;
 - about 5 MB pretty.
+
+*Step 6 note:* `MeshSource`, `MaterialOverride`, `Camera` and `Environment` arrive in
+steps 7 and 8. Until then bench10k has the components that exist:
+- `Name` and `Transform`, with random positions, rotations and scales (9 significant
+  digits, so few fields are default);
+- 100 lights of every type;
+- the same hierarchy, about 60% of the entities parented, depth up to 8;
+- 3.2 MB pretty.
+
+The generator gains the new components as they land, and steps 7 and 8 re-run the gate
+on the full scene. The 3.2 MB scene passes with about 15–20% headroom on save and
+validate (step 6 change record), so the full scene needs more codec speed or a budget
+ruling then.
 
 | Operation (bench10k) | Budget (median) |
 |---|---|
@@ -856,12 +917,21 @@ Scene `bench10k` is generated with a fixed seed:
 | `world.query`, 1,000 IDs, full components, compact | ≤ 2 ms |
 
 - **Scaling:** `bench100k` must stay within 12× the 10k numbers (near-linear).
+  - *Measured as (step 6):* each bench100k operation is paired with a bench10k run in
+    the same rounds (10 rounds after 2 warm-ups), and the ratio is taken against those
+    bench10k samples.
+  - Both therefore start with caches cold from the other scene. This tests that the
+    work per entity does not grow with the scene.
+  - Against the warm, standalone bench10k medians, bench100k operations are about
+    23–26× slower. That is the scene outgrowing the CPU caches (32 MB of text, a 25 MB
+    world), not per-entity work growing, and it is recorded in `scene_bench.json`.
 - **Recorded, not gated:**
   - process wall time of `ohao validate` and `ohao run --steps 1` on bench10k;
   - load-to-first-frame of the Cornell scene with rendering.
 - **Gate mechanics:** `scene_bench --check tests/bench/scene_budgets.json` exits
   nonzero on any regression and writes `scene_bench.json`. Changing a budget is a
-  ledgered ruling that needs Frank's OK.
+  ledgered ruling that needs Frank's OK. `scene_bench --breakdown [N]` times the codec's
+  phases separately (parse, decode, save layouts, float formatting) for performance work.
 
 ### Tension: canonical/readable vs fast
 
@@ -876,7 +946,7 @@ than binary. That cost buys diffs, agent readability and determinism. The resolu
 **three tiers, each used where it wins:**
 
 1. **Text** (`.scene.json`, pretty or compact) for authoring, review, git and agents.
-   It's fast enough to sit under a budget (simdjson at GB/s, `to_chars`, a hand-written
+   It's fast enough to sit under a budget (a single-pass reader, `to_chars`, a hand-written
    writer into one reserved buffer, no iostreams), and it never sits on a per-step
    path.
 2. **In-memory columnar snapshots plus commands** for every per-step agent operation,
@@ -898,7 +968,7 @@ adopted later for a whole layer without touching the core.
 |---|---|---|
 | Core runtime, ECS, renderer, physics glue | **C++20 (keep)** | It's 54K working lines. Vulkan, Jolt, NRD, DLSS, OIDN, assimp/ufbx and EnTT are C/C++ APIs. A rewrite costs months and buys no measurable speed. |
 | Reflection + schema | **C++20, explicit registration** | It must see the C++ component types at zero runtime cost. Its output (JSON catalogue, JSON Schema) is language-neutral. |
-| Scene codec, validator, migrations | **C++20 + simdjson + `to_chars`** | One implementation of the format, parsing at GB/s. A second implementation in another language would drift. Others validate through the JSON Schema. |
+| Scene codec, validator, migrations | **C++20, own reader + `to_chars`** (simdjson validates UTF-8) | One implementation of the format, at about 1 GB/s. A second implementation in another language would drift. Others validate through the JSON Schema. |
 | API layer (`ohao/api`) | **C++20** | In-process with the World: no FFI, no copies. |
 | Agent CLI (`ohao`) | **C++20** | Same binary as the engine; no runtime start-up tax. |
 | Control surface (later) | **C++20, JSON-RPC 2.0 over stdio, named pipe later** | MCP *is* JSON-RPC over stdio, so a native server needs no Node or Python hop. |
@@ -1149,7 +1219,12 @@ Each step ends with the engine running and every suite green.
    into the sequential apply with rollback. `Session` is the dispatch; the CLI (step 9)
    wraps it.)*
 6. Columnar snapshot/restore, `scene_bench` and the budgets. Tests 10 and 19 for the
-   operations that exist so far.
+   operations that exist so far. *(Done 2026-10-23. Every budget and scaling ratio
+   passes on the step-6 bench10k (3.2 MB; see the step-6 note under "Budgets").
+   Getting there took a new JSON reader, warm decode memory, an early-breaking pretty
+   writer, validation without unused float conversion, sequential-access snapshot and
+   restore, and `World::attach`/`reserve`. `world.snapshot`/`world.restore` are in the
+   API.)*
 7. `MeshSource`, `MaterialOverride`, `generateQuad`/`generateBox`, instantiate, resolver.
    Test 11.
 8. `Camera`, `Environment`, scene view. `cornell_box`/`model_viewer` converted, with
@@ -1169,14 +1244,17 @@ Each step ends with the engine running and every suite green.
   one shared BLAS. Traversal should be unchanged, but BLAS float ordering might not be.
   The exact RT golden decides. The fallback is per-entity meshes as today, with sharing
   recorded as a follow-up.
-- **The budgets are estimates until step 6 measures them.** They were sized from
-  simdjson and `to_chars` throughput with headroom. If one is missed, profile first. A
-  budget change needs Frank's OK.
+- **The budgets were estimates until step 6 measured them.** They were sized from
+  simdjson and `to_chars` throughput with headroom. Step 6 met all of them on the
+  current 3.2 MB bench10k after profiling (a new reader, warm memory, a faster pretty
+  writer, validation that skips unused conversions). Save and validate keep only about
+  15–20% headroom, so the full ~5 MB scene of steps 7–8 is the real test. A budget change
+  needs Frank's OK.
 - **Windows timing noise.** Medians of 50 after warm-up, high process priority, and p95
   reported. The gate compares medians only.
 - **Three new header-only or small dependencies** (simdjson, unordered_dense, Boost.PFR
-  test-only). All are pinned. simdjson's padding and forward-only On-Demand API shape
-  the reader (raw tokens for floats, `raw_json()` for preserved components).
+  test-only). All are pinned. Since step 6 simdjson only validates UTF-8; the reader is
+  our own (raw tokens for floats, views into the text for strings).
 - **CLI start-up cost** (process plus Vulkan initialization for renders) limits
   one-process-per-operation agents. In 3, `--script` batches many operations per
   process. Later, `ohao serve` keeps one process alive.
@@ -1210,7 +1288,7 @@ Decided with Frank on 2026-10-22, as recommended:
 |---|---|---|
 | 1 | Type registry | Own registry, member-pointer registration, editor attributes. Revised: per-member typed codegen. |
 | 2 | Completeness guard | Boost.PFR (test-only). Revised: also checks docs and units. |
-| 3 | Text format | Canonical JSON, own writer. Revised: simdjson parser; pretty and compact renderings. |
+| 3 | Text format | Canonical JSON, own writer. Revised: simdjson parser; pretty and compact renderings. Revised again (step 6): own single-pass reader, simdjson for UTF-8 validation only. |
 | 4 | Extension | `.scene.json` (revised 2026-10-23 from `.ohscene`; see "File naming") |
 | 5 | Entity IDs | Random 64-bit. Revised: splitmix64(seed + counter), counter in snapshots, explicit IDs allowed. |
 | 6 | Asset references | `AssetRef {path, guid}` + `AssetResolver`. Texture overrides deferred to the asset DB. |
@@ -1245,7 +1323,7 @@ technology calls; these were decided on that delegation:
 | 29 | Editor UI | C++ + Dear ImGui (docking) on the Vulkan backend, as an `ohao/api` client |
 | 30 | Shaders | GLSL stays; new shaders in Slang from 2b |
 | 31 | Second compiled language | None now. Rust or Zig only for a standalone out-of-process tool behind a boundary, if it needs a library C++ lacks. |
-| 32 | Dependencies | simdjson (scene reader), ankerl::unordered_dense (ID map), fast_float (float parsing, header-only, private to `ohao_reflect`), Boost.PFR (test-only); all pinned |
+| 32 | Dependencies | simdjson (UTF-8 validation of scene text; the reader was until step 6), ankerl::unordered_dense (ID map), fast_float (float parsing, header-only, private to `ohao_reflect`), Boost.PFR (test-only); all pinned |
 | 33 | Agent dev ergonomics in 3 | `AGENTS.md` (+ `CLAUDE.md` import), `docs/ARCHITECTURE.md` with recipes, refreshed `.claude/skills/`, JSON output from everything new; the rest in sub-project 4 |
 
 Answered by Frank on 2026-10-22:

@@ -427,6 +427,62 @@ static void pretty_single_pass_matches_pretty_print() {
     CHECK(p.str() == "{}", "an empty root stays {}");
 }
 
+// Random trees (nesting, fan-out, key and string lengths) written to both layouts. The
+// pretty writer breaks a container as soon as it cannot fit (a child broke, or its line is
+// already too long); prettyPrint decides from finished compact text. They must agree.
+static void writeRandomValue(JsonWriter& a, JsonWriter& b, std::mt19937& rng, int depth) {
+    const auto both = [&](auto&& f) { f(a); f(b); };
+    const int kind = depth >= 6 ? static_cast<int>(rng() % 3) : static_cast<int>(rng() % 6);
+    if (kind == 0) {
+        const float v = static_cast<float>(static_cast<int>(rng() % 20000) - 10000) / 7.0f;
+        both([&](JsonWriter& w) { w.float32(v); });
+    } else if (kind == 1) {
+        const std::string s(rng() % 40, static_cast<char>('a' + rng() % 26));
+        both([&](JsonWriter& w) { w.string(s); });
+    } else if (kind == 2) {
+        both([](JsonWriter& w) { w.null(); });
+    } else if (kind == 3 || kind == 4) {
+        both([](JsonWriter& w) { w.beginObject(); });
+        const int n = static_cast<int>(rng() % 6);
+        for (int i = 0; i < n; ++i) {
+            const std::string k = "k" + std::to_string(i) + std::string(rng() % 25, 'x');
+            both([&](JsonWriter& w) { w.key(k); });
+            writeRandomValue(a, b, rng, depth + 1);
+        }
+        both([](JsonWriter& w) { w.endObject(); });
+    } else {
+        both([](JsonWriter& w) { w.beginArray(); });
+        const int n = static_cast<int>(rng() % 7);
+        for (int i = 0; i < n; ++i) writeRandomValue(a, b, rng, depth + 1);
+        both([](JsonWriter& w) { w.endArray(); });
+    }
+}
+
+static void t02_pretty_writer_matches_pretty_print_on_random_trees() {
+    for (uint32_t seed = 1; seed <= 300; ++seed) {
+        for (int width : {20, 60, 100}) {
+            std::mt19937 rng(seed);
+            JsonWriter compact(0, JsonLayout::Compact);
+            JsonWriter pretty(0, JsonLayout::Pretty, width);
+            compact.beginObject();
+            pretty.beginObject();
+            for (int i = 0; i < 4; ++i) {
+                const std::string k = "top" + std::to_string(i);
+                compact.key(k);
+                pretty.key(k);
+                writeRandomValue(compact, pretty, rng, 0);
+            }
+            compact.endObject();
+            pretty.endObject();
+            const std::string expect = prettyPrint(compact.str(), width);
+            if (pretty.str() != expect)
+                std::printf("\n--- seed %u width %d\nGOT:\n%s\nWANT:\n%s\n", seed, width, pretty.str().c_str(),
+                            expect.c_str());
+            CHECK(pretty.str() == expect, "single-pass pretty == prettyPrint(compact) for random trees");
+        }
+    }
+}
+
 // ---- typed operations -------------------------------------------------------------------
 
 static void struct_writes_canonically() {
@@ -803,6 +859,7 @@ int main(int argc, char** argv) {
     RUN(pretty_layout_rules);
     RUN(pretty_strips_back_to_compact);
     RUN(pretty_single_pass_matches_pretty_print);
+    RUN(t02_pretty_writer_matches_pretty_print_on_random_trees);
     RUN(struct_writes_canonically);
     RUN(struct_equality_is_bit_exact);
     RUN(limits_are_checked_per_component);

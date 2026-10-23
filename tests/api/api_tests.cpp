@@ -160,7 +160,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 9, "nine methods");
+    CHECK(api::methods().size() == 11, "eleven methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -687,6 +687,42 @@ static void t09_scene_methods_load_save_validate() {
     CHECK(failed.code() == "E_ID_INVALID" && w3.idCount() == 0, "a failed load leaves the world empty");
 }
 
+// ---- t10: snapshots through the API ---------------------------------------------------------
+
+// The spec's script: snapshot, edit, step, query, restore -- and the world, the frame and
+// the next generated id come back.
+static void t10_snapshot_and_restore_through_the_api() {
+    World w;
+    loadFile(w, "rooms.scene.json");
+    w.seedIds(99);
+    api::Session s(w, engineTypes());
+    const std::string before = save(w);
+    const Reply snap(s.call("world.snapshot", R"({"name":"base"})"));
+    CHECK(snap.ok() && snap.str("/result/name") == "base" && snap.str("/result/entities") == "4" &&
+              std::stoul(snap.str("/result/bytes")) > 0,
+          "world.snapshot reports the entities and the memory it holds");
+    const Reply created = applyBatch(s, R"([{"op":"entity.create","name":"Extra"},
+        {"op":"field.set","id":"1000000000000002","path":"/Light/intensity","value":2},
+        {"op":"entity.destroy","id":"1000000000000003"},
+        {"op":"entity.reparent","id":"1000000000000004","parent":null}])");
+    CHECK(created.ok(), "edits apply");
+    (void)s.call("world.step", R"({"frames":5})");
+    CHECK(s.frame() == 5 && save(w) != before, "the world moved on");
+    const Reply r(s.call("world.restore", R"({"name":"base"})"));
+    CHECK(r.ok() && r.str("/result/created") == "1" && r.str("/result/destroyed") == "1" &&
+              r.str("/result/changed") == "2" && r.str("/result/frame") == "0",
+          "restore reports one recreated, one destroyed, two changed, and the frame");
+    CHECK(save(w) == before && s.frame() == 0, "the save and the frame are back");
+    const Reply again = applyBatch(s, R"([{"op":"entity.create","name":"Extra"}])");
+    CHECK(again.str("/result/results/0") == created.str("/result/results/0"), "the next generated id repeats");
+    const Reply unknown(s.call("world.restore", R"({"name":"bsae"})"));
+    CHECK(unknown.code() == "E_SNAPSHOT_UNKNOWN" && unknown.str("/error/data/0/suggestion") == "base",
+          "an unknown snapshot name is E_SNAPSHOT_UNKNOWN with a suggestion");
+    CHECK(Reply(s.call("world.snapshot", "{}")).code() == "E_COMMAND", "a snapshot needs a name");
+    const Reply resnap(s.call("world.snapshot", R"({"name":"base"})"));
+    CHECK(resnap.ok() && resnap.str("/result/entities") == "5", "snapshotting a name again replaces it");
+}
+
 // ---- informational benchmark (step 6 gates the budgets) -------------------------------------
 
 static void bench_apply_and_query_10k() {
@@ -783,6 +819,7 @@ int main() {
     RUN(t09_query_filters_and_projects);
     RUN(t09_summary_is_small_and_complete);
     RUN(t09_scene_methods_load_save_validate);
+    RUN(t10_snapshot_and_restore_through_the_api);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

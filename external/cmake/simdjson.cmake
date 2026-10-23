@@ -1,4 +1,5 @@
-# simdjson -- SIMD JSON parser (On-Demand API), used by ohao_ecs to read scene files.
+# simdjson -- used by ohao_ecs for its SIMD UTF-8 validator (simdjson::validate_utf8) on
+# scene text; the JSON reader itself is ohao_ecs's own (json_parse.cpp) since step 6.
 # Built from its single-header amalgamation. Pinned; bump deliberately.
 include(FetchContent)
 FetchContent_Declare(

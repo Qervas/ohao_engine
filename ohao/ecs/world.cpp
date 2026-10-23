@@ -77,6 +77,11 @@ void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {
 }
 
 void World::onIdConstructed(entt::registry& r, entt::entity e) {
+    if (m_claimed) {   // create/createWithId already reserved the slot: no second hash
+        *m_claimed = e;
+        m_claimed = nullptr;
+        return;
+    }
     const uint64_t id = r.get<EntityId>(e).value;
     if (!m_byId.try_emplace(id, e).second)
         std::cerr << "[ecs] EntityId " << id << " emplaced on a second entity; use World::createWithId\n";
@@ -97,8 +102,16 @@ void World::onIdUpdated(entt::registry& r, entt::entity e) {
 uint64_t World::nextId() {
     for (;;) {
         const uint64_t id = splitmix64(m_idGen.seed + m_idGen.counter++);
-        if (id != 0 && !m_byId.contains(id)) return id;
+        if (id != 0 && claim(id)) return id;
     }
+}
+
+// Reserves the index slot for `id` (one hash operation); the EntityId hook of the entity
+// created next fills it. False when the id is in use.
+bool World::claim(uint64_t id) {
+    const auto [it, fresh] = m_byId.try_emplace(id, entt::entity{entt::null});
+    if (fresh) m_claimed = &it->second;
+    return fresh;
 }
 
 entt::entity World::findById(uint64_t id) const {
@@ -112,12 +125,23 @@ uint64_t World::idOf(entt::entity e) const {
     return id ? id->value : 0;
 }
 
+void World::reserve(std::size_t entities) {
+    m_byId.reserve(entities);
+    m_registry.storage<entt::entity>().reserve(entities);
+    m_registry.storage<EntityId>().reserve(entities);
+    m_registry.storage<Name>().reserve(entities);
+    m_registry.storage<Transform>().reserve(entities);
+    m_registry.storage<Children>().reserve(entities);
+    m_registry.storage<TransformDirty>().reserve(entities);
+    m_registry.storage<CreationOrder>().reserve(entities);
+}
+
 entt::entity World::create(std::string_view name, const Transform& local) {
     return createImpl(nextId(), name, local);
 }
 
 entt::entity World::createWithId(uint64_t id, std::string_view name, const Transform& local) {
-    if (id == 0 || m_byId.contains(id)) return entt::null;
+    if (id == 0 || !claim(id)) return entt::null;
     return createImpl(id, name, local);
 }
 
@@ -170,6 +194,12 @@ bool World::setParent(entt::entity child, entt::entity parent) {
     }
     m_registry.emplace_or_replace<TransformDirty>(child);
     return true;
+}
+
+void World::attach(entt::entity child, entt::entity parent) {
+    m_registry.emplace<Parent>(child, parent);
+    m_registry.get_or_emplace<Children>(parent).entities.push_back(child);
+    m_registry.emplace_or_replace<TransformDirty>(child);
 }
 
 void World::setTransform(entt::entity e, const Transform& local) {

@@ -100,7 +100,7 @@ bool resolveRefs(Batch& b) {
         if (e == entt::null) {
             Diagnostic d;
             d.code = ref.component == b.s.tParent ? "E_PARENT_MISSING" : "E_ENTITY_NOT_FOUND";
-            d.path = ref.path;
+            d.path = b.ctx.pathOf(ref);
             d.entity = ref.entity;
             d.offset = ref.offset;
             d.message = "no entity has id " + hex16(ref.id);

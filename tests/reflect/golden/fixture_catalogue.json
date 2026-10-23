@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "c56cf1f23a8bedf8",
+  "schemaHash": "02863136e5e19f9c",
   "units": [
     "m",
     "m/s",
@@ -82,6 +82,7 @@
       "code": "E_PATH",
       "meaning": "A path that reaches no field: \"/Type/field\", then optionally member names or array indices."
     },
+    { "code": "E_SNAPSHOT_UNKNOWN", "meaning": "No snapshot has this name (world.restore)." },
     {
       "code": "W_UNKNOWN_COMPONENT",
       "meaning": "Warning: an unknown component close to a known name. It is kept, but may be a typo."

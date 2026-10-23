@@ -227,7 +227,7 @@ void readFloats(V& v, int count, const JsonNode& n, DecodeContext& ctx, float* d
         ok = readFloat(ctx.doc.child(n, static_cast<uint32_t>(i)), ctx, tmp[i]) && ok;
         ctx.pop();
     }
-    if (ok)
+    if (ok && ctx.needValue)
         for (int i = 0; i < count; ++i) dst[i] = tmp[i];
     (void)v;
 }
@@ -258,7 +258,7 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
             return;
         }
         v = ValueTraits<V>::null();   // patched once every entity exists
-        ctx.refs.push_back(PendingRef{&v, &detail::assignRef<V>, id, ctx.entity, ctx.component, ctx.path(), n.offset});
+        ctx.addRef(&v, &detail::assignRef<V>, id, n.offset);
     } else if constexpr (k == Kind::Bool) {
         if (n.type != JsonType::Bool) return detail::typeError(n, ctx, "true or false");
         v = n.boolean;
@@ -272,7 +272,7 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
         uint64_t x;
         if (readHex64(n, ctx, "E_TYPE", x)) v = x;
     } else if constexpr (k == Kind::Float) {
-        float x;
+        float x = v;
         if (readFloat(n, ctx, x)) v = x;
     } else if constexpr (k == Kind::String) {
         if (n.type != JsonType::String) return detail::typeError(n, ctx, "a string");

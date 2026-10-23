@@ -3,12 +3,14 @@
 #include "api/session.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
 #include "reflect/decode.hpp"
 #include "reflect/json_writer.hpp"
 
 #include <ankerl/unordered_dense.h>
 
 #include <initializer_list>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +42,7 @@ struct Session::Impl {
     std::vector<const TypeInfo*> withOps;
     std::vector<const TypeInfo*> saved;          // the subset written to files
     std::vector<std::string_view> savedNames;    // for "did you mean"
+    std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};
     const TypeInfo* tParent{nullptr};

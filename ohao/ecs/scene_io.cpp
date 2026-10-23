@@ -2,7 +2,6 @@
 
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
-#include "ecs/owned_value.hpp"
 #include "ecs/scene_types.hpp"
 
 #include <ankerl/unordered_dense.h>
@@ -11,6 +10,7 @@
 #include <cstddef>
 #include <fstream>
 #include <map>
+#include <memory_resource>
 #include <new>
 #include <sstream>
 
@@ -45,19 +45,137 @@ std::vector<SavedType> savedTypes(const TypeRegistry& r) {
 
 // ---- decoded values -----------------------------------------------------------------------
 
-struct DecodedEntity {
-    uint64_t id{0};
-    std::vector<OwnedValue> components;
-    std::vector<PreservedComponent> preserved;
+// Flat tables, no allocation per entity: an entity is a range of values and a range of
+// preserved components.
+struct DecodedValue {
+    const TypeInfo* type;
+    void* ptr;
 };
 
-struct Decoded {
+struct DecodedEntity {
+    uint64_t id{0};
+    uint32_t firstValue{0};
+    uint32_t valueCount{0};
+    uint32_t firstPreserved{0};
+    uint32_t preservedCount{0};
+};
+
+// A bump allocator that keeps its chunks between uses: decoded values for a load.
+class WarmArena {
+public:
+    void* allocate(std::size_t size, std::size_t align) {
+        for (;;) {
+            if (m_cur < m_chunks.size()) {
+                Chunk& c = m_chunks[m_cur];
+                const auto base = reinterpret_cast<std::uintptr_t>(c.data.get());
+                const std::size_t off = ((base + c.used + align - 1) & ~(align - 1)) - base;
+                if (off + size <= c.size) {
+                    c.used = off + size;
+                    return c.data.get() + off;
+                }
+                ++m_cur;
+                continue;
+            }
+            const std::size_t bytes = std::max(size + align, m_chunks.empty() ? std::size_t{1} << 20 : m_chunks.back().size * 2);
+            m_chunks.push_back(Chunk{std::make_unique<std::byte[]>(bytes), bytes, 0});
+        }
+    }
+    void reset() {
+        for (Chunk& c : m_chunks) c.used = 0;
+        m_cur = 0;
+    }
+
+private:
+    struct Chunk {
+        std::unique_ptr<std::byte[]> data;
+        std::size_t size;
+        std::size_t used;
+    };
+    std::vector<Chunk> m_chunks;
+    std::size_t m_cur{0};
+};
+
+// decode()'s large working memory, kept warm per thread. Vectors over ~512 KB are
+// returned to the OS when freed, so allocating them per call page-faults them again
+// every time: for a 10k-entity scene that alone cost more than a millisecond.
+struct WarmMemory {
     std::vector<DecodedEntity> entities;
+    std::vector<DecodedValue> values;
     std::vector<reflect::PendingRef> refs;
-    std::size_t preserved{0};
+    std::vector<reflect::DecodeContext::Seg> paths;
+    std::unique_ptr<WarmArena> arena;
+};
+WarmMemory& warm() {
+    thread_local WarmMemory w;
+    return w;
+}
+template <class T>
+std::vector<T> borrow(std::vector<T>& from) {
+    std::vector<T> v = std::move(from);
+    v.clear();
+    return v;
+}
+template <class T>
+void giveBack(std::vector<T>& to, std::vector<T>& v) {
+    v.clear();
+    if (v.capacity() > to.capacity()) to = std::move(v);
+}
+
+class Decoded {
+public:
+    // keepValues: load needs every decoded value; validation decodes each component into
+    // one reusable object per type and keeps nothing.
+    explicit Decoded(bool keepValues) : keep(keepValues) {
+        WarmMemory& w = warm();
+        entities = borrow(w.entities);
+        values = borrow(w.values);
+        refs = borrow(w.refs);
+        m_arena = w.arena ? std::move(w.arena) : std::make_unique<WarmArena>();
+        m_arena->reset();
+    }
+    ~Decoded() {
+        for (const DecodedValue& v : values) v.type->destroy(v.ptr);
+        for (auto& [t, obj] : m_scratch) t->destroy(obj);
+        WarmMemory& w = warm();
+        giveBack(w.entities, entities);
+        giveBack(w.values, values);
+        giveBack(w.refs, refs);
+        if (!w.arena) w.arena = std::move(m_arena);
+    }
+    Decoded(const Decoded&) = delete;
+    Decoded& operator=(const Decoded&) = delete;
+
+    // A default-valued object to decode the next `t` into.
+    void* object(const TypeInfo& t) {
+        if (keep) {
+            void* p = m_arena->allocate(t.size, t.align);
+            t.construct(p);
+            values.push_back({&t, p});
+            return p;
+        }
+        for (auto& [st, obj] : m_scratch)
+            if (st == &t) {
+                t.copy(obj, t.defaultValue.get());
+                return obj;
+            }
+        void* p = m_arena->allocate(t.size, t.align);
+        t.construct(p);
+        m_scratch.emplace_back(&t, p);
+        return p;
+    }
+
+    const bool keep;
+    std::vector<DecodedEntity> entities;
+    std::vector<DecodedValue> values;
+    std::vector<PreservedComponent> preserved;
+    std::vector<reflect::PendingRef> refs;
     std::vector<UpgradeApplied> upgraded;
     std::vector<Diagnostic> errors;
     std::vector<Diagnostic> warnings;
+
+private:
+    std::unique_ptr<WarmArena> m_arena;
+    std::vector<std::pair<const TypeInfo*, void*>> m_scratch;
 };
 
 // Component types the file wrote with an older version (and that can be upgraded),
@@ -103,6 +221,7 @@ void decodeUpgraded(void* obj, const TypeInfo& t, uint32_t fromVersion, const Js
         ctx.warnings.push_back(std::move(w));
     }
     for (reflect::PendingRef& r : sctx.refs) {
+        r.path = sctx.pathOf(r);   // the side document dies with this function
         r.offset = c.offset;
         ctx.refs.push_back(std::move(r));
     }
@@ -134,9 +253,17 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
         if (t->role == reflect::TypeRole::Component) knownNames.push_back(t->name);
     }
 
-    ankerl::unordered_dense::map<uint64_t, uint32_t> fileIndex;   // id -> entity index in the file
+    // id -> (position in the file, index in out.entities)
+    struct Slot {
+        uint32_t filePos;
+        uint32_t decoded;
+    };
+    ankerl::unordered_dense::map<uint64_t, Slot> fileIndex;
+    fileIndex.reserve(ents.count);
     ankerl::unordered_dense::map<const TypeInfo*, uint32_t> singletonCount;
     out.entities.reserve(ents.count);
+    if (out.keep) out.values.reserve(static_cast<std::size_t>(ents.count) * 3);
+    std::vector<const TypeInfo*> seen;
 
     ctx.push("entities");
     for (uint32_t i = 0; i < ents.count && !ctx.full(); ++i) {
@@ -148,7 +275,9 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             continue;
         }
         DecodedEntity de;
-        de.components.reserve(en.count);
+        de.firstValue = static_cast<uint32_t>(out.values.size());
+        de.firstPreserved = static_cast<uint32_t>(out.preserved.size());
+        seen.clear();   // component types given for this entity (duplicates)
         bool idOk = false;
         const JsonNode* idNode = doc.member(en, "id");
         if (!idNode) {
@@ -159,9 +288,11 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             if (reflect::readHex64(*idNode, ctx, "E_ID_INVALID", id)) {
                 if (id == 0) {
                     ctx.error("E_ID_INVALID", *idNode, "entity id 0 is invalid", "a nonzero id", ctx.gotText(*idNode));
-                } else if (!fileIndex.try_emplace(id, i).second) {
+                } else if (const auto [slot, fresh] =
+                               fileIndex.try_emplace(id, Slot{i, static_cast<uint32_t>(out.entities.size())});
+                           !fresh) {
                     ctx.error("E_ID_DUPLICATE", *idNode, "id " + hexId(id) + " is already used by entity " +
-                                                             std::to_string(fileIndex[id]),
+                                                             std::to_string(slot->second.filePos),
                               "a unique id", ctx.gotText(*idNode));
                 } else {
                     de.id = id;
@@ -186,25 +317,23 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             const TypeInfo* t = found == byName.end() ? nullptr : found->second;
             if (t && t->role == reflect::TypeRole::Component && t->serialized && componentOps(*t)) {
                 if (skipTypes.contains(t)) { ctx.pop(); continue; }   // version mismatch, reported once
-                const bool dup = std::any_of(de.components.begin(), de.components.end(),
-                                             [&](const OwnedValue& v) { return v.type() == t; });
-                if (dup) {
+                if (std::find(seen.begin(), seen.end(), t) != seen.end()) {
                     ctx.error("E_DUPLICATE_KEY", c, "component '" + t->name + "' is given twice");
                 } else {
+                    seen.push_back(t);
                     if (t->singleton && ++singletonCount[t] > 1)
                         ctx.error("E_SINGLETON", c, t->name + " allows one per world; this is another",
                                   "at most one " + t->name);
-                    OwnedValue v(t);
+                    void* v = out.object(*t);
                     ctx.component = t;
                     const auto old = oldVersions.empty() ? oldVersions.end() : oldVersions.find(t);
                     if (old == oldVersions.end()) {
-                        reflect::readStruct(v.get(), *t, c, ctx);
+                        reflect::readStruct(v, *t, c, ctx);
                     } else {
-                        decodeUpgraded(v.get(), *t, old->second, doc, c, i, ctx);
+                        decodeUpgraded(v, *t, old->second, doc, c, i, ctx);
                         ++upgradeCounts[t];
                     }
                     ctx.component = nullptr;
-                    de.components.push_back(std::move(v));
                 }
             } else if (t) {
                 const std::string why = !t->serialized ? "is runtime state and is never saved"
@@ -214,7 +343,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             } else if (c.type != JsonType::Object) {
                 ctx.error("E_TYPE", c, "a component is an object", "object", ctx.gotText(c));
             } else {
-                const bool dup = std::any_of(de.preserved.begin(), de.preserved.end(),
+                const bool dup = std::any_of(out.preserved.begin() + de.firstPreserved, out.preserved.end(),
                                              [&](const PreservedComponent& p) { return p.name == c.key; });
                 if (dup) {
                     ctx.error("E_DUPLICATE_KEY", c, "component '" + std::string(c.key) + "' is given twice");
@@ -222,9 +351,8 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                     JsonWriter w;
                     reflect::writeJson(w, doc, c);
                     const auto hv = headerVersions.find(c.key);
-                    de.preserved.push_back(
+                    out.preserved.push_back(
                         PreservedComponent{std::string(c.key), hv == headerVersions.end() ? 1u : hv->second, w.take()});
-                    ++out.preserved;
                     const std::string near = reflect::suggest(c.key, knownNames);
                     if (!near.empty())
                         ctx.warning("W_UNKNOWN_COMPONENT", c,
@@ -234,7 +362,14 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             ctx.pop();
         }
         ctx.entity = 0;
-        if (idOk) out.entities.push_back(std::move(de));
+        if (idOk) {
+            de.valueCount = static_cast<uint32_t>(out.values.size()) - de.firstValue;
+            de.preservedCount = static_cast<uint32_t>(out.preserved.size()) - de.firstPreserved;
+            out.entities.push_back(de);
+        } else {
+            // Not kept: drop what was decoded for it (the values are destroyed with `out`).
+            out.preserved.resize(de.firstPreserved);
+        }
         ctx.pop();
     }
     ctx.pop();
@@ -242,15 +377,20 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
         if (const auto n = upgradeCounts.find(t); n != upgradeCounts.end())
             out.upgraded.push_back(UpgradeApplied{t->name, oldVersions.at(t), t->version, n->second});
 
-    // References: every target must exist. Parents must not form cycles.
-    ankerl::unordered_dense::map<uint64_t, std::size_t> parentRef;   // child id -> ref index
+    // References: every target must exist. Parents must not form cycles. Entities are
+    // addressed by their index in out.entities (file order).
+    constexpr uint32_t kNone = UINT32_MAX;
+    const std::size_t n = out.entities.size();
+    std::vector<uint32_t> parentOf(n, kNone);    // entity -> parent entity
+    std::vector<uint32_t> parentRef(n, kNone);   // entity -> its Parent ref in ctx.refs
     for (std::size_t k = 0; k < ctx.refs.size(); ++k) {
         const reflect::PendingRef& ref = ctx.refs[k];
         const bool isParent = ref.component == parentType;
-        if (!fileIndex.contains(ref.id)) {
+        const auto target = fileIndex.find(ref.id);
+        if (target == fileIndex.end()) {
             Diagnostic d;
             d.code = isParent ? "E_PARENT_MISSING" : "E_ENTITY_NOT_FOUND";
-            d.path = ref.path;
+            d.path = ctx.pathOf(ref);
             d.entity = ref.entity;
             d.offset = ref.offset;
             d.message = "no entity has id " + hexId(ref.id);
@@ -258,54 +398,57 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
             d.got = "\"" + hexId(ref.id) + "\"";
             ctx.report(std::move(d));
         } else if (isParent && ref.entity != 0) {
-            parentRef[ref.entity] = k;
+            if (const auto holder = fileIndex.find(ref.entity); holder != fileIndex.end()) {
+                parentOf[holder->second.decoded] = target->second.decoded;
+                parentRef[holder->second.decoded] = static_cast<uint32_t>(k);
+            }
         }
     }
-    ankerl::unordered_dense::map<uint64_t, uint8_t> state;   // 1 on the current walk, 2 done
-    for (const DecodedEntity& de : out.entities) {
-        std::vector<uint64_t> chain;
-        uint64_t cur = de.id;
-        while (cur != 0 && state[cur] == 0) {
+    std::vector<uint8_t> state(n, 0);   // 1 on the current walk, 2 done
+    std::vector<uint32_t> chain;
+    for (uint32_t i = 0; i < n; ++i) {
+        chain.clear();
+        uint32_t cur = i;
+        while (cur != kNone && state[cur] == 0) {
             state[cur] = 1;
             chain.push_back(cur);
-            const auto pr = parentRef.find(cur);
-            cur = pr == parentRef.end() ? 0 : ctx.refs[pr->second].id;
+            cur = parentOf[cur];
         }
-        if (cur != 0 && state[cur] == 1) {
+        if (cur != kNone && state[cur] == 1) {
             // A cycle: report it once, at the member that comes first in the file.
             const auto from = std::find(chain.begin(), chain.end(), cur);
-            uint64_t first = cur;
-            for (auto it = from; it != chain.end(); ++it)
-                if (fileIndex[*it] < fileIndex[first]) first = *it;
+            const uint32_t first = *std::min_element(from, chain.end());
             const reflect::PendingRef& ref = ctx.refs[parentRef[first]];
             Diagnostic d;
             d.code = "E_PARENT_CYCLE";
-            d.path = ref.path;
-            d.entity = first;
+            d.path = ctx.pathOf(ref);
+            d.entity = out.entities[first].id;
             d.offset = ref.offset;
             std::string loop;
-            for (auto it = from; it != chain.end(); ++it) loop += hexId(*it) + " -> ";
-            d.message = "parents form a cycle: " + loop + hexId(cur);
+            for (auto it = from; it != chain.end(); ++it) loop += hexId(out.entities[*it].id) + " -> ";
+            d.message = "parents form a cycle: " + loop + hexId(out.entities[cur].id);
             d.expected = "a parent that is not a descendant";
             d.got = "\"" + hexId(ref.id) + "\"";
             ctx.report(std::move(d));
         }
-        for (uint64_t id : chain) state[id] = 2;
+        for (const uint32_t c : chain) state[c] = 2;
     }
 }
 
-Decoded decode(std::string_view text, const TypeRegistry& r) {
-    Decoded out;
+void decode(std::string_view text, const TypeRegistry& r, Decoded& out) {
     // One warm parser per thread: repeated loads reuse its buffers. Nothing in `out`
     // points into the document, so the next parse may overwrite it.
     thread_local JsonParser parser;
     auto parsed = parser.parse(text);
     if (!parsed) {
         out.errors.push_back(std::move(parsed.error()));
-        return out;
+        return;
     }
     const JsonDocument& doc = *parsed.value();
     DecodeContext ctx(doc);
+    ctx.valuesUnused = !out.keep;   // validation: nothing decoded is kept
+    ctx.refs = std::move(out.refs);   // warm capacity (see WarmMemory)
+    ctx.adoptPaths(std::move(warm().paths));
     const JsonNode& root = doc.root();
 
     const JsonNode *format = nullptr, *version = nullptr, *components = nullptr, *entities = nullptr;
@@ -405,6 +548,7 @@ Decoded decode(std::string_view text, const TypeRegistry& r) {
     }
 
     out.refs = std::move(ctx.refs);
+    if (auto paths = ctx.releasePaths(); paths.capacity() > warm().paths.capacity()) warm().paths = std::move(paths);
     out.errors = std::move(ctx.errors);
     out.warnings = std::move(ctx.warnings);
     sortByOffset(out.errors);
@@ -412,7 +556,6 @@ Decoded decode(std::string_view text, const TypeRegistry& r) {
     reflect::fillLineColumns(out.errors, doc.source);
     reflect::fillLineColumns(out.warnings, doc.source);
     // Strings were copied out of the document; nothing in `out` points into it.
-    return out;
 }
 
 } // namespace
@@ -509,7 +652,8 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
 }
 
 ValidationReport validateScene(std::string_view text, const TypeRegistry& types) {
-    Decoded d = decode(text, types);
+    Decoded d(false);
+    decode(text, types, d);
     return ValidationReport{std::move(d.errors), std::move(d.warnings), std::move(d.upgraded)};
 }
 
@@ -522,7 +666,8 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
                     std::to_string(dst.registry().storage<entt::entity>().in_use()) + " entities";
         return R::err({std::move(d)});
     }
-    Decoded d = decode(text, types);
+    Decoded d(true);
+    decode(text, types, d);
     if (!d.errors.empty()) return R::err(std::move(d.errors));
 
     // Phase 2: nothing below can fail; every id, reference and value was checked.
@@ -530,35 +675,51 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
     const TypeInfo* tTransform = types.find<Transform>();
     const TypeInfo* tParent = types.find<Parent>();
     entt::registry& reg = dst.registry();
-    std::vector<entt::entity> created(d.entities.size(), entt::entity{entt::null});
-    for (std::size_t i = 0; i < d.entities.size(); ++i) {
+    const std::size_t n = d.entities.size();
+    dst.reserve(n);
+    std::vector<entt::entity> created(n, entt::entity{entt::null});
+    for (std::size_t i = 0; i < n; ++i) {
         const DecodedEntity& de = d.entities[i];
         std::string_view name;
         Transform local{};
-        for (const OwnedValue& v : de.components) {
-            if (v.type() == tName) name = static_cast<const Name*>(v.get())->value;
-            else if (v.type() == tTransform) local = *static_cast<const Transform*>(v.get());
+        for (uint32_t k = de.firstValue; k < de.firstValue + de.valueCount; ++k) {
+            const DecodedValue& v = d.values[k];
+            if (v.type == tName) name = static_cast<const Name*>(v.ptr)->value;
+            else if (v.type == tTransform) local = *static_cast<const Transform*>(v.ptr);
         }
         created[i] = dst.createWithId(de.id, name, local);
     }
     for (const reflect::PendingRef& ref : d.refs)
         ref.assign(ref.field, reflect::ValueTraits<entt::entity>::toRaw(dst.findById(ref.id)));
-    for (std::size_t i = 0; i < d.entities.size(); ++i) {
-        DecodedEntity& de = d.entities[i];
-        for (OwnedValue& v : de.components) {
-            if (v.type() == tName || v.type() == tTransform || v.type() == tParent) continue;
-            componentOps(*v.type())->emplace(reg, created[i], v.get());
+    std::size_t preserved = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const DecodedEntity& de = d.entities[i];
+        for (uint32_t k = de.firstValue; k < de.firstValue + de.valueCount; ++k) {
+            const DecodedValue& v = d.values[k];
+            if (v.type == tName || v.type == tTransform || v.type == tParent) continue;
+            componentOps(*v.type)->emplace(reg, created[i], v.ptr);
         }
-        if (!de.preserved.empty()) reg.emplace<PreservedComponents>(created[i], std::move(de.preserved));
+        if (de.preservedCount) {
+            auto first = d.preserved.begin() + de.firstPreserved;
+            reg.emplace<PreservedComponents>(
+                created[i], std::vector<PreservedComponent>(std::make_move_iterator(first),
+                                                            std::make_move_iterator(first + de.preservedCount)));
+            preserved += de.preservedCount;
+        }
     }
-    // Parents last, in file order, through the World so Children stay consistent.
-    for (std::size_t i = 0; i < d.entities.size(); ++i)
-        for (const OwnedValue& v : d.entities[i].components)
-            if (v.type() == tParent) dst.setParent(created[i], static_cast<const Parent*>(v.get())->entity);
+    // Parents last, in file order, through the World so Children stay consistent. Phase 1
+    // rejected missing parents and cycles, so the trusted attach is safe.
+    for (std::size_t i = 0; i < n; ++i) {
+        const DecodedEntity& de = d.entities[i];
+        for (uint32_t k = de.firstValue; k < de.firstValue + de.valueCount; ++k)
+            if (d.values[k].type == tParent)
+                if (const entt::entity p = static_cast<const Parent*>(d.values[k].ptr)->entity; p != entt::null)
+                    dst.attach(created[i], p);
+    }
 
     LoadReport report;
-    report.entities = d.entities.size();
-    report.preservedUnknown = d.preserved;
+    report.entities = n;
+    report.preservedUnknown = preserved;
     report.upgraded = std::move(d.upgraded);
     report.warnings = std::move(d.warnings);
     return R::ok(std::move(report));

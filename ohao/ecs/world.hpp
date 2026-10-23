@@ -48,6 +48,9 @@ public:
     // 0 when e is invalid or has no EntityId.
     [[nodiscard]] uint64_t idOf(entt::entity e) const;
     [[nodiscard]] std::size_t idCount() const noexcept { return m_byId.size(); }
+    // Room for `entities` entities in the id index and the per-entity storages, before a
+    // bulk create (scene load, snapshot restore).
+    void reserve(std::size_t entities);
     // The CreationOrder the next create() assigns. Restoring it (with idGenState) undoes
     // the bookkeeping of creates that were rolled back.
     [[nodiscard]] uint64_t nextCreationSeq() const noexcept { return m_nextSeq; }
@@ -61,6 +64,10 @@ public:
     // Returns false and changes nothing if child is invalid or parent == child or a
     // descendant of child (a cycle).
     bool setParent(entt::entity child, entt::entity parent);
+    // setParent for hierarchies already known to be acyclic (a validated scene file, a
+    // snapshot): `child` has no parent, `parent` is valid and not `child`'s descendant.
+    // No ancestor walk, so bulk loads stay linear.
+    void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
     void addSystem(std::string name, System fn);
@@ -83,9 +90,11 @@ private:
     void onIdUpdated(entt::registry& r, entt::entity e);
     entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local);
     uint64_t nextId();
+    bool claim(uint64_t id);
 
     entt::registry m_registry;
     ankerl::unordered_dense::map<uint64_t, entt::entity> m_byId;
+    entt::entity* m_claimed{nullptr};   // the slot claim() reserved for the entity being created
     IdGenState m_idGen;
     std::vector<std::pair<std::string, System>> m_systems;
     uint64_t m_nextSeq{0};

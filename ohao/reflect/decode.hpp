@@ -55,8 +55,13 @@ struct PendingRef {
     uint64_t id;                                // the referenced entity's id
     uint64_t entity;                            // id of the entity holding the reference
     const TypeInfo* component;                  // the component holding it
+    // Its JSON Pointer is only needed for an error, so the context keeps the path
+    // segments and DecodeContext::pathOf builds the string on demand. `path` is the
+    // built form for a reference moved to another context (or given explicitly).
     std::string path;
     uint32_t offset;
+    uint32_t pathBegin{0};
+    uint32_t pathCount{0};
 };
 
 class DecodeContext {
@@ -69,11 +74,22 @@ public:
     std::vector<PendingRef> refs;
     uint64_t entity{0};
     const TypeInfo* component{nullptr};
+    // Validation without a world: decoded values are thrown away, so a number in a field
+    // without limits is only checked to fit (from its decimal exponent), not converted.
+    // The verdict is the same; readField turns conversion back on for fields with limits.
+    bool valuesUnused{false};
+    bool needValue{true};   // set per field by readField
 
     void push(std::string_view key) { m_path.push_back(Seg{key, 0, false}); }
     void push(uint32_t index) { m_path.push_back(Seg{{}, index, true}); }
     void pop() { m_path.pop_back(); }
     [[nodiscard]] std::string path() const;
+
+    // Records an entity reference at the current path (resolved once every entity is known).
+    void addRef(void* field, void (*assign)(void*, uint64_t), uint64_t id, uint32_t offset);
+    // A reference's JSON Pointer. Valid while the document is: build it (into r.path)
+    // before moving the reference out of this context.
+    [[nodiscard]] std::string pathOf(const PendingRef& r) const;
 
     // After maxErrors errors one E_TOO_MANY_ERRORS is appended and further errors are
     // dropped; decoders check full() to stop early.
@@ -88,15 +104,29 @@ public:
     // compact JSON of a container, truncated.
     [[nodiscard]] std::string gotText(const JsonNode& n) const;
 
-private:
     struct Seg {
         std::string_view key;
         uint32_t index;
         bool isIndex;
     };
+    // The store of saved ref paths, for decoders that run often and keep it warm: large
+    // vectors freed after every decode go back to the OS and page-fault again on the
+    // next one. adoptPaths takes a store's capacity; releasePaths hands it back, cleared.
+    void adoptPaths(std::vector<Seg>&& store) {
+        m_refPaths = std::move(store);
+        m_refPaths.clear();
+    }
+    [[nodiscard]] std::vector<Seg> releasePaths() {
+        m_refPaths.clear();
+        return std::move(m_refPaths);
+    }
+
+private:
     Diagnostic make(std::string_view code, const JsonNode& at, std::string message) const;
+    static std::string buildPath(const Seg* segs, std::size_t n);
 
     std::vector<Seg> m_path;
+    std::vector<Seg> m_refPaths;   // the saved paths of refs, back to back
     std::size_t m_maxErrors;
     bool m_full{false};
 };

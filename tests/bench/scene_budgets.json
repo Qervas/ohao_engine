@@ -1,0 +1,15 @@
+{
+  "comment": "Spec 'Performance / Budgets (gated)'. Medians in ms on bench10k (Release, single thread). Changing a budget needs Frank's OK.",
+  "budgetsMs": {
+    "save_pretty": 10,
+    "load": 20,
+    "validate": 10,
+    "snapshot": 1,
+    "restore_unchanged": 1,
+    "restore_1pct": 2,
+    "restore_empty": 10,
+    "apply_100_field_set": 0.2,
+    "query_1000_ids": 2
+  },
+  "scaling": { "scene": "bench100k", "maxRatio": 12 }
+}

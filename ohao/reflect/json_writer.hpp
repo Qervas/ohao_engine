@@ -78,7 +78,7 @@ private:
         uint16_t depth;
         bool object;
         bool hasChildren;
-        bool brokenChild;    // a direct child was laid out broken: this one must break
+        bool broken;         // laid out one child per line; children are written in that form
     };
 
     void beforeValue();
@@ -87,6 +87,7 @@ private:
     void closeContainer(bool object);
     void resolvePending(bool trailingComma);
     void breakContainer(const Frame& f);
+    void breakOpenFrames();
     std::size_t rawValue(std::string_view s, std::size_t i);
 
     std::string m_out;

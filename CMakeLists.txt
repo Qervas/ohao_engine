@@ -180,5 +180,9 @@ option(BUILD_API_TESTS "Build API tests (methods, commands, inverses, queries; C
 if(BUILD_API_TESTS)
     add_subdirectory(tests/api)
 endif()
+option(BUILD_SCENE_BENCH "Build scene_bench (scene codec/snapshot/API budgets; CPU only)" ON)
+if(BUILD_SCENE_BENCH)
+    add_subdirectory(tools/bench)
+endif()
 
 

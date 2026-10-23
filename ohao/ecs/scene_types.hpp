@@ -6,6 +6,7 @@
 //
 // Never included by systems that run per frame (transform, render extract): reflection
 // serves load, save, validation, commands and tools only.
+#include "ecs/snapshot_column.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
 
@@ -35,6 +36,10 @@ struct ComponentOps {
     const void* (*tryGet)(const entt::registry& r, entt::entity e);
     void (*remove)(entt::registry& r, entt::entity e);
     std::size_t (*count)(const entt::registry& r);
+    // Snapshots (ecs/snapshot.hpp): capture every T into a column (rowOf maps an entity
+    // index to its snapshot row), and restore a column by diffing (see restoreColumn).
+    void (*capture)(const entt::registry& r, std::span<const uint32_t> rowOf, SnapshotColumn& out);
+    std::size_t (*restore)(entt::registry& r, const SnapshotColumn& col, RestoreScratch& scratch);
 };
 
 template <class T>
@@ -47,6 +52,8 @@ template <class T>
             const auto* s = r.storage<T>();
             return s ? s->size() : 0;
         },
+        &detail::captureColumn<T>,
+        &detail::restoreColumn<T>,
     };
     return std::shared_ptr<const void>(&ops, [](const void*) {});
 }

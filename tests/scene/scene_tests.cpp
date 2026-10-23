@@ -10,6 +10,7 @@
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
 #include "reflect/schema.hpp"
@@ -26,6 +27,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <random>
 #include <set>
 #include <sstream>
@@ -830,105 +832,255 @@ static void t08_v1_corpus_loads_with_expected_values() {
     }
 }
 
-// ---- informational benchmark (step 6 gates the real budget) -------------------------------
+// ---- step 6: snapshots (test 10) ------------------------------------------------------------
 
-static void bench_scene_save_load_10k() {
-    World w;
-    w.seedIds(1);
-    std::mt19937 rng(3);
-    std::uniform_real_distribution<float> pos(-50.0f, 50.0f), ang(0.0f, 6.2831853f);
-    std::vector<entt::entity> es;
-    for (int i = 0; i < 10'000; ++i) {
-        Transform t;
-        t.position = {pos(rng), pos(rng), pos(rng)};
-        t.rotation = glm::angleAxis(ang(rng), glm::normalize(glm::vec3(pos(rng), pos(rng), pos(rng)) + 0.001f));
-        const auto e = w.create("Entity_" + std::to_string(i), t);
-        if (i >= 9'900) w.registry().emplace<Light>(e);
-        if (i % 3 == 1) w.setParent(e, es[static_cast<std::size_t>(i - 1)]);
-        es.push_back(e);
+// Every entity's children, by id, in Children order.
+static std::map<uint64_t, std::vector<uint64_t>> childrenById(const World& w) {
+    std::map<uint64_t, std::vector<uint64_t>> out;
+    for (auto [e, id, ch] : w.registry().view<const EntityId, const Children>().each()) {
+        auto& v = out[id.value];
+        for (const entt::entity c : ch.entities) v.push_back(w.idOf(c));
     }
-    const auto timeIt = [](auto&& fn) {
-        double best = 1e9;
-        for (int rep = 0; rep < 10; ++rep) {
-            const auto t0 = std::chrono::steady_clock::now();
-            fn();
-            best = std::min(best, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
-        }
-        return best;
-    };
-    std::string pretty, compact;
-    const double tPretty = timeIt([&] { pretty = save(w); });
-    const double tCompact = timeIt([&] { compact = save(w, reflect::JsonLayout::Compact); });
-    const double tParseCold = timeIt([&] { (void)parseJson(pretty); });
-    JsonParser warm;
-    const double tParse = timeIt([&] { (void)warm.parse(pretty); });
-    const double tValidate = timeIt([&] { (void)validateScene(pretty, engineTypes()); });
-    const double tLoad = timeIt([&] {
-        World b;
-        (void)loadScene(b, pretty, engineTypes());
-    });
-    const std::size_t fullBytes = saveScene(w, engineTypes(), SaveOptions{reflect::JsonLayout::Pretty, true}).value().size();
-    std::printf("\n      10k entities: save pretty %.2f ms (%.2f MB; %.2f MB with defaults), save compact %.2f ms "
-                "(%.2f MB), parse %.2f ms (cold parser %.2f ms), validate %.2f ms, load %.2f ms (incl. world teardown)  ",
-                tPretty, pretty.size() / 1e6, fullBytes / 1e6, tCompact, compact.size() / 1e6, tParse, tParseCold,
-                tValidate, tLoad);
-    CHECK(!pretty.empty(), "saved");
+    return out;
 }
 
-// ---- informational benchmark (step 6 gates the real budget) -------------------------------
+// Counts every construct/update/destroy of the snapshotted components and of EntityId.
+struct WriteCounter {
+    int writes = 0;
+    void on(entt::registry&, entt::entity) { ++writes; }
+    template <class T>
+    void watch(entt::registry& r) {
+        r.on_construct<T>().template connect<&WriteCounter::on>(*this);
+        r.on_update<T>().template connect<&WriteCounter::on>(*this);
+        r.on_destroy<T>().template connect<&WriteCounter::on>(*this);
+    }
+    template <class T>
+    void unwatch(entt::registry& r) {
+        r.on_construct<T>().disconnect(this);
+        r.on_update<T>().disconnect(this);
+        r.on_destroy<T>().disconnect(this);
+    }
+};
 
-static void bench_write_authoring_components() {
-    reflect::TypeRegistry r;
-    registerSceneTypes(r);
+static void addPreserved(World& w, entt::entity e) {
+    w.registry().emplace<PreservedComponents>(
+        e, std::vector<PreservedComponent>{{"AudioSource", 2, R"({"clip":{"path":"hum.ogg"},"volume":0.4})"}});
+}
+
+static void t10_mutations_then_restore_give_identical_saves() {
     World w;
-    w.seedIds(1);
-    std::mt19937 rng(3);
-    std::uniform_real_distribution<float> pos(-50.0f, 50.0f), ang(0.0f, 6.2831853f);
+    buildRandomWorld(w, 77, 600);
     std::vector<entt::entity> es;
-    for (int i = 0; i < 10'000; ++i) {
-        Transform t;
-        t.position = {pos(rng), pos(rng), pos(rng)};
-        t.rotation = glm::angleAxis(ang(rng), glm::normalize(glm::vec3(pos(rng), pos(rng), pos(rng)) + 0.001f));
-        const auto e = w.create("Entity_" + std::to_string(i), t);
-        if (i >= 9'900) w.registry().emplace<Light>(e);
-        if (i % 3 == 1) w.setParent(e, es[static_cast<std::size_t>(i - 1)]);
-        es.push_back(e);
+    for (auto [e, co] : w.registry().view<const CreationOrder>().each()) es.push_back(e);
+    std::sort(es.begin(), es.end(), [&](auto a, auto b) {
+        return w.registry().get<CreationOrder>(a).seq < w.registry().get<CreationOrder>(b).seq;
+    });
+    addPreserved(w, es[5]);
+    const std::string before = save(w);
+    const auto kids = childrenById(w);
+    const Snapshot snap = takeSnapshot(w, engineTypes(), 42);
+    CHECK(snap.rows() == 600 && snap.frame == 42, "the snapshot has every entity and the frame");
+
+    auto& reg = w.registry();
+    reg.patch<Transform>(es[1], [](Transform& t) { t.position.x += 3.0f; });                 // move
+    reg.emplace_or_replace<Light>(es[2], Light{LightType::Spot});                          // add
+    reg.remove<Light>(*std::find_if(es.begin() + 3, es.end(), [&](auto e) { return reg.all_of<Light>(e); }));   // remove
+    reg.replace<Name>(es[3], Name{"renamed"});                                             // rename
+    reg.remove<PreservedComponents>(es[5]);                                                // drop preserved
+    w.setParent(es[10], entt::null);                                                       // reparent
+    w.setParent(es[11], es[300]);
+    w.destroy(es[20]);                                                                     // destroy a subtree
+    const auto raw = *std::find_if(es.begin() + 41, es.end(), [&](auto e) {
+        return reg.valid(e) && !reg.get<Children>(e).entities.empty();
+    });
+    reg.destroy(raw);                                                                      // raw destroy (children detach)
+    for (int i = 0; i < 25; ++i) w.create("new" + std::to_string(i));                     // create
+    CHECK(save(w) != before, "the mutations show in the save");
+
+    RestoreStats st = restoreSnapshot(w, snap);
+    CHECK(st.created > 0 && st.destroyed == 25 && st.changed > 0, "restore created, destroyed and changed entities");
+    CHECK(save(w) == before, "after restore the save is byte-identical");
+    CHECK(childrenById(w) == kids, "and every Children list is back in its order");
+    st = restoreSnapshot(w, snap);
+    CHECK(st.created == 0 && st.destroyed == 0 && st.changed == 0, "restoring again changes nothing");
+    World loaded;
+    CHECK(load(loaded, before) && sameWorld(w, loaded), "the restored world equals the saved one, field by field");
+}
+
+static void t10_id_counter_and_creation_sequence_are_restored() {
+    World w;
+    buildRandomWorld(w, 5, 50);
+    const Snapshot snap = takeSnapshot(w, engineTypes());
+    std::vector<uint64_t> first;
+    for (int i = 0; i < 5; ++i) first.push_back(w.idOf(w.create("x")));
+    const uint64_t seqAfter = w.nextCreationSeq();
+    restoreSnapshot(w, snap);
+    CHECK(w.idGenState() == snap.idGen && w.nextCreationSeq() == snap.nextSeq, "generator and sequence are restored");
+    std::vector<uint64_t> again;
+    for (int i = 0; i < 5; ++i) again.push_back(w.idOf(w.create("x")));
+    CHECK(again == first && w.nextCreationSeq() == seqAfter, "so new entities get the same ids and sequence again");
+}
+
+static void t10_unchanged_restore_writes_no_component() {
+    World w;
+    buildRandomWorld(w, 9, 300);
+    addPreserved(w, w.findById(takeSnapshot(w, engineTypes()).ids[7]));
+    const Snapshot snap = takeSnapshot(w, engineTypes());
+    auto& reg = w.registry();
+    WriteCounter c;
+    c.watch<EntityId>(reg);
+    c.watch<Name>(reg);
+    c.watch<Transform>(reg);
+    c.watch<Parent>(reg);
+    c.watch<Light>(reg);
+    c.watch<PreservedComponents>(reg);
+    const RestoreStats st = restoreSnapshot(w, snap);
+    const int unchangedWrites = c.writes;
+    reg.patch<Transform>(w.findById(snap.ids[3]), [](Transform& t) { t.scale.y = 7.0f; });
+    c.writes = 0;
+    const RestoreStats one = restoreSnapshot(w, snap);
+    const int oneWrites = c.writes;
+    c.unwatch<EntityId>(reg);
+    c.unwatch<Name>(reg);
+    c.unwatch<Transform>(reg);
+    c.unwatch<Parent>(reg);
+    c.unwatch<Light>(reg);
+    c.unwatch<PreservedComponents>(reg);
+    CHECK(st.created == 0 && st.destroyed == 0 && st.changed == 0 && unchangedWrites == 0,
+          "an unchanged restore fires no component signal at all");
+    CHECK(one.changed == 1 && oneWrites == 1, "one changed row is one replace");
+}
+
+static void t10_restore_into_an_empty_world() {
+    World a;
+    buildRandomWorld(a, 31, 400);
+    addPreserved(a, a.findById(takeSnapshot(a, engineTypes()).ids[0]));
+    const Snapshot snap = takeSnapshot(a, engineTypes());
+    World b;
+    const RestoreStats st = restoreSnapshot(b, snap);
+    CHECK(st.created == 400 && st.destroyed == 0, "every entity is created");
+    CHECK(save(b) == save(a) && sameWorld(a, b), "the new world saves byte-identically");
+    CHECK(childrenById(b) == childrenById(a), "with the same Children order");
+    for (auto [e, id, co] : a.registry().view<const EntityId, const CreationOrder>().each())
+        CHECK(b.registry().get<CreationOrder>(b.findById(id.value)).seq == co.seq, "and each entity's CreationOrder");
+}
+
+// Review focus 3: entities destroyed and new ones created, then restored. The recreated
+// entities keep their CreationOrder, so draw and light order (sorted by it) are exact.
+static void t10_restore_after_structural_changes_keeps_creation_order() {
+    World w;
+    w.seedIds(3);
+    std::vector<entt::entity> lights;
+    for (int i = 0; i < 8; ++i) {
+        lights.push_back(w.create("L" + std::to_string(i)));
+        w.registry().emplace<Light>(lights.back(), Light{LightType::Point, glm::vec3(0.1f * i)});
     }
-    const auto& name = *r.find<Name>();
-    const auto& tr = *r.find<Transform>();
-    const auto& par = *r.find<Parent>();
-    const auto& li = *r.find<Light>();
-    WorldEntityIds ids(w);
-    double bestWrite = 1e9, bestPretty = 1e9;
-    std::size_t compactBytes = 0, prettyBytes = 0;
-    for (int rep = 0; rep < 10; ++rep) {
-        const auto t0 = std::chrono::steady_clock::now();
-        reflect::JsonWriter jw(4 << 20);
-        jw.entityIds = &ids;
-        jw.beginArray();
-        auto& reg = w.registry();
-        for (const auto e : es) {
-            jw.beginObject();
-            jw.key("id"); jw.hex64(w.idOf(e));
-            jw.key("Name"); reflect::writeStruct(&reg.get<Name>(e), jw, name);
-            jw.key("Transform"); reflect::writeStruct(&reg.get<Transform>(e), jw, tr);
-            if (const auto* p = reg.try_get<Parent>(e)) { jw.key("Parent"); reflect::writeStruct(p, jw, par); }
-            if (const auto* l = reg.try_get<Light>(e)) { jw.key("Light"); reflect::writeStruct(l, jw, li); }
-            jw.endObject();
-        }
-        jw.endArray();
-        const auto t1 = std::chrono::steady_clock::now();
-        const std::string pretty = reflect::prettyPrint(jw.str());
-        const auto t2 = std::chrono::steady_clock::now();
-        bestWrite = std::min(bestWrite, std::chrono::duration<double, std::milli>(t1 - t0).count());
-        bestPretty = std::min(bestPretty, std::chrono::duration<double, std::milli>(t2 - t1).count());
-        compactBytes = jw.str().size();
-        prettyBytes = pretty.size();
+    const auto lightOrder = [&] {
+        std::vector<std::pair<uint64_t, uint64_t>> v;   // (seq, id)
+        for (auto [e, l, co] : w.registry().view<const Light, const CreationOrder>().each()) v.emplace_back(co.seq, w.idOf(e));
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    const auto order = lightOrder();
+    const Snapshot snap = takeSnapshot(w, engineTypes());
+    w.destroy(lights[2]);
+    w.destroy(lights[5]);
+    w.registry().emplace<Light>(w.create("intruder"));
+    restoreSnapshot(w, snap);
+    CHECK(lightOrder() == order, "light order (by CreationOrder) is exactly the original");
+}
+
+static void t10_children_order_is_restored() {
+    World w;
+    const auto p = w.create("p");
+    std::vector<entt::entity> kids;
+    for (int i = 0; i < 6; ++i) {
+        kids.push_back(w.create("c" + std::to_string(i)));
+        w.setParent(kids.back(), p);
     }
-    std::printf("\n      10k entities (Name, Transform, 1/3 Parent, 100 Light; random transforms): "
-                "write %.2f ms (%.2f MB), pretty %.2f ms (%.2f MB), total %.2f ms  ",
-                bestWrite, compactBytes / 1e6, bestPretty, prettyBytes / 1e6, bestWrite + bestPretty);
-    CHECK(prettyBytes > 0, "wrote something");
+    const auto before = childrenById(w);
+    const Snapshot snap = takeSnapshot(w, engineTypes());
+    w.setParent(kids[1], entt::null);   // detach and reattach: c1 moves to the end
+    w.setParent(kids[1], p);
+    w.setParent(kids[4], kids[0]);
+    CHECK(childrenById(w) != before, "the order changed");
+    restoreSnapshot(w, snap);
+    CHECK(childrenById(w) == before, "restore puts the children back in their order");
+}
+
+static void t10_recapture_reuses_memory_and_matches_a_fresh_snapshot() {
+    World w;
+    buildRandomWorld(w, 12, 200);
+    Snapshot s = takeSnapshot(w, engineTypes());
+    const auto* idsBefore = s.ids.data();
+    w.registry().patch<Transform>(w.findById(s.ids[0]), [](Transform& t) { t.position.z = 9.0f; });
+    takeSnapshot(w, engineTypes(), s);
+    CHECK(s.ids.data() == idsBefore, "recapturing reuses the snapshot's buffers");
+    const std::string now = save(w);
+    w.registry().patch<Transform>(w.findById(s.ids[0]), [](Transform& t) { t.position.z = -1.0f; });
+    restoreSnapshot(w, s);
+    CHECK(save(w) == now, "and restores the recaptured state");
+}
+
+// ---- step 6: the JSON reader and validation fast paths -----------------------------------------
+
+static void t06_json_reader_is_strict_rfc8259() {
+    const char* good[] = {"{}", "[]", "0", "-0", "1.5e+3", "-2E-7", "true", "null", R"("é")",
+                          R"({"a":[1,{"b":null}],"c":true})", " \t\r\n[1,2]\n"};
+    for (const char* t : good) {
+        if (!parseJson(t)) std::printf("\n      rejected: %s", t);
+        CHECK(parseJson(t), "valid JSON is accepted");
+    }
+    const char* bad[] = {"", "{", "}", "[1,]", R"({"a":1,})", "01", "1.", ".5", "+1", "NaN", "[1 2]", R"({"a" 1})",
+                         R"(["\x"])", "[\"\\ud800\"]", "[\"\\udc00\"]", "[\"\\ud800\\u0041\"]", R"(["a)", "[\"tab\there\"]", "{} x", "tru",
+                         "nul", "[\"\xC3\x28\"]", "[1e]", "[-]", "{1:2}"};
+    for (const char* t : bad) {
+        const auto r = parseJson(t);
+        if (r) std::printf("\n      accepted: %s", t);
+        CHECK(!r && r.error().code == "E_PARSE", "invalid JSON is E_PARSE");
+    }
+    std::string deep(1025, '[');
+    deep += std::string(1025, ']');
+    CHECK(!parseJson(deep), "nesting deeper than 1024 is rejected, not a stack overflow");
+    CHECK(parseJson(std::string(1000, '[') + std::string(1000, ']')), "1000 levels are fine");
+    const auto pos = parseJson("{\"a\": 1,\n  \"b\": }");
+    CHECK(!pos && pos.error().line == 2 && pos.error().column == 8, "errors carry their line and column");
+}
+
+static void t06_json_reader_strings_and_numbers() {
+    // An ordinary literal: MSVC translates \u inside raw string literals.
+    const std::string text = "{\"k\\\"ey\": \"a\\\\b\\nc\\u00e9\\ud83d\\ude80\", \"plain\": \"xyz\", \"n\": -12.5e-3}";
+    auto r = parseJson(text);
+    CHECK(r, "parses");
+    const auto& d = r.value();
+    const reflect::JsonNode& root = d.root();
+    CHECK(root.count == 3 && d.child(root, 0).key == "k\"ey", "escaped keys are unescaped");
+    CHECK(d.child(root, 0).text == "a\\b\nc\xC3\xA9\xF0\x9F\x9A\x80", "escapes and surrogate pairs decode to UTF-8");
+    CHECK(d.child(root, 1).text.data() >= d.source.data() &&
+              d.child(root, 1).text.data() < d.source.data() + d.source.size(),
+          "strings without escapes are views into the text");
+    CHECK(d.child(root, 2).type == reflect::JsonType::Number && d.child(root, 2).text == "-12.5e-3",
+          "numbers keep their token");
+    CHECK(d.child(root, 2).offset == text.find("-12.5"), "and their offset");
+}
+
+// Validation skips the float conversion for fields without limits; it must report exactly
+// what a load reports, including at the edges of the float range.
+static void t06_validate_reports_what_load_reports_for_float_edges() {
+    const char* tokens[] = {"0", "-0", "0.0e5", "1e37", "9.9e37", "3.4028235e38", "3.4028236e38", "1e38", "1e39",
+                            "-1e39", "1e-44", "1.4e-45", "7.1e-46", "7e-46", "1e-46", "1e-45", "123456789.125",
+                            "0.000000000000000000000000000000000000000000001", "1e0400", "1e-0400",
+                            "340282350000000000000000000000000000000"};
+    for (const char* tok : tokens) {
+        const std::string text = std::string(R"({"format":"ohao.scene","version":1,"entities":[{"id":"00000000000000a1","Transform":{"position":[)") +
+                                 tok + R"(,0,0]}}]})";
+        const auto v = validateScene(text, engineTypes());
+        World w;
+        const auto l = loadScene(w, text, engineTypes());
+        const bool same = v.ok() == static_cast<bool>(l) && (v.ok() || (v.errors[0].code == l.error()[0].code));
+        if (!same) std::printf("\n      %s: validate %d, load %d", tok, int(v.ok()), int(static_cast<bool>(l)));
+        CHECK(same, "validation and load agree");
+    }
 }
 
 // ---- main --------------------------------------------------------------------------------
@@ -972,8 +1124,16 @@ int main(int argc, char** argv) {
     RUN(t08_failed_upgrades_and_their_errors);
     RUN(t08_newer_or_unreachable_versions_are_rejected);
     RUN(t08_v1_corpus_loads_with_expected_values);
-    RUN(bench_write_authoring_components);
-    RUN(bench_scene_save_load_10k);
+    RUN(t06_json_reader_is_strict_rfc8259);
+    RUN(t06_json_reader_strings_and_numbers);
+    RUN(t06_validate_reports_what_load_reports_for_float_edges);
+    RUN(t10_mutations_then_restore_give_identical_saves);
+    RUN(t10_id_counter_and_creation_sequence_are_restored);
+    RUN(t10_unchanged_restore_writes_no_component);
+    RUN(t10_restore_into_an_empty_world);
+    RUN(t10_restore_after_structural_changes_keeps_creation_order);
+    RUN(t10_children_order_is_restored);
+    RUN(t10_recapture_reuses_memory_and_matches_a_fresh_snapshot);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

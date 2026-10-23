@@ -88,7 +88,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 25> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 26> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -113,6 +113,7 @@ constexpr std::array<ErrorCodeInfo, 25> kCodes = {{
     {"E_COMMAND", "A request that is malformed or cannot apply (unknown op, missing member, absent component)."},
     {"E_COMPONENT_UNKNOWN", "A request names a type that is not a component (or, for edits, not a saved one)."},
     {"E_PATH", "A path that reaches no field: \"/Type/field\", then optionally member names or array indices."},
+    {"E_SNAPSHOT_UNKNOWN", "No snapshot has this name (world.restore)."},
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
 }};
 } // namespace
@@ -194,9 +195,23 @@ std::string oneOf(std::span<const std::string_view> names, std::size_t max) {
 
 DecodeContext::DecodeContext(const JsonDocument& d, std::size_t maxErrors) : doc(d), m_maxErrors(maxErrors) {}
 
-std::string DecodeContext::path() const {
+std::string DecodeContext::path() const { return buildPath(m_path.data(), m_path.size()); }
+
+void DecodeContext::addRef(void* field, void (*assign)(void*, uint64_t), uint64_t id, uint32_t offset) {
+    PendingRef r{field, assign, id, entity, component, {}, offset, static_cast<uint32_t>(m_refPaths.size()),
+                 static_cast<uint32_t>(m_path.size())};
+    m_refPaths.insert(m_refPaths.end(), m_path.begin(), m_path.end());
+    refs.push_back(std::move(r));
+}
+
+std::string DecodeContext::pathOf(const PendingRef& r) const {
+    if (!r.path.empty() || r.pathCount == 0 || r.pathBegin + r.pathCount > m_refPaths.size()) return r.path;
+    return buildPath(m_refPaths.data() + r.pathBegin, r.pathCount);
+}
+
+std::string DecodeContext::buildPath(const Seg* segs, std::size_t n) {
     std::string p;
-    for (const Seg& s : m_path) {
+    for (const Seg& s : std::span<const Seg>(segs, n)) {
         p.push_back('/');
         if (s.isIndex) {
             p += std::to_string(s.index);
@@ -280,12 +295,59 @@ std::string DecodeContext::gotText(const JsonNode& n) const {
 
 // ---- scalar readers -----------------------------------------------------------------------
 
+namespace {
+// True when a JSON number token is certainly a finite float that does not underflow to
+// zero: zero, or a leading digit at 10^-44 .. 10^37 (float spans 1.4e-45 .. 3.4e38).
+// Tokens near either end, or with long exponents, return false and get converted.
+bool floatFitsQuick(std::string_view tok) noexcept {
+    const char* p = tok.data();
+    const char* const end = p + tok.size();
+    if (p < end && *p == '-') ++p;
+    const char* intStart = p;
+    while (p < end && *p >= '0' && *p <= '9') ++p;
+    const auto intLen = static_cast<int>(p - intStart);
+    int lead = 0;   // decimal exponent of the leading nonzero digit
+    bool nonzero = false;
+    if (intLen > 1 || (intLen == 1 && *intStart != '0')) {
+        nonzero = true;
+        lead = intLen - 1;
+    }
+    if (p < end && *p == '.') {
+        ++p;
+        int zeros = 0;
+        if (!nonzero) {
+            while (p < end && *p == '0') { ++p; ++zeros; }
+            if (p < end && *p >= '1' && *p <= '9') {
+                nonzero = true;
+                lead = -(zeros + 1);
+            }
+        }
+        while (p < end && *p >= '0' && *p <= '9') ++p;
+    }
+    int exp = 0;
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        ++p;
+        const bool neg = p < end && *p == '-';
+        if (p < end && (*p == '-' || *p == '+')) ++p;
+        const char* d = p;
+        while (p < end && *p >= '0' && *p <= '9') exp = exp * 10 + (*p++ - '0');
+        if (p - d > 3) return false;   // let the full conversion judge huge exponents
+        if (neg) exp = -exp;
+    }
+    if (p != end) return false;
+    if (!nonzero) return true;   // zero (any spelling) fits
+    const int e = lead + exp;
+    return e >= -44 && e <= 37;
+}
+} // namespace
+
 bool readFloat(const JsonNode& n, DecodeContext& ctx, float& out) {
     if (n.type != JsonType::Number) {
         ctx.error("E_TYPE", n, std::string("expected a number, found ") + jsonTypeName(n.type), "number",
                   ctx.gotText(n));
         return false;
     }
+    if (!ctx.needValue && floatFitsQuick(n.text)) return true;   // validation only; `out` is not used
     // Correctly rounded decimal -> float, straight from the source token (never via a
     // double). Same results as std::from_chars<float>, several times faster.
     const char* first = n.text.data();
@@ -423,9 +485,13 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
 
 bool readField(void* obj, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx) {
     const std::size_t before = ctx.errors.size();
-    f.ops->read(obj, n, ctx, *f.type);
     const auto& l = f.attrs.limits;
-    if (ctx.errors.size() == before && (l.min || l.max) && !f.ops->inRange(obj, l))
+    const bool limited = l.min || l.max;
+    const bool outer = ctx.needValue;
+    ctx.needValue = !ctx.valuesUnused || limited;
+    f.ops->read(obj, n, ctx, *f.type);
+    ctx.needValue = outer;
+    if (ctx.errors.size() == before && limited && !f.ops->inRange(obj, l))
         ctx.error("E_RANGE", n, t.name + "." + f.name + " is outside its limits", limitsText(f), ctx.gotText(n));
     return ctx.errors.size() == before;
 }

@@ -34,6 +34,11 @@ constexpr reflect::MethodDoc kMethods[] = {
     {"world.apply", "{commands}", "{applied, results, inverse}",
      "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
     {"world.step", "{frames = 1, dt = 1/60}", "{frame}", "Runs the world's systems with a fixed dt."},
+    {"world.snapshot", "{name}", "{name, entities, bytes}",
+     "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
+     "component, the id generator and the frame."},
+    {"world.restore", "{name}", "{created, destroyed, changed, frame}",
+     "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
 };
 
 constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope
@@ -256,6 +261,59 @@ bool worldStep(Session::Impl& s, const JsonDocument& doc, const JsonNode& params
     return true;
 }
 
+// The snapshot name from {name}. False after reporting.
+bool snapshotName(const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, std::string_view what,
+                  std::string_view& name) {
+    if (!checkKeys(doc, params, {"name"}, what, ctx) || !optString(doc, params, "name", ctx, name)) return false;
+    if (name.empty()) {
+        ctx.error("E_COMMAND", params, std::string(what) + " needs a non-empty \"name\"", "{\"name\": \"base\"}");
+        return false;
+    }
+    return true;
+}
+
+bool worldSnapshot(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                   JsonWriter& out) {
+    std::string_view name;
+    if (!snapshotName(doc, params, ctx, "world.snapshot params", name)) return false;
+    auto it = s.snapshots.find(name);
+    if (it == s.snapshots.end()) it = s.snapshots.emplace(std::string(name), ecs::Snapshot{}).first;
+    ecs::takeSnapshot(s.world, s.types, it->second, s.frame);   // reuses the old snapshot's memory
+    const std::size_t rows = it->second.rows(), bytes = it->second.bytes();
+    out.beginObject();
+    out.key("name"); out.string(name);
+    out.key("entities"); out.uint64(rows);
+    out.key("bytes"); out.uint64(bytes);
+    out.endObject();
+    return true;
+}
+
+bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                  JsonWriter& out) {
+    std::string_view name;
+    if (!snapshotName(doc, params, ctx, "world.restore params", name)) return false;
+    const auto it = s.snapshots.find(name);
+    if (it == s.snapshots.end()) {
+        std::vector<std::string_view> names;
+        for (const auto& [n, snap] : s.snapshots) names.push_back(n);
+        ctx.push("name");
+        ctx.error("E_SNAPSHOT_UNKNOWN", *doc.member(params, "name"), "no snapshot is named '" + std::string(name) + "'",
+                  names.empty() ? "a name given to world.snapshot (none yet)" : reflect::oneOf(names),
+                  "\"" + std::string(name) + "\"", reflect::suggest(name, names));
+        ctx.pop();
+        return false;
+    }
+    const ecs::RestoreStats st = ecs::restoreSnapshot(s.world, it->second);
+    s.frame = it->second.frame;
+    out.beginObject();
+    out.key("created"); out.uint64(st.created);
+    out.key("destroyed"); out.uint64(st.destroyed);
+    out.key("changed"); out.uint64(st.changed);
+    out.key("frame"); out.uint64(s.frame);
+    out.endObject();
+    return true;
+}
+
 struct MethodEntry {
     std::string_view name;
     MethodFn fn;
@@ -264,6 +322,7 @@ constexpr MethodEntry kDispatch[] = {
     {"schema.get", schemaGet},       {"scene.validate", sceneValidate}, {"scene.load", sceneLoad},
     {"scene.save", sceneSave},       {"world.info", worldInfo},         {"world.summary", methodSummary},
     {"world.query", methodQuery},    {"world.apply", methodApply},      {"world.step", worldStep},
+    {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore},
 };
 static_assert(std::size(kDispatch) == std::size(kMethods));
 
