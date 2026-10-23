@@ -26,6 +26,7 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
     }
 
     m_ssaoPass = std::make_unique<SSAOPass>();
+    m_ssaoPass->setNoiseSeed(m_noiseSeed);
     if (!m_ssaoPass->initialize(device, physicalDevice)) {
         return false;
     }
@@ -60,6 +61,11 @@ void PostProcessingPipeline::cleanup() {
     safeDestroy(m_sampler);
 
     destroyFinalOutput();
+}
+
+void PostProcessingPipeline::setNoiseSeed(uint32_t seed) {
+    m_noiseSeed = seed;
+    if (m_ssaoPass) m_ssaoPass->setNoiseSeed(seed);
 }
 
 void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex) {
@@ -400,12 +406,18 @@ bool PostProcessingPipeline::createTonemappingPass() {
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
 
+    // Samples the lit (or TAA-resolved) frame and bloom's mip 0, both just written; the
+    // gizmo pass and the readback use its output.
+    const auto dependencies = sampledColorPassDependencies();
+
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderPassInfo.attachmentCount = 1;
     renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
 
     if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_tonemapRenderPass) != VK_SUCCESS) {
         return false;

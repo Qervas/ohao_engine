@@ -289,6 +289,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     glm::mat4 jitteredProj = m_proj;
     jitteredProj[2][0] += jitter.x;
     jitteredProj[2][1] += jitter.y;
+    if (!m_prevViewProjValid) {   // the first frame: no motion into it
+        m_prevViewProj = m_proj * m_view;
+        m_prevViewProjValid = true;
+    }
 
     // Update G-Buffer pass
     if (m_gbufferPass) {
@@ -705,7 +709,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 
 void DeferredRenderer::resetTemporalState() {
     m_totalTime = 0.0f;
-    m_prevViewProj = m_proj * m_view;   // no motion into the first frame
+    m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
     if (m_rtGI) m_rtGI->resetHistory();
     if (m_postProcessing) m_postProcessing->resetHistory();
 }

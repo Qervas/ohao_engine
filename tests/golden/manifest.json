@@ -65,17 +65,17 @@
       "name": "cornell_box_deferred",
       "command": "./build/cornell_box {out} 4 deferred --denoise=none",
       "golden": "tests/golden/cornell_box_deferred.png",
-      "max_abs_diff": 4,
-      "max_diff_frac": 0.01,
-      "_note": "Deferred hybrid (G-buffer + RT shadows/GI where supported). Captured on master before sub-project 2a so the ECS/RenderScene migration is checked against the old renderer's own output."
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "Deferred hybrid (G-buffer + RT shadows/GI where supported). Captured on master before sub-project 2a so the ECS/RenderScene migration is checked against the old renderer's own output. Exact since sub-project 4 step 1 (2026-10-23): deferred rendering is bit-identical run to run, ten separate-process renders gave one pixel hash, and this golden has measured max_abs 0 in every session since 2026-10-09. Any difference is a change to look at, not noise."
     },
     {
       "name": "damaged_helmet_deferred",
       "command": "./build/model_viewer assets/test_models/DamagedHelmet.glb {out} 4 deferred --denoise=none",
       "golden": "tests/golden/damaged_helmet_deferred.png",
-      "max_abs_diff": 6,
-      "max_diff_frac": 0.05,
-      "_note": "Deferred hybrid on the helmet; same purpose as cornell_box_deferred. Not bit-exact run-to-run (fresh-vs-fresh max_abs 3, diff_frac ~0.026 measured 2026-10-09); max_diff_frac is 0.05 for that reason, cornell_box_deferred is exact. max_abs tail up to 5 observed against the golden (2 of ~8 runs), so max_abs_diff is 6."
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "Deferred hybrid on the helmet with TAA, SSAO and bloom; same purpose as cornell_box_deferred. Exact since sub-project 4 step 1 (2026-10-23). It used to move run to run (max_abs 1-5, ~2.6% of pixels) because bloom's mip chain read each mip before the previous render pass's writes were visible, and TAA's first frame read an unset previous view-projection; both are fixed, ten separate-process renders gave one pixel hash, and the golden was regenerated then (the old one differed by max_abs 1 on 2.9% of pixels, scattered: one sample of the race)."
     },
     {
       "name": "cornell_box_rt_realtime",
@@ -105,17 +105,17 @@
       "name": "cli_cornell_box_deferred",
       "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred",
       "golden": "tests/golden/cornell_box_deferred.png",
-      "max_abs_diff": 4,
-      "max_diff_frac": 0.01,
-      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. 10 frames and no post effects: what the example does."
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. 10 frames and no post effects: what the example does. Exact, as cornell_box_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_damaged_helmet_deferred",
       "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
       "golden": "tests/golden/damaged_helmet_deferred.png",
-      "max_abs_diff": 6,
-      "max_diff_frac": 0.05,
-      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6); the scene file holds no render settings, so the command line states them."
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6); the scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_cornell_box_rt_realtime",

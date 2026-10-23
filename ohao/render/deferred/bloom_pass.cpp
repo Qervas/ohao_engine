@@ -244,13 +244,9 @@ bool BloomPass::createRenderPasses() {
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
 
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    // Every pass of the chain samples the mip the previous render pass wrote (downsample:
+    // mip i-1; upsample: mip i+1, and it loads and blends into its own).
+    const auto dependencies = sampledColorPassDependencies();
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -258,8 +254,8 @@ bool BloomPass::createRenderPasses() {
     renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
 
     if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_thresholdRenderPass) != VK_SUCCESS) {
         return false;

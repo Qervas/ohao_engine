@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <array>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -101,6 +102,16 @@ protected:
     // Create sampler with common defaults
     [[nodiscard]] VkSampler createSampler(VkFilter filter = VK_FILTER_LINEAR,
                                           VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+
+    // The external dependencies of a one-subpass color pass that samples earlier passes'
+    // output and is sampled by later ones (the post chain: bloom, TAA, tonemapping):
+    //   [0] in:  earlier color-attachment and shader writes are visible to this pass's
+    //            sampling and load/blend; earlier reads of its attachment finish first.
+    //   [1] out: this pass's attachment writes are visible to later sampling and copies.
+    // Without [0], a pass that samples the image the previous render pass just wrote races
+    // it: the implicit end-of-pass dependency makes no write visible (bloom's mip chain
+    // gave a different image run to run).
+    [[nodiscard]] static std::array<VkSubpassDependency, 2> sampledColorPassDependencies();
 
     // Single image layout transition
     static void transitionImage(VkCommandBuffer cmd, VkImage image,

@@ -168,10 +168,16 @@ private:
     uint32_t m_height{0};
 
     // Camera data
-    glm::mat4 m_view;
-    glm::mat4 m_proj;
-    glm::mat4 m_prevViewProj;
-    glm::vec3 m_cameraPos;
+    glm::mat4 m_view{1.0f};
+    glm::mat4 m_proj{1.0f};
+    // Last frame's unjittered view-projection, for motion vectors. Until a frame has been
+    // rendered (a fresh renderer, or after resetTemporalState) there is none, and the
+    // frame uses its own: no motion into the first frame. glm leaves a default-constructed
+    // mat4 uninitialized, and TAA's first frame blends towards the cleared history by the
+    // motion it sees, so an unset matrix made the first image depend on stale memory.
+    glm::mat4 m_prevViewProj{1.0f};
+    bool m_prevViewProjValid{false};
+    glm::vec3 m_cameraPos{0.0f};
     float m_nearPlane{0.1f};
     float m_farPlane{1000.0f};
 

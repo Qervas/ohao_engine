@@ -130,9 +130,9 @@ private:
     };
     static_assert(sizeof(DrawPushConstant) == 16);
 
-    glm::mat4 m_view;
-    glm::mat4 m_projection;
-    glm::mat4 m_prevViewProj;
+    glm::mat4 m_view{1.0f};
+    glm::mat4 m_projection{1.0f};
+    glm::mat4 m_prevViewProj{1.0f};
 
     // Wireframe mode
     bool m_wireframeEnabled{false};

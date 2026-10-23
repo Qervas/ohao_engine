@@ -168,8 +168,10 @@ public:
     [[nodiscard]] float getEnvIntensityScale() const noexcept { return m_envIntensityScale; }
     void notifyCameraChanged();
     void resetAccumulation();
-    /// Offline/inverse: base sample index after accumulation reset (FD stability).
+    /// The render's one seed: the path tracers' base sample index after an accumulation
+    /// reset, and the deferred path's SSAO noise. Kept, so renderers created later get it.
     void setRenderSeed(uint32_t seed);
+    [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
 
     // Read back HDR buffers for OIDN denoising
@@ -370,6 +372,7 @@ private:
     uint32_t m_envMapHeight{0};
     float m_envMapIntegral{0.0f};
     float m_envIntensityScale{1.0f}; // light header offset 8
+    uint32_t m_renderSeed{0};        // setRenderSeed; applied to renderers as they are created
 
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.

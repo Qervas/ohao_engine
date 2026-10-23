@@ -83,6 +83,10 @@ public:
     void setSSAORadius(float radius);
     void setSSAOIntensity(float intensity);
     void setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj);
+    // The SSAO noise seed (VulkanRenderer::setRenderSeed); kept across re-initialization.
+    void setNoiseSeed(uint32_t seed);
+    // The seed the SSAO pass's noise texture was built from.
+    [[nodiscard]] uint32_t noiseSeed() const noexcept { return m_ssaoPass ? m_ssaoPass->noiseSeed() : m_noiseSeed; }
 
     void setDeltaTime(float dt)          { m_totalTime += dt; }
 
@@ -108,6 +112,7 @@ private:
     std::unique_ptr<BloomPass> m_bloomPass;
     std::unique_ptr<TAAPass> m_taaPass;
     std::unique_ptr<SSAOPass> m_ssaoPass;
+    uint32_t m_noiseSeed{0};
 
     // Tonemapping (final pass)
     VkRenderPass m_tonemapRenderPass{VK_NULL_HANDLE};

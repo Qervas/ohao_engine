@@ -8,8 +8,7 @@
 //   3. render.capture B, which must differ from A (the move is visible);
 //   4. world.restore; one frame, which must upload exactly what the move did (one
 //      instance back, not the table);
-//   5. render.capture C, which must be bit-identical to A (post effects off), or within
-//      the fresh-renderer floor of 1 LSB (post effects on);
+//   5. render.capture C, which must be bit-identical to A (post effects off and on);
 //   6. world.restore again (nothing differs): it reports no change and its frame uploads
 //      0 instance bytes.
 // The sequence runs twice: post effects off (as cornell_box renders), then TAA, SSAO and
@@ -144,14 +143,10 @@ int main() {
         checks.push_back({p + "the restore changes one entity; its frame uploads what the move did",
                           ok(q.restored) && q.restored.find("\"changed\":1") != std::string::npos &&
                               q.restoreBytes == q.moveBytes});
-        if (std::string(tag) == "plain") {
-            checks.push_back({p + "after the restore the capture is bit-identical to the first", ac == 0});
-        } else {
-            // With TAA, SSAO and bloom the deferred renderer is not bit-exact even between
-            // two fresh renderers (max 1 LSB, ~1.4k pixels measured; the helmet deferred
-            // golden's noise). Without the history reset TAA would ghost the moved sphere.
-            checks.push_back({p + "after the restore the capture matches the first within 1 LSB", maxAbs(q.a, q.c) <= 1});
-        }
+        // Exact with post effects too since sub-project 4 step 1 (bloom's mip chain raced and
+        // TAA's first frame read an unset previous view-projection; both fixed). Without the
+        // history reset TAA would ghost the moved sphere.
+        checks.push_back({p + "after the restore the capture is bit-identical to the first", ac == 0});
         checks.push_back({p + "an unchanged restore changes nothing and uploads 0 instance bytes",
                           ok(q.again) && q.again.find("\"created\":0,\"destroyed\":0,\"changed\":0") != std::string::npos &&
                               q.unchangedBytes == 0});

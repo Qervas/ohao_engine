@@ -311,6 +311,7 @@ bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
             slot.reset();
             return false;
         }
+        slot->setRenderSeed(m_renderSeed);   // a seed set before this renderer existed
         std::cout << "RT " << label << " renderer: ready" << std::endl;
         return true;
     };
@@ -479,7 +480,10 @@ void VulkanRenderer::resetAccumulation() {
 }
 
 void VulkanRenderer::setRenderSeed(uint32_t seed) {
+    m_renderSeed = seed;
     forEachRTRenderer([&](IRTRendererProfile& r) { r.setRenderSeed(seed); });
+    if (m_deferredRenderer)
+        if (auto* pp = m_deferredRenderer->getPostProcessing()) pp->setNoiseSeed(seed);
 }
 
 void VulkanRenderer::notifyCameraChanged() {
@@ -610,8 +614,10 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     }
     std::cout << "VulkanRenderer: DeferredRenderer initialized, resizing to " << m_width << "x" << m_height << std::endl;
     m_deferredRenderer->onResize(m_width, m_height);
-    if (m_deferredRenderer->getPostProcessing())
-        m_deferredRenderer->getPostProcessing()->setExposure(0.6f);
+    if (auto* pp = m_deferredRenderer->getPostProcessing()) {
+        pp->setExposure(0.6f);
+        pp->setNoiseSeed(m_renderSeed);
+    }
     return true;
 }
 

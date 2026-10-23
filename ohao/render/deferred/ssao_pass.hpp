@@ -33,6 +33,14 @@ public:
     void setBias(float bias) { m_bias = bias; }
     void setIntensity(float intensity) { m_intensity = intensity; }
     void setSampleCount(uint32_t count) { m_sampleCount = count; }
+    // The 4x4 rotation-noise texture is a function of this seed alone (default 0, the
+    // renderer's default seed), so SSAO is the same in every process. Before initialize()
+    // it only records the seed; after, a different seed idles the device, rewrites the
+    // staging data and uploads it on the next execute().
+    void setNoiseSeed(uint32_t seed);
+    [[nodiscard]] uint32_t noiseSeed() const noexcept { return m_noiseSeed; }
+    // The 16 texels of the noise texture for `seed` (unit vectors in XY).
+    [[nodiscard]] static std::array<glm::vec4, 16> noise(uint32_t seed);
 
     // Get output
     [[nodiscard]] VkImageView getOutputView() const { return m_aoOutputView; }
@@ -64,6 +72,7 @@ private:
     VkBuffer m_noiseStagingBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_noiseStagingMemory{VK_NULL_HANDLE};
     bool m_noiseUploaded{false};
+    uint32_t m_noiseSeed{0};
     void uploadNoiseTexture(VkCommandBuffer cmd);
 
     // Compute pipeline

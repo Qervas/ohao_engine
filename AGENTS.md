@@ -78,6 +78,7 @@ $ build/Release/renderer_test.exe > /dev/null   # gpu
 $ build/Release/instantiate_gpu_test.exe > /dev/null   # gpu
 $ build/Release/scene_view_gpu_test.exe > /dev/null   # gpu
 $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
+$ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
@@ -89,15 +90,19 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - `engine_tests`: event bus, command history, assets, headless deferred and path-traced
   frames, RenderScene. `ecs_tests`: world, hierarchy, transforms and the render extract
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
-  snapshot/restore through the renderer.
+  snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
+  post effects included, bit-identical across fresh renderers, processes and repeated
+  captures.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included.
   `check_validation.py` renders deferred Cornell and the helmet under the layers.
 - **Render goldens** (`tests/golden/manifest.json`, 10 scenes: 5 examples, 5 through
   `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). They are a hash of an unchanged sampler, not an image-quality gate: anything
   that perturbs the sample sequence moves every pixel by the noise. Never widen a
-  tolerance to make one pass. Renders drift by 1 LSB on a few pixels across sessions with
-  identical SPIR-V; never compare md5s across days.
+  tolerance to make one pass. The four deferred scenes are exact (max_abs 0): deferred
+  rendering is deterministic, so any difference there is a change. Path-traced renders
+  drift by 1 LSB on a few pixels across sessions with identical SPIR-V; never compare
+  their md5s across days.
 - **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
   results in `build/scene_bench.json`. A budget changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI

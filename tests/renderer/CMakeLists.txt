@@ -91,6 +91,18 @@ if(MSVC)
 endif()
 add_dependencies(restore_render_gpu_test shaders)
 
+# Deferred rendering is bit-identical across fresh renderers and processes, post effects
+# included, and the render seed reaches SSAO (sub-project 4, step 1).
+add_executable(deferred_determinism_gpu_test deferred_determinism_gpu_test.cpp)
+target_compile_features(deferred_determinism_gpu_test PRIVATE cxx_std_20)
+target_compile_definitions(deferred_determinism_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    OHAO_BINARY_DIR="${CMAKE_BINARY_DIR}")
+target_link_libraries(deferred_determinism_gpu_test PRIVATE ohao_host)
+if(MSVC)
+    target_link_options(deferred_determinism_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(deferred_determinism_gpu_test shaders)
+
 # Env CDF unit test
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp

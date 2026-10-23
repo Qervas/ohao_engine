@@ -5,7 +5,9 @@
 //   reflect_tests --update-golden     rewrite tests/reflect/golden/* from the fixture
 //
 // Test names carry the spec's test numbers: t01 completeness, t12 schema, t13 dependency
-// rule. The fixture registry below exercises every field kind.
+// rule; sp4_t02 is sub-project 4's test 2 (no unseeded randomness or wall clock in the
+// renderer, the GPU layer or the ECS systems). The fixture registry below exercises every
+// field kind.
 #include "reflect/decode.hpp"
 #include "reflect/registry.hpp"
 #include "reflect/schema.hpp"
@@ -14,6 +16,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -717,6 +720,106 @@ static void t13_reflect_depends_on_glm_and_std_only() {
     CHECK(hits.empty(), "ohao_reflect includes glm and the standard library only");
 }
 
+// ---- sub-project 4, test 2: sources of nondeterminism ---------------------------------------
+// Renders and simulation must be reproducible (sub-project 4 spec, "Determinism"): no
+// unseeded randomness and no wall clock in the renderer, the GPU layer or the ECS systems,
+// except where an allowlist entry says why (timing statistics).
+
+struct NondeterminismHit {
+    std::string file;   // generic path relative to the source root
+    int line;
+    std::string token;
+    std::string text;
+};
+
+// The tokens that make a result depend on the process or the moment.
+static const std::vector<std::string> kNondeterministicTokens = {
+    "random_device", "rand(", "srand(", "_clock::now", "glfwGetTime", "time(nullptr)", "time(NULL)", "__rdtsc"};
+
+// Code only: what follows `//` on a line is a comment.
+static std::vector<NondeterminismHit> nondeterminismHits(const std::string& file, const std::string& text) {
+    std::vector<NondeterminismHit> hits;
+    std::istringstream in(text);
+    std::string line;
+    int n = 0;
+    while (std::getline(in, line)) {
+        ++n;
+        const std::string code = line.substr(0, line.find("//"));
+        for (const auto& t : kNondeterministicTokens) {
+            const auto at = code.find(t);
+            if (at == std::string::npos) continue;
+            // "rand(" inside another identifier (operand(, srand( counted separately) is not rand().
+            if (t == "rand(" && at > 0 && (std::isalnum(static_cast<unsigned char>(code[at - 1])) || code[at - 1] == '_'))
+                continue;
+            hits.push_back({file, n, t, line});
+        }
+    }
+    return hits;
+}
+
+static void sp4_t02_lint_finds_nondeterminism() {
+    const std::string sample =
+        "std::random_device rd;\n"
+        "int x = rand();\n"
+        "int y = operand(3);   // not rand()\n"
+        "auto t = std::chrono::steady_clock::now();\n"
+        "// std::random_device in a comment is fine\n"
+        "double g = glfwGetTime();\n";
+    const auto hits = nondeterminismHits("sample.cpp", sample);
+    CHECK(hits.size() == 4, "finds random_device, rand(), a clock and glfwGetTime; skips comments and operand(");
+    CHECK(hits.size() == 4 && hits[0].line == 1 && hits[1].line == 2 && hits[2].line == 4 && hits[3].line == 6,
+          "reports the right lines");
+}
+
+static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems() {
+    const fs::path root(OHAO_SOURCE_DIR);
+    struct Allowed {
+        const char* file;
+        const char* token;
+        const char* why;
+    };
+    static const Allowed allowed[] = {
+        {"ohao/render/scene/render_scene.cpp", "_clock::now", "RenderSceneStats::recordCpuMs, a timing statistic"},
+    };
+
+    std::vector<fs::path> files;
+    for (const char* tree : {"ohao/render", "ohao/gpu"})
+        for (const auto& e : fs::recursive_directory_iterator(root / tree))
+            if (e.is_regular_file() && (e.path().extension() == ".cpp" || e.path().extension() == ".hpp" ||
+                                        e.path().extension() == ".h"))
+                files.push_back(e.path());
+    for (const char* f : {"ohao/ecs/transform_system.cpp", "ohao/ecs/transform_system.hpp",
+                          "ohao/ecs/render_extract.cpp", "ohao/ecs/render_extract.hpp",
+                          "ohao/ecs/instantiate.cpp", "ohao/ecs/instantiate.hpp",
+                          "ohao/ecs/spin_system.cpp", "ohao/ecs/spin_system.hpp"})
+        if (fs::exists(root / f)) files.push_back(root / f);
+    CHECK(files.size() > 50, "the renderer, GPU and system sources were found");
+
+    std::vector<NondeterminismHit> offending;
+    std::vector<int> allowedUsed(std::size(allowed), 0);
+    for (const auto& f : files) {
+        const std::string rel = fs::relative(f, root).generic_string();
+        for (auto& h : nondeterminismHits(rel, readFile(f))) {
+            bool ok = false;
+            for (std::size_t i = 0; i < std::size(allowed); ++i)
+                if (rel == allowed[i].file && h.token == allowed[i].token) {
+                    ok = true;
+                    ++allowedUsed[i];
+                }
+            if (!ok) offending.push_back(std::move(h));
+        }
+    }
+    for (const auto& h : offending) std::printf("\n      %s:%d: %s", h.file.c_str(), h.line, h.text.c_str());
+    CHECK(offending.empty(), "no random_device, rand(), wall clock or glfwGetTime outside the allowlist");
+    bool allUsed = true;
+    for (std::size_t i = 0; i < std::size(allowed); ++i)
+        if (allowedUsed[i] == 0) {
+            allUsed = false;
+            std::printf("\n      stale allowlist entry: %s %s (%s)", allowed[i].file, allowed[i].token, allowed[i].why);
+        }
+    CHECK(allUsed, "every allowlist entry still matches (remove the ones that do not)");
+}
+
 // ---- informational benchmark (not gated in step 1) -----------------------------------------
 
 static void bench_typed_write() {
@@ -953,6 +1056,8 @@ int main(int argc, char** argv) {
     RUN(t08_upgrade_registration_is_checked);
     RUN(t13_no_reflection_on_hot_paths);
     RUN(t13_reflect_depends_on_glm_and_std_only);
+    RUN(sp4_t02_lint_finds_nondeterminism);
+    RUN(sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems);
     RUN(bench_typed_write);
     RUN(bench_float_format);
     RUN(bench_float_parse);

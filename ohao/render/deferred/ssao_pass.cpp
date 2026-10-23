@@ -1,7 +1,6 @@
 #include "ssao_pass.hpp"
 #include <array>
 #include <cstring>
-#include <random>
 #include <cmath>
 
 namespace ohao {
@@ -255,18 +254,47 @@ void SSAOPass::destroyOutputImage() {
     safeFree(m_aoMemory);
 }
 
-bool SSAOPass::createNoiseTexture() {
-    // Generate 4x4 noise texture with random unit vectors
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+// 16 unit vectors in the XY plane, from `seed` alone. A counter hash (splitmix32-style)
+// and exact float arithmetic instead of <random> distributions, whose output differs
+// between standard libraries.
+std::array<glm::vec4, 16> SSAOPass::noise(uint32_t seed) {
+    uint32_t state = seed;
+    const auto next = [&state]() {
+        uint32_t z = (state += 0x9E3779B9u);
+        z = (z ^ (z >> 16)) * 0x85EBCA6Bu;
+        z = (z ^ (z >> 13)) * 0xC2B2AE35u;
+        return z ^ (z >> 16);
+    };
+    // 24 random bits scaled to [-1, 1): every step is exact in float.
+    const auto unit = [&next]() { return static_cast<float>(next() >> 8) * (2.0f / 16777216.0f) - 1.0f; };
 
-    std::array<glm::vec4, 16> noiseData;
-    for (auto& v : noiseData) {
-        v = glm::vec4(dist(gen), dist(gen), 0.0f, 0.0f);
-        float len = std::sqrt(v.x * v.x + v.y * v.y);
+    std::array<glm::vec4, 16> noise;
+    for (auto& v : noise) {
+        v = glm::vec4(unit(), unit(), 0.0f, 0.0f);
+        const float len = std::sqrt(v.x * v.x + v.y * v.y);
         if (len > 0.0001f) { v.x /= len; v.y /= len; }
     }
+    return noise;
+}
+
+void SSAOPass::setNoiseSeed(uint32_t seed) {
+    if (seed == m_noiseSeed) return;
+    m_noiseSeed = seed;
+    if (m_noiseStagingMemory == VK_NULL_HANDLE) return;   // not created yet: initialize() uses the seed
+
+    // Earlier frames may still read the noise image (and an upload may still read the
+    // staging buffer); reseeding is a setup-time call, so idle rather than track them.
+    vkDeviceWaitIdle(m_device);
+    const auto noiseData = noise(m_noiseSeed);
+    void* data = nullptr;
+    if (vkMapMemory(m_device, m_noiseStagingMemory, 0, sizeof(noiseData), 0, &data) != VK_SUCCESS) return;
+    std::memcpy(data, noiseData.data(), sizeof(noiseData));
+    vkUnmapMemory(m_device, m_noiseStagingMemory);
+    m_noiseUploaded = false;   // the next execute() copies it into the image
+}
+
+bool SSAOPass::createNoiseTexture() {
+    const auto noiseData = noise(m_noiseSeed);
 
     // Create staging buffer
     VkDeviceSize bufferSize = sizeof(noiseData);
