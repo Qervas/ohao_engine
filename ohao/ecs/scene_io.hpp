@@ -2,8 +2,8 @@
 // Scene files (*.scene.json): canonical save, two-phase load, validation without a World.
 //
 // Save writes every live entity in creation order: "id" first, then each saved component
-// in registration order, then preserved unknown components by name. The same world
-// always gives the same bytes.
+// in registration order (defaults left out, see SaveOptions), then preserved unknown
+// components by name. The same world always gives the same bytes.
 //
 // Load is two-phase. Phase 1 parses and decodes the whole document and collects every
 // error (up to 100). Only when it finds none does phase 2 create the entities, in file
@@ -26,6 +26,11 @@ using reflect::Diagnostic;
 
 struct SaveOptions {
     reflect::JsonLayout layout{reflect::JsonLayout::Pretty};   // Pretty ends with '\n'
+    // Canonical files leave out every field equal to its registered default, and every
+    // always-present component (Name, Transform) that is entirely default: a missing
+    // field or component loads as that default, so nothing is lost and diffs show only
+    // what differs. true writes every field (a deterministic, longer rendering).
+    bool includeDefaults{false};
 };
 
 struct SaveReport {

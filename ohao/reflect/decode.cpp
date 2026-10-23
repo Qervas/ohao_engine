@@ -88,7 +88,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 21> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 25> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -109,6 +109,10 @@ constexpr std::array<ErrorCodeInfo, 21> kCodes = {{
     {"E_ENTITY_NOT_FOUND", "An entity reference that names no entity in the document."},
     {"E_WORLD_NOT_EMPTY", "Loading into a world that already has entities."},
     {"E_TOO_MANY_ERRORS", "More errors exist than are reported (the first 100 are)."},
+    {"E_METHOD", "An unknown API method."},
+    {"E_COMMAND", "A request that is malformed or cannot apply (unknown op, missing member, absent component)."},
+    {"E_COMPONENT_UNKNOWN", "A request names a type that is not a component (or, for edits, not a saved one)."},
+    {"E_PATH", "A path that reaches no field: \"/Type/field\", then optionally member names or array indices."},
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
 }};
 } // namespace
@@ -174,6 +178,16 @@ std::string suggest(std::string_view word, std::span<const std::string_view> can
         }
     }
     return best <= limit ? std::string(pick) : std::string();
+}
+
+std::string oneOf(std::span<const std::string_view> names, std::size_t max) {
+    std::string s = "one of: ";
+    for (std::size_t i = 0; i < names.size() && i < max; ++i) {
+        if (i) s += ", ";
+        s += names[i];
+    }
+    if (names.size() > max) s += ", +" + std::to_string(names.size() - max) + " more";
+    return s;
 }
 
 // ---- DecodeContext -----------------------------------------------------------------------
@@ -382,13 +396,8 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
         const int idx = fieldIndex(t, m.key, i);
         if (idx < 0) {
             std::vector<std::string_view> names;
-            std::string list;
-            for (const auto& f : t.fields) {
-                names.push_back(f.name);
-                if (!list.empty()) list += ", ";
-                list += f.name;
-            }
-            ctx.error("E_UNKNOWN_FIELD", m, t.name + " has no field '" + std::string(m.key) + "'", "one of: " + list,
+            for (const auto& f : t.fields) names.push_back(f.name);
+            ctx.error("E_UNKNOWN_FIELD", m, t.name + " has no field '" + std::string(m.key) + "'", oneOf(names),
                       "\"" + std::string(m.key) + "\"", suggest(m.key, names));
             ctx.pop();
             continue;
@@ -407,13 +416,18 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
             ctx.pop();
             continue;
         }
-        const std::size_t before = ctx.errors.size();
-        f.ops->read(obj, m, ctx, *f.type);
-        const auto& l = f.attrs.limits;
-        if (ctx.errors.size() == before && (l.min || l.max) && !f.ops->inRange(obj, l))
-            ctx.error("E_RANGE", m, t.name + "." + f.name + " is outside its limits", limitsText(f), ctx.gotText(m));
+        readField(obj, t, f, m, ctx);
         ctx.pop();
     }
+}
+
+bool readField(void* obj, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx) {
+    const std::size_t before = ctx.errors.size();
+    f.ops->read(obj, n, ctx, *f.type);
+    const auto& l = f.attrs.limits;
+    if (ctx.errors.size() == before && (l.min || l.max) && !f.ops->inRange(obj, l))
+        ctx.error("E_RANGE", n, t.name + "." + f.name + " is outside its limits", limitsText(f), ctx.gotText(n));
+    return ctx.errors.size() == before;
 }
 
 } // namespace ohao::reflect

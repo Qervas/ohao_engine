@@ -433,6 +433,46 @@ static void t02_round_trip_is_byte_identical() {
     CHECK(pretty.find('\r') == std::string::npos && pretty.back() == '\n', "LF only, trailing newline");
 }
 
+// Step 5 (token budget): canonical files leave out what equals the registered default.
+static void t02_defaults_are_omitted_and_round_trip() {
+    World a;
+    const auto ea = a.createWithId(0xa1, "A");
+    Light l;
+    l.intensity = 5.0f;
+    a.registry().emplace<Light>(ea, l);
+    const auto eb = a.createWithId(0xa2, "");
+    a.registry().emplace<Light>(eb);
+    a.createWithId(0xa3, "C", Transform{{1.0f, 2.0f, 3.0f}});
+    a.createWithId(0xa4, "", Transform{{-0.0f, 0.0f, 0.0f}});
+    const std::string expected =
+        R"({"format":"ohao.scene","version":1,"components":{"Light":1,"Name":1,"Transform":1},"entities":[)"
+        R"({"id":"00000000000000a1","Name":{"value":"A"},"Light":{"intensity":5}},)"
+        R"({"id":"00000000000000a2","Light":{}},)"
+        R"({"id":"00000000000000a3","Name":{"value":"C"},"Transform":{"position":[1,2,3]}},)"
+        R"({"id":"00000000000000a4","Transform":{"position":[-0,0,0]}}]})";
+    const std::string compact = save(a, reflect::JsonLayout::Compact);
+    CHECK(compact == expected, "default fields, an empty Name and a default Transform are left out; -0 is not 0");
+    World b;
+    CHECK(load(b, compact) && sameWorld(a, b), "the omitted form loads back to the same world, bit for bit");
+    CHECK(save(b, reflect::JsonLayout::Compact) == compact && save(b) == save(a), "and saves byte-identically");
+    CHECK(save(a) == reflect::prettyPrint(compact) + "\n", "pretty is still prettyPrint(compact)");
+}
+
+static void t02_include_defaults_writes_every_field() {
+    World a;
+    a.createWithId(0xa1, "");
+    a.registry().emplace<Light>(a.findById(0xa1));
+    auto full = saveScene(a, engineTypes(), SaveOptions{reflect::JsonLayout::Compact, true});
+    CHECK(full && full.value().find(R"("Name":{"value":""},"Transform":{"position":[0,0,0],"rotation":[0,0,0,1])") !=
+                      std::string::npos &&
+              full.value().find(R"("Light":{"type":"Point","color":[1,1,1],"intensity":1,)") != std::string::npos,
+          "includeDefaults writes every component and field");
+    World b;
+    CHECK(load(b, full.value()) && sameWorld(a, b), "the full form loads to the same world");
+    CHECK(save(b, reflect::JsonLayout::Compact) == save(a, reflect::JsonLayout::Compact),
+          "and re-saves to the canonical (omitted) form");
+}
+
 static void t03_random_worlds_round_trip() {
     for (uint64_t seed : {101u, 202u, 303u}) {
         World a;
@@ -578,12 +618,11 @@ static void t07_unknown_components_survive_byte_identically() {
     const std::string text = R"({
   "format": "ohao.scene",
   "version": 1,
-  "components": { "FutureThing": 3, "Name": 1, "Transform": 1 },
+  "components": { "FutureThing": 3, "Name": 1 },
   "entities": [
     {
       "id": "00000000000000a1",
       "Name": { "value": "x" },
-      "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
       "FutureThing": { "power": 9001, "tags": ["a", "b"], "nested": { "deep": [1.5, null, true] } }
     }
   ]
@@ -686,8 +725,8 @@ static void t08_old_components_are_upgraded_on_load() {
           "the report lists the upgrade once per component type, with its count");
     const auto saved = saveScene(w, lampTypes());
     CHECK(saved && saved.value().find(R"("TestLamp": 3)") != std::string::npos &&
-              saved.value().find(R"("intensity": 3, "mode": "Warm")") != std::string::npos,
-          "saving writes the current version");
+              saved.value().find(R"("TestLamp": { "intensity": 3 })") != std::string::npos,
+          "saving writes the current version (mode is the default \"Warm\", so it is left out)");
     World w2;
     CHECK(loadScene(w2, saved.value(), lampTypes()) && saveScene(w2, lampTypes()).value() == saved.value(),
           "the upgraded file then round-trips with no further upgrade");
@@ -828,9 +867,11 @@ static void bench_scene_save_load_10k() {
         World b;
         (void)loadScene(b, pretty, engineTypes());
     });
-    std::printf("\n      10k entities: save pretty %.2f ms (%.2f MB), save compact %.2f ms (%.2f MB), "
-                "parse %.2f ms (cold parser %.2f ms), validate %.2f ms, load %.2f ms (incl. world teardown)  ",
-                tPretty, pretty.size() / 1e6, tCompact, compact.size() / 1e6, tParse, tParseCold, tValidate, tLoad);
+    const std::size_t fullBytes = saveScene(w, engineTypes(), SaveOptions{reflect::JsonLayout::Pretty, true}).value().size();
+    std::printf("\n      10k entities: save pretty %.2f ms (%.2f MB; %.2f MB with defaults), save compact %.2f ms "
+                "(%.2f MB), parse %.2f ms (cold parser %.2f ms), validate %.2f ms, load %.2f ms (incl. world teardown)  ",
+                tPretty, pretty.size() / 1e6, fullBytes / 1e6, tCompact, compact.size() / 1e6, tParse, tParseCold,
+                tValidate, tLoad);
     CHECK(!pretty.empty(), "saved");
 }
 
@@ -916,6 +957,8 @@ int main(int argc, char** argv) {
     RUN(t01_authoring_and_runtime_split);
     RUN(t12_engine_catalogue_matches_golden);
     RUN(t02_round_trip_is_byte_identical);
+    RUN(t02_defaults_are_omitted_and_round_trip);
+    RUN(t02_include_defaults_writes_every_field);
     RUN(t03_random_worlds_round_trip);
     RUN(t04_hierarchy_and_order_are_rebuilt);
     RUN(t04_references_before_their_target_resolve);

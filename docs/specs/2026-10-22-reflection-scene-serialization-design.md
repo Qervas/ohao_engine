@@ -115,7 +115,7 @@ For sub-project 3, G1 means five properties:
 | Versioning, migrations, v1 corpus | Cooked binary scene format (`ohao cook`) |
 | Authoring components, instantiate system, scene view | Asset database (GUIDs, sidecars, import cache), prefabs |
 | `ohao/api`: commands with inverses, query, snapshot/restore | Semantic diff (`ohao diff` by entity ID), optional thin Python client |
-| `ohao` CLI: `schema`, `validate`, `fmt`, `apply`, `run` | Scripting (see "Language per layer"), physics in the ECS |
+| `ohao` CLI: `schema`, `validate`, `fmt`, `apply`, `query`, `summary`, `run` | Scripting (see "Language per layer"), physics in the ECS |
 | `scene_bench` + checked-in budgets; scene goldens; CLI goldens | Texture overrides in `MaterialOverride` |
 
 Converting `ohao_game`, `turntable` and `env_demo` to scene files is not in 3. Only
@@ -223,7 +223,9 @@ both canonical and deterministic:
 
 - **`ohao_schema.json`**, the agent-facing catalogue. It lists every type, saved or
   runtime, marked `"serialized": true|false`. For each type it gives:
-  - the version, the doc string and whether it is a singleton;
+  - the version, the doc string, whether it is a singleton, and whether it is
+    `alwaysPresent` (on every entity: `Name`, `Transform`; left out of files when
+    entirely default, and never removable);
   - its upgrade history, as `readsVersions`: every file version the engine loads (the
     current one plus each older version with a complete upgrade path);
   - per field: name, kind, default, `min`/`max`, `uiRange`, unit, doc and aliases;
@@ -373,7 +375,25 @@ Scene files are named `<name>.scene.json`. The reasons:
   - Entities are ordered by `CreationOrder`.
   - Within an entity: `"id"` first, then known components in registration order, then
     preserved unknown components by name.
-  - Fields are in registration order, and every field is always written.
+  - Fields are in registration order. **A top-level field equal to its registered default
+    is left out**, and so is an always-present component (`Name`, `Transform`) that is
+    entirely default. A fully default optional component is still written, as `{}`
+    (its presence is the information). Nested values (inside arrays, optionals and
+    variants) are written in full. Equality is bit-exact, so `-0` is written where the
+    default is `0`.
+  - Why: a missing field decodes to exactly that default, so nothing is lost; diffs show
+    only what an author changed; files and query answers shrink. A typical light goes
+    from 9 fields to 2 or 3. The scene_tests 10k bench (random positions and rotations, so
+    little is default) goes from 2.89 MB to 2.58 MB pretty; authored scenes, where most
+    fields stay default, shrink much more.
+  - It stays canonical: omission is decided per value by the registered default, so one
+    world still gives one byte sequence, and save → load → save is byte-identical.
+    `SaveOptions::includeDefaults` (and `scene.save {defaults: true}`) writes every
+    field; it loads to the same world and re-saves to the canonical form.
+  - **Hazard:** changing a registered default changes the meaning of every file that
+    omitted that field. A default change is therefore a component version bump whose
+    upgrade writes the old default explicitly into old files. The v1 corpus asserts
+    some defaults and catches an accidental change.
 - **Two canonical renderings of the same document:**
   - *pretty* is for files: 2-space indent, and objects and arrays print on one line when
     they fit in 100 columns.
@@ -393,8 +413,8 @@ Scene files are named `<name>.scene.json`. The reasons:
   - IDs and `uint64_t` are 16-digit lowercase hex strings.
   - `AssetRef` is `{ "path": … }`, plus `"guid"` only when it's non-empty.
 - **On read:** a missing field takes the struct default, and a missing `Name`/`Transform`
-  takes the default component. Agents may write minimal files; `ohao fmt` expands them
-  to canonical form.
+  takes the default component. Agents may write minimal files in any member order;
+  `ohao fmt` puts them in canonical form.
 - **Header:** `format: "ohao.scene"`, the document `version` (1), and `components`
   (each type present → the version it was written with, keys sorted). The file contains
   no timestamps and no machine-specific data.
@@ -420,19 +440,13 @@ Example (excerpt of `assets/scenes/cornell_box.scene.json`; the real file is gen
     {
       "id": "3f9a61c2d8e04b17",
       "Name": { "value": "MainCamera" },
-      "Transform": { "position": [0, 0, 13], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-      "Camera": { "fovDeg": 38, "nearPlane": 0.1, "farPlane": 100, "active": true }
+      "Transform": { "position": [0, 0, 13] },
+      "Camera": { "fovDeg": 38 }
     },
-    {
-      "id": "a1c47e09b3f25d68",
-      "Name": { "value": "Environment" },
-      "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-      "Environment": { "hdri": null, "intensity": 1 }
-    },
+    { "id": "a1c47e09b3f25d68", "Name": { "value": "Environment" }, "Environment": {} },
     {
       "id": "5e20b8d4c19f7a03",
       "Name": { "value": "Back" },
-      "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
       "MeshSource": {
         "source": {
           "QuadPrim": {
@@ -441,28 +455,25 @@ Example (excerpt of `assets/scenes/cornell_box.scene.json`; the real file is gen
           }
         }
       },
-      "MaterialOverride": { "baseColor": [0.73, 0.73, 0.73], "roughness": 0.95, "metallic": 0, "emissiveStrength": 0 }
+      "MaterialOverride": { "baseColor": [0.73, 0.73, 0.73], "roughness": 0.95 }
     },
     {
       "id": "c8d2f61a4b7e9035",
       "Name": { "value": "MetalSphere" },
-      "Transform": { "position": [-2, -3, 0], "rotation": [0, 0, 0, 1], "scale": [2, 2, 2] },
+      "Transform": { "position": [-2, -3, 0], "scale": [2, 2, 2] },
       "MeshSource": { "source": { "SpherePrim": { "radius": 0.5, "sectors": 32, "stacks": 16 } } },
-      "MaterialOverride": { "baseColor": [0.95, 0.93, 0.88], "roughness": 0.05, "metallic": 1, "emissiveStrength": 0 }
+      "MaterialOverride": { "baseColor": [0.95, 0.93, 0.88], "roughness": 0.05, "metallic": 1 }
     },
     {
       "id": "07b9e3a5d61c4f82",
       "Name": { "value": "Light0" },
-      "Transform": { "position": [-3, 4, -3], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
-      "Light": {
-        "type": "Point", "color": [1, 0.3, 0.2], "intensity": 5, "range": 10, "radius": 0.3,
-        "innerConeDeg": 30, "outerConeDeg": 45, "areaEdge1": [1, 0, 0], "areaEdge2": [0, 0, 1]
-      }
+      "Transform": { "position": [-3, 4, -3] },
+      "Light": { "color": [1, 0.3, 0.2], "intensity": 5, "radius": 0.3 }
     },
     {
       "id": "e46a0f2c9d8b1357",
       "Name": { "value": "LampShade" },
-      "Transform": { "position": [0, 0.4, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+      "Transform": { "position": [0, 0.4, 0] },
       "Parent": { "entity": "07b9e3a5d61c4f82" },
       "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/props/lamp_shade.glb" } } } }
     }
@@ -527,7 +538,7 @@ file.)
   | Warnings | `W_UNKNOWN_COMPONENT` |
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
   | Assets | `E_ASSET_NOT_FOUND` (with `--check-assets`) |
-  | Commands only | `E_ENTITY_NOT_FOUND`, `E_COMPONENT_UNKNOWN`, `E_PATH` |
+  | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH` (and `E_ENTITY_NOT_FOUND` for command targets) |
   | Limits | `E_TOO_MANY_ERRORS` |
 
   Warnings use the same shape with `W_` codes. `line`/`column` are present for file
@@ -575,19 +586,55 @@ Every authoring operation is a method with JSON-encodable parameters and results
 CLI, the future `ohao serve`, the future C ABI and the future editor all dispatch
 through this table, so there is exactly one implementation of each operation.
 
+`api::Session(World&, const TypeRegistry&)` owns the dispatch:
+`std::string call(std::string_view method, std::string_view params)`.
+- `params` is a JSON object (empty means `{}`). The reply is compact JSON, exactly one of
+  `{"result": …}` or `{"error": {"code", "message", "data": [diagnostics]}}`.
+- `code` and `message` are the first diagnostic's (with "(+N more)"); `data` holds up to
+  20 diagnostics in the file-validation shape, with paths into the params (for example
+  `/commands/3/value`). The JSON-RPC integer error codes are mapped in sub-project 4.
+- Optional members are left out of results when empty, and unknown params are
+  `E_UNKNOWN_FIELD` with a suggestion.
+- The method table (name, params, result, doc) is part of the catalogue
+  (`"methods"`) and of `schemaHash`.
+
 | Method | Params → result |
 |---|---|
-| `schema.get` | → catalogue (as `ohao schema`), `schemaHash` |
-| `scene.validate` | `{text \| path, checkAssets}` → `{ok, errors[], warnings[]}` |
-| `scene.load` | `{text \| path, seed?}` → `{entities, upgraded[], warnings[]}`. The world must be empty. |
-| `scene.save` | `{path?, compact?}` → `{text?, warnings[]}` |
+| `schema.get` | → the catalogue (as `ohao schema`, compact), with `methods` and `schemaHash` |
+| `scene.validate` | `{text \| path \| scene, limit = 20}` → `{ok, errors?, warnings?, upgraded?, more?}` |
+| `scene.load` | `{text \| path \| scene, seed?}` → `{entities, preserved?, upgraded?, warnings?}`. The world must be empty; all or nothing. |
+| `scene.save` | `{path?, layout = compact \| pretty, defaults = false}` → `{scene}` (the compact scene as an object) or `{path, bytes}` |
 | `world.info` | → `{entities, frame, schemaHash, idCounter}` |
-| `world.query` | `{ids?, names?, has?[], fields?[], limit?}` → entities in canonical compact encoding, in creation order |
-| `world.apply` | `{commands[]}` (one atomic batch) → `{ok, results[], inverse[]}` or errors |
-| `world.step` | `{frames, dt = 1/60}` → `{frame}` |
-| `world.snapshot` | `{name}` → `{name, entities, bytes}` |
-| `world.restore` | `{name}` → `{created, destroyed, changed}` |
-| `render.capture` | `{path, mode, spp, width, height, denoise}` → `{path, ms}`. The renderer is initialized lazily on first use. |
+| `world.summary` | `{depth = 2, maxChildren = 8, maxNodes = 64}` → `{entities, roots, components, bounds?, outline, moreRoots?}` |
+| `world.query` | `{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}` → `{entities, count, missing?, next?}` |
+| `world.apply` | `{commands}` (one atomic batch) → `{applied, results, inverse}` |
+| `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` |
+| `world.snapshot` | `{name}` → `{name, entities, bytes}` (step 6) |
+| `world.restore` | `{name}` → `{created, destroyed, changed}` (step 6) |
+| `render.capture` | `{path, mode, spp, width, height, denoise}` → `{path, ms}`. The renderer is initialized lazily on first use. (step 9) |
+
+- `scene` is the scene as a JSON object: it costs no string escaping, which matters
+  when an agent writes it. `text` is the same as a string, `path` a file. `seed` (16
+  hex digits) fixes the id generator for later creates. `checkAssets` arrives with
+  assets (step 7).
+- **`world.query`:**
+  - Filters all have to match: `ids` (any of), `names` (exact, any of), `nameContains`
+    (substring), `has` (every listed component, runtime ones included).
+  - Entities come in creation order, `limit`/`offset` page them, `count` is the total
+    match count and `next` the following offset. Ids that do not exist are listed in
+    `missing`, not an error.
+  - **Projection:** without `fields`, each entity is its compact file form (defaults
+    omitted unless `defaults: true`). `fields: ["/Light", "/Transform/position"]` gives
+    whole components or single fields (always written, even when default). Runtime
+    components can be projected too (`/WorldTransform/world`). `fields: []` gives ids
+    only.
+- **`world.summary`:**
+  - Counts per component (runtime included) and the number of roots.
+  - `bounds` of the entity origins in world space, composed from local transforms, so
+    they are current before any step.
+  - An `outline` of the hierarchy in creation order, `depth` levels below the roots.
+    Each node is `{id, name?, children?, more?}`, where `more` counts the direct children
+    not listed (depth, `maxChildren` or `maxNodes` reached).
 
 **Commands** (the editor and agents both mutate authoring state only through these;
 gameplay systems mutate simulation state, and snapshots capture both):
@@ -602,14 +649,88 @@ gameplay systems mutate simulation state, and snapshots capture both):
 { "op": "field.set", "id": "…", "path": "/Light/intensity", "value": 12.5 }
 ```
 
-- **Atomic batches:** a batch is fully validated first, with the same validator as
-  files. It's then applied in order through `patch`/`emplace_or_replace`, so the usual
-  signals fire. It's all or nothing.
+- **Atomic batches:**
+  - Commands apply in order. Each is validated against the world as the earlier ones
+    left it (with the same typed decoders, limits and reference checks as files), so a
+    batch can create an entity and then edit it.
+  - A command checks everything before it changes anything. Changes go through
+    `emplace_or_replace`, `remove` and `World::setParent`, so the usual signals fire.
+  - When a command fails, the commands already applied are undone by running their
+    inverses in reverse order, and the id generator and creation sequence are
+    restored. All or nothing: the world saves byte-identically to before.
+  - *Revised in step 5:* the first design validated the whole batch before applying
+    any of it. That cannot check a command against entities an earlier command of the
+    same batch creates, reparents or destroys, so validation moved into the sequential
+    apply, with rollback.
+- **Command details:**
+  - `entity.create`: `components` accepts every saved component, `Name`, `Transform`
+    and `Parent` included; giving both `name` and `Name` (or `parent` and `Parent`) is
+    `E_DUPLICATE_KEY`. Unknown components are `E_COMPONENT_UNKNOWN` (commands do not
+    preserve typos). The restore-only members `order` (the `CreationOrder`) and
+    `preserved` (`{Name: {version, value}}`) let inverses bring back an entity exactly.
+  - `entity.destroy`: recursive by default. With `recursive: false` the children are
+    detached (they become roots) and survive.
+  - `Parent` changes always go through `World::setParent`, whichever command makes them
+    (`entity.reparent`, `component.set`/`component.remove` of `Parent`, or `field.set`
+    of `/Parent/entity`). Cycles are `E_PARENT_CYCLE`.
+  - `Name` and `Transform` are on every entity and cannot be removed (`E_COMMAND`).
+  - `field.set` paths are `/Type/field`, optionally followed by member names or array
+    indices (`/Transform/position/1`). A deep path re-decodes the whole field through the
+    typed decoder, so limits and types are checked exactly as in files. A field of a
+    component the entity lacks is `E_COMMAND` (use `component.set`).
+  - Command-level `id` and `parent` also accept `"$k"`: the entity created by command
+    `k` of the same batch (an earlier `entity.create`).
+- **Results:** `results[i]` is the id that command `i` created, else `null`.
 - **Inverses:** every applied batch returns its inverse batch. Undo/redo is replaying
-  inverses, and the editor later coalesces a gizmo drag into one `field.set`.
+  inverses (the inverse of the inverse redoes), and the editor later coalesces a gizmo
+  drag into one `field.set`.
+  - create → destroy; destroy → `entity.create` per entity in pre-order (with `order`,
+    its file-form components and `preserved`), plus reparents of detached children;
+    reparent → reparent back; `component.set` → the old value or `component.remove`;
+    `component.remove` → `component.set`; `field.set` → the old value at the same path.
+  - A batch's inverse is its commands' inverse lists, last command first.
+  - Known limit: an undo that recreates a child appends it to its parent's `Children`,
+    so sibling order can differ after undo. Saves are unaffected (they order by
+    `CreationOrder`, which is restored); step 6's restore does not have this limit.
 - **One semantics for create:** `entity.create` with components is the same thing as
   loading that entity from a file. A test proves the command-built world saves to the
   same bytes.
+- **New error codes:** `E_METHOD` (unknown method), `E_COMMAND` (malformed request or
+  an edit that cannot apply), `E_COMPONENT_UNKNOWN` (not a component, or not a saved
+  one for edits), `E_PATH` (a path that reaches no field).
+
+### Token budget (agents)
+
+Agents pay for every byte they read and write, so token efficiency is a requirement,
+not a nicety. **An agent never needs to read a whole large scene.** It orients with
+`world.info`/`world.summary`, reads exactly what it needs with filtered, projected
+`world.query`, edits with `field.set`, and reads terse errors. Concretely:
+
+1. **Defaults are omitted** from canonical files and from query answers (see "Layout
+   and encoding"); `defaults: true` asks for everything.
+2. **Filters and projection** in `world.query` (and the CLI later) keep answers to the
+   entities and fields asked for.
+3. **`world.summary`** gives counts, bounds and a capped outline in a fixed small size,
+   whatever the scene size.
+4. **Errors are terse:** one diagnostic is one line of JSON with code, path, expected,
+   got and a suggestion; "one of" lists are cut after 12 names ("…, +N more"); an error
+   reply carries at most 20 diagnostics, and `scene.validate` returns at most `limit`
+   (20) of each kind with a `more` count.
+
+Estimates, measured on the 10k-entity test world (`api_tests`, tokens ≈ bytes / 4):
+
+| Operation | Request + reply | ≈ tokens |
+|---|---|---|
+| `world.query` one entity, one projected field | 61 + 98 B | 40 |
+| `world.apply` one `field.set` (reply includes its inverse) | 100 + 137 B | 60 |
+| One error (e.g. a misspelled field, with suggestion) | 289 B | 70 |
+| `world.info` | ~90 B | 25 |
+| `world.summary` of 10k entities (64 outline nodes) | 3.3 KB | 830 |
+| `world.query` 1,000 entities, full components | 122 KB | 31k |
+| The whole 10k scene, compact (never needed) | 1.26 MB | 310k |
+
+A typical edit loop (summary once, then query + edit + verify per change) costs about
+1k tokens up front and 100–200 tokens per edit, independent of scene size.
 
 **`ohao` CLI** (`tools/ohao`, built on `ohao_api`):
 
@@ -618,6 +739,9 @@ ohao schema   [-o dir]                       # ohao_schema.json + scene.schema.j
 ohao validate <scene> [--check-assets]
 ohao fmt      <scene> [--check] [--compact] [-o out]
 ohao apply    <scene> <commands.json> [-o out]
+ohao query    <scene> [--ids a,b] [--name N] [--name-contains S] [--has T,U] [--fields /T,/T/f]
+              [--limit N] [--offset N] [--defaults]            # = world.query
+ohao summary  <scene> [--depth D] [--max-children N] [--max-nodes N]   # = world.summary
 ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
               [--render out.png --mode deferred|rt_realtime|rt_offline --spp N --denoise X --size WxH]
               [--save out.scene.json]
@@ -743,7 +867,7 @@ Scene `bench10k` is generated with a fixed seed:
 Canonical text costs CPU:
 - sorting by creation order;
 - shortest-float formatting;
-- writing every field;
+- comparing every field with its default (to leave defaults out);
 - line-fitting pretty-printing.
 
 It also costs size: about 5 MB for 10k entities. Readable formats are inherently slower
@@ -1018,7 +1142,11 @@ Each step ends with the engine running and every suite green.
    Tests 2–4, 6, 7. *(Done 2026-10-23. Also: the single-pass pretty writer, fast_float
    for float parsing, and the error-code table in the catalogue.)*
 4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8. *(Done 2026-10-23.)*
-5. `ohao/api`: commands with inverses, query, the method table. Test 9.
+5. `ohao/api`: commands with inverses, query, the method table. Test 9. *(Done
+   2026-10-23. Also: the token budget. Canonical files omit defaults; `world.query`
+   filters and projects; `world.summary`; terse capped errors. Batch validation moved
+   into the sequential apply with rollback. `Session` is the dispatch; the CLI (step 9)
+   wraps it.)*
 6. Columnar snapshot/restore, `scene_bench` and the budgets. Tests 10 and 19 for the
    operations that exist so far.
 7. `MeshSource`, `MaterialOverride`, `generateQuad`/`generateBox`, instantiate, resolver.
@@ -1103,7 +1231,7 @@ technology calls; these were decided on that delegation:
 | 16 | Agents as users | First-class. Catalogue + JSON Schema, structured errors, commands, deterministic headless CLI. |
 | 17 | One API | `ohao/api` method table shared by the CLI, future RPC, C ABI and editor. Authoring edits go only through commands. |
 | 18 | Edits | Typed commands, atomic batches, inverse returned (undo = replay inverses) |
-| 19 | CLI | `ohao` with `schema`/`validate`/`fmt`/`apply`/`run`; JSON on stdout; JSON-Lines scripts = JSON-RPC requests minus the envelope |
+| 19 | CLI | `ohao` with `schema`/`validate`/`fmt`/`apply`/`query`/`summary`/`run`; JSON on stdout; JSON-Lines scripts = JSON-RPC requests minus the envelope |
 | 20 | Control surface | Designed now (JSON-RPC 2.0 over stdio, MCP-native, `Content-Length` framing), built in sub-project 4 |
 | 21 | Determinism | World state and CPU stdout bit-identical per build, inputs and seed. Pixels within golden tolerances. |
 | 22 | Performance gate | `scene_bench` budgets (bench10k), medians gated; budget changes need Frank's OK |

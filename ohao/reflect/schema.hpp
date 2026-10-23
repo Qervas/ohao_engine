@@ -3,7 +3,9 @@
 #include "reflect/registry.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ohao::reflect {
@@ -13,12 +15,25 @@ namespace ohao::reflect {
 // serialized type. Empty means clean. Each entry starts with "Type.field:".
 [[nodiscard]] std::vector<std::string> lint(const TypeRegistry& r);
 
-// The catalogue (ohao_schema.json): every type and enum with fields, kinds, defaults,
-// limits, units, docs and versions, in registration order. Canonical and deterministic;
-// pretty layout plus a trailing newline. `schemaHash` (16 hex digits) is FNV-1a 64 of
-// the catalogue's compact form without the schemaHash member.
-[[nodiscard]] std::string exportCatalogue(const TypeRegistry& r);
-[[nodiscard]] uint64_t schemaHash(const TypeRegistry& r);
+// One entry of the API method table (owned by the layer that implements the methods).
+struct MethodDoc {
+    std::string_view name;
+    std::string_view params;   // a compact description of the params object
+    std::string_view result;   // and of the result
+    std::string_view doc;
+};
+
+struct CatalogueOptions {
+    std::span<const MethodDoc> methods{};
+    JsonLayout layout{JsonLayout::Pretty};   // Pretty ends with '\n'; Compact has no newline
+};
+
+// The catalogue (ohao_schema.json): the error codes, the API methods, and every type and
+// enum with fields, kinds, defaults, limits, units, docs and versions, in registration
+// order. Canonical and deterministic. `schemaHash` (16 hex digits) is FNV-1a 64 of the
+// catalogue's compact form without the schemaHash member.
+[[nodiscard]] std::string exportCatalogue(const TypeRegistry& r, const CatalogueOptions& options = {});
+[[nodiscard]] uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods = {});
 
 // JSON Schema (draft 2020-12) for scene documents (*.scene.json) built from the serialized types:
 // any validator can check a scene's shape, enums, limits and id syntax. Cross-entity

@@ -27,12 +27,14 @@ struct ohao::reflect::ValueTraits<entt::entity> {
 
 namespace ohao::ecs {
 
-// What scene load/save needs to move a component between a decoded value and the
-// registry, typed at registration and stored in TypeInfo::host. Only saved components
-// carry it.
+// What scene load/save, commands and queries need to move a component between a typed
+// value and the registry, generated at registration and stored in TypeInfo::host. Every
+// component with data carries it (saved and runtime); empty tag types do not.
 struct ComponentOps {
-    void (*emplace)(entt::registry& r, entt::entity e, void* value);   // moves from value
+    void (*emplace)(entt::registry& r, entt::entity e, void* value);   // moves from value; fires signals
     const void* (*tryGet)(const entt::registry& r, entt::entity e);
+    void (*remove)(entt::registry& r, entt::entity e);
+    std::size_t (*count)(const entt::registry& r);
 };
 
 template <class T>
@@ -40,6 +42,11 @@ template <class T>
     static const ComponentOps ops{
         [](entt::registry& r, entt::entity e, void* v) { r.emplace_or_replace<T>(e, std::move(*static_cast<T*>(v))); },
         [](const entt::registry& r, entt::entity e) -> const void* { return r.try_get<T>(e); },
+        [](entt::registry& r, entt::entity e) { r.remove<T>(e); },
+        [](const entt::registry& r) -> std::size_t {
+            const auto* s = r.storage<T>();
+            return s ? s->size() : 0;
+        },
     };
     return std::shared_ptr<const void>(&ops, [](const void*) {});
 }

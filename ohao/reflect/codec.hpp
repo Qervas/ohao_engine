@@ -312,13 +312,8 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
             return;
         }
         std::vector<std::string_view> names;
-        std::string list;
-        for (const auto& e : d.enumType->values) {
-            names.push_back(e.name);
-            if (!list.empty()) list += ", ";
-            list += e.name;
-        }
-        ctx.error("E_ENUM", n, "'" + std::string(n.text) + "' is not a " + d.enumType->name, "one of: " + list,
+        for (const auto& e : d.enumType->values) names.push_back(e.name);
+        ctx.error("E_ENUM", n, "'" + std::string(n.text) + "' is not a " + d.enumType->name, oneOf(names),
                   ctx.gotText(n), suggest(n.text, names));
     } else if constexpr (k == Kind::Vector) {
         if (n.type != JsonType::Array) return detail::typeError(n, ctx, "an array");

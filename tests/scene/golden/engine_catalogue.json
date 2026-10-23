@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "cee89f77e694bda0",
+  "schemaHash": "51d2823cc7a39f67",
   "units": [
     "m",
     "m/s",
@@ -69,11 +69,25 @@
       "code": "E_TOO_MANY_ERRORS",
       "meaning": "More errors exist than are reported (the first 100 are)."
     },
+    { "code": "E_METHOD", "meaning": "An unknown API method." },
+    {
+      "code": "E_COMMAND",
+      "meaning": "A request that is malformed or cannot apply (unknown op, missing member, absent component)."
+    },
+    {
+      "code": "E_COMPONENT_UNKNOWN",
+      "meaning": "A request names a type that is not a component (or, for edits, not a saved one)."
+    },
+    {
+      "code": "E_PATH",
+      "meaning": "A path that reaches no field: \"/Type/field\", then optionally member names or array indices."
+    },
     {
       "code": "W_UNKNOWN_COMPONENT",
       "meaning": "Warning: an unknown component close to a known name. It is kept, but may be a typo."
     }
   ],
+  "methods": [],
   "enums": [
     {
       "name": "LightType",
@@ -109,6 +123,7 @@
       "role": "component",
       "serialized": true,
       "singleton": false,
+      "alwaysPresent": true,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -138,6 +153,7 @@
       "role": "component",
       "serialized": true,
       "singleton": false,
+      "alwaysPresent": true,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -201,6 +217,7 @@
       "role": "component",
       "serialized": true,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -230,6 +247,7 @@
       "role": "component",
       "serialized": true,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -395,6 +413,7 @@
       "role": "struct",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -441,6 +460,7 @@
       "role": "struct",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -487,6 +507,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -516,6 +537,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -562,6 +584,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -625,6 +648,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -654,6 +678,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -734,6 +759,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -763,6 +789,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -792,6 +819,7 @@
       "role": "struct",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -855,6 +883,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [
@@ -884,6 +913,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [],
@@ -895,6 +925,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [],
@@ -906,6 +937,7 @@
       "role": "component",
       "serialized": false,
       "singleton": false,
+      "alwaysPresent": false,
       "version": 1,
       "readsVersions": [1],
       "fields": [],

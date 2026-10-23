@@ -18,11 +18,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
 
     // ---- authoring components (saved in scene files) -----------------------------------
 
-    r.type<Name>("Name").component().host(makeComponentOps<Name>())
+    r.type<Name>("Name").component().alwaysPresent().host(makeComponentOps<Name>())
         .doc("Display name for people and agents. Not unique; entities are identified by id.")
         .field("value", &Name::value).doc("The name");
 
-    r.type<Transform>("Transform").component().host(makeComponentOps<Transform>())
+    r.type<Transform>("Transform").component().alwaysPresent().host(makeComponentOps<Transform>())
         .doc("Local transform relative to the parent (or the world for a root entity). "
              "World matrix = parent world * T * R * S.")
         .field("position", &Transform::position).doc("Local translation").unit("m")
@@ -57,31 +57,31 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("index", &MaterialHandle::index).doc("Slot index; 4294967295 means none").unitless()
         .field("generation", &MaterialHandle::generation).doc("Slot generation").unitless();
 
-    r.type<Children>("Children").component().runtime()
+    r.type<Children>("Children").component().runtime().host(makeComponentOps<Children>())
         .doc("The entity's children in attach order. Derived: rebuilt from Parent.")
         .field("entities", &Children::entities).doc("Child entities");
-    r.type<WorldTransform>("WorldTransform").component().runtime()
+    r.type<WorldTransform>("WorldTransform").component().runtime().host(makeComponentOps<WorldTransform>())
         .doc("World matrices computed by the transform system from Transform and Parent.")
         .field("world", &WorldTransform::world).doc("Object-to-world matrix this frame, column-major").unitless()
         .field("prevWorld", &WorldTransform::prevWorld).doc("Last frame's object-to-world matrix (motion vectors)").unitless();
-    r.type<MeshRenderer>("MeshRenderer").component().runtime()
+    r.type<MeshRenderer>("MeshRenderer").component().runtime().host(makeComponentOps<MeshRenderer>())
         .doc("The GPU mesh and materials an entity renders with. Built from the entity's mesh source.")
         .field("mesh", &MeshRenderer::mesh).doc("Mesh slot")
         .field("materials", &MeshRenderer::materials).doc("One material per submesh, in submesh order")
         .field("visible", &MeshRenderer::visible).doc("Whether the entity is drawn");
-    r.type<RenderSlot>("RenderSlot").component().runtime()
+    r.type<RenderSlot>("RenderSlot").component().runtime().host(makeComponentOps<RenderSlot>())
         .doc("The entity's instance slot in the GPU render scene. Owned by the render extract.")
         .field("slot", &RenderSlot::slot).doc("Instance slot index").unitless();
-    r.type<EmissiveProxyLight>("EmissiveProxyLight").component().runtime()
+    r.type<EmissiveProxyLight>("EmissiveProxyLight").component().runtime().host(makeComponentOps<EmissiveProxyLight>())
         .doc("A point light approximating a mesh's emissive texture. Derived from the model.")
         .field("localCenter", &EmissiveProxyLight::localCenter).doc("Center in the entity's model space").unit("m")
         .field("radius", &EmissiveProxyLight::radius).doc("Emitter radius").unit("m")
         .field("color", &EmissiveProxyLight::color).doc("Emitted color").unit("linear-rgb").color()
         .field("intensity", &EmissiveProxyLight::intensity).doc("Brightness multiplier").unitless();
-    r.type<GiMaterialLegacy>("GiMaterialLegacy").component().runtime()
+    r.type<GiMaterialLegacy>("GiMaterialLegacy").component().runtime().host(makeComponentOps<GiMaterialLegacy>())
         .doc("LEGACY: the RT GI per-instance material word (albedo rgb, packed roughness/metallic in a).")
         .field("packed", &GiMaterialLegacy::packed).doc("rgb = albedo, a = packed roughness/metallic/vertex-count rule").unitless();
-    r.type<CreationOrder>("CreationOrder").component().runtime()
+    r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
         .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
         .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");
     r.type<PreservedComponent>("PreservedComponent").runtime()
@@ -89,7 +89,7 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("name", &PreservedComponent::name).doc("Component name as written in the file")
         .field("version", &PreservedComponent::version).doc("Its version from the file header (1 if absent)").unitless()
         .field("json", &PreservedComponent::json).doc("Its value as canonical compact JSON");
-    r.type<PreservedComponents>("PreservedComponents").component().runtime()
+    r.type<PreservedComponents>("PreservedComponents").component().runtime().host(makeComponentOps<PreservedComponents>())
         .doc("Components a scene file carried that this build does not know; written back on save.")
         .field("entries", &PreservedComponents::entries).doc("The kept components, in file order");
     r.type<TransformDirty>("TransformDirty").component().runtime()

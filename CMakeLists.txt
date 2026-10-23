@@ -176,5 +176,9 @@ endif()
 if(BUILD_SCENE_TESTS)
     add_subdirectory(tests/scene)
 endif()
+option(BUILD_API_TESTS "Build API tests (methods, commands, inverses, queries; CPU only)" ON)
+if(BUILD_API_TESTS)
+    add_subdirectory(tests/api)
+endif()
 
 

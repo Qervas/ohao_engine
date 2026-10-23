@@ -45,6 +45,9 @@ void fillLineColumns(std::span<Diagnostic> diags, std::string_view source);
 // The closest candidate within an edit distance of max(1, |word| / 3), or "".
 [[nodiscard]] std::string suggest(std::string_view word, std::span<const std::string_view> candidates);
 
+// "one of: a, b, c", cut after `max` names ("..., +N more") so errors stay terse.
+[[nodiscard]] std::string oneOf(std::span<const std::string_view> names, std::size_t max = 12);
+
 // An entity reference found while decoding; resolved once every entity is known.
 struct PendingRef {
     void* field;                                // the decoded value to patch

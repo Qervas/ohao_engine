@@ -24,7 +24,7 @@ bool needsUnit(const TypeInfo& t, const FieldInfo& f) {
     return t.serialized && takesUnit(*f.type);
 }
 
-void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, const uint64_t* hash) {
+void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const MethodDoc> methods, const uint64_t* hash) {
     w.beginObject();
     w.key("format"); w.string("ohao.schema");
     w.key("version"); w.int64(1);
@@ -40,6 +40,18 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, const uint64_t* ha
         w.beginObject();
         w.key("code"); w.string(e.code);
         w.key("meaning"); w.string(e.meaning);
+        w.endObject();
+    }
+    w.endArray();
+
+    w.key("methods");
+    w.beginArray();
+    for (const auto& m : methods) {
+        w.beginObject();
+        w.key("name"); w.string(m.name);
+        w.key("params"); w.string(m.params);
+        w.key("result"); w.string(m.result);
+        w.key("doc"); w.string(m.doc);
         w.endObject();
     }
     w.endArray();
@@ -73,6 +85,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, const uint64_t* ha
         w.key("role"); w.string(t->role == TypeRole::Component ? "component" : "struct");
         w.key("serialized"); w.boolean(t->serialized);
         w.key("singleton"); w.boolean(t->singleton);
+        w.key("alwaysPresent"); w.boolean(t->alwaysPresent);
         w.key("version"); w.int64(t->version);
         w.key("readsVersions");   // file versions this engine loads (older ones are upgraded)
         w.beginArray();
@@ -292,17 +305,19 @@ std::vector<std::string> lint(const TypeRegistry& r) {
     return issues;
 }
 
-uint64_t schemaHash(const TypeRegistry& r) {
+uint64_t schemaHash(const TypeRegistry& r, std::span<const MethodDoc> methods) {
     JsonWriter w(1 << 14);
-    writeCatalogueBody(w, r, nullptr);
+    writeCatalogueBody(w, r, methods, nullptr);
     return fnv1a64(w.str());
 }
 
-std::string exportCatalogue(const TypeRegistry& r) {
-    const uint64_t hash = schemaHash(r);
-    JsonWriter w(1 << 14);
-    writeCatalogueBody(w, r, &hash);
-    return prettyPrint(w.str()) + "\n";
+std::string exportCatalogue(const TypeRegistry& r, const CatalogueOptions& options) {
+    const uint64_t hash = schemaHash(r, options.methods);
+    JsonWriter w(1 << 14, options.layout);
+    writeCatalogueBody(w, r, options.methods, &hash);
+    std::string out = w.take();
+    if (options.layout == JsonLayout::Pretty) out.push_back('\n');
+    return out;
 }
 
 std::string exportSceneJsonSchema(const TypeRegistry& r) {

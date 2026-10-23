@@ -1,0 +1,8 @@
+add_executable(api_tests api_tests.cpp)
+target_compile_features(api_tests PRIVATE cxx_std_20)
+target_link_libraries(api_tests PRIVATE ohao_api)
+target_compile_definitions(api_tests PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_link_options(api_tests PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_test(NAME ApiTests COMMAND api_tests)

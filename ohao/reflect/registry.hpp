@@ -48,6 +48,7 @@ public:
     TypeBuilder& component();    // a top-level component block in scene files
     TypeBuilder& runtime();      // listed in the catalogue, never serialized
     TypeBuilder& singleton();    // at most one per world
+    TypeBuilder& alwaysPresent() { m_t.alwaysPresent = true; return *this; }   // on every entity
     TypeBuilder& host(std::shared_ptr<const void> data) { m_t.host = std::move(data); return *this; }
     // Registers the migration from version `from` to `from + 1` (1 <= from < version).
     TypeBuilder& upgrade(uint32_t from, Upgrade fn);

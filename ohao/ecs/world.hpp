@@ -48,6 +48,10 @@ public:
     // 0 when e is invalid or has no EntityId.
     [[nodiscard]] uint64_t idOf(entt::entity e) const;
     [[nodiscard]] std::size_t idCount() const noexcept { return m_byId.size(); }
+    // The CreationOrder the next create() assigns. Restoring it (with idGenState) undoes
+    // the bookkeeping of creates that were rolled back.
+    [[nodiscard]] uint64_t nextCreationSeq() const noexcept { return m_nextSeq; }
+    void setNextCreationSeq(uint64_t seq) noexcept { m_nextSeq = seq; }
     // Destroys the entity and its whole subtree, detaching it from its parent first.
     // This is the preferred path. registry().destroy(e) is also kept consistent, with
     // different semantics: e's parent forgets it, and e's children are DETACHED (they

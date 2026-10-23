@@ -69,9 +69,10 @@ const EnumValue* EnumInfo::findByName(std::string_view n) const {
     return nullptr;
 }
 
-void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t) {
+void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const void* omitEqualTo) {
     w.beginObject();
     for (const auto& f : t.fields) {
+        if (omitEqualTo && f.ops->equal(object, omitEqualTo, *f.type)) continue;
         w.key(f.name);
         f.ops->write(object, w, *f.type);
     }

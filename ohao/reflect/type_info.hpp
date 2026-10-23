@@ -101,6 +101,7 @@ struct TypeInfo {
     TypeRole role{TypeRole::Struct};
     bool serialized{true};    // false: runtime-only, listed in the catalogue, never saved
     bool singleton{false};    // at most one per world
+    bool alwaysPresent{false};   // every entity has it; omitted from files when fully default
     std::vector<FieldInfo> fields;          // registration order = file order
     std::vector<SkippedField> skipped;      // members deliberately not serialized
     // One upgrade per older version, from -> from + 1; version N needs 1 .. N-1.
@@ -140,12 +141,18 @@ struct EnumInfo {
 };
 
 // Struct-level operations over the registered fields (skipped members are ignored).
-void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t);
+// With `omitEqualTo` (an object of the same type, normally t.defaultValue), fields equal
+// to it are left out: the canonical file form, since a missing field decodes to that
+// same default.
+void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const void* omitEqualTo = nullptr);
 [[nodiscard]] bool equalStruct(const void* a, const void* b, const TypeInfo& t);
 // Decodes an object into `object` (already holding defaults): unknown members, duplicate
 // members, type errors and limit violations are reported to ctx; missing members keep
 // their defaults.
 void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx);
+// Decodes one member of `object` (a `t`) from `n` and checks its limits, exactly as
+// readStruct does per member. False when it reported an error.
+bool readField(void* object, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx);
 
 // "f32", "vec3", "optional<AssetRef>", "variant<SpherePrim|CubePrim>", ... (catalogue form)
 [[nodiscard]] std::string typeName(const TypeDesc& d);

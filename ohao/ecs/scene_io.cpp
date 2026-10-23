@@ -2,6 +2,7 @@
 
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
+#include "ecs/owned_value.hpp"
 #include "ecs/scene_types.hpp"
 
 #include <ankerl/unordered_dense.h>
@@ -43,30 +44,6 @@ std::vector<SavedType> savedTypes(const TypeRegistry& r) {
 }
 
 // ---- decoded values -----------------------------------------------------------------------
-
-// A component value decoded into its own heap block (stable address: pending entity
-// references point into it until phase 2 patches them).
-class OwnedValue {
-public:
-    explicit OwnedValue(const TypeInfo* t)
-        : m_type(t), m_ptr(::operator new(t->size, std::align_val_t(t->align))) {
-        t->construct(m_ptr);
-    }
-    OwnedValue(OwnedValue&& o) noexcept : m_type(o.m_type), m_ptr(o.m_ptr) { o.m_ptr = nullptr; }
-    OwnedValue& operator=(OwnedValue&&) = delete;
-    OwnedValue(const OwnedValue&) = delete;
-    ~OwnedValue() {
-        if (!m_ptr) return;
-        m_type->destroy(m_ptr);
-        ::operator delete(m_ptr, std::align_val_t(m_type->align));
-    }
-    [[nodiscard]] const TypeInfo* type() const noexcept { return m_type; }
-    [[nodiscard]] void* get() const noexcept { return m_ptr; }
-
-private:
-    const TypeInfo* m_type;
-    void* m_ptr;
-};
 
 struct DecodedEntity {
     uint64_t id{0};
@@ -452,12 +429,25 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     std::sort(order.begin(), order.end());
 
     const std::vector<SavedType> saved = savedTypes(types);
-    std::vector<bool> present(saved.size(), false);
+    // The component each entity writes per saved type (null: none), row-major by entity.
+    // An always-present component that is entirely default is left out unless defaults
+    // are requested.
+    const bool omit = !options.includeDefaults;
+    const std::size_t nt = saved.size();
+    std::vector<const void*> writes(order.size() * nt, nullptr);
+    std::vector<bool> present(nt, false);
     std::map<std::string, uint32_t> header;   // sorted by name
-    for (const auto& [seq, e] : order) {
-        for (std::size_t i = 0; i < saved.size(); ++i)
-            if (!present[i] && saved[i].ops->tryGet(reg, e)) present[i] = true;
-        if (const auto* p = reg.try_get<PreservedComponents>(e))
+    for (std::size_t n = 0; n < order.size(); ++n) {
+        const entt::entity e = order[n].second;
+        for (std::size_t i = 0; i < nt; ++i) {
+            const void* value = saved[i].ops->tryGet(reg, e);
+            if (!value) continue;
+            const TypeInfo& t = *saved[i].type;
+            if (omit && t.alwaysPresent && reflect::equalStruct(value, t.defaultValue.get(), t)) continue;
+            writes[n * nt + i] = value;
+            present[i] = true;
+        }
+        if (const auto* p = reg.try_get<PreservedComponents>(order[n].second))
             for (const auto& entry : p->entries) header.emplace(entry.name, entry.version);
     }
     for (std::size_t i = 0; i < saved.size(); ++i)
@@ -484,11 +474,12 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
         w.beginObject();
         w.key("id");
         w.hex64(world.idOf(e));
-        for (const SavedType& s : saved) {
-            if (const void* value = s.ops->tryGet(reg, e)) {
-                w.key(s.type->name);
-                reflect::writeStruct(value, w, *s.type);
-            }
+        for (std::size_t i = 0; i < nt; ++i) {
+            const void* value = writes[n * nt + i];
+            if (!value) continue;
+            const TypeInfo& t = *saved[i].type;
+            w.key(t.name);
+            reflect::writeStruct(value, w, t, omit ? t.defaultValue.get() : nullptr);
         }
         if (const auto* p = reg.try_get<PreservedComponents>(e)) {
             extra.clear();
