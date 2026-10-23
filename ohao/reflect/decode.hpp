@@ -2,6 +2,7 @@
 // Structured diagnostics and the state of one typed decode. Every error carries a
 // stable code, a JSON Pointer path, the entity id (if any), the source position and,
 // where it helps, what was expected, what was found and a "did you mean".
+#include "reflect/json_cursor.hpp"
 #include "reflect/json_value.hpp"
 
 #include <cstdint>
@@ -131,9 +132,33 @@ private:
     bool m_full{false};
 };
 
+// The streaming decoder's state: typed values read straight from a JsonCursor, no tree.
+// readStructFast and FieldOps::readFast return false at the first thing that is not a
+// valid, canonical-enough value -- exactly where the tree decoder (readStruct) would
+// report an error -- and the caller then decodes with the tree decoder, which reports it.
+struct FastDecode {
+    JsonCursor& in;
+    std::vector<PendingRef>& refs;   // entity references found (patched once all exist)
+    uint64_t entity{0};              // id of the entity being decoded
+    const TypeInfo* component{nullptr};
+    bool valuesUnused{false};        // validation: see DecodeContext::valuesUnused
+    bool needValue{true};
+};
+// readStruct without a tree: false when it would report anything.
+[[nodiscard]] bool readStructFast(void* object, const TypeInfo& t, FastDecode& c);
+
 // Scalar readers shared by the typed decoders. On failure they report and return false.
 bool readFloat(const JsonNode& n, DecodeContext& ctx, float& out);
 bool readInt(const JsonNode& n, DecodeContext& ctx, int64_t lo, int64_t hi, int64_t& out);
 bool readHex64(const JsonNode& n, DecodeContext& ctx, std::string_view code, uint64_t& out);
+
+// The same checks on a raw token, without reporting: what the streaming decoder
+// (readStructFast) uses. Each returns false exactly where the reader above reports.
+// (Floats: JsonCursor::numberAsFloat / numberFits.)
+[[nodiscard]] bool parseIntToken(std::string_view token, int64_t lo, int64_t hi, int64_t& out) noexcept;
+[[nodiscard]] bool parseHex16(std::string_view s, uint64_t& out) noexcept;
+// readStruct's member lookup: the field named `key` (or with it as an alias), trying
+// `position` first since canonical files list fields in order. -1: none.
+[[nodiscard]] int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexcept;
 
 } // namespace ohao::reflect

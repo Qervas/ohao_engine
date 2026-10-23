@@ -1,6 +1,6 @@
 // scene_bench: the scene codec, snapshot and API budgets (spec "Performance").
 //
-//   scene_bench [--check budgets.json] [--out scene_bench.json] [--no-scale] [--iters N]
+//   scene_bench [--check budgets.json] [--out build/scene_bench.json] [--no-scale] [--iters N]
 //   scene_bench --breakdown [N]        the codec's phases timed separately (not gated)
 //
 // Generates bench10k (and bench100k for the scaling check) with a fixed seed and times
@@ -9,7 +9,7 @@
 // (thermal throttling, background load) lands on all of them instead of skewing one; the
 // bench100k scaling ratios are taken against bench10k samples from the same rounds. After
 // timing, every operation is run once more and its result verified: a benchmark of broken
-// code fails. Results go to scene_bench.json; with --check the exit code is 1 when a
+// code fails. Results go to build/scene_bench.json; with --check the exit code is 1 when a
 // median is over its budget or a bench100k median is more than maxRatio times bench10k's.
 //
 // The scene is the spec's: Name, Transform, Parent, Light, MeshSource, MaterialOverride,
@@ -32,9 +32,11 @@
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -290,21 +292,27 @@ void breakdown(int n) {
     for (const auto [e, t] : world.registry().view<const Transform>().each())
         fs.insert(fs.end(), {t.position.x, t.position.y, t.position.z, t.rotation.x, t.rotation.y, t.rotation.z,
                              t.rotation.w, t.scale.x});
+    char fbuf[32];
+    std::size_t sink = 0;
+    // Each fast path next to the reference it replaced (the tree decoder, the generic
+    // writer, std::to_chars), so a regression in either shows.
     std::vector<Op> ops = {
-        {"parse pretty (warm parser)", {}, [&] { (void)parser.parse(pretty); }, {}},
-        {"parse compact (warm parser)", {}, [&] { (void)parser.parse(compact); }, {}},
-        {"validate pretty", {}, [&] { (void)validateScene(pretty, engineTypes()); }, {}},
-        {"validate compact", {}, [&] { (void)validateScene(compact, engineTypes()); }, {}},
-        {"load pretty", [&] { fresh = std::make_unique<World>(); }, [&] { (void)loadScene(*fresh, pretty, engineTypes()); },
-         [&] { fresh.reset(); }},
-        {"save compact", {}, [&] { (void)save(world, JsonLayout::Compact); }, {}},
-        {"save pretty", {}, [&] { (void)save(world); }, {}},
-        {"prettyPrint(compact)", {}, [&] { (void)reflect::prettyPrint(compact); }, {}},
-        {"format the Transform floats", {}, [&] {
-             JsonWriter w(fs.size() * 12);
-             w.beginArray();
-             for (float f : fs) w.float32(f);
-             w.endArray();
+        {"parse pretty (tree, warm)", {}, [&] { (void)parser.parse(pretty); }, {}},
+        {"validate pretty (streaming)", {}, [&] { (void)validateScene(pretty, engineTypes()); }, {}},
+        {"validate pretty (tree)", {}, [&] { (void)validateSceneReference(pretty, engineTypes()); }, {}},
+        {"validate compact (streaming)", {}, [&] { (void)validateScene(compact, engineTypes()); }, {}},
+        {"load pretty (streaming)", [&] { fresh = std::make_unique<World>(); },
+         [&] { (void)loadScene(*fresh, pretty, engineTypes()); }, [&] { fresh.reset(); }},
+        {"load pretty (tree)", [&] { fresh = std::make_unique<World>(); },
+         [&] { (void)loadSceneReference(*fresh, pretty, engineTypes()); }, [&] { fresh.reset(); }},
+        {"save pretty (per-type writers)", {}, [&] { (void)save(world); }, {}},
+        {"save pretty (generic writer)", {}, [&] { (void)saveSceneGeneric(world, engineTypes()); }, {}},
+        {"save compact (per-type writers)", {}, [&] { (void)save(world, JsonLayout::Compact); }, {}},
+        {"Transform floats: formatFloat32", {}, [&] {
+             for (float f : fs) sink += static_cast<std::size_t>(reflect::formatFloat32(f, fbuf) - fbuf);
+         }, {}},
+        {"Transform floats: std::to_chars", {}, [&] {
+             for (float f : fs) sink += static_cast<std::size_t>(std::to_chars(fbuf, fbuf + sizeof(fbuf), f).ptr - fbuf);
          }, {}},
     };
     std::vector<Op*> list;
@@ -313,8 +321,9 @@ void breakdown(int n) {
     std::printf("  breakdown, %d entities (%.2f MB pretty, %zu floats in Transforms)\n", n, pretty.size() / 1e6, fs.size());
     for (const Op& op : ops) {
         const Timing t = stats(op.samples);
-        std::printf("    %-30s median %8.3f ms   p95 %8.3f ms\n", op.name.c_str(), t.median, t.p95);
+        std::printf("    %-32s median %8.3f ms   p95 %8.3f ms\n", op.name.c_str(), t.median, t.p95);
     }
+    (void)sink;
 }
 
 std::string readFile(const std::string& path) {
@@ -330,7 +339,8 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);   // less scheduling noise (spec "Risks")
 #endif
-    std::string checkPath, outPath = "scene_bench.json";
+    // Results go under build/ (git-ignored) unless --out says otherwise.
+    std::string checkPath, outPath = "build/scene_bench.json";
     bool scale = true;
     int iters = 50;
     for (int i = 1; i < argc; ++i) {
@@ -449,6 +459,10 @@ int main(int argc, char** argv) {
     for (const auto& f : failures) w.string(f);
     w.endArray();
     w.endObject();
+    if (const auto dir = std::filesystem::path(outPath).parent_path(); !dir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+    }
     std::ofstream(outPath, std::ios::binary) << w.str() << '\n';
 
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());

@@ -105,6 +105,29 @@ private:
     std::string m_scratch;
 };
 
+// The canonical text of a finite float (what JsonWriter::float32 writes): the shortest
+// round-trip form, byte for byte what std::to_chars(float) prints, computed with
+// Schubfach (shortestDecimal) and a fast path for whole numbers. `buf` holds at least 32
+// bytes; returns the end of the text.
+char* formatFloat32(float v, char* buf);
+
+// The shortest decimal digits * 10^exponent that read back as `v` (finite, >= 0), the
+// closest such to v, ties to even; no trailing zeros in digits (0 for zero).
+struct ShortestDecimal {
+    uint32_t digits;
+    int exponent;
+};
+[[nodiscard]] ShortestDecimal shortestDecimal(float v);
+// digits * 10^exponent in to_chars' shortest style (fixed unless scientific is shorter).
+char* writeShortest(char* out, uint32_t digits, int exponent);
+// The same for the float `value` these digits came from (to_chars prints an integer
+// value >= 2^24 in fixed notation exactly; see json_writer.cpp).
+char* writeShortestOf(char* out, uint32_t digits, int exponent, float value);
+[[nodiscard]] bool shortestIsFixed(uint32_t digits, int exponent);
+
+// Appends `s` as a JSON string token (quoted, escaped exactly as JsonWriter escapes).
+void appendJsonString(std::string& out, std::string_view s);
+
 // Canonical pretty layout of canonical compact JSON (see JsonLayout::Pretty). The result
 // has no trailing newline. Removing whitespace outside strings gives back the input.
 [[nodiscard]] std::string prettyPrint(std::string_view compact, int width = 100);

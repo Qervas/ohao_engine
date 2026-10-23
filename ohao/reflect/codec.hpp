@@ -368,6 +368,118 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
     }
 }
 
+// ---- streaming read (no tree): readValue's checks, false where it would report ----------
+
+// A value that is not needed (validation of a field without limits) is only checked to
+// fit, in the same pass as its grammar; otherwise it is converted.
+inline bool readFloatFast(FastDecode& c, float& dst) { return c.needValue ? c.in.numberAsFloat(dst) : c.in.numberFits(); }
+
+template <class V>
+bool readFloatsFast(FastDecode& c, int count, float* dst) {
+    if (!c.in.beginArray()) return false;
+    for (int i = 0; i < count; ++i)
+        if (!c.in.nextElement() || !readFloatFast(c, dst[i])) return false;
+    return !c.in.nextElement() && !c.in.failed();   // exactly `count` numbers
+}
+
+template <class V>
+bool readValueFast(V& v, FastDecode& c, const TypeDesc& d) {
+    constexpr Kind k = kindOf<V>();
+    if constexpr (k == Kind::EntityRef) {
+        if (c.in.atNull()) {
+            v = ValueTraits<V>::null();
+            return c.in.null();
+        }
+        std::string_view s;
+        uint64_t id = 0;
+        if (!c.in.string(s) || !parseHex16(s, id) || id == 0) return false;
+        v = ValueTraits<V>::null();   // patched once every entity exists
+        c.refs.push_back(PendingRef{&v, &detail::assignRef<V>, id, c.entity, c.component, {}, c.in.offset(), 0, 0});
+        return true;
+    } else if constexpr (k == Kind::Bool) {
+        return c.in.boolean(v);
+    } else if constexpr (k == Kind::Int32 || k == Kind::UInt32) {
+        std::string_view tok;
+        int64_t x = 0;
+        constexpr int64_t lo = k == Kind::Int32 ? INT32_MIN : 0;
+        constexpr int64_t hi = k == Kind::Int32 ? INT32_MAX : UINT32_MAX;
+        if (!c.in.number(tok) || !parseIntToken(tok, lo, hi, x)) return false;
+        v = static_cast<V>(x);
+        return true;
+    } else if constexpr (k == Kind::UInt64) {
+        std::string_view s;
+        return c.in.string(s) && parseHex16(s, v);
+    } else if constexpr (k == Kind::Float) {
+        return readFloatFast(c, v);
+    } else if constexpr (k == Kind::String) {
+        std::string_view s;
+        if (!c.in.string(s)) return false;
+        v.assign(s);
+        return true;
+    } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
+        return readFloatsFast<V>(c, V::length(), &v[0]);
+    } else if constexpr (k == Kind::Quat) {
+        float q[4] = {v.x, v.y, v.z, v.w};
+        if (!readFloatsFast<V>(c, 4, q)) return false;   // glTF order
+        v.x = q[0]; v.y = q[1]; v.z = q[2]; v.w = q[3];
+        return true;
+    } else if constexpr (k == Kind::Mat4) {
+        return readFloatsFast<V>(c, 16, &v[0][0]);
+    } else if constexpr (k == Kind::AssetRef) {
+        if (!c.in.beginObject()) return false;
+        std::string_view key, s;
+        bool hasPath = false;
+        while (c.in.nextMember(key)) {
+            if (key == "path") {
+                if (!c.in.string(s)) return false;
+                v.path.assign(s);
+                hasPath = true;
+            } else if (key == "guid") {
+                if (!c.in.string(s)) return false;
+                v.guid.assign(s);
+            } else {
+                return false;
+            }
+        }
+        return !c.in.failed() && hasPath && !v.path.empty();
+    } else if constexpr (k == Kind::Enum) {
+        std::string_view s;
+        if (!c.in.string(s)) return false;
+        const EnumValue* e = d.enumType->findByName(s);
+        if (!e) return false;
+        v = static_cast<V>(static_cast<std::underlying_type_t<V>>(e->value));
+        return true;
+    } else if constexpr (k == Kind::Vector) {
+        if (!c.in.beginArray()) return false;
+        v.clear();
+        const std::size_t refsBefore = c.refs.size();
+        while (c.in.nextElement()) {
+            if (!readValueFast(v.emplace_back(), c, *d.element)) return false;
+        }
+        // References into a growing vector would dangle: leave those to the tree decoder.
+        return !c.in.failed() && c.refs.size() == refsBefore;
+    } else if constexpr (k == Kind::Optional) {
+        if (c.in.atNull()) {
+            v.reset();
+            return c.in.null();
+        }
+        v.emplace();
+        return readValueFast(*v, c, *d.element);
+    } else if constexpr (k == Kind::Variant) {
+        std::string_view key;
+        if (!c.in.beginObject() || !c.in.nextMember(key)) return false;
+        for (std::size_t i = 0; i < d.alternatives.size(); ++i) {
+            if (d.alternatives[i]->name != key) continue;
+            detail::emplaceAlternative(v, i, std::make_index_sequence<std::variant_size_v<V>>{});
+            const bool ok = std::visit([&](auto& alt) { return readStructFast(&alt, *d.alternatives[i], c); }, v);
+            return ok && !c.in.nextMember(key) && !c.in.failed();   // exactly one key
+        }
+        return false;
+    } else {
+        return readStructFast(&v, *d.structType, c);
+    }
+}
+
 template <class C, class M>
 class MemberOps final : public FieldOps {
 public:
@@ -377,6 +489,9 @@ public:
     }
     void read(void* o, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) const override {
         readValue(static_cast<C*>(o)->*m_member, n, ctx, d);
+    }
+    bool readFast(void* o, FastDecode& c, const TypeDesc& d) const override {
+        return readValueFast(static_cast<C*>(o)->*m_member, c, d);
     }
     bool equal(const void* a, const void* b, const TypeDesc& d) const override {
         return equalValue(static_cast<const C*>(a)->*m_member, static_cast<const C*>(b)->*m_member, d);

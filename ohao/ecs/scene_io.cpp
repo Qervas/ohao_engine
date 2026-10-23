@@ -4,6 +4,7 @@
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
+#include "reflect/json_layout.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -166,6 +167,19 @@ public:
         return p;
     }
 
+    // Back to empty after a fast decode gave up (the arena keeps its space: scratch
+    // objects live in it).
+    void reset() {
+        for (const DecodedValue& v : values) v.type->destroy(v.ptr);
+        entities.clear();
+        values.clear();
+        preserved.clear();
+        refs.clear();
+        upgraded.clear();
+        errors.clear();
+        warnings.clear();
+    }
+
     const bool keep;
     const AssetResolver* assets{nullptr};   // validation with checkAssets
     std::vector<DecodedEntity> entities;
@@ -272,6 +286,25 @@ std::string hexId(uint64_t id) {
     JsonWriter w;
     w.hex64(id);
     return w.str().substr(1, 16);
+}
+
+// W_UNSAVEABLE_MESH: a mesh made in code (spawnModel) has no MeshSource, so the file
+// cannot rebuild it. `order` is the saved entities in file order.
+void unsaveableMeshes(const World& world, const std::vector<std::pair<uint64_t, entt::entity>>& order,
+                      SaveReport& report) {
+    const entt::registry& reg = world.registry();
+    report.warnings.clear();
+    for (std::size_t n = 0; n < order.size(); ++n) {
+        const entt::entity e = order[n].second;
+        if (!reg.all_of<MeshRenderer>(e) || reg.all_of<MeshSource>(e)) continue;
+        Diagnostic d;
+        d.code = "W_UNSAVEABLE_MESH";
+        d.path = "/entities/" + std::to_string(n);
+        d.entity = world.idOf(e);
+        d.message = "entity " + hexId(d.entity) + " renders a mesh made in code; the file has no MeshSource for it";
+        d.suggestion = "MeshSource";
+        report.warnings.push_back(std::move(d));
+    }
 }
 
 void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeRegistry& r,
@@ -476,7 +509,168 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
     }
 }
 
-void decode(std::string_view text, const TypeRegistry& r, Decoded& out) {
+// ---- the streaming fast path -----------------------------------------------------------
+//
+// A current, valid file (the common case: saved by the engine or a careful agent) is
+// decoded straight from the text with a JsonCursor and the typed readFast operations: no
+// JSON tree. It accepts only documents the tree decoder accepts without any error or
+// warning and with no upgrade to run, and decodes them to the same values. At anything
+// else (an error, an unknown component, an older component version, members out of the
+// canonical order it needs) it gives up and decode() runs the tree decoder on the same
+// text, which produces the diagnostics. So reports never change; only clean files get
+// faster.
+bool decodeFast(std::string_view text, const TypeRegistry& r, Decoded& out) {
+    if (!validUtf8(text)) return false;
+    thread_local std::string padded;   // the text and the cursor's NUL padding, kept warm
+    padded.assign(text);
+    padded.append(32, '\0');
+    reflect::JsonCursor in(padded.data(), text.size());
+    reflect::FastDecode c{in, out.refs};
+    c.valuesUnused = !out.keep;
+
+    struct Known {
+        std::string_view name;
+        const TypeInfo* type;
+    };
+    std::vector<Known> known;   // the saved components, looked up by name
+    for (const TypeInfo* t : r.types())
+        if (t->role == reflect::TypeRole::Component && t->serialized && componentOps(*t)) known.push_back({t->name, t});
+    if (known.size() > 64) return false;
+    const TypeInfo* parentType = r.find<Parent>();
+    const TypeInfo* meshSourceType = r.find<MeshSource>();
+    const TypeInfo* environmentType = r.find<Environment>();
+
+    ankerl::unordered_dense::map<uint64_t, uint32_t> fileIndex;   // id -> index in out.entities
+    std::vector<uint32_t> singletons(known.size(), 0);
+    bool format = false, version = false, entities = false, header = false;
+    std::string_view key, s;
+    if (!in.beginObject()) return false;
+    while (in.nextMember(key)) {
+        if (key == "format") {
+            if (format || !in.string(s) || s != "ohao.scene") return false;
+            format = true;
+        } else if (key == "version") {
+            if (version || !in.number(s) || s != "1") return false;
+            version = true;
+        } else if (key == "components") {
+            // Before the entities (canonical order): a version the engine does not read as
+            // its current one means an upgrade or an error.
+            if (header || entities || !in.beginObject()) return false;
+            header = true;
+            while (in.nextMember(key)) {
+                int64_t v = 0;
+                if (!in.number(s) || !reflect::parseIntToken(s, 1, UINT32_MAX, v)) return false;
+                if (const TypeInfo* t = r.find(key);
+                    t && t->serialized && t->role == reflect::TypeRole::Component && static_cast<uint32_t>(v) != t->version)
+                    return false;
+            }
+            if (in.failed()) return false;
+        } else if (key == "entities") {
+            if (entities || !in.beginArray()) return false;
+            entities = true;
+            fileIndex.reserve(text.size() / 256);
+            while (in.nextElement()) {
+                // An entity: "id" first, then its components.
+                uint64_t id = 0;
+                if (!in.beginObject() || !in.nextMember(key) || key != "id" || !in.string(s) || !reflect::parseHex16(s, id) ||
+                    id == 0)
+                    return false;
+                const auto index = static_cast<uint32_t>(out.entities.size());
+                if (!fileIndex.try_emplace(id, index).second) return false;
+                DecodedEntity de;
+                de.id = id;
+                de.firstValue = static_cast<uint32_t>(out.values.size());
+                de.firstPreserved = static_cast<uint32_t>(out.preserved.size());
+                c.entity = id;
+                uint64_t seen = 0;
+                std::size_t next = 0;   // canonical files list components in registration order
+                while (in.nextMember(key)) {
+                    const auto same = [&](std::size_t k) {
+                        const std::string_view n = known[k].name;
+                        return n.size() == key.size() && n[0] == key[0] && std::memcmp(n.data(), key.data(), n.size()) == 0;
+                    };
+                    std::size_t k = known.size();
+                    for (std::size_t i = next; i < known.size(); ++i)
+                        if (same(i)) {
+                            k = i;
+                            break;
+                        }
+                    if (k == known.size())
+                        for (std::size_t i = 0; i < next && i < known.size(); ++i)
+                            if (same(i)) {
+                                k = i;
+                                break;
+                            }
+                    next = k + 1;
+                    if (k == known.size() || ((seen >> k) & 1u)) return false;   // unknown, or twice
+                    seen |= uint64_t{1} << k;
+                    const TypeInfo& t = *known[k].type;
+                    if (t.singleton && ++singletons[k] > 1) return false;
+                    void* v = out.object(t);
+                    c.component = &t;
+                    if (!reflect::readStructFast(v, t, c)) return false;
+                    c.component = nullptr;
+                    if (out.assets) {
+                        if (&t == meshSourceType) {
+                            const auto* m = std::get_if<ModelAsset>(&static_cast<const MeshSource*>(v)->source);
+                            if (m && !out.assets->exists(m->asset)) return false;
+                        } else if (&t == environmentType) {
+                            const auto& env = *static_cast<const Environment*>(v);
+                            if (env.hdri && !out.assets->exists(*env.hdri)) return false;
+                        }
+                    }
+                }
+                if (in.failed()) return false;
+                de.valueCount = static_cast<uint32_t>(out.values.size()) - de.firstValue;
+                out.entities.push_back(de);
+            }
+            if (in.failed()) return false;
+        } else {
+            return false;
+        }
+    }
+    if (in.failed() || !in.atEnd() || !format || !version || !entities) return false;
+
+    // References: every target exists, and parents form no cycle.
+    constexpr uint32_t kNone = UINT32_MAX;
+    const std::size_t n = out.entities.size();
+    std::vector<uint32_t> parentOf(n, kNone);
+    for (const reflect::PendingRef& ref : out.refs) {
+        const auto target = fileIndex.find(ref.id);
+        if (target == fileIndex.end()) return false;
+        if (ref.component == parentType) parentOf[fileIndex.at(ref.entity)] = target->second;
+    }
+    std::vector<uint8_t> state(n, 0);   // 1 on the current walk, 2 done
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t cur = i;
+        uint32_t walked = 0;
+        while (cur != kNone && state[cur] == 0) {
+            state[cur] = 1;
+            cur = parentOf[cur];
+            ++walked;
+        }
+        if (cur != kNone && state[cur] == 1) return false;   // a cycle
+        for (uint32_t k = i; walked-- > 0; k = parentOf[k]) state[k] = 2;
+    }
+    return true;
+}
+
+void decodeTree(std::string_view text, const TypeRegistry& r, Decoded& out);
+
+thread_local DecodeCounters g_counters;
+
+// allowFast false: the tree decoder alone (the reference the fast path is tested against).
+void decode(std::string_view text, const TypeRegistry& r, Decoded& out, bool allowFast = true) {
+    if (allowFast && decodeFast(text, r, out)) {
+        ++g_counters.fast;
+        return;
+    }
+    out.reset();
+    ++g_counters.tree;
+    decodeTree(text, r, out);
+}
+
+void decodeTree(std::string_view text, const TypeRegistry& r, Decoded& out) {
     // One warm parser per thread: repeated loads reuse its buffers. Nothing in `out`
     // points into the document, so the next parse may overwrite it.
     thread_local JsonParser parser;
@@ -603,8 +797,8 @@ void decode(std::string_view text, const TypeRegistry& r, Decoded& out) {
 
 // ---- public API ------------------------------------------------------------------------------
 
-Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options,
-                                          SaveReport* report) {
+Result<std::string, Diagnostic> saveSceneGeneric(const World& world, const TypeRegistry& types, SaveOptions options,
+                                                 SaveReport* report) {
     using R = Result<std::string, Diagnostic>;
     const entt::registry& reg = world.registry();
 
@@ -686,34 +880,235 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     }
     w.endArray();
     w.endObject();
-    if (report) {
-        // A mesh made in code (spawnModel) has no MeshSource: the file cannot rebuild it.
-        report->warnings.clear();
-        for (std::size_t n = 0; n < order.size(); ++n) {
-            const entt::entity e = order[n].second;
-            if (!reg.all_of<MeshRenderer>(e) || reg.all_of<MeshSource>(e)) continue;
-            Diagnostic d;
-            d.code = "W_UNSAVEABLE_MESH";
-            d.path = "/entities/" + std::to_string(n);
-            d.entity = world.idOf(e);
-            d.message = "entity " + hexId(d.entity) + " renders a mesh made in code; the file has no MeshSource for it";
-            d.suggestion = "MeshSource";
-            report->warnings.push_back(std::move(d));
-        }
-    }
+    if (report) unsaveableMeshes(world, order, *report);
     std::string out = w.take();
     if (options.layout == reflect::JsonLayout::Pretty) out.push_back('\n');
     return R::ok(std::move(out));
 }
 
-ValidationReport validateScene(std::string_view text, const TypeRegistry& types, const AssetResolver* assets) {
+Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry& types, SaveOptions options,
+                                          SaveReport* report) {
+    using R = Result<std::string, Diagnostic>;
+    const entt::registry& reg = world.registry();
+    const bool pretty = options.layout == reflect::JsonLayout::Pretty;
+    const bool omit = !options.includeDefaults;
+
+    struct Row {
+        uint64_t seq;
+        entt::entity e;
+        uint64_t id;
+    };
+    std::vector<Row> order;
+    order.reserve(reg.storage<CreationOrder>() ? reg.storage<CreationOrder>()->size() : 0);
+    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>().each()) order.push_back({co.seq, e, id.value});
+    std::sort(order.begin(), order.end(), [](const Row& a, const Row& b) { return a.seq < b.seq; });
+
+    // The saved component types, their keys as JSON tokens, and whether an entity writes
+    // one: an always-present component that is entirely default is left out.
+    const std::vector<SavedType> saved = savedTypes(types);
+    const std::size_t nt = saved.size();
+    std::vector<std::string> keys(nt);   // never resized: the tree references these keys
+    std::vector<const void*> pools(nt);
+    for (std::size_t i = 0; i < nt; ++i) {
+        reflect::appendJsonString(keys[i], saved[i].type->name);
+        pools[i] = saved[i].ops->pool(reg);
+    }
+    const auto* preservedPool = reg.storage<PreservedComponents>();
+    const auto writes = [&](std::size_t i, entt::entity e) -> const void* {
+        const void* value = saved[i].ops->tryGetIn(pools[i], e);
+        const TypeInfo& t = *saved[i].type;
+        if (value && omit && t.alwaysPresent && reflect::equalStruct(value, t.defaultValue.get(), t)) return nullptr;
+        return value;
+    };
+
+    // Header: every type some entity writes, and every preserved component, by name.
+    std::map<std::string, uint32_t> header;
+    for (std::size_t i = 0; i < nt; ++i) {
+        if (!pools[i] || saved[i].ops->count(reg) == 0) continue;
+        for (const Row& row : order)
+            if (writes(i, row.e)) {
+                header[saved[i].type->name] = saved[i].type->version;
+                break;
+            }
+    }
+    for (auto [e, p, id, co] : reg.view<const PreservedComponents, const EntityId, const CreationOrder>().each())
+        for (const auto& entry : p.entries) header.emplace(entry.name, entry.version);
+    std::vector<std::string> headerKeys;   // never resized once filled: the tree references them
+    headerKeys.reserve(header.size());
+    for (const auto& [name, version] : header) reflect::appendJsonString(headerKeys.emplace_back(), name);
+
+    thread_local reflect::LayoutTree tree;
+    FieldSink sink{tree, world};
+    WorldEntityIds ids(world);
+    std::vector<const PreservedComponent*> extra;
+    std::string scratchKey;
+
+    // One entity into the tree, as a top-level value. False (with the error) when a value
+    // cannot be written canonically.
+    const auto build = [&](const Row& row) {
+        tree.beginObject();
+        tree.hex64("\"id\"", row.id);
+        for (std::size_t i = 0; i < nt; ++i) {
+            const void* value = writes(i, row.e);
+            if (!value) continue;
+            const TypeInfo& t = *saved[i].type;
+            const void* omitEqualTo = omit ? t.defaultValue.get() : nullptr;
+            if (saved[i].ops->writeFields) {
+                tree.beginObject(keys[i]);
+                saved[i].ops->writeFields(value, omitEqualTo, sink);
+                tree.endObject();
+            } else {
+                // A type without a per-type writer: the generic one, laid out like the rest.
+                JsonWriter w;
+                w.entityIds = &ids;
+                reflect::writeStruct(value, w, t, omitEqualTo);
+                if (!w.ok()) tree.fail(w.error());
+                tree.compact(keys[i], w.str());
+            }
+        }
+        if (const auto* p = preservedPool && preservedPool->contains(row.e) ? &preservedPool->get(row.e) : nullptr) {
+            extra.clear();
+            for (const auto& entry : p->entries) extra.push_back(&entry);
+            std::sort(extra.begin(), extra.end(), [](auto* a, auto* b) { return a->name < b->name; });
+            for (const PreservedComponent* entry : extra) {
+                scratchKey.clear();
+                reflect::appendJsonString(scratchKey, entry->name);
+                tree.compact(scratchKey, entry->json);
+            }
+        }
+        tree.endObject();
+    };
+    const auto failed = [&](std::size_t n) {
+        Diagnostic d;
+        d.code = tree.error().rfind("non-finite", 0) == 0 ? "E_NONFINITE" : "E_ENUM";
+        d.path = "/entities/" + std::to_string(n);
+        d.entity = order[n].id;
+        d.message = "entity " + hexId(d.entity) + ": " + tree.error();
+        return R::err(std::move(d));
+    };
+
+    // Entities are emitted into a warm scratch buffer sized by the tree's bound, then
+    // appended: no per-token string growth checks.
+    thread_local std::vector<char> scratch;
+    const auto appendEntity = [&](std::string& out, uint32_t node, uint32_t column, bool comma, bool asPretty) {
+        const std::size_t need = tree.bound(2) + 8;
+        if (scratch.size() < need) scratch.resize(need * 2);
+        char* o = scratch.data();
+        o = asPretty ? tree.emitPretty(o, node, column, 2, comma) : tree.emitCompact(o, node);
+        out.append(scratch.data(), static_cast<std::size_t>(o - scratch.data()));
+    };
+
+    std::string out;
+    out.reserve(order.size() * (pretty ? 560 : 420) + 4096);
+    tree.clear();
+    tree.beginObject();
+    std::size_t hk = 0;
+    for (const auto& [name, version] : header) tree.i64(headerKeys[hk++], version);
+    tree.endObject();
+    if (pretty) {
+        // The root always breaks: one member per line, indented 2. "components" starts
+        // at column 16, "entities" at column 14 (the last member, so no comma).
+        out.append("{\n  \"format\": \"ohao.scene\",\n  \"version\": 1,\n  \"components\": ");
+        tree.appendPretty(out, tree.roots().front(), 16, 1, true);
+        out.append(",\n  \"entities\": ");
+        // The entities array fits on one line only while its one-line form ends by column
+        // 100: hold the first entities until that is decided, then stream the rest.
+        constexpr uint32_t kColumn = 14, kWidth = 100;
+        tree.clear();
+        std::size_t n = 0;
+        uint32_t oneLine = 2;   // "[" ... "]"
+        bool broken = false;
+        for (; n < order.size(); ++n) {
+            build(order[n]);
+            if (!tree.ok()) return failed(n);
+            oneLine += tree.oneLine(tree.roots().back()) + (n ? 2u : 0u);
+            if (kColumn + oneLine > kWidth) {
+                broken = true;
+                ++n;
+                break;
+            }
+        }
+        if (!broken) {
+            out.push_back('[');
+            for (std::size_t k = 0; k < tree.roots().size(); ++k) {
+                if (k) out.append(", ", 2);
+                tree.appendPretty(out, tree.roots()[k], 0, 2, false, false, ~0u);   // one line
+            }
+            out.push_back(']');
+        } else {
+            out.push_back('[');
+            const auto emitEntity = [&](uint32_t node, std::size_t index) {
+                const bool last = index + 1 == order.size();
+                out.append("\n    ", 5);
+                appendEntity(out, node, 4, !last, true);
+                if (!last) out.push_back(',');
+            };
+            for (std::size_t k = 0; k < tree.roots().size(); ++k) emitEntity(tree.roots()[k], k);
+            for (; n < order.size(); ++n) {
+                tree.clear();
+                build(order[n]);
+                if (!tree.ok()) return failed(n);
+                emitEntity(tree.roots().front(), n);
+            }
+            out.append("\n  ]", 4);
+        }
+        out.append("\n}\n", 3);
+    } else {
+        out.append("{\"format\":\"ohao.scene\",\"version\":1,\"components\":");
+        tree.appendCompact(out, tree.roots().front());
+        out.append(",\"entities\":[");
+        for (std::size_t n = 0; n < order.size(); ++n) {
+            tree.clear();
+            build(order[n]);
+            if (!tree.ok()) return failed(n);
+            if (n) out.push_back(',');
+            appendEntity(out, tree.roots().front(), 0, false, false);
+        }
+        out.append("]}");
+    }
+    if (report) {
+        std::vector<std::pair<uint64_t, entt::entity>> rows;
+        rows.reserve(order.size());
+        for (const Row& r : order) rows.emplace_back(r.seq, r.e);
+        unsaveableMeshes(world, rows, *report);
+    }
+    return R::ok(std::move(out));
+}
+
+DecodeCounters decodeCounters() noexcept { return g_counters; }
+
+namespace {
+
+ValidationReport validate(std::string_view text, const TypeRegistry& types, const AssetResolver* assets, bool allowFast) {
     Decoded d(false);
     d.assets = assets;
-    decode(text, types, d);
+    decode(text, types, d, allowFast);
     return ValidationReport{std::move(d.errors), std::move(d.warnings), std::move(d.upgraded)};
 }
 
+Result<LoadReport, std::vector<Diagnostic>> load(World& dst, std::string_view text, const TypeRegistry& types,
+                                                 bool allowFast);
+
+} // namespace
+
+ValidationReport validateScene(std::string_view text, const TypeRegistry& types, const AssetResolver* assets) {
+    return validate(text, types, assets, true);
+}
+ValidationReport validateSceneReference(std::string_view text, const TypeRegistry& types, const AssetResolver* assets) {
+    return validate(text, types, assets, false);
+}
 Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_view text, const TypeRegistry& types) {
+    return load(dst, text, types, true);
+}
+Result<LoadReport, std::vector<Diagnostic>> loadSceneReference(World& dst, std::string_view text,
+                                                               const TypeRegistry& types) {
+    return load(dst, text, types, false);
+}
+
+namespace {
+
+Result<LoadReport, std::vector<Diagnostic>> load(World& dst, std::string_view text, const TypeRegistry& types,
+                                                 bool allowFast) {
     using R = Result<LoadReport, std::vector<Diagnostic>>;
     if (dst.idCount() != 0 || dst.registry().storage<entt::entity>().in_use() != 0) {
         Diagnostic d;
@@ -723,7 +1118,7 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
         return R::err({std::move(d)});
     }
     Decoded d(true);
-    decode(text, types, d);
+    decode(text, types, d, allowFast);
     if (!d.errors.empty()) return R::err(std::move(d.errors));
 
     // Phase 2: nothing below can fail; every id, reference and value was checked.
@@ -780,6 +1175,8 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
     report.warnings = std::move(d.warnings);
     return R::ok(std::move(report));
 }
+
+} // namespace
 
 Result<bool, Diagnostic> saveSceneFile(const World& world, const TypeRegistry& types,
                                        const std::filesystem::path& path, SaveOptions options, SaveReport* report) {

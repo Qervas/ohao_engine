@@ -1,8 +1,11 @@
 #include "reflect/json_writer.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cmath>
+#include <cstring>
 
 namespace ohao::reflect {
 
@@ -230,6 +233,11 @@ void JsonWriter::float32(float v) {
     }
     beforeValue();
     char buf[32];
+    m_out.append(buf, formatFloat32(v, buf));
+    m_needComma = true;
+}
+
+char* formatFloat32(float v, char* buf) {
     // Fast path for whole numbers below 10^4, common in scenes (0, 1, scales, unit
     // quaternions). It prints exactly what to_chars does: shortest form picks fixed
     // notation whenever it is not longer than scientific, and for |v| < 10^4 fixed has
@@ -237,55 +245,273 @@ void JsonWriter::float32(float v) {
     if (std::fabs(v) < 10000.0f && v == static_cast<float>(static_cast<int32_t>(v))) {
         const auto i = static_cast<int32_t>(v);
         if (i == 0 && std::signbit(v)) {
-            m_out.append("-0", 2);
-        } else {
-            auto r = std::to_chars(buf, buf + sizeof(buf), i);
-            m_out.append(buf, r.ptr);
+            buf[0] = '-';
+            buf[1] = '0';
+            return buf + 2;
         }
-        m_needComma = true;
-        return;
+        return std::to_chars(buf, buf + 32, i).ptr;
     }
-    // Fast path for short decimals in [0.001, 16): colors, roughness, sizes (0.73, 0.05,
-    // 1.5). Prints exactly what to_chars does:
-    //  - a*1e6 is exact in double; m = its nearest integer is the closest 6-digit
-    //    decimal to a;
-    //  - float(m) / 1e6f is a single correctly rounded division of exact floats (m <
-    //    2^24), so it equals the correctly rounded value of the decimal m*1e-6, and the
-    //    test below is an exact round-trip check;
-    //  - below 16 half an ulp is under 0.5e-6, so every shorter round-tripping decimal is
-    //    m with trailing zeros: stripping them gives the shortest digits, and m was the
-    //    closest candidate, as to_chars picks;
-    //  - in [0.001, 16) fixed notation is never longer than scientific.
-    // Anything else (most random floats fail the check) takes to_chars.
+    // Scenes repeat values (palette colors, sizes, a uniform scale written three times):
+    // a small direct-mapped memo per thread returns a repeat's text without recomputing
+    // it. Pure memoization of this function: the bytes are the same either way. A text
+    // is at most 16 bytes (sign, 9 digits, point and exponent).
+    struct Entry {
+        uint32_t bits;
+        uint32_t len;   // 0: empty
+        char text[24];
+    };
+    thread_local Entry memo[512];
+    const uint32_t bits = std::bit_cast<uint32_t>(v);
+    Entry& e = memo[(bits * 0x9E3779B1u) >> 23];
+    if (e.len != 0 && e.bits == bits) {
+        std::memcpy(buf, e.text, 16);
+        return buf + e.len;
+    }
+    char* p = buf;
+    if (std::signbit(v)) *p++ = '-';
     const float a = std::fabs(v);
-    if (a >= 0.001f && a < 16.0f) {
-        const auto m = static_cast<uint32_t>(std::nearbyint(static_cast<double>(a) * 1e6));
-        if (static_cast<float>(m) / 1e6f == a) {
-            uint32_t digits = m;
-            int k = 6;
-            while (digits % 10 == 0) {
-                digits /= 10;
-                --k;
-            }
-            static constexpr uint32_t kPow10[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
-            const uint32_t whole = digits / kPow10[k];
-            uint32_t frac = digits % kPow10[k];
-            char* p = buf;
-            if (std::signbit(v)) *p++ = '-';
-            p = std::to_chars(p, buf + sizeof(buf), whole).ptr;
-            *p++ = '.';
-            for (int i = k - 1; i >= 0; --i) {
-                p[i] = static_cast<char>('0' + frac % 10);
-                frac /= 10;
-            }
-            m_out.append(buf, p + k);
-            m_needComma = true;
-            return;
+    const ShortestDecimal d = shortestDecimal(a);
+    char* const end = writeShortestOf(p, d.digits, d.exponent, a);
+    e.bits = bits;
+    e.len = static_cast<uint32_t>(end - buf);
+    std::memcpy(e.text, buf, 16);
+    return end;
+}
+
+// ---------------------------------------------------------------------------------------
+// Shortest round-trip digits of a float: Schubfach (R. Giulietti, "The Schubfach way to
+// render doubles", 2020), binary32 variant as in A. Bolz's C++ port. One 64x32-bit
+// multiply per interval bound and no digit-by-digit loop. The result is the decimal
+// to_chars picks: the shortest digit string that reads back as the same float, the one
+// closest to it among those, ties to even. reflect_tests checks it against std::to_chars
+// (a sample on every run; all 2^32 bit patterns with --exhaustive-floats).
+
+namespace {
+
+// 10^k as a 64-bit significand g = ceil(10^k / 2^r), r = floor(log2 10^k) - 63, for
+// k in [-31, 45]: 2^63 <= g < 2^64 overestimates 10^k * 2^-r by less than one unit.
+// Generated with exact rational arithmetic (Python Fraction: g = ceil(10^k / 2^r)); the
+// to_chars comparisons in reflect_tests cover every entry.
+constexpr int kPow10Min = -31;
+constexpr uint64_t kPow10[] = {
+    0x81CEB32C4B43FCF5u, 0xA2425FF75E14FC32u, 0xCAD2F7F5359A3B3Fu, 0xFD87B5F28300CA0Eu,
+    0x9E74D1B791E07E49u, 0xC612062576589DDBu, 0xF79687AED3EEC552u, 0x9ABE14CD44753B53u,
+    0xC16D9A0095928A28u, 0xF1C90080BAF72CB2u, 0x971DA05074DA7BEFu, 0xBCE5086492111AEBu,
+    0xEC1E4A7DB69561A6u, 0x9392EE8E921D5D08u, 0xB877AA3236A4B44Au, 0xE69594BEC44DE15Cu,
+    0x901D7CF73AB0ACDAu, 0xB424DC35095CD810u, 0xE12E13424BB40E14u, 0x8CBCCC096F5088CCu,
+    0xAFEBFF0BCB24AAFFu, 0xDBE6FECEBDEDD5BFu, 0x89705F4136B4A598u, 0xABCC77118461CEFDu,
+    0xD6BF94D5E57A42BDu, 0x8637BD05AF6C69B6u, 0xA7C5AC471B478424u, 0xD1B71758E219652Cu,
+    0x83126E978D4FDF3Cu, 0xA3D70A3D70A3D70Bu, 0xCCCCCCCCCCCCCCCDu, 0x8000000000000000u,
+    0xA000000000000000u, 0xC800000000000000u, 0xFA00000000000000u, 0x9C40000000000000u,
+    0xC350000000000000u, 0xF424000000000000u, 0x9896800000000000u, 0xBEBC200000000000u,
+    0xEE6B280000000000u, 0x9502F90000000000u, 0xBA43B74000000000u, 0xE8D4A51000000000u,
+    0x9184E72A00000000u, 0xB5E620F480000000u, 0xE35FA931A0000000u, 0x8E1BC9BF04000000u,
+    0xB1A2BC2EC5000000u, 0xDE0B6B3A76400000u, 0x8AC7230489E80000u, 0xAD78EBC5AC620000u,
+    0xD8D726B7177A8000u, 0x878678326EAC9000u, 0xA968163F0A57B400u, 0xD3C21BCECCEDA100u,
+    0x84595161401484A0u, 0xA56FA5B99019A5C8u, 0xCECB8F27F4200F3Au, 0x813F3978F8940985u,
+    0xA18F07D736B90BE6u, 0xC9F2C9CD04674EDFu, 0xFC6F7C4045812297u, 0x9DC5ADA82B70B59Eu,
+    0xC5371912364CE306u, 0xF684DF56C3E01BC7u, 0x9A130B963A6C115Du, 0xC097CE7BC90715B4u,
+    0xF0BDC21ABB48DB21u, 0x96769950B50D88F5u, 0xBC143FA4E250EB32u, 0xEB194F8E1AE525FEu,
+    0x92EFD1B8D0CF37BFu, 0xB7ABC627050305AEu, 0xE596B7B0C643C71Au, 0x8F7E32CE7BEA5C70u,
+    0xB35DBF821AE4F38Cu,
+};
+static_assert(std::size(kPow10) == 45 - kPow10Min + 1);
+
+inline int floorLog2Pow10(int e) { return (e * 1741647) >> 19; }
+inline int floorLog10Pow2(int e) { return (e * 1262611) >> 22; }
+inline int floorLog10ThreeQuartersPow2(int e) { return (e * 1262611 - 524031) >> 22; }
+
+// floor(g * cp / 2^64), rounded to odd (the paper's vb with its sticky bit).
+inline uint32_t roundToOdd(uint64_t g, uint32_t cp) {
+    const uint64_t lo = (g & 0xFFFFFFFFu) * cp;
+    const uint64_t hi = (g >> 32) * cp;
+    const uint64_t mid = hi + (lo >> 32);
+    const auto y1 = static_cast<uint32_t>(mid >> 32);
+    const auto y0 = static_cast<uint32_t>(mid);
+    return y1 | (y0 > 1u ? 1u : 0u);
+}
+
+} // namespace
+
+ShortestDecimal shortestDecimal(float v) {
+    const uint32_t bitsV = std::bit_cast<uint32_t>(v);
+    const uint32_t ieeeMantissa = bitsV & 0x7FFFFFu;
+    const uint32_t ieeeExponent = (bitsV >> 23) & 0xFFu;
+    if (ieeeExponent == 0 && ieeeMantissa == 0) return {0, 0};
+    uint32_t c;
+    int q;
+    if (ieeeExponent != 0) {
+        c = (1u << 23) | ieeeMantissa;
+        q = static_cast<int>(ieeeExponent) - 150;
+    } else {
+        c = ieeeMantissa;
+        q = -149;
+    }
+    const bool isEven = (c % 2) == 0;
+    const bool lowerBoundaryIsCloser = ieeeMantissa == 0 && ieeeExponent > 1;
+    const uint32_t cbl = 4 * c - 2 + (lowerBoundaryIsCloser ? 1u : 0u);
+    const uint32_t cb = 4 * c;
+    const uint32_t cbr = 4 * c + 2;
+    const int k = lowerBoundaryIsCloser ? floorLog10ThreeQuartersPow2(q) : floorLog10Pow2(q);
+    const int h = q + floorLog2Pow10(-k) + 1;
+    const uint64_t pow10 = kPow10[-k - kPow10Min];
+    const uint32_t vbl = roundToOdd(pow10, cbl << h);
+    const uint32_t vb = roundToOdd(pow10, cb << h);
+    const uint32_t vbr = roundToOdd(pow10, cbr << h);
+    const uint32_t lower = vbl + (isEven ? 0u : 1u);
+    const uint32_t upper = vbr - (isEven ? 0u : 1u);
+
+    uint32_t digits;
+    int exponent;
+    const uint32_t s = vb / 4;
+    bool done = false;
+    if (s >= 10) {
+        const uint32_t sp = s / 10;
+        const bool upInside = lower <= 40 * sp;
+        const bool wpInside = 40 * sp + 40 <= upper;
+        if (upInside != wpInside) {
+            digits = sp + (wpInside ? 1u : 0u);
+            exponent = k + 1;
+            done = true;
         }
     }
-    auto r = std::to_chars(buf, buf + sizeof(buf), v);   // shortest round-trip
-    m_out.append(buf, r.ptr);
-    m_needComma = true;
+    if (!done) {
+        const bool uInside = lower <= 4 * s;
+        const bool wInside = 4 * s + 4 <= upper;
+        if (uInside != wInside) {
+            digits = s + (wInside ? 1u : 0u);
+        } else {
+            const uint32_t mid = 4 * s + 2;
+            const bool roundUp = vb > mid || (vb == mid && (s & 1u) != 0);
+            digits = s + (roundUp ? 1u : 0u);
+        }
+        exponent = k;
+    }
+    // Trailing zeros (up to 9 for a float): usually none, so one test; else 8, 4, 2, 1.
+    if (digits % 10 == 0) {
+        if (digits % 100000000 == 0) { digits /= 100000000; exponent += 8; }
+        if (digits % 10000 == 0) { digits /= 10000; exponent += 4; }
+        if (digits % 100 == 0) { digits /= 100; exponent += 2; }
+        if (digits % 10 == 0) { digits /= 10; exponent += 1; }
+    }
+    return {digits, exponent};
+}
+
+namespace {
+
+constexpr uint32_t kPow10u32[] = {1,      10,      100,      1000,      10000,
+                                  100000, 1000000, 10000000, 100000000, 1000000000};
+
+// Decimal digits of x >= 1, without a division loop: from the bit length.
+inline int decimalLength(uint32_t x) {
+    const int t = ((32 - std::countl_zero(x | 1u)) * 1233) >> 12;   // floor(log10) or one less
+    return t + (x >= kPow10u32[t] ? 1 : 0);
+}
+
+// Pairs of digits, so a 9-digit number takes 5 steps instead of 9 divisions.
+constexpr char kDigitPairs[201] =
+    "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+    "40414243444546474849505152535455565758596061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
+
+// x < 10^9 as exactly 9 digits (leading zeros) at out[0, 9): one division by 10^8, then
+// two independent 4-digit halves, so the steps do not wait on each other.
+inline void writeNineDigits(char* out, uint32_t x) {
+    const uint32_t a = x / 100000000u;
+    const uint32_t r = x - a * 100000000u;
+    const uint32_t hi = r / 10000u, lo = r - hi * 10000u;
+    const uint32_t h1 = hi / 100u, h2 = hi - h1 * 100u;
+    const uint32_t l1 = lo / 100u, l2 = lo - l1 * 100u;
+    out[0] = static_cast<char>('0' + a);
+    std::memcpy(out + 1, kDigitPairs + 2 * h1, 2);
+    std::memcpy(out + 3, kDigitPairs + 2 * h2, 2);
+    std::memcpy(out + 5, kDigitPairs + 2 * l1, 2);
+    std::memcpy(out + 7, kDigitPairs + 2 * l2, 2);
+}
+
+} // namespace
+
+// to_chars' choice for the shortest form: fixed notation unless scientific ("d.ddde+XX",
+// at least two exponent digits) is strictly shorter.
+bool shortestIsFixed(uint32_t digits, int exponent) {
+    const int n = decimalLength(digits);
+    const int sciExp = exponent + n - 1;
+    const int absExp = sciExp < 0 ? -sciExp : sciExp;
+    const int sciLen = n + (n > 1 ? 1 : 0) + 2 + (absExp >= 100 ? 3 : 2);
+    int fixedLen;
+    if (exponent >= 0) fixedLen = n + exponent;
+    else if (n + exponent > 0) fixedLen = n + 1;
+    else fixedLen = 2 - exponent;
+    return fixedLen <= sciLen;
+}
+
+char* writeShortest(char* out, uint32_t digits, int exponent) {
+    return writeShortestOf(out, digits, exponent, -1.0f);
+}
+
+// digits * 10^exponent as to_chars prints the shortest form (see shortestIsFixed).
+// `value` (when >= 0) is the float itself: when fixed notation wins and the digits end
+// before the decimal point (only integers >= 2^24, below 10^15), to_chars prints the
+// float's exact integer value (printf's %.0f), not the digits padded with zeros.
+char* writeShortestOf(char* out, uint32_t digits, int exponent, float value) {
+    if (digits == 0) {
+        *out++ = '0';
+        return out;
+    }
+    const int n = decimalLength(digits);
+    const int sciExp = exponent + n - 1;
+    const int absExp = sciExp < 0 ? -sciExp : sciExp;
+    const int sciLen = n + (n > 1 ? 1 : 0) + 2 + (absExp >= 100 ? 3 : 2);
+    int fixedLen;
+    if (exponent >= 0) fixedLen = n + exponent;
+    else if (n + exponent > 0) fixedLen = n + 1;
+    else fixedLen = 2 - exponent;
+    if (fixedLen <= sciLen && exponent > 0 && value >= 0.0f)
+        return std::to_chars(out, out + 24, static_cast<uint64_t>(value)).ptr;
+    // The digits at d[0, n); every copy below is a fixed 16 bytes (inlined, no library
+    // call) of which only the first ones count: the output has room (see formatFloat32).
+    char nine[32] = {};
+    const char* d;
+    if (digits < 1000000000u) {
+        writeNineDigits(nine, digits);
+        d = nine + 9 - n;
+    } else {   // ten digits: not produced for floats, kept correct anyway
+        const char* const end = std::to_chars(nine, nine + 16, digits).ptr;
+        d = end - n;
+    }
+    if (fixedLen <= sciLen) {
+        if (exponent >= 0) {
+            std::memcpy(out, d, 16);
+            out += n;
+            std::memset(out, '0', 16);
+            return out + exponent;
+        }
+        const int whole = n + exponent;   // digits before the point
+        if (whole > 0) {
+            std::memcpy(out, d, 16);
+            out[whole] = '.';
+            std::memcpy(out + whole + 1, d + whole, 16);
+            return out + n + 1;
+        }
+        out[0] = '0';
+        out[1] = '.';
+        std::memset(out + 2, '0', 16);
+        out += 2 - whole;
+        std::memcpy(out, d, 16);
+        return out + n;
+    }
+    *out++ = d[0];
+    if (n > 1) {
+        *out++ = '.';
+        std::memcpy(out, d + 1, 16);
+        out += n - 1;
+    }
+    *out++ = 'e';
+    *out++ = sciExp < 0 ? '-' : '+';
+    if (absExp >= 100) *out++ = static_cast<char>('0' + absExp / 100);
+    *out++ = static_cast<char>('0' + (absExp / 10) % 10);
+    *out++ = static_cast<char>('0' + absExp % 10);
+    return out;
 }
 
 void JsonWriter::hex64(uint64_t v) {
@@ -311,32 +537,34 @@ void JsonWriter::string(std::string_view s) {
     m_needComma = true;
 }
 
-void JsonWriter::appendString(std::string_view s) {
-    m_out.push_back('"');
+void JsonWriter::appendString(std::string_view s) { appendJsonString(m_out, s); }
+
+void appendJsonString(std::string& out, std::string_view s) {
+    out.push_back('"');
     const char* p = s.data();
     const char* const end = p + s.size();
     while (p < end) {
         const char* run = p;
         while (p < end && !kNeedsEscape[static_cast<unsigned char>(*p)]) ++p;
-        m_out.append(run, p);
+        out.append(run, p);
         if (p == end) break;
         const unsigned char c = static_cast<unsigned char>(*p++);
         switch (c) {
-        case '"':  m_out.append("\\\"", 2); break;
-        case '\\': m_out.append("\\\\", 2); break;
-        case '\b': m_out.append("\\b", 2); break;
-        case '\f': m_out.append("\\f", 2); break;
-        case '\n': m_out.append("\\n", 2); break;
-        case '\r': m_out.append("\\r", 2); break;
-        case '\t': m_out.append("\\t", 2); break;
+        case '"':  out.append("\\\"", 2); break;
+        case '\\': out.append("\\\\", 2); break;
+        case '\b': out.append("\\b", 2); break;
+        case '\f': out.append("\\f", 2); break;
+        case '\n': out.append("\\n", 2); break;
+        case '\r': out.append("\\r", 2); break;
+        case '\t': out.append("\\t", 2); break;
         default: {
             static constexpr char kDigits[] = "0123456789abcdef";
             const char esc[6] = {'\\', 'u', '0', '0', kDigits[c >> 4], kDigits[c & 0xF]};
-            m_out.append(esc, 6);
+            out.append(esc, 6);
         }
         }
     }
-    m_out.push_back('"');
+    out.push_back('"');
 }
 
 void JsonWriter::raw(std::string_view compactJson) {

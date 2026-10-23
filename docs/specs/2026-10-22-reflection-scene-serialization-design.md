@@ -568,6 +568,10 @@ file.)
        simdjson's SIMD validator, simdjson's only remaining use. It replaced simdjson
        On-Demand plus a tree builder, which spent most of its time in the per-value API:
        parsing bench10k went from 6.8 to 3.6 ms.
+     - *Revised in step 9:* a clean, current file never builds the tree. It streams from
+       the text (`reflect::JsonCursor`, typed `readFast`) into the same decoded values.
+       Anything the streaming path does not accept is decoded by the tree path above,
+       which reports: see the step 9 note under "Budgets".
      - A per-thread `JsonParser` keeps the input copy and the tree storage warm, and so
        does the decoder for its large tables (references, decoded values, ids): repeated
        loads allocate nothing once warm. (Vectors over ~512 KB go back to Windows when
@@ -1018,6 +1022,58 @@ rows), so the new single-row columns add nothing.
 In the laptop's current state the whole bench100k column runs about twice as fast as in
 step 7, and this ratio sits at the 12× line. It joins open decision 1.
 
+*Step 9 note (Frank's ruling on open decision 1, 2026-10-23):* option 3. The budgets
+stay at 10 ms on the full bench10k, single-threaded, and the codec was rewritten for
+speed with byte-identical output. What was built:
+
+- **Save: per-type writers.** Each authoring component has a hand-written writer
+  (`ecs/scene_writers.cpp`) with its keys as literals and no reflection walk. A type
+  without one (a test fixture, a future component) takes the generic writer, laid out
+  the same way.
+  - The writers fill a per-entity node list (`reflect::LayoutTree`). Every container's
+    one-line length is known before emission, so the pretty layout (`JsonWriter`'s rule,
+    exactly) is decided first and each byte is written once into a warm buffer.
+  - Arrays of numbers (`vec3`, `quat`) are one node. Components are reached through
+    their storage, resolved once per save rather than once per entity.
+  - `saveSceneGeneric` keeps the old path as the reference, and test 21 compares the two
+    byte for byte.
+- **Floats: Schubfach.** Shortest floats come from Schubfach (one 64x32-bit multiply per
+  bound; table generated with exact arithmetic), formatted the way `to_chars` chooses
+  between fixed and scientific.
+  - A finding: for an integer of 2^24 and up written in fixed notation, MSVC's
+    `to_chars` prints the exact integer, not the shortest digits padded with zeros
+    (`50331648`, not `50331650`). The writer does the same.
+  - All 4,278,190,080 finite floats were checked against `std::to_chars`:
+    `reflect_tests --exhaustive-floats`, 0 mismatches, 417 s. Each normal run checks 32M
+    sampled floats.
+  - A per-thread memo of 512 recent values returns a repeated value's text. It is pure
+    memoization of the same function, so the output is the same.
+- **Validate and load: streaming.** A clean, current file is decoded straight from the
+  text with `reflect::JsonCursor` and typed `readFast` operations; no JSON tree is built.
+  - The cursor accepts exactly the tree parser's grammar. A number is read once: checked
+    to fit when its value is unused, converted with fast_float (JSON grammar) when it is
+    needed.
+  - It takes only documents the tree decoder accepts with no error, warning or upgrade,
+    and decodes them to the same values. At anything else (an error, an unknown component,
+    an older version, members out of canonical order) it gives up, and the tree decoder
+    decodes the same text and reports.
+  - So diagnostics never change, and only clean files get faster.
+    `validateSceneReference`/`loadSceneReference` keep the tree path for tests, and
+    `decodeCounters()` shows which path ran.
+
+Gate (bench10k medians, three runs after the rewrite):
+
+| | Before (step 8) | After | Budget |
+|---|---|---|---|
+| save pretty | 14.3–14.5 ms | 8.98–9.18 ms | 10 ms |
+| validate | 14.0–14.9 ms | 8.24–8.46 ms | 10 ms |
+| load | 18.7–19.3 ms | 12.8–13.4 ms | 20 ms |
+| apply | 0.17–0.21 ms | 0.195–0.217 ms (untouched; at its line as before) | 0.2 ms |
+
+Snapshot, the restores and query are within budget. Of the bench100k ratios, all pass
+except `restore_empty` (×12.3–14.6). The rewrite does not touch restore, and that ratio
+sits at the line as in step 8. It is reported, not loosened.
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1044,7 +1100,8 @@ step 7, and this ratio sits at the 12× line. It joins open decision 1.
   - process wall time of `ohao validate` and `ohao run --steps 1` on bench10k;
   - load-to-first-frame of the Cornell scene with rendering.
 - **Gate mechanics:** `scene_bench --check tests/bench/scene_budgets.json` exits
-  nonzero on any regression and writes `scene_bench.json`. Changing a budget is a
+  nonzero on any regression and writes `build/scene_bench.json` (git-ignored; `--out`
+  overrides). Changing a budget is a
   ledgered ruling that needs Frank's OK. `scene_bench --breakdown [N]` times the codec's
   phases separately (parse, decode, save layouts, float formatting) for performance work.
 
@@ -1061,9 +1118,9 @@ than binary. That cost buys diffs, agent readability and determinism. The resolu
 **three tiers, each used where it wins:**
 
 1. **Text** (`.scene.json`, pretty or compact) for authoring, review, git and agents.
-   It's fast enough to sit under a budget (a single-pass reader, `to_chars`, a hand-written
-   writer into one reserved buffer, no iostreams), and it never sits on a per-step
-   path.
+   It's fast enough to sit under a budget (a streaming reader for clean files, per-type
+   writers with a one-pass layout, Schubfach floats, warm buffers, no iostreams), and it
+   never sits on a per-step path.
 2. **In-memory columnar snapshots plus commands** for every per-step agent operation,
    at memcpy speed.
 3. **Cooked binary** (later) for shipping and very large levels, which share the
@@ -1332,12 +1389,23 @@ CLI and GPU tests:
       - Deferred is bit-exact, with 0 validation messages.
       - RT allows its own rare 1-LSB flips: at most 16 bytes may differ, each by 1 (see
         "Risks").
+21. **Codec fast paths** (added in step 9, with Frank's codec ruling), `scene_tests` t21:
+    - every saved engine component has a per-type writer;
+    - `saveScene` equals `saveSceneGeneric` byte for byte on random worlds, the
+      one-line-array edges, escapes, dead references, defaults of every alternative,
+      preserved components, and NaN/enum failures, in all four renderings;
+    - clean files take the streaming path (per `decodeCounters`), load and re-save
+      identically, and get the same verdict as the tree decoder;
+    - so does every corpus file, every edge number token (both the fit-only and the
+      converting path), and 3,000 random edits of valid files;
+    - `reflect_tests`: Schubfach equals `std::to_chars` on 32M sampled floats and the
+      edge classes (all 2^32 patterns with `--exhaustive-floats`).
 
 ## Done criteria
 
 All verified by running, none estimated.
 
-- Tests 1–20 pass. All existing suites and goldens stay green.
+- Tests 1–21 pass. All existing suites and goldens stay green.
 - `ohao schema` emits both files, and an agent-facing guide `docs/agents/ohao-cli.md`
   describes the CLI, the methods, the commands and the error codes. It was checked by
   running every example in it.
@@ -1484,7 +1552,7 @@ Decided with Frank on 2026-10-22, as recommended:
 |---|---|---|
 | 1 | Type registry | Own registry, member-pointer registration, editor attributes. Revised: per-member typed codegen. |
 | 2 | Completeness guard | Boost.PFR (test-only). Revised: also checks docs and units. |
-| 3 | Text format | Canonical JSON, own writer. Revised: simdjson parser; pretty and compact renderings. Revised again (step 6): own single-pass reader, simdjson for UTF-8 validation only. |
+| 3 | Text format | Canonical JSON, own writer. Revised: simdjson parser; pretty and compact renderings. Revised again (step 6): own single-pass reader, simdjson for UTF-8 validation only. Revised again (step 9, Frank's ruling): clean files stream with no tree (tree decoder for everything else), per-type writers with a one-pass layout, Schubfach floats. |
 | 4 | Extension | `.scene.json` (revised 2026-10-23 from `.ohscene`; see "File naming") |
 | 5 | Entity IDs | Random 64-bit. Revised: splitmix64(seed + counter), counter in snapshots, explicit IDs allowed. |
 | 6 | Asset references | `AssetRef {path, guid}` + `AssetResolver`. Texture overrides deferred to the asset DB. |
@@ -1532,7 +1600,12 @@ Answered by Frank on 2026-10-22:
 
 ## Open decisions
 
-1. **Save/validate budgets on the full bench10k (raised in step 7, needs Frank).**
+None open. Decided:
+
+1. **Save/validate budgets on the full bench10k (raised in step 7).** *Ruled by Frank
+   on 2026-10-23: option 3.* Keep 10 ms each and stay single-threaded, and rewrite the
+   reader and writer. Done at the start of step 9; see the step 9 note under "Budgets".
+   The history below is kept.
    - On the 5.13 MB scene: save pretty median about 13.9 ms, validate about 14.0 ms;
      both budgets are 10 ms. Every other budget and scaling ratio passes.
    - The options, as set out under "Budgets":

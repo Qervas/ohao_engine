@@ -415,6 +415,8 @@ struct Backing {
 
 } // namespace
 
+bool validUtf8(std::string_view text) noexcept { return simdjson::validate_utf8(text.data(), text.size()); }
+
 Result<JsonDocument, Diagnostic> parseJson(std::string_view text) {
     using R = Result<JsonDocument, Diagnostic>;
     auto backing = std::make_shared<Backing>();

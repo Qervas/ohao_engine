@@ -1579,6 +1579,229 @@ static void t20_example_scenes_save_load_and_validate() {
           "the studio image");
 }
 
+// ---- t21: the fast codec paths agree with the reference (step 9, Frank's ruling) -----------
+
+// saveScene (per-type writers + LayoutTree) against saveSceneGeneric (the reflection
+// walk into JsonWriter), in all four renderings. Empty string: they agree.
+static std::string writersDisagree(const World& w) {
+    for (const auto layout : {reflect::JsonLayout::Pretty, reflect::JsonLayout::Compact})
+        for (const bool defaults : {false, true}) {
+            SaveOptions o{layout, defaults};
+            SaveReport ra, rb;
+            const auto a = saveScene(w, engineTypes(), o, &ra);
+            const auto b = saveSceneGeneric(w, engineTypes(), o, &rb);
+            if (a.has_value() != b.has_value()) return "one failed, the other did not";
+            if (!a.has_value()) {
+                if (a.error().code != b.error().code || a.error().message != b.error().message ||
+                    a.error().path != b.error().path)
+                    return "different errors: " + a.error().message + " / " + b.error().message;
+                continue;
+            }
+            if (a.value() != b.value()) {
+                std::size_t i = 0;
+                while (i < a.value().size() && i < b.value().size() && a.value()[i] == b.value()[i]) ++i;
+                return "texts differ at byte " + std::to_string(i) + ": ..." +
+                       a.value().substr(i > 40 ? i - 40 : 0, 80) + "... vs ..." + b.value().substr(i > 40 ? i - 40 : 0, 80);
+            }
+            if (ra.warnings.size() != rb.warnings.size()) return "different warnings";
+        }
+    return {};
+}
+
+static void t21_every_authoring_component_has_a_writer() {
+    for (const reflect::TypeInfo* t : engineTypes().types()) {
+        if (!t->serialized || t->role != reflect::TypeRole::Component) continue;
+        CHECK(componentOps(*t) && componentOps(*t)->writeFields,
+              "every saved engine component is written by its own writer, not the reflection walk");
+    }
+}
+
+static void t21_per_type_writers_match_the_generic_writer() {
+    for (uint64_t seed = 1; seed <= 40; ++seed) {
+        World w;
+        buildRandomWorld(w, seed, static_cast<int>(1 + seed * 7));
+        const std::string why = writersDisagree(w);
+        if (!why.empty()) std::printf("\n      seed %llu: %s", static_cast<unsigned long long>(seed), why.c_str());
+        CHECK(why.empty(), "random worlds save identically, pretty and compact, with and without defaults");
+    }
+    // The edges of the layout: no entities, entities that fit the "entities" array on one
+    // line, and the first entity that does not.
+    World empty;
+    CHECK(writersDisagree(empty).empty(), "an empty world");
+    for (int n = 1; n <= 4; ++n) {
+        World w;
+        w.seedIds(99);
+        for (int i = 0; i < n; ++i) w.create(i % 2 ? "" : "x");
+        CHECK(writersDisagree(w).empty(), "tiny worlds (one-line entities arrays)");
+    }
+    // Long strings, escapes, dead parents, every MeshSource alternative at its default.
+    World odd;
+    odd.seedIds(5);
+    const auto a = odd.create(std::string(150, 'n') + "\"\\\n\x01 \xc3\xa9");
+    const auto b = odd.create("child");
+    odd.setParent(b, a);
+    auto& reg = odd.registry();
+    reg.emplace<Parent>(odd.create("dangling"), Parent{a});
+    MeshSource ms;
+    for (std::size_t alt = 0; alt < std::variant_size_v<decltype(ms.source)>; ++alt) {
+        const auto e = odd.create("alt");
+        switch (alt) {
+        case 0: ms.source = ModelAsset{AssetRef{"assets/a b/\"q\".glb", "g"}}; break;
+        case 1: ms.source = SpherePrim{}; break;
+        case 2: ms.source = CubePrim{}; break;
+        case 3: ms.source = PlatformPrim{}; break;
+        case 4: ms.source = CylinderPrim{}; break;
+        case 5: ms.source = ConePrim{}; break;
+        case 6: ms.source = QuadPrim{}; break;
+        default: ms.source = BoxPrim{}; break;
+        }
+        reg.emplace<MeshSource>(e, ms);
+        reg.emplace<MaterialOverride>(e, MaterialOverride{{-0.0f, 0.0f, 1.0f}, 0.0f, -0.0f, 0.0f});
+    }
+    reg.emplace<Environment>(odd.create("env"), Environment{});
+    reg.emplace<ecs::Camera>(odd.create("cam"), ecs::Camera{});
+    odd.destroy(a);   // b's parent is gone with it; "dangling" keeps a dead reference
+    CHECK(writersDisagree(odd).empty(), "strings, escapes, a dead parent, defaults of every alternative");
+    // Unknown components kept from a file, and the generic writer's failures.
+    World kept;
+    CHECK(load(kept, R"({"format":"ohao.scene","version":1,"components":{"Zeta":3,"Alpha":1},"entities":[)"
+                     R"({"id":"0000000000000001","Zeta":{"x":[1,{"y":null}],"s":"t"},"Alpha":{}}]})"),
+          "loads");
+    CHECK(writersDisagree(kept).empty(), "preserved components are laid out like the rest");
+    World bad;
+    bad.registry().emplace<Light>(bad.create("nan"), Light{LightType::Point, {std::nanf(""), 0.0f, 0.0f}});
+    bad.registry().emplace<Light>(bad.create("enum"), Light{static_cast<LightType>(9)});
+    CHECK(writersDisagree(bad).empty() && !saveScene(bad, engineTypes()).has_value(),
+          "a NaN and an unregistered enum value fail the same way");
+}
+
+// The streaming decoder against the tree decoder on one text: the same report (errors and
+// warnings, rendered), and for a valid text the same loaded world. Empty: they agree.
+static std::string readersDisagree(std::string_view text) {
+    const auto a = validateScene(text, engineTypes());
+    const auto b = validateSceneReference(text, engineTypes());
+    if (diagnosticsJson(a.errors) != diagnosticsJson(b.errors)) return "errors differ: " + diagnosticsJson(a.errors) + " vs " + diagnosticsJson(b.errors);
+    if (diagnosticsJson(a.warnings) != diagnosticsJson(b.warnings)) return "warnings differ";
+    if (a.upgraded.size() != b.upgraded.size()) return "upgrades differ";
+    World wa, wb;
+    const auto la = loadScene(wa, text, engineTypes());
+    const auto lb = loadSceneReference(wb, text, engineTypes());
+    if (la.has_value() != lb.has_value()) return "one load failed";
+    if (!la.has_value()) return diagnosticsJson(la.error()) == diagnosticsJson(lb.error()) ? "" : "load errors differ";
+    if (save(wa, reflect::JsonLayout::Compact) != save(wb, reflect::JsonLayout::Compact)) return "loaded worlds differ";
+    return {};
+}
+
+static void t21_clean_files_stream_and_load_identically() {
+    for (uint64_t seed = 1; seed <= 25; ++seed) {
+        World w;
+        buildRandomWorld(w, seed, static_cast<int>(10 + seed * 13));
+        for (const auto layout : {reflect::JsonLayout::Pretty, reflect::JsonLayout::Compact}) {
+            const std::string text = save(w, layout);
+            const DecodeCounters before = decodeCounters();
+            World loaded;
+            CHECK(load(loaded, text) && save(loaded, layout) == text, "a saved world loads back to the same text");
+            CHECK(validateScene(text, engineTypes()).ok(), "and validates");
+            CHECK(decodeCounters().fast == before.fast + 2 && decodeCounters().tree == before.tree,
+                  "both took the streaming path (no tree)");
+            const std::string why = readersDisagree(text);
+            if (!why.empty()) std::printf("\n      seed %llu: %s", static_cast<unsigned long long>(seed), why.c_str());
+            CHECK(why.empty(), "the streaming and tree decoders agree");
+        }
+    }
+    // The checked-in corpus (errors, warnings, upgrades, unknown components): every file
+    // gets the same report either way.
+    std::size_t files = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(kScenes)) {
+        if (!entry.is_regular_file() || !isSceneFile(entry.path())) continue;
+        const std::string why = readersDisagree(readFile(entry.path()));
+        if (!why.empty()) std::printf("\n      %s: %s", entry.path().filename().string().c_str(), why.c_str());
+        CHECK(why.empty(), "every corpus file is reported the same by both decoders");
+        ++files;
+    }
+    CHECK(files >= 10, "the corpus was found");
+}
+
+// Number tokens at the edges of the grammar and of float's range, in a field without
+// limits (the streaming path only checks that it fits) and one with limits (it converts).
+static void t21_numbers_are_judged_identically() {
+    std::vector<std::string> tokens = {
+        "0", "-0", "0.0", "0e0", "0.000e-99", "1", "-1", "1.5", "1E+5", "1e-5", "2.5E-3", "1e38", "3.4e38",
+        "3.4028235e38", "3.4028236e38", "3.5e38", "1e39", "1e+999", "1e0038", "1e-37", "1.17549435e-38", "1e-44",
+        "1.4e-45", "1e-45", "7e-46", "1e-46", "1e-999", "0.00000000000000000000000000000000000000000000001",
+        "123456789012345678901234567890", "1e00000000000000038", "01", "1.", ".5", "-", "+1", "1e", "1e+", "0x10",
+        "1.5.5", "--1", "1e5e5", "NaN", "Infinity", "-Infinity", "1_0", "0.1e-44", "10e-46", "99999999999e-56"};
+    std::mt19937_64 rng(77);
+    for (int i = 0; i < 300; ++i) {   // random decimal tokens of every magnitude
+        std::string t = rng() % 2 ? "-" : "";
+        t += std::to_string(rng() % 100000);
+        if (rng() % 2) t += "." + std::to_string(rng() % 1000000);
+        if (rng() % 2) t += "e" + std::to_string(static_cast<int>(rng() % 100) - 50);
+        tokens.push_back(t);
+    }
+    for (const std::string& t : tokens) {
+        const std::string unlimited = R"({"format":"ohao.scene","version":1,"entities":[{"id":"0000000000000001",)"
+                                      R"("Transform":{"position":[)" + t + R"(,0,0]}}]})";
+        const std::string limited = R"({"format":"ohao.scene","version":1,"entities":[{"id":"0000000000000001",)"
+                                    R"("MaterialOverride":{"roughness":)" + t + "}}]}";
+        for (const std::string& text : {unlimited, limited}) {
+            const std::string why = readersDisagree(text);
+            if (!why.empty()) std::printf("\n      token %s: %s", t.c_str(), why.c_str());
+            CHECK(why.empty(), "every number token is judged the same by both decoders");
+        }
+    }
+}
+
+// Random edits of valid files -- bytes deleted, inserted or replaced, and token-level
+// edits (numbers out of range, wrong types, renamed or duplicated members, broken ids
+// and references) -- must be judged identically by the streaming path and the tree.
+static void t21_edited_files_are_judged_identically() {
+    std::mt19937_64 rng(2109);
+    std::vector<std::string> bases;
+    for (uint64_t seed : {3u, 8u, 21u}) {
+        World w;
+        buildRandomWorld(w, seed, 25);
+        bases.push_back(save(w));
+        bases.push_back(save(w, reflect::JsonLayout::Compact));
+    }
+    const char* inserts[] = {"\"", "{", "}", "[", "]", ",", ":", "0", "-", ".", "e", "1e39", "null", "true", "\\",
+                             "\"x\"", " ", "\x01", "1.0", "-0", "nan"};
+    const std::pair<const char*, const char*> swaps[] = {
+        {"\"position\"", "\"positon\""}, {"\"Transform\"", "\"Transfrom\""}, {"\"id\"", "\"Id\""},
+        {"\"rotation\"", "\"scale\""},   {"\"Light\"", "\"Children\""},     {"\"type\": \"", "\"type\": \"X"},
+        {"\"radius\"", "\"size\""},      {"\"value\"", "\"value\": 1, \"value\""}, {"\"entity\": \"", "\"entity\": \"0"},
+        {"[", "[1, "},                   {": 1", ": 1.5"},                   {": 0.", ": 1e40"},
+        {"\"sectors\": 32", "\"sectors\": 2"}, {"\"version\": 1", "\"version\": 2"}, {"\"Name\": 1", "\"Name\": 0"},
+        {"\"MeshSource\"", "\"MeshSourcee\""}, {"\"SpherePrim\"", "\"SpherPrim\""}, {"\"path\"", "\"guid\""},
+        {"\"baseColor\": [", "\"baseColor\": [2, "}, {"\"active\"", "\"active\": 0, \"x\""}, {"}", ", \"Zeta\": {}}"},
+    };
+    std::size_t edits = 0, accepted = 0;
+    for (int i = 0; i < 3000; ++i) {
+        std::string t = bases[rng() % bases.size()];
+        const int n = 1 + static_cast<int>(rng() % 3);
+        for (int k = 0; k < n && !t.empty(); ++k) {
+            const std::size_t at = rng() % t.size();
+            switch (rng() % 4) {
+            case 0: t.erase(at, 1 + rng() % 3); break;
+            case 1: t.insert(at, inserts[rng() % std::size(inserts)]); break;
+            case 2: t[at] = "{}[],:\"0123456789.-eE ntf\\"[rng() % 26]; break;
+            default: {
+                const auto& [from, to] = swaps[rng() % std::size(swaps)];
+                const std::size_t pos = t.find(from, at);
+                if (pos != std::string::npos) t.replace(pos, std::strlen(from), to);
+            }
+            }
+        }
+        const std::string why = readersDisagree(t);
+        if (!why.empty()) std::printf("\n      edit %d: %s\n      text: %.200s", i, why.c_str(), t.c_str());
+        CHECK(why.empty(), "an edited file gets the same report and world from both decoders");
+        ++edits;
+        accepted += validateScene(t, engineTypes()).ok();
+    }
+    std::printf("\n      %zu edited files, %zu still valid ", edits, accepted);
+    CHECK(edits == 3000, "all edits checked");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -1647,6 +1870,11 @@ int main(int argc, char** argv) {
     RUN(t20_cameras_and_environments_are_singletons);
     RUN(t20_check_assets_reports_a_missing_hdri);
     RUN(t20_example_scenes_save_load_and_validate);
+    RUN(t21_every_authoring_component_has_a_writer);
+    RUN(t21_per_type_writers_match_the_generic_writer);
+    RUN(t21_clean_files_stream_and_load_identically);
+    RUN(t21_numbers_are_judged_identically);
+    RUN(t21_edited_files_are_judged_identically);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

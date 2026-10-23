@@ -9,6 +9,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace ohao::reflect {
@@ -409,6 +410,27 @@ bool readHex64(const JsonNode& n, DecodeContext& ctx, std::string_view code, uin
     return true;
 }
 
+bool parseIntToken(std::string_view token, int64_t lo, int64_t hi, int64_t& out) noexcept {
+    bool integer = false;
+    if (!isJsonNumber(token, &integer) || !integer) return false;
+    const auto r = std::from_chars(token.data(), token.data() + token.size(), out);
+    return r.ec == std::errc{} && out >= lo && out <= hi;
+}
+
+bool parseHex16(std::string_view s, uint64_t& out) noexcept {
+    if (s.size() != 16) return false;
+    uint64_t v = 0;
+    for (const char c : s) {
+        uint64_t d;
+        if (c >= '0' && c <= '9') d = static_cast<uint64_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') d = static_cast<uint64_t>(c - 'a' + 10);
+        else return false;
+        v = (v << 4) | d;
+    }
+    out = v;
+    return true;
+}
+
 // ---- struct decoding ----------------------------------------------------------------------
 
 namespace {
@@ -433,20 +455,24 @@ std::string limitsText(const FieldInfo& f) {
     return s + "<= " + num(*l.max);
 }
 
-int fieldIndex(const TypeInfo& t, std::string_view key, uint32_t position) {
+} // namespace
+
+int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexcept {
     // Canonical files list fields in registration order: try the member's own position
-    // first, so a canonical file never searches.
-    if (position < t.fields.size() && t.fields[position].name == key) return static_cast<int>(position);
+    // first, so a canonical file never searches. The first byte rules out most names
+    // before a full compare.
+    const auto same = [](std::string_view a, std::string_view b) {
+        return a.size() == b.size() && (a.empty() || (a[0] == b[0] && std::memcmp(a.data(), b.data(), a.size()) == 0));
+    };
+    if (position < t.fields.size() && same(t.fields[position].name, key)) return static_cast<int>(position);
     for (std::size_t i = 0; i < t.fields.size(); ++i) {
         const FieldInfo& f = t.fields[i];
-        if (f.name == key) return static_cast<int>(i);
+        if (same(f.name, key)) return static_cast<int>(i);
         for (const auto& a : f.attrs.aliases)
             if (a == key) return static_cast<int>(i);
     }
     return -1;
 }
-
-} // namespace
 
 void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx) {
     if (n.type != JsonType::Object) {
@@ -459,7 +485,7 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
     for (uint32_t i = 0; i < n.count && !ctx.full(); ++i) {
         const JsonNode& m = ctx.doc.child(n, i);
         ctx.push(m.key);
-        const int idx = fieldIndex(t, m.key, i);
+        const int idx = findField(t, m.key, i);
         if (idx < 0) {
             std::vector<std::string_view> names;
             for (const auto& f : t.fields) names.push_back(f.name);
@@ -485,6 +511,27 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
         readField(obj, t, f, m, ctx);
         ctx.pop();
     }
+}
+
+bool readStructFast(void* obj, const TypeInfo& t, FastDecode& c) {
+    if (t.fields.size() > 64 || !c.in.beginObject()) return false;
+    uint64_t seen = 0;
+    uint32_t position = 0;
+    std::string_view key;
+    while (c.in.nextMember(key)) {
+        const int idx = findField(t, key, position++);
+        if (idx < 0 || ((seen >> idx) & 1u)) return false;   // unknown, or given twice
+        seen |= uint64_t{1} << idx;
+        const FieldInfo& f = t.fields[static_cast<std::size_t>(idx)];
+        const auto& l = f.attrs.limits;
+        const bool limited = l.min || l.max;
+        const bool outer = c.needValue;
+        c.needValue = !c.valuesUnused || limited;   // as readField
+        const bool ok = f.ops->readFast(obj, c, *f.type);
+        c.needValue = outer;
+        if (!ok || (limited && !f.ops->inRange(obj, l))) return false;
+    }
+    return !c.in.failed();
 }
 
 bool readField(void* obj, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx) {

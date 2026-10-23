@@ -357,6 +357,53 @@ static void writer_short_decimals_match_to_chars_across_the_range() {
     CHECK(mismatches == 0 && checked > 3'000'000, "every sampled float in [0.001, 16) formats exactly as to_chars");
 }
 
+// formatFloat32 (Schubfach, step 9) against std::to_chars on the bit patterns from
+// `first`, every `stride`-th, `count` of them; mismatches are printed (up to 5).
+static std::size_t floatMismatches(uint64_t first, uint64_t stride, uint64_t count, std::size_t* checked) {
+    std::size_t bad = 0;
+    char a[32], b[32];
+    for (uint64_t k = 0; k < count; ++k) {
+        const auto bits = static_cast<uint32_t>(first + k * stride);
+        const float v = std::bit_cast<float>(bits);
+        if (!std::isfinite(v)) continue;
+        const char* ea = formatFloat32(v, a);
+        const char* eb = std::to_chars(b, b + sizeof(b), v).ptr;
+        ++*checked;
+        const std::string_view sa(a, static_cast<std::size_t>(ea - a)), sb(b, static_cast<std::size_t>(eb - b));
+        if (sa != sb && bad++ < 5)
+            std::printf("\n      bits %08x (%.9g): wrote %s, to_chars %s", bits, v, std::string(sa).c_str(),
+                        std::string(sb).c_str());
+    }
+    return bad;
+}
+
+// 32M bit patterns spread over the whole range (an odd stride visits every exponent and
+// many mantissas), plus every power of two, every subnormal boundary and the extremes.
+// The full 2^32 run is `reflect_tests --exhaustive-floats`.
+static void writer_schubfach_matches_to_chars() {
+    std::size_t checked = 0;
+    std::size_t bad = floatMismatches(0x9E3779B9u, 133u, 1u << 25, &checked);
+    std::vector<uint32_t> edges;
+    for (uint32_t e = 0; e < 255; ++e)
+        for (uint32_t m : {0u, 1u, 2u, 0x7FFFFFu, 0x7FFFFEu, 0x400000u})
+            for (uint32_t s : {0u, 0x80000000u}) edges.push_back(s | (e << 23) | m);
+    for (uint32_t bits : edges) bad += floatMismatches(bits, 1, 1, &checked);
+    CHECK(bad == 0 && checked > 30'000'000, "shortest float text == std::to_chars on 32M sampled floats and the edges");
+}
+
+static int exhaustiveFloats() {
+    std::size_t checked = 0, bad = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (uint64_t chunk = 0; chunk < 256; ++chunk) {
+        bad += floatMismatches(chunk << 24, 1, 1u << 24, &checked);
+        if (chunk % 32 == 31) std::printf("  %llu/256 chunks, %zu mismatches\n", static_cast<unsigned long long>(chunk + 1), bad);
+    }
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("exhaustive floats: %zu finite floats checked against std::to_chars, %zu mismatches, %.0f s\n", checked,
+                bad, s);
+    return bad == 0 ? 0 : 1;
+}
+
 static void pretty_layout_rules() {
     const std::string compact =
         R"({"a":[1,2,3],"o":{"x":1,"y":"s"},"e":{},"z":[],"long":{"k1":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","k2":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","k3":[1,2]}})";
@@ -866,6 +913,7 @@ static int dumpSchema(const fs::path& dir) {
 
 int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "--dump-schema") == 0) return dumpSchema(argv[2]);
+    if (argc == 2 && std::strcmp(argv[1], "--exhaustive-floats") == 0) return exhaustiveFloats();
     if (argc == 2 && std::strcmp(argv[1], "--update-golden") == 0) {
         TypeRegistry r;
         registerFixture(r);
@@ -890,6 +938,7 @@ int main(int argc, char** argv) {
     RUN(pretty_layout_rules);
     RUN(pretty_strips_back_to_compact);
     RUN(writer_short_decimals_match_to_chars_across_the_range);
+    RUN(writer_schubfach_matches_to_chars);
     RUN(pretty_single_pass_matches_pretty_print);
     RUN(t02_pretty_writer_matches_pretty_print_on_random_trees);
     RUN(struct_writes_canonically);

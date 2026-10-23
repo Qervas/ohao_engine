@@ -14,6 +14,7 @@ class JsonWriter;
 class DecodeContext;
 struct JsonNode;
 class JsonValue;
+struct FastDecode;
 
 // Migrates one component value from version `from` to `from + 1`, in place, before it
 // is decoded. Returns false and sets `error` to reject the old data (E_UPGRADE).
@@ -71,6 +72,8 @@ public:
     // Decodes `n` into the member, reporting problems to ctx. The member keeps its
     // current (default) value when the input is wrong.
     virtual void read(void* object, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) const = 0;
+    // The same from a streaming cursor (FastDecode); false where read() would report.
+    [[nodiscard]] virtual bool readFast(void* object, FastDecode& c, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool equal(const void* a, const void* b, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool inRange(const void* object, const NumericLimits& l) const = 0;
     [[nodiscard]] virtual void* address(void* object) const = 0;

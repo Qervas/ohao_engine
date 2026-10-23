@@ -6,6 +6,7 @@
 //
 // Never included by systems that run per frame (transform, render extract): reflection
 // serves load, save, validation, commands and tools only.
+#include "ecs/scene_writers.hpp"
 #include "ecs/snapshot_column.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
@@ -40,7 +41,26 @@ struct ComponentOps {
     // index to its snapshot row), and restore a column by diffing (see restoreColumn).
     void (*capture)(const entt::registry& r, std::span<const uint32_t> rowOf, SnapshotColumn& out);
     std::size_t (*restore)(entt::registry& r, const SnapshotColumn& col, RestoreScratch& scratch);
+    // The scene save's per-type writer (ecs/scene_writers.hpp): the fields of a T into the
+    // open object, those equal to `omit`'s left out. Null: the generic writer is used.
+    void (*writeFields)(const void* value, const void* omit, FieldSink& out);
+    // tryGet without the registry's per-call storage lookup: `pool` once per pass (null
+    // when the registry has no storage for T), then `tryGetIn` per entity.
+    const void* (*pool)(const entt::registry& r);
+    const void* (*tryGetIn)(const void* pool, entt::entity e);
 };
+
+namespace detail {
+template <class T>
+void writeFieldsErased(const void* value, const void* omit, FieldSink& out) {
+    writeFields(*static_cast<const T*>(value), static_cast<const T*>(omit), out);
+}
+template <class T>
+constexpr auto fieldWriterFor() -> void (*)(const void*, const void*, FieldSink&) {
+    if constexpr (requires(const T& v, FieldSink& s) { writeFields(v, &v, s); }) return &writeFieldsErased<T>;
+    else return nullptr;
+}
+} // namespace detail
 
 template <class T>
 [[nodiscard]] std::shared_ptr<const void> makeComponentOps() {
@@ -54,6 +74,13 @@ template <class T>
         },
         &detail::captureColumn<T>,
         &detail::restoreColumn<T>,
+        detail::fieldWriterFor<T>(),
+        [](const entt::registry& r) -> const void* { return r.storage<T>(); },
+        [](const void* pool, entt::entity e) -> const void* {
+            using Pool = std::remove_cvref_t<decltype(*std::declval<const entt::registry&>().template storage<T>())>;
+            const auto* s = static_cast<const Pool*>(pool);
+            return s && s->contains(e) ? &s->get(e) : nullptr;
+        },
     };
     return std::shared_ptr<const void>(&ops, [](const void*) {});
 }

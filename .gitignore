@@ -93,3 +93,6 @@ tools/dlss_probe/ngx_appdata/
 # Not part of the engine; kept out of git deliberately.
 _backup/
 smoke_test.png
+
+# scene_bench results (written to build/ by default; a stray copy in the root)
+/scene_bench.json

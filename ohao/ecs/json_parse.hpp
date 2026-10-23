@@ -14,6 +14,9 @@ namespace ohao::ecs {
 // owns). On failure the diagnostic is E_PARSE at the failing byte, with line and column.
 [[nodiscard]] Result<reflect::JsonDocument, reflect::Diagnostic> parseJson(std::string_view text);
 
+// The UTF-8 check parseJson makes first (simdjson's SIMD validator).
+[[nodiscard]] bool validUtf8(std::string_view text) noexcept;
+
 // A reusable parser: keeps its padded input buffer, string arena and tree storage
 // between parses, so repeated loads (an agent loading thousands of times) allocate
 // nothing once warm. The returned document lives until the next parse() on this parser.

@@ -60,9 +60,15 @@ struct ValidationReport {
 };
 
 // Fails (E_NONFINITE / E_ENUM, with the entity's path) only on a value that cannot be
-// written canonically.
+// written canonically. Each component with a per-type writer (ecs/scene_writers.hpp) is
+// written by it; any other type by the generic reflection writer. The text is laid out
+// once from a per-entity node list (reflect::LayoutTree).
 [[nodiscard]] Result<std::string, Diagnostic> saveScene(const World& world, const reflect::TypeRegistry& types,
                                                         SaveOptions options = {}, SaveReport* report = nullptr);
+// The same document through the generic writer alone (reflect::writeStruct into a
+// JsonWriter). Kept as the reference saveScene is checked against byte for byte.
+[[nodiscard]] Result<std::string, Diagnostic> saveSceneGeneric(const World& world, const reflect::TypeRegistry& types,
+                                                               SaveOptions options = {}, SaveReport* report = nullptr);
 
 class AssetResolver;
 
@@ -75,6 +81,22 @@ class AssetResolver;
 // `dst` must be empty (E_WORLD_NOT_EMPTY otherwise). On error `dst` is unchanged.
 [[nodiscard]] Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_view text,
                                                                     const reflect::TypeRegistry& types);
+
+// Validation and load decode in one of two ways. A clean current file streams straight
+// from the text into typed values (no JSON tree). Anything else -- an error, a warning,
+// an upgrade, an unknown component, members out of canonical order -- is decoded by the
+// tree decoder, which reports. Results and reports are the same either way.
+// The *Reference versions always take the tree decoder: what the tests compare against.
+[[nodiscard]] ValidationReport validateSceneReference(std::string_view text, const reflect::TypeRegistry& types,
+                                                      const AssetResolver* assets = nullptr);
+[[nodiscard]] Result<LoadReport, std::vector<Diagnostic>> loadSceneReference(World& dst, std::string_view text,
+                                                                             const reflect::TypeRegistry& types);
+// Decodes on this thread so far that streamed, and that took the tree decoder.
+struct DecodeCounters {
+    std::size_t fast{0};
+    std::size_t tree{0};
+};
+[[nodiscard]] DecodeCounters decodeCounters() noexcept;
 
 // UTF-8, LF, trailing newline (Pretty). E_IO when the file cannot be written or read.
 [[nodiscard]] Result<bool, Diagnostic> saveSceneFile(const World& world, const reflect::TypeRegistry& types,
