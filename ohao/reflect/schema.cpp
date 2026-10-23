@@ -11,7 +11,7 @@ namespace {
 // A limit printed in the field's own number type, so a float limit 0.1 prints as 0.1.
 void writeLimit(JsonWriter& w, double v, const TypeDesc& d) {
     const Kind k = (d.kind == Kind::Vector || d.kind == Kind::Optional) && d.element ? d.element->kind : d.kind;
-    if (k == Kind::Int32 || k == Kind::UInt32) w.int64(static_cast<int64_t>(v));
+    if (k == Kind::Int32 || k == Kind::UInt32 || k == Kind::Int64) w.int64(static_cast<int64_t>(v));
     else w.float32(static_cast<float>(v));
 }
 
@@ -49,7 +49,9 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
     for (const auto& m : methods) {
         w.beginObject();
         w.key("name"); w.string(m.name);
-        w.key("params"); w.string(m.params);
+        w.key("params");
+        if (m.params) writeParamsSchema(w, *m.params);
+        else { w.beginObject(); w.endObject(); }
         w.key("result"); w.string(m.result);
         w.key("doc"); w.string(m.doc);
         w.endObject();
@@ -167,8 +169,11 @@ void writeValueSchema(JsonWriter& w, const TypeDesc& d, const NumericLimits& l) 
     case Kind::Bool:
         w.beginObject(); w.key("type"); w.string("boolean"); w.endObject();
         break;
-    case Kind::Int32: case Kind::UInt32: case Kind::Float:
+    case Kind::Int32: case Kind::UInt32: case Kind::Int64: case Kind::Float:
         writeNumberSchema(w, d, l);
+        break;
+    case Kind::Json:
+        w.beginObject(); w.endObject();   // any JSON value
         break;
     case Kind::UInt64:
         w.beginObject(); w.key("type"); w.string("string"); w.key("pattern"); w.string("^[0-9a-f]{16}$"); w.endObject();
@@ -278,7 +283,126 @@ void writeStructSchema(JsonWriter& w, const TypeInfo& t) {
     w.endObject();
 }
 
+// ---- params schemas: self-contained (no $ref), terse ---------------------------------------
+
+void writeInlineSchema(JsonWriter& w, const TypeDesc& d, const NumericLimits& l);
+
+void writeFieldProperty(JsonWriter& w, const TypeInfo& t, const FieldInfo& f) {
+    w.key(f.name);
+    w.beginObject();
+    w.key("description"); w.string(f.attrs.doc);
+    writeInlineSchema(w, *f.type, f.attrs.limits);
+    // An optional or free-JSON member has no default value to show; a required one needs none.
+    if (!f.attrs.required && f.type->kind != Kind::Optional && f.type->kind != Kind::Json) {
+        w.key("default");
+        f.ops->write(t.defaultValue.get(), w, *f.type);
+    }
+    w.endObject();
+}
+
+void writeObjectSchemaBody(JsonWriter& w, const TypeInfo& t) {
+    w.key("type"); w.string("object");
+    w.key("properties");
+    w.beginObject();
+    for (const auto& f : t.fields) writeFieldProperty(w, t, f);
+    w.endObject();
+    bool anyRequired = false;
+    for (const auto& f : t.fields) anyRequired = anyRequired || f.attrs.required;
+    if (anyRequired) {
+        w.key("required");
+        w.beginArray();
+        for (const auto& f : t.fields)
+            if (f.attrs.required) w.string(f.name);
+        w.endArray();
+    }
+    w.key("additionalProperties"); w.boolean(false);
+}
+
+// The keywords of one value's schema, written into an open object.
+void writeInlineSchema(JsonWriter& w, const TypeDesc& d, const NumericLimits& l) {
+    const auto range = [&](const TypeDesc& e) {
+        std::optional<double> lo = l.min;
+        if (e.kind == Kind::UInt32 && (!lo || *lo < 0)) lo = 0.0;
+        if (lo) { w.key("minimum"); writeLimit(w, *lo, e); }
+        if (l.max) { w.key("maximum"); writeLimit(w, *l.max, e); }
+    };
+    switch (d.kind) {
+    case Kind::Bool: w.key("type"); w.string("boolean"); break;
+    case Kind::Int32: case Kind::UInt32: case Kind::Int64:
+        w.key("type"); w.string("integer");
+        range(d);
+        break;
+    case Kind::Float:
+        w.key("type"); w.string("number");
+        range(d);
+        break;
+    case Kind::UInt64: case Kind::EntityRef:
+        w.key("type"); w.string("string");
+        w.key("pattern"); w.string("^[0-9a-f]{16}$");
+        break;
+    case Kind::String: w.key("type"); w.string("string"); break;
+    case Kind::Vec2: case Kind::Vec3: case Kind::Vec4: case Kind::Quat: case Kind::Mat4: {
+        const int n = d.kind == Kind::Vec2 ? 2 : d.kind == Kind::Vec3 ? 3 : d.kind == Kind::Mat4 ? 16 : 4;
+        w.key("type"); w.string("array");
+        w.key("items"); w.beginObject(); w.key("type"); w.string("number"); w.endObject();
+        w.key("minItems"); w.int64(n);
+        w.key("maxItems"); w.int64(n);
+        break;
+    }
+    case Kind::Enum:
+        w.key("type"); w.string("string");
+        w.key("enum");
+        w.beginArray();
+        for (const auto& v : d.enumType->values) w.string(v.name);
+        w.endArray();
+        break;
+    case Kind::Struct: writeObjectSchemaBody(w, *d.structType); break;
+    case Kind::AssetRef:
+        w.key("type"); w.string("object");
+        w.key("properties");
+        w.beginObject();
+        w.key("path"); w.beginObject(); w.key("type"); w.string("string"); w.endObject();
+        w.endObject();
+        w.key("required"); w.beginArray(); w.string("path"); w.endArray();
+        break;
+    case Kind::Vector:
+        w.key("type"); w.string("array");
+        w.key("items");
+        w.beginObject();
+        writeInlineSchema(w, *d.element, l);
+        w.endObject();
+        break;
+    case Kind::Optional: writeInlineSchema(w, *d.element, l); break;   // may be left out
+    case Kind::Variant:
+        w.key("oneOf");
+        w.beginArray();
+        for (const TypeInfo* alt : d.alternatives) {
+            w.beginObject();
+            w.key("type"); w.string("object");
+            w.key("properties");
+            w.beginObject();
+            w.key(alt->name);
+            w.beginObject();
+            writeObjectSchemaBody(w, *alt);
+            w.endObject();
+            w.endObject();
+            w.key("required"); w.beginArray(); w.string(alt->name); w.endArray();
+            w.key("additionalProperties"); w.boolean(false);
+            w.endObject();
+        }
+        w.endArray();
+        break;
+    case Kind::Json: break;   // any JSON value
+    }
+}
+
 } // namespace
+
+void writeParamsSchema(JsonWriter& w, const TypeInfo& params) {
+    w.beginObject();
+    writeObjectSchemaBody(w, params);
+    w.endObject();
+}
 
 std::vector<std::string> lint(const TypeRegistry& r) {
     std::vector<std::string> issues = r.errors();

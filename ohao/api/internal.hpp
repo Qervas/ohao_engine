@@ -1,5 +1,6 @@
 #pragma once
 // Shared by the method implementations; not part of the public API.
+#include "api/params.hpp"
 #include "api/session.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
@@ -45,9 +46,20 @@ struct Session::Impl {
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
     ecs::AssetResolver* assets{nullptr};                           // checkAssets
     RenderHandler render;                                          // render.capture
+    HostKind host{HostKind::None};
+    std::optional<PathPolicy> paths;                               // the sandbox, when serving
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};
     const TypeInfo* tParent{nullptr};
+
+    // The call in progress.
+    const CallControl* control{nullptr};
+    bool paramsFailed{false};   // the errors are about the params themselves (BadParams)
+    bool cancelled{false};
+
+    [[nodiscard]] bool cancelRequested() const noexcept {
+        return control && control->cancel && control->cancel->load(std::memory_order_relaxed);
+    }
 };
 
 // A method writes its result value into `out`, or reports into ctx.errors and returns false.
@@ -72,6 +84,30 @@ bool optInt(const JsonDocument& doc, const JsonNode& obj, std::string_view key, 
             int64_t hi, int64_t& out);
 bool optString(const JsonDocument& doc, const JsonNode& obj, std::string_view key, DecodeContext& ctx,
                std::string_view& out);
+
+// Marks the call's errors as being about its params (BadParams); returns false.
+inline bool badParams(Session::Impl& s) {
+    s.paramsFailed = true;
+    return false;
+}
+
+// Decodes a method's params into its registered struct `P`: unknown members, types,
+// enums and limits as scene files report them, then the required members. MCP's "_meta"
+// is skipped. False (BadParams) after reporting.
+template <class P>
+bool decodeParams(Session::Impl& s, const JsonNode& params, DecodeContext& ctx, P& out) {
+    const TypeInfo* t = paramsRegistry().find<P>();
+    reflect::readStruct(&out, *t, params, ctx, "_meta");
+    for (const auto& f : t->fields)
+        if (f.attrs.required && params.type == JsonType::Object && !ctx.doc.member(params, f.name))
+            ctx.error("E_COMMAND", params, t->doc + " need \"" + f.name + "\"", f.attrs.doc);
+    return ctx.errors.empty() || badParams(s);
+}
+
+// The file a params path names: as given without a sandbox, else resolved by it (E_ACCESS
+// when outside). `key` is the member holding it. False after reporting.
+bool usePath(Session::Impl& s, const JsonNode& params, std::string_view key, std::string_view path, PathUse use,
+             DecodeContext& ctx, std::string& resolved);
 // A component type with data by name. Unknown names report E_COMPONENT_UNKNOWN with a
 // suggestion; with `savedOnly`, so do runtime types. `at` is the node naming it.
 [[nodiscard]] const TypeInfo* findComponent(Session::Impl& s, std::string_view name, const JsonNode& at,

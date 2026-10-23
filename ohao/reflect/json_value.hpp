@@ -40,6 +40,15 @@ struct JsonDocument {
     [[nodiscard]] const JsonNode* member(const JsonNode& object, std::string_view k) const;
 };
 
+// A JSON value left as is inside a decoded struct (Kind::Json), for members that another
+// decoder checks (a batch of commands, an inline scene). It points into the document
+// being decoded and is valid as long as that document is. Default: absent.
+struct JsonRef {
+    const JsonDocument* doc{nullptr};
+    const JsonNode* node{nullptr};
+    [[nodiscard]] explicit operator bool() const noexcept { return node != nullptr; }
+};
+
 class JsonWriter;
 // Writes a subtree canonically (strings re-escaped, numbers as their raw tokens, member
 // order kept).

@@ -24,12 +24,17 @@ bool isIdentifier(std::string_view s) noexcept {
 
 bool isNumeric(Kind k) noexcept {
     switch (k) {
-    case Kind::Int32: case Kind::UInt32: case Kind::Float:
+    case Kind::Int32: case Kind::UInt32: case Kind::Int64: case Kind::Float:
     case Kind::Vec2: case Kind::Vec3: case Kind::Vec4:
         return true;
     default:
         return false;
     }
+}
+
+bool takesLimits(const TypeDesc& d) noexcept {
+    if (isNumeric(d.kind)) return true;
+    return (d.kind == Kind::Optional || d.kind == Kind::Vector) && d.element && takesLimits(*d.element);
 }
 
 bool takesUnit(const TypeDesc& d) noexcept {
@@ -91,6 +96,8 @@ std::string typeName(const TypeDesc& d) {
     case Kind::Int32: return "i32";
     case Kind::UInt32: return "u32";
     case Kind::UInt64: return "u64";
+    case Kind::Int64: return "i64";
+    case Kind::Json: return "json";
     case Kind::Float: return "f32";
     case Kind::String: return "string";
     case Kind::Vec2: return "vec2";

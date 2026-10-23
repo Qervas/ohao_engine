@@ -1,5 +1,6 @@
 #include "api/internal.hpp"
 
+#include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/scene_io.hpp"
 #include "reflect/schema.hpp"
@@ -12,46 +13,50 @@ namespace ohao::api {
 
 namespace {
 
-constexpr reflect::MethodDoc kMethods[] = {
-    {"schema.get", "{}", "the catalogue (ohao_schema.json), compact",
-     "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
-    {"scene.validate", "{text | path | scene, limit = 20, checkAssets = false}",
-     "{ok, errors?, warnings?, upgraded?, more?}",
-     "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
-     "files that do not exist (E_ASSET_NOT_FOUND)."},
-    {"scene.load", "{text | path | scene, seed?}", "{entities, preserved?, upgraded?, warnings?}",
-     "Loads a scene into the session's world, which must be empty. All or nothing. seed (16 hex digits) "
-     "fixes the id generator for later creates."},
-    {"scene.save", "{path?, layout = compact | pretty, defaults = false}", "{scene} or {path, bytes}",
-     "The canonical scene. Without a path it is returned as an object (compact)."},
-    {"world.info", "{}", "{entities, frame, schemaHash, idCounter}", "Cheap orientation: sizes and identity."},
-    {"world.summary", "{depth = 2, maxChildren = 8, maxNodes = 64}",
-     "{entities, roots, components, bounds?, outline, moreRoots?}",
-     "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline. A node whose "
-     "children are not all listed carries more (the count left out); moreRoots counts unlisted roots."},
-    {"world.query",
-     "{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}",
-     "{count, entities, missing?, next?}",
-     "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
-     "\"/Type/field\"; without fields each entity is its file form."},
-    {"world.apply", "{commands}", "{applied, results, inverse}",
-     "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
-    {"world.step", "{frames = 1, dt = 1/60}", "{frame}", "Runs the world's systems with a fixed dt."},
-    {"world.snapshot", "{name}", "{name, entities, bytes}",
-     "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
-     "component, the id generator and the frame."},
-    {"world.restore", "{name}", "{created, destroyed, changed, frame}",
-     "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
-    {"render.capture",
-     "{path, mode = deferred | rt_realtime | rt_offline, spp = 16, frames?, width = 1920, height = 1080, "
-     "denoise = none, post = [], exposure?}",
-     "{path, frames, ms, validation?}",
-     "Renders the world through its Camera and Environment to a PNG. Needs a host with a GPU (ohao run); the "
-     "renderer starts on first use. frames defaults to 10 (deferred) or spp + 3 (path tracer); post turns on "
-     "deferred effects (bloom, taa, ssao); exposure defaults to the renderer's own (0.6)."},
-};
-
 constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope
+
+// ---- the method table -------------------------------------------------------------------
+
+std::vector<reflect::MethodDoc> buildMethods() {
+    const reflect::TypeRegistry& p = paramsRegistry();
+    return {
+        {"engine.info", p.find<EngineInfoParams>(), "{protocolVersion, schemaHash, version, host, time}",
+         "The native handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host "
+         "and time state."},
+        {"schema.get", p.find<SchemaGetParams>(), "the catalogue (ohao_schema.json), compact",
+         "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
+        {"scene.validate", p.find<SceneValidateParams>(), "{ok, errors?, warnings?, upgraded?, more?}",
+         "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
+         "files that do not exist (E_ASSET_NOT_FOUND)."},
+        {"scene.load", p.find<SceneLoadParams>(), "{entities, preserved?, upgraded?, warnings?}",
+         "Loads a scene into the world, which must be empty unless replace is true (then it is cleared first; "
+         "snapshots are kept). All or nothing. seed fixes the id generator for later creates."},
+        {"scene.save", p.find<SceneSaveParams>(), "{scene} or {path, bytes}",
+         "The canonical scene. Without a path it is returned as an object (compact)."},
+        {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host}",
+         "Cheap orientation: sizes and identity."},
+        {"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
+         "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline. A node whose "
+         "children are not all listed carries more (the count left out); moreRoots counts unlisted roots."},
+        {"world.query", p.find<WorldQueryParams>(), "{count, entities, missing?, next?}",
+         "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
+         "\"/Type/field\"; without fields each entity is its file form."},
+        {"world.apply", p.find<WorldApplyParams>(), "{applied, results, inverse}",
+         "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
+        {"world.step", p.find<WorldStepParams>(), "{frame}",
+         "Runs the world's systems for frames fixed steps. Cancellable between steps."},
+        {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
+         "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
+         "component, the id generator and the frame."},
+        {"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
+         "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
+        {"render.capture", p.find<RenderCaptureParams>(), "{path, frames, ms, validation?}",
+         "Renders the world through its Camera and Environment to a PNG. Needs a host with a GPU; the renderer "
+         "starts on first use. post turns on deferred effects."},
+        {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
+         "Engine log records after since (pass the last read's next), filtered by level and channel."},
+    };
+}
 
 std::string readFile(const std::string& path, bool& ok) {
     std::ifstream f(path, std::ios::binary);
@@ -82,40 +87,34 @@ void writeDiagnostics(JsonWriter& w, const std::vector<Diagnostic>& ds, std::siz
 }
 
 // The scene text from {text | path | scene}. False after reporting.
-bool sceneSource(const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, std::string& text) {
-    const JsonNode* t = doc.member(params, "text");
-    const JsonNode* p = doc.member(params, "path");
-    const JsonNode* s = doc.member(params, "scene");
-    if ((t != nullptr) + (p != nullptr) + (s != nullptr) != 1) {
+bool sceneSource(Session::Impl& s, const JsonNode& params, const std::optional<std::string>& text,
+                 const std::optional<std::string>& path, const reflect::JsonRef& scene, DecodeContext& ctx,
+                 std::string& out) {
+    if (text.has_value() + path.has_value() + static_cast<bool>(scene) != 1) {
         ctx.error("E_COMMAND", params, "give exactly one of \"text\", \"path\" or \"scene\"",
                   "{\"text\": \"...\"} or {\"path\": \"...\"} or {\"scene\": {...}}");
-        return false;
+        return badParams(s);
     }
-    if (s) {
-        JsonWriter w(s->count * 64);
-        reflect::writeJson(w, doc, *s);
-        text = w.take();
+    if (scene) {
+        JsonWriter w(scene.node->count * 64);
+        reflect::writeJson(w, *scene.doc, *scene.node);
+        out = w.take();
         return true;
     }
-    const JsonNode& n = t ? *t : *p;
-    ctx.push(t ? "text" : "path");
-    if (n.type != JsonType::String) {
-        ctx.error("E_TYPE", n, "expected a string", "string", ctx.gotText(n));
+    if (text) {
+        out = *text;
+        return true;
+    }
+    std::string file;
+    if (!usePath(s, params, "path", *path, PathUse::Read, ctx, file)) return false;
+    bool ok = false;
+    out = readFile(file, ok);
+    if (!ok) {
+        ctx.push("path");
+        ctx.error("E_IO", *ctx.doc.member(params, "path"), "cannot read " + *path);
         ctx.pop();
         return false;
     }
-    if (t) {
-        text = std::string(n.text);
-    } else {
-        bool ok = false;
-        text = readFile(std::string(n.text), ok);
-        if (!ok) {
-            ctx.error("E_IO", n, "cannot read " + std::string(n.text));
-            ctx.pop();
-            return false;
-        }
-    }
-    ctx.pop();
     return true;
 }
 
@@ -124,33 +123,52 @@ void reportAll(DecodeContext& ctx, std::vector<Diagnostic>& ds) {
     for (Diagnostic& d : ds) ctx.report(std::move(d));
 }
 
+void writeTime(Session::Impl& s, JsonWriter& out) {
+    // Headless and CLI sessions are lockstep only (sub-project 4 spec, "Time modes").
+    out.beginObject();
+    out.key("mode"); out.string("lockstep");
+    out.key("paused"); out.boolean(false);
+    out.key("frame"); out.uint64(s.frame);
+    out.key("fixedDt"); out.float32(1.0f / 60.0f);
+    out.endObject();
+}
+
 // ---- methods --------------------------------------------------------------------------
 
-bool schemaGet(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-               JsonWriter& out) {
-    if (!checkKeys(doc, params, {}, "schema.get params", ctx)) return false;
+bool engineInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    EngineInfoParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    out.beginObject();
+    out.key("protocolVersion"); out.int64(kProtocolVersion);
+    out.key("schemaHash"); out.hex64(s.schemaHash);
+    out.key("version"); out.string(kEngineVersion);
+    out.key("host"); out.string(hostKindName(s.host));
+    out.key("time"); writeTime(s, out);
+    out.endObject();
+    return true;
+}
+
+bool schemaGet(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    SchemaGetParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
     if (s.catalogue.empty())
-        s.catalogue = reflect::exportCatalogue(s.types, {kMethods, reflect::JsonLayout::Compact});
+        s.catalogue = reflect::exportCatalogue(s.types, {methods(), reflect::JsonLayout::Compact});
     out.raw(s.catalogue);
     return true;
 }
 
-bool sceneValidate(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+bool sceneValidate(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
-    if (!checkKeys(doc, params, {"text", "path", "scene", "limit", "checkAssets"}, "scene.validate params", ctx))
-        return false;
-    int64_t limit = 20;
-    bool checkAssets = false;
-    if (!optInt(doc, params, "limit", ctx, 0, 100, limit) || !optBool(doc, params, "checkAssets", ctx, checkAssets))
-        return false;
-    if (checkAssets && !s.assets) {
+    SceneValidateParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    if (p.checkAssets && !s.assets) {
         ctx.error("E_COMMAND", params, "this session has no asset resolver, so it cannot check assets");
         return false;
     }
     std::string text;
-    if (!sceneSource(doc, params, ctx, text)) return false;
-    const ecs::ValidationReport r = ecs::validateScene(text, s.types, checkAssets ? s.assets : nullptr);
-    const auto n = static_cast<std::size_t>(limit);
+    if (!sceneSource(s, params, p.text, p.path, p.scene, ctx, text)) return false;
+    const ecs::ValidationReport r = ecs::validateScene(text, s.types, p.checkAssets ? s.assets : nullptr);
+    const auto n = static_cast<std::size_t>(p.limit);
     out.beginObject();
     out.key("ok"); out.boolean(r.ok());
     if (!r.errors.empty()) { out.key("errors"); writeDiagnostics(out, r.errors, n); }
@@ -163,25 +181,32 @@ bool sceneValidate(Session::Impl& s, const JsonDocument& doc, const JsonNode& pa
     return true;
 }
 
-bool sceneLoad(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-               JsonWriter& out) {
-    if (!checkKeys(doc, params, {"text", "path", "scene", "seed"}, "scene.load params", ctx)) return false;
-    uint64_t seed = 0;
-    const JsonNode* seedNode = doc.member(params, "seed");
-    if (seedNode) {
-        ctx.push("seed");
-        const bool ok = reflect::readHex64(*seedNode, ctx, "E_TYPE", seed);
-        ctx.pop();
-        if (!ok) return false;
-    }
+bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    SceneLoadParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
     std::string text;
-    if (!sceneSource(doc, params, ctx, text)) return false;
+    if (!sceneSource(s, params, p.text, p.path, p.scene, ctx, text)) return false;
+    if (p.replace) {
+        // Checked first, so a scene that does not load leaves the world as it was.
+        const ecs::ValidationReport r = ecs::validateScene(text, s.types, nullptr);
+        if (!r.ok()) {
+            auto errors = r.errors;
+            reportAll(ctx, errors);
+            return false;
+        }
+        std::vector<entt::entity> roots;
+        const entt::registry& reg = s.world.registry();
+        for (auto [e, id] : reg.view<const ecs::EntityId>().each())
+            if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
+        for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
+        s.frame = 0;
+    }
     auto r = ecs::loadScene(s.world, text, s.types);
     if (!r) {
         reportAll(ctx, r.error());
         return false;
     }
-    if (seedNode) s.world.seedIds(seed);
+    if (p.seed) s.world.seedIds(*p.seed);
     const ecs::LoadReport& rep = r.value();
     out.beginObject();
     out.key("entities"); out.uint64(rep.entities);
@@ -192,85 +217,79 @@ bool sceneLoad(Session::Impl& s, const JsonDocument& doc, const JsonNode& params
     return true;
 }
 
-bool sceneSave(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-               JsonWriter& out) {
-    if (!checkKeys(doc, params, {"path", "layout", "defaults"}, "scene.save params", ctx)) return false;
-    std::string_view path, layout;
-    bool defaults = false;
-    if (!optString(doc, params, "path", ctx, path) || !optString(doc, params, "layout", ctx, layout) ||
-        !optBool(doc, params, "defaults", ctx, defaults))
-        return false;
+bool sceneSave(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    SceneSaveParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
     ecs::SaveOptions o;
-    o.includeDefaults = defaults;
-    o.layout = path.empty() ? reflect::JsonLayout::Compact : reflect::JsonLayout::Pretty;
-    if (!layout.empty()) {
-        if (layout != "compact" && layout != "pretty") {
-            ctx.push("layout");
-            ctx.error("E_ENUM", *doc.member(params, "layout"), "unknown layout", "one of: compact, pretty",
-                      "\"" + std::string(layout) + "\"");
-            ctx.pop();
-            return false;
-        }
-        if (path.empty() && layout == "pretty") {
+    o.includeDefaults = p.defaults;
+    o.layout = p.path ? reflect::JsonLayout::Pretty : reflect::JsonLayout::Compact;
+    if (p.layout) {
+        if (!p.path && *p.layout == SaveLayout::pretty) {
             ctx.error("E_COMMAND", params, "an inline scene is always compact; give a path for pretty");
-            return false;
+            return badParams(s);
         }
-        o.layout = layout == "compact" ? reflect::JsonLayout::Compact : reflect::JsonLayout::Pretty;
+        o.layout = *p.layout == SaveLayout::compact ? reflect::JsonLayout::Compact : reflect::JsonLayout::Pretty;
     }
+    std::string file;
+    if (p.path && !usePath(s, params, "path", *p.path, PathUse::Write, ctx, file)) return false;
     auto text = ecs::saveScene(s.world, s.types, o);
     if (!text) {
         ctx.report(std::move(text.error()));
         return false;
     }
     out.beginObject();
-    if (path.empty()) {
+    if (!p.path) {
         out.key("scene");
         out.raw(text.value());
     } else {
-        std::ofstream f(std::string(path), std::ios::binary | std::ios::trunc);
+        std::ofstream f(file, std::ios::binary | std::ios::trunc);
         f.write(text.value().data(), static_cast<std::streamsize>(text.value().size()));
         if (!f) {
             ctx.push("path");
-            ctx.error("E_IO", *doc.member(params, "path"), "cannot write " + std::string(path));
+            ctx.error("E_IO", *ctx.doc.member(params, "path"), "cannot write " + *p.path);
             ctx.pop();
             return false;
         }
-        out.key("path"); out.string(path);
+        out.key("path"); out.string(*p.path);
         out.key("bytes"); out.uint64(text.value().size());
     }
     out.endObject();
     return true;
 }
 
-bool worldInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-               JsonWriter& out) {
-    if (!checkKeys(doc, params, {}, "world.info params", ctx)) return false;
+bool worldInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    WorldInfoParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
     out.beginObject();
     out.key("entities"); out.uint64(s.world.idCount());
     out.key("frame"); out.uint64(s.frame);
     out.key("schemaHash"); out.hex64(s.schemaHash);
     out.key("idCounter"); out.uint64(s.world.idGenState().counter);
+    out.key("host"); out.string(hostKindName(s.host));
     out.endObject();
     return true;
 }
 
-bool worldStep(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-               JsonWriter& out) {
-    if (!checkKeys(doc, params, {"frames", "dt"}, "world.step params", ctx)) return false;
-    int64_t frames = 1;
-    if (!optInt(doc, params, "frames", ctx, 0, 1'000'000, frames)) return false;
-    float dt = 1.0f / 60.0f;
-    if (const JsonNode* n = doc.member(params, "dt")) {
+bool worldStep(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    WorldStepParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    const float dt = p.dt.value_or(1.0f / 60.0f);
+    if (!(dt > 0.0f)) {
         ctx.push("dt");
-        const bool ok = reflect::readFloat(*n, ctx, dt);
-        if (ok && !(dt > 0.0f && dt <= 1.0f))
-            ctx.error("E_RANGE", *n, "dt is out of range", "a step in (0, 1] seconds", std::string(n->text));
+        ctx.error("E_RANGE", *ctx.doc.member(params, "dt"), "dt is out of range", "a step in (0, 1] seconds",
+                  ctx.gotText(*ctx.doc.member(params, "dt")));
         ctx.pop();
-        if (!ctx.errors.empty()) return false;
+        return badParams(s);
     }
-    for (int64_t i = 0; i < frames; ++i) {
+    const auto frames = static_cast<uint64_t>(p.frames);
+    for (uint64_t i = 0; i < frames; ++i) {
+        if (s.cancelRequested()) {   // between whole steps
+            s.cancelled = true;
+            return false;
+        }
         s.world.update(dt);
         ++s.frame;
+        if (s.control && s.control->progress) s.control->progress(i + 1, frames);
     }
     out.beginObject();
     out.key("frame"); out.uint64(s.frame);
@@ -278,27 +297,24 @@ bool worldStep(Session::Impl& s, const JsonDocument& doc, const JsonNode& params
     return true;
 }
 
-// The snapshot name from {name}. False after reporting.
-bool snapshotName(const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, std::string_view what,
-                  std::string_view& name) {
-    if (!checkKeys(doc, params, {"name"}, what, ctx) || !optString(doc, params, "name", ctx, name)) return false;
-    if (name.empty()) {
-        ctx.error("E_COMMAND", params, std::string(what) + " needs a non-empty \"name\"", "{\"name\": \"base\"}");
-        return false;
-    }
-    return true;
+// A snapshot name: non-empty. False after reporting.
+bool snapshotName(Session::Impl& s, const JsonNode& params, const std::string& name, std::string_view what,
+                  DecodeContext& ctx) {
+    if (!name.empty()) return true;
+    ctx.error("E_COMMAND", params, std::string(what) + " needs a non-empty \"name\"", "{\"name\": \"base\"}");
+    return badParams(s);
 }
 
-bool worldSnapshot(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+bool worldSnapshot(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
-    std::string_view name;
-    if (!snapshotName(doc, params, ctx, "world.snapshot params", name)) return false;
-    auto it = s.snapshots.find(name);
-    if (it == s.snapshots.end()) it = s.snapshots.emplace(std::string(name), ecs::Snapshot{}).first;
+    WorldSnapshotParams p;
+    if (!decodeParams(s, params, ctx, p) || !snapshotName(s, params, p.name, "world.snapshot", ctx)) return false;
+    auto it = s.snapshots.find(p.name);
+    if (it == s.snapshots.end()) it = s.snapshots.emplace(p.name, ecs::Snapshot{}).first;
     ecs::takeSnapshot(s.world, s.types, it->second, s.frame);   // reuses the old snapshot's memory
     const std::size_t rows = it->second.rows(), bytes = it->second.bytes();
     out.beginObject();
-    out.key("name"); out.string(name);
+    out.key("name"); out.string(p.name);
     out.key("entities"); out.uint64(rows);
     out.key("bytes"); out.uint64(bytes);
     out.endObject();
@@ -307,16 +323,16 @@ bool worldSnapshot(Session::Impl& s, const JsonDocument& doc, const JsonNode& pa
 
 bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                   JsonWriter& out) {
-    std::string_view name;
-    if (!snapshotName(doc, params, ctx, "world.restore params", name)) return false;
-    const auto it = s.snapshots.find(name);
+    WorldRestoreParams p;
+    if (!decodeParams(s, params, ctx, p) || !snapshotName(s, params, p.name, "world.restore", ctx)) return false;
+    const auto it = s.snapshots.find(p.name);
     if (it == s.snapshots.end()) {
         std::vector<std::string_view> names;
         for (const auto& [n, snap] : s.snapshots) names.push_back(n);
         ctx.push("name");
-        ctx.error("E_SNAPSHOT_UNKNOWN", *doc.member(params, "name"), "no snapshot is named '" + std::string(name) + "'",
+        ctx.error("E_SNAPSHOT_UNKNOWN", *doc.member(params, "name"), "no snapshot is named '" + p.name + "'",
                   names.empty() ? "a name given to world.snapshot (none yet)" : reflect::oneOf(names),
-                  "\"" + std::string(name) + "\"", reflect::suggest(name, names));
+                  "\"" + p.name + "\"", reflect::suggest(p.name, names));
         ctx.pop();
         return false;
     }
@@ -331,91 +347,77 @@ bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& par
     return true;
 }
 
-// A string member that must be one of `allowed` (absent: `out` unchanged). False after reporting.
-bool optEnum(const JsonDocument& doc, const JsonNode& params, std::string_view key,
-             std::initializer_list<std::string_view> allowed, DecodeContext& ctx, std::string& out) {
-    std::string_view v;
-    if (!optString(doc, params, key, ctx, v)) return false;
-    if (!doc.member(params, key)) return true;
-    if (std::find(allowed.begin(), allowed.end(), v) == allowed.end()) {
-        const std::span<const std::string_view> names(allowed.begin(), allowed.size());
-        ctx.push(key);
-        ctx.error("E_ENUM", *doc.member(params, key), "'" + std::string(v) + "' is not a " + std::string(key),
-                  reflect::oneOf(names), "\"" + std::string(v) + "\"", reflect::suggest(v, names));
-        ctx.pop();
-        return false;
-    }
-    out = std::string(v);
-    return true;
-}
-
-bool renderCapture(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
-    if (!checkKeys(doc, params, {"path", "mode", "spp", "frames", "width", "height", "denoise", "post", "exposure"},
-                   "render.capture params", ctx))
-        return false;
-    RenderRequest r;
-    std::string_view path;
-    int64_t spp = r.spp, frames = r.frames, width = r.width, height = r.height;
-    if (!optString(doc, params, "path", ctx, path) ||
-        !optEnum(doc, params, "mode", {"deferred", "rt_realtime", "rt_offline"}, ctx, r.mode) ||
-        !optEnum(doc, params, "denoise", {"none", "oidn", "nrd", "atrous", "dlss"}, ctx, r.denoise) ||
-        !optInt(doc, params, "spp", ctx, 1, 65536, spp) || !optInt(doc, params, "frames", ctx, 0, 100000, frames) ||
-        !optInt(doc, params, "width", ctx, 16, 8192, width) || !optInt(doc, params, "height", ctx, 16, 8192, height))
-        return false;
-    if (path.empty()) {
+    RenderCaptureParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    if (p.path.empty()) {
         ctx.error("E_COMMAND", params, "render.capture needs a \"path\" for the PNG", "{\"path\": \"out.png\"}");
-        return false;
+        return badParams(s);
     }
-    if (const JsonNode* p = doc.member(params, "post")) {
-        ctx.push("post");
-        if (p->type != JsonType::Array) {
-            ctx.error("E_TYPE", *p, "expected an array of effect names", "[\"bloom\", \"taa\", \"ssao\"]", ctx.gotText(*p));
-            ctx.pop();
-            return false;
-        }
-        static constexpr std::string_view kEffects[] = {"bloom", "taa", "ssao"};
-        for (uint32_t i = 0; i < p->count; ++i) {
-            const JsonNode& e = doc.child(*p, i);
-            ctx.push(i);
-            if (e.type != JsonType::String || std::find(std::begin(kEffects), std::end(kEffects), e.text) == std::end(kEffects))
-                ctx.error("E_ENUM", e, "not a post effect", reflect::oneOf(kEffects), ctx.gotText(e),
-                          e.type == JsonType::String ? reflect::suggest(e.text, kEffects) : std::string());
-            else r.post.emplace_back(e.text);
-            ctx.pop();
-        }
-        ctx.pop();
-        if (!ctx.errors.empty()) return false;
-    }
-    if (const JsonNode* e = doc.member(params, "exposure")) {
+    if (p.exposure && !(*p.exposure > 0.0f)) {
         ctx.push("exposure");
-        float exposure = 0.0f;
-        const bool ok = reflect::readFloat(*e, ctx, exposure);
-        if (ok && !(exposure > 0.0f && exposure <= 64.0f))
-            ctx.error("E_RANGE", *e, "exposure is out of range", "in (0, 64]", std::string(e->text));
-        r.exposure = exposure;
+        ctx.error("E_RANGE", *ctx.doc.member(params, "exposure"), "exposure is out of range", "in (0, 64]",
+                  ctx.gotText(*ctx.doc.member(params, "exposure")));
         ctx.pop();
-        if (!ctx.errors.empty()) return false;
+        return badParams(s);
     }
     if (!s.render) {
         ctx.error("E_COMMAND", params, "this session has no renderer; render.capture needs a host with a GPU (ohao run)");
         return false;
     }
-    r.path = std::string(path);
-    r.spp = static_cast<int>(spp);
-    r.frames = static_cast<int>(frames);
-    r.width = static_cast<uint32_t>(width);
-    r.height = static_cast<uint32_t>(height);
+    std::string file;
+    if (!usePath(s, params, "path", p.path, PathUse::Write, ctx, file)) return false;
+    static constexpr const char* kModes[] = {"deferred", "rt_realtime", "rt_offline"};
+    static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "atrous", "dlss"};
+    static constexpr const char* kEffects[] = {"bloom", "taa", "ssao"};
+    RenderRequest r;
+    r.path = file;
+    r.mode = kModes[static_cast<int>(p.mode)];
+    r.spp = p.spp;
+    r.frames = p.frames;
+    r.width = static_cast<uint32_t>(p.width);
+    r.height = static_cast<uint32_t>(p.height);
+    r.denoise = kDenoisers[static_cast<int>(p.denoise)];
+    for (const PostEffect e : p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
+    r.exposure = p.exposure;
     RenderOutcome o = s.render(r);
     if (!o.errors.empty()) {
         reportAll(ctx, o.errors);
         return false;
     }
     out.beginObject();
-    out.key("path"); out.string(r.path);
+    out.key("path"); out.string(p.path);
     out.key("frames"); out.int64(o.frames);
     out.key("ms"); out.float32(static_cast<float>(o.ms));
     if (o.validationMessages) { out.key("validation"); out.uint64(*o.validationMessages); }
+    out.endObject();
+    return true;
+}
+
+bool logRead(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    LogReadParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    std::optional<log::Channel> channel;
+    if (p.channel) channel = static_cast<log::Channel>(*p.channel);
+    const log::Page page = log::read(static_cast<uint64_t>(p.since.value_or(0)), static_cast<log::Level>(p.level),
+                                     channel, static_cast<std::size_t>(p.limit));
+    out.beginObject();
+    out.key("lines");
+    out.beginArray();
+    for (const log::Record& r : page.lines) {
+        out.beginObject();
+        out.key("seq"); out.uint64(r.seq);
+        out.key("t"); out.float32(static_cast<float>(r.t));
+        out.key("level"); out.string(log::levelName(r.level));
+        out.key("channel"); out.string(log::channelName(r.channel));
+        out.key("msg"); out.string(r.msg);
+        if (r.repeat > 1) { out.key("repeat"); out.uint64(r.repeat); }
+        out.endObject();
+    }
+    out.endArray();
+    out.key("next"); out.uint64(page.next);
+    if (page.dropped) { out.key("dropped"); out.uint64(page.dropped); }
     out.endObject();
     return true;
 }
@@ -425,23 +427,38 @@ struct MethodEntry {
     MethodFn fn;
 };
 constexpr MethodEntry kDispatch[] = {
-    {"schema.get", schemaGet},       {"scene.validate", sceneValidate}, {"scene.load", sceneLoad},
-    {"scene.save", sceneSave},       {"world.info", worldInfo},         {"world.summary", methodSummary},
-    {"world.query", methodQuery},    {"world.apply", methodApply},      {"world.step", worldStep},
-    {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore}, {"render.capture", renderCapture},
+    {"engine.info", engineInfo},     {"schema.get", schemaGet},         {"scene.validate", sceneValidate},
+    {"scene.load", sceneLoad},       {"scene.save", sceneSave},         {"world.info", worldInfo},
+    {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply},
+    {"world.step", worldStep},       {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore},
+    {"render.capture", renderCapture}, {"log.read", logRead},
 };
-static_assert(std::size(kDispatch) == std::size(kMethods));
 
-std::string errorEnvelope(std::vector<Diagnostic>& errors) {
+const MethodEntry* findMethod(std::string_view name) {
+    const auto it = std::find_if(std::begin(kDispatch), std::end(kDispatch),
+                                 [&](const MethodEntry& e) { return e.name == name; });
+    return it == std::end(kDispatch) ? nullptr : it;
+}
+
+Diagnostic unknownMethod(std::string_view method) {
+    std::vector<std::string_view> names;
+    for (const auto& e : kDispatch) names.push_back(e.name);
+    Diagnostic d;
+    d.code = "E_METHOD";
+    d.message = "no method is named '" + std::string(method) + "'";
+    d.expected = reflect::oneOf(names);
+    d.got = "\"" + std::string(method) + "\"";
+    d.suggestion = reflect::suggest(method, names);
+    return d;
+}
+
+void writeErrorObject(JsonWriter& w, std::vector<Diagnostic>& errors) {
     if (errors.empty()) {
         Diagnostic d;
         d.code = "E_COMMAND";
         d.message = "the request failed without a diagnostic";
         errors.push_back(std::move(d));
     }
-    JsonWriter w(256);
-    w.beginObject();
-    w.key("error");
     w.beginObject();
     w.key("code"); w.string(errors.front().code);
     w.key("message");
@@ -450,13 +467,45 @@ std::string errorEnvelope(std::vector<Diagnostic>& errors) {
     w.key("data");
     writeDiagnostics(w, errors, kMaxErrorData);
     w.endObject();
+}
+
+std::string errorEnvelope(std::vector<Diagnostic>& errors) {
+    JsonWriter w(256);
+    w.beginObject();
+    w.key("error");
+    writeErrorObject(w, errors);
     w.endObject();
     return w.take();
 }
 
 } // namespace
 
-std::span<const reflect::MethodDoc> methods() noexcept { return kMethods; }
+std::span<const reflect::MethodDoc> methods() {
+    static const std::vector<reflect::MethodDoc> table = buildMethods();
+    return table;
+}
+
+int exitClass(std::string_view code) noexcept {
+    if (code == "E_ASSET_NOT_FOUND" || code == "E_ASSET_INVALID" || code == "E_MESH_INVALID") return 2;
+    if (code == "E_RENDER" || code == "E_INTERNAL") return 3;
+    return 1;
+}
+
+std::string_view hostKindName(HostKind k) noexcept {
+    switch (k) {
+    case HostKind::Cli: return "cli";
+    case HostKind::Headless: return "headless";
+    case HostKind::Window: return "window";
+    case HostKind::None: break;
+    }
+    return "none";
+}
+
+std::string errorObject(std::vector<Diagnostic> errors) {
+    JsonWriter w(256);
+    writeErrorObject(w, errors);
+    return w.take();
+}
 
 // ---- helpers --------------------------------------------------------------------------
 
@@ -465,6 +514,27 @@ std::string hex16(uint64_t id) {
     std::string s(16, '0');
     for (int i = 15; i >= 0; --i, id >>= 4) s[static_cast<std::size_t>(i)] = kDigits[id & 15u];
     return s;
+}
+
+bool usePath(Session::Impl& s, const JsonNode& params, std::string_view key, std::string_view path, PathUse use,
+             DecodeContext& ctx, std::string& resolved) {
+    if (!s.paths) {
+        resolved = std::string(path);
+        return true;
+    }
+    std::string why;
+    const auto p = resolvePath(*s.paths, path, use, why);
+    if (p.empty()) {
+        ctx.push(key);
+        ctx.error("E_ACCESS", *ctx.doc.member(params, key), why,
+                  use == PathUse::Read ? "a project-relative path with '/', inside the root"
+                                       : "a project-relative path with '/', inside the output directory",
+                  "\"" + std::string(path) + "\"");
+        ctx.pop();
+        return false;
+    }
+    resolved = p.string();
+    return true;
 }
 
 bool checkKeys(const JsonDocument& doc, const JsonNode& obj, std::initializer_list<std::string_view> allowed,
@@ -582,7 +652,7 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t) : world(w), t
     tName = t.find<ecs::Name>();
     tTransform = t.find<ecs::Transform>();
     tParent = t.find<ecs::Parent>();
-    schemaHash = reflect::schemaHash(t, kMethods);
+    schemaHash = reflect::schemaHash(t, methods());
 }
 
 Session::Session(ecs::World& world, const reflect::TypeRegistry& types)
@@ -591,21 +661,66 @@ Session::~Session() = default;
 
 ecs::World& Session::world() noexcept { return m->world; }
 uint64_t Session::frame() const noexcept { return m->frame; }
+uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 void Session::setRenderHandler(RenderHandler handler) { m->render = std::move(handler); }
+void Session::setHostKind(HostKind host) noexcept { m->host = host; }
+void Session::setPathPolicy(PathPolicy policy) { m->paths = normalizePolicy(std::move(policy)); }
+
+namespace {
+
+// Runs one method, writing its result value into `out`. The status says how it ended;
+// errors are left in ctx.
+CallStatus run(Session::Impl& m, const MethodEntry& method, const JsonDocument& doc, const JsonNode& params,
+               DecodeContext& ctx, JsonWriter& out, const CallControl* control) {
+    if (params.type != JsonType::Object) {
+        ctx.error("E_TYPE", params, "params is an object", "object", ctx.gotText(params));
+        return CallStatus::BadParams;
+    }
+    m.control = control;
+    m.paramsFailed = false;
+    m.cancelled = false;
+    ecs::WorldEntityIds ids(m.world);
+    out.entityIds = &ids;
+    const bool ok = method.fn(m, doc, params, ctx, out) && ctx.errors.empty();
+    out.entityIds = nullptr;
+    m.control = nullptr;
+    if (m.cancelled) return CallStatus::Cancelled;
+    if (!ok) return m.paramsFailed ? CallStatus::BadParams : CallStatus::Failed;
+    return CallStatus::Ok;
+}
+
+} // namespace
+
+CallOutcome Session::call(std::string_view method, const JsonDocument& doc, const JsonNode& params,
+                          const CallControl* control) {
+    CallOutcome o;
+    const MethodEntry* found = findMethod(method);
+    if (!found) {
+        o.status = CallStatus::UnknownMethod;
+        o.errors.push_back(unknownMethod(method));
+        return o;
+    }
+    DecodeContext ctx(doc);
+    JsonWriter out(256);
+    o.status = run(*m, *found, doc, params, ctx, out, control);
+    if (o.status == CallStatus::Ok) o.result = out.take();
+    else if (o.status != CallStatus::Cancelled) {
+        o.errors = std::move(ctx.errors);
+        if (o.errors.empty()) {
+            Diagnostic d;
+            d.code = "E_COMMAND";
+            d.message = "the request failed without a diagnostic";
+            o.errors.push_back(std::move(d));
+        }
+    }
+    return o;
+}
 
 std::string Session::call(std::string_view method, std::string_view params) {
-    const auto found = std::find_if(std::begin(kDispatch), std::end(kDispatch),
-                                    [&](const MethodEntry& e) { return e.name == method; });
-    if (found == std::end(kDispatch)) {
-        std::vector<std::string_view> names;
-        for (const auto& e : kDispatch) names.push_back(e.name);
-        std::vector<Diagnostic> errs(1);
-        errs[0].code = "E_METHOD";
-        errs[0].message = "no method is named '" + std::string(method) + "'";
-        errs[0].expected = reflect::oneOf(names);
-        errs[0].got = "\"" + std::string(method) + "\"";
-        errs[0].suggestion = reflect::suggest(method, names);
+    const MethodEntry* found = findMethod(method);
+    if (!found) {
+        std::vector<Diagnostic> errs{unknownMethod(method)};
         return errorEnvelope(errs);
     }
     auto parsed = m->paramsParser.parse(params.empty() ? std::string_view("{}") : params);
@@ -615,17 +730,11 @@ std::string Session::call(std::string_view method, std::string_view params) {
     }
     const JsonDocument& doc = *parsed.value();
     DecodeContext ctx(doc);
-    if (doc.root().type != JsonType::Object) {
-        ctx.error("E_TYPE", doc.root(), "params is an object", "object", ctx.gotText(doc.root()));
-        return errorEnvelope(ctx.errors);
-    }
     // The result is written inside the envelope directly; on failure it is discarded.
-    ecs::WorldEntityIds ids(m->world);
     JsonWriter out(256);
-    out.entityIds = &ids;
     out.beginObject();
     out.key("result");
-    if (!found->fn(*m, doc, doc.root(), ctx, out) || !ctx.errors.empty()) return errorEnvelope(ctx.errors);
+    if (run(*m, *found, doc, doc.root(), ctx, out, nullptr) != CallStatus::Ok) return errorEnvelope(ctx.errors);
     out.endObject();
     return out.take();
 }

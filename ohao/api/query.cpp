@@ -20,16 +20,6 @@ struct Projection {
     std::vector<const FieldInfo*> fields;
 };
 
-const JsonNode* arrayParam(const JsonDocument& doc, const JsonNode& params, std::string_view key, DecodeContext& ctx) {
-    const JsonNode* n = doc.member(params, key);
-    if (n && n->type != JsonType::Array) {
-        ctx.push(key);
-        ctx.error("E_TYPE", *n, "expected an array", "array", ctx.gotText(*n));
-        ctx.pop();
-    }
-    return n && n->type == JsonType::Array ? n : nullptr;
-}
-
 bool parseProjection(Session::Impl& s, const JsonDocument& doc, const JsonNode& fields, DecodeContext& ctx,
                      std::vector<Projection>& out) {
     const std::size_t before = ctx.errors.size();
@@ -80,22 +70,17 @@ bool parseProjection(Session::Impl& s, const JsonDocument& doc, const JsonNode& 
 
 bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                  JsonWriter& out) {
-    if (!checkKeys(doc, params, {"ids", "names", "nameContains", "has", "fields", "limit", "offset", "defaults"},
-                   "world.query params", ctx))
-        return false;
-    int64_t limit = 50, offset = 0;
-    bool defaults = false;
-    std::string_view contains;
-    if (!optInt(doc, params, "limit", ctx, 0, 100'000, limit) ||
-        !optInt(doc, params, "offset", ctx, 0, std::numeric_limits<int32_t>::max(), offset) ||
-        !optBool(doc, params, "defaults", ctx, defaults) || !optString(doc, params, "nameContains", ctx, contains))
-        return false;
+    WorldQueryParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    const int64_t limit = p.limit, offset = p.offset;
+    const bool defaults = p.defaults;
+    const std::string_view contains = p.nameContains ? std::string_view(*p.nameContains) : std::string_view();
 
-    const JsonNode* idsNode = arrayParam(doc, params, "ids", ctx);
-    const JsonNode* namesNode = arrayParam(doc, params, "names", ctx);
-    const JsonNode* hasNode = arrayParam(doc, params, "has", ctx);
-    const JsonNode* fieldsNode = arrayParam(doc, params, "fields", ctx);
-    if (!ctx.errors.empty()) return false;
+    // The arrays' elements are strings (decodeParams checked); the nodes give each one's path.
+    const JsonNode* idsNode = p.ids ? doc.member(params, "ids") : nullptr;
+    const JsonNode* namesNode = p.names ? doc.member(params, "names") : nullptr;
+    const JsonNode* hasNode = p.has ? doc.member(params, "has") : nullptr;
+    const JsonNode* fieldsNode = p.fields ? doc.member(params, "fields") : nullptr;
 
     std::vector<uint64_t> ids;
     if (idsNode) {
@@ -297,11 +282,9 @@ void vec3(JsonWriter& w, const glm::vec3& v) {
 
 bool methodSummary(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
-    if (!checkKeys(doc, params, {"depth", "maxChildren", "maxNodes"}, "world.summary params", ctx)) return false;
-    int64_t depth = 2, maxChildren = 8, maxNodes = 64;
-    if (!optInt(doc, params, "depth", ctx, 0, 64, depth) || !optInt(doc, params, "maxChildren", ctx, 1, 10'000, maxChildren) ||
-        !optInt(doc, params, "maxNodes", ctx, 1, 100'000, maxNodes))
-        return false;
+    WorldSummaryParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    const int64_t depth = p.depth, maxChildren = p.maxChildren, maxNodes = p.maxNodes;
 
     const entt::registry& reg = s.world.registry();
     std::vector<std::pair<uint64_t, entt::entity>> rootOrder;

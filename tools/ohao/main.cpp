@@ -14,6 +14,11 @@
 //   ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
+//   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
+//                 the engine as a JSON-RPC 2.0 / MCP server on stdio (headless, lockstep): native
+//                 methods and MCP tools over newline-delimited JSON until stdin closes (ohao/rpc).
+//                 Paths in params are project-relative; writes go under --out (default
+//                 <root>/agent_out). Exit 0 when stdin closes; 1 if the scene does not load.
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
@@ -24,6 +29,7 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
@@ -33,13 +39,8 @@
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
 #include "reflect/schema.hpp"
-
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
+#include "rpc/server.hpp"
+#include "rpc/transport.hpp"
 
 #include <cstdio>
 #include <exception>
@@ -70,12 +71,8 @@ const reflect::TypeRegistry& engineTypes() {
     return r;
 }
 
-// The exit class of an error code.
-int exitFor(std::string_view code) {
-    if (code == "E_ASSET_NOT_FOUND" || code == "E_ASSET_INVALID" || code == "E_MESH_INVALID") return kAsset;
-    if (code == "E_RENDER" || code == "E_INTERNAL") return kInternal;
-    return kInput;
-}
+// The exit class of an error code (shared with the server's JSON-RPC error codes).
+int exitFor(std::string_view code) { return api::exitClass(code); }
 
 // {"error": {...}} with one diagnostic.
 std::string errorDoc(std::string_view code, const std::string& message) {
@@ -98,8 +95,9 @@ std::string errorDoc(std::string_view code, const std::string& message) {
     return w.take();
 }
 
-// stdout carries only JSON: The engine logs to stdout (std::cout, printf), so main()
-// keeps a private copy of the real stdout for the JSON and points descriptor 1 at stderr.
+// stdout carries only JSON. The engine logs to stderr, but third-party code (Jolt, NRD,
+// assimp, the driver) may print, so main() keeps a private copy of the real stdout for
+// the JSON and points descriptor 1 at stderr.
 FILE* g_json = stdout;
 
 void emit(const std::string& json) {
@@ -109,18 +107,7 @@ void emit(const std::string& json) {
 }
 
 void separateLogsFromJson() {
-#ifdef _WIN32
-    std::fflush(stdout);
-    const int json = _dup(_fileno(stdout));
-    if (json < 0 || _dup2(_fileno(stderr), _fileno(stdout)) != 0) return;
-    _setmode(json, _O_BINARY);   // a dup keeps the text mode, which would write \r\n
-    if (FILE* f = _fdopen(json, "wb")) g_json = f;
-#else
-    std::fflush(stdout);
-    const int json = dup(fileno(stdout));
-    if (json < 0 || dup2(fileno(stderr), fileno(stdout)) < 0) return;
-    if (FILE* f = fdopen(json, "w")) g_json = f;
-#endif
+    if (FILE* f = rpc::separateStdout()) g_json = f;
 }
 
 // A session reply's exit class: 0 for a result, else from its error code. For a
@@ -278,6 +265,7 @@ struct Context {
         world = std::make_unique<ecs::World>();
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
+        session->setHostKind(api::HostKind::Cli);
         render->bind(*world);
         session->setRenderHandler([r = render.get()](const api::RenderRequest& req) { return r->capture(req); });
     }
@@ -637,10 +625,65 @@ int cmdDoctor(const Args& a) {
     return doctor::passed(checks) ? kOk : kInput;
 }
 
+// The engine as a server over stdio until stdin closes (headless, lockstep). Nothing is
+// printed on stdout but protocol messages; a scene that does not load is reported on
+// stderr before serving starts.
+int cmdServe(const Args& a, const std::vector<std::string>& allowPaths) {
+    if (a.positional.size() > 1) return usage("serve takes at most one scene");
+    long long maxMessage = 64ll << 20;
+    std::string err;
+    if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
+    if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
+    if (has(a, "--log-level")) {
+        const auto level = log::parseLevel(opt(a, "--log-level"));
+        if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
+        log::setLevel(*level);
+        log::stderrSink()->level = *level == log::Level::Off ? log::Level::Error : *level;
+        if (*level == log::Level::Off) log::removeSink(log::stderrSink().get());
+    }
+    const std::string root = opt(a, "--root", ".");
+    Context c(root);
+    c.session->setHostKind(api::HostKind::Headless);
+    api::PathPolicy policy;
+    policy.root = root;
+    policy.out = opt(a, "--out");
+    for (const auto& p : allowPaths) policy.allowed.emplace_back(p);
+    c.session->setPathPolicy(std::move(policy));
+    if (!a.positional.empty()) {
+        if (std::string e = loadScene(c, a.positional[0], opt(a, "--seed")); !e.empty()) {
+            OHAO_LOG(Error, rpc, "serve: the scene did not load: {}", e);
+            return replyExit(e);
+        }
+    }
+    rpc::StdioTransport transport(g_json);
+    rpc::ServerOptions options;
+    options.maxMessage = static_cast<std::size_t>(maxMessage);
+    rpc::Server server(*c.session, transport, options);
+    server.run();
+    return kOk;
+}
+
 int run(int argc, char** argv) {
     if (argc < 2)
-        return usage("usage: ohao <schema|validate|fmt|apply|query|summary|run|doctor> ... (see tools/ohao/main.cpp)");
+        return usage(
+            "usage: ohao <schema|validate|fmt|apply|query|summary|run|doctor|serve> ... (see tools/ohao/main.cpp)");
     const std::string_view cmd = argv[1];
+    if (cmd == "serve") {
+        // --allow-path may be given more than once; the rest parses as usual.
+        std::vector<std::string> allow;
+        std::vector<char*> rest{argv[0], argv[1]};
+        for (int i = 2; i < argc; ++i) {
+            if (std::string_view(argv[i]) == "--allow-path") {
+                if (i + 1 >= argc) return usage("--allow-path needs a value");
+                allow.emplace_back(argv[++i]);
+            } else {
+                rest.push_back(argv[i]);
+            }
+        }
+        const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2, {},
+                                 {"--root", "--out", "--seed", "--log-level", "--max-message"});
+        return a.error.empty() ? cmdServe(a, allow) : usage(a.error);
+    }
     if (cmd == "schema") {
         const Args a = parseArgs(argc, argv, 2, {}, {"-o"});
         return a.error.empty() ? cmdSchema(a) : usage(a.error);
@@ -677,7 +720,7 @@ int run(int argc, char** argv) {
         return a.error.empty() ? cmdDoctor(a) : usage(a.error);
     }
     return usage("unknown command '" + std::string(cmd) +
-                 "'; one of: schema, validate, fmt, apply, query, summary, run, doctor");
+                 "'; one of: schema, validate, fmt, apply, query, summary, run, doctor, serve");
 }
 
 } // namespace

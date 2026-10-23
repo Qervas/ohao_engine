@@ -26,7 +26,9 @@ enum class Kind : uint8_t {
     Vec2, Vec3, Vec4, Quat,
     Enum, Struct, Vector, Optional, Variant,
     AssetRef, EntityRef,
-    Mat4,   // 16 floats, column-major (glm order)
+    Mat4,    // 16 floats, column-major (glm order)
+    Int64,   // a JSON integer (UInt64 is a 16-hex-digit string)
+    Json,    // any JSON value, kept as is (JsonRef): checked by another decoder
 };
 
 struct TypeInfo;
@@ -60,6 +62,7 @@ struct FieldAttrs {
     bool angle{false};
     bool hidden{false};
     bool readOnly{false};
+    bool required{false};             // must be given (method params; the schema says so)
     std::vector<std::string> aliases;  // older names accepted on load
 };
 
@@ -151,8 +154,9 @@ void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const voi
 [[nodiscard]] bool equalStruct(const void* a, const void* b, const TypeInfo& t);
 // Decodes an object into `object` (already holding defaults): unknown members, duplicate
 // members, type errors and limit violations are reported to ctx; missing members keep
-// their defaults.
-void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx);
+// their defaults. A member named `ignoredKey` (if given) is skipped, not reported.
+void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx,
+                std::string_view ignoredKey = {});
 // Decodes one member of `object` (a `t`) from `n` and checks its limits, exactly as
 // readStruct does per member. False when it reported an error.
 bool readField(void* object, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx);
@@ -161,6 +165,8 @@ bool readField(void* object, const TypeInfo& t, const FieldInfo& f, const JsonNo
 [[nodiscard]] std::string typeName(const TypeDesc& d);
 // Kinds that carry numbers and so take limits and units.
 [[nodiscard]] bool isNumeric(Kind k) noexcept;
+// Numeric kinds and optionals/vectors of them: what min()/max() apply to.
+[[nodiscard]] bool takesLimits(const TypeDesc& d) noexcept;
 [[nodiscard]] bool takesUnit(const TypeDesc& d) noexcept;
 
 } // namespace ohao::reflect

@@ -69,6 +69,7 @@ public:
     TypeBuilder& angle();
     TypeBuilder& hidden();
     TypeBuilder& readOnly();
+    TypeBuilder& required();   // must be given (method params)
     TypeBuilder& alias(std::string_view oldName);
 
 private:
@@ -328,7 +329,7 @@ TypeBuilder<T>& TypeBuilder<T>::unitless() {
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::min(double v) {
     if (auto* f = last("min")) {
-        if (!isNumeric(f->type->kind)) { m_r.error("field " + m_t.name + "." + f->name + ": min on a non-numeric field"); return *this; }
+        if (!takesLimits(*f->type)) { m_r.error("field " + m_t.name + "." + f->name + ": min on a non-numeric field"); return *this; }
         f->attrs.limits.min = v;
         checkDefaultInRange(*f);
     }
@@ -338,7 +339,7 @@ TypeBuilder<T>& TypeBuilder<T>::min(double v) {
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::max(double v) {
     if (auto* f = last("max")) {
-        if (!isNumeric(f->type->kind)) { m_r.error("field " + m_t.name + "." + f->name + ": max on a non-numeric field"); return *this; }
+        if (!takesLimits(*f->type)) { m_r.error("field " + m_t.name + "." + f->name + ": max on a non-numeric field"); return *this; }
         f->attrs.limits.max = v;
         checkDefaultInRange(*f);
     }
@@ -391,6 +392,7 @@ TypeBuilder<T>& TypeBuilder<T>::angle() {
 
 template <class T> TypeBuilder<T>& TypeBuilder<T>::hidden() { if (auto* f = last("hidden")) f->attrs.hidden = true; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::readOnly() { if (auto* f = last("readOnly")) f->attrs.readOnly = true; return *this; }
+template <class T> TypeBuilder<T>& TypeBuilder<T>::required() { if (auto* f = last("required")) f->attrs.required = true; return *this; }
 
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::alias(std::string_view oldName) {

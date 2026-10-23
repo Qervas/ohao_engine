@@ -1,3 +1,5 @@
+# `ohao serve`'s default output directory (writes from agents)
+agent_out/
 # Build directories
 build/
 */build/

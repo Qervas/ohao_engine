@@ -7,6 +7,7 @@ add_subdirectory(audio)
 add_subdirectory(physics)
 add_subdirectory(ecs)
 add_subdirectory(api)
+add_subdirectory(rpc)
 add_subdirectory(runtime)
 
 # Engine builds as static libraries. Link against them from examples/ or tests/.

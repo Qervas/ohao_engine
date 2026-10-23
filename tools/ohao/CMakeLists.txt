@@ -14,7 +14,7 @@ endif()
 
 add_executable(ohao main.cpp doctor.cpp doctor.hpp)
 target_compile_features(ohao PRIVATE cxx_std_20)
-target_link_libraries(ohao PRIVATE ohao_host)
+target_link_libraries(ohao PRIVATE ohao_host ohao_rpc)
 if(MSVC)
     target_link_options(ohao PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
 endif()

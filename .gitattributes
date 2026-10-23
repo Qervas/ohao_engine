@@ -12,3 +12,6 @@ tests/scenes/** text eol=lf
 *.scene.json text eol=lf
 # The CLI's expected stdout and the inputs its cases feed it (sub-project 3, step 9).
 tests/cli/** text eol=lf
+# `ohao serve`'s scripted sessions and their expected stdout (sub-project 4, step 5).
+tests/serve/sessions/** text eol=lf
+tests/serve/expected/** text eol=lf

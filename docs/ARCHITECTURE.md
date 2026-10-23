@@ -19,7 +19,8 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_scene`, `ohao_core`, Vulkan, VMA | device and queues, `VulkanRenderer` (the facade), frame resources, bindless textures, the allocator |
 | `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_scene`, `ohao_core` (NRD, OIDN, NGX optional) | `RenderScene` (the persistent GPU scene), deferred passes, path tracers, denoisers, the render graph |
 | `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, EnTT (simdjson privately) | `World`, components, systems (spin, transform, instantiate, render extract), the scene codec, snapshots, the scene view |
-| `ohao_api` | `api/` | `ohao_ecs`, `ohao_reflect` | `Session`: the method table, edit commands, queries. GPU-free. |
+| `ohao_api` | `api/` | `ohao_ecs`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox. GPU-free. |
+| `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams and the MCP adapter (`ohao serve`): reader and engine threads, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
 | `ohao_runtime` | `runtime/` | `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | the windowed `Application` loop, fixed-step clock, input actions, swapchain |
 | `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics and audio, not yet driven by the ECS |
 | `ohao_host` | `tools/ohao/` | `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the GPU side of `render.capture` |
@@ -172,11 +173,23 @@ Followed for `entity.duplicate`. A command is one op in a `world.apply` batch; a
 4. **Docs:** the command table in `docs/agents/ohao-cli.md`; a CLI case in
    `tests/cli/cases.json` if the CLI exposes something new.
 
-A new **method** instead: a `MethodDoc` in `kMethods` and a handler in `kDispatch`
-(`ohao/api/session.cpp`). Then update:
-- the method count in `t09_method_table_dispatch_and_errors`;
-- the CLI goldens (the catalogue lists methods);
-- the method table in the CLI guide.
+A new **method** instead:
+1. **Its params struct** in `ohao/api/params.hpp`, registered in `params.cpp` with a doc
+   on every field, limits, units and `.required()` where a member must be given. Free
+   JSON that another decoder checks is a `reflect::JsonRef`. This one definition is the
+   validation (`decodeParams`), the catalogue's JSON Schema and the MCP tool's input
+   schema.
+2. **The handler** `bool name(Session::Impl&, const JsonDocument&, const JsonNode& params,
+   DecodeContext&, JsonWriter& out)` in `ohao/api/session.cpp`: first
+   `decodeParams(s, params, ctx, p)`; a rule on the params alone fails with
+   `badParams(s)` (JSON-RPC -32602), anything else is a domain error. A path in params
+   goes through `usePath` (the server's sandbox). A long loop checks
+   `s.cancelRequested()` between whole steps and reports `s.control->progress`.
+3. **Register it:** a `MethodDoc` in `buildMethods` and the handler in `kDispatch`.
+4. Then update the method count in `t09_method_table_dispatch_and_errors`, the CLI and
+   serve goldens (the catalogue and `tools/list` list methods; `schemaHash` changes), an
+   example in `EXAMPLES` of `tests/serve/check_serve.py`, and the method table in the
+   CLI guide. `rpc_tests` keeps `tools/list` under 24 KB.
 
 ```console
 $ build/Release/api_tests.exe > /dev/null

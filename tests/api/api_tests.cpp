@@ -4,7 +4,9 @@
 //
 // Everything goes through Session::call with JSON text, exactly as the CLI and the future
 // RPC server will.
+#include "api/params.hpp"
 #include "api/session.hpp"
+#include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
@@ -168,11 +170,11 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 12, "twelve methods");
+    CHECK(api::methods().size() == 14, "fourteen methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
-        CHECK(!m.params.empty() && !m.result.empty() && !m.doc.empty(), "and is documented");
+        CHECK(m.params && !m.result.empty() && !m.doc.empty(), "and is documented, with a params struct");
     }
 }
 
@@ -964,6 +966,147 @@ static void bench_apply_and_query_10k() {
 
 // ---- main --------------------------------------------------------------------------------
 
+// ---- sub-project 4, step 5: params structs, new methods, the sandbox, cancellation -------
+
+// Every method's params are a documented struct whose schema refuses unknown members.
+static void sp4_t08_params_structs_lint_clean_and_close_their_schemas() {
+    const auto issues = reflect::lint(api::paramsRegistry());
+    for (const auto& i : issues) std::printf("\n      %s", i.c_str());
+    CHECK(issues.empty(), "the params registry lints clean (docs, units, registration)");
+    for (const auto& m : api::methods()) {
+        JsonWriter w;
+        reflect::writeParamsSchema(w, *m.params);
+        CHECK(w.str().find("\"additionalProperties\":false") != std::string::npos, "closed schemas");
+        CHECK(w.str().find("$ref") == std::string::npos, "self-contained schemas");
+    }
+    World w;
+    api::Session s(w, engineTypes());
+    const Reply r(s.call("world.step", R"({"frames":2,"framez":3})"));
+    CHECK(r.code() == "E_UNKNOWN_FIELD" && r.str("/error/data/0/path") == "/framez" &&
+              r.str("/error/data/0/suggestion") == "frames",
+          "an unknown param: E_UNKNOWN_FIELD with a suggestion");
+    CHECK(Reply(s.call("world.step", R"({"frames":2000000})")).code() == "E_RANGE", "the step cap holds");
+    CHECK(Reply(s.call("render.capture", R"({"path":"x.png","mode":"deferd"})")).str("/error/data/0/suggestion") ==
+              "deferred",
+          "enums suggest");
+    CHECK(Reply(s.call("world.apply", "{}")).code() == "E_COMMAND", "required members are required");
+    const reflect::JsonDocument meta = parseJson(R"({"frames":1,"_meta":{"progressToken":7}})").value();
+    CHECK(s.call("world.step", meta, meta.root()).status == api::CallStatus::Ok, "MCP's _meta is ignored");
+    const reflect::JsonDocument bad = parseJson(R"({"frames":"x"})").value();
+    CHECK(s.call("world.step", bad, bad.root()).status == api::CallStatus::BadParams, "a params error is BadParams");
+    const reflect::JsonDocument missing = parseJson(R"({"name":"nope"})").value();
+    CHECK(s.call("world.restore", missing, missing.root()).status == api::CallStatus::Failed,
+          "a domain error is Failed");
+    CHECK(s.call("world.nope", bad, bad.root()).status == api::CallStatus::UnknownMethod, "and E_METHOD UnknownMethod");
+}
+
+static void sp4_engine_info_and_log_read() {
+    World w;
+    api::Session s(w, engineTypes());
+    s.setHostKind(api::HostKind::Headless);
+    const Reply info(s.call("engine.info"));
+    CHECK(info.str("/result/protocolVersion") == "1" && info.str("/result/schemaHash").size() == 16 &&
+              info.str("/result/host") == "headless" && info.str("/result/time/mode") == "lockstep",
+          "engine.info: protocol version, schemaHash, host, time");
+    CHECK(Reply(s.call("world.info")).str("/result/host") == "headless", "world.info reports the host");
+
+    OHAO_LOG(Warn, api, "api test marker {}", 1);
+    const Reply page(s.call("log.read", R"({"level":"warn","channel":"api","limit":1000})"));
+    const JsonNode* lines = page.at("/result/lines");
+    CHECK(lines && lines->count >= 1, "log.read returns the record");
+    const std::string last = "/result/lines/" + std::to_string(lines->count - 1);
+    CHECK(page.str(last + "/msg") == "api test marker 1" && page.str(last + "/level") == "warn" &&
+              page.str(last + "/channel") == "api",
+          "with its level and channel");
+    const Reply after(s.call("log.read", "{\"since\":" + page.str("/result/next") + "}"));
+    CHECK(after.at("/result/lines") && after.at("/result/lines")->count == 0, "since pages past it");
+}
+
+static void sp4_scene_load_replace_clears_and_keeps_snapshots() {
+    World w;
+    api::Session s(w, engineTypes());
+    const std::string path = (kScenes / "v1" / "rooms.scene.json").generic_string();
+    CHECK(Reply(s.call("scene.load", "{\"path\":\"" + path + "\"}")).ok(), "first load");
+    CHECK(Reply(s.call("world.snapshot", R"({"name":"rooms"})")).ok(), "snapshot");
+    CHECK(Reply(s.call("scene.load", "{\"path\":\"" + path + "\"}")).code() == "E_WORLD_NOT_EMPTY",
+          "without replace the world must be empty");
+    CHECK(Reply(s.call("scene.load", R"({"text":"{\"format\":\"nope\"}","replace":true})")).code() == "E_FORMAT" &&
+              w.idCount() == 4,
+          "a scene that does not load leaves the world as it was");
+    const Reply again(s.call("scene.load", "{\"path\":\"" + path + "\",\"replace\":true}"));
+    CHECK(again.ok() && again.str("/result/entities") == "4" && w.idCount() == 4, "replace loads into a cleared world");
+    CHECK(Reply(s.call("world.restore", R"({"name":"rooms"})")).ok(), "snapshots survive a replace");
+}
+
+// Test 15 (paths part): the sandbox admits project-relative reads, writes under --out,
+// and exactly the --allow-path roots.
+static void sp4_t15_paths_are_confined_to_the_sandbox() {
+    const fs::path root = fs::path(OHAO_SOURCE_DIR) / "build" / ("api_sandbox_" + std::to_string(processId()));
+    fs::remove_all(root);
+    fs::create_directories(root / "scenes");
+    fs::create_directories(root / "allowA");
+    fs::create_directories(root / "allowAB");
+    fs::copy_file(kScenes / "v1" / "rooms.scene.json", root / "scenes" / "rooms.scene.json");
+    fs::copy_file(kScenes / "v1" / "rooms.scene.json", root / "allowAB" / "rooms.scene.json");
+    World w;
+    api::Session s(w, engineTypes());
+    s.setPathPolicy({root, {}, {root / "allowA"}});
+    const auto code = [&](const std::string& method, const std::string& params) {
+        return Reply(s.call(method, params)).code();
+    };
+    CHECK(code("scene.validate", R"({"path":"scenes/rooms.scene.json"})").empty(), "a project-relative read");
+    CHECK(code("scene.validate", "{\"path\":\"" + (root / "scenes" / "rooms.scene.json").generic_string() + "\"}") ==
+              "E_ACCESS",
+          "an absolute path outside the allowed roots");
+    CHECK(code("scene.validate", R"({"path":"scenes/../scenes/rooms.scene.json"})") == "E_ACCESS", "'..'");
+    CHECK(code("scene.validate", R"({"path":"scenes\\rooms.scene.json"})") == "E_ACCESS", "backslashes");
+    CHECK(code("scene.load", R"({"path":"scenes/rooms.scene.json"})").empty(), "load");
+    CHECK(code("scene.save", R"({"path":"scenes/out.scene.json"})") == "E_ACCESS", "a write outside the output dir");
+    CHECK(code("scene.save", R"({"path":"agent_out/sub/out.scene.json"})").empty() &&
+              fs::exists(root / "agent_out" / "sub" / "out.scene.json"),
+          "a write under the output dir (made on demand)");
+    CHECK(code("scene.save", "{\"path\":\"" + (root / "allowA" / "x.scene.json").generic_string() + "\"}").empty(),
+          "an absolute write inside an allowed root");
+    CHECK(code("scene.validate", "{\"path\":\"" + (root / "allowAB" / "rooms.scene.json").generic_string() +
+                                     "\"}") == "E_ACCESS",
+          "a sibling that shares the allowed root's prefix is outside it");
+    const Reply r(s.call("scene.save", R"({"path":"/etc/passwd"})"));
+    CHECK(r.code() == "E_ACCESS" && r.str("/error/data/0/path") == "/path", "E_ACCESS points at the member");
+    fs::remove_all(root);
+}
+
+// Test 7 (cancellation part): a cancelled world.step stops between whole steps.
+static void sp4_t07_cancel_leaves_whole_steps() {
+    const std::string spinner =
+        R"({"commands":[{"op":"entity.create","name":"Spinner","components":{"Spin":{"degreesPerSecond":37}}}]})";
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("world.apply", spinner)).ok(), "a spinning entity");
+    std::atomic<bool> cancel{false};
+    uint64_t reported = 0;
+    api::CallControl control;
+    control.cancel = &cancel;
+    control.progress = [&](uint64_t done, uint64_t total) {
+        reported = done;
+        if (done == 123 && total == 1'000'000) cancel = true;
+    };
+    const reflect::JsonDocument p = parseJson(R"({"frames":1000000})").value();
+    const api::CallOutcome o = s.call("world.step", p, p.root(), &control);
+    CHECK(o.status == api::CallStatus::Cancelled && o.errors.empty(), "the call reports Cancelled");
+    CHECK(s.frame() == 123 && reported == 123, "after exactly the steps that completed");
+    const auto rot = [](World& world) {
+        for (auto [e, n, t] : world.registry().view<const Name, const Transform>().each())
+            if (n.value == "Spinner") return t.rotation;
+        return glm::quat{};
+    };
+    World fresh;
+    api::Session f(fresh, engineTypes());
+    CHECK(Reply(f.call("world.apply", spinner)).ok() && Reply(f.call("world.step", R"({"frames":123})")).ok(),
+          "a fresh world stepped 123 times");
+    const glm::quat a = rot(w), b = rot(fresh);
+    CHECK(std::memcmp(&a, &b, sizeof a) == 0, "is bit-identical: no half step");
+}
+
 int main() {
     std::printf("api_tests\n");
     RUN(t09_method_table_dispatch_and_errors);
@@ -982,6 +1125,11 @@ int main() {
     RUN(t10_snapshot_and_restore_through_the_api);
     RUN(t11_validate_checks_assets_when_asked);
     RUN(t20_commands_keep_one_camera_and_environment);
+    RUN(sp4_t08_params_structs_lint_clean_and_close_their_schemas);
+    RUN(sp4_engine_info_and_log_read);
+    RUN(sp4_scene_load_replace_clears_and_keeps_snapshots);
+    RUN(sp4_t15_paths_are_confined_to_the_sandbox);
+    RUN(sp4_t07_cancel_leaves_whole_steps);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

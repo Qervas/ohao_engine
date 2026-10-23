@@ -89,7 +89,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 32> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 35> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -120,6 +120,9 @@ constexpr std::array<ErrorCodeInfo, 32> kCodes = {{
     {"E_MESH_INVALID", "A MeshSource that gives no usable geometry (InstantiateError)."},
     {"E_RENDER", "render.capture failed: no usable GPU, a frame that failed, or an image that could not be written."},
     {"E_INTERNAL", "An internal error in a tool (a bug); the operation did not complete (ohao exits with 3)."},
+    {"E_ACCESS", "A path outside the server's sandbox: absolute, with '..', or a write outside the output directory."},
+    {"E_STATE", "A method not allowed in the current time mode or host."},
+    {"E_REPLAY", "An input recording that does not match the world it is replayed on."},
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
     {"W_UNSAVEABLE_MESH", "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."},
 }};
@@ -443,13 +446,13 @@ std::string limitsText(const FieldInfo& f) {
         const Kind k = (f.type->kind == Kind::Vector || f.type->kind == Kind::Optional) && f.type->element
                            ? f.type->element->kind
                            : f.type->kind;
-        if (k == Kind::Int32 || k == Kind::UInt32) w.int64(static_cast<int64_t>(v));
+        if (k == Kind::Int32 || k == Kind::UInt32 || k == Kind::Int64) w.int64(static_cast<int64_t>(v));
         else w.float32(static_cast<float>(v));
         return w.take();
     };
     const auto& l = f.attrs.limits;
     std::string s = isNumeric(f.type->kind) && f.type->kind != Kind::Int32 && f.type->kind != Kind::UInt32 &&
-                            f.type->kind != Kind::Float
+                            f.type->kind != Kind::Int64 && f.type->kind != Kind::Float
                         ? "each component "
                         : "";
     if (l.min && l.max) return s + "in [" + num(*l.min) + ", " + num(*l.max) + "]";
@@ -476,7 +479,7 @@ int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexce
     return -1;
 }
 
-void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx) {
+void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx, std::string_view ignoredKey) {
     if (n.type != JsonType::Object) {
         ctx.error("E_TYPE", n, t.name + " must be an object", "object", ctx.gotText(n));
         return;
@@ -486,6 +489,7 @@ void readStruct(void* obj, const TypeInfo& t, const JsonNode& n, DecodeContext& 
     if (t.fields.size() > 64) seenLarge.assign(t.fields.size(), false);
     for (uint32_t i = 0; i < n.count && !ctx.full(); ++i) {
         const JsonNode& m = ctx.doc.child(n, i);
+        if (!ignoredKey.empty() && m.key == ignoredKey) continue;
         ctx.push(m.key);
         const int idx = findField(t, m.key, i);
         if (idx < 0) {

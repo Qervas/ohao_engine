@@ -820,6 +820,23 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
     CHECK(allUsed, "every allowlist entry still matches (remove the ones that do not)");
 }
 
+// ---- sub-project 4, test 2 (rpc part, step 5): the protocol server is CPU-only ------------
+static void sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header() {
+    const fs::path root(OHAO_SOURCE_DIR);
+    const std::vector<std::string> banned = {"vulkan", "glfw", "GLFW", "\"render/", "<render/", "\"gpu/", "<gpu/",
+                                             "\"runtime/", "<runtime/"};
+    std::vector<std::string> hits;
+    std::size_t files = 0;
+    for (const auto& e : fs::directory_iterator(root / "ohao" / "rpc"))
+        if (e.is_regular_file()) {
+            ++files;
+            for (auto& h : offendingIncludes(e.path(), banned)) hits.push_back(std::move(h));
+        }
+    CHECK(files >= 2, "the rpc sources were found");
+    for (const auto& h : hits) std::printf("\n      %s", h.c_str());
+    CHECK(hits.empty(), "ohao_rpc includes no Vulkan, GLFW, renderer, GPU or window header");
+}
+
 // ---- sub-project 4, test 2 (print part, step 4): the engine prints only through the logger --
 // Every engine message goes through OHAO_LOG (ohao/core/log.hpp), so it reaches the ring,
 // carries a level and channel, and never lands on stdout, which `ohao serve` keeps for the
@@ -879,6 +896,7 @@ static void sp4_t02_engine_prints_only_through_the_logger() {
     };
     static const Allowed allowed[] = {
         {"ohao/core/log.cpp", "stderr", "the logger's stderr sink"},
+        {"ohao/rpc/transport.cpp", "stdout", "separateStdout: the protocol stream's private copy of stdout"},
     };
     std::vector<NondeterminismHit> offending;
     std::vector<int> allowedUsed(std::size(allowed), 0);
@@ -1148,6 +1166,7 @@ int main(int argc, char** argv) {
     RUN(t13_reflect_depends_on_glm_and_std_only);
     RUN(sp4_t02_lint_finds_nondeterminism);
     RUN(sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems);
+    RUN(sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header);
     RUN(sp4_t02_lint_finds_prints);
     RUN(sp4_t02_engine_prints_only_through_the_logger);
     RUN(bench_typed_write);

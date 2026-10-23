@@ -2,8 +2,8 @@
 
 `ohao` reads, checks, edits, steps and renders OHAO scenes without an editor. Everything
 it does goes through the engine's one API (`ohao/api`, the `Session` method table), so
-what works here works the same over the future JSON-RPC/MCP server: a script line is a
-JSON-RPC request without `jsonrpc`/`id`.
+what works here works the same over the JSON-RPC/MCP server (`ohao serve`, below): a
+script line is a JSON-RPC request without `jsonrpc`/`id`.
 
 Every command below was run by `python tests/docs/check_docs.py`, and every output shown
 is what it printed. Paths are relative to the repo root; the binary is
@@ -41,6 +41,7 @@ ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                      [--post bloom,taa,ssao] [--exposure E]]
                     [--save OUT.scene.json]
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
+ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
 every scene command: [--root DIR]  the project root that asset paths resolve against (default .)
 ```
 
@@ -180,24 +181,57 @@ $ python -c "import json; r = json.load(open('build/doc_tmp/doctor.json'))['resu
 ['shaders.complete', 'shaders.fresh', 'assets.present', 'tools.glslc', 'tools.cmake', 'python.deps']
 ```
 
+### Serve: one engine for a whole session
+
+`ohao serve` keeps one engine running and answers JSON-RPC 2.0 on stdin/stdout, one
+compact JSON message per line. Native clients call the methods below by name
+(`{"jsonrpc":"2.0","id":1,"method":"world.info"}`); MCP clients `initialize`, then
+`tools/list` and `tools/call` with the method's name, `.` replaced by `_` (`world_info`).
+Each tool's input schema is its params struct's JSON Schema, the same one the catalogue
+lists. stdout carries protocol messages only; logs go to stderr, and to the client as
+`notifications/message` after `logging/setLevel`.
+
+- **Order.** Requests run one at a time, in arrival order. `ping` and
+  `notifications/cancelled {requestId}` are handled at once, even during a long
+  `world.step` (cancelled at the next whole step, no response). Params with
+  `_meta.progressToken` get `notifications/progress` every 250 ms.
+- **Errors.** -32700 unparseable, -32600 not a request (or a batch, or longer than
+  `--max-message`, default 64 MiB), -32601 unknown method (`data.suggestion`), -32602 bad
+  params (`data` is the diagnostics), else the exit class (1, 2, 3) with
+  `data: {code, diagnostics}`. Over MCP a domain error is a tool result with
+  `isError: true`.
+- **Paths** are project-relative with `/` (no absolute paths, no `..`): reads inside the
+  root, writes under `--out` (default `agent_out/`, git-ignored). `--allow-path DIR` adds
+  a root for both. Anything else is `E_ACCESS`.
+- **Closing stdin ends the session:** the running request is cancelled, queued ones are
+  dropped, and the server exits 0. Wait for your last reply before you close.
+
+```console
+$ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
+0 14 tools
+```
+
 ## Methods
 
-What a script line or (later) an RPC request can call. Params with `=` have that default.
+What a script line or an RPC request can call. Params with `=` have that default; the
+catalogue (`schema.get`) gives each method's params as a JSON Schema.
 
 | Method | Params → result | What it does |
 |---|---|---|
+| `engine.info` | `{}` → `{protocolVersion, schemaHash, version, host, time}` | The native handshake. |
 | `schema.get` | `{}` → the catalogue, compact | Every component, field, enum, limit, unit, error code and method. Read once; key on `schemaHash`. |
 | `scene.validate` | `{text \| path \| scene, limit = 20, checkAssets = false}` → `{ok, errors?, warnings?, upgraded?, more?}` | Checks a scene exactly as `scene.load` would, without touching the world. |
-| `scene.load` | `{text \| path \| scene, seed?}` → `{entities, preserved?, upgraded?, warnings?}` | Loads into the session's world, which must be empty. All or nothing. `seed` (16 hex digits) fixes the id generator. |
+| `scene.load` | `{text \| path \| scene, seed?, replace = false}` → `{entities, preserved?, upgraded?, warnings?}` | Loads into the session's world, which must be empty unless `replace` (then it is cleared first; snapshots are kept). All or nothing. `seed` (16 hex digits) fixes the id generator. |
 | `scene.save` | `{path?, layout = compact \| pretty, defaults = false}` → `{scene}` or `{path, bytes}` | The canonical scene; without a path it is returned as an object. |
-| `world.info` | `{}` → `{entities, frame, schemaHash, idCounter}` | Cheap orientation. |
+| `world.info` | `{}` → `{entities, frame, schemaHash, idCounter, host}` | Cheap orientation. |
 | `world.summary` | `{depth = 2, maxChildren = 8, maxNodes = 64}` → `{entities, roots, components, bounds?, outline, moreRoots?}` | Counts, bounds and a capped hierarchy outline; a node with unlisted children carries `more`. |
 | `world.query` | `{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}` → `{count, entities, missing?, next?}` | Entities in creation order, filtered and projected (`"/Type"`, `"/Type/field"`). |
 | `world.apply` | `{commands}` → `{applied, results, inverse}` | One atomic batch; on any error nothing changes. |
 | `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` | Runs the world's systems with a fixed `dt`. |
 | `world.snapshot` | `{name}` → `{name, entities, bytes}` | Captures the world in memory under a name. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
-| `render.capture` | `{path, mode = deferred, spp = 16, frames?, width = 1920, height = 1080, denoise = none, post = [], exposure?}` → `{path, frames, ms, validation?}` | Renders through the world's Camera and Environment to a PNG (needs `ohao run`, a GPU). |
+| `render.capture` | `{path, mode = deferred, spp = 16, frames?, width = 1920, height = 1080, denoise = none, post = [], exposure?}` → `{path, frames, ms, validation?}` | Renders through the world's Camera and Environment to a PNG (needs `ohao run` or `ohao serve`, a GPU). |
+| `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
 
 ## Edit commands
 
@@ -268,6 +302,9 @@ frame, appear in the catalogue for reference, and are refused in files and comma
 | `E_MESH_INVALID` | A MeshSource that gives no usable geometry. Exit code 2. |
 | `E_RENDER` | `render.capture` failed: no GPU, a failed frame, an unwritable image. Exit code 3. |
 | `E_INTERNAL` | A bug in a tool; the operation did not complete. Exit code 3. |
+| `E_ACCESS` | A path outside the server's sandbox: absolute, with `..`, or a write outside `--out`. |
+| `E_STATE` | A method not allowed in the current time mode or host. |
+| `E_REPLAY` | An input recording that does not match the world it is replayed on. |
 | `W_UNKNOWN_COMPONENT` | Warning: an unknown component close to a known name, kept but probably a typo. |
 | `W_UNSAVEABLE_MESH` | Warning: a mesh made in code, with no MeshSource, is not saved. |
 

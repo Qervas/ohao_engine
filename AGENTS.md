@@ -6,8 +6,8 @@ Every command in a `console` block below is run by `python tests/docs/check_docs
 
 OHAO is a C++20 game engine: a Vulkan 1.3 hybrid renderer (deferred raster with RT
 shadows/GI, plus a path tracer), an EnTT world, reflection and canonical scene files, an
-API for agents (`ohao/api`) and the headless `ohao` CLI. Windows/MSVC is the platform in
-daily use.
+API for agents (`ohao/api`), the headless `ohao` CLI and `ohao serve`, the same API as a
+JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows/MSVC is the platform in daily use.
 
 - **Code map, data flow, recipes:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Driving the engine from an agent:** [docs/agents/ohao-cli.md](docs/agents/ohao-cli.md)
@@ -85,6 +85,7 @@ $ build/Release/log_tests.exe > /dev/null
 $ build/Release/reflect_tests.exe > /dev/null
 $ build/Release/scene_tests.exe > /dev/null
 $ build/Release/api_tests.exe > /dev/null
+$ build/Release/rpc_tests.exe > /dev/null
 $ build/Release/systems_tests.exe > /dev/null
 $ build/Release/physics_backend_tests.exe > /dev/null
 $ build/Release/audio_system_tests.exe > /dev/null
@@ -97,6 +98,7 @@ $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
 $ python tests/golden/test_golden_diff.py > /dev/null
 $ python tests/doctor/check_doctor.py > /dev/null
+$ python tests/serve/check_serve.py > /dev/null
 ```
 
 | Suite | Covers |
@@ -105,13 +107,15 @@ $ python tests/doctor/check_doctor.py > /dev/null
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation |
+| `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging |
 | `systems_tests` | engine-provided systems (spin) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
 | `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes) and on the real tree; `--gpu` adds the device checks |
+| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps |
 
 GPU suites and harnesses (each creates a Vulkan device):
 

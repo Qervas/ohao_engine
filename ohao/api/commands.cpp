@@ -791,15 +791,14 @@ std::string batchInverse(const Batch& b, uint32_t count) {
 
 bool methodApply(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                  JsonWriter& out) {
-    if (!checkKeys(doc, params, {"commands"}, "world.apply params", ctx)) return false;
-    const JsonNode* list = doc.member(params, "commands");
-    if (!list || list->type != JsonType::Array) {
-        if (list) ctx.push("commands");
-        ctx.error(list ? "E_TYPE" : "E_COMMAND", list ? *list : params,
-                  list ? "\"commands\" is an array" : "world.apply needs \"commands\"", "[{\"op\": ...}, ...]",
-                  list ? ctx.gotText(*list) : std::string());
-        if (list) ctx.pop();
-        return false;
+    WorldApplyParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    const JsonNode* list = p.commands.node;
+    if (list->type != JsonType::Array) {
+        ctx.push("commands");
+        ctx.error("E_TYPE", *list, "\"commands\" is an array", "[{\"op\": ...}, ...]", ctx.gotText(*list));
+        ctx.pop();
+        return badParams(s);
     }
     const ecs::World::IdGenState idGen = s.world.idGenState();
     const uint64_t nextSeq = s.world.nextCreationSeq();

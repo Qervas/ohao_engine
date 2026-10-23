@@ -18,10 +18,17 @@ namespace ohao::reflect {
 // One entry of the API method table (owned by the layer that implements the methods).
 struct MethodDoc {
     std::string_view name;
-    std::string_view params;   // a compact description of the params object
-    std::string_view result;   // and of the result
+    const TypeInfo* params{nullptr};   // the params struct; its JSON Schema is the input schema
+    std::string_view result;           // a compact description of the result
     std::string_view doc;
 };
+
+// JSON Schema (draft 2020-12) of a params struct, self-contained (no $ref) and terse:
+// {"type": "object", "properties": {...}, "required"?: [...], "additionalProperties": false},
+// each property with its description, type keywords, limits and (unless optional, free
+// JSON or required) its default. The catalogue's method table and MCP's tool input
+// schemas are this.
+void writeParamsSchema(JsonWriter& w, const TypeInfo& params);
 
 struct CatalogueOptions {
     std::span<const MethodDoc> methods{};

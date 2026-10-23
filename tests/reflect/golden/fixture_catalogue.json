@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "cd877b3e889be65a",
+  "schemaHash": "b4aa35585bc50bb4",
   "units": [
     "m",
     "m/s",
@@ -103,6 +103,15 @@
     {
       "code": "E_INTERNAL",
       "meaning": "An internal error in a tool (a bug); the operation did not complete (ohao exits with 3)."
+    },
+    {
+      "code": "E_ACCESS",
+      "meaning": "A path outside the server's sandbox: absolute, with '..', or a write outside the output directory."
+    },
+    { "code": "E_STATE", "meaning": "A method not allowed in the current time mode or host." },
+    {
+      "code": "E_REPLAY",
+      "meaning": "An input recording that does not match the world it is replayed on."
     },
     {
       "code": "W_UNKNOWN_COMPONENT",

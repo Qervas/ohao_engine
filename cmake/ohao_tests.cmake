@@ -93,6 +93,8 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(test_golden_diff LABEL quick SCRIPT tests/golden/test_golden_diff.py)
     ohao_add_python_test(check_doctor LABEL quick SCRIPT tests/doctor/check_doctor.py)
     ohao_add_python_test(check_doctor_gpu LABEL gpu GPU SCRIPT tests/doctor/check_doctor.py ARGS --gpu)
+    # `ohao serve` as a process (tests 8-10, 15): its goldens write build/serve_tmp/<session>.
+    ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
 
     # GPU harnesses and the presentation gate
     ohao_add_python_test(check_cli LABEL gpu GPU LOCKS cli_tmp SCRIPT tests/cli/check_cli.py)
@@ -113,7 +115,7 @@ function(ohao_register_harness_tests)
     endif()
 
     # Docs
-    ohao_add_python_test(check_docs LABEL docs TIMEOUT 1200 LOCKS cli_tmp check_fixture
+    ohao_add_python_test(check_docs LABEL docs TIMEOUT 1200 LOCKS cli_tmp check_fixture serve_tmp
         SCRIPT tests/docs/check_docs.py ARGS --cpu-only)
     ohao_add_python_test(monograph_structure LABEL docs SCRIPT site/tests/test_monograph_structure.py)
 endfunction()

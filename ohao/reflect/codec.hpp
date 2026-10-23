@@ -49,6 +49,8 @@ constexpr Kind kindOf() {
     else if constexpr (std::is_same_v<V, int32_t>) return Kind::Int32;
     else if constexpr (std::is_same_v<V, uint32_t>) return Kind::UInt32;
     else if constexpr (std::is_same_v<V, uint64_t>) return Kind::UInt64;
+    else if constexpr (std::is_same_v<V, int64_t>) return Kind::Int64;
+    else if constexpr (std::is_same_v<V, JsonRef>) return Kind::Json;
     else if constexpr (std::is_same_v<V, float>) return Kind::Float;
     else if constexpr (std::is_same_v<V, std::string>) return Kind::String;
     else if constexpr (std::is_same_v<V, glm::vec2>) return Kind::Vec2;
@@ -86,6 +88,11 @@ void writeValue(const V& v, JsonWriter& w, const TypeDesc& d) {
         w.uint64(v);
     } else if constexpr (k == Kind::UInt64) {
         w.hex64(v);
+    } else if constexpr (k == Kind::Int64) {
+        w.int64(v);
+    } else if constexpr (k == Kind::Json) {
+        if (v) writeJson(w, *v.doc, *v.node);
+        else w.null();
     } else if constexpr (k == Kind::Float) {
         w.float32(v);
     } else if constexpr (k == Kind::String) {
@@ -174,6 +181,8 @@ bool equalValue(const V& a, const V& b, const TypeDesc& d) {
             a);
     } else if constexpr (k == Kind::Struct) {
         return equalStruct(&a, &b, *d.structType);
+    } else if constexpr (k == Kind::Json) {
+        return a.doc == b.doc && a.node == b.node;   // the same value of the same document
     } else {
         return a == b;   // bool, ints, string, enum, AssetRef, entity handle
     }
@@ -188,7 +197,7 @@ inline bool withinLimits(double v, const NumericLimits& l) {
 template <class V>
 bool inRangeValue(const V& v, const NumericLimits& l) {
     constexpr Kind k = kindOf<V>();
-    if constexpr (k == Kind::Int32 || k == Kind::UInt32 || k == Kind::Float) {
+    if constexpr (k == Kind::Int32 || k == Kind::UInt32 || k == Kind::Int64 || k == Kind::Float) {
         return withinLimits(static_cast<double>(v), l);
     } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
         for (int i = 0; i < V::length(); ++i)
@@ -271,6 +280,12 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
     } else if constexpr (k == Kind::UInt64) {
         uint64_t x;
         if (readHex64(n, ctx, "E_TYPE", x)) v = x;
+    } else if constexpr (k == Kind::Int64) {
+        int64_t x;
+        if (readInt(n, ctx, INT64_MIN, INT64_MAX, x)) v = x;
+    } else if constexpr (k == Kind::Json) {
+        v.doc = &ctx.doc;
+        v.node = &n;
     } else if constexpr (k == Kind::Float) {
         float x = v;
         if (readFloat(n, ctx, x)) v = x;
@@ -409,6 +424,11 @@ bool readValueFast(V& v, FastDecode& c, const TypeDesc& d) {
     } else if constexpr (k == Kind::UInt64) {
         std::string_view s;
         return c.in.string(s) && parseHex16(s, v);
+    } else if constexpr (k == Kind::Int64) {
+        std::string_view tok;
+        return c.in.number(tok) && parseIntToken(tok, INT64_MIN, INT64_MAX, v);
+    } else if constexpr (k == Kind::Json) {
+        return false;   // needs the tree: the tree decoder keeps a reference into it
     } else if constexpr (k == Kind::Float) {
         return readFloatFast(c, v);
     } else if constexpr (k == Kind::String) {
