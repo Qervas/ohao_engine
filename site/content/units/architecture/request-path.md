@@ -13,7 +13,7 @@ OHAO has no editor host. The offline examples — `cornell_box`, `model_viewer`,
 up the device, create an `ecs::World` and wire its render extract (and, for a world
 built from data, instantiate) to the renderer's `RenderScene`, build entities, apply
 the world's camera and environment, choose a `RenderMode`, then loop
-`world.update()` and `render()` and read the pixels back. `ohao run --render` runs the
+`world.sync()` and `render()` and read the pixels back. `ohao run --render` runs the
 same sequence on a scene file. `cornell_box`
 is the shortest complete instance of it, and it shows the one convention that
 surprises people reading the CLI: the output resolution is a compile-time constant
@@ -46,31 +46,31 @@ an upload and a BLAS build, blocking, at load time — and returns an entity car
 
 `spawnLight` makes an entity with a `Light`. Neither path touches a command buffer,
 and neither makes anything visible yet: an entity reaches the screen only after a
-`world.update()`.
+`world.sync()`.
 
 ## The frame, from game hooks to passes
 
-One frame is the same chain in every host. In `ohao_game` the loop runs the
-fixed-step game hook zero or more times, the per-frame hook once, then the world,
-then the renderer:
+One frame is the same chain in every host. In `ohao_game` the loop runs the steps
+its timeline (`core/timeline.hpp`) owes for the wall time that passed — for each, the
+fixed-step game hook and the world's simulate phase — then the per-frame hook once,
+then the world's sync phase, then the renderer:
 
-{{cite ohao/runtime/application.cpp "m_world->update(frameDt);"}}
+{{cite ohao/runtime/application.cpp "m_world->sync();"}}
 
-The headless drivers have no `Application`, so they call `world.update(0.0f)` before
-each `render()` themselves. The world runs its systems in exactly the order they
-were added. The constructor adds two: the engine-provided `spin`, which turns
-entities carrying a `Spin` (a no-op at `dt = 0`, which is why headless renders are
-unaffected), then the structural `transform`:
+The headless drivers have no `Application`, so they call `world.sync()` before each
+`render()` themselves: a render never steps the simulation. The sync phase runs its
+systems in exactly the order they were added. The constructor adds the structural
+`transform` (and, to the simulate phase, the engine-provided `spin`):
 
-{{cite ohao/ecs/world.cpp "addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });"}}
+{{cite ohao/ecs/world.cpp "addSync("transform", [](World& w) { updateTransforms(w.registry()); });"}}
 
 Instantiate, when installed, goes immediately before `transform`, so a mesh it builds
-gets its world matrix in the same update. `TransformSystem` recomputes `WorldTransform`
+gets its world matrix in the same sync. `TransformSystem` recomputes `WorldTransform`
 for every dirty entity and its descendants, parents first, and tags the movers
 `RenderDirty`. The render extract is installed straight after it and consumes those
 tags:
 
-{{cite ohao/ecs/render_extract.cpp "world.addSystemAfter("transform", "render_extract","}}
+{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });"}}
 
 It releases the slots of vanished renderables, creates an instance for every
 renderable without one — in creation order, so slot numbers are deterministic —
@@ -282,7 +282,7 @@ empty frame or ignores a flag, suspect call order before suspecting the shaders.
 ## Contracts
 
 - `initialize()` must precede `renderScene()`. Before it, the `RenderScene` does not exist and the accessor returns a null reference.
-- Install the render extract (`ecs::installRenderExtract`, or let `Application` do it) before expecting entities on screen, and run `world.update()` before every `render()`. Spawning uploads a mesh and its materials; only the extract makes an instance of it.
+- Install the render extract (`ecs::installRenderExtract`, or let `Application` do it) before expecting entities on screen, and run `world.sync()` before every `render()` (never `update`, which would also step the simulation). Spawning uploads a mesh and its materials; only the extract makes an instance of it.
 - The `RenderScene` must outlive the `ecs::World`. `Application` resets the world first; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
 - `setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.
 - In the modes that return the ring buffer (None, Atrous, DLSSRR) the pixels trail the GPU by `MAX_FRAMES_IN_FLIGHT` calls. Reading them after fewer than four `render()` calls returns a staging slot that was never written.

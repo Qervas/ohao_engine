@@ -208,7 +208,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 14 tools
+0 18 tools
 ```
 
 ## Methods
@@ -223,12 +223,16 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `scene.validate` | `{text \| path \| scene, limit = 20, checkAssets = false}` → `{ok, errors?, warnings?, upgraded?, more?}` | Checks a scene exactly as `scene.load` would, without touching the world. |
 | `scene.load` | `{text \| path \| scene, seed?, replace = false}` → `{entities, preserved?, upgraded?, warnings?}` | Loads into the session's world, which must be empty unless `replace` (then it is cleared first; snapshots are kept). All or nothing. `seed` (16 hex digits) fixes the id generator. |
 | `scene.save` | `{path?, layout = compact \| pretty, defaults = false}` → `{scene}` or `{path, bytes}` | The canonical scene; without a path it is returned as an object. |
-| `world.info` | `{}` → `{entities, frame, schemaHash, idCounter, host}` | Cheap orientation. |
+| `world.info` | `{}` → `{entities, frame, schemaHash, idCounter, host, time}` | Cheap orientation. |
 | `world.summary` | `{depth = 2, maxChildren = 8, maxNodes = 64}` → `{entities, roots, components, bounds?, outline, moreRoots?}` | Counts, bounds and a capped hierarchy outline; a node with unlisted children carries `more`. |
 | `world.query` | `{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}` → `{count, entities, missing?, next?}` | Entities in creation order, filtered and projected (`"/Type"`, `"/Type/field"`). |
 | `world.apply` | `{commands}` → `{applied, results, inverse}` | One atomic batch; on any error nothing changes. |
-| `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` | Runs the world's systems with a fixed `dt`. |
+| `world.step` | `{frames = 1, dt?, watch?: {ids?, names?, fields, limit = 50}}` → `{frame, watch?}` | Runs the simulate systems once per step with a fixed `dt` (default: `time.get`'s `fixedDt`), then the sync systems once. `watch` returns those fields after the last step, as `world.query` would: one round trip instead of two. `E_STATE` while the clock runs in realtime. |
+| `time.get` | `{}` → `{mode, paused, frame, fixedDt, fps?}` | `lockstep` (steps only on request; `ohao serve`, the CLI) or `realtime` (steps from wall time; a window host). `frame` counts the steps run. |
+| `time.set` | `{mode?, paused?, fixedDt?}` → as `time.get` | Never runs or drops a step. Headless hosts are lockstep only (`E_STATE`). |
+| `world.hash` | `{}` → `{hash, frame}` | 64 bits over the authoring state: ids, hierarchy, every saved component, the id generator. Equal hashes, equal worlds; runtime state is not hashed. |
 | `world.snapshot` | `{name}` → `{name, entities, bytes}` | Captures the world in memory under a name. |
+| `world.diff` | `{snapshot, fields?, limit = 50}` → `{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}` | What changed since a snapshot. `"/Type/field"` with old and new values in file form, `"/Type"` for a component added or removed; `fields` keeps only the listed ones. `count` counts changed entities; `more` what `limit` left out. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
 | `render.capture` | `{path, mode = deferred, spp = 16, frames?, width = 1920, height = 1080, denoise = none, post = [], exposure?}` → `{path, frames, ms, validation?}` | Renders through the world's Camera and Environment to a PNG (needs `ohao run` or `ohao serve`, a GPU). |
 | `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
@@ -315,4 +319,7 @@ frame, appear in the catalogue for reference, and are refused in files and comma
   `inverse` if you may want to undo.
 - `validate` anything you wrote by hand before loading it, and act on `suggestion`.
 - Snapshot before an experiment, restore after; it is far cheaper than reloading.
+  `world.diff` against the snapshot says what the experiment changed, field by field.
+- Step with `watch` instead of a step followed by a query.
+- Compare runs with `world.hash`, not by reading the world back.
 - Key any cached catalogue on `schemaHash`.

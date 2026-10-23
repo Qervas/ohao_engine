@@ -47,7 +47,7 @@
 <div class="section-rule"><h2 id="ids-that-survive-a-reload">Ids that survive a reload</h2></div>
 <div class="prose reveal">
 <p>An `entt::entity` is an index plus a version that the registry recycles, so its value depends on the history of creates and destroys in one process. A file, a command or a diff needs a key that names the same entity in another world on another day. `EntityId` is a 64-bit value; 0 is invalid. `World::create` generates one:</p>
-<div class="citation-chip"><code class="citation-code">const uint64_t id = splitmix64(m_idGen.seed + m_idGen.counter++);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.cpp#L109" target="_blank" rel="noopener">ohao/ecs/world.cpp:109</a></div>
+<div class="citation-chip"><code class="citation-code">const uint64_t id = splitmix64(m_idGen.seed + m_idGen.counter++);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.cpp#L108" target="_blank" rel="noopener">ohao/ecs/world.cpp:108</a></div>
 <p>splitmix64 is a bijection on 64 bits, so for a fixed seed, consecutive counters never produce the same id before 2^64 creates. The loop skips 0 and any id already claimed, and each skipped candidate still consumes a counter step. The whole generator state is the pair (seed, counter):</p>
 <ul>
 <li>`seedIds(s)` sets it to (s, 0). Without it, the seed comes from `std::random_device`.</li>
@@ -61,7 +61,7 @@
 <div class="section-rule"><h2 id="one-canonical-form">One canonical form</h2></div>
 <div class="prose reveal">
 <p>**Defaults are left out, compared bit for bit.** A field is omitted when it equals the same field of the type&#x27;s default-constructed instance, and float equality compares bits:</p>
-<div class="citation-chip"><code class="citation-code">return std::bit_cast&lt;uint32_t&gt;(a) == std::bit_cast&lt;uint32_t&gt;(b);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L150" target="_blank" rel="noopener">ohao/reflect/codec.hpp:150</a></div>
+<div class="citation-chip"><code class="citation-code">return std::bit_cast&lt;uint32_t&gt;(a) == std::bit_cast&lt;uint32_t&gt;(b);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L151" target="_blank" rel="noopener">ohao/reflect/codec.hpp:151</a></div>
 <p>So `-0` is not the default `0`: it is written as `-0` and reloads as `-0`. Omission works per field, so a `vec3` is written whole when any one of its components differs. A test pins the result: an entity with an empty name at `(-0, 0, 0)` saves as</p>
 <div class="citation-chip"><code class="citation-code">R&quot;({&quot;id&quot;:&quot;00000000000000a4&quot;,&quot;Transform&quot;:{&quot;position&quot;:[-0,0,0]}}]})&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L518" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:518</a></div>
 <p>`Name` and `Transform` are always present on every entity, so when they are entirely default they are dropped as whole blocks. Any other component, even when entirely default, is still written as `{}` (the Cornell `&quot;Environment&quot;: {}`), because its presence is the information. Values nested in variants and optionals are written in full. `SaveOptions::includeDefaults` writes every field instead; loading that and saving again gives back the omitted form.</p>

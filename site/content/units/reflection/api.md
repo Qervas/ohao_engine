@@ -90,7 +90,17 @@ The projection decides how much comes back. Without `fields`, each entity is its
 
 ## Time and pixels
 
-`world.step {frames = 1, dt = 1/60}` calls `World::update(dt)` once per frame with a fixed `dt` in (0, 1] and counts the session's frames. `world.restore` resets that count to the snapshot's.
+Time is a `Timeline` (`core/timeline.hpp`): a mode, a pause flag, a fixed step and the frame number, the one time axis every step is counted on. A session owns one until a window host shares its own, so the host's realtime steps and the agent's `world.step` count on the same frames. Lockstep advances only on request; realtime steps from wall time and, paused, behaves as lockstep. Only a window host can run realtime:
+
+{{cite ohao/api/session.cpp "if (p.mode == TimeMode::realtime && s.host != HostKind::Window) {"}}
+
+`world.step {frames = 1, dt}` runs the world's simulate phase once per frame (`dt` defaults to the timeline's fixed step), then its sync phase once, and is `E_STATE` while the clock runs by itself. `watch` returns fields after the last step through the same selection and projection as `world.query`, checked before any step runs, so a bad path costs no simulation. `world.restore` resets the frame to the snapshot's.
+
+`world.hash` is 64 bits over everything a snapshot holds, read live in creation order without copying the values; field by field, so padding and heap pointers never reach it, and a type whose bytes are exactly its fields (such as `Transform`) as its bytes:
+
+{{cite ohao/reflect/registry.cpp "plain = t.triviallyCopyable && t.size % 4 == 0 && t.size > 0 && plainFieldsSize(t) == t.size ? 1 : 0;"}}
+
+`world.diff {snapshot, fields?, limit}` compares the live world with a named snapshot, column by column and read-only (a memcmp first for trivially copyable components), and reports per entity `"/Type/field": [old, new]` in file form, `"/Type"` for a component added or removed, and the created and destroyed ids. It reports what a diff of the two saves would.
 
 `render.capture` is checked entirely in the session: the path, the mode and denoiser names, `spp`, `frames`, sizes from 16 to 8192, each `post` effect name, and exposure in (0, 64]. Only then does the session look for a handler:
 

@@ -199,6 +199,13 @@ public:
 `Session::setHost(Host*)` replaces `setRenderHandler`. A session without a host is the
 spec-3 CPU session: `render.capture` is `E_COMMAND`, time is lockstep only.
 
+*Correction (step 7).* Time does not go through `Host` virtuals: it is a value both sides
+share. The session answers `time.get`/`time.set` from a `Timeline` (see "Time modes", as
+built), its own until the host hands it one with `Session::setTimeline(Timeline&)`, and the
+host kind (`setHostKind`) decides whether realtime is allowed. One object then holds the
+single frame axis, with no copy to keep in step. `Host`'s remaining parts (capture,
+`beforeSteps` for input stamping) arrive with the live host (step 9) and input (step 8).
+
 ### Method params are reflected structs
 
 Every method's params become a registered struct, for example:
@@ -405,6 +412,15 @@ complete pending captures               -> readback of the frame just rendered, 
 This makes the window's simulation independent of the frame rate: a realtime session and
 a lockstep session that run the same steps with the same input reach the same state.
 
+*As built (step 7, 2026-10-23).* The phase is in the method and the system's type:
+`World::addSimulate(name, fn(World&, float dt))`, and `addSync`, `addSyncBefore`,
+`addSyncAfter` with `fn(World&)`, so a sync system cannot take a dt. `simulateNames()` and
+`syncNames()` list them. spin is a simulate system; instantiate, transform and the render
+extract are sync systems. Headless renders (the examples, `ohao run`'s capture) call
+`World::sync()` before each frame, never `update`, so a capture never steps the world.
+`world.step` runs `sync` once after its steps, and also when cancelled, so the derived state
+matches the last whole step.
+
 ### Time modes
 
 - **lockstep** (default for `ohao serve`, both hosts): simulation advances only through
@@ -416,6 +432,25 @@ a lockstep session that run the same steps with the same input reach the same st
   `paused: false` resumes from the current state.
 - Switching mode never loses or invents a step: the stamped-step counter (`frame`) is
   the single time axis for input, recordings, hashes and logs.
+
+*As built (step 7).* The time model is `ohao::Timeline` (`ohao/core/timeline.hpp`, with
+`FixedStepClock` moved there from `ohao/runtime`): mode, paused, the fixed step in integer
+nanoseconds, the frame number and an optional fps. `advance(wall)` returns the fixed steps
+due only when `running()` (realtime and not paused); otherwise none, and the wall time is
+dropped. Pausing, resuming and switching mode reset the clock's leftover time, so resuming
+never catches up on the pause and never runs a step early. The host reports the steps it
+runs with `stepped(n)`. It is CPU-only and reads no clock (the host passes wall time in),
+so it is tested without a window (`runtime_tests` `sp4_t11_*`). `Application` steps its
+World with one (realtime by default, `AppConfig::timeMode`): per frame, for each step due,
+the `fixedUpdate` hook and `World::simulate(fixedDt)`, then the `update` hook and
+`World::sync()`. Spin therefore runs per fixed step in `ohao_game` too (it ran with the
+frame's dt before). A `Session` owns a lockstep `Timeline` until a host shares its own
+(`Session::setTimeline`), so the window host's realtime steps and an agent's `world.step`
+count on one frame axis; that is the window host's part of step 9. Rules: `time.set {mode:
+realtime}` is `E_STATE` unless the session's host is a window host; `world.step` is
+`E_STATE` while the timeline is running; `fixedDt` must be in (0, 1]; `paused` may be set
+in lockstep (it changes nothing there). The default fixed step, 16,666,667 ns, reads back
+as exactly `1/60` in float, so the `world.step` default `dt` did not change.
 
 ## Input
 
@@ -591,6 +626,42 @@ Spec 3's contract, extended:
    or under `ohao/render`, `ohao/gpu` except on an allowlist (timing statistics, GPU timer
    queries, the default ID seed in `World`). A test enforces it.
 
+*As built (step 7): `world.hash`.* The content is what the spec names, read differently for
+speed (the first draft, a snapshot then a pass over it, measured 0.86 ms of the 1.0 ms
+budget):
+- **Read live, in snapshot order, no copy.** `ecs::hashWorld` captures only the entity
+  table (`captureEntityTable`: ids, creation sequence, parent rows, child rows in
+  `Children` order, the id generator), then hashes each saved component type straight from
+  its EnTT storage: which rows have it, then its values in row order. Packed storage order
+  is never hashed (it depends on the pools' history, not on the state), so a restored world
+  and a loaded one hash alike.
+- **Values field by field** (`reflect::hashStruct`, a typed `FieldOps::hash` per member):
+  floats by their bits (as equality: -0 ≠ +0), strings by length and bytes, optionals by
+  presence, variants by index, entity references by the target's id, never a handle,
+  padding or heap pointer. A type whose registered fields add up to its whole size (only
+  numbers, vectors, quaternions, matrices and structs of them; `Transform`,
+  `MaterialOverride`, most primitives) is hashed as its bytes, which are then exactly its
+  field bits; decided once per type (`TypeInfo::plainBytes`).
+- **The function** is FNV-1a 64 taken over 8-byte words (`reflect::Hasher`), with a
+  xor-shift fold after each multiply and a splitmix64 finish. Each word's step is a
+  bijection of the state, so inputs that differ in one word always hash differently; a word
+  per step is eight times faster than byte-wise FNV.
+- The frame number is not hashed (`world.hash` reports it beside the hash): two worlds in the
+  same state at different frames hash alike.
+Measured on bench10k: 0.52 ms over stdio (0.09 ms of it the entity table).
+
+*As built (step 7): `world.diff`.* `ecs::diffWorld` matches the snapshot's rows to live
+entities (fast path: row r at packed position r, else by id), diffs each column with a
+typed, read-only pass (`diffColumn`: a `memcmp` first for trivially copyable components,
+then bit-exact per field) and compares parents by id. The API turns it into
+`"/Type/field": [old, new]` in file form, `"/Type": [old|null, new|null]` for a component
+added or removed (file form, defaults left out), `"/Parent/entity"` or `"/Parent"` for the
+hierarchy, and `created`/`destroyed` ids (creation order). `fields` keeps only the listed
+types or fields, and only entities with a listed change count. `limit` caps each of
+`changed`, `created` and `destroyed`; `count` counts changed entities, `more` everything
+left out. Children order and creation sequence are not compared (the file form has neither
+as a field). Measured: 0.44 ms over stdio, bench10k with 100 entities changed.
+
 ### Should 4 fix the 1-LSB post-effect noise? Yes, in step 1.
 
 Live capture equality, replay verification with pixels, and every agent A/B ("did my edit
@@ -765,6 +836,17 @@ over the five): `world.info` round trip 0.0179–0.0196 ms, transport overhead
 193.9–195.8 ns, `tools/list` 7,811 B. Recorded: start to `initialize` 18.7–20.2 ms,
 `scene.load` bench10k over stdio 27.4–30.0 ms, `initialize` reply 725 B (`instructions`
 551 B).
+
+*As built (step 7).* Two more ops: `world_hash_rpc` (10 calls per block) and
+`world_diff_1pct_rpc` (10 calls of `world.diff {snapshot: "diff_base"}`). The diff's state is
+set up once over stdio (snapshot `diff_base`, `field.set` of the position of 100 entities,
+snapshot `diff_now`), and each diff block first restores `diff_now`, untimed (an `Op`'s
+`prepare`), since the ops beside it move the world. After timing the bench checks that two
+hashes agree and that the diff counts the 100 entities. Five consecutive passes on
+2026-10-23: `world.hash` 0.5193–0.5251 ms (p95 at most 0.8014), `world.diff` 0.4373–0.4541
+ms (p95 at most 0.6831); the step 6 ops stayed where they were (`world.info` 0.0203–0.0209,
+`world.apply` 0.0952–0.0982, `world.step` 0.0387–0.0409 ms). `tools/list` is 10,357 B for
+18 tools.
 
 ## Engine development by agents (G2)
 
@@ -1007,6 +1089,27 @@ CPU (no device):
 12. **Hash and diff:** the hash is stable across save → load with the same seed, changes
     on any authoring change and ignores runtime components; `world.diff` equals a diff of
     the two saves, respects `limit`/`more`.
+   - *As built (step 7):* test 11 is `runtime_tests` `sp4_t11_*` (3: lockstep ignores wall
+     time; 600 realtime frames of one fixed step are 600 steps; pausing, resuming and
+     switching mode neither run nor drop a step, and the default fixed step is 1/60 s
+     exactly) and `api_tests` `sp4_t11_*` (5: simulate 5 times and sync once for 5 steps,
+     exact frame counts over batches; `watch` equals a `world.query` after the step, a bad
+     watch path points into `watch` and runs no step; `E_STATE` for realtime on a headless
+     host and for `world.step` while a window host's realtime runs, allowed paused and in
+     lockstep; the default `dt` is the fixed step and follows `time.set`; a realtime loop
+     driven by hand with uneven wall times, a pause, 17 steps while paused and a resume
+     reaches the hash of the same number of lockstep steps, and one more step does not).
+     Test 12 is `api_tests` `sp4_t12_*` (4: the hash is stable across save → load with the
+     same seed, ignores WorldTransforms and dirty tags, and differs for another seed; it
+     changes for a one-ulp position, a sign bit (-0), a name, a component added or removed,
+     a reparent, a create and a destroy, and comes back on restore; `world.diff` of 200
+     entities after 30 mixed edits equals a diff of the two saves (paths and values),
+     created and destroyed included, and nothing after a restore; `limit`/`count`/`more`,
+     `fields`, an unknown snapshot, a bad projection, a missing `snapshot`) plus
+     `reflect_tests` `sp4_t12_value_hash_ignores_padding_and_counts_bits`. The native
+     protocol session (`tests/serve/sessions/native.jsonl`) now covers `world.hash` before
+     an edit and after the restore (equal), `world.diff`, `time.get`/`time.set` with the
+     `E_STATE` refusal, and `world.step` with `watch`.
 13. **Input:** key-name table round trip; `InputActions` rebinds on change; injection gives
     `pressed` on exactly the stamped step, `held` after, `released` on the release step;
     axis override and release; `FocusLost`; record → replay matches every checkpoint; a
@@ -1132,6 +1235,11 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
 7. **Time model, hash, diff.** System phases, `World::simulate`/`sync`, lockstep and
    realtime clocks in `Application`, `time.get`/`time.set`, `world.step watch`,
    `world.hash`, `world.diff`. Tests 11, 12.
+   - *Done 2026-10-23.* See the as-built notes under "System phases", "Time modes",
+     "Determinism" and "Budgets", and the correction under "The host interface" (time is a
+     shared `Timeline`, not `Host` virtuals). `world.info` gains `time`; `schemaHash`
+     changed (catalogue, CLI and serve goldens updated after review). The `world.hash` and
+     `world.diff` budgets pass five consecutive `serve_bench` runs.
 8. **Input as data.** `InputMap` to `ohao/core`, key names, `InputActions`, the virtual
    device, `input.inject`/`state`/`record`/`replay`, `FlyController`. Tests 13, 14.
 9. **Live host and capture.** `LiveHost`, `ohao serve --window`, the request queue on the

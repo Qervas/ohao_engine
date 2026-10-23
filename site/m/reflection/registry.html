@@ -58,7 +58,7 @@
 <li>`doc` and `tooltip`.</li>
 <li>`unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 18 names, from `m` and `deg/s` to `linear-rgb`, `lux` and `nits`:</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">constexpr std::array&lt;std::string_view, 18&gt; kUnits = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.cpp#L8" target="_blank" rel="noopener">ohao/reflect/registry.cpp:8</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr std::array&lt;std::string_view, 18&gt; kUnits = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.cpp#L10" target="_blank" rel="noopener">ohao/reflect/registry.cpp:10</a></div>
 <ul>
 <li>`min` and `max`, which are hard limits enforced by validation and commands, per component for vectors. `uiRange` and `step` are editor hints and are not enforced.</li>
 <li>`color()` (only on vec3 and vec4), `angle()` (only on float), `hidden`, `readOnly`, and `alias`, an older name that is still accepted on load.</li>
@@ -91,7 +91,7 @@
 <li>`pool` and `tryGetIn`, which resolve the storage once per pass rather than once per entity.</li>
 <li>`writeFields`, the per-type scene writer, found by a requires-expression:</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">if constexpr (requires(const T&amp; v, FieldSink&amp; s) { writeFields(v, &amp;v, s); }) return &amp;writeFieldsErased&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.hpp#L60" target="_blank" rel="noopener">ohao/ecs/scene_types.hpp:60</a></div>
+<div class="citation-chip"><code class="citation-code">if constexpr (requires(const T&amp; v, FieldSink&amp; s) { writeFields(v, &amp;v, s); }) return &amp;writeFieldsErased&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.hpp#L66" target="_blank" rel="noopener">ohao/ecs/scene_types.hpp:66</a></div>
 <p>If no overload is visible, `writeFields` is null and the save falls back to the generic reflection writer. Tag types carry no ops. Nothing requires the ops, either: a serialized component registered without `.host(...)` is quietly left out of every save:</p>
 <div class="citation-chip"><code class="citation-code">if (const ComponentOps* ops = componentOps(*t)) out.push_back({t, ops});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_io.cpp#L45" target="_blank" rel="noopener">ohao/ecs/scene_io.cpp:45</a></div>
 <p>On load, its block is rejected as &quot;not a component (it is a nested value type)&quot;. Lint cannot see this, because reflect never looks inside `host`. For engine types, `t21_every_authoring_component_has_a_writer` catches it.</p>
@@ -118,7 +118,7 @@
 <div class="section-rule"><h2 id="never-on-a-frame">Never on a frame</h2></div>
 <div class="prose reveal">
 <p>`t13_no_reflection_on_hot_paths` scans every file under `ohao/render` and `ohao/gpu`, plus the transform, render-extract, instantiate and spin system sources, for an `#include` naming `reflect/` or `api/`:</p>
-<div class="citation-chip"><code class="citation-code">for (const char* dir : {&quot;ohao/render&quot;, &quot;ohao/gpu&quot;})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L696" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:696</a></div>
+<div class="citation-chip"><code class="citation-code">for (const char* dir : {&quot;ohao/render&quot;, &quot;ohao/gpu&quot;})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L697" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:697</a></div>
 <p>A second test holds `ohao/reflect` to glm and the standard library, with no EnTT, Vulkan, `core/`, `gpu/`, `render/` or `ecs/` includes. Both tests match include lines as text and do not follow includes. A system source that included `ecs/scene_types.hpp` would pull in the whole registry and still pass. Inside `ohao/`, only `scene_types.cpp`, `scene_io.cpp`, `snapshot.cpp` and `api/internal.hpp` include that header today.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>

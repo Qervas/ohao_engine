@@ -62,7 +62,7 @@
 <li>a second singleton, an unknown or repeated field, a value outside its limits, an escaped member name, or more than 64 component types or fields;</li>
 <li>a vector whose elements hold entity references, since its pending reference pointers would dangle as it grows:</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">// References into a growing vector would dangle: leave those to the tree decoder.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L479" target="_blank" rel="noopener">ohao/reflect/codec.hpp:479</a></div>
+<div class="citation-chip"><code class="citation-code">// References into a growing vector would dangle: leave those to the tree decoder.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L526" target="_blank" rel="noopener">ohao/reflect/codec.hpp:526</a></div>
 <ul>
 <li>a missing asset under `checkAssets`, an unresolved reference, or a parent cycle.</li>
 </ul>

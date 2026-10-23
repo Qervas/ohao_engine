@@ -35,7 +35,7 @@ and `assets/scenes/damaged_helmet.scene.json`, and they are what the `ohao` CLI
 `run`, whose `--render` renders a scene file through the same instantiate and
 scene-view path. In
 every driver the render extract is installed on the world once, and from then on
-`world.update()` is what turns entity edits into GPU state.
+`world.sync()` is what turns entity edits into GPU state.
 
 `examples/` builds four offline binaries and one windowed host. The four
 offline ones are half scene description, half harness. `cornell_box` authors its

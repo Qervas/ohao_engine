@@ -58,23 +58,25 @@ With GLM's column-vector convention the rightmost factor applies first, so scale
 
 {{cite ohao/ecs/world.cpp "return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation) *"}}
 
-## Systems run in the order they were added
+## Two phases, each in the order its systems were added
 
-A system is a `std::function<void(World&, float)>`. There is no discovery, no dependency graph, no sort: `World::update` walks a vector. The constructor puts two systems in it — the engine-provided `spin`, then `transform` — and a host that owns a renderer inserts its two around `transform` by name:
+Systems come in two phases, two vectors walked in order — no discovery, no dependency graph, no sort. **Simulate** systems change the world and run once per fixed step with the fixed dt (`World::simulate(dt)`); **sync** systems derive state from it and run once per batch of steps and before each render, with no dt (`World::sync()`). The constructor adds the engine-provided `spin` as a simulate system and `transform` as a sync system; a host that owns a renderer inserts its two sync systems around `transform` by name:
 
-{{cite ohao/ecs/world.cpp "addSystem("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });"}}
-{{cite ohao/ecs/world.cpp "addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });"}}
-{{cite ohao/ecs/instantiate.cpp "world.addSystemBefore("transform", "instantiate", [state](World&, float) { state->run(); });"}}
-{{cite ohao/ecs/render_extract.cpp "world.addSystemAfter("transform", "render_extract","}}
+{{cite ohao/ecs/world.cpp "addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });"}}
+{{cite ohao/ecs/world.cpp "addSync("transform", [](World& w) { updateTransforms(w.registry()); });"}}
+{{cite ohao/ecs/instantiate.cpp "world.addSyncBefore("transform", "instantiate", [state](World&) { state->run(); });"}}
+{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });"}}
 
-With everything installed the order is `spin`, `instantiate`, `transform`, `render_extract`. Systems that move entities run before `transform`, so a change made in one update reaches the world matrices and the GPU in the same update. Instantiate also runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — that same update.
+With everything installed, a step runs `spin`, and a sync runs `instantiate`, `transform`, `render_extract`. Everything the simulate phase moved reaches the world matrices and the GPU at the next sync. Instantiate runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — in that same sync. `World::update(dt)` is one `simulate(dt)` then one `sync()`, for tests and tools.
 
-`addSystemAfter` and `addSystemBefore` with a name that is not in the list append instead of failing. Plain `addSystem` always appends — which, once the extract is installed, means *after* `render_extract`. A gameplay system registered that way and moving an entity is seen by the transform system and the extract only on the next `update`: one frame of latency, silently. Engine-provided systems therefore go into the constructor before `transform`; `ohao_game` moves its cube in the `Application`'s `update` hook, which runs before `World::update`:
+The split is what makes a frame's simulation independent of how often it is rendered: `world.step` with 100 frames simulates 100 times and syncs once, a window host simulates once per fixed step of wall time and syncs once per presented frame, and a capture only syncs — rendering never advances the simulation. A realtime session and a lockstep one that run the same steps reach the same state, bit for bit.
 
-{{cite ohao/runtime/application.cpp "m_world->update(frameDt);"}}
+{{cite ohao/runtime/application.cpp "m_world->simulate(fixedDt);"}}
+
+`addSyncAfter` and `addSyncBefore` with a name that is not in the list append instead of failing; plain `addSync` always appends — once the extract is installed, *after* `render_extract`, so what such a system writes reaches the GPU one sync late. A sync system cannot take a dt by its type, so stepping behaviour cannot hide there.
 
 :::why
-A fixed list instead of a scheduler: with four systems and no threading, an explicit order is something a reader can verify by looking at one vector, and the only ordering bug it admits — appending after the extract — is visible in `systemNames()`. A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
+Fixed lists instead of a scheduler: with four systems and no threading, an explicit order is something a reader can verify by looking at two vectors (`simulateNames()`, `syncNames()`). A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
 :::
 
 ## Hierarchy: both directions, cycles rejected
@@ -112,5 +114,5 @@ No survivor is left holding a `Parent` that names a dead entity, and the survivi
 
 {{cite ohao/ecs/world.cpp "m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);"}}
 
-- `World` is non-copyable and owns its systems; destroying it destroys `m_systems` before `m_registry`, which is what lets the render extract release its slots while the registry still exists.
+- `World` is non-copyable and owns its systems; destroying it destroys `m_simulate` and `m_sync` before `m_registry`, which is what lets the render extract release its slots while the registry still exists.
 - `CreationOrder` is set once and never rewritten. Do not replace it to "reorder" lights or instances — slots already handed out keep their numbers.

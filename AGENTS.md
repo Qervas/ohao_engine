@@ -103,11 +103,11 @@ $ python tests/serve/check_serve.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, input actions, swapchain choices |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), input actions, swapchain choices |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff` |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging |
 | `systems_tests` | engine-provided systems (spin) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
@@ -164,7 +164,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
   results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
   `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
-  round trips, transport overhead, apply, step, the logger's per-call costs, the
+  round trips, transport overhead, apply, step, hash, diff, the logger's per-call costs, the
   `tools/list` size), results in `build/serve_bench.json`. `serve_bench` times a
   calibration loop before and after its blocks and records every other process that
   used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
@@ -203,6 +203,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - ECS writes: `Transform`, `MeshRenderer`, `Light`, `EmissiveProxyLight` and
   `GiMaterialLegacy` reach the renderer only through `registry.patch<T>()` /
   `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
+- World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
+  `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
+  `update()`: rendering must not step the simulation.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
 - The validation layer stops at 10 reports per VUID; set
