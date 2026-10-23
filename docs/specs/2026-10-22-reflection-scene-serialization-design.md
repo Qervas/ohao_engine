@@ -1128,6 +1128,25 @@ At the end of step 10, two runs of `scene_bench --check`:
   line on the noise of the small denominator, not on a change in the work.
 - Every other ratio passes (×0.9–×11.1).
 
+*Follow-up, restore into an empty world (Frank's ruling, 2026-10-23):* no budget and no
+limit changed, no threads were added, and saves stay byte-identical.
+- **Code** (`ecs/snapshot.cpp`, `ecs/snapshot_column.hpp`). Restoring into a world with
+  no entity skips the passes that only exist to diff against existing state: matching
+  rows, comparing the `Name` and `Transform` columns step 3 has just written, a lookup
+  and comparison per value, a drop sweep per pool, and a separate hierarchy pass.
+  - Links are attached while the child is created, with the parent still in cache.
+  - Every pool is reserved to its final size, the `Parent` pool once.
+  - Back to back (`scene_bench --breakdown`), the restore went from 25.6 to 21.5 ms at
+    100k and from 2.40 to 2.06 ms at 10k.
+- **Measurement.** The method above replaced the interleaved pairs.
+- **Result:** twelve consecutive gate runs, every budget and every ratio passing.
+  `restore_empty` measured ×10.6, 11.2, 10.9, 11.4, 10.5, 10.1, 10.8, 11.2, 10.9, 11.2,
+  10.4, 10.2;
+  the bench100k median was 21.6–24.4 ms, the bench10k cold median 1.99–2.22 ms.
+  - `apply_100_field_set` is at its line as before (0.159–0.198 ms in those runs). Two
+    diagnostic runs without the scaling blocks measured 0.211–0.212 ms; that is machine
+    noise on a path this change does not touch.
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1141,15 +1160,34 @@ At the end of step 10, two runs of `scene_bench --check`:
 | `world.query`, 1,000 IDs, full components, compact | ≤ 2 ms |
 
 - **Scaling:** `bench100k` must stay within 12× the 10k numbers (near-linear).
-  - *Measured as (step 6):* each bench100k operation is paired with a bench10k run in
-    the same rounds (10 rounds after 2 warm-ups), and the ratio is taken against those
-    bench10k samples.
-  - Both therefore start with caches cold from the other scene. This tests that the
-    work per entity does not grow with the scene.
-  - Against the warm, standalone bench10k medians, the codec and restore operations are
-    22–27× slower at bench100k, and snapshot 18×. That is the scene outgrowing the CPU
-    caches (32 MB of text, a 25 MB world), not per-entity work growing, and it is
-    recorded in `scene_bench.json`.
+  - *Measured as (revised 2026-10-23, the restore_empty follow-up):* both sizes are
+    measured the same way, so the ratio compares per-entity work and nothing else.
+    - **Caches cold for both.** Every scaling sample's untimed setup ends by evicting
+      the CPU caches (one write per cache line of a 128 MB buffer, allocated once).
+      bench100k cannot fit in the caches anyway (32 MB of text, a 25 MB world), and warm
+      bench10k samples would compare cache hits with memory traffic.
+    - **The same memory history for both.** The bench10k scaling block (25 rounds after
+      2 warm-ups) runs first, in a process that has only built the scene. The gated
+      bench10k rounds come next, then the bench100k scene and its block (25 rounds).
+    - **Page faults reported.** Each side's median page faults appear next to its ratio,
+      in the output and in `scene_bench.json`.
+  - *Why it changed:* step 6 interleaved each bench100k sample with a bench10k one, to
+    put thermal drift on both. Page-fault counts per sample showed that this paired the
+    bench100k samples with bench10k samples taken in a different memory state.
+    - After a 100k world has been freed, the heap keeps enough committed memory for a
+      whole 10k world. A 10k operation then takes from 1 to ~650 page faults, depending
+      on what was freed just before. bench100k always takes fresh pages (~6,500 faults
+      for `restore_empty`, about a quarter of its time).
+    - The paired bench10k `restore_empty` therefore ran 1.39–2.30 ms against 2.0 ms in
+      its own rounds, and the ratio came out anywhere from ×10.7 to ×16.8 on the same
+      code. Running bench10k first, and then bench100k, measured ×16 consistently: the
+      bench10k side reused freed memory and stayed cache-warm.
+    - A heap trim (`_heapmin`, `HeapCompact`) before each sample was tried. It did not
+      change the fault counts and was dropped.
+    - With the blocks above, the bench10k scaling samples fault like the gated rounds
+      (~690 against ~650) and match their time within a few percent.
+    - The drift that interleaving guarded against is the smaller effect: the two blocks
+      run seconds apart.
 - **Recorded, not gated:**
   - process wall time of `ohao validate` and `ohao run --steps 1` on bench10k;
   - load-to-first-frame of the Cornell scene with rendering.

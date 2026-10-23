@@ -33,6 +33,9 @@ struct RestoreScratch {
     std::span<const uint8_t> fresh;       // row -> created by this restore (its writes are not "changes")
     std::vector<uint32_t> stamp;          // by entity index: the epoch that last listed it
     uint32_t epoch{0};
+    // Every live entity was created by this restore (it restores into an empty world):
+    // no entity holds T yet, so values are emplaced with no lookup, comparison or drop pass.
+    bool intoEmpty{false};
 };
 
 namespace detail {
@@ -84,6 +87,17 @@ std::size_t restoreColumn(entt::registry& r, const SnapshotColumn& col, RestoreS
     const uint32_t epoch = ++sc.epoch;
     constexpr std::size_t page = entt::component_traits<T>::page_size;
     std::size_t writes = 0;
+    // The pool ends with one value per column row (anything else is dropped below): room
+    // for all of them up front, so a restore that creates them fills it once instead of
+    // reallocating as it doubles. A no-op when the pool already holds them.
+    s.reserve(col.rows.size());
+    if (sc.intoEmpty) {
+        // One sequential pass: at 100k entities the per-entity sparse lookups, comparisons
+        // and the drop pass below each stream the pool from memory again.
+        for (std::size_t k = 0; k < col.rows.size(); ++k)
+            if (const uint32_t row = col.rows[k]; row != kNoRow) r.emplace<T>(sc.live[row], values[k]);
+        return 0;   // nothing existed before the restore, so nothing "changed"
+    }
     for (std::size_t k = 0; k < col.rows.size(); ++k) {
         const uint32_t row = col.rows[k];
         if (row == kNoRow) continue;

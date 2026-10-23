@@ -154,12 +154,17 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
     thread_local std::vector<uint32_t> stamp, moved;
     live.assign(n, entt::entity{entt::null});
     fresh.assign(n, 0);
+    // Restoring into a world with no entity at all (a new world, or one cleared): every
+    // entity is created here, so nothing needs finding, comparing, dropping or detaching.
+    // The paths below for that case do the same writes in fewer passes; at 100k entities
+    // each pass streams megabytes from memory (spec, "Scaling").
+    const bool intoEmpty = world.idCount() == 0 && reg.storage<entt::entity>().in_use() == 0;
 
     // 1. Which snapshot entities are alive; stamp them. Fast path: an unchanged world
     // holds row r at packed position r (both are creation order).
-    stamp.assign(entitySlots(reg), 0);
-    std::size_t missing = 0;
-    {
+    std::size_t missing = intoEmpty ? n : 0;
+    if (!intoEmpty) {
+        stamp.assign(entitySlots(reg), 0);
         auto& ids = reg.storage<EntityId>();
         auto& cos = reg.storage<CreationOrder>();
         for (std::size_t r = 0; r < n; ++r) {
@@ -185,7 +190,7 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
     // 2. Destroy entities the snapshot does not have. registry().destroy detaches their
     // children instead of destroying them: those that belong to the snapshot are
     // reattached below.
-    if (world.idCount() > n - missing) {
+    if (!intoEmpty && world.idCount() > n - missing) {
         std::vector<entt::entity> extra;
         for (const entt::entity e : static_cast<const entt::sparse_set&>(reg.storage<EntityId>()))
             if (stamp[entityIndex(e)] != 1) extra.push_back(e);
@@ -195,6 +200,7 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
 
     // 3. Create the missing ones, in creation order, with their id, name, transform and
     // CreationOrder.
+    bool attachHere = false;   // the hierarchy was attached while creating (into an empty world)
     if (missing) {
         world.reserve(world.idCount() + missing);
         thread_local std::vector<uint32_t> nameAt, transformAt;
@@ -211,26 +217,68 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
         const auto* names = nameCol ? static_cast<const std::vector<Name>*>(nameCol->values.get()) : nullptr;
         const auto* transforms =
             transformCol ? static_cast<const std::vector<Transform>*>(transformCol->values.get()) : nullptr;
+        // Into an empty world, a link whose parent row comes first is attached right here,
+        // while the parent's Children (created a few rows earlier) is still in cache:
+        // attached in a later pass, each link is a cache miss once the world outgrows the
+        // CPU caches. Children then fill in row order, which is the snapshot's order when
+        // its child lists ascend. Otherwise step 5 attaches every link.
+        attachHere = intoEmpty && s.childrenAscending;
+        for (std::size_t r = 0; attachHere && r < n; ++r) attachHere = s.parent[r] == kNoRow || s.parent[r] < r;
+        auto& parents = reg.storage<Parent>();
+        auto& childLists = reg.storage<Children>();
+        if (attachHere) parents.reserve(n - static_cast<std::size_t>(std::count(s.parent.begin(), s.parent.end(), kNoRow)));
         for (std::size_t r = 0; r < n; ++r) {
             if (live[r] != entt::null) continue;
             const std::string_view name = nameAt[r] != kNoRow ? std::string_view((*names)[nameAt[r]].value) : "";
             const Transform local = transformAt[r] != kNoRow ? (*transforms)[transformAt[r]] : Transform{};
             const entt::entity e = world.createWithId(s.ids[r], name, local);
             reg.get<CreationOrder>(e).seq = s.order[r];
-            // Its children are attached below: one allocation instead of growing per child.
-            if (const uint32_t kids = s.childBegin[r + 1] - s.childBegin[r])
-                reg.get<Children>(e).entities.reserve(kids);
+            // One allocation for its children instead of growing per child.
+            if (const uint32_t kids = s.childBegin[r + 1] - s.childBegin[r]) childLists.get(e).entities.reserve(kids);
+            if (attachHere && s.parent[r] != kNoRow) {
+                const entt::entity p = live[s.parent[r]];
+                reg.emplace<Parent>(e, p);
+                childLists.get(p).entities.push_back(e);
+            }
             live[r] = e;
             fresh[r] = 1;
         }
         stats.created = missing;
     }
 
-    // 4. Component values, column by column.
-    stamp.assign(entitySlots(reg), 0);
-    RestoreScratch scratch{live, fresh, std::move(stamp), 0};
-    for (const SnapshotColumn& c : s.columns) stats.changed += componentOps(*c.type)->restore(reg, c, scratch);
+    // 4. Component values, column by column. Into an empty world, the Name and Transform
+    // columns are exactly what step 3 wrote (comparing them again would only take a cache
+    // miss per entity), and the other columns are plain emplaces.
+    if (!intoEmpty) stamp.assign(entitySlots(reg), 0);
+    RestoreScratch scratch{live, fresh, std::move(stamp), 0, intoEmpty};
+    for (std::size_t i = 0; i < s.columns.size(); ++i) {
+        const SnapshotColumn& c = s.columns[i];
+        if (intoEmpty && (static_cast<int>(i) == s.nameColumn || static_cast<int>(i) == s.transformColumn)) continue;
+        stats.changed += componentOps(*c.type)->restore(reg, c, scratch);
+    }
     stamp = std::move(scratch.stamp);
+
+    // 5 (into an empty world). No entity has a parent yet: each link is one Parent emplace,
+    // and each Children list is filled from the snapshot's, so it is in the snapshot's
+    // order already (step 3 reserved it, and created every entity with TransformDirty).
+    if (intoEmpty) {
+        if (!attachHere) {
+            std::size_t links = 0;
+            for (std::size_t r = 0; r < n; ++r) links += s.parent[r] != kNoRow;
+            reg.storage<Parent>().reserve(links);
+            for (std::size_t r = 0; r < n; ++r)
+                if (s.parent[r] != kNoRow) reg.emplace<Parent>(live[r], live[s.parent[r]]);
+            auto& cs = reg.storage<Children>();
+            for (std::size_t r = 0; r < n; ++r)
+                if (s.childBegin[r] != s.childBegin[r + 1]) {
+                    auto& kids = cs.get(live[r]).entities;
+                    for (uint32_t k = s.childBegin[r]; k < s.childBegin[r + 1]; ++k) kids.push_back(live[s.children[k]]);
+                }
+        }
+        world.setIdGenState(s.idGen);
+        world.setNextCreationSeq(s.nextSeq);
+        return stats;
+    }
 
     // 5. Hierarchy. Current parents come from the Parent storage in packed order. Detach
     // every entity whose parent differs first, then attach: the attached links are all
@@ -260,7 +308,9 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
         if (current[r] != entt::null) world.setParent(live[r], entt::null);
     }
     // Every link attached is a snapshot link and every entity attached is detached by now,
-    // so the trusted attach applies (no ancestor walk per entity).
+    // so the trusted attach applies (no ancestor walk per entity). The Parent pool takes
+    // every link at once instead of growing by doubling.
+    reg.storage<Parent>().reserve(parented);
     for (const uint32_t r : moved) {
         if (const entt::entity p = desiredParent(r); p != entt::null) world.attach(live[r], p);
         stats.changed += fresh[r] ? 0u : 1u;

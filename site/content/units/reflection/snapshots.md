@@ -44,7 +44,7 @@ The working vectors are `thread_local`, so once the world stops growing, no vect
 
 **2. Destroy extras.** This runs only when the world holds more managed entities than were matched:
 
-{{cite ohao/ecs/snapshot.cpp "if (world.idCount() > n - missing) {"}}
+{{cite ohao/ecs/snapshot.cpp "if (!intoEmpty && world.idCount() > n - missing) {"}}
 
 Extras are destroyed with `registry().destroy`, not `World::destroy`. A snapshot entity that was reparented under an extra is therefore detached by the hierarchy hook rather than destroyed with it, and step 5 reattaches it.
 
@@ -68,7 +68,7 @@ The current value is found by the same positional trick: index `k` of the storag
 
 {{cite ohao/ecs/snapshot.cpp "if (current[r] != entt::null) world.setParent(live[r], entt::null);"}}
 
-Detaching everything before attaching anything means no intermediate state can contain a cycle, even when two entities swap roles as parent and child. Every attached link is a snapshot link, so the ancestor walk is unnecessary. Each `Children` list is then compared with the saved order and overwritten only if it differs. The check is skipped when the restore attached every link itself and every saved list is in ascending row order. That typically happens in a restore into an empty world.
+Detaching everything before attaching anything means no intermediate state can contain a cycle, even when two entities swap roles as parent and child. Every attached link is a snapshot link, so the ancestor walk is unnecessary. Each `Children` list is then compared with the saved order and overwritten only if it differs. The check is skipped when the restore attached every link itself and every saved list is in ascending row order.
 
 **6.** The id generator and the creation sequence are set back to the snapshot's values. Entities created after a restore get the same ids and sequences they got the first time (`t10_id_counter_and_creation_sequence_are_restored`).
 
@@ -78,7 +78,26 @@ Detaching everything before attaching anything means no intermediate state can c
 An unchanged restore performs no emplace, replace, remove or reparent, so it fires no component signal. `t10_unchanged_restore_writes_no_component` connects counters to construct, update and destroy on `EntityId`, `Name`, `Transform`, `Parent`, `Light` and `PreservedComponents`, and requires zero. After one `Transform` edit it requires exactly one write.
 :::
 
-Restore does not need an empty world. Restoring into a fresh `World` creates every row, and `t10_restore_into_an_empty_world` requires a byte-identical save, the same `Children` order and the same `CreationOrder` per entity. `t10_mutations_then_restore_give_identical_saves` runs moves, adds, removes, renames, reparents, subtree destroys, raw destroys and creates, then restores, and requires a byte-identical save.
+Restore does not need an empty world. `t10_mutations_then_restore_give_identical_saves` runs moves, adds, removes, renames, reparents, subtree destroys, raw destroys and creates, then restores, and requires a byte-identical save.
+
+## Restoring into an empty world
+
+The diff above pays for its generality with passes over the whole world: match every row, stamp, compare every column, sweep every pool for values to drop, walk the hierarchy again to attach. At 10,000 entities the world and the snapshot stay in the CPU caches and the extra passes are nearly free. At 100,000 each one streams megabytes from memory, and a parent's `Children` list, allocated in step 3, has long been evicted by the time step 5 appends to it. Restoring into a world with no entity at all needs none of that, and is detected up front:
+
+{{cite ohao/ecs/snapshot.cpp "const bool intoEmpty = world.idCount() == 0 && reg.storage<entt::entity>().in_use() == 0;"}}
+
+The writes are the same; the passes are fewer.
+
+- **Steps 1 and 2** are skipped: every row is missing and nothing is extra.
+- **Step 3** attaches each link as it creates the child, while the parent (created a few rows earlier in a typical scene) is still in cache. Children then fill in row order, which is the snapshot's order when its child lists ascend. It does so only when every parent row precedes its child's and the lists ascend; otherwise a separate pass attaches the links from the snapshot's own lists. Either way the `Parent` pool is reserved once.
+
+{{cite ohao/ecs/snapshot.cpp "for (std::size_t r = 0; attachHere && r < n; ++r) attachHere = s.parent[r] == kNoRow || s.parent[r] < r;"}}
+
+- **Step 4** skips the `Name` and `Transform` columns, which step 3 has just written from the same values, and emplaces every other column in one sequential pass, with no lookup, comparison or drop sweep. Each pool is first reserved to its column's size, so it fills once instead of reallocating as it doubles. A pool that already holds the values is left alone:
+
+{{cite ohao/ecs/snapshot_column.hpp "if (const uint32_t row = col.rows[k]; row != kNoRow) r.emplace<T>(sc.live[row], values[k]);"}}
+
+`t10_restore_into_an_empty_world` requires a byte-identical save, the same `Children` order and the same `CreationOrder` per entity, and `scene_bench` checks the bench scenes the same way after timing them. The change took restore into an empty world from 25.6 to 21.5 ms at 100k entities and from 2.40 to 2.06 ms at 10k, measured back to back with `scene_bench --breakdown`.
 
 ## How the GPU follows
 
@@ -107,4 +126,5 @@ In deferred mode, `VulkanRenderer::resetAccumulation` idles the device, zeroes t
 - **Only `Parent` is remapped.** Columns copy values verbatim. `Parent` is today the only saved component holding an `entt::entity`, and it is stored as a row. A future saved component with an entity field would be restored with the old handle, which is stale if restore recreated its target.
 - **The registry must outlive the snapshot.** Columns hold `const TypeInfo*`, and restore dispatches through `componentOps(*c.type)`. The snapshot must come from a world with the same registrations, and nothing checks that.
 - **Unmanaged entities are invisible.** An entity without an `EntityId` is neither captured nor destroyed, and its components are never touched.
-- **Snapshots live in memory only**, in the session, by name. The codec-speed record also reports that restoring into an empty world scales x12.3 to x14.6 from 10k to 100k entities, over the 12x limit. That figure is reported there, not loosened.
+- **Snapshots live in memory only**, in the session, by name.
+- **Restoring into an empty world is a page-fault workload.** About a quarter of its time at 100k entities is first touches of fresh pages (roughly 6,500 faults). A 10k world often lands in memory the heap kept from an earlier free and takes far fewer, which is why `scene_bench` measures its scaling ratio in blocks that give both sizes the same memory history (spec, "Budgets").

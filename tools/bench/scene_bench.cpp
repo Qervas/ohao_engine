@@ -1,7 +1,8 @@
 // scene_bench: the scene codec, snapshot and API budgets (spec "Performance").
 //
 //   scene_bench [--check budgets.json] [--out build/scene_bench.json] [--no-scale] [--iters N]
-//   scene_bench --breakdown [N]        the codec's phases timed separately (not gated)
+//   scene_bench --breakdown [N]        the codec's phases timed separately, and restore into
+//                                      an empty world with its page faults (not gated)
 //
 // Generates bench10k (and bench100k for the scaling check) with a fixed seed and times
 // every gated operation: median of N (50) after 5 warm-ups, p95 reported, single thread.
@@ -29,6 +30,7 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
 #endif
 
 #include <algorithm>
@@ -142,6 +144,7 @@ struct Op {
     std::function<void()> run;        // timed
     std::function<void()> teardown;   // untimed, after each run
     std::vector<double> samples;      // ms
+    std::vector<double> faults;       // page faults during each timed run
 };
 
 struct Timing {
@@ -156,16 +159,52 @@ Timing stats(std::vector<double> ms) {
     return {at(0.5), at(0.95)};
 }
 
+// The process's page faults so far (soft faults included: first touches of fresh pages).
+uint64_t pageFaults() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS c{};
+    c.cb = sizeof c;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &c, sizeof c)) return c.PageFaultCount;
+#endif
+    return 0;
+}
+
+// Evicts the CPU caches: writes one byte per cache line of a buffer larger than any L3 in
+// use. The buffer is allocated and touched once, so flushing takes no page faults.
+void flushCaches() {
+    static std::vector<uint8_t> buffer(std::size_t{128} << 20, 1);
+    for (std::size_t i = 0; i < buffer.size(); i += 64) buffer[i] = static_cast<uint8_t>(buffer[i] + 1);
+}
+
+// A copy of `ops` whose untimed setup ends by evicting the caches (scaling samples).
+std::vector<Op> coldCopy(const std::vector<Op>& ops) {
+    std::vector<Op> out = ops;
+    for (Op& op : out) {
+        op.samples.clear();
+        op.faults.clear();
+        op.setup = [setup = op.setup] {
+            if (setup) setup();
+            flushCaches();
+        };
+    }
+    return out;
+}
+
 // One run of every op per round; the first `warmups` rounds are not recorded.
 void runRounds(const std::vector<Op*>& ops, int warmups, int rounds) {
     for (int r = 0; r < warmups + rounds; ++r)
         for (Op* op : ops) {
             if (op->setup) op->setup();
+            const uint64_t f0 = pageFaults();
             const auto t0 = std::chrono::steady_clock::now();
             op->run();
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            const uint64_t f1 = pageFaults();
             if (op->teardown) op->teardown();
-            if (r >= warmups) op->samples.push_back(ms);
+            if (r >= warmups) {
+                op->samples.push_back(ms);
+                op->faults.push_back(static_cast<double>(f1 - f0));
+            }
         }
 }
 
@@ -324,6 +363,33 @@ void breakdown(int n) {
         std::printf("    %-32s median %8.3f ms   p95 %8.3f ms\n", op.name.c_str(), t.median, t.p95);
     }
     (void)sink;
+
+    // Restore into an empty world, and the teardown of that world, with the page faults
+    // each takes (a first touch of a fresh page is a fault).
+    const Snapshot snap = takeSnapshot(world, engineTypes());
+    std::vector<double> restoreMs, restoreFaults, dropMs, dropFaults;
+    for (int r = 0; r < 23; ++r) {
+        auto w = std::make_unique<World>();
+        const uint64_t f0 = pageFaults();
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)restoreSnapshot(*w, snap);
+        const auto t1 = std::chrono::steady_clock::now();
+        const uint64_t f1 = pageFaults();
+        w.reset();
+        const auto t2 = std::chrono::steady_clock::now();
+        const uint64_t f2 = pageFaults();
+        if (r < 3) continue;
+        restoreMs.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+        dropMs.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+        restoreFaults.push_back(static_cast<double>(f1 - f0));
+        dropFaults.push_back(static_cast<double>(f2 - f1));
+    }
+    const auto line = [](const char* what, const std::vector<double>& ms, const std::vector<double>& faults) {
+        const Timing t = stats(ms), f = stats(faults);
+        std::printf("    %-32s median %8.3f ms   p95 %8.3f ms   page faults %8.0f\n", what, t.median, t.p95, f.median);
+    };
+    line("restore into an empty world", restoreMs, restoreFaults);
+    line("  destroying that world", dropMs, dropFaults);
 }
 
 std::string readFile(const std::string& path) {
@@ -386,26 +452,44 @@ int main(int argc, char** argv) {
 
     std::printf("scene_bench (Release, single thread, no GPU; %d rounds after 5 warm-ups)\n", iters);
     Scene s10("bench10k", 10'000);
-    {
+
+    // Scaling (spec, "Budgets"): bench100k against bench10k, both measured the same way.
+    // - Caches cold for both: every scaling sample's untimed setup ends by evicting them.
+    //   bench100k cannot fit in the caches; warm bench10k samples would compare cache hits
+    //   with memory traffic.
+    // - The same memory history for both: the bench10k block runs first, in a process that
+    //   has only built the scene, and the bench100k block last. How many page faults a 10k
+    //   operation takes depends on what the heap kept from earlier frees: after a 100k
+    //   world has been freed, a whole 10k world fits in the kept memory (1 fault instead of
+    //   ~650); after the 50 gated rounds, anywhere from ~200 to ~560 from run to run.
+    //   bench100k always takes fresh pages (~6,500 faults for restore_empty).
+    // These blocks replaced the step-6 interleaved pairs, whose bench10k samples landed in
+    // one memory state or the other and put restore_empty anywhere from x10.7 to x16.8.
+    // The page faults of both sides are reported next to each ratio.
+    std::unique_ptr<Scene> s100;
+    std::vector<Op> cold10, cold100;
+    const int scaleRounds = std::max(20, iters / 2);   // 25 by default; 10 was too few
+    const auto runBlock = [&](std::vector<Op>& ops) {
+        std::vector<Op*> list;
+        for (Op& op : ops) list.push_back(&op);
+        runRounds(list, 2, scaleRounds);
+    };
+    if (scale) {
+        cold10 = coldCopy(s10.ops);
+        runBlock(cold10);
+    }
+
+    {   // The gated bench10k rounds.
         std::vector<Op*> list;
         for (Op& op : s10.ops) list.push_back(&op);
         runRounds(list, 5, iters);
     }
     std::vector<std::string> failures = s10.verify();
 
-    // bench100k, each op paired with a bench10k run in the same round.
-    std::unique_ptr<Scene> s100;
-    std::vector<Op> paired10;
     if (scale) {
         s100 = std::make_unique<Scene>("bench100k", 100'000);
-        paired10 = s10.ops;
-        std::vector<Op*> list;
-        for (std::size_t i = 0; i < s100->ops.size(); ++i) {
-            paired10[i].samples.clear();
-            list.push_back(&s100->ops[i]);
-            list.push_back(&paired10[i]);
-        }
-        runRounds(list, 2, std::max(10, iters / 5));
+        cold100 = coldCopy(s100->ops);
+        runBlock(cold100);
         for (auto& p : s100->verify()) failures.push_back(std::move(p));
     }
 
@@ -426,9 +510,9 @@ int main(int argc, char** argv) {
         w.key("ops");
         w.beginObject();
         for (std::size_t i = 0; i < s.ops.size(); ++i) {
-            const Op& op = s.ops[i];
+            const Op& op = gated ? s.ops[i] : cold100[i];   // bench100k: its cold scaling samples
             const Timing t = stats(op.samples);
-            char verdict[96] = "";
+            char verdict[160] = "";
             w.key(op.name);
             w.beginObject();
             w.key("medianMs"); w.float32(static_cast<float>(t.median));
@@ -443,13 +527,18 @@ int main(int argc, char** argv) {
                     w.key("budgetMs"); w.float32(static_cast<float>(b->second));
                 }
             } else {
-                const Timing base = stats(paired10[i].samples);
+                const Timing base = stats(cold10[i].samples);
                 const double ratio = base.median > 0 ? t.median / base.median : 0.0;
                 const bool pass = maxRatio <= 0 || ratio <= maxRatio;
-                std::snprintf(verdict, sizeof verdict, "%s x%.1f of bench10k (%.3f ms in the same rounds)",
-                              pass ? "ok  " : "OVER", ratio, base.median);
+                std::snprintf(verdict, sizeof verdict,
+                              "%s x%.1f of bench10k cold (%.3f ms; %.3f warm) page faults %.0f / %.0f",
+                              pass ? "ok  " : "OVER", ratio, base.median, stats(s10.ops[i].samples).median,
+                              stats(op.faults).median, stats(cold10[i].faults).median);
                 if (!pass) failures.push_back(s.name() + " " + op.name + ": " + std::to_string(ratio) + "x bench10k");
                 w.key("ratioTo10k"); w.float32(static_cast<float>(ratio));
+                w.key("bench10kColdMs"); w.float32(static_cast<float>(base.median));
+                w.key("pageFaults"); w.float32(static_cast<float>(stats(op.faults).median));
+                w.key("bench10kPageFaults"); w.float32(static_cast<float>(stats(cold10[i].faults).median));
             }
             w.endObject();
             std::printf("    %-22s median %9.3f ms   p95 %9.3f ms   %s\n", op.name.c_str(), t.median, t.p95, verdict);
