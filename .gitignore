@@ -65,6 +65,8 @@ playground/
 
 # Variance-tool diff artifacts
 *.diff.png
+# render_golden.py writes the failing render beside its golden
+tests/golden/*.actual.png
 
 # Misc
 imgui.ini
