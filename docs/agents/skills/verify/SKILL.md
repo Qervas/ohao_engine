@@ -5,9 +5,22 @@ description: Run OHAO's gates (unit suites, CLI and doc checks, GPU tests, valid
 
 # Verify OHAO
 
+## The one command
+
+```console
+$ python tools/check.py   # slow
+```
+
+It builds (shaders first, at most 6 jobs) and runs every CTest test labelled `quick`,
+`gpu` or `docs`; `--all` adds the goldens, the benchmark gate and the slow checks. Read
+the last line it prints (also `build/check/check.json`): `ok`, then per test `ok`, the
+suite's own `passed`/`failed`/`failures`, and for a failure the last 40 lines of its
+output in `tail`. Exit 0 = pass, 1 = a failure, 2 = the environment (the `error` field
+says what). The sections below run single suites by hand.
+
 Every suite exits 0 on success and nonzero on any failure; that is the pass criterion.
-Newer suites end with one JSON line `{"suite", "passed", "failed", "failures"}`. Build
-first (the `build` skill), shaders included if `shaders/` changed.
+Every suite ends with one JSON line `{"suite", "passed", "failed", "failures"}`. Build
+first (the `build` skill) when running suites by hand.
 
 ## 1. CPU gates (seconds; run always)
 
@@ -25,6 +38,7 @@ $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
+$ python tests/check/check_tests.py > /dev/null
 ```
 
 ## 2. GPU gates (a minute or two; when rendering, ECS, scene or API code changed)

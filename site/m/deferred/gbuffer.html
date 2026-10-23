@@ -46,7 +46,7 @@
 <p>Comments in five files still name a packed 10-bit format for this attachment, including the header of the shared octahedral decoder:</p>
 <div class="citation-chip"><code class="citation-code">// Octahedron normal encoding/decoding (A2R10G10B10 GBuffer format)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L11" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:11</a></div>
 <p>Three of those five, and four of the nine shaders that `#include` that header, sit under `shaders/_disabled/` — a directory nothing actually excludes, because the shader target globs the tree recursively and compiles it too:</p>
-<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
 <p>The octahedral encoding is a leftover from the 10-bit format. It is not vestigial — it is now paying for something else.</p>
 </div>
 <div class="section-rule"><h2 id="the-packing-that-buys-a-channel">The packing that buys a channel</h2></div>

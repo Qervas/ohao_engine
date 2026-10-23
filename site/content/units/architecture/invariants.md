@@ -157,9 +157,11 @@ reason that is not a renderer change, and what closes it.
 ## And nothing starts any of them
 
 The repository carries one CI workflow and it publishes this site. There is no
-build job, no `ctest` invocation, no golden run, no installed git hook.
-`engine_tests`, `check_validation.py` and `render_golden.py` all work, and all
-three run only when a person types the command.
+build job, no golden run, no installed git hook. Since sub-project 4 every tier is one
+command away — `python tools/check.py` builds and runs every suite, harness and gate
+through CTest and answers with one JSON verdict — but `engine_tests`,
+`check_validation.py` and `render_golden.py` still run only when a person, or an agent,
+types that command.
 
 The audit closes on an honest total, one line per mechanism. The asserts are the
 only tier that fires by itself, on every compile, and they stop at the language

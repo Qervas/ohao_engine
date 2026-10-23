@@ -15,9 +15,9 @@ results. There is no shader database, no variant matrix, no reflection step.
 
 {{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SHADER_SOURCES"}}
 
-The glob runs at *configure* time and carries no `CONFIGURE_DEPENDS`, so a newly
-added `.rgen` is invisible until CMake is re-run — the failure looks like a
-missing SPIR-V at load, not a build error. It also recurses without exclusions:
+The glob runs at configure time and, since sub-project 4, carries `CONFIGURE_DEPENDS`:
+the build re-checks it and re-runs the configure step when a stage source is added or
+removed, so a new `.rgen` is compiled by the next build. It also recurses without exclusions:
 every stage source anywhere under `shaders/` is globbed and compiled, whether or
 not any C++ loads it — 40 sources, 40 SPIR-V modules. Headers are the opposite
 case: a `.glsl` file is compiled only as text spliced into a stage, so a header no
@@ -120,6 +120,7 @@ POST_BUILD `copy_directory` commands writing the same destination race under
 
 {{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
+Every example and every rendering test declares the same dependency, and
 `renderer_test` is configured by default, so an ordinary configure-and-build
 produces both trees:
 
@@ -208,7 +209,7 @@ report success and the SPIR-V will be unchanged.
 
 ## Contracts
 
-- The `shaders` target is declared without `ALL`, so it is not a root of the default build in its own right. It is pulled in through `add_dependencies` from the `ohao` CLI, which is always configured, and from `renderer_test` and the `*_gpu_test` targets, which means a plain `cmake --build build` does recompile shaders; a build of only an example does not. `--target shaders` remains the only way to say it directly. {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
+- The `shaders` target is declared without `ALL`, so it is not a root of the default build in its own right. It is pulled in through `add_dependencies` from every target that loads SPIR-V — the `ohao` CLI, the examples, `renderer_test`, `engine_tests`, `ecs_tests` and the `*_gpu_test`s — so building any of them recompiles shaders; `python tools/check.py` builds it first explicitly. `--target shaders` remains the way to say it directly. {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 - The mirror from `build/shaders/` into `bin/shaders/` is owned by the `shaders` target itself, not by its consumers. Two consumers each attaching their own POST_BUILD `copy_directory` into that one destination raced under `-j8`; the single copy also closes the ordering gap where a consumer's mirror could snapshot SPIR-V from before the shaders were rebuilt. {{cite shaders/CMakeLists.txt "add_custom_command(TARGET shaders POST_BUILD"}}
 - Nothing deletes stale outputs. A renamed or moved shader leaves its old `.spv` in `build/shaders/`, where the runtime's basename fallback will happily load it.
 - Every shader path in the engine is CWD-relative, and on a single-config build exactly two working directories resolve: the repository root (via the `build/shaders/` + basename rung) and `build/` (via the `bin/shaders/` literal, served by the `shaders` target's mirror). They are not equivalent for anything else — `model_viewer`'s scene names its environment map as a project-relative asset, which the example's `FileAssetResolver` resolves against the current directory, and the file exists only under the source tree, so that example still has to run from the root. {{cite examples/example_scenes.hpp "addEnvironment(world, ecs::AssetRef{"assets/test_models/env_studio.hdr", {}});"}}

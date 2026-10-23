@@ -744,6 +744,11 @@ remains the registry: `ctest -L quick` works without the script.
   `{"suite", "passed", "failed", "failures"}` line, adopted by every C++ suite that lacks
   it (`engine_tests`, `ecs_tests`, `runtime_tests`, physics, audio, force, `env_cdf_test`,
   `denoise_parse_test`, `sobol_test`, `renderer_test`, the `*_gpu_test`s).
+  - *As built (step 2):* the macros are `CHECK`/`RUN` (the names the suites already used;
+    there is no `SECTION`), and `ohao::test::finish(...)` prints the line, either from the
+    macros' counters or from a suite's own (the `TEST_BEGIN`/`EXPECT` suites keep their
+    macros and record failures). The three GoogleTest suites link `ohao_gtest_main`, a
+    main that prints the line. The `*_gpu_test`s already printed it.
 - `render_golden.py --json FILE` and `check_validation.py --json FILE` write one object
   per scene (below). `check.py` passes them.
 
@@ -836,6 +841,15 @@ CPU (no device):
    fails makes `check.py --labels selftest` exit 1 with the failure and its tail in
    `check.json`; `check.json` and `junit.xml` parse; every built test executable is
    registered.
+   - *As built (step 2):* `tests/check/check_tests.py` (label `quick`). The fixtures are a
+     Python-only CMake project (`tests/check/fixture`) configured into its own build tree,
+     `build/check_fixture`: a CTest run nested inside the main one would share
+     `build/Testing`. Seven checks: the failure fails the check (exit 1, counts); it
+     carries its suite line and a 40-line tail; stdout's last line is `check.json` and the
+     failing output stays out of the progress lines; `junit.xml` agrees; labels select
+     exactly their tests; an unknown label exits 2; every `*_test`, `*_tests` and
+     `*_bench` executable in `build/Release` is a registered test, and every test has
+     exactly one known label.
 4. **Golden harness:** synthetic image pairs with known differences give the expected
    max_abs, regions and heatmap pixels; `--json` shape.
 5. **Doctor:** a fake shader tree (temp directory) with one stale and one missing SPIR-V
@@ -932,6 +946,18 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
    shaders as a dependency of every SPIR-V consumer, `tests/common/harness.hpp` adopted by
    every suite, `tools/check.py`, `AGENTS.md` and the `verify` skill text updated (the
    skill file change is a Frank action). Test 3.
+   - *Done 2026-10-23.* 29 tests registered (`quick` 14, `gpu` 10, `docs` 2, `golden`,
+     `bench`, `slow` 1 each); `python tools/check.py` 26/26 and `--all` 28/29 with
+     `scene_bench` the one failure, a uniform 2.3× slowdown of unchanged code (see the
+     step's change record). Also built: a `LOCKS` registration option, after the first
+     run found three tests racing on `build/cli_tmp` (the CLI check runs as two tests and
+     inside the doc checker) and `api_tests` writing a fixed `%TEMP%` file;
+     `renderer_test` checks what it renders and writes under the build directory (it left
+     `smoke_test.png` in the repo root). `doctor` is `null` in `check.json` until step 3.
+     The `build` and `verify` skill drafts wait in `docs/agents/skills/`. The dead
+     `tests/CMakeLists.txt` and the `tests/engine_tests.cpp` it named are deleted;
+     `renderer_pipeline_tests.cpp` and `tests/shadow_system` (dead, but cited by the
+     monograph) are left for a cleanup with their units.
 3. **Golden diffs and doctor.** `render_golden.py`/`check_validation.py` `--json`,
    heatmaps, regions, selftest floor; `ohao doctor`; `check.py` runs doctor. Tests 4, 5.
 4. **Logger.** `ohao/core/log`; every engine print migrated; validation messages into

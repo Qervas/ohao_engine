@@ -248,11 +248,11 @@ lines keep rendering denoised instead of silently returning noise.
 {{cite tests/renderer/denoise_parse_test.cpp "TEST(DenoiseTypes, OptixRemovedFallsBackToOidn)"}}
 
 A fourth binary, `renderer_test`, initializes Vulkan, uploads a red quad, renders
-one RTOffline frame and writes a PNG — but never inspects a pixel, returning 0
-even when `getPixels()` hands back null. An init-and-teardown canary, fine to
-have provided nobody reads its `ALL PASS` as a claim about the image.
+one RTOffline frame and writes a PNG under the build directory. It checks that a frame
+came back and was written, but never inspects a pixel: an init-and-teardown canary,
+not a claim about the image.
 
-{{cite tests/renderer/renderer_test.cpp "=== ALL PASS ==="}}
+{{cite tests/renderer/renderer_test.cpp "check(pixels != nullptr, "a frame renders to pixels");"}}
 
 Three more binaries in the same directory do inspect pixels, by comparing renders
 with each other rather than with a committed image, and each ends with a one-line
@@ -372,20 +372,36 @@ editing a builder without regenerating the file fails here.
 `tests/reflect/check_scene_schema.py` runs the generated JSON Schemas through a stock
 validator and needs the `jsonschema` package.
 
+## One command runs all of it
+
+Every suite, harness and gate is a CTest test with exactly one label, registered
+through one helper that runs it from the source root and gives every GPU test the
+resource lock `gpu`, so two never share the device:
+
+{{cite cmake/ohao_tests.cmake "set_property(TEST ${name} PROPERTY RESOURCE_LOCK ${locks})"}}
+
+The labels are `quick` (CPU suites and harnesses), `gpu`, `docs`, `golden`, `bench`
+(run alone: `RUN_SERIAL`), `slow` (the exhaustive float check) and `selftest`.
+`python tools/check.py` configures if needed, builds the `shaders` target before
+everything else, runs `ctest` on the chosen labels (`quick,gpu,docs` by default,
+`--all` for every one but `selftest`) and writes one verdict, `build/check/check.json`,
+also printed as its last line. Each test's entry carries the counts from the suite's own
+JSON line; a failing one carries the last 40 lines of its output.
+
+{{cite tools/check.py "entry["tail"] = tail(output)"}}
+
+Every C++ suite ends with the same summary line, from `tests/common/harness.hpp`; the
+three GoogleTest suites get it from a main that replaces `gtest_main`. Tests that share
+a scratch directory under `build/` hold a common lock as well: the CLI check writes
+`build/cli_tmp` and runs as two tests and inside the doc checker.
+
+`tests/check/check_tests.py` tests the check itself: against fixtures configured into
+their own build tree, a failing test must fail the check and arrive with its summary and
+tail, and every test executable the build produces must be registered.
+
 ## What only looks wired up
 
-Four things under `tests/` look like tests and are not.
-
-- `enable_testing()` is called nowhere in the repository, so CMake emits no
-  `CTestTestfile.cmake` and `ctest -N` reports zero tests. Every `add_test` and
-  `gtest_discover_tests` call under `tests/` is inert; each suite runs by
-  executing its binary.
-- `tests/CMakeLists.txt` is orphaned — the root adds `tests/renderer`,
-  `tests/engine` and the rest individually, never `tests` itself. Fortunate: that
-  file declares a second `engine_tests` target and re-adds `tests/renderer`, so
-  wiring it in would fail configuration outright.
-
-{{cite tests/CMakeLists.txt "gtest_discover_tests(engine_tests)"}}
+Two things under `tests/` look like tests and are not.
 
 - `tests/renderer/renderer_pipeline_tests.cpp`, 939 lines advertising "Phase 1–5"
   coverage of the deferred pipeline, is in no `CMakeLists.txt` and could not
