@@ -65,9 +65,11 @@ struct BusyProcess {
     double corePct = 0.0;   // CPU time over wall time, in percent of one core
 };
 
-// CPU time used by every other process between start() and stop().
+// CPU time used by every other process between start() and stop(). Processes the bench
+// started itself (a server it drives) are passed to exclude().
 class LoadMonitor {
 public:
+    void exclude(uint32_t pid) { excluded_.push_back(pid); }
     void start() {
         t0_ = std::chrono::steady_clock::now();
         before_ = sample();
@@ -82,7 +84,8 @@ public:
         double sum = 0.0;
         for (const auto& a : after)
             for (const auto& b : before_)
-                if (a.pid == b.pid && a.name == b.name && a.cpu100ns >= b.cpu100ns) {
+                if (a.pid == b.pid && a.name == b.name && a.cpu100ns >= b.cpu100ns &&
+                    std::find(excluded_.begin(), excluded_.end(), a.pid) == excluded_.end()) {
                     const double pct = wall100ns > 0 ? 100.0 * double(a.cpu100ns - b.cpu100ns) / wall100ns : 0.0;
                     sum += pct;
                     if (pct >= minPct) busy.push_back({a.name, pct});
@@ -128,6 +131,7 @@ private:
 
     std::chrono::steady_clock::time_point t0_{};
     std::vector<Sample> before_;
+    std::vector<uint32_t> excluded_;
 };
 
 } // namespace ohao::bench

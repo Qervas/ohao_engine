@@ -6,7 +6,8 @@
   t3_* run tools/check.py against the selftest fixtures (tests/check/fixture), configured
   into their own build tree, build/check_fixture: a failing test makes the check exit 1
   and reports it with its own summary and the tail of its output; check.json, the last
-  stdout line and junit.xml agree; labels select exactly their tests.
+  stdout line and junit.xml agree; labels select exactly their tests; a bench that reports
+  itself noisy is rerun at most twice, every attempt reported.
   t3_every_test_executable_is_registered: every test executable the main build produced
   (*_test, *_tests, *_bench in build/Release) runs as a CTest test, and every registered
   test carries exactly one known label.
@@ -117,6 +118,28 @@ def t3_labels_select_exactly_their_tests():
         f"only the quick-labelled test ran: {[t['name'] for t in verdict['tests']]}"
 
 
+def t3_a_noisy_bench_is_rerun_at_most_twice():
+    """Spec "Measurement rules": the check reruns a noisy bench at most twice and reports
+    every attempt (sub-project 4, step 6)."""
+    for name in ("noisy_once.runs", "noisy_always.runs"):
+        (FIXTURE_BUILD / name).unlink(missing_ok=True)
+    r, out = run_check("bench")
+    verdict = json.loads((out / "check.json").read_text(encoding="utf-8"))
+    tests = {t["name"]: t for t in verdict["tests"]}
+    once, always = tests.get("fixture_noisy_once"), tests.get("fixture_noisy_always")
+    assert once is not None and always is not None, f"both noisy fixtures are reported: {sorted(tests)}"
+    assert once["ok"] is True and "noisy" not in once, "noisy once, then a clean pass: the test passes"
+    assert [(a["ok"], a["noisy"]) for a in once["attempts"]] == [(False, True), (True, False)], \
+        f"its two attempts are reported: {once.get('attempts')}"
+    runs = len((FIXTURE_BUILD / "noisy_always.runs").read_text(encoding="utf-8").splitlines())
+    assert runs == 3, f"an always-noisy bench runs three times in all, the first plus two reruns (ran {runs})"
+    assert always["ok"] is False and always.get("noisy") is True, "still noisy: not passed, and marked noisy"
+    assert [(a["ok"], a["noisy"]) for a in always["attempts"]] == [(False, True)] * 3, \
+        f"its three attempts are reported: {always.get('attempts')}"
+    assert r.returncode == 1 and verdict["counts"] == {"tests": 2, "passed": 1, "failed": 1}, \
+        f"exit 1, one of two passed (exit {r.returncode}, counts {verdict['counts']})"
+
+
 def t3_an_unknown_label_is_an_environment_error():
     r, out = run_check("nonsense")
     verdict = json.loads((out / "check.json").read_text(encoding="utf-8"))
@@ -155,7 +178,8 @@ def main():
     else:
         for fn in (t3_a_failing_test_fails_the_check, t3_the_failure_carries_its_summary_and_output_tail,
                    t3_stdout_last_line_is_check_json, t3_junit_parses_and_agrees,
-                   t3_labels_select_exactly_their_tests, t3_an_unknown_label_is_an_environment_error):
+                   t3_labels_select_exactly_their_tests, t3_a_noisy_bench_is_rerun_at_most_twice,
+                   t3_an_unknown_label_is_an_environment_error):
             run(fn)
     run(t3_every_test_executable_is_registered)
     print(f"Results: {passed}/{passed + failed} passed")

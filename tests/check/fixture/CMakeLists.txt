@@ -14,3 +14,9 @@ add_test(NAME fixture_fail COMMAND ${Python3_EXECUTABLE} ${fixture} fail)
 add_test(NAME fixture_other_label COMMAND ${Python3_EXECUTABLE} ${fixture} pass)
 set_tests_properties(fixture_pass fixture_fail PROPERTIES LABELS selftest)
 set_tests_properties(fixture_other_label PROPERTIES LABELS quick)
+# Benchmarks under outside load (exit 2, "noisy"): the check reruns them at most twice.
+add_test(NAME fixture_noisy_once COMMAND ${Python3_EXECUTABLE} ${fixture} noisy_once
+    ${CMAKE_CURRENT_BINARY_DIR}/noisy_once.runs)
+add_test(NAME fixture_noisy_always COMMAND ${Python3_EXECUTABLE} ${fixture} noisy_always
+    ${CMAKE_CURRENT_BINARY_DIR}/noisy_always.runs)
+set_tests_properties(fixture_noisy_once fixture_noisy_always PROPERTIES LABELS bench)

@@ -12,12 +12,15 @@ Steps (sub-project 4 spec, "One entry point"):
   4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
      error-level check fails the run stops there, with the doctor's verdict in check.json;
   5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
+     a test whose summary says "noisy" (a benchmark under outside load) is rerun alone, at
+     most twice, and every attempt is reported;
   6. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
-seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}}. passed /
-failed / failures come from the suite's own JSON summary line; tail is the last 40 lines
-of a failing test's output, so no failure is ever reported without what it printed.
+seconds, passed?, failed?, failures?, noisy?, attempts?, tail?}], counts: {tests, passed,
+failed}}. passed / failed / failures come from the suite's own JSON summary line; tail is
+the last 40 lines of a failing test's output, so no failure is ever reported without what
+it printed. attempts lists a rerun noisy test's runs, [{ok, noisy, seconds}].
 
 Labels (cmake/ohao_tests.cmake): quick, gpu, docs (the default set); --all adds golden,
 bench and slow. selftest is only for this script's own test.
@@ -219,11 +222,49 @@ def summarize(junit, labels):
             entry["failed"] = s.get("failed")
             if s.get("failures"):
                 entry["failures"] = s["failures"][:20]
+            if s.get("noisy"):
+                entry["noisy"] = True   # a benchmark run under outside load: no verdict
         if failed:
             entry["status"] = status
             entry["tail"] = tail(output)
         tests.append(entry)
     return tests
+
+
+# The summary line is a suite's last: keep the end of long outputs, not the start.
+OUTPUT_FLAGS = ["--output-on-failure", "--test-output-size-passed", "65536",
+                "--test-output-size-failed", "1048576", "--test-output-truncation", "head"]
+MAX_NOISY_RERUNS = 2
+
+
+def rerun_noisy(ctest, build_dir, config, out, tests, labels):
+    """A test that reports itself noisy (a benchmark under outside load) is rerun alone, at
+    most twice; its entry becomes the last attempt's, with every attempt in `attempts`. One
+    still noisy after that has not passed (ok false) and keeps `noisy`, so the verdict tells
+    "the machine was busy" from a regression."""
+    for i, entry in enumerate(tests):
+        if entry["ok"] or not entry.get("noisy"):
+            continue
+        name = entry["name"]
+        attempts = [{"ok": False, "noisy": True, "seconds": entry["seconds"]}]
+        latest = entry
+        for k in range(1, MAX_NOISY_RERUNS + 1):
+            print(f"check: {name} was noisy; rerun {k}/{MAX_NOISY_RERUNS}", flush=True)
+            junit = out / f"rerun_{name}_{k}.xml"
+            if junit.exists():
+                junit.unlink()
+            run_logged([str(ctest), "--test-dir", str(build_dir), "-C", config, "-R", "^" + re.escape(name) + "$",
+                        "--output-junit", str(junit)] + OUTPUT_FLAGS, out / f"rerun_{name}_{k}.log", True)
+            again = summarize(junit, labels)
+            if not again:
+                break
+            latest = again[0]
+            attempts.append({"ok": latest["ok"], "noisy": bool(latest.get("noisy")), "seconds": latest["seconds"]})
+            if latest["ok"] or not latest.get("noisy"):
+                break
+        latest = dict(latest)
+        latest["attempts"] = attempts
+        tests[i] = latest
 
 
 def main(argv=None):
@@ -293,13 +334,12 @@ def main(argv=None):
         junit.unlink()
     regex = "^(" + "|".join(labels) + ")$"
     cmd = [str(ctest), "--test-dir", str(build_dir), "-C", args.config, "-L", regex,
-           "--output-junit", str(junit), "--output-on-failure", "--no-tests=error",
-           "-j", str(max(1, args.ctest_jobs)),
-           "--test-output-size-passed", "65536", "--test-output-size-failed", "1048576",
-           "--test-output-truncation", "head"]
+           "--output-junit", str(junit), "--no-tests=error", "-j", str(max(1, args.ctest_jobs))] + OUTPUT_FLAGS
     print(f"check: ctest -L '{regex}'", flush=True)
     run_logged(cmd, out / "ctest.log", True)
-    result["tests"] = summarize(junit, test_labels(ctest, build_dir, args.config))
+    labels_of = test_labels(ctest, build_dir, args.config)
+    result["tests"] = summarize(junit, labels_of)
+    rerun_noisy(ctest, build_dir, args.config, out, result["tests"], labels_of)
     n = len(result["tests"])
     passed = sum(1 for t in result["tests"] if t["ok"])
     result["counts"] = {"tests": n, "passed": passed, "failed": n - passed}
