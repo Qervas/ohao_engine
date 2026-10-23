@@ -58,7 +58,7 @@ $$</div>
 <div class="section-rule"><h2 id="the-basis-reaches-the-renderer-through-the-view-matrix">The basis reaches the renderer through the view matrix</h2></div>
 <div class="prose reveal">
 <p>`getFront`, `getRight`, `getPitch` and `getYaw` have one caller in the tree, the windowed host&#x27;s fly camera, which seeds its angles from the camera and moves along its basis:</p>
-<div class="citation-chip"><code class="citation-code">cam.getFront() * (a.input().axis(&quot;move_forward&quot;) * speed) +</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/ohao_game.cpp#L178" target="_blank" rel="noopener">examples/ohao_game.cpp:178</a></div>
+<div class="citation-chip"><code class="citation-code">cam.getFront() * (a.input().axis(&quot;move_forward&quot;) * speed) +</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/ohao_game.cpp#L179" target="_blank" rel="noopener">examples/ohao_game.cpp:179</a></div>
 <p>`getUp` has none. No renderer reads the basis through these accessors — it round-trips through the view matrix. `glm::lookAt` packs the three axes into the rotation block:</p>
 <div class="citation-chip"><code class="citation-code">viewMatrix = glm::lookAt(position, position + front, up);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:41</a></div>
 <p>and the path tracer&#x27;s raygen pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>

@@ -15,7 +15,7 @@ The signature is untyped on purpose. The `ohao` CLI, its script lines, the plann
 
 ## The method table and the error envelope
 
-Fourteen methods live in two tables: `buildMethods` (name, params struct, result, doc), exported as the catalogue's `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). `api_tests` checks that every documented name dispatches and has a params struct.
+Twenty-two methods live in two tables: `buildMethods` (name, params struct, result, doc), exported as the catalogue's `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). `api_tests` checks that every documented name dispatches and has a params struct.
 
 Each method's params are a struct registered in its own registry (`ohao/api/params.hpp`), so one definition is the validation, the catalogue's JSON Schema and the MCP tool's input schema. A method starts with `decodeParams`, the typed struct decoder of scene files (MCP's `_meta` skipped):
 
@@ -88,7 +88,7 @@ The projection decides how much comes back. Without `fields`, each entity is its
 
 `world.summary` returns entity and root counts, the count of each component type, the bounds of entity origins and a hierarchy outline capped by `depth`, `maxChildren` and `maxNodes`. The bounds are composed from local transforms, so they are correct before the first step. This is the agent's token budget. The step-5 record measured a 10k-entity summary at 3.3 KB (about 830 tokens), a one-field query at 61 + 98 bytes, and the whole compact scene at 1.26 MB. An agent orients with the summary and then reads only the fields it needs.
 
-## Time and pixels
+## Time, hash and diff
 
 Time is a `Timeline` (`core/timeline.hpp`): a mode, a pause flag, a fixed step and the frame number, the one time axis every step is counted on. A session owns one until a window host shares its own, so the host's realtime steps and the agent's `world.step` count on the same frames. Lockstep advances only on request; realtime steps from wall time and, paused, behaves as lockstep. Only a window host can run realtime:
 
@@ -101,6 +101,26 @@ Time is a `Timeline` (`core/timeline.hpp`): a mode, a pause flag, a fixed step a
 {{cite ohao/reflect/registry.cpp "plain = t.triviallyCopyable && t.size % 4 == 0 && t.size > 0 && plainFieldsSize(t) == t.size ? 1 : 0;"}}
 
 `world.diff {snapshot, fields?, limit}` compares the live world with a named snapshot, column by column and read-only (a memcmp first for trivially copyable components), and reports per entity `"/Type/field": [old, new]` in file form, `"/Type"` for a component added or removed, and the created and destroyed ids. It reports what a diff of the two saves would.
+
+## Input as data
+
+Input reaches the world only through its `InputMap` (`core/input.hpp`), which the `World` owns and steps once per simulation step, never per rendered frame. Bindings are the `InputActions` singleton, so a scene file carries its controls; key names are the reflected `Key` enum, so a typo in a file or a command is `E_ENUM` with a suggestion. A change to `InputActions` marks the bindings dirty, and each step starts by re-evaluating every action from what is held now, before that step's events:
+
+{{cite ohao/core/input.cpp "settle();   // bindings may have changed since the last step: what they hold now counts"}}
+
+Without that line a removed binding left its action held until some key changed. Injected input is one more device: an injected action is held until let go, an injected axis value overrides its keys until released with `value: null`, and a focus loss releases keys and injections alike.
+
+Every step, whoever asks for it, goes through one function, `stepOnce`: the step's device events, then the injections due at this step (queued by absolute step, same-step events in the order given), then the recording, the simulate phase and the frame counter.
+
+{{cite ohao/api/input.cpp "while (due < s.injected.size() && s.injected[due].step <= step) events.push_back(s.injected[due++].event);"}}
+
+`input.record` writes those events as JSON Lines with a world hash every 60 steps; `input.replay` feeds them back in lockstep and compares each checkpoint before the step it was taken at, so `E_REPLAY` names the first step whose world differs:
+
+{{cite ohao/api/input.cpp "} else if (p.verify) {   // a checkpoint at `at` was taken before this step: compare now"}}
+
+A step whose length differs from the fixed step (a realtime host's clamp after a stall) gets a `dt` line, so a recording made while a human played replays exactly in lockstep. Both recording and replay begin by releasing everything held, so they start from the same input state.
+
+## Pixels
 
 `render.capture` is checked entirely in the session: the path, the mode and denoiser names, `spp`, `frames`, sizes from 16 to 8192, each `post` effect name, and exposure in (0, 64]. Only then does the session look for a handler:
 

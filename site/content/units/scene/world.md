@@ -34,6 +34,8 @@ Authoring components:
 - `MeshSource` and `MaterialOverride` — where the mesh comes from (a model asset or a primitive) and the material of a primitive; the instantiate system turns them into a `MeshRenderer`.
 - `Camera` and `Environment` — the view and the image-based lighting, one of each per world.
 - `Spin` — a constant turn about a local axis, applied by the spin system.
+- `InputActions` — the world's controls (action and axis bindings by key name), one per world; the World rebuilds its `InputMap` from it when it changes.
+- `FlyController` — flies its entity from named axes and actions, applied by the `fly_controller` system.
 
 Runtime components:
 
@@ -60,14 +62,14 @@ With GLM's column-vector convention the rightmost factor applies first, so scale
 
 ## Two phases, each in the order its systems were added
 
-Systems come in two phases, two vectors walked in order — no discovery, no dependency graph, no sort. **Simulate** systems change the world and run once per fixed step with the fixed dt (`World::simulate(dt)`); **sync** systems derive state from it and run once per batch of steps and before each render, with no dt (`World::sync()`). The constructor adds the engine-provided `spin` as a simulate system and `transform` as a sync system; a host that owns a renderer inserts its two sync systems around `transform` by name:
+Systems come in two phases, two vectors walked in order — no discovery, no dependency graph, no sort. **Simulate** systems change the world and run once per fixed step with the fixed dt (`World::simulate(dt)`); **sync** systems derive state from it and run once per batch of steps and before each render, with no dt (`World::sync()`). The constructor adds the engine-provided `spin` and `fly_controller` as simulate systems and `transform` as a sync system; a host that owns a renderer inserts its two sync systems around `transform` by name:
 
 {{cite ohao/ecs/world.cpp "addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });"}}
 {{cite ohao/ecs/world.cpp "addSync("transform", [](World& w) { updateTransforms(w.registry()); });"}}
 {{cite ohao/ecs/instantiate.cpp "world.addSyncBefore("transform", "instantiate", [state](World&) { state->run(); });"}}
 {{cite ohao/ecs/render_extract.cpp "world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });"}}
 
-With everything installed, a step runs `spin`, and a sync runs `instantiate`, `transform`, `render_extract`. Everything the simulate phase moved reaches the world matrices and the GPU at the next sync. Instantiate runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — in that same sync. `World::update(dt)` is one `simulate(dt)` then one `sync()`, for tests and tools.
+With everything installed, a step runs `spin` then `fly_controller` (after the World's `InputMap` has taken that step's events, `World::stepInput`), and a sync runs `instantiate`, `transform`, `render_extract`. Everything the simulate phase moved reaches the world matrices and the GPU at the next sync. Instantiate runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — in that same sync. `World::update(dt)` is one `simulate(dt)` then one `sync()`, for tests and tools.
 
 The split is what makes a frame's simulation independent of how often it is rendered: `world.step` with 100 frames simulates 100 times and syncs once, a window host simulates once per fixed step of wall time and syncs once per presented frame, and a capture only syncs — rendering never advances the simulation. A realtime session and a lockstep one that run the same steps reach the same state, bit for bit.
 
@@ -76,7 +78,7 @@ The split is what makes a frame's simulation independent of how often it is rend
 `addSyncAfter` and `addSyncBefore` with a name that is not in the list append instead of failing; plain `addSync` always appends — once the extract is installed, *after* `render_extract`, so what such a system writes reaches the GPU one sync late. A sync system cannot take a dt by its type, so stepping behaviour cannot hide there.
 
 :::why
-Fixed lists instead of a scheduler: with four systems and no threading, an explicit order is something a reader can verify by looking at two vectors (`simulateNames()`, `syncNames()`). A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
+Fixed lists instead of a scheduler: with five systems and no threading, an explicit order is something a reader can verify by looking at two vectors (`simulateNames()`, `syncNames()`). A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
 :::
 
 ## Hierarchy: both directions, cycles rejected

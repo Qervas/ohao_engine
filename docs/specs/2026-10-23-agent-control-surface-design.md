@@ -203,8 +203,15 @@ spec-3 CPU session: `render.capture` is `E_COMMAND`, time is lockstep only.
 share. The session answers `time.get`/`time.set` from a `Timeline` (see "Time modes", as
 built), its own until the host hands it one with `Session::setTimeline(Timeline&)`, and the
 host kind (`setHostKind`) decides whether realtime is allowed. One object then holds the
-single frame axis, with no copy to keep in step. `Host`'s remaining parts (capture,
-`beforeSteps` for input stamping) arrive with the live host (step 9) and input (step 8).
+single frame axis, with no copy to keep in step. `Host`'s remaining part (capture) arrives
+with the live host (step 9).
+
+*Correction (step 8).* There is no `beforeSteps`: input stamping needs no host virtual.
+Every simulation step goes through one function, `Session::step(deviceEvents, dt)`, which
+feeds the step's device events and then the injected ones due at that step to the
+World's `InputMap`, writes them to a recording, simulates, and advances the frame. The
+window host (step 9) calls it once per realtime step with the events polled since the
+previous step; `world.step` and `input.replay` call it with none.
 
 ### Method params are reflected structs
 
@@ -533,6 +540,63 @@ It moves and turns its entity from the named axes and actions, exactly as `ohao_
 hook does today. Put on the `Camera` entity, it gives the fly camera. `ohao_game` becomes a
 scene file (`assets/scenes/helmet_game.scene.json`: the helmet room, the spinning cube as a
 `Spin`, the camera with a `FlyController`, `InputActions`) played by `LiveHost`.
+
+### Input, as built (step 8, 2026-10-23)
+
+- **Where it lives.** `ohao/core/input.{hpp,cpp}` (namespace `ohao`, moved from
+  `ohao/runtime`). The `World` owns the `InputMap` (`World::input()`) and steps it with
+  `World::stepInput(events)` once per simulation step; `Application::input()` returns the
+  World's. `Application` collects the events polled during a frame and hands them to the
+  first step that runs, so a device event is stamped with the step that consumes it.
+- **Key names** are the reflected enum `Key` (`ohao/core/input`, registered as `"Key"` in
+  the catalogue), its values the GLFW codes, mouse buttons at `1000 + button`. Names are
+  identifiers, so digits are `Digit0`–`Digit9`; `None` (0) is "unbound" and is not a key
+  `input.inject` can press. `ActionBinding::key` and `AxisBinding::positive`/`negative`
+  are `Key`, not `std::string` as sketched above, so the scene codec gives `E_ENUM` with a
+  suggestion for free, in files and commands alike (corpus case `20_input`).
+- **Rebinding.** `InputActions` construction, update and removal set a flag (an EnTT
+  signal); the next `stepInput` rebuilds the bindings from the singleton (an axis side
+  `None` is no key). `InputMap::beginStep` re-evaluates every action and axis from the
+  current device and virtual state before applying the step's events, so a rebinding
+  with no new event takes effect at the next step (a bug found here: before, a removed
+  binding left its action held until some key changed).
+- **The virtual device.** `InputEvent` gains `ActionDown`/`ActionUp`, `AxisSet`/
+  `AxisRelease` (`value: null`) and `MouseDelta`. An action is held while a bound key *or*
+  the virtual device holds it; an injected axis value overrides its keys until released.
+  `FocusLost` releases keys, mouse buttons and the virtual device alike.
+- **`input.inject`** validates every event (exactly one of `action`, `axis`, `key`,
+  `mouse`, `focusLost`; `down` for actions and keys; `value` for axes) and queues them by
+  absolute step; same-step events keep their order, this call's after earlier calls'.
+  `world.snapshot` restore and `scene.load replace` drop the queue (its steps refer to a
+  world that is gone). Nothing else rejects an injection: an action name that nothing
+  binds is still a held action, readable through `input.state`.
+- **Recording.** The header has `format`, `version`, `schemaHash`, the last `scene.load`'s
+  `scene` and `seed` when there was one, `startFrame`, `startHash`, `fixedDt`. Then each
+  step's events (`key` by name, or `keyCode`/`button` for a code with no name; `cursor` for
+  absolute pointer moves; `mouse` for deltas), a `{"step", "dt"}` line before any step
+  whose length differs from `fixedDt`, `{"step", "hash"}` after every 60th step
+  (the hash of the world *at* that step, before it runs), and `{"end", "hash"}` on stop.
+  Starting a recording releases everything held, as a focus loss, so a recording and its
+  replay start from the same input state.
+- **Replay.** Refused (`E_STATE`) while the timeline is running or while injected events
+  are queued (both would mix other input into the replayed steps). With `verify` (the
+  default), the world's hash must equal `startHash`, each checkpoint is compared before
+  its step runs, and `E_REPLAY`'s `expected` names the step of the first mismatch; the
+  world is left there, synced. The recording's steps run from the current frame on (its
+  step numbers order it), and a replay also starts by releasing everything. `verify:
+  false` runs it without hashing. A replay is recorded like any other steps.
+- **`FlyController`** turns while `look` is held by the mouse delta:
+  `rotation = normalize(yaw(-dx·rate) · rotation · pitch(-dy·rate))`, `rate =
+  lookDegPerUnit` in radians (yaw about world up, pitch about the local X); then moves by
+  `(front·forward + right·right + up·up) · moveSpeed · (fast ? fastMultiplier : 1) · dt`
+  with `front = rotation · -Z`, `right = rotation · +X`, `up` = world Y. It patches the
+  `Transform` only when it moved or turned. `ohao_game`'s quit and fly-camera code moved
+  into its `fixedUpdate` hook (per step, reading the World's map); the scene-file
+  `ohao_game` and `helmet_game.scene.json` are step 9's, with `LiveHost`.
+- **`world.hash` moves when types are added.** The hash covers every saved type's column,
+  so adding `InputActions` and `FlyController` changed the hash of unchanged scenes (the
+  CLI's rooms goldens: `0dc30d7b47b1f234` → `87ba2c301e031a40`). Hashes compare worlds of
+  one engine build, as recordings do through `schemaHash`.
 
 ## Frame capture
 
@@ -1118,6 +1182,14 @@ CPU (no device):
 14. **`FlyController`:** 60 steps of `move_forward = 1` move the entity by exactly
     `moveSpeed · dt · 60` along its front; look turns by the configured rate; `fast`
     multiplies.
+   - *As built (step 8):* test 13 is `runtime_tests` `sp4_t13_*` (3: key names round
+     trip, the virtual device acts like a device, a rebind counts at the next step
+     without an event) and `api_tests` `sp4_t13_*` (8: injection stamped by step, axis
+     override and release, `InputActions` rebinding on change, focus lost, unknown key
+     names `E_ENUM` with a suggestion, record → replay over 150 steps with 3 checkpoints,
+     a tampered recording failing at step 120, a realtime recording with dropped time
+     replaying exactly), plus the corpus case `20_input` and the native protocol session's
+     inject/step/state/bad-key requests. Test 14 is `systems_tests` `sp4_t14_*` (3).
 15. **Security:** absolute paths, `..`, and writes outside `--out` are `E_ACCESS`;
     `--allow-path` admits exactly its root; a second pipe client is refused; the size
     and step caps hold.
@@ -1242,6 +1314,11 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
      `world.diff` budgets pass five consecutive `serve_bench` runs.
 8. **Input as data.** `InputMap` to `ohao/core`, key names, `InputActions`, the virtual
    device, `input.inject`/`state`/`record`/`replay`, `FlyController`. Tests 13, 14.
+   - *Done 2026-10-23.* See "Input, as built" and the correction under "The host
+     interface" (`Session::step` replaces `beforeSteps`). `schemaHash` changed (catalogue,
+     CLI and serve goldens updated after review). Also, at the reviewer's request,
+     `scene_bench` gained serve_bench's load record and per-round CPU and memory probes
+     (see "Budgets", as built).
 9. **Live host and capture.** `LiveHost`, `ohao serve --window`, the request queue on the
    engine thread, lockstep render-on-demand, readback on request, inline previews,
    `ohao_game` on `helmet_game.scene.json`, GPU budgets in `serve_bench`. Tests 16, 17,

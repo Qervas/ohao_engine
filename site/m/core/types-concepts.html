@@ -81,7 +81,7 @@
 <div class="citation-chip"><code class="citation-code">static_assert(CommandLike&lt;LambdaCommand&gt;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/command.hpp#L62" target="_blank" rel="noopener">ohao/core/command.hpp:62</a></div>
 <p>`class Command;` is forward-declared beside the concept and then never referenced by it; the concept describes a surface, the virtual class implements one.</p>
 <p>The entity system has no concept of its own. Components are plain structs stored in EnTT pools — `Transform`, `MeshRenderer`, `Light` — with no base class to derive from and nothing in `core/` to gate them. The reference between entities is an `entt::entity` value, and the parent link is a component like any other:</p>
-<div class="citation-chip"><code class="citation-code">struct Parent { entt::entity entity{entt::null}; };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/components.hpp#L39" target="_blank" rel="noopener">ohao/ecs/components.hpp:39</a></div>
+<div class="citation-chip"><code class="citation-code">struct Parent { entt::entity entity{entt::null}; };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/components.hpp#L42" target="_blank" rel="noopener">ohao/ecs/components.hpp:42</a></div>
 <p>So the sharp edge a nominal gate would bring — `concepts.hpp` unable to see the type it tests without including `scene/` — does not exist: nothing in `core/` forward-declares a component type, and `core/` has no dependency on the entity layer.</p>
 </div>
 <div class="section-rule"><h2 id="a-header-of-aliases">A header of aliases</h2></div>

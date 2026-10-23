@@ -208,7 +208,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 18 tools
+0 22 tools
 ```
 
 ## Methods
@@ -231,6 +231,10 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `time.get` | `{}` → `{mode, paused, frame, fixedDt, fps?}` | `lockstep` (steps only on request; `ohao serve`, the CLI) or `realtime` (steps from wall time; a window host). `frame` counts the steps run. |
 | `time.set` | `{mode?, paused?, fixedDt?}` → as `time.get` | Never runs or drops a step. Headless hosts are lockstep only (`E_STATE`). |
 | `world.hash` | `{}` → `{hash, frame}` | 64 bits over the authoring state: ids, hierarchy, every saved component, the id generator. Equal hashes, equal worlds; runtime state is not hashed. |
+| `input.inject` | `{events: [{step = 0, action \| axis \| key \| mouse \| focusLost, down?, value?}]}` → `{queued, firstStep, lastStep}` | Input for coming steps, `step` counted from the next one. An action is held (`down: true`) until let go; an axis keeps `value` until changed (`null` hands it back to its keys); a `key` goes through the bindings like a real key; `mouse` is a delta `[dx, dy]`; `focusLost` releases everything. Same-step events apply in order, after that step's device events. |
+| `input.state` | `{}` → `{actions: {name: {held, pressed, released}}, axes: {name: value}}` | The input map as the last step saw it. |
+| `input.record` | `{path}` / `{stop: true}` → `{path, steps, events}` | A JSON-Lines recording under the output directory: a header (scene, seed, start frame and hash, `fixedDt`), every event with its step, `{step, hash}` every 60 steps, `{end, hash}`. Starting releases everything held. |
+| `input.replay` | `{path, verify = true}` → `{steps, events, checkpoints, frame}` | Replays a recording from the current world, which must hash as the recording's start (load the scene with its seed or restore a snapshot first); `E_REPLAY` names the first step where a checkpoint differs. Hand-written recordings work too. |
 | `world.snapshot` | `{name}` → `{name, entities, bytes}` | Captures the world in memory under a name. |
 | `world.diff` | `{snapshot, fields?, limit = 50}` → `{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}` | What changed since a snapshot. `"/Type/field"` with old and new values in file form, `"/Type"` for a component added or removed; `fields` keeps only the listed ones. `count` counts changed entities; `more` what `limit` left out. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
@@ -268,6 +272,8 @@ that id.
 | `Camera` | The scene camera (one per world); looks along −Z of its entity. |
 | `Environment` | The HDRI that lights the scene (one per world). |
 | `Spin` | Turns the entity about a local axis at `degreesPerSecond` (the spin system, every step). |
+| `InputActions` | The world's controls (one per world): `actions: [{action, key}]`, `axes: [{axis, positive, negative}]`. Key names are the catalogue's `Key` enum (`W`, `Space`, `LeftShift`, `Escape`, `Digit1`, `F5`, `MouseLeft`, `MouseRight`, `None`, …); a typo is `E_ENUM` with a suggestion. |
+| `FlyController` | Flies the entity from named axes and actions (`move_forward`, `move_right`, `move_up`, `look`, `fast` by default) at `moveSpeed`; on the Camera entity, a fly camera. |
 
 Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, …) are derived each
 frame, appear in the catalogue for reference, and are refused in files and commands.

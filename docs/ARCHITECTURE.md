@@ -13,12 +13,12 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
 | Library | Directory | Depends on | What it owns |
 |---|---|---|---|
-| `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the time model (`Timeline`, `FixedStepClock`: lockstep or realtime, paused, the frame number), the event bus, command history, `Result`, concepts, small shared types |
+| `ohao_core` | `core/` | glm | the logger (`OHAO_LOG`, the ring, sinks), the time model (`Timeline`, `FixedStepClock`: lockstep or realtime, paused, the frame number), input (`InputMap`: actions, axes, the virtual device injection uses; the `Key` name table), the event bus, command history, `Result`, concepts, small shared types |
 | `ohao_reflect` | `reflect/` | glm (fast_float privately) | the type registry, schema/catalogue export, the JSON writer, reader and layout, typed decode/encode. Knows nothing of ECS or GPU. |
 | `ohao_scene` | `scene/` | assimp, tinygltf, ufbx | asset loading into CPU `Model`s, procedural meshes |
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_scene`, `ohao_core`, Vulkan, VMA | device and queues, `VulkanRenderer` (the facade), frame resources, bindless textures, the allocator |
 | `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_scene`, `ohao_core` (NRD, OIDN, NGX optional) | `RenderScene` (the persistent GPU scene), deferred passes, path tracers, denoisers, the render graph |
-| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, EnTT (simdjson privately) | `World` (simulate and sync phases), components, systems (spin, transform, instantiate, render extract), the scene codec, snapshots, the world hash and diff, the scene view |
+| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, EnTT (simdjson privately) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components, systems (spin, fly controller, transform, instantiate, render extract), the scene codec, snapshots, the world hash and diff, the scene view |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox. GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams and the MCP adapter (`ohao serve`): reader and engine threads, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
 | `ohao_runtime` | `runtime/` | `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | the windowed `Application` loop (stepped by a `Timeline`), frame statistics, input actions, swapchain |
@@ -61,9 +61,12 @@ systems come in two phases, each a fixed list run in order, never discovered or 
 the timeline (core/timeline.hpp) decides the steps: lockstep, on request (world.step);
 realtime, whole fixed steps from wall time (paused: none)
 for each step:
-  host / game hooks (input, fixedUpdate)                write components with patch/replace
+  World::stepInput(events)   device events since the last step, then injected ones
+                             (api: Session::step; InputActions rebinds the map first)
+  host / game hooks (fixedUpdate)                       write components with patch/replace
   World::simulate(fixedDt)
-    spin          engine-provided: Spin -> Transform (patch)          every World
+    spin            engine-provided: Spin -> Transform (patch)        every World
+    fly_controller  engine-provided: input + FlyController -> Transform   every World
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
@@ -229,5 +232,5 @@ Followed for `systems_tests`.
 
 ```console
 $ build/Release/systems_tests.exe | tail -n 1
-{"suite":"systems_tests","passed":6,"failed":0,"failures":[]}
+{"suite":"systems_tests","passed":9,"failed":0,"failures":[]}
 ```

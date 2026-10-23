@@ -103,13 +103,13 @@ $ python tests/serve/check_serve.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), input actions, swapchain choices |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff` |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay) |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging |
-| `systems_tests` | engine-provided systems (spin) |
+| `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
@@ -170,8 +170,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
   by `serve_bench --calibrate` on a quiet machine) or beside other processes using more
   than half a core in total is `noisy`, exit 2: it is neither a pass nor a regression,
-  and `tools/check.py` reruns it, at most twice. A budget is met after five consecutive
-  passes and changes only by Frank's ruling.
+  and `tools/check.py` reruns it, at most twice. `scene_bench` records the same, plus a
+  CPU and a memory probe per round, and is also noisy when over a quarter of its rounds
+  are contended (a probe over 1.5x its fastest round); it prints each op's median in
+  clean and in contended rounds. This laptop slows a busy core by itself after about 3 s
+  of sustained load (`scene_bench --machine-test` shows it), more with other bots' work
+  running. A budget is met after five consecutive passes and changes only by Frank's
+  ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   guide and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
   `docs/agents/skills/` until they are installed there; see its README).
@@ -206,6 +211,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
   `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
   `update()`: rendering must not step the simulation.
+- Input is stepped per simulation step, not per frame: read `pressed`/`released` in a
+  simulate system or `fixedUpdate`, never once per frame (two steps in one frame would
+  lose a press). A world with an `InputActions` component rebuilds its bindings from it;
+  one without keeps the bindings made in code.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
 - The validation layer stops at 10 reports per VUID; set
