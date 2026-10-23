@@ -132,6 +132,14 @@ Each point is a fact about the tree on 2026-10-23.
   bloom on (`restore_render_gpu_test`), the helmet deferred golden (which turns SSAO on)
   moves on ~1.7% of pixels run to run, Cornell deferred (no post) is exact, and one
   `restore_render_gpu_test` run failed without the failure being captured.
+  - *Corrected in step 1:* the seed was real per-process randomness, but it was not the
+    cause. `deferred_lighting.frag` never samples the SSAO output (the lighting pass binds
+    it at binding 10, which the shader does not declare), so SSAO reaches no pixel. A
+    pass-by-pass bisection (each effect alone) found two causes: bloom's render passes had
+    no dependency making the previous pass's writes visible to their sampling (a
+    read-after-write race down and up the mip chain), and TAA's first frame took its
+    motion from `DeferredRenderer::m_prevViewProj`, a `glm::mat4` that a fresh renderer
+    never set. See "Determinism", as built.
 - **CTest is inert.** Ten suites call `add_test`, but nothing calls `enable_testing()`, so
   `ctest` finds no tests. `tests/CMakeLists.txt` (a gtest `engine_tests`) is included by
   nothing and is dead.
@@ -549,6 +557,32 @@ the same two-renderer test and fixes what it finds. A residual that is traced to
 driver (not OHAO code) is measured, recorded in the change record and the manifest with
 its measured floor, and goes to Frank as a ruling; it is never absorbed silently.
 
+*As built (step 1, 2026-10-23).* The seed fix alone changed nothing visible: SSAO's
+output is never sampled by the lighting shader (see "Why"). The bisection found the two
+real causes, both in OHAO code:
+- **Bloom raced its own mip chain.** Post-processing runs outside the render graph, and
+  each bloom render pass's only external dependency guarded earlier *reads* against its
+  writes. Nothing made the previous pass's color writes visible to the next pass's
+  sampling. Bloom, TAA and the tonemap pass now take
+  `RenderPassBase::sampledColorPassDependencies()`: earlier color-attachment and shader
+  writes visible to this pass's sampling and load, and this pass's writes visible to
+  later sampling and copies.
+- **TAA's first frame read an unset matrix.** `DeferredRenderer::m_prevViewProj` was a
+  default-constructed `glm::mat4` (uninitialized). TAA blends towards the cleared history
+  by the motion it sees (`mix(blendFactor, 0.5, motionWeight)`), so a fresh renderer's
+  first frame depended on stale memory, and a capture after `resetTemporalState` (which
+  set the matrix) differed from a fresh renderer's. The first frame after creation or a
+  reset now uses its own view-projection: no motion into it.
+- **The SSAO seed** is still fixed as specified (noise from the render seed, pinned for
+  seed 0, `setRenderSeed` reaches the pass), and RT renderers created after
+  `setRenderSeed` now receive the seed too (they did not).
+
+Result: every deferred configuration (Cornell plain, each post effect alone, all three;
+the helmet plain and with post) is bit-identical across fresh renderers, across
+processes and across repeated captures by one renderer; ten separate-process renders of
+each deferred golden gave one pixel hash; the four deferred goldens are exact. Wiring
+SSAO into lighting is a look change and goes to 2b's renderer findings.
+
 ## Security
 
 - **No listener by default.** stdio serves exactly the parent process. There is no port,
@@ -788,6 +822,13 @@ CPU (no device):
 1. **Deferred determinism** (GPU, listed here for its number): two fresh renderers, Cornell
    and helmet, post effects off and on, bit-identical; `restore_render_gpu_test` post case
    exact; ten golden `--selftest` runs identical for the deferred scenes.
+   - *As built (step 1):* `deferred_determinism_gpu_test`. Seven configurations (Cornell
+     plain, TAA, SSAO, bloom, all three; helmet plain and with post), each rendered by two
+     fresh renderers, by a fresh renderer in a child process of the test, and twice by one
+     renderer: all bit-identical, validation clean. The SSAO noise is checked directly
+     (deterministic, pinned hash for seed 0, unit vectors, another seed differs) and the
+     seed's path to the pass, since no pixel shows SSAO. The ten-run check used full-
+     resolution pixel hashes of each deferred golden command in separate processes.
 2. **Source lints:** the nondeterminism lint (see "Determinism"); no
    `std::cout`/`std::cerr`/`printf` under `ohao/` (after step 4); `ohao_rpc` includes no
    Vulkan, GLFW or renderer header.
@@ -880,6 +921,12 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
 1. **Deterministic deferred rendering.** Seed the SSAO noise from the renderer seed; the
    nondeterminism lint; the two-renderer test; regenerate and tighten the deferred
    goldens after looking at them; `restore_render_gpu_test` exact. Tests 1, 2 (lint part).
+   - *Done 2026-10-23.* Also fixed: the bloom/TAA/tonemap render-pass dependencies and
+     TAA's unset first-frame matrix (the actual causes; see "Determinism", as built), and
+     the render seed not reaching RT renderers created later. Only the helmet deferred
+     golden was regenerated (the Cornell one already matched); all four deferred
+     entries are exact. The lint is `reflect_tests` `sp4_t02_*`. The `verify` skill change
+     waits in `docs/agents/skills/` for Frank.
 2. **One check entry point.** `enable_testing()`, every suite and harness registered with
    labels and the `gpu` lock, the dead `tests/CMakeLists.txt` deleted, `CONFIGURE_DEPENDS`,
    shaders as a dependency of every SPIR-V consumer, `tests/common/harness.hpp` adopted by
@@ -918,7 +965,8 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
   2025-03-26 shares; supporting a new version is a table entry plus a test case.
 - **Deferred determinism may have a second cause.** If the seed fix leaves a residue,
   step 1 bisects it; a driver-level residue becomes a measured, documented floor and a
-  ruling for Frank, not a widened tolerance.
+  ruling for Frank, not a widened tolerance. *Step 1:* it had two (bloom sync, TAA's
+  first frame), both in OHAO code and fixed; no driver residue.
 - **The window host's loop changes under `ohao_game`.** Phases and stamped input change
   when the spin advances (per step, not per frame). The presentation gate and validation
   run catch breakage; the visual result is the same motion at a fixed rate.

@@ -125,6 +125,17 @@ blending and `LOAD_OP_LOAD`, so each level accumulates in place.
 
 {{cite ohao/render/deferred/bloom_pass.cpp "colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;"}}
 
+Every step of the chain is its own render pass that samples the mip the previous
+render pass just wrote, and nothing else orders them: post-processing runs outside the
+render graph. The render passes' own external dependencies are the only barrier, so
+they must make earlier colour-attachment writes visible to fragment-shader reads. Until
+sub-project 4 step 1 the single dependency guarded only earlier *reads* against this
+pass's writes; the implicit end-of-pass dependency makes no write visible, so each mip
+was read racing its writer and bloom came out different run to run. Bloom, TAA and the
+tonemap pass now share `RenderPassBase::sampledColorPassDependencies()`:
+
+{{cite ohao/render/deferred/render_pass_base.cpp "deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;"}}
+
 Two consequences. Mip 0 ends up holding the *thresholded* full-resolution image
 plus the blurred chain, and the tonemap adds that on top of the untouched HDR at
 unit strength — above-threshold energy is counted roughly twice, not

@@ -225,10 +225,12 @@ runs down the columns:
 {{cite ohao/render/deferred/ssao_pass.cpp "m_noiseSampler = createSampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);"}}
 
 Every pixel on screen reads noise texel (0,0). There is no interleaving at all.
-The pass fills all sixteen texels once, at initialization, from an `std::mt19937`
-that `std::random_device` only seeds:
+The pass fills all sixteen texels from the render seed alone (`VulkanRenderer::setRenderSeed`,
+default 0), with a counter hash and exact float arithmetic rather than a `<random>`
+distribution, whose output differs between standard libraries. Until sub-project 4
+step 1 it seeded from `std::random_device`, so every process drew different noise:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "std::mt19937 gen(rd());"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "const auto unit = [&next]() { return static_cast<float>(next() >> 8) * (2.0f / 16777216.0f) - 1.0f; };"}}
 
 Fifteen of those vectors are never sampled. One rotates the entire frame, and the
 banding the noise exists to break survives untouched.
@@ -236,7 +238,7 @@ banding the noise exists to break survives untouched.
 That one vector is also mis-decoded. The host writes an already-signed unit
 vector in xy into an `R32G32B32A32_SFLOAT` image that stores the floats verbatim:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "v = glm::vec4(dist(gen), dist(gen), 0.0f, 0.0f);"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "v = glm::vec4(unit(), unit(), 0.0f, 0.0f);"}}
 
 and the shader applies the classic UNORM decode on top of it:
 

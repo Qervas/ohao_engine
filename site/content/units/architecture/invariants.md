@@ -117,9 +117,9 @@ Each is compared after downscaling to 640 px wide,
 {{cite tests/golden/render_golden.py "DOWNSCALE_WIDTH = 640"}}
 
 against two thresholds that must **both** hold: a per-channel maximum and an
-allowance of differing pixels. The defaults are 4 LSB and 1 %; the deferred helmet
-carries its own looser pair, 6 LSB and 5 %, because it is not bit-exact from run
-to run.
+allowance of differing pixels. The defaults are 4 LSB and 1 %; the deferred scenes
+are held to 0 and 0, because deferred rendering is bit-exact from run to run (since
+sub-project 4 step 1; the helmet used to carry a looser 6 LSB and 5 %).
 
 {{cite tests/golden/render_golden.py "return s is not None and s["}}
 

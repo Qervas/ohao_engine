@@ -99,8 +99,10 @@ the slice needs it)?
   with them. Existing GLSL migrates only when a pass is rewritten.
 - **RT determinism and the open renderer findings:** RT offline's rare 1-LSB flips,
   `rt_realtime` run-to-run noise, VUID 03004 and the NRI push-descriptor exit that block
-  validation-clean RT, the double tint on untextured materials in RT, and sky/particles
-  lost while SSS is active. 2b rebuilds the frame flow these live in; fixing them there is
+  validation-clean RT, the double tint on untextured materials in RT, sky/particles
+  lost while SSS is active, and SSAO, which is computed every frame it is on but never
+  sampled by the lighting shader (wiring it changes the look, and its noise tiling and
+  decode are wrong too; see the monograph's SSAO unit). 2b rebuilds the frame flow these live in; fixing them there is
   cheaper than around it, and validation-clean RT is a precondition for trusting a
   rebuilt renderer.
 - **A render benchmark with budgets:** the `scene_bench` 10k/100k scenes rendered, with

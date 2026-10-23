@@ -266,8 +266,14 @@ them to match: exactly for deferred, within the RT path's rare 1-LSB flips for t
 helmet. `restore_render_gpu_test` drives the CLI's own session and render host on
 the checked-in Cornell scene with one renderer per sequence: a capture, a move that
 must change the image, a `world.restore` after which the capture must equal the
-first — bit-identical with post effects off, within 1 LSB with TAA, SSAO and bloom
-on. Validation is on for every deferred run and must report nothing.
+first, bit-identical with post effects off and on. `deferred_determinism_gpu_test`
+renders each deferred configuration (Cornell with no post effects, each of TAA, SSAO
+and bloom alone, all three; the helmet room without and with them) in two fresh
+renderers, in a fresh renderer in a child process of itself, and twice in one
+renderer, and requires the same bytes every time. Validation is on for every deferred
+run and must report nothing.
+
+{{cite tests/renderer/deferred_determinism_gpu_test.cpp "checks.push_back({p + "a fresh renderer in another process is bit-identical", hc == ha});"}}
 
 {{cite tests/renderer/scene_view_gpu_test.cpp "{"cornell: the Camera entity renders exactly as the hand-set camera", c12.bytes == 0},"}}
 

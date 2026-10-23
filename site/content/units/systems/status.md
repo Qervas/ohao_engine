@@ -142,12 +142,12 @@ back to `DEFAULT_MAX_ABS_DIFF = 4` / `DEFAULT_MAX_DIFF_FRAC = 0.01` only where a
 scene omits them. Every committed scene sets them explicitly. The ten scenes are five
 pairs: each example render (`cornell_box`, `model_viewer`, in path-traced, deferred
 and realtime modes) and the same scene rendered by `ohao run` from its checked-in
-scene file, held to the same golden image and the same numbers. Three pairs take
-exactly those defaults. The deferred helmet loosens them to 6 and 0.05, and its
-manifest note records why — it is not bit-exact run to run, with a fresh-versus-fresh
-max difference of 3 and a differing-pixel fraction near 0.026:
+scene file, held to the same golden image and the same numbers. The two path-traced
+pairs take exactly those defaults. The two deferred pairs are exact, 0 and 0: deferred
+rendering has been bit-identical run to run since sub-project 4 step 1, which fixed the
+two causes of the helmet's old run-to-run noise, and the manifest note records them:
 
-{{cite tests/golden/manifest.json "fresh-vs-fresh max_abs 3, diff_frac ~0.026 measured 2026-10-09"}}
+{{cite tests/golden/manifest.json "both are fixed, ten separate-process renders gave one pixel hash"}}
 
 The realtime path tracer loosens them to 10 and 0.05 for a read-write race in its
 raygen, which its note names. A scene added later with looser numbers would be held to
@@ -161,14 +161,14 @@ broken material lookup, a flipped normal, a dropped light. The second bounds the
 tonemap constant nudged, a different RNG stream — which the max test can never
 see, because 1 ≤ 4. Each closes the other's blind spot. All four committed goldens
 are 640×360, so $N = 230{,}400$ and a scene at the default $\phi = 10^{-2}$ tolerates
-roughly 2,300 differing pixels and no more; the deferred helmet's $0.05$ tolerates
-about 11,500.
+roughly 2,300 differing pixels and no more; the deferred scenes, at $0$, tolerate none.
 
 The harness also ships a `--selftest` mode that renders each scene twice and
 compares the two renders to each other instead of to the golden. That is not
 redundant: it measures the gate's own noise floor, which is the only way to tell
 a tolerance that is too tight from a renderer that genuinely regressed. The deferred
-helmet's loosened numbers are what that measurement produced.
+helmet's old loosened numbers (6 and 0.05) were what that measurement produced; the
+floor it measured turned out to be two bugs, and with them fixed the floor is zero.
 
 {{cite tests/golden/render_golden.py "render a second time, compare the two renders to each other"}}
 

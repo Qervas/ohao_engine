@@ -118,7 +118,7 @@
 <div class="section-rule"><h2 id="never-on-a-frame">Never on a frame</h2></div>
 <div class="prose reveal">
 <p>`t13_no_reflection_on_hot_paths` scans every file under `ohao/render` and `ohao/gpu`, plus the transform, render-extract, instantiate and spin system sources, for an `#include` naming `reflect/` or `api/`:</p>
-<div class="citation-chip"><code class="citation-code">for (const char* dir : {&quot;ohao/render&quot;, &quot;ohao/gpu&quot;})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L693" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:693</a></div>
+<div class="citation-chip"><code class="citation-code">for (const char* dir : {&quot;ohao/render&quot;, &quot;ohao/gpu&quot;})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L696" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:696</a></div>
 <p>A second test holds `ohao/reflect` to glm and the standard library, with no EnTT, Vulkan, `core/`, `gpu/`, `render/` or `ecs/` includes. Both tests match include lines as text and do not follow includes. A system source that included `ecs/scene_types.hpp` would pull in the whole registry and still pass. Inside `ohao/`, only `scene_types.cpp`, `scene_io.cpp`, `snapshot.cpp` and `api/internal.hpp` include that header today.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>

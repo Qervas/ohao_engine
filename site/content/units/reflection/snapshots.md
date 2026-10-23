@@ -117,7 +117,9 @@ The pixels need one more thing. The deferred path carries temporal state across 
 
 {{cite tools/ohao/render_host.cpp "if (m_captures > 0) renderer.resetAccumulation();"}}
 
-In deferred mode, `VulkanRenderer::resetAccumulation` idles the device, zeroes the frame slot and calls `DeferredRenderer::resetTemporalState`. In the RT modes it resets the path tracer's accumulation. With TAA, SSAO and bloom on, the test accepts a 1 LSB maximum difference: its own comment records that two fresh deferred renderers already differ by that much under those effects.
+In deferred mode, `VulkanRenderer::resetAccumulation` idles the device, zeroes the frame slot and calls `DeferredRenderer::resetTemporalState`. In the RT modes it resets the path tracer's accumulation. With TAA, SSAO and bloom on the restored capture is bit-identical too. Until sub-project 4 step 1 the test allowed 1 LSB there, because two fresh deferred renderers differed: bloom's mip chain sampled each mip before the previous render pass's writes were visible, and TAA's first frame took its motion from a previous view-projection that a fresh renderer never set. The reset now leaves that matrix unset as well, so the first frame after it, like a fresh renderer's first frame, uses its own:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it"}}
 
 ## Sharp edges
 
