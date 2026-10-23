@@ -5,6 +5,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
+#include "ecs/world_diff.hpp"
 #include "reflect/decode.hpp"
 #include "reflect/json_writer.hpp"
 
@@ -32,7 +33,9 @@ struct Session::Impl {
 
     ecs::World& world;
     const reflect::TypeRegistry& types;
-    uint64_t frame{0};
+    // The time model: the session's own (lockstep) until a host shares its timeline.
+    Timeline ownTime;
+    Timeline* time{&ownTime};
     uint64_t schemaHash{0};
     std::string catalogue;            // built on the first schema.get
     ecs::JsonParser paramsParser;     // the request's params
@@ -44,6 +47,8 @@ struct Session::Impl {
     std::vector<const TypeInfo*> saved;          // the subset written to files
     std::vector<std::string_view> savedNames;    // for "did you mean"
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
+    ecs::Snapshot hashScratch;                                     // world.hash's capture, reused
+    ecs::WorldDiff diffScratch;                                    // world.diff's result, reused
     ecs::AssetResolver* assets{nullptr};                           // checkAssets
     RenderHandler render;                                          // render.capture
     HostKind host{HostKind::None};
@@ -69,6 +74,38 @@ bool methodApply(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
 bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodSummary(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out);
+
+// ---- query planning (query.cpp), shared by world.query, world.step's watch and world.diff --
+
+// One projected component: the whole value, or the listed fields.
+struct Projection {
+    const TypeInfo* type;
+    bool whole{false};
+    std::vector<const FieldInfo*> fields;
+};
+// Reads a "fields" array ("/Type" or "/Type/field"; ctx is positioned at its parent).
+// False after reporting (E_PATH, E_COMPONENT_UNKNOWN).
+bool parseProjection(Session::Impl& s, const JsonDocument& doc, const JsonNode& fields, DecodeContext& ctx,
+                     std::vector<Projection>& out);
+
+// A checked selection and projection. Its views point into the request's document.
+struct QueryPlan {
+    bool byIds{false};
+    std::vector<uint64_t> ids;
+    std::vector<std::string_view> names;
+    std::string_view nameContains;
+    std::vector<const ecs::ComponentOps*> has;
+    bool projected{false};
+    std::vector<Projection> projection;
+    std::size_t limit{50};
+    std::size_t offset{0};
+    bool defaults{false};
+};
+// Reads the "ids", "names", "has" and "fields" members of `obj` (already type-checked by
+// its params struct) into `plan`. False after reporting.
+bool planQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& obj, DecodeContext& ctx, QueryPlan& plan);
+// {entities: [...], count, missing?, next?}, matching entities in creation order.
+void writeQuery(Session::Impl& s, const QueryPlan& plan, JsonWriter& out);
 
 // ---- helpers (session.cpp) -------------------------------------------------------------
 

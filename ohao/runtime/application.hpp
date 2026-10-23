@@ -25,6 +25,7 @@ struct AppConfig {
     WindowConfig window;
     bool vsync{false};
     ClockConfig clock;
+    TimeMode timeMode{TimeMode::realtime};   // a game steps from wall time
     int frameLimit{0};                // 0 = run until closed
     int resizeAtFrame{-1};            // scripted resize, for the presentation gate
     VkExtent2D resizeTo{1280, 720};
@@ -41,9 +42,12 @@ struct RunReport {
 };
 
 // Owns the window, input, renderer and the game World, and runs the loop:
-//   poll -> input -> N x fixedUpdate (fixed step) -> update -> world.update -> render/present
-// The World's render extract feeds the renderer's RenderScene. Minimized windows keep
-// simulating and skip rendering.
+//   poll -> input -> the timeline's steps, each: fixedUpdate, world.simulate(fixedDt)
+//        -> update -> world.sync -> render/present
+// The timeline (core/timeline.hpp) decides the steps: realtime, whole fixed steps from
+// wall time; paused or lockstep, none (a host steps the world on request). The World's
+// render extract feeds the renderer's RenderScene. Minimized windows keep simulating and
+// skip rendering.
 class Application {
 public:
     Application() = default;
@@ -64,6 +68,8 @@ public:
     [[nodiscard]] ecs::World& world() { return *m_world; }
     [[nodiscard]] InputMap& input() { return m_input; }
     [[nodiscard]] Window& window() { return m_window; }
+    // The frame counter, mode and pause state.
+    [[nodiscard]] Timeline& timeline() { return m_time; }
     void quit() { m_quit = true; }
 
 private:
@@ -72,7 +78,7 @@ private:
     InputMap m_input;
     std::unique_ptr<VulkanRenderer> m_renderer;
     std::unique_ptr<ecs::World> m_world;   // destroyed before the renderer (it holds RenderScene slots)
-    FixedStepClock m_clock;
+    Timeline m_time;
     FrameStats m_stats;
     std::vector<InputEvent> m_events;
     bool m_quit{false};

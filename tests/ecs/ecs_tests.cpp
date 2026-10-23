@@ -189,10 +189,18 @@ static void reparent_keeps_local() {
 static void systems_run_in_registration_order() {
     World w;
     std::string order;
-    w.addSystem("first", [&](World&, float) { order += "1"; });
-    w.addSystem("second", [&](World&, float) { order += "2"; });
+    w.addSync("third", [&](World&) { order += "3"; });
+    w.addSimulate("first", [&](World&, float) { order += "1"; });
+    w.addSimulate("second", [&](World&, float) { order += "2"; });
+    w.addSyncBefore("third", "before", [&](World&) { order += "b"; });
     w.update(0.0f);
-    CHECK(order == "12", "systems run in the order they were added");
+    CHECK(order == "12b3", "simulate systems, then sync systems, each in the order they were added");
+    order.clear();
+    w.simulate(0.0f);
+    CHECK(order == "12", "simulate runs only the simulate phase");
+    order.clear();
+    w.sync();
+    CHECK(order == "b3", "sync runs only the sync phase");
 }
 
 static void cyclic_parenting_is_rejected() {

@@ -7,6 +7,7 @@
 // They live in their own registry: they are not scene types and never appear in files.
 // Free-JSON members (world.apply's commands, an inline scene) are JsonRefs, checked by the
 // command and scene decoders.
+#include "core/timeline.hpp"
 #include "reflect/json_value.hpp"
 #include "reflect/registry.hpp"
 
@@ -71,9 +72,34 @@ struct WorldApplyParams {
     reflect::JsonRef commands;
 };
 
+// What world.step returns after its last step: world.query's selection and projection.
+struct WatchSpec {
+    std::optional<std::vector<std::string>> ids;
+    std::optional<std::vector<std::string>> names;
+    std::vector<std::string> fields;
+    int32_t limit{50};
+};
+
 struct WorldStepParams {
     int32_t frames{1};
     std::optional<float> dt;
+    std::optional<WatchSpec> watch;
+};
+
+struct TimeGetParams {};
+
+struct TimeSetParams {
+    std::optional<TimeMode> mode;
+    std::optional<bool> paused;
+    std::optional<float> fixedDt;
+};
+
+struct WorldHashParams {};
+
+struct WorldDiffParams {
+    std::string snapshot;
+    std::optional<std::vector<std::string>> fields;
+    int32_t limit{50};
 };
 
 struct WorldSnapshotParams {

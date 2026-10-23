@@ -4,6 +4,7 @@
 // C ABI and the editor all dispatch through Session::call, so each operation has exactly
 // one implementation.
 #include "api/paths.hpp"
+#include "core/timeline.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 #include "reflect/decode.hpp"
@@ -107,7 +108,14 @@ public:
                                    const reflect::JsonNode& params, const CallControl* control = nullptr);
 
     [[nodiscard]] ecs::World& world() noexcept;
+    // Steps run so far: the timeline's frame.
     [[nodiscard]] uint64_t frame() const noexcept;
+    // The time model time.get/time.set answer and world.step advances: the session's own
+    // (lockstep) until a host shares its timeline with setTimeline. A window host steps
+    // the world itself while it runs in realtime (simulate per step, then stepped()), so
+    // both count on one frame axis. Not owned; it must outlive the session.
+    [[nodiscard]] Timeline& timeline() noexcept;
+    void setTimeline(Timeline& timeline) noexcept;
     [[nodiscard]] uint64_t schemaHash() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;

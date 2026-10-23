@@ -1,11 +1,13 @@
 {
-  "comment": "Sub-project 4 spec 'Performance / Budgets', CPU part (serve_bench; medians, Release, reference machine). Steps 7 and 9 add world.hash, world.diff and the GPU budgets. Changing a budget needs Frank's OK.",
+  "comment": "Sub-project 4 spec 'Performance / Budgets', CPU part (serve_bench; medians, Release, reference machine). Step 9 adds the GPU budgets. Changing a budget needs Frank's OK.",
   "budgets": {
     "world_info_rpc_ms": 0.15,
     "transport_overhead_ms": 0.10,
     "world_query_one_rpc_ms": 0.20,
     "world_apply_100_rpc_ms": 0.40,
     "world_step_1_rpc_ms": 0.50,
+    "world_hash_rpc_ms": 1.0,
+    "world_diff_1pct_rpc_ms": 2.0,
     "log_below_threshold_ns": 5,
     "log_ring_80_ns": 300,
     "tools_list_bytes": 24576

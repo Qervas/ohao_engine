@@ -228,7 +228,7 @@ int main(int argc, char* argv[]) {
         renderer.resetAccumulation();
 
         for (int s = 0; s < spp + 3; s++) {
-            world.update(0.0f);   // headless: no Application drives the systems
+            world.sync();   // headless: no Application drives the systems
             renderer.render();
         }
 

@@ -392,9 +392,9 @@ int main(int argc, char* argv[]) {
     }
     // LightingMode::None → no lights, HDR env IBL only (pure environment)
 
-    // Headless: no Application drives the systems, so every frame updates the world.
+    // Headless: no Application drives the systems, so every frame syncs the world.
     const auto renderFrame = [&] {
-        world.update(0.0f);
+        world.sync();
         renderer.render();
     };
 

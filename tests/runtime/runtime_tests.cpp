@@ -10,6 +10,7 @@
 
 #include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
 
+using namespace ohao;
 using namespace ohao::runtime;
 using namespace std::chrono_literals;
 
@@ -73,6 +74,44 @@ static void frame_stats_average_and_fps() {
     for (int i = 0; i < 4; ++i) s.record(4.0, 1.0);   // window of 4 drops the old samples
     CHECK(std::abs(s.avgCpuMs() - 4.0) < 1e-9, "rolling window discards old frames");
     CHECK(s.frames() == 6, "frames counts every record");
+}
+
+// ---------------------------------------------------------------- timeline (sub-project 4, test 11)
+
+static void sp4_t11_lockstep_ignores_wall_time() {
+    Timeline t;   // lockstep by default
+    for (int i = 0; i < 120; ++i) CHECK(t.advance(16'666'667ns).steps == 0, "lockstep: wall time runs no step");
+    t.stepped(7);
+    CHECK(t.frame() == 7 && !t.running(), "steps on request count the frame");
+}
+
+static void sp4_t11_realtime_counts_are_exact() {
+    Timeline t(TimeMode::realtime);
+    uint64_t steps = 0;
+    for (int i = 0; i < 600; ++i) {
+        const int n = t.advance(16'666'667ns).steps;
+        steps += static_cast<uint64_t>(n);
+        t.stepped(static_cast<uint64_t>(n));
+    }
+    CHECK(steps == 600 && t.frame() == 600, "600 frames of exactly one fixed step: 600 steps");
+}
+
+static void sp4_t11_pause_and_mode_switches_neither_run_nor_drop_a_step() {
+    Timeline t(TimeMode::realtime);
+    t.stepped(static_cast<uint64_t>(t.advance(8'000'000ns).steps));   // half a step pending
+    t.setPaused(true);
+    CHECK(t.advance(10'000'000'000ns).steps == 0 && t.frame() == 0, "paused: ten seconds run nothing");
+    t.stepped(3);   // world.step while paused
+    t.setPaused(false);
+    CHECK(t.advance(10'000'000ns).steps == 0, "resuming does not catch up on the pause (nor on the half step)");
+    CHECK(t.advance(7'000'000ns).steps == 1, "the first step after resuming comes a whole fixed step later");
+    t.stepped(1);
+    t.setMode(TimeMode::lockstep);
+    CHECK(t.advance(1'000'000'000ns).steps == 0 && t.frame() == 4, "lockstep again: the frame is kept, no step");
+    t.setFixedStep(50'000'000ns);
+    CHECK(std::abs(t.fixedDt() - 0.05f) < 1e-9f, "the fixed step can change");
+    Timeline d;
+    CHECK(d.fixedDt() == 1.0f / 60.0f, "the default fixed step is 1/60 s exactly, as a float");
 }
 
 // ---------------------------------------------------------------- input
@@ -271,6 +310,10 @@ int main() {
     RUN(clock_rejects_negative_and_zero_dt);
     RUN(clock_alpha_always_in_unit_interval);
     RUN(frame_stats_average_and_fps);
+    std::printf("[timeline]\n");
+    RUN(sp4_t11_lockstep_ignores_wall_time);
+    RUN(sp4_t11_realtime_counts_are_exact);
+    RUN(sp4_t11_pause_and_mode_switches_neither_run_nor_drop_a_step);
     std::printf("[input]\n");
     RUN(press_hold_release_edges);
     RUN(tap_within_one_frame);

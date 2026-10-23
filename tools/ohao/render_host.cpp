@@ -98,7 +98,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
 
     const int frames = r.frames > 0 ? r.frames : (mode == RenderMode::Deferred ? 10 : r.spp + 3);
     for (int i = 0; i < frames; ++i) {
-        world.update(0.0f);   // headless: the systems run before each frame, as in the examples
+        world.sync();   // derived state only: rendering never steps the simulation
         if (i == 0) {
             const auto failed = ecs::instantiateErrors(world);
             for (const entt::entity e : failed) {

@@ -3,30 +3,6 @@
 
 namespace ohao::runtime {
 
-Tick FixedStepClock::advance(Nanos frameDt) {
-    Tick t;
-    t.frameDt = frameDt.count() > 0 ? frameDt : Nanos{0};
-    m_accumulator += t.frameDt;
-
-    const Nanos step = m_cfg.fixedStep;
-    int64_t due = m_accumulator / step;
-    if (due > m_cfg.maxSteps) {
-        // Drop whole steps beyond the clamp; keep the sub-step remainder so the
-        // next frame's alpha is still meaningful.
-        const Nanos excess = (due - m_cfg.maxSteps) * step;
-        m_accumulator -= excess;
-        t.discarded = excess;
-        m_totalDiscarded += excess;
-        due = m_cfg.maxSteps;
-    }
-    m_accumulator -= due * step;
-    t.steps = static_cast<int>(due);
-    m_totalSteps += static_cast<uint64_t>(due);
-    t.alpha = static_cast<float>(static_cast<double>(m_accumulator.count()) /
-                                 static_cast<double>(step.count()));
-    return t;
-}
-
 void FrameStats::record(double cpuMs, double gpuMs) {
     m_cpu.push_back(cpuMs);
     m_gpu.push_back(gpuMs);

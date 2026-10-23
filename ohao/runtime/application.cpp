@@ -7,7 +7,7 @@ namespace ohao::runtime {
 
 bool Application::initialize(const AppConfig& cfg) {
     m_cfg = cfg;
-    m_clock = FixedStepClock(cfg.clock);
+    m_time = Timeline(cfg.timeMode, cfg.clock);
     if (!m_window.create(cfg.window)) return false;
     const VkExtent2D ext = m_window.framebufferExtent();
     m_renderer = std::make_unique<VulkanRenderer>(ext.width, ext.height);
@@ -37,16 +37,19 @@ RunReport Application::run(const GameHooks& hooks) {
         if (m_window.consumeResized()) m_renderer->setPresentExtent(m_window.framebufferExtent());
 
         const auto now = Clock::now();
-        const Tick tick = m_clock.advance(std::chrono::duration_cast<Nanos>(now - last));
+        const Tick tick = m_time.advance(std::chrono::duration_cast<Nanos>(now - last));
         last = now;
 
-        const float fixedDt = m_clock.fixedDtSeconds();
-        for (int i = 0; i < tick.steps; ++i)
+        const float fixedDt = m_time.fixedDt();
+        for (int i = 0; i < tick.steps; ++i) {
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
+            m_world->simulate(fixedDt);
+            m_time.stepped(1);
+        }
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
-        // Transforms, then the render extract into the RenderScene.
-        m_world->update(frameDt);
+        // Instantiate, transforms, then the render extract into the RenderScene.
+        m_world->sync();
 
         const VkExtent2D ext = m_window.framebufferExtent();
         if (ext.width != 0 && ext.height != 0) {     // minimized: simulate, don't render
@@ -55,6 +58,7 @@ RunReport Application::run(const GameHooks& hooks) {
             // real frame rate; GPU time comes from the deferred timestamp queries.
             m_stats.record(std::chrono::duration<double, std::milli>(tick.frameDt).count(),
                            m_renderer->gpuFrameMs());
+            m_time.setFps(static_cast<float>(m_stats.fps()));
         }
         ++frame;
     }

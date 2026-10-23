@@ -3,8 +3,8 @@
 //
 //   systems_tests     run every test; last line is a JSON summary
 //
-// One test group per engine-provided system (ecs::World runs them before the transform
-// system). Today: spin (ecs/spin_system.hpp).
+// One test group per engine-provided system (ecs::World simulates them once per fixed step;
+// the transform system syncs after). Today: spin (ecs/spin_system.hpp).
 #include "api/session.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
@@ -49,9 +49,10 @@ static bool near(const glm::quat& a, const glm::quat& b, float eps = 1e-5f) {
 
 static void spin_runs_before_the_transform_system() {
     World w;
-    const auto names = w.systemNames();
-    CHECK(names.size() == 2 && names[0] == "spin" && names[1] == "transform",
-          "every world runs spin, then transform");
+    const auto simulate = w.simulateNames();
+    const auto sync = w.syncNames();
+    CHECK(simulate.size() == 1 && simulate[0] == "spin", "every world simulates spin once per fixed step");
+    CHECK(sync.size() == 1 && sync[0] == "transform", "and syncs transforms after each batch of steps");
 }
 
 static void spin_turns_about_the_local_axis_by_rate_times_dt() {
@@ -88,7 +89,7 @@ static void spin_leaves_still_entities_untouched() {
     std::size_t patched = 0;
     w.registry().on_update<Transform>().connect<&countWrite>(patched);
     w.update(0.0f);
-    CHECK(patched == 0, "dt = 0 writes nothing (headless renders call update(0))");
+    CHECK(patched == 0, "dt = 0 writes nothing");
     w.update(1.0f / 60.0f);
     CHECK(patched == 1, "a zero rate, a zero or NaN axis or an infinite rate write nothing; the default Spin turns");
     for (const auto e : es) CHECK(w.registry().get<Transform>(e).rotation == glm::quat(1, 0, 0, 0), "unchanged");

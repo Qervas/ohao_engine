@@ -3,9 +3,11 @@
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/scene_io.hpp"
+#include "ecs/world_hash.hpp"
 #include "reflect/schema.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -33,8 +35,8 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "snapshots are kept). All or nothing. seed fixes the id generator for later creates."},
         {"scene.save", p.find<SceneSaveParams>(), "{scene} or {path, bytes}",
          "The canonical scene. Without a path it is returned as an object (compact)."},
-        {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host}",
-         "Cheap orientation: sizes and identity."},
+        {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host, time}",
+         "Cheap orientation: sizes, identity and the time state."},
         {"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
          "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline. A node whose "
          "children are not all listed carries more (the count left out); moreRoots counts unlisted roots."},
@@ -43,8 +45,24 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "\"/Type/field\"; without fields each entity is its file form."},
         {"world.apply", p.find<WorldApplyParams>(), "{applied, results, inverse}",
          "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
-        {"world.step", p.find<WorldStepParams>(), "{frame}",
-         "Runs the world's systems for frames fixed steps. Cancellable between steps."},
+        {"world.step", p.find<WorldStepParams>(), "{frame, watch?: {entities, count, missing?, next?}}",
+         "Runs frames fixed steps: the simulate systems once per step, then the sync systems once. watch returns "
+         "fields after the last step, as world.query would. E_STATE while realtime is running. Cancellable between "
+         "steps."},
+        {"time.get", p.find<TimeGetParams>(), "{mode, paused, frame, fixedDt, fps?}",
+         "The time state: lockstep (steps on request) or realtime (steps from wall time), paused, the frame number "
+         "(steps run so far) and the fixed step."},
+        {"time.set", p.find<TimeSetParams>(), "as time.get",
+         "Changes the mode, pause state or fixed step. Never runs or drops a step. Headless hosts: lockstep only "
+         "(E_STATE)."},
+        {"world.hash", p.find<WorldHashParams>(), "{hash, frame}",
+         "A 64-bit hash of the authoring state: ids, hierarchy, every saved component, the id generator and the "
+         "creation sequence. Equal hashes, equal worlds; runtime state is not hashed."},
+        {"world.diff", p.find<WorldDiffParams>(),
+         "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
+         "What changed since a snapshot: per entity, \"/Type/field\" (or \"/Type\" for a component added or "
+         "removed) with old and new values in file form; created and destroyed ids. count: changed entities; more: "
+         "entries left out by limit."},
         {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
          "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
          "component, the id generator and the frame."},
@@ -124,12 +142,13 @@ void reportAll(DecodeContext& ctx, std::vector<Diagnostic>& ds) {
 }
 
 void writeTime(Session::Impl& s, JsonWriter& out) {
-    // Headless and CLI sessions are lockstep only (sub-project 4 spec, "Time modes").
+    const Timeline& t = *s.time;
     out.beginObject();
-    out.key("mode"); out.string("lockstep");
-    out.key("paused"); out.boolean(false);
-    out.key("frame"); out.uint64(s.frame);
-    out.key("fixedDt"); out.float32(1.0f / 60.0f);
+    out.key("mode"); out.string(t.mode() == TimeMode::realtime ? "realtime" : "lockstep");
+    out.key("paused"); out.boolean(t.paused());
+    out.key("frame"); out.uint64(t.frame());
+    out.key("fixedDt"); out.float32(t.fixedDt());
+    if (t.fps()) { out.key("fps"); out.float32(*t.fps()); }
     out.endObject();
 }
 
@@ -199,7 +218,7 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         for (auto [e, id] : reg.view<const ecs::EntityId>().each())
             if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
         for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
-        s.frame = 0;
+        s.time->setFrame(0);
     }
     auto r = ecs::loadScene(s.world, text, s.types);
     if (!r) {
@@ -262,18 +281,30 @@ bool worldInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     if (!decodeParams(s, params, ctx, p)) return false;
     out.beginObject();
     out.key("entities"); out.uint64(s.world.idCount());
-    out.key("frame"); out.uint64(s.frame);
+    out.key("frame"); out.uint64(s.time->frame());
     out.key("schemaHash"); out.hex64(s.schemaHash);
     out.key("idCounter"); out.uint64(s.world.idGenState().counter);
     out.key("host"); out.string(hostKindName(s.host));
+    out.key("time"); writeTime(s, out);
     out.endObject();
     return true;
+}
+
+bool snapshotName(Session::Impl& s, const JsonNode& params, const std::string& name, std::string_view what,
+                  DecodeContext& ctx);
+
+// E_STATE: the call needs the clock stopped (lockstep, or realtime paused).
+bool requireSteppable(Session::Impl& s, const JsonNode& params, std::string_view what, DecodeContext& ctx) {
+    if (!s.time->running()) return true;
+    ctx.error("E_STATE", params, std::string(what) + " cannot run while the world steps in realtime",
+              "time.set {\"paused\": true} or {\"mode\": \"lockstep\"} first");
+    return false;
 }
 
 bool worldStep(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
     WorldStepParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
-    const float dt = p.dt.value_or(1.0f / 60.0f);
+    const float dt = p.dt.value_or(s.time->fixedDt());
     if (!(dt > 0.0f)) {
         ctx.push("dt");
         ctx.error("E_RANGE", *ctx.doc.member(params, "dt"), "dt is out of range", "a step in (0, 1] seconds",
@@ -281,18 +312,213 @@ bool worldStep(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         ctx.pop();
         return badParams(s);
     }
+    // The watch is checked before any step runs: a bad path costs no simulation.
+    QueryPlan watch;
+    if (p.watch) {
+        const JsonNode& w = *ctx.doc.member(params, "watch");
+        ctx.push("watch");
+        if (!ctx.doc.member(w, "fields"))
+            ctx.error("E_COMMAND", w, "a watch needs \"fields\"", "{\"fields\": [\"/Transform/position\"]}");
+        watch.limit = static_cast<std::size_t>(p.watch->limit);
+        planQuery(s, ctx.doc, w, ctx, watch);
+        ctx.pop();
+        if (!ctx.errors.empty()) return badParams(s);
+    }
+    if (!requireSteppable(s, params, "world.step", ctx)) return false;
     const auto frames = static_cast<uint64_t>(p.frames);
     for (uint64_t i = 0; i < frames; ++i) {
         if (s.cancelRequested()) {   // between whole steps
+            s.world.sync();
             s.cancelled = true;
             return false;
         }
-        s.world.update(dt);
-        ++s.frame;
+        s.world.simulate(dt);
+        s.time->stepped(1);
         if (s.control && s.control->progress) s.control->progress(i + 1, frames);
     }
+    s.world.sync();   // derived state once per batch
     out.beginObject();
-    out.key("frame"); out.uint64(s.frame);
+    out.key("frame"); out.uint64(s.time->frame());
+    if (p.watch) {
+        out.key("watch");
+        writeQuery(s, watch, out);
+    }
+    out.endObject();
+    return true;
+}
+
+bool timeGet(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    TimeGetParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    writeTime(s, out);
+    return true;
+}
+
+bool timeSet(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    TimeSetParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    if (p.fixedDt && !(*p.fixedDt > 0.0f)) {
+        ctx.push("fixedDt");
+        ctx.error("E_RANGE", *doc.member(params, "fixedDt"), "fixedDt is out of range", "a step in (0, 1] seconds",
+                  ctx.gotText(*doc.member(params, "fixedDt")));
+        ctx.pop();
+        return badParams(s);
+    }
+    // Realtime needs a clock that runs between requests: only a window host has one.
+    if (p.mode == TimeMode::realtime && s.host != HostKind::Window) {
+        ctx.push("mode");
+        ctx.error("E_STATE", *doc.member(params, "mode"),
+                  "this host runs lockstep only (" + std::string(hostKindName(s.host)) + ")",
+                  "\"lockstep\"; realtime needs a window host", "\"realtime\"");
+        ctx.pop();
+        return false;
+    }
+    if (p.mode) s.time->setMode(*p.mode);
+    if (p.paused) s.time->setPaused(*p.paused);
+    if (p.fixedDt)
+        s.time->setFixedStep(Nanos(static_cast<int64_t>(std::llround(static_cast<double>(*p.fixedDt) * 1e9))));
+    writeTime(s, out);
+    return true;
+}
+
+bool worldHash(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    WorldHashParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    const uint64_t h = ecs::hashWorld(s.world, s.types, s.hashScratch);
+    out.beginObject();
+    out.key("hash"); out.hex64(h);
+    out.key("frame"); out.uint64(s.time->frame());
+    out.endObject();
+    return true;
+}
+
+// The snapshot a request names, or E_SNAPSHOT_UNKNOWN (with the known names) at `key`.
+const ecs::Snapshot* findSnapshot(Session::Impl& s, const JsonDocument& doc, const JsonNode& params,
+                                  std::string_view key, const std::string& name, DecodeContext& ctx) {
+    const auto it = s.snapshots.find(name);
+    if (it != s.snapshots.end()) return &it->second;
+    std::vector<std::string_view> names;
+    for (const auto& [n, snap] : s.snapshots) names.push_back(n);
+    ctx.push(key);
+    ctx.error("E_SNAPSHOT_UNKNOWN", *doc.member(params, key), "no snapshot is named '" + name + "'",
+              names.empty() ? "a name given to world.snapshot (none yet)" : reflect::oneOf(names), "\"" + name + "\"",
+              reflect::suggest(name, names));
+    ctx.pop();
+    return nullptr;
+}
+
+bool worldDiff(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    WorldDiffParams p;
+    if (!decodeParams(s, params, ctx, p) || !snapshotName(s, params, p.snapshot, "world.diff", ctx)) return false;
+    std::vector<Projection> only;
+    if (p.fields) {
+        parseProjection(s, doc, *doc.member(params, "fields"), ctx, only);
+        if (!ctx.errors.empty()) return badParams(s);
+    }
+    const ecs::Snapshot* snap = findSnapshot(s, doc, params, "snapshot", p.snapshot, ctx);
+    if (!snap) return false;
+    ecs::WorldDiff& d = s.diffScratch;
+    ecs::diffWorld(s.world, *snap, d);
+
+    const auto projected = [&](const TypeInfo* t) -> const Projection* {
+        for (const Projection& pr : only)
+            if (pr.type == t) return &pr;
+        return nullptr;
+    };
+    // Whether a component change is listed, and which of its fields. A whole-type projection
+    // (or none at all) lists every field.
+    const auto fieldListed = [&](const Projection* pr, const FieldInfo& f) {
+        return !pr || pr->whole || std::find(pr->fields.begin(), pr->fields.end(), &f) != pr->fields.end();
+    };
+    const auto anyListed = [&](const ecs::EntityDiff& e) {
+        if (only.empty()) return true;
+        for (const ecs::ComponentDiff& c : e.components) {
+            const Projection* pr = projected(c.type);
+            if (!pr) continue;
+            if (!c.before || !c.after || pr->whole) return true;
+            for (const FieldInfo* f : pr->fields)
+                if (!f->ops->equal(c.before, c.after, *f->type)) return true;
+        }
+        return e.parentChanged && projected(s.tParent);
+    };
+    const auto parentValue = [&](uint64_t id) {
+        out.beginObject();
+        out.key("entity"); out.hex64(id);
+        out.endObject();
+    };
+
+    const auto limit = static_cast<std::size_t>(p.limit);
+    std::size_t count = 0, more = 0;
+    out.beginObject();
+    out.key("changed");
+    out.beginArray();
+    for (const ecs::EntityDiff& e : d.changed) {
+        if (!anyListed(e)) continue;
+        if (count++ >= limit) {
+            ++more;
+            continue;
+        }
+        out.beginObject();
+        out.key("id"); out.hex64(e.id);
+        if (const auto* n = s.world.registry().try_get<ecs::Name>(e.entity); n && !n->value.empty()) {
+            out.key("name"); out.string(n->value);
+        }
+        out.key("fields");
+        out.beginObject();
+        for (const ecs::ComponentDiff& c : e.components) {
+            const Projection* pr = projected(c.type);
+            if (!only.empty() && !pr) continue;
+            if (!c.before || !c.after) {   // added or removed: the whole value, in file form
+                out.key("/" + c.type->name);
+                out.beginArray();
+                if (c.before) reflect::writeStruct(c.before, out, *c.type, c.type->defaultValue.get());
+                else out.null();
+                if (c.after) reflect::writeStruct(c.after, out, *c.type, c.type->defaultValue.get());
+                else out.null();
+                out.endArray();
+                continue;
+            }
+            for (const FieldInfo& f : c.type->fields) {
+                if (!fieldListed(pr, f) || f.ops->equal(c.before, c.after, *f.type)) continue;
+                out.key("/" + c.type->name + "/" + f.name);
+                out.beginArray();
+                f.ops->write(c.before, out, *f.type);
+                f.ops->write(c.after, out, *f.type);
+                out.endArray();
+            }
+        }
+        if (e.parentChanged && (only.empty() || projected(s.tParent))) {
+            if (e.parentBefore && e.parentAfter) {
+                out.key("/Parent/entity");
+                out.beginArray();
+                out.hex64(e.parentBefore);
+                out.hex64(e.parentAfter);
+                out.endArray();
+            } else {
+                out.key("/Parent");
+                out.beginArray();
+                if (e.parentBefore) parentValue(e.parentBefore);
+                else out.null();
+                if (e.parentAfter) parentValue(e.parentAfter);
+                else out.null();
+                out.endArray();
+            }
+        }
+        out.endObject();
+        out.endObject();
+    }
+    out.endArray();
+    const auto ids = [&](const char* key, const std::vector<uint64_t>& list) {
+        out.key(key);
+        out.beginArray();
+        for (std::size_t i = 0; i < list.size() && i < limit; ++i) out.hex64(list[i]);
+        out.endArray();
+        if (list.size() > limit) more += list.size() - limit;
+    };
+    ids("created", d.created);
+    ids("destroyed", d.destroyed);
+    out.key("count"); out.uint64(count);
+    if (more) { out.key("more"); out.uint64(more); }
     out.endObject();
     return true;
 }
@@ -311,7 +537,7 @@ bool worldSnapshot(Session::Impl& s, const JsonDocument&, const JsonNode& params
     if (!decodeParams(s, params, ctx, p) || !snapshotName(s, params, p.name, "world.snapshot", ctx)) return false;
     auto it = s.snapshots.find(p.name);
     if (it == s.snapshots.end()) it = s.snapshots.emplace(p.name, ecs::Snapshot{}).first;
-    ecs::takeSnapshot(s.world, s.types, it->second, s.frame);   // reuses the old snapshot's memory
+    ecs::takeSnapshot(s.world, s.types, it->second, s.time->frame());   // reuses the old snapshot's memory
     const std::size_t rows = it->second.rows(), bytes = it->second.bytes();
     out.beginObject();
     out.key("name"); out.string(p.name);
@@ -325,24 +551,15 @@ bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& par
                   JsonWriter& out) {
     WorldRestoreParams p;
     if (!decodeParams(s, params, ctx, p) || !snapshotName(s, params, p.name, "world.restore", ctx)) return false;
-    const auto it = s.snapshots.find(p.name);
-    if (it == s.snapshots.end()) {
-        std::vector<std::string_view> names;
-        for (const auto& [n, snap] : s.snapshots) names.push_back(n);
-        ctx.push("name");
-        ctx.error("E_SNAPSHOT_UNKNOWN", *doc.member(params, "name"), "no snapshot is named '" + p.name + "'",
-                  names.empty() ? "a name given to world.snapshot (none yet)" : reflect::oneOf(names),
-                  "\"" + p.name + "\"", reflect::suggest(p.name, names));
-        ctx.pop();
-        return false;
-    }
-    const ecs::RestoreStats st = ecs::restoreSnapshot(s.world, it->second);
-    s.frame = it->second.frame;
+    const ecs::Snapshot* snap = findSnapshot(s, doc, params, "name", p.name, ctx);
+    if (!snap) return false;
+    const ecs::RestoreStats st = ecs::restoreSnapshot(s.world, *snap);
+    s.time->setFrame(snap->frame);
     out.beginObject();
     out.key("created"); out.uint64(st.created);
     out.key("destroyed"); out.uint64(st.destroyed);
     out.key("changed"); out.uint64(st.changed);
-    out.key("frame"); out.uint64(s.frame);
+    out.key("frame"); out.uint64(s.time->frame());
     out.endObject();
     return true;
 }
@@ -430,8 +647,9 @@ constexpr MethodEntry kDispatch[] = {
     {"engine.info", engineInfo},     {"schema.get", schemaGet},         {"scene.validate", sceneValidate},
     {"scene.load", sceneLoad},       {"scene.save", sceneSave},         {"world.info", worldInfo},
     {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply},
-    {"world.step", worldStep},       {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore},
-    {"render.capture", renderCapture}, {"log.read", logRead},
+    {"world.step", worldStep},       {"time.get", timeGet},             {"time.set", timeSet},
+    {"world.hash", worldHash},       {"world.diff", worldDiff},         {"world.snapshot", worldSnapshot},
+    {"world.restore", worldRestore}, {"render.capture", renderCapture}, {"log.read", logRead},
 };
 
 const MethodEntry* findMethod(std::string_view name) {
@@ -660,7 +878,9 @@ Session::Session(ecs::World& world, const reflect::TypeRegistry& types)
 Session::~Session() = default;
 
 ecs::World& Session::world() noexcept { return m->world; }
-uint64_t Session::frame() const noexcept { return m->frame; }
+uint64_t Session::frame() const noexcept { return m->time->frame(); }
+Timeline& Session::timeline() noexcept { return *m->time; }
+void Session::setTimeline(Timeline& timeline) noexcept { m->time = &timeline; }
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 void Session::setRenderHandler(RenderHandler handler) { m->render = std::move(handler); }

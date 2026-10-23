@@ -83,7 +83,7 @@ int main(int rawArgc, char* rawArgv[]) {
     auto start = std::chrono::high_resolution_clock::now();
     const int frames = cli.useDeferred ? 10 : (samples + 3);
     for (int i = 0; i < frames; i++) {
-        world.update(0.0f);   // headless: no Application drives the systems
+        world.sync();   // headless: no Application drives the systems
         if (i == 0 && !ecs::instantiateErrors(world).empty()) {
             std::cerr << "FATAL: meshes could not be built (see the instantiate errors above)\n";
             return 2;

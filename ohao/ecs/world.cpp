@@ -48,12 +48,11 @@ World::World() : m_idGen{randomSeed(), 0} {
     m_registry.storage<TransformDirty>();
     m_registry.on_destroy<Parent>().connect<&World::onParentDestroyed>(this);
     m_registry.on_destroy<Children>().connect<&World::onChildrenDestroyed>(this);
-    // Engine-provided behaviour first: these move entities, so they run before the
-    // transform system and their changes reach the GPU the same update.
-    addSystem("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
+    // Engine-provided behaviour, once per fixed step.
+    addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
     // Structural: transforms are propagated before every host system (instantiate is
     // inserted right before it, the render extract right after).
-    addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });
+    addSync("transform", [](World& w) { updateTransforms(w.registry()); });
 }
 
 void World::onTransformChanged(entt::registry& r, entt::entity e) {
@@ -211,11 +210,19 @@ void World::setTransform(entt::entity e, const Transform& local) {
     m_registry.patch<Transform>(e, [&](Transform& t) { t = local; });
 }
 
-void World::addSystem(std::string name, System fn) {
-    m_systems.emplace_back(std::move(name), std::move(fn));
+void World::addSimulate(std::string name, SimulateSystem fn) {
+    m_simulate.emplace_back(std::move(name), std::move(fn));
 }
 
-void World::update(float dt) {
+void World::addSync(std::string name, SyncSystem fn) {
+    m_sync.emplace_back(std::move(name), std::move(fn));
+}
+
+void World::simulate(float dt) {
+    for (auto& [name, fn] : m_simulate) fn(*this, dt);
+}
+
+void World::sync() {
 #ifndef NDEBUG
     // A Transform written through get<>() instead of patch<>() is never propagated.
     if (m_transformMismatches == 0) {
@@ -228,25 +235,29 @@ void World::update(float dt) {
                      m_transformMismatches);
     }
 #endif
-    for (auto& [name, fn] : m_systems) fn(*this, dt);
+    for (auto& [name, fn] : m_sync) fn(*this);
 }
 
-void World::addSystemAfter(std::string_view after, std::string name, System fn) {
-    auto it = std::find_if(m_systems.begin(), m_systems.end(),
-                           [&](const auto& s) { return s.first == after; });
-    if (it != m_systems.end()) ++it;
-    m_systems.emplace(it, std::move(name), std::move(fn));
+void World::addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn) {
+    auto it = std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.first == anchor; });
+    if (it != m_sync.end()) ++it;
+    m_sync.emplace(it, std::move(name), std::move(fn));
 }
 
-void World::addSystemBefore(std::string_view before, std::string name, System fn) {
-    const auto it = std::find_if(m_systems.begin(), m_systems.end(),
-                                 [&](const auto& s) { return s.first == before; });
-    m_systems.emplace(it, std::move(name), std::move(fn));
+void World::addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn) {
+    const auto it = std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.first == anchor; });
+    m_sync.emplace(it, std::move(name), std::move(fn));
 }
 
-std::vector<std::string> World::systemNames() const {
+std::vector<std::string> World::simulateNames() const {
     std::vector<std::string> out;
-    for (const auto& [name, fn] : m_systems) out.push_back(name);
+    for (const auto& [name, fn] : m_simulate) out.push_back(name);
+    return out;
+}
+
+std::vector<std::string> World::syncNames() const {
+    std::vector<std::string> out;
+    for (const auto& [name, fn] : m_sync) out.push_back(name);
     return out;
 }
 

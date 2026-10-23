@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -11,6 +12,7 @@
 namespace ohao::reflect {
 
 class JsonWriter;
+class Hasher;
 class DecodeContext;
 struct JsonNode;
 class JsonValue;
@@ -78,6 +80,9 @@ public:
     // The same from a streaming cursor (FastDecode); false where read() would report.
     [[nodiscard]] virtual bool readFast(void* object, FastDecode& c, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool equal(const void* a, const void* b, const TypeDesc& d) const = 0;
+    // Feeds the member's value to `h` (reflect/hash.hpp): equal values (equal() above) hash
+    // alike.
+    virtual void hash(const void* object, Hasher& h, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool inRange(const void* object, const NumericLimits& l) const = 0;
     [[nodiscard]] virtual void* address(void* object) const = 0;
     [[nodiscard]] virtual const void* address(const void* object) const = 0;
@@ -88,6 +93,18 @@ struct FieldInfo {
     const TypeDesc* type{nullptr};
     FieldAttrs attrs;
     std::unique_ptr<FieldOps> ops;
+};
+
+// A tri-state computed on first use (-1 unknown), safe to read from several threads; a
+// copy carries the value.
+struct LazyFlag {
+    mutable std::atomic<int8_t> value{-1};
+    LazyFlag() = default;
+    LazyFlag(const LazyFlag& o) noexcept : value(o.value.load(std::memory_order_relaxed)) {}
+    LazyFlag& operator=(const LazyFlag& o) noexcept {
+        value.store(o.value.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
+    }
 };
 
 struct SkippedField {
@@ -123,6 +140,10 @@ struct TypeInfo {
     // Opaque per-type data owned by the embedding layer; the ECS keeps its component
     // operations (emplace, get, count) here. Reflect never looks inside.
     std::shared_ptr<const void> host;
+    // Whether a value's bytes are exactly its registered fields (plain numbers and structs
+    // of them, no padding, no unregistered member), decided on first use by hashStruct,
+    // which then hashes the bytes: -1 not yet known, 0 no, 1 yes.
+    LazyFlag plainBytes;
 
     [[nodiscard]] const FieldInfo* field(std::string_view fieldName) const;
     // The upgrade from `from` to `from + 1`, or null.
@@ -152,6 +173,9 @@ struct EnumInfo {
 // same default.
 void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const void* omitEqualTo = nullptr);
 [[nodiscard]] bool equalStruct(const void* a, const void* b, const TypeInfo& t);
+// Every registered field, in order (reflect/hash.hpp); a type whose bytes are exactly its
+// fields (TypeInfo::plainBytes) as its bytes, which is the same information, faster.
+void hashStruct(const void* object, Hasher& h, const TypeInfo& t);
 // Decodes an object into `object` (already holding defaults): unknown members, duplicate
 // members, type errors and limit violations are reported to ctx; missing members keep
 // their defaults. A member named `ignoredKey` (if given) is skipped, not reported.

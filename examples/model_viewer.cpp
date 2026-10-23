@@ -187,10 +187,10 @@ int main(int rawArgc, char* rawArgv[]) {
         }
     }
 
-    // Headless: no Application drives the systems, so every frame updates the world.
+    // Headless: no Application drives the systems, so every frame syncs the world.
     bool firstFrame = true;
     const auto renderFrame = [&] {
-        world.update(0.0f);
+        world.sync();
         if (firstFrame && !ecs::instantiateErrors(world).empty()) {
             std::cerr << "FATAL: meshes could not be built (see the instantiate errors above)\n";
             std::exit(2);

@@ -1,13 +1,20 @@
 {"jsonrpc":"2.0","id":"p","result":{}}
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"8a3083d7fd9f023a","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"ef86e2dd5f1d6054","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":2,"result":{"entities":4}}
-{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"8a3083d7fd9f023a","idCounter":0,"host":"headless"}}
+{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"ef86e2dd5f1d6054","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":4,"result":{"entities":4,"roots":2,"components":{"Name":4,"Transform":4,"Parent":2,"Light":2,"Children":4,"CreationOrder":4},"bounds":{"min":[0,0,-4],"max":[15,50,0]},"outline":[{"id":"1000000000000001","name":"Room","children":[{"id":"1000000000000002","name":"Lamp","more":1}]},{"id":"1000000000000003","name":"Sun"}]}}
 {"jsonrpc":"2.0","id":5,"result":{"entities":[{"id":"1000000000000002","Light":{"type":"Spot","color":[1,0.85,0.6],"intensity":12.5,"range":15,"radius":0.05,"innerConeDeg":20,"outerConeDeg":35}}],"count":1}}
 {"jsonrpc":"2.0","id":6,"result":{"name":"base","entities":4,"bytes":556}}
+{"jsonrpc":"2.0","id":20,"result":{"hash":"0dc30d7b47b1f234","frame":0}}
 {"jsonrpc":"2.0","id":7,"result":{"applied":2,"results":[null,"4f3c532b3a1decba"],"inverse":[{"op":"entity.destroy","id":"4f3c532b3a1decba"},{"op":"field.set","id":"1000000000000002","path":"/Light/intensity","value":12.5}]}}
 {"jsonrpc":"2.0","id":8,"result":{"frame":3}}
+{"jsonrpc":"2.0","id":21,"result":{"changed":[{"id":"1000000000000002","name":"Lamp","fields":{"/Light/intensity":[12.5,3.5]}}],"created":["4f3c532b3a1decba"],"destroyed":[],"count":1}}
+{"jsonrpc":"2.0","id":22,"result":{"mode":"lockstep","paused":false,"frame":3,"fixedDt":0.016666668}}
+{"jsonrpc":"2.0","id":23,"error":{"code":1,"message":"this host runs lockstep only (headless)","data":{"code":"E_STATE","diagnostics":[{"code":"E_STATE","path":"/mode","message":"this host runs lockstep only (headless)","expected":"\"lockstep\"; realtime needs a window host","got":"\"realtime\""}]}}}
+{"jsonrpc":"2.0","id":24,"result":{"mode":"lockstep","paused":false,"frame":3,"fixedDt":0.05}}
+{"jsonrpc":"2.0","id":25,"result":{"frame":5,"watch":{"entities":[{"id":"1000000000000002","Transform":{"position":[1.5,2.25,-0.5]},"Light":{"intensity":3.5}}],"count":1}}}
 {"jsonrpc":"2.0","id":9,"result":{"created":0,"destroyed":1,"changed":1,"frame":0}}
+{"jsonrpc":"2.0","id":26,"result":{"hash":"0dc30d7b47b1f234","frame":0}}
 {"jsonrpc":"2.0","id":10,"result":{"entities":4}}
 {"jsonrpc":"2.0","id":11,"result":{"path":"build/serve_tmp/native/rooms.scene.json","bytes":1056}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"8a3083d7fd9f023a","idCounter":0,"host":"headless"}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"ef86e2dd5f1d6054","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":2,"fixedDt":0.05}}}

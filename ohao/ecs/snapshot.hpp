@@ -62,4 +62,11 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
 // `snapshot` must come from a world with the same registrations. Never fails.
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
 
+// The parts of a capture, for code that reads the world in snapshot order without copying
+// its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;
+// no columns, the frame untouched) with `rowOf` mapping an entity index to its row
+// (kNoRow: none), and the component types a snapshot has a column for, in column order.
+void captureEntityTable(const World& world, Snapshot& into, std::vector<uint32_t>& rowOf);
+[[nodiscard]] std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types);
+
 } // namespace ohao::ecs

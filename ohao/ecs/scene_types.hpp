@@ -48,6 +48,12 @@ struct ComponentOps {
     // when the registry has no storage for T), then `tryGetIn` per entity.
     const void* (*pool)(const entt::registry& r);
     const void* (*tryGetIn)(const void* pool, entt::entity e);
+    // world.hash: every T in snapshot row order (see hashColumn). world.diff: the values
+    // that differ between a snapshot column and the live world (see diffColumn).
+    void (*hash)(const entt::registry& r, std::span<const uint32_t> rowOf, const reflect::TypeInfo& t,
+                 reflect::Hasher& h);
+    void (*diff)(const entt::registry& r, const SnapshotColumn& col, DiffScratch& scratch,
+                 std::vector<ColumnChange>& out);
 };
 
 namespace detail {
@@ -81,6 +87,8 @@ template <class T>
             const auto* s = static_cast<const Pool*>(pool);
             return s && s->contains(e) ? &s->get(e) : nullptr;
         },
+        &detail::hashColumn<T>,
+        &detail::diffColumn<T>,
     };
     return std::shared_ptr<const void>(&ops, [](const void*) {});
 }

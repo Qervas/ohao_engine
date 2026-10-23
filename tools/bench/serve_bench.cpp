@@ -11,6 +11,8 @@
 //   world_query_one_rpc      world.query, one entity, one projected field         <= 0.20 ms
 //   world_apply_100_rpc      world.apply of 100 field.set                         <= 0.40 ms
 //   world_step_1_rpc         world.step of 1 frame                                <= 0.50 ms
+//   world_hash_rpc           world.hash of bench10k                               <= 1.0 ms
+//   world_diff_1pct_rpc      world.diff against a snapshot, 1% of rows changed    <= 2.0 ms
 //   log_below_threshold      OHAO_LOG below the threshold, per call               <= 5 ns
 //   log_ring_80              OHAO_LOG into the ring, an 80-character message      <= 300 ns
 //   tools_list_bytes         the tools/list result                                <= 24 KB
@@ -220,6 +222,7 @@ struct Op {
     std::vector<double> samples;      // per-call mean of each block, in `unit`
     std::vector<double> faults;       // the server's page faults per call (round trips)
     bool serverFaults{false};
+    std::function<void()> prepare;    // untimed, before each block: puts the world in the op's state
 };
 
 } // namespace
@@ -363,6 +366,23 @@ int main(int argc, char** argv) {
     const std::string queryReq = request(8, "world.query", queryParams);
     const std::string applyReqA = request(9, "world.apply", applyA), applyReqB = request(9, "world.apply", applyB);
     const std::string stepReq = request(10, "world.step", R"({"frames":1})");
+    const std::string hashReq = request(11, "world.hash", "{}");
+    const std::string diffReq = request(12, "world.diff", R"({"snapshot":"diff_base"})");
+    const std::string restoreNowReq = request(13, "world.restore", R"({"name":"diff_now"})");
+    // diff_base, then 100 entities (1% of bench10k) moved, then diff_now.
+    std::string moveParams = R"({"commands":[)";
+    for (int i = 0; i < 100; ++i)
+        moveParams += std::string(i ? "," : "") + R"({"op":"field.set","id":")" + hex16(order[300 + i].second) +
+                      R"(","path":"/Transform/position","value":[5,5,5]})";
+    moveParams += "]}";
+    expect(server.call(request(5, "world.snapshot", R"({"name":"diff_base"})")).find("\"entities\":10002") !=
+               std::string::npos,
+           "world.snapshot diff_base");
+    expect(server.call(request(6, "world.apply", moveParams)).find("\"applied\":100") != std::string::npos,
+           "1% of the entities moved");
+    expect(server.call(request(6, "world.snapshot", R"({"name":"diff_now"})")).find("\"entities\":10002") !=
+               std::string::npos,
+           "world.snapshot diff_now");
     std::string last;
     std::vector<Op> ops;
     const auto each = [](auto fn) {
@@ -376,6 +396,11 @@ int main(int argc, char** argv) {
     ops.push_back({"world_apply_100_rpc", "ms", 10,
                    each([&](int k) { last = server.call(k % 2 ? applyReqA : applyReqB); }), {}, {}, true});
     ops.push_back({"world_step_1_rpc", "ms", 10, each([&](int) { last = server.call(stepReq); }), {}, {}, true});
+    ops.push_back({"world_hash_rpc", "ms", 10, each([&](int) { last = server.call(hashReq); }), {}, {}, true});
+    // world.diff against diff_base with exactly 1% of the rows changed: each block first
+    // restores diff_now (untimed), since the ops beside it move the world.
+    ops.push_back({"world_diff_1pct_rpc", "ms", 10, each([&](int) { last = server.call(diffReq); }), {}, {}, true,
+                   [&] { last = server.call(restoreNowReq); }});
     ops.push_back({"log_below_threshold", "ns", 1'000'000, [](int first, int n) {
                        for (int i = first; i < first + n; ++i) OHAO_LOG(Debug, render, "below the threshold {} {}", i, 0.5);
                    }});
@@ -393,6 +418,7 @@ int main(int argc, char** argv) {
     int calls = 0;
     for (int r = 0; r < 5 + rounds; ++r) {
         for (Op& op : ops) {
+            if (op.prepare) op.prepare();
             const uint64_t f0 = op.serverFaults ? server.pageFaults() : 0;
             const auto s = Clock::now();
             op.run(calls, op.calls);
@@ -412,6 +438,10 @@ int main(int argc, char** argv) {
     expect(server.call(queryReq).find("\"count\":1") != std::string::npos, "world.query finds the one entity");
     expect(server.call(applyReqA).find("\"applied\":100") != std::string::npos, "world.apply applies 100");
     expect(server.call(stepReq).find("\"frame\":") != std::string::npos, "world.step steps");
+    const std::string h1 = server.call(hashReq), h2 = server.call(hashReq);
+    expect(h1.find("\"hash\":\"") != std::string::npos && h1 == h2, "world.hash answers, the same twice");
+    server.call(restoreNowReq);
+    expect(server.call(diffReq).find("\"count\":100") != std::string::npos, "world.diff finds the 100 moved entities");
     const int exitCode = server.close();
     expect(exitCode == 0, "the server exits 0 when stdin closes (exit " + std::to_string(exitCode) + ")");
 
@@ -437,12 +467,14 @@ int main(int argc, char** argv) {
         {"world_query_one_rpc", "ms", "world_query_one_rpc_ms", stats(ops[2].samples), ops[2].faults},
         {"world_apply_100_rpc", "ms", "world_apply_100_rpc_ms", stats(ops[3].samples), ops[3].faults},
         {"world_step_1_rpc", "ms", "world_step_1_rpc_ms", stats(ops[4].samples), ops[4].faults},
-        {"log_below_threshold", "ns", "log_below_threshold_ns", stats(ops[5].samples), {}},
-        {"log_ring_80", "ns", "log_ring_80_ns", stats(ops[6].samples), {}},
+        {"world_hash_rpc", "ms", "world_hash_rpc_ms", stats(ops[5].samples), ops[5].faults},
+        {"world_diff_1pct_rpc", "ms", "world_diff_1pct_rpc_ms", stats(ops[6].samples), ops[6].faults},
+        {"log_below_threshold", "ns", "log_below_threshold_ns", stats(ops[7].samples), {}},
+        {"log_ring_80", "ns", "log_ring_80_ns", stats(ops[8].samples), {}},
         {"tools_list_bytes", "B", "tools_list_bytes", {static_cast<double>(toolsBytes), static_cast<double>(toolsBytes)}, {}},
     };
 
-    std::printf("serve_bench (sub-project 4, step 6): ohao serve as a child process, bench10k, %d rounds\n", rounds);
+    std::printf("serve_bench (sub-project 4, steps 6-7): ohao serve as a child process, bench10k, %d rounds\n", rounds);
     char refText[96] = "none (run serve_bench --calibrate on a quiet machine)";
     if (ref > 0) std::snprintf(refText, sizeof refText, "%.3f ms (x%.2f)", ref, slow);
     std::printf("    calibration  before %.3f ms  after %.3f ms  reference %s\n", cal0, cal1, refText);

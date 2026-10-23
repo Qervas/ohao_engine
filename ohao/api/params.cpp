@@ -85,9 +85,33 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("commands", &WorldApplyParams::commands).doc("Array of commands {op, ...}, applied atomically in order")
             .required();
 
+    r.type<WatchSpec>("WatchSpec").doc("Entities and fields world.step returns after its last step")
+        .field("ids", &WatchSpec::ids).doc("Entity ids (16 hex digits)")
+        .field("names", &WatchSpec::names).doc("Exact names")
+        .field("fields", &WatchSpec::fields).doc("Projection: \"/Type\" or \"/Type/field\"").required()
+        .field("limit", &WatchSpec::limit).doc("Entities returned").unitless().min(0).max(10'000);
+
     r.type<WorldStepParams>("WorldStepParams").doc("world.step params")
         .field("frames", &WorldStepParams::frames).doc("Fixed steps to run").unitless().min(0).max(1'000'000)
-        .field("dt", &WorldStepParams::dt).doc("Step length, in (0, 1]; default 1/60").unit("s").min(0.0).max(1.0);
+        .field("dt", &WorldStepParams::dt).doc("Step length, in (0, 1]; default the session's fixedDt (time.get)")
+            .unit("s").min(0.0).max(1.0)
+        .field("watch", &WorldStepParams::watch).doc("Fields to return after the last step: one round trip, not two");
+
+    r.enumeration<TimeMode>("TimeMode").doc("How the world advances")
+        .value("lockstep", TimeMode::lockstep, "Only on request (world.step); the default for ohao serve")
+        .value("realtime", TimeMode::realtime, "Fixed steps from wall time, as a game runs (window hosts only)");
+    r.type<TimeGetParams>("TimeGetParams").doc("time.get params");
+    r.type<TimeSetParams>("TimeSetParams").doc("time.set params")
+        .field("mode", &TimeSetParams::mode).doc("lockstep or realtime (realtime needs a window host)")
+        .field("paused", &TimeSetParams::paused).doc("Stop realtime stepping; world.step then works as in lockstep")
+        .field("fixedDt", &TimeSetParams::fixedDt).doc("Fixed step length, in (0, 1]").unit("s").min(0.0).max(1.0);
+
+    r.type<WorldHashParams>("WorldHashParams").doc("world.hash params");
+    r.type<WorldDiffParams>("WorldDiffParams").doc("world.diff params")
+        .field("snapshot", &WorldDiffParams::snapshot).doc("Name given to world.snapshot").required()
+        .field("fields", &WorldDiffParams::fields).doc("Only these: \"/Type\" or \"/Type/field\"; absent: everything")
+        .field("limit", &WorldDiffParams::limit).doc("Entries listed in each of changed, created, destroyed")
+            .unitless().min(0).max(10'000);
 
     r.type<WorldSnapshotParams>("WorldSnapshotParams").doc("world.snapshot params")
         .field("name", &WorldSnapshotParams::name).doc("Snapshot name (an existing one is replaced)").required();

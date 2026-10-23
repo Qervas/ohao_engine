@@ -11,15 +11,6 @@
 
 namespace ohao::api {
 
-namespace {
-
-// One projected component: the whole value, or the listed fields.
-struct Projection {
-    const TypeInfo* type;
-    bool whole{false};
-    std::vector<const FieldInfo*> fields;
-};
-
 bool parseProjection(Session::Impl& s, const JsonDocument& doc, const JsonNode& fields, DecodeContext& ctx,
                      std::vector<Projection>& out) {
     const std::size_t before = ctx.errors.size();
@@ -66,65 +57,73 @@ bool parseProjection(Session::Impl& s, const JsonDocument& doc, const JsonNode& 
     return ctx.errors.size() == before;
 }
 
-} // namespace
-
-bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
-                 JsonWriter& out) {
-    WorldQueryParams p;
-    if (!decodeParams(s, params, ctx, p)) return false;
-    const int64_t limit = p.limit, offset = p.offset;
-    const bool defaults = p.defaults;
-    const std::string_view contains = p.nameContains ? std::string_view(*p.nameContains) : std::string_view();
-
-    // The arrays' elements are strings (decodeParams checked); the nodes give each one's path.
-    const JsonNode* idsNode = p.ids ? doc.member(params, "ids") : nullptr;
-    const JsonNode* namesNode = p.names ? doc.member(params, "names") : nullptr;
-    const JsonNode* hasNode = p.has ? doc.member(params, "has") : nullptr;
-    const JsonNode* fieldsNode = p.fields ? doc.member(params, "fields") : nullptr;
-
-    std::vector<uint64_t> ids;
-    if (idsNode) {
+bool planQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& obj, DecodeContext& ctx, QueryPlan& plan) {
+    const std::size_t before = ctx.errors.size();
+    // The arrays' elements are strings (the params struct checked); the nodes give each one's path.
+    const JsonNode* idsNode = doc.member(obj, "ids");
+    const JsonNode* namesNode = doc.member(obj, "names");
+    const JsonNode* hasNode = doc.member(obj, "has");
+    const JsonNode* fieldsNode = doc.member(obj, "fields");
+    if (idsNode && idsNode->type == JsonType::Array) {
+        plan.byIds = true;
         ctx.push("ids");
         for (uint32_t i = 0; i < idsNode->count; ++i) {
             ctx.push(i);
             uint64_t id = 0;
-            if (reflect::readHex64(doc.child(*idsNode, i), ctx, "E_ID_INVALID", id)) ids.push_back(id);
+            if (reflect::readHex64(doc.child(*idsNode, i), ctx, "E_ID_INVALID", id)) plan.ids.push_back(id);
             ctx.pop();
         }
         ctx.pop();
     }
-    std::vector<std::string_view> names;
-    if (namesNode) {
+    if (namesNode && namesNode->type == JsonType::Array) {
         ctx.push("names");
         for (uint32_t i = 0; i < namesNode->count; ++i) {
             const JsonNode& n = doc.child(*namesNode, i);
             ctx.push(i);
             if (n.type != JsonType::String) ctx.error("E_TYPE", n, "expected a string", "string", ctx.gotText(n));
-            else names.push_back(n.text);
+            else plan.names.push_back(n.text);
             ctx.pop();
         }
         ctx.pop();
     }
-    std::vector<const ecs::ComponentOps*> has;
-    if (hasNode) {
+    if (hasNode && hasNode->type == JsonType::Array) {
         ctx.push("has");
         for (uint32_t i = 0; i < hasNode->count; ++i) {
             const JsonNode& n = doc.child(*hasNode, i);
             ctx.push(i);
             if (n.type != JsonType::String) ctx.error("E_TYPE", n, "expected a component name", "string", ctx.gotText(n));
-            else if (const TypeInfo* t = findComponent(s, n.text, n, false, ctx)) has.push_back(ecs::componentOps(*t));
+            else if (const TypeInfo* t = findComponent(s, n.text, n, false, ctx)) plan.has.push_back(ecs::componentOps(*t));
             ctx.pop();
         }
         ctx.pop();
     }
-    std::vector<Projection> projection;
-    if (fieldsNode) parseProjection(s, doc, *fieldsNode, ctx, projection);
-    if (!ctx.errors.empty()) return false;
+    if (fieldsNode && fieldsNode->type == JsonType::Array) {
+        plan.projected = true;
+        parseProjection(s, doc, *fieldsNode, ctx, plan.projection);
+    }
+    return ctx.errors.size() == before;
+}
 
+bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                 JsonWriter& out) {
+    WorldQueryParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    QueryPlan plan;
+    plan.limit = static_cast<std::size_t>(p.limit);
+    plan.offset = static_cast<std::size_t>(p.offset);
+    plan.defaults = p.defaults;
+    if (p.nameContains) plan.nameContains = doc.member(params, "nameContains")->text;
+    if (!planQuery(s, doc, params, ctx, plan)) return false;
+    writeQuery(s, plan, out);
+    return true;
+}
+
+void writeQuery(Session::Impl& s, const QueryPlan& plan, JsonWriter& out) {
     const entt::registry& reg = s.world.registry();
     std::vector<std::pair<uint64_t, entt::entity>> candidates;
     std::vector<uint64_t> missing;
-    if (idsNode) {
+    if (plan.byIds) {
+        std::vector<uint64_t> ids = plan.ids;
         std::sort(ids.begin(), ids.end());
         ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
         candidates.reserve(ids.size());
@@ -141,13 +140,14 @@ bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
     std::sort(candidates.begin(), candidates.end());
 
     const auto matches = [&](entt::entity e) {
-        if (!names.empty() || !contains.empty()) {
+        if (!plan.names.empty() || !plan.nameContains.empty()) {
             const auto* n = reg.try_get<ecs::Name>(e);
             const std::string_view name = n ? std::string_view(n->value) : std::string_view();
-            if (!names.empty() && std::find(names.begin(), names.end(), name) == names.end()) return false;
-            if (!contains.empty() && name.find(contains) == std::string_view::npos) return false;
+            if (!plan.names.empty() && std::find(plan.names.begin(), plan.names.end(), name) == plan.names.end())
+                return false;
+            if (!plan.nameContains.empty() && name.find(plan.nameContains) == std::string_view::npos) return false;
         }
-        for (const ecs::ComponentOps* ops : has)
+        for (const ecs::ComponentOps* ops : plan.has)
             if (!ops->tryGet(reg, e)) return false;
         return true;
     };
@@ -156,8 +156,8 @@ bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
     out.key("entities");
     out.beginArray();
     std::size_t count = 0;
-    const auto first = static_cast<std::size_t>(offset);
-    const auto last = first + static_cast<std::size_t>(limit);
+    const std::size_t first = plan.offset;
+    const std::size_t last = first + plan.limit;
     for (const auto& [seq, e] : candidates) {
         if (!matches(e)) continue;
         const std::size_t index = count++;
@@ -165,15 +165,15 @@ bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
         out.beginObject();
         out.key("id");
         out.hex64(s.world.idOf(e));
-        if (!fieldsNode) {
-            writeComponents(s, out, e, defaults, true);
+        if (!plan.projected) {
+            writeComponents(s, out, e, plan.defaults, true);
         } else {
-            for (const Projection& p : projection) {
+            for (const Projection& p : plan.projection) {
                 const void* v = ecs::componentOps(*p.type)->tryGet(reg, e);
                 if (!v) continue;
                 out.key(p.type->name);
                 if (p.whole) {
-                    reflect::writeStruct(v, out, *p.type, defaults ? nullptr : p.type->defaultValue.get());
+                    reflect::writeStruct(v, out, *p.type, plan.defaults ? nullptr : p.type->defaultValue.get());
                 } else {
                     out.beginObject();
                     for (const FieldInfo* f : p.fields) {
@@ -200,7 +200,6 @@ bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
         out.uint64(last);
     }
     out.endObject();
-    return true;
 }
 
 // ---- summary ------------------------------------------------------------------------------

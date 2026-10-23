@@ -170,7 +170,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 14, "fourteen methods");
+    CHECK(api::methods().size() == 18, "eighteen methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -1107,6 +1107,372 @@ static void sp4_t07_cancel_leaves_whole_steps() {
     CHECK(std::memcmp(&a, &b, sizeof a) == 0, "is bit-identical: no half step");
 }
 
+// ---- test 11: the time model ----------------------------------------------------------
+
+static const std::string kSpinners =
+    R"({"commands":[{"op":"entity.create","name":"A","components":{"Spin":{"degreesPerSecond":37}}},)"
+    R"({"op":"entity.create","name":"B","components":{"Spin":{"axis":[1,0,0],"degreesPerSecond":-90}}},)"
+    R"({"op":"entity.create","name":"C","components":{"Transform":{"position":[1,2,3]}}}]})";
+
+static std::string worldHashOf(api::Session& s) { return Reply(s.call("world.hash")).str("/result/hash"); }
+
+// kSpinners in a world whose id generator is seeded, so two such worlds agree on ids.
+static bool loadSpinners(World& w, api::Session& s) {
+    w.seedIds(0x5eed);
+    return Reply(s.call("world.apply", kSpinners)).ok();
+}
+
+static void sp4_t11_simulate_runs_once_per_step_and_sync_once_per_batch() {
+    World w;
+    api::Session s(w, engineTypes());
+    int simulated = 0, synced = 0;
+    w.addSimulate("count", [&](World&, float) { ++simulated; });
+    w.addSync("count", [&](World&) { ++synced; });
+    const Reply r(s.call("world.step", R"({"frames":5})"));
+    CHECK(r.ok() && r.str("/result/frame") == "5", "five steps");
+    CHECK(simulated == 5 && synced == 1, "simulate five times, sync once");
+    CHECK(Reply(s.call("world.step", R"({"frames":37})")).ok() && Reply(s.call("world.step", R"({"frames":58})")).ok(),
+          "two more batches");
+    CHECK(simulated == 100 && synced == 3 && s.frame() == 100, "lockstep counts are exact");
+    CHECK(Reply(s.call("time.get")).str("/result/frame") == "100", "time.get reports the frame");
+}
+
+static void sp4_t11_world_step_watch_returns_fields_after_the_last_step() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("world.apply", kSpinners)).ok(), "spinners");
+    const Reply r(s.call("world.step",
+                         R"({"frames":3,"watch":{"names":["A","C"],"fields":["/Transform/rotation","/Name"]}})"));
+    CHECK(r.ok() && r.str("/result/frame") == "3" && r.str("/result/watch/count") == "2", "two watched entities");
+    CHECK(r.str("/result/watch/entities/0/Name/value") == "A" && r.at("/result/watch/entities/0/Transform/rotation"),
+          "projected as world.query projects");
+    const Reply q(s.call("world.query", R"({"names":["A","C"],"fields":["/Transform/rotation","/Name"]})"));
+    CHECK(q.json("/result/entities") == r.json("/result/watch/entities"), "exactly what a world.query after it returns");
+    const Reply bad(s.call("world.step", R"({"frames":3,"watch":{"fields":["/Transform/nope"]}})"));
+    CHECK(bad.code() == "E_PATH" && bad.str("/error/data/0/path") == "/watch/fields/0", "a bad path points into watch");
+    CHECK(s.frame() == 3, "and no step ran");
+    CHECK(Reply(s.call("world.step", R"({"watch":{"names":["A"]}})")).code() == "E_COMMAND" && s.frame() == 3,
+          "a watch needs fields");
+}
+
+static void sp4_t11_time_rules_per_host_and_mode() {
+    World w;
+    api::Session s(w, engineTypes());
+    s.setHostKind(api::HostKind::Headless);
+    const Reply t(s.call("time.get"));
+    CHECK(t.str("/result/mode") == "lockstep" && t.json("/result/paused") == "false" &&
+              t.str("/result/fixedDt") == "0.016666668",
+          "a headless session is lockstep at 1/60 s");
+    const Reply rt(s.call("time.set", R"({"mode":"realtime"})"));
+    CHECK(rt.code() == "E_STATE" && rt.str("/error/data/0/path") == "/mode", "headless hosts are lockstep only");
+    CHECK(Reply(s.call("time.set", R"({"fixedDt":0})")).code() == "E_RANGE", "fixedDt must be positive");
+    CHECK(Reply(s.call("time.set", R"({"fixedDt":2})")).code() == "E_RANGE", "and at most 1 s");
+
+    // A window host's session: realtime is allowed and stops world.step while it runs.
+    World ww;
+    api::Session win(ww, engineTypes());
+    win.setHostKind(api::HostKind::Window);
+    const Reply on(win.call("time.set", R"({"mode":"realtime"})"));
+    CHECK(on.ok() && on.str("/result/mode") == "realtime", "realtime on a window host");
+    CHECK(Reply(win.call("world.step")).code() == "E_STATE", "world.step while realtime runs is E_STATE");
+    CHECK(Reply(win.call("time.set", R"({"paused":true})")).ok() && Reply(win.call("world.step")).ok(),
+          "paused, world.step works as in lockstep");
+    CHECK(Reply(win.call("time.set", R"({"paused":false})")).ok() && Reply(win.call("world.step")).code() == "E_STATE",
+          "resumed, it is E_STATE again");
+    CHECK(Reply(win.call("time.set", R"({"mode":"lockstep"})")).ok() && Reply(win.call("world.step")).ok() &&
+              win.frame() == 2,
+          "lockstep: steps on request, the frame kept throughout");
+}
+
+static void sp4_t11_dt_defaults_to_the_fixed_step() {
+    World a, b, c;
+    api::Session sa(a, engineTypes()), sb(b, engineTypes()), sc(c, engineTypes());
+    CHECK(loadSpinners(a, sa) && loadSpinners(b, sb) && loadSpinners(c, sc), "spinners");
+    CHECK(Reply(sa.call("world.step", R"({"frames":60})")).ok(), "default dt");
+    CHECK(Reply(sb.call("world.step", R"({"frames":60,"dt":0.016666668})")).ok(), "explicit 1/60");
+    CHECK(worldHashOf(sa) == worldHashOf(sb), "the default dt is the fixed step");
+    CHECK(Reply(sc.call("time.set", R"({"fixedDt":0.05})")).ok() && Reply(sc.call("world.step", R"({"frames":60})")).ok(),
+          "fixedDt 0.05, then 60 default steps");
+    CHECK(Reply(sb.call("world.step", R"({"frames":0})")).ok() && worldHashOf(sc) != worldHashOf(sb),
+          "a different fixed step, a different world");
+    World d;
+    api::Session sd(d, engineTypes());
+    CHECK(loadSpinners(d, sd) && Reply(sd.call("world.step", R"({"frames":60,"dt":0.05})")).ok(), "explicit 0.05");
+    CHECK(worldHashOf(sc) == worldHashOf(sd), "follows time.set");
+}
+
+// A window host's realtime loop, run by hand: wall time in, whole fixed steps out.
+static void sp4_t11_realtime_paused_stepped_reaches_the_lockstep_hash() {
+    using namespace std::chrono_literals;
+    World w;
+    api::Session s(w, engineTypes());
+    s.setHostKind(api::HostKind::Window);
+    CHECK(loadSpinners(w, s), "spinners");
+    CHECK(Reply(s.call("time.set", R"({"mode":"realtime"})")).ok(), "realtime");
+    Timeline& t = s.timeline();
+    const auto frame = [&](Nanos wall) {   // one host frame: steps, then sync
+        const int n = t.advance(wall).steps;
+        for (int i = 0; i < n; ++i) {
+            w.simulate(t.fixedDt());
+            t.stepped(1);
+        }
+        w.sync();
+    };
+    const Nanos walls[] = {7'000'000ns, 16'666'667ns, 31'000'000ns, 2'000'000ns, 40'000'000ns, 16'666'667ns};
+    for (int i = 0; i < 40; ++i) frame(walls[i % 6]);
+    CHECK(Reply(s.call("time.set", R"({"paused":true})")).ok(), "pause");
+    for (int i = 0; i < 10; ++i) frame(100'000'000ns);   // paused frames step nothing
+    CHECK(Reply(s.call("world.step", R"({"frames":17})")).ok(), "step while paused");
+    CHECK(Reply(s.call("time.set", R"({"paused":false})")).ok(), "resume");
+    for (int i = 0; i < 25; ++i) frame(walls[(i + 3) % 6]);
+    const uint64_t steps = s.frame();
+    CHECK(steps > 17, "realtime ran steps");
+
+    World l;
+    api::Session ls(l, engineTypes());
+    CHECK(loadSpinners(l, ls), "the same scene");
+    CHECK(Reply(ls.call("world.step", "{\"frames\":" + std::to_string(steps) + "}")).ok(), "pure lockstep");
+    CHECK(worldHashOf(s) == worldHashOf(ls), "the same steps reach the same hash, however they were driven");
+    CHECK(Reply(ls.call("world.step")).ok() && worldHashOf(s) != worldHashOf(ls), "one more step does not");
+}
+
+// ---- test 12: hash and diff -----------------------------------------------------------
+
+static void sp4_t12_hash_is_stable_across_save_and_load() {
+    const std::string path = (kScenes / "v1" / "rooms.scene.json").generic_string();
+    const std::string load = "{\"path\":\"" + path + "\",\"seed\":\"00000000000000aa\"}";
+    World a;
+    api::Session sa(a, engineTypes());
+    CHECK(Reply(sa.call("scene.load", load)).ok(), "load");
+    const std::string h = worldHashOf(sa);
+    CHECK(h.size() == 16 && Reply(sa.call("world.hash")).str("/result/frame") == "0", "a 16-hex-digit hash and the frame");
+    CHECK(worldHashOf(sa) == h, "hashing changes nothing");
+    const Reply saved(sa.call("scene.save"));
+    World b;
+    api::Session sb(b, engineTypes());
+    CHECK(Reply(sb.call("scene.load", "{\"scene\":" + saved.json("/result/scene") + ",\"seed\":\"00000000000000aa\"}")).ok(),
+          "load the save");
+    CHECK(worldHashOf(sb) == h, "save -> load with the same seed: the same hash");
+    // Runtime state is not authoring state.
+    a.sync();   // WorldTransforms and dirty tags
+    for (auto [e, n] : a.registry().view<const Name>().each()) a.registry().emplace_or_replace<TransformDirty>(e);
+    CHECK(worldHashOf(sa) == h, "runtime components are not hashed");
+    World c;
+    api::Session sc(c, engineTypes());
+    CHECK(Reply(sc.call("scene.load", "{\"path\":\"" + path + "\",\"seed\":\"00000000000000ab\"}")).ok() &&
+              worldHashOf(sc) != h,
+          "another id seed is another state (it decides future ids)");
+}
+
+static void sp4_t12_hash_changes_on_any_authoring_change() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("scene.load", "{\"path\":\"" + (kScenes / "v1" / "rooms.scene.json").generic_string() +
+                                         "\",\"seed\":\"0000000000000001\"}")).ok(),
+          "load");
+    CHECK(Reply(s.call("world.snapshot", R"({"name":"base"})")).ok(), "snapshot");
+    const std::string base = worldHashOf(s);
+    const std::string lamp = std::string("\"") + kLamp + "\"", sun = std::string("\"") + kSun + "\"";
+    const std::vector<std::pair<const char*, std::string>> edits = {
+        {"a position by one ulp", R"([{"op":"field.set","id":)" + lamp + R"(,"path":"/Transform/position","value":[0,2.0000002,0]}])"},
+        {"a sign bit (-0)", R"([{"op":"field.set","id":)" + sun + R"(,"path":"/Transform/position/0","value":-0.0}])"},
+        {"a name", R"([{"op":"field.set","id":)" + lamp + R"(,"path":"/Name/value","value":"Lamp2"}])"},
+        {"a component added", R"([{"op":"component.set","id":)" + lamp + R"(,"type":"Spin","value":{}}])"},
+        {"a component removed", R"([{"op":"component.remove","id":)" + sun + R"(,"type":"Light"}])"},
+        {"a reparent", R"([{"op":"entity.reparent","id":)" + sun + R"(,"parent":)" + lamp + "}]"},
+        {"an entity created", R"([{"op":"entity.create","name":"New"}])"},
+        {"an entity destroyed", R"([{"op":"entity.destroy","id":)" + sun + "}]"},
+    };
+    for (const auto& [what, commands] : edits) {
+        const Reply r = applyBatch(s, commands);
+        if (!r.ok()) std::printf("\n      %s: %s", what, r.text.c_str());
+        CHECK(r.ok(), what);
+        CHECK(worldHashOf(s) != base, what);
+        CHECK(Reply(s.call("world.restore", R"({"name":"base"})")).ok() && worldHashOf(s) == base,
+              "restored, the hash is back");
+    }
+}
+
+// The diff a test computes from two saves written with every field: per entity, "/Type"
+// for a component in one save only, "/Type/field" for a field whose JSON differs.
+struct FileDiff {
+    std::map<std::string, std::map<std::string, std::string>> changed;   // id -> path -> "[old,new]" ("" for /Type)
+    std::vector<std::string> created, destroyed;
+};
+
+static FileDiff diffSaves(const std::string& before, const std::string& after) {
+    FileDiff d;
+    const auto a = parseJson(before).value(), b = parseJson(after).value();
+    const auto entities = [](const JsonDocument& doc) {
+        std::map<std::string, const JsonNode*> m;
+        const JsonNode& list = *doc.member(doc.root(), "entities");
+        for (uint32_t i = 0; i < list.count; ++i) {
+            const JsonNode& e = doc.child(list, i);
+            m[std::string(doc.member(e, "id")->text)] = &e;
+        }
+        return m;
+    };
+    const auto text = [](const JsonDocument& doc, const JsonNode& n) {
+        JsonWriter w;
+        reflect::writeJson(w, doc, n);
+        return w.take();
+    };
+    const auto ea = entities(a), eb = entities(b);
+    for (const auto& [id, na] : ea) {
+        const auto it = eb.find(id);
+        if (it == eb.end()) {
+            d.destroyed.push_back(id);
+            continue;
+        }
+        const JsonNode* nb = it->second;
+        std::map<std::string, std::string> paths;
+        const auto visit = [&](const JsonDocument& doc, const JsonNode& e, const JsonDocument& other, const JsonNode& oe,
+                               bool first) {
+            for (uint32_t i = 0; i < e.count; ++i) {
+                const JsonNode& comp = doc.child(e, i);
+                if (comp.key == "id") continue;
+                const JsonNode* oc = other.member(oe, comp.key);
+                if (!oc) {
+                    paths["/" + std::string(comp.key)] = "";
+                    continue;
+                }
+                if (!first) continue;
+                for (uint32_t k = 0; k < comp.count; ++k) {
+                    const JsonNode& f = doc.child(comp, k);
+                    const JsonNode* of = other.member(*oc, f.key);
+                    const std::string ta = text(doc, f), tb = of ? text(other, *of) : "null";
+                    if (ta != tb) paths["/" + std::string(comp.key) + "/" + std::string(f.key)] = "[" + ta + "," + tb + "]";
+                }
+            }
+        };
+        visit(a, *na, b, *nb, true);
+        visit(b, *nb, a, *na, false);
+        if (!paths.empty()) d.changed[id] = std::move(paths);
+    }
+    for (const auto& [id, nb] : eb)
+        if (!ea.count(id)) d.created.push_back(id);
+    return d;
+}
+
+static void sp4_t12_diff_equals_a_diff_of_the_two_saves() {
+    World w;
+    api::Session s(w, engineTypes());
+    buildWorld(w, 12, 200);
+    CHECK(Reply(s.call("world.snapshot", R"({"name":"base"})")).ok(), "snapshot");
+    const std::string before = Reply(s.call("scene.save", R"({"defaults":true})")).json("/result/scene");
+    // Mixed edits, each through the API: positions, names, light fields, components added
+    // and removed, reparents, creates, destroys.
+    std::mt19937_64 rng(77);
+    std::vector<uint64_t> ids = liveIds(w);
+    std::shuffle(ids.begin(), ids.end(), rng);
+    std::string cmds = "[";
+    const auto hex = [](uint64_t id) {
+        char b[19];
+        std::snprintf(b, sizeof b, "\"%016llx\"", static_cast<unsigned long long>(id));
+        return std::string(b);
+    };
+    for (int i = 0; i < 12; ++i)
+        cmds += R"({"op":"field.set","id":)" + hex(ids[i]) + R"(,"path":"/Transform/position/1","value":)" +
+                std::to_string(i + 100) + "},";
+    for (int i = 12; i < 16; ++i)
+        cmds += R"({"op":"field.set","id":)" + hex(ids[i]) + R"(,"path":"/Name/value","value":"renamed )" +
+                std::to_string(i) + "\"},";
+    for (int i = 16; i < 20; ++i)
+        cmds += R"({"op":"component.set","id":)" + hex(ids[i]) + R"(,"type":"Light","value":{"intensity":3}},)";
+    int removed = 0;   // four lights removed, from entities not edited above
+    for (std::size_t i = 26; i < ids.size() && removed < 4; ++i)
+        if (w.registry().all_of<Light>(w.findById(ids[i]))) {
+            cmds += R"({"op":"component.remove","id":)" + hex(ids[i]) + R"(,"type":"Light"},)";
+            ++removed;
+        }
+    CHECK(removed == 4, "the world has lights to remove");
+    cmds += R"({"op":"entity.reparent","id":)" + hex(ids[24]) + R"(,"parent":null},)";
+    cmds += R"({"op":"entity.create","name":"fresh"},)";
+    cmds += R"({"op":"entity.destroy","id":)" + hex(ids[25]) + "}]";
+    const Reply applied = applyBatch(s, cmds);
+    if (!applied.ok()) std::printf("\n      %s", applied.text.c_str());
+    CHECK(applied.ok(), "the edits apply");
+    const std::string after = Reply(s.call("scene.save", R"({"defaults":true})")).json("/result/scene");
+    const FileDiff want = diffSaves(before, after);
+
+    const Reply got(s.call("world.diff", R"({"snapshot":"base","limit":10000})"));
+    CHECK(got.ok(), "world.diff");
+    const JsonNode* changed = got.at("/result/changed");
+    CHECK(changed && got.str("/result/count") == std::to_string(changed->count) && !got.at("/result/more"),
+          "count is the number of changed entities; nothing left out");
+    std::map<std::string, std::map<std::string, std::string>> have;
+    for (uint32_t i = 0; i < changed->count; ++i) {
+        const std::string at = "/result/changed/" + std::to_string(i);
+        const JsonNode& fields = *got.at(at + "/fields");
+        auto& paths = have[got.str(at + "/id")];
+        for (uint32_t k = 0; k < fields.count; ++k) {
+            const JsonNode& f = got.doc.child(fields, k);
+            const std::string path(f.key);
+            // Whole components are compared by path: the save holds every field, the diff
+            // the file form (defaults left out).
+            if (path.find('/', 1) == std::string::npos) {
+                paths[path] = "";
+                continue;
+            }
+            JsonWriter jw;   // the keys hold '/', so the value is read through its node
+            reflect::writeJson(jw, got.doc, f);
+            paths[path] = jw.take();
+        }
+    }
+    CHECK(have == want.changed, "the same entities, paths and [old, new] values as the diff of the two saves");
+    const auto list = [&](const char* ptr) {
+        std::vector<std::string> v;
+        if (const JsonNode* n = got.at(ptr))
+            for (uint32_t i = 0; i < n->count; ++i) v.push_back("\"" + std::string(got.doc.child(*n, i).text) + "\"");
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    std::vector<std::string> wc = want.created, wd = want.destroyed;
+    std::sort(wc.begin(), wc.end());
+    std::sort(wd.begin(), wd.end());
+    const auto quoted = [](std::vector<std::string> v) {
+        for (auto& x : v) x = "\"" + x + "\"";
+        return v;
+    };
+    CHECK(list("/result/created") == quoted(wc) && list("/result/destroyed") == quoted(wd), "created and destroyed");
+    CHECK(Reply(s.call("world.restore", R"({"name":"base"})")).ok(), "restore");
+    const Reply none(s.call("world.diff", R"({"snapshot":"base"})"));
+    CHECK(none.str("/result/count") == "0" && none.at("/result/created")->count == 0 &&
+              none.at("/result/destroyed")->count == 0,
+          "restored, nothing differs");
+}
+
+static void sp4_t12_diff_respects_limit_fields_and_names() {
+    World w;
+    api::Session s(w, engineTypes());
+    buildWorld(w, 5, 100);
+    CHECK(Reply(s.call("world.snapshot", R"({"name":"base"})")).ok(), "snapshot");
+    std::string cmds = "[";
+    const std::vector<uint64_t> ids = liveIds(w);
+    for (int i = 0; i < 30; ++i) {
+        char b[19];
+        std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(ids[i]));
+        cmds += std::string(i ? "," : "") + R"({"op":"field.set","id":")" + b +
+                R"(","path":"/Transform/scale","value":[2,2,2]})";
+        if (i < 5) cmds += std::string(R"(,{"op":"field.set","id":")") + b + R"(","path":"/Name/value","value":"x"})";
+    }
+    cmds += R"(,{"op":"entity.create","name":"n1"},{"op":"entity.create","name":"n2"}])";
+    CHECK(applyBatch(s, cmds).ok(), "30 scales, 5 names, 2 creates");
+    const Reply cut(s.call("world.diff", R"({"snapshot":"base","limit":10})"));
+    CHECK(cut.at("/result/changed")->count == 10 && cut.str("/result/count") == "30" && cut.str("/result/more") == "20" &&
+              cut.at("/result/created")->count == 2,
+          "limit caps each list; count is every changed entity; more says how many were left out");
+    const Reply names(s.call("world.diff", R"({"snapshot":"base","fields":["/Name"]})"));
+    CHECK(names.str("/result/count") == "5" && names.json("/result/changed/0/fields").find("Transform") == std::string::npos,
+          "fields keeps only the listed changes, and only entities that have one");
+    const Reply scale(s.call("world.diff", R"({"snapshot":"base","fields":["/Transform/position"]})"));
+    CHECK(scale.str("/result/count") == "0", "a field that did not change lists nothing");
+    CHECK(Reply(s.call("world.diff", R"({"snapshot":"nope"})")).code() == "E_SNAPSHOT_UNKNOWN", "an unknown snapshot");
+    const Reply bad(s.call("world.diff", R"({"snapshot":"base","fields":["/Nope"]})"));
+    CHECK(bad.code() == "E_COMPONENT_UNKNOWN" && bad.str("/error/data/0/path") == "/fields/0", "a bad projection");
+    CHECK(Reply(s.call("world.diff", "{}")).code() == "E_COMMAND", "snapshot is required");
+}
+
 int main() {
     std::printf("api_tests\n");
     RUN(t09_method_table_dispatch_and_errors);
@@ -1130,6 +1496,15 @@ int main() {
     RUN(sp4_scene_load_replace_clears_and_keeps_snapshots);
     RUN(sp4_t15_paths_are_confined_to_the_sandbox);
     RUN(sp4_t07_cancel_leaves_whole_steps);
+    RUN(sp4_t11_simulate_runs_once_per_step_and_sync_once_per_batch);
+    RUN(sp4_t11_world_step_watch_returns_fields_after_the_last_step);
+    RUN(sp4_t11_time_rules_per_host_and_mode);
+    RUN(sp4_t11_dt_defaults_to_the_fixed_step);
+    RUN(sp4_t11_realtime_paused_stepped_reaches_the_lockstep_hash);
+    RUN(sp4_t12_hash_is_stable_across_save_and_load);
+    RUN(sp4_t12_hash_changes_on_any_authoring_change);
+    RUN(sp4_t12_diff_equals_a_diff_of_the_two_saves);
+    RUN(sp4_t12_diff_respects_limit_fields_and_names);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

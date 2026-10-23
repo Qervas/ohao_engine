@@ -9,6 +9,7 @@
 // renderer, the GPU layer or the ECS systems). The fixture registry below exercises every
 // field kind.
 #include "reflect/decode.hpp"
+#include "reflect/hash.hpp"
 #include "reflect/registry.hpp"
 #include "reflect/schema.hpp"
 
@@ -757,6 +758,65 @@ static std::vector<NondeterminismHit> nondeterminismHits(const std::string& file
     return hits;
 }
 
+// ---- sub-project 4, test 12: the value hash (world.hash's building block) -----------------
+
+struct HashPadded { bool on{false}; float x{0.0f}; };   // three bytes of padding after `on`
+struct HashPlain { float a{0.0f}; int32_t b{0}; glm::vec3 c{0.0f}; };
+struct HashOuter { HashPlain inner; std::string name; std::vector<float> list; std::optional<int32_t> maybe; };
+
+static const TypeRegistry& hashTypes() {
+    static TypeRegistry r;
+    static const bool once = [] {
+        r.type<HashPadded>("HashPadded").doc("d").field("on", &HashPadded::on).doc("d").field("x", &HashPadded::x).doc("d").unitless();
+        r.type<HashPlain>("HashPlain").doc("d")
+            .field("a", &HashPlain::a).doc("d").unitless()
+            .field("b", &HashPlain::b).doc("d").unitless()
+            .field("c", &HashPlain::c).doc("d").unitless();
+        r.type<HashOuter>("HashOuter").doc("d")
+            .field("inner", &HashOuter::inner).doc("d")
+            .field("name", &HashOuter::name).doc("d")
+            .field("list", &HashOuter::list).doc("d").unitless()
+            .field("maybe", &HashOuter::maybe).doc("d").unitless();
+        return true;
+    }();
+    (void)once;
+    return r;
+}
+
+template <class T>
+static uint64_t hashOf(const T& v) {
+    Hasher h;
+    hashStruct(&v, h, *hashTypes().find<T>());
+    return h.finish();
+}
+
+static void sp4_t12_value_hash_ignores_padding_and_counts_bits() {
+    alignas(HashPadded) unsigned char a[sizeof(HashPadded)], b[sizeof(HashPadded)];
+    std::memset(a, 0x00, sizeof a);
+    std::memset(b, 0xAA, sizeof b);
+    auto* pa = new (a) HashPadded{true, 2.5f};
+    auto* pb = new (b) HashPadded{true, 2.5f};
+    CHECK(std::memcmp(a, b, sizeof a) != 0, "(the two objects differ in their padding bytes)");
+    CHECK(hashOf(*pa) == hashOf(*pb), "padding never reaches the hash");
+    CHECK(hashTypes().find<HashPadded>()->plainBytes.value.load() == 0, "a type with padding is hashed field by field");
+    HashPlain p{1.0f, 7, {1, 2, 3}};
+    CHECK(hashOf(p) == hashOf(HashPlain{1.0f, 7, {1, 2, 3}}), "equal values, equal hashes");
+    CHECK(hashTypes().find<HashPlain>()->plainBytes.value.load() == 1, "a padding-free type of numbers is hashed as its bytes");
+    HashPlain z = p, nz = p;
+    z.c.y = 0.0f;
+    nz.c.y = -0.0f;
+    CHECK(hashOf(z) != hashOf(nz), "-0 and +0 differ, as equality says");
+    HashPlain q = p;
+    q.b = 8;
+    CHECK(hashOf(p) != hashOf(q), "any field changes it");
+    HashOuter o1{p, "ab", {1.0f}, std::nullopt}, o2{p, "a", {1.0f}, std::nullopt}, o3{p, "ab", {1.0f}, 0};
+    CHECK(hashOf(o1) != hashOf(o2) && hashOf(o1) != hashOf(o3), "strings by content and length, optionals by presence");
+    HashOuter s1{p, "a", {}, std::nullopt}, s2{p, "", {}, std::nullopt};
+    s2.name = std::string("a");
+    s2.name.reserve(64);   // a different heap buffer, the same value
+    CHECK(hashOf(s1) == hashOf(s2), "heap pointers never reach the hash");
+}
+
 static void sp4_t02_lint_finds_nondeterminism() {
     const std::string sample =
         "std::random_device rd;\n"
@@ -1164,6 +1224,7 @@ int main(int argc, char** argv) {
     RUN(t08_upgrade_registration_is_checked);
     RUN(t13_no_reflection_on_hot_paths);
     RUN(t13_reflect_depends_on_glm_and_std_only);
+    RUN(sp4_t12_value_hash_ignores_padding_and_counts_bits);
     RUN(sp4_t02_lint_finds_nondeterminism);
     RUN(sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems);
     RUN(sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header);

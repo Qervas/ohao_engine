@@ -4,6 +4,7 @@
 // the component's EnTT packed order; trivially copyable components are captured with one
 // memcpy per storage page.
 #include "ecs/components.hpp"
+#include "reflect/hash.hpp"
 #include "reflect/type_info.hpp"
 
 #include <entt/entt.hpp>
@@ -36,6 +37,23 @@ struct RestoreScratch {
     // Every live entity was created by this restore (it restores into an empty world):
     // no entity holds T yet, so values are emplaced with no lookup, comparison or drop pass.
     bool intoEmpty{false};
+};
+
+// One component value that differs between a snapshot and the live world (world.diff):
+// `before` points into the snapshot column, `after` at the live component; null where the
+// entity did not have / no longer has the component.
+struct ColumnChange {
+    uint32_t row;
+    const void* before;
+    const void* after;
+};
+
+// Working state of one diff, shared by its column passes.
+struct DiffScratch {
+    std::span<const entt::entity> live;    // snapshot row -> live entity, or null (destroyed)
+    std::span<const uint32_t> rowOfLive;   // by entity index: its snapshot row, or kNoRow
+    std::vector<uint32_t> stamp;           // by entity index: the epoch that last listed it
+    uint32_t epoch{0};
 };
 
 namespace detail {
@@ -122,6 +140,78 @@ std::size_t restoreColumn(entt::registry& r, const SnapshotColumn& col, RestoreS
         if (sc.stamp[entityIndex(e)] != epoch && r.all_of<EntityId>(e)) drop.push_back(e);
     for (const entt::entity e : drop) r.remove<T>(e);
     return writes + drop.size();
+}
+
+// world.hash's pass over one component type, read live in snapshot row order (no copy):
+// the type's name, how many entities have it, their rows, then their values in row order
+// (reflect::hashStruct).
+template <class T>
+void hashColumn(const entt::registry& r, std::span<const uint32_t> rowOf, const reflect::TypeInfo& t,
+                reflect::Hasher& h) {
+    thread_local std::vector<uint64_t> keyed;   // (row << 32) | packed position
+    thread_local std::vector<uint32_t> rows;
+    keyed.clear();
+    rows.clear();
+    h.string(t.name);
+    const auto* s = r.storage<T>();
+    if (s) {
+        bool ascending = true;
+        const entt::entity* es = s->data();
+        for (std::size_t i = 0; i < s->size(); ++i) {
+            const uint32_t idx = entityIndex(es[i]);
+            const uint32_t row = idx < rowOf.size() ? rowOf[idx] : kNoRow;
+            if (row == kNoRow) continue;
+            ascending = ascending && (keyed.empty() || row > static_cast<uint32_t>(keyed.back() >> 32));
+            keyed.push_back((static_cast<uint64_t>(row) << 32) | i);
+        }
+        if (!ascending) std::sort(keyed.begin(), keyed.end());
+    }
+    h.u64(keyed.size());
+    for (const uint64_t k : keyed) rows.push_back(static_cast<uint32_t>(k >> 32));
+    h.words(rows.data(), rows.size() * 4);
+    constexpr std::size_t page = entt::component_traits<T>::page_size;
+    for (const uint64_t k : keyed) {
+        const auto i = static_cast<uint32_t>(k);
+        reflect::hashStruct(&s->raw()[i / page][i % page], h, t);
+    }
+}
+
+// Appends every value of T that differs between the column and the live entities of its
+// rows (changed, removed, or added to an entity the snapshot has). Read-only; equal values
+// are found with one memcmp when T is trivially copyable, bit-exact per field otherwise.
+template <class T>
+void diffColumn(const entt::registry& r, const SnapshotColumn& col, DiffScratch& sc, std::vector<ColumnChange>& out) {
+    const auto& values = *static_cast<const std::vector<T>*>(col.values.get());
+    const auto* s = r.storage<T>();
+    const uint32_t epoch = ++sc.epoch;
+    constexpr std::size_t page = entt::component_traits<T>::page_size;
+    for (std::size_t k = 0; k < col.rows.size(); ++k) {
+        const uint32_t row = col.rows[k];
+        if (row == kNoRow) continue;
+        const entt::entity e = sc.live[row];
+        if (e == entt::null) continue;   // destroyed: reported once, as an entity
+        sc.stamp[entityIndex(e)] = epoch;
+        // Fast path as in restoreColumn: an unchanged storage holds the entity at k.
+        const T* cur = nullptr;
+        if (s) {
+            if (k < s->size() && s->data()[k] == e) cur = &s->raw()[k / page][k % page];
+            else if (s->contains(e)) cur = &s->get(e);
+        }
+        if (!cur) {
+            out.push_back({row, &values[k], nullptr});
+            continue;
+        }
+        if constexpr (std::is_trivially_copyable_v<T>)
+            if (std::memcmp(cur, &values[k], sizeof(T)) == 0) continue;
+        if (reflect::equalStruct(&values[k], cur, *col.type)) continue;   // bit-exact per field
+        out.push_back({row, &values[k], cur});
+    }
+    if (!s) return;
+    for (std::size_t i = 0; i < s->size(); ++i) {
+        const uint32_t idx = entityIndex(s->data()[i]);
+        if (idx < sc.rowOfLive.size() && sc.rowOfLive[idx] != kNoRow && sc.stamp[idx] != epoch)
+            out.push_back({sc.rowOfLive[idx], nullptr, &s->raw()[i / page][i % page]});
+    }
 }
 
 } // namespace detail

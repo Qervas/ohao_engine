@@ -90,7 +90,7 @@ struct LightUniformBuffer {
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
  *   ecs::installRenderExtract(world, renderer.renderScene());
- *   world.update(0); renderer.render();
+ *   world.sync(); renderer.render();
  *   const uint8_t* pixels = renderer.getPixels(); // RGBA format
  */
 class VulkanRenderer {

@@ -1,5 +1,7 @@
 #include "reflect/registry.hpp"
 
+#include "reflect/hash.hpp"
+
 #include <array>
 
 namespace ohao::reflect {
@@ -88,6 +90,54 @@ bool equalStruct(const void* a, const void* b, const TypeInfo& t) {
     for (const auto& f : t.fields)
         if (!f.ops->equal(a, b, *f.type)) return false;
     return true;
+}
+
+namespace {
+
+// The bytes a plain value occupies (numbers, vectors, quaternions, matrices and structs of
+// them), or 0 when the kind can hold padding, pointers or entity handles.
+std::size_t plainSize(const TypeDesc& d);
+
+std::size_t plainFieldsSize(const TypeInfo& t) {
+    std::size_t sum = 0;
+    for (const auto& f : t.fields) {
+        const std::size_t s = plainSize(*f.type);
+        if (s == 0) return 0;
+        sum += s;
+    }
+    return sum;
+}
+
+std::size_t plainSize(const TypeDesc& d) {
+    switch (d.kind) {
+    case Kind::Float: case Kind::Int32: case Kind::UInt32: return 4;
+    case Kind::Int64: case Kind::UInt64: case Kind::Vec2: return 8;
+    case Kind::Vec3: return 12;
+    case Kind::Vec4: case Kind::Quat: return 16;
+    case Kind::Mat4: return 64;
+    case Kind::Struct: {
+        const std::size_t s = plainFieldsSize(*d.structType);
+        return s == d.structType->size ? s : 0;
+    }
+    default: return 0;
+    }
+}
+
+} // namespace
+
+void hashStruct(const void* object, Hasher& h, const TypeInfo& t) {
+    int8_t plain = t.plainBytes.value.load(std::memory_order_relaxed);
+    if (plain < 0) {
+        // The fields' sizes add up to the whole object: no padding and nothing unregistered,
+        // so its bytes are exactly its field bits (floats by bits, as equality compares them).
+        plain = t.triviallyCopyable && t.size % 4 == 0 && t.size > 0 && plainFieldsSize(t) == t.size ? 1 : 0;
+        t.plainBytes.value.store(plain, std::memory_order_relaxed);
+    }
+    if (plain) {
+        h.words(object, t.size);
+        return;
+    }
+    for (const auto& f : t.fields) f.ops->hash(object, h, *f.type);
 }
 
 std::string typeName(const TypeDesc& d) {

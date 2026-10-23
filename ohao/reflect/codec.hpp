@@ -3,6 +3,7 @@
 // type-erased: a FieldOps for `float Light::*` calls writeValue<float> directly.
 #include "reflect/asset_ref.hpp"
 #include "reflect/decode.hpp"
+#include "reflect/hash.hpp"
 #include "reflect/json_value.hpp"
 #include "reflect/json_writer.hpp"
 #include "reflect/type_info.hpp"
@@ -185,6 +186,52 @@ bool equalValue(const V& a, const V& b, const TypeDesc& d) {
         return a.doc == b.doc && a.node == b.node;   // the same value of the same document
     } else {
         return a == b;   // bool, ints, string, enum, AssetRef, entity handle
+    }
+}
+
+// ---- hash (consistent with equalValue: floats by their bits) ------------------------------
+
+template <class V>
+void hashValue(const V& v, Hasher& h, const TypeDesc& d) {
+    constexpr Kind k = kindOf<V>();
+    if constexpr (k == Kind::EntityRef) {
+        h.entity(ValueTraits<V>::toRaw(v));
+    } else if constexpr (k == Kind::Bool) {
+        h.u32(v ? 1u : 0u);
+    } else if constexpr (k == Kind::Int32 || k == Kind::UInt32) {
+        h.u32(static_cast<uint32_t>(v));
+    } else if constexpr (k == Kind::UInt64 || k == Kind::Int64) {
+        h.u64(static_cast<uint64_t>(v));
+    } else if constexpr (k == Kind::Json) {
+        h.u64(reinterpret_cast<uintptr_t>(v.node));   // identity, as equalValue compares it
+    } else if constexpr (k == Kind::Float) {
+        h.f32(v);
+    } else if constexpr (k == Kind::String) {
+        h.string(v);
+    } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
+        for (int i = 0; i < V::length(); ++i) h.f32(v[i]);
+    } else if constexpr (k == Kind::Mat4) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) h.f32(v[c][r]);
+    } else if constexpr (k == Kind::Quat) {
+        h.f32(v.x); h.f32(v.y); h.f32(v.z); h.f32(v.w);
+    } else if constexpr (k == Kind::AssetRef) {
+        h.string(v.path);
+        h.string(v.guid);
+    } else if constexpr (k == Kind::Enum) {
+        h.u64(static_cast<uint64_t>(static_cast<int64_t>(static_cast<std::underlying_type_t<V>>(v))));
+    } else if constexpr (k == Kind::Vector) {
+        h.u32(static_cast<uint32_t>(v.size()));
+        for (const auto& e : v) hashValue(e, h, *d.element);
+    } else if constexpr (k == Kind::Optional) {
+        h.u32(v ? 1u : 0u);
+        if (v) hashValue(*v, h, *d.element);
+    } else if constexpr (k == Kind::Variant) {
+        h.u32(static_cast<uint32_t>(v.index()));
+        const TypeInfo& alt = *d.alternatives[v.index()];
+        std::visit([&](const auto& a) { hashStruct(&a, h, alt); }, v);
+    } else {
+        hashStruct(&v, h, *d.structType);
     }
 }
 
@@ -515,6 +562,9 @@ public:
     }
     bool equal(const void* a, const void* b, const TypeDesc& d) const override {
         return equalValue(static_cast<const C*>(a)->*m_member, static_cast<const C*>(b)->*m_member, d);
+    }
+    void hash(const void* o, Hasher& h, const TypeDesc& d) const override {
+        hashValue(static_cast<const C*>(o)->*m_member, h, d);
     }
     bool inRange(const void* o, const NumericLimits& l) const override {
         return inRangeValue(static_cast<const C*>(o)->*m_member, l);

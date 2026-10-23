@@ -229,8 +229,7 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
     }
     reg.ctx().emplace<RenderExtractInstalled>();
     auto state = std::make_shared<ExtractState>(reg, scene);
-    world.addSystemAfter("transform", "render_extract",
-                         [state](World&, float) { state->run(); });
+    world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });
 }
 
 } // namespace ohao::ecs

@@ -5,9 +5,10 @@
 // entities it already has. Each capture applies the world's Camera and Environment
 // (scene_host.hpp), renders the frames and writes a PNG.
 //
-// A capture renders exactly as cornell_box and model_viewer do (world.update(0) then
-// render(), per frame; the same frame counts and settings), so `ohao run` reproduces
-// their golden images from the scene files.
+// A capture renders exactly as cornell_box and model_viewer do (world.sync() then render(),
+// per frame; the same frame counts and settings), so `ohao run` reproduces their golden
+// images from the scene files. It never runs the simulate phase: capturing does not
+// change the world.
 //
 // Declare the RenderHost before the World: the World's systems release their RenderScene
 // slots when it is destroyed, so the renderer must outlive it.

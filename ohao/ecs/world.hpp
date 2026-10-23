@@ -12,11 +12,19 @@
 
 namespace ohao::ecs {
 
-// The game world: an EnTT registry plus an explicitly ordered list of systems.
-// Systems run in exactly the order they were added -- no discovery, no sorting.
+// The game world: an EnTT registry plus two explicitly ordered lists of systems, one per
+// phase (sub-project 4 spec, "System phases"). Systems run in exactly the order they were
+// added -- no discovery, no sorting.
+//   simulate  behaviour (spin, later physics and gameplay): once per fixed step, with the
+//             fixed dt. simulate(dt) runs them.
+//   sync      derived state (instantiate, transform, the render extract): once before each
+//             render and after each batch of steps, with no dt. sync() runs them.
+// A frame's simulation is then independent of how often it is rendered: a realtime session
+// and a lockstep one that run the same steps reach the same state.
 class World {
 public:
-    using System = std::function<void(World&, float dt)>;
+    using SimulateSystem = std::function<void(World&, float dt)>;
+    using SyncSystem = std::function<void(World&)>;
 
     World();
     World(const World&) = delete;
@@ -70,14 +78,23 @@ public:
     void attach(entt::entity child, entt::entity parent);
     void setTransform(entt::entity e, const Transform& local);
 
-    void addSystem(std::string name, System fn);
-    // Inserts right after the system named `after` (appends if there is none).
-    void addSystemAfter(std::string_view after, std::string name, System fn);
-    // Inserts right before the system named `before` (appends if there is none).
-    void addSystemBefore(std::string_view before, std::string name, System fn);
-    void update(float dt);
-    [[nodiscard]] std::vector<std::string> systemNames() const;
-    // Debug builds: before running systems, update() checks every untagged entity's
+    void addSimulate(std::string name, SimulateSystem fn);
+    void addSync(std::string name, SyncSystem fn);
+    // Inserts right after / before the sync system named `anchor` (appends if there is none).
+    void addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn);
+    void addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn);
+    // One fixed step: every simulate system, in order.
+    void simulate(float dt);
+    // Every sync system, in order.
+    void sync();
+    // simulate(dt) then sync(): one step and its derived state, for tests and tools.
+    void update(float dt) {
+        simulate(dt);
+        sync();
+    }
+    [[nodiscard]] std::vector<std::string> simulateNames() const;
+    [[nodiscard]] std::vector<std::string> syncNames() const;
+    // Debug builds: before running sync systems, sync() checks every untagged entity's
     // WorldTransform against its local Transform (verifyTransforms) and logs the first
     // nonzero result once per World. This is that result (0: none seen; always 0 in
     // Release, where the check is compiled out).
@@ -98,7 +115,8 @@ private:
     ankerl::unordered_dense::map<uint64_t, entt::entity> m_byId;
     entt::entity* m_claimed{nullptr};   // the slot claim() reserved for the entity being created
     IdGenState m_idGen;
-    std::vector<std::pair<std::string, System>> m_systems;
+    std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
+    std::vector<std::pair<std::string, SyncSystem>> m_sync;
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };

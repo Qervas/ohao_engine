@@ -42,6 +42,39 @@ Snapshot takeSnapshot(const World& world, const reflect::TypeRegistry& types, ui
 }
 
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& s, uint64_t frame) {
+    thread_local std::vector<uint32_t> rowOf;
+    captureEntityTable(world, s, rowOf);
+    const entt::registry& reg = world.registry();
+
+    // One column per saved component (Parent is the parent row), then the preserved ones.
+    // A column whose type matches the one already in that slot keeps its buffers.
+    std::size_t used = 0;
+    const auto capture = [&](const reflect::TypeInfo* t) {
+        if (used == s.columns.size()) s.columns.emplace_back();
+        SnapshotColumn& c = s.columns[used++];
+        if (c.type != t) c = SnapshotColumn{t, {}, {}, 0};
+        componentOps(*t)->capture(reg, rowOf, c);
+    };
+    s.nameColumn = s.transformColumn = -1;
+    for (const reflect::TypeInfo* t : snapshotTypes(types)) {
+        if (t == types.find<Name>()) s.nameColumn = static_cast<int>(used);
+        if (t == types.find<Transform>()) s.transformColumn = static_cast<int>(used);
+        capture(t);
+    }
+    s.columns.resize(used);
+    s.frame = frame;
+}
+
+std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types) {
+    std::vector<const reflect::TypeInfo*> out;
+    const reflect::TypeInfo* tParent = types.find<Parent>();
+    for (const reflect::TypeInfo* t : types.types())
+        if (t->role == reflect::TypeRole::Component && t->serialized && t != tParent && componentOps(*t)) out.push_back(t);
+    if (const reflect::TypeInfo* t = types.find<PreservedComponents>()) out.push_back(t);
+    return out;
+}
+
+void captureEntityTable(const World& world, Snapshot& s, std::vector<uint32_t>& rowOf) {
     const entt::registry& reg = world.registry();
     const auto* idStore = reg.storage<EntityId>();
     const std::size_t n = idStore ? idStore->size() : 0;
@@ -53,7 +86,6 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     const bool aligned = coStore && coStore->size() == n && (n == 0 || std::memcmp(coStore->data(), es, n * sizeof(entt::entity)) == 0);
     thread_local std::vector<uint64_t> seq;   // working memory, kept warm between snapshots
     thread_local std::vector<uint32_t> pos;
-    thread_local std::vector<uint32_t> rowOf;
     seq.resize(n);
     bool sorted = true;
     for (std::size_t i = 0; i < n; ++i) {
@@ -119,29 +151,8 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
                 break;
             }
 
-    // One column per saved component (Parent is the parent row), then the preserved ones.
-    // A column whose type matches the one already in that slot keeps its buffers.
-    std::size_t used = 0;
-    const auto capture = [&](const reflect::TypeInfo* t) {
-        if (used == s.columns.size()) s.columns.emplace_back();
-        SnapshotColumn& c = s.columns[used++];
-        if (c.type != t) c = SnapshotColumn{t, {}, {}, 0};
-        componentOps(*t)->capture(reg, rowOf, c);
-    };
-    const reflect::TypeInfo* tParent = types.find<Parent>();
-    s.nameColumn = s.transformColumn = -1;
-    for (const reflect::TypeInfo* t : types.types()) {
-        if (t->role != reflect::TypeRole::Component || !t->serialized || t == tParent || !componentOps(*t)) continue;
-        if (t == types.find<Name>()) s.nameColumn = static_cast<int>(used);
-        if (t == types.find<Transform>()) s.transformColumn = static_cast<int>(used);
-        capture(t);
-    }
-    if (const reflect::TypeInfo* t = types.find<PreservedComponents>()) capture(t);
-    s.columns.resize(used);
-
     s.idGen = world.idGenState();
     s.nextSeq = world.nextCreationSeq();
-    s.frame = frame;
 }
 
 RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
