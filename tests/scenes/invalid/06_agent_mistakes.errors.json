@@ -1,0 +1,6 @@
+[
+  { "code": "E_ENUM", "path": "/entities/0/Light/type", "line": 7, "suggestion": "Spot" },
+  { "code": "E_UNKNOWN_FIELD", "path": "/entities/0/Light/intensty", "line": 7, "suggestion": "intensity" },
+  { "code": "E_RANGE", "path": "/entities/0/Light/radius", "line": 7 },
+  { "code": "E_PARENT_MISSING", "path": "/entities/1/Parent/entity", "line": 11 }
+]

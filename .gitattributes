@@ -8,4 +8,5 @@
 # of generated schemas and scene files must check out exactly as the engine writes them.
 tests/reflect/golden/** text eol=lf
 tests/scene/golden/** text eol=lf
+tests/scenes/** text eol=lf
 *.ohscene text eol=lf

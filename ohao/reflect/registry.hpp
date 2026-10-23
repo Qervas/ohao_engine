@@ -48,6 +48,7 @@ public:
     TypeBuilder& component();    // a top-level component block in scene files
     TypeBuilder& runtime();      // listed in the catalogue, never serialized
     TypeBuilder& singleton();    // at most one per world
+    TypeBuilder& host(std::shared_ptr<const void> data) { m_t.host = std::move(data); return *this; }
 
     template <class M>
     TypeBuilder& field(std::string_view name, M T::*member);

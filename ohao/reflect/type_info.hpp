@@ -10,6 +10,8 @@
 namespace ohao::reflect {
 
 class JsonWriter;
+class DecodeContext;
+struct JsonNode;
 
 // What a reflected value is. Every field of a registered type has exactly one kind.
 enum class Kind : uint8_t {
@@ -60,6 +62,9 @@ class FieldOps {
 public:
     virtual ~FieldOps() = default;
     virtual void write(const void* object, JsonWriter& w, const TypeDesc& d) const = 0;
+    // Decodes `n` into the member, reporting problems to ctx. The member keeps its
+    // current (default) value when the input is wrong.
+    virtual void read(void* object, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool equal(const void* a, const void* b, const TypeDesc& d) const = 0;
     [[nodiscard]] virtual bool inRange(const void* object, const NumericLimits& l) const = 0;
     [[nodiscard]] virtual void* address(void* object) const = 0;
@@ -100,6 +105,9 @@ struct TypeInfo {
     void (*destroy)(void* at){nullptr};
     void (*copy)(void* dst, const void* src){nullptr};
     std::shared_ptr<const void> defaultValue;   // a default-constructed instance
+    // Opaque per-type data owned by the embedding layer; the ECS keeps its component
+    // operations (emplace, get, count) here. Reflect never looks inside.
+    std::shared_ptr<const void> host;
 
     [[nodiscard]] const FieldInfo* field(std::string_view fieldName) const;
 };
@@ -122,6 +130,10 @@ struct EnumInfo {
 // Struct-level operations over the registered fields (skipped members are ignored).
 void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t);
 [[nodiscard]] bool equalStruct(const void* a, const void* b, const TypeInfo& t);
+// Decodes an object into `object` (already holding defaults): unknown members, duplicate
+// members, type errors and limit violations are reported to ctx; missing members keep
+// their defaults.
+void readStruct(void* object, const TypeInfo& t, const JsonNode& n, DecodeContext& ctx);
 
 // "f32", "vec3", "optional<AssetRef>", "variant<SpherePrim|CubePrim>", ... (catalogue form)
 [[nodiscard]] std::string typeName(const TypeDesc& d);

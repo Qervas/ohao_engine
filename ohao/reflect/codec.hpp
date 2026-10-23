@@ -2,6 +2,8 @@
 // Typed value operations, instantiated per C++ type at registration. Nothing here is
 // type-erased: a FieldOps for `float Light::*` calls writeValue<float> directly.
 #include "reflect/asset_ref.hpp"
+#include "reflect/decode.hpp"
+#include "reflect/json_value.hpp"
 #include "reflect/json_writer.hpp"
 #include "reflect/type_info.hpp"
 
@@ -203,12 +205,179 @@ bool inRangeValue(const V& v, const NumericLimits& l) {
     }
 }
 
+// ---- read ---------------------------------------------------------------------------------
+
+namespace detail {
+inline void typeError(const JsonNode& n, DecodeContext& ctx, const char* expected) {
+    ctx.error("E_TYPE", n, std::string("expected ") + expected + ", found " + jsonTypeName(n.type), expected,
+              ctx.gotText(n));
+}
+
+template <class V>
+void readFloats(V& v, int count, const JsonNode& n, DecodeContext& ctx, float* dst) {
+    if (n.type != JsonType::Array || n.count != static_cast<uint32_t>(count)) {
+        const std::string what = "an array of " + std::to_string(count) + " numbers";
+        ctx.error("E_TYPE", n, "expected " + what, what, ctx.gotText(n));
+        return;
+    }
+    float tmp[16];
+    bool ok = true;
+    for (int i = 0; i < count; ++i) {
+        ctx.push(static_cast<uint32_t>(i));
+        ok = readFloat(ctx.doc.child(n, static_cast<uint32_t>(i)), ctx, tmp[i]) && ok;
+        ctx.pop();
+    }
+    if (ok)
+        for (int i = 0; i < count; ++i) dst[i] = tmp[i];
+    (void)v;
+}
+
+template <class Var, std::size_t... I>
+void emplaceAlternative(Var& v, std::size_t index, std::index_sequence<I...>) {
+    ((I == index ? (v.template emplace<I>(), true) : false) || ...);
+}
+
+template <class V>
+void assignRef(void* field, uint64_t raw) {
+    *static_cast<V*>(field) = ValueTraits<V>::fromRaw(raw);
+}
+} // namespace detail
+
+template <class V>
+void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
+    constexpr Kind k = kindOf<V>();
+    if constexpr (k == Kind::EntityRef) {
+        if (n.type == JsonType::Null) {
+            v = ValueTraits<V>::null();
+            return;
+        }
+        uint64_t id = 0;
+        if (!readHex64(n, ctx, "E_ID_INVALID", id)) return;
+        if (id == 0) {
+            ctx.error("E_ID_INVALID", n, "entity id 0 is invalid", "a nonzero id or null", ctx.gotText(n));
+            return;
+        }
+        v = ValueTraits<V>::null();   // patched once every entity exists
+        ctx.refs.push_back(PendingRef{&v, &detail::assignRef<V>, id, ctx.entity, ctx.component, ctx.path(), n.offset});
+    } else if constexpr (k == Kind::Bool) {
+        if (n.type != JsonType::Bool) return detail::typeError(n, ctx, "true or false");
+        v = n.boolean;
+    } else if constexpr (k == Kind::Int32) {
+        int64_t x;
+        if (readInt(n, ctx, INT32_MIN, INT32_MAX, x)) v = static_cast<int32_t>(x);
+    } else if constexpr (k == Kind::UInt32) {
+        int64_t x;
+        if (readInt(n, ctx, 0, UINT32_MAX, x)) v = static_cast<uint32_t>(x);
+    } else if constexpr (k == Kind::UInt64) {
+        uint64_t x;
+        if (readHex64(n, ctx, "E_TYPE", x)) v = x;
+    } else if constexpr (k == Kind::Float) {
+        float x;
+        if (readFloat(n, ctx, x)) v = x;
+    } else if constexpr (k == Kind::String) {
+        if (n.type != JsonType::String) return detail::typeError(n, ctx, "a string");
+        v.assign(n.text);
+    } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
+        detail::readFloats(v, V::length(), n, ctx, &v[0]);
+    } else if constexpr (k == Kind::Quat) {
+        float q[4];
+        q[0] = v.x; q[1] = v.y; q[2] = v.z; q[3] = v.w;
+        detail::readFloats(v, 4, n, ctx, q);   // glTF order
+        v.x = q[0]; v.y = q[1]; v.z = q[2]; v.w = q[3];
+    } else if constexpr (k == Kind::Mat4) {
+        detail::readFloats(v, 16, n, ctx, &v[0][0]);   // column-major
+    } else if constexpr (k == Kind::AssetRef) {
+        if (n.type != JsonType::Object) return detail::typeError(n, ctx, "an object {\"path\": ...}");
+        const JsonNode* path = nullptr;
+        for (uint32_t i = 0; i < n.count; ++i) {
+            const JsonNode& m = ctx.doc.child(n, i);
+            ctx.push(m.key);
+            if (m.key == "path" || m.key == "guid") {
+                if (m.type != JsonType::String) detail::typeError(m, ctx, "a string");
+                else if (m.key == "path") { v.path.assign(m.text); path = &m; }
+                else v.guid.assign(m.text);
+            } else {
+                ctx.error("E_UNKNOWN_FIELD", m, "an asset reference has no field '" + std::string(m.key) + "'",
+                          "one of: path, guid", "\"" + std::string(m.key) + "\"");
+            }
+            ctx.pop();
+        }
+        if (!path || path->text.empty())
+            ctx.error("E_TYPE", n, "an asset reference needs a non-empty \"path\"", "{\"path\": \"assets/...\"}",
+                      ctx.gotText(n));
+    } else if constexpr (k == Kind::Enum) {
+        if (n.type != JsonType::String) return detail::typeError(n, ctx, "a string naming an enum value");
+        if (const EnumValue* e = d.enumType->findByName(n.text)) {
+            v = static_cast<V>(static_cast<std::underlying_type_t<V>>(e->value));
+            return;
+        }
+        std::vector<std::string_view> names;
+        std::string list;
+        for (const auto& e : d.enumType->values) {
+            names.push_back(e.name);
+            if (!list.empty()) list += ", ";
+            list += e.name;
+        }
+        ctx.error("E_ENUM", n, "'" + std::string(n.text) + "' is not a " + d.enumType->name, "one of: " + list,
+                  ctx.gotText(n), suggest(n.text, names));
+    } else if constexpr (k == Kind::Vector) {
+        if (n.type != JsonType::Array) return detail::typeError(n, ctx, "an array");
+        // Sized first: elements are decoded in place and never move afterwards (pending
+        // entity references point into them).
+        v.clear();
+        v.resize(n.count);
+        for (uint32_t i = 0; i < n.count && !ctx.full(); ++i) {
+            ctx.push(i);
+            readValue(v[i], ctx.doc.child(n, i), ctx, *d.element);
+            ctx.pop();
+        }
+    } else if constexpr (k == Kind::Optional) {
+        if (n.type == JsonType::Null) {
+            v.reset();
+            return;
+        }
+        v.emplace();
+        readValue(*v, n, ctx, *d.element);
+    } else if constexpr (k == Kind::Variant) {
+        std::string names;
+        for (const TypeInfo* alt : d.alternatives) {
+            if (!names.empty()) names += "|";
+            names += alt->name;
+        }
+        const std::string what = "a one-key object {\"" + names + "\": {...}}";
+        if (n.type != JsonType::Object || n.count != 1) {
+            ctx.error("E_TYPE", n, "expected " + what, what, ctx.gotText(n));
+            return;
+        }
+        const JsonNode& m = ctx.doc.child(n, 0);
+        for (std::size_t i = 0; i < d.alternatives.size(); ++i) {
+            if (d.alternatives[i]->name != m.key) continue;
+            detail::emplaceAlternative(v, i, std::make_index_sequence<std::variant_size_v<V>>{});
+            ctx.push(m.key);
+            std::visit([&](auto& alt) { readStruct(&alt, *d.alternatives[i], m, ctx); }, v);
+            ctx.pop();
+            return;
+        }
+        std::vector<std::string_view> alts;
+        for (const TypeInfo* alt : d.alternatives) alts.push_back(alt->name);
+        ctx.push(m.key);
+        ctx.error("E_TYPE", m, "'" + std::string(m.key) + "' is not one of the alternatives", names,
+                  "\"" + std::string(m.key) + "\"", suggest(m.key, alts));
+        ctx.pop();
+    } else {
+        readStruct(&v, *d.structType, n, ctx);
+    }
+}
+
 template <class C, class M>
 class MemberOps final : public FieldOps {
 public:
     explicit MemberOps(M C::*member) : m_member(member) {}
     void write(const void* o, JsonWriter& w, const TypeDesc& d) const override {
         writeValue(static_cast<const C*>(o)->*m_member, w, d);
+    }
+    void read(void* o, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) const override {
+        readValue(static_cast<C*>(o)->*m_member, n, ctx, d);
     }
     bool equal(const void* a, const void* b, const TypeDesc& d) const override {
         return equalValue(static_cast<const C*>(a)->*m_member, static_cast<const C*>(b)->*m_member, d);

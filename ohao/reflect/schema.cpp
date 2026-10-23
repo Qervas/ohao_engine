@@ -1,5 +1,7 @@
 #include "reflect/schema.hpp"
 
+#include "reflect/decode.hpp"
+
 #include <limits>
 
 namespace ohao::reflect {
@@ -30,6 +32,16 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, const uint64_t* ha
     w.key("units");
     w.beginArray();
     for (auto u : knownUnits()) w.string(u);
+    w.endArray();
+
+    w.key("errors");
+    w.beginArray();
+    for (const auto& e : errorCodes()) {
+        w.beginObject();
+        w.key("code"); w.string(e.code);
+        w.key("meaning"); w.string(e.meaning);
+        w.endObject();
+    }
     w.endArray();
 
     w.key("enums");

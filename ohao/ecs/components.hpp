@@ -81,6 +81,15 @@ struct CreationOrder { uint64_t seq{0}; };
 // rgb = albedo, a = packed roughness/metallic/vertex-count rule. Set by spawnModel.
 struct GiMaterialLegacy { glm::vec4 packed{0.73f, 0.73f, 0.73f, 0.95f}; };
 
+// Components a scene file carried that this build does not know (newer engine, other
+// tool). Kept as canonical compact JSON and written back on save, sorted by name.
+struct PreservedComponent {
+    std::string name;
+    uint32_t version{1};
+    std::string json;
+};
+struct PreservedComponents { std::vector<PreservedComponent> entries; };
+
 struct TransformDirty {};
 struct RenderDirty {};
 struct MovedLastFrame {};

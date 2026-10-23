@@ -451,9 +451,15 @@ file.)
 ### Loading and validation
 
 - **Two-phase.**
-  1. Parse (simdjson On-Demand) and decode the whole document into a typed
-     intermediate. All errors are collected here, up to 100 in document order, then
-     `E_TOO_MANY_ERRORS`.
+  1. Parse (simdjson On-Demand, in `ohao_ecs`) into a small read-only JSON tree
+     (`reflect::JsonDocument`, which keeps each number's raw token), then decode the
+     whole document into typed per-component values. All errors are collected here, up
+     to 100 in document order, then `E_TOO_MANY_ERRORS`.
+     - A per-thread `JsonParser` keeps the simdjson parser, the padded input and the
+       tree storage warm, so repeated loads allocate nothing once warm.
+     - Floats are parsed from their tokens with fast_float, which is correctly rounded
+       and gives `std::from_chars<float>` results bit for bit, faster. Overflow and
+       underflow are `E_RANGE`.
   2. Only if phase 1 reports no errors, create entities in file order and emplace
      components.
 
@@ -461,8 +467,15 @@ file.)
   signals, so dirty tagging, instantiate and extract need no special load path.
   `Parent` is applied after all entities exist, through `World::setParent`.
 - **Unknown components** are kept in `PreservedComponents` as canonical compact JSON
-  text and written back on save. An unknown *field* inside a known component is an
-  error (`E_UNKNOWN_FIELD`) with a suggestion. Agent typos must not vanish silently.
+  text and written back on save, with the version from the file header. An unknown
+  *field* inside a known component is an error (`E_UNKNOWN_FIELD`) with a suggestion.
+  Agent typos must not vanish silently:
+  - An unknown component whose name is one edit (or one swap of adjacent letters) from
+    a known component draws `W_UNKNOWN_COMPONENT` with the suggestion.
+  - A registered runtime-only component in a file (for example `WorldTransform`) is
+    `E_UNKNOWN_FIELD`.
+  - A header version that differs from the engine's is `E_COMPONENT_VERSION`, and that
+    component is not decoded (step 4 adds the upgrades that make older versions load).
 - **Error object.** It's the same in files, commands, CLI output and the future RPC:
 
 ```json
@@ -482,8 +495,11 @@ file.)
 
   | Group | Codes |
   |---|---|
-  | Parsing and document | `E_PARSE`, `E_FORMAT`, `E_VERSION_UNSUPPORTED`, `E_COMPONENT_VERSION` |
-  | Values | `E_UNKNOWN_FIELD`, `E_TYPE`, `E_ENUM`, `E_RANGE`, `E_NONFINITE` |
+  | Files | `E_IO` |
+  | Parsing and document | `E_PARSE`, `E_FORMAT`, `E_VERSION_UNSUPPORTED`, `E_COMPONENT_VERSION`, `E_WORLD_NOT_EMPTY` |
+  | Values | `E_UNKNOWN_FIELD`, `E_DUPLICATE_KEY`, `E_TYPE`, `E_ENUM`, `E_RANGE`, `E_NONFINITE` |
+  | References | `E_ENTITY_NOT_FOUND` (an entity reference other than `Parent`) |
+  | Warnings | `W_UNKNOWN_COMPONENT` |
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
   | Assets | `E_ASSET_NOT_FOUND` (with `--check-assets`) |
   | Commands only | `E_ENTITY_NOT_FOUND`, `E_COMPONENT_UNKNOWN`, `E_PATH` |
@@ -951,7 +967,8 @@ Each step ends with the engine running and every suite green.
    so the catalogue describes every component. The engine catalogue and scene schema
    have goldens in `tests/scene/golden`.)*
 3. simdjson reader (fetched here), two-phase load, structured validation, error corpus.
-   Tests 2–4, 6, 7.
+   Tests 2–4, 6, 7. *(Done 2026-10-23. Also: the single-pass pretty writer, fast_float
+   for float parsing, and the error-code table in the catalogue.)*
 4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8.
 5. `ohao/api`: commands with inverses, query, the method table. Test 9.
 6. Columnar snapshot/restore, `scene_bench` and the budgets. Tests 10 and 19 for the
@@ -1051,7 +1068,7 @@ technology calls; these were decided on that delegation:
 | 29 | Editor UI | C++ + Dear ImGui (docking) on the Vulkan backend, as an `ohao/api` client |
 | 30 | Shaders | GLSL stays; new shaders in Slang from 2b |
 | 31 | Second compiled language | None now. Rust or Zig only for a standalone out-of-process tool behind a boundary, if it needs a library C++ lacks. |
-| 32 | Dependencies | simdjson (scene reader), ankerl::unordered_dense (ID map), Boost.PFR (test-only); all pinned |
+| 32 | Dependencies | simdjson (scene reader), ankerl::unordered_dense (ID map), fast_float (float parsing, header-only, private to `ohao_reflect`), Boost.PFR (test-only); all pinned |
 | 33 | Agent dev ergonomics in 3 | `AGENTS.md` (+ `CLAUDE.md` import), `docs/ARCHITECTURE.md` with recipes, refreshed `.claude/skills/`, JSON output from everything new; the rest in sub-project 4 |
 
 Answered by Frank on 2026-10-22:

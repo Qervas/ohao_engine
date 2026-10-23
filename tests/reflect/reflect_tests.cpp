@@ -6,6 +6,7 @@
 //
 // Test names carry the spec's test numbers: t01 completeness, t12 schema, t13 dependency
 // rule. The fixture registry below exercises every field kind.
+#include "reflect/decode.hpp"
 #include "reflect/registry.hpp"
 #include "reflect/schema.hpp"
 
@@ -374,6 +375,54 @@ static void pretty_strips_back_to_compact() {
     }
 }
 
+// The writer's single-pass pretty layout must equal prettyPrint() of its compact output,
+// for every shape and width: they are two independent implementations of one rule.
+static void writeEverything(JsonWriter& w, const TypeRegistry& r, int n, uint32_t seed) {
+    std::mt19937 rng(seed);
+    const TypeInfo& t = *r.find<Everything>();
+    w.beginObject();
+    w.key("items");
+    w.beginArray();
+    for (int i = 0; i < n; ++i) {
+        Everything e;
+        e.name = std::string(rng() % 40, 'x');
+        e.list.resize(rng() % 4);
+        e.weights.resize(rng() % 30, 0.5f);
+        if (rng() % 2) e.prim = LabelPrim{std::string(rng() % 90, 'y')};
+        if (rng() % 3 == 0) e.maybe = AssetRef{std::string(rng() % 70, 'p'), ""};
+        writeStruct(&e, w, t);
+    }
+    w.endArray();
+    w.key("empty_obj"); w.beginObject(); w.endObject();
+    w.key("empty_arr"); w.beginArray(); w.endArray();
+    w.key("nested"); w.beginArray(); w.beginArray(); w.int64(1); w.endArray(); w.beginObject(); w.endObject(); w.endArray();
+    w.key("raw"); w.raw(R"({"a":[1,2,{"b":"c\"d"}],"e":{}})");
+    w.endObject();
+}
+
+static void pretty_single_pass_matches_pretty_print() {
+    TypeRegistry r;
+    registerFixture(r);
+    for (uint32_t seed = 1; seed <= 20; ++seed) {
+        for (int width : {16, 40, 80, 100, 160}) {
+            JsonWriter compact(0, JsonLayout::Compact);
+            JsonWriter pretty(0, JsonLayout::Pretty, width);
+            writeEverything(compact, r, 1 + static_cast<int>(seed % 7), seed);
+            writeEverything(pretty, r, 1 + static_cast<int>(seed % 7), seed);
+            const std::string expect = prettyPrint(compact.str(), width);
+            if (pretty.str() != expect) {
+                std::printf("\n--- seed %u width %d\nGOT:\n%s\nWANT:\n%s\n", seed, width, pretty.str().c_str(),
+                            expect.c_str());
+            }
+            CHECK(pretty.str() == expect, "single-pass pretty == prettyPrint(compact)");
+        }
+    }
+    JsonWriter p(0, JsonLayout::Pretty);
+    p.beginObject();
+    p.endObject();
+    CHECK(p.str() == "{}", "an empty root stays {}");
+}
+
 // ---- typed operations -------------------------------------------------------------------
 
 static void struct_writes_canonically() {
@@ -581,6 +630,79 @@ static void bench_float_format() {
     CHECK(bytes > 0, "wrote something");
 }
 
+// The decoder's float reader (fast_float) must give exactly std::from_chars' results,
+// and reject what does not fit.
+static void decoder_floats_match_from_chars() {
+    JsonDocument doc;
+    doc.nodes.resize(1);
+    DecodeContext ctx(doc);
+    const auto readText = [&](std::string_view text, float& out) {
+        JsonNode n;
+        n.type = JsonType::Number;
+        n.text = text;
+        return readFloat(n, ctx, out);
+    };
+    std::mt19937 rng(77);
+    for (int i = 0; i < 1'000'000; ++i) {
+        const float f = std::bit_cast<float>(static_cast<uint32_t>(rng()));
+        if (!std::isfinite(f)) continue;
+        char buf[64];
+        // Shortest form and a long fixed form (exercises the slow path).
+        for (int form = 0; form < 2; ++form) {
+            auto r = form == 0 ? std::to_chars(buf, buf + sizeof(buf), f)
+                               : std::to_chars(buf, buf + sizeof(buf), static_cast<double>(f), std::chars_format::scientific, 17);
+            const std::string_view text(buf, static_cast<std::size_t>(r.ptr - buf));
+            float a = 0.0f, b = 0.0f;
+            std::from_chars(text.data(), text.data() + text.size(), b);
+            CHECK(readText(text, a) && std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b),
+                  "decoder float == std::from_chars float, bit for bit");
+        }
+    }
+    float x = 0.0f;
+    CHECK(!readText("1e39", x) && !readText("-1e39", x) && !readText("1e-50", x), "overflow and underflow are E_RANGE");
+    CHECK(readText("0", x) && readText("-0.0e5", x) && std::signbit(x), "zeros are not underflow; -0 keeps its sign");
+    CHECK(readText("1e-45", x) && x > 0.0f, "the smallest denormal parses");
+    CHECK(ctx.errors.size() == 3 && ctx.errors[0].code == "E_RANGE", "each out-of-range number is one E_RANGE");
+}
+
+static void bench_float_parse() {
+    std::vector<std::string> texts;
+    std::mt19937 rng(9);
+    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    for (int i = 0; i < 1'000'000; ++i) {
+        char buf[32];
+        auto r = std::to_chars(buf, buf + sizeof(buf), dist(rng));
+        texts.emplace_back(buf, r.ptr);
+    }
+    double bestStd = 1e9, bestDecoder = 1e9;
+    float sink = 0.0f;
+    JsonDocument doc;
+    doc.nodes.resize(1);
+    DecodeContext ctx(doc);
+    for (int rep = 0; rep < 5; ++rep) {
+        auto t0 = std::chrono::steady_clock::now();
+        for (const auto& s : texts) {
+            float v = 0.0f;
+            std::from_chars(s.data(), s.data() + s.size(), v);
+            sink += v;
+        }
+        bestStd = std::min(bestStd, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        t0 = std::chrono::steady_clock::now();
+        for (const auto& s : texts) {
+            JsonNode n;
+            n.type = JsonType::Number;
+            n.text = s;
+            float v = 0.0f;
+            readFloat(n, ctx, v);
+            sink += v;
+        }
+        bestDecoder = std::min(bestDecoder, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("\n      1M shortest float texts -> float: std::from_chars %.1f ns each, decoder (fast_float) %.1f ns each  ",
+                bestStd * 1e6 / texts.size(), bestDecoder * 1e6 / texts.size());
+    CHECK(sink != 12345.0f, "parsed");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 static int dumpSchema(const fs::path& dir) {
@@ -614,8 +736,10 @@ int main(int argc, char** argv) {
     RUN(writer_escapes_and_structure);
     RUN(float_text_round_trips_bit_exact);
     RUN(writer_fast_path_matches_to_chars);
+    RUN(decoder_floats_match_from_chars);
     RUN(pretty_layout_rules);
     RUN(pretty_strips_back_to_compact);
+    RUN(pretty_single_pass_matches_pretty_print);
     RUN(struct_writes_canonically);
     RUN(struct_equality_is_bit_exact);
     RUN(limits_are_checked_per_component);
@@ -626,6 +750,7 @@ int main(int argc, char** argv) {
     RUN(t13_reflect_depends_on_glm_and_std_only);
     RUN(bench_typed_write);
     RUN(bench_float_format);
+    RUN(bench_float_parse);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     JsonWriter s;

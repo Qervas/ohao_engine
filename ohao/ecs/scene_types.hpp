@@ -12,6 +12,7 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 template <>
@@ -25,6 +26,27 @@ struct ohao::reflect::ValueTraits<entt::entity> {
 };
 
 namespace ohao::ecs {
+
+// What scene load/save needs to move a component between a decoded value and the
+// registry, typed at registration and stored in TypeInfo::host. Only saved components
+// carry it.
+struct ComponentOps {
+    void (*emplace)(entt::registry& r, entt::entity e, void* value);   // moves from value
+    const void* (*tryGet)(const entt::registry& r, entt::entity e);
+};
+
+template <class T>
+[[nodiscard]] std::shared_ptr<const void> makeComponentOps() {
+    static const ComponentOps ops{
+        [](entt::registry& r, entt::entity e, void* v) { r.emplace_or_replace<T>(e, std::move(*static_cast<T*>(v))); },
+        [](const entt::registry& r, entt::entity e) -> const void* { return r.try_get<T>(e); },
+    };
+    return std::shared_ptr<const void>(&ops, [](const void*) {});
+}
+
+[[nodiscard]] inline const ComponentOps* componentOps(const reflect::TypeInfo& t) noexcept {
+    return static_cast<const ComponentOps*>(t.host.get());
+}
 
 // Registers every ECS component, authoring and runtime, in a fixed order (the order of
 // the catalogue and of component blocks in scene files):

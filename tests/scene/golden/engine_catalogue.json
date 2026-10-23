@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "f0bd3b568080d8b5",
+  "schemaHash": "952925f8588ecb1f",
   "units": [
     "m",
     "m/s",
@@ -20,6 +20,55 @@
     "nits",
     "ratio",
     "Hz"
+  ],
+  "errors": [
+    { "code": "E_IO", "meaning": "The file could not be read or written." },
+    { "code": "E_PARSE", "meaning": "The text is not valid JSON (or not valid UTF-8)." },
+    {
+      "code": "E_FORMAT",
+      "meaning": "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."
+    },
+    {
+      "code": "E_VERSION_UNSUPPORTED",
+      "meaning": "The document version is not one this engine reads."
+    },
+    {
+      "code": "E_COMPONENT_VERSION",
+      "meaning": "A component's version in the file differs from the engine's and no upgrade applies."
+    },
+    {
+      "code": "E_UNKNOWN_FIELD",
+      "meaning": "A member the type does not have, or a runtime-only component in a file."
+    },
+    { "code": "E_DUPLICATE_KEY", "meaning": "The same member appears twice in one object." },
+    { "code": "E_TYPE", "meaning": "A value of the wrong JSON type or shape." },
+    { "code": "E_ENUM", "meaning": "A string that is not a value of the enum." },
+    { "code": "E_RANGE", "meaning": "A number outside the field's limits or its type's range." },
+    { "code": "E_NONFINITE", "meaning": "NaN or infinity, which a scene cannot contain." },
+    {
+      "code": "E_ID_INVALID",
+      "meaning": "A missing, malformed or zero entity id (ids are 16 lowercase hex digits)."
+    },
+    { "code": "E_ID_DUPLICATE", "meaning": "Two entities with the same id." },
+    { "code": "E_PARENT_MISSING", "meaning": "A Parent that names no entity in the document." },
+    { "code": "E_PARENT_CYCLE", "meaning": "Parents that form a cycle." },
+    {
+      "code": "E_SINGLETON",
+      "meaning": "A second instance of a component that allows one per world."
+    },
+    {
+      "code": "E_ENTITY_NOT_FOUND",
+      "meaning": "An entity reference that names no entity in the document."
+    },
+    { "code": "E_WORLD_NOT_EMPTY", "meaning": "Loading into a world that already has entities." },
+    {
+      "code": "E_TOO_MANY_ERRORS",
+      "meaning": "More errors exist than are reported (the first 100 are)."
+    },
+    {
+      "code": "W_UNKNOWN_COMPONENT",
+      "meaning": "Warning: an unknown component close to a known name. It is kept, but may be a typo."
+    }
   ],
   "enums": [
     {
@@ -705,6 +754,96 @@
           "type": "u64",
           "default": "0000000000000000",
           "doc": "Sequence number, never recycled",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "PreservedComponent",
+      "doc": "One unknown component kept from a scene file.",
+      "role": "struct",
+      "serialized": false,
+      "singleton": false,
+      "version": 1,
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": "",
+          "doc": "Component name as written in the file",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "version",
+          "type": "u32",
+          "default": 1,
+          "doc": "Its version from the file header (1 if absent)",
+          "unit": "1",
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "json",
+          "type": "string",
+          "default": "",
+          "doc": "Its value as canonical compact JSON",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "PreservedComponents",
+      "doc": "Components a scene file carried that this build does not know; written back on save.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "version": 1,
+      "fields": [
+        {
+          "name": "entries",
+          "type": "vector<PreservedComponent>",
+          "default": [],
+          "doc": "The kept components, in file order",
           "unit": null,
           "min": null,
           "max": null,

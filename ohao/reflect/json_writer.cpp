@@ -17,35 +17,153 @@ constexpr std::array<bool, 256> kNeedsEscape = [] {
     return t;
 }();
 
+// Index of the closing quote of the string token that starts at s[i] == '"'.
+std::size_t stringEnd(std::string_view s, std::size_t i) {
+    ++i;
+    while (i < s.size()) {
+        const char c = s[i];
+        if (c == '"') return i;
+        i += (c == '\\') ? 2 : 1;
+    }
+    return s.size() - 1;
+}
+
 } // namespace
 
-// A comma is due exactly when the previous token was a value or a closed container.
-void JsonWriter::separator() {
-    if (m_needComma) m_out.push_back(',');
+JsonWriter::JsonWriter(std::size_t reserveBytes, JsonLayout layout, int width)
+    : m_layout(layout), m_width(static_cast<uint32_t>(width)) {
+    m_out.reserve(reserveBytes);
 }
 
-void JsonWriter::beginObject() { separator(); m_out.push_back('{'); m_needComma = false; }
-void JsonWriter::endObject()   { m_out.push_back('}'); m_needComma = true; }
-void JsonWriter::beginArray()  { separator(); m_out.push_back('['); m_needComma = false; }
-void JsonWriter::endArray()    { m_out.push_back(']'); m_needComma = true; }
+// Compact: a comma is due exactly when the previous token was a value or a closed
+// container. Pretty: the frame stack knows; see the class comment.
+void JsonWriter::beforeValue() {
+    if (m_layout == JsonLayout::Compact) {
+        if (m_needComma) m_out.push_back(',');
+        return;
+    }
+    if (m_afterKey) { m_afterKey = false; return; }
+    if (m_frames.empty()) { m_nextColumn = 0; return; }
+    Frame& f = m_frames.back();
+    if (f.hasChildren) {
+        resolvePending(true);   // the previous child is followed by a comma
+        m_seps.push_back(static_cast<uint32_t>(m_out.size()));
+        m_out.append(", ", 2);
+    } else {
+        f.hasChildren = true;
+        if (f.object) m_out.push_back(' ');
+    }
+    m_nextColumn = 2u * (f.depth + 1u);
+}
+
+void JsonWriter::openContainer(bool object) {
+    beforeValue();
+    if (m_layout == JsonLayout::Compact) {
+        m_out.push_back(object ? '{' : '[');
+        m_needComma = false;
+        return;
+    }
+    m_frames.push_back(Frame{static_cast<uint32_t>(m_out.size()), m_nextColumn,
+                             static_cast<uint32_t>(m_seps.size()), 0,
+                             static_cast<uint16_t>(m_frames.size()), object, false, false});
+    m_out.push_back(object ? '{' : '[');
+}
+
+void JsonWriter::closeContainer(bool object) {
+    if (m_layout == JsonLayout::Compact) {
+        m_out.push_back(object ? '}' : ']');
+        m_needComma = true;
+        return;
+    }
+    resolvePending(false);   // the last child is followed by the closing bracket
+    Frame f = m_frames.back();
+    m_frames.pop_back();
+    if (f.hasChildren && f.object) m_out.append(" }", 2);
+    else m_out.push_back(object ? '}' : ']');
+    f.end = static_cast<uint32_t>(m_out.size() - 1);
+    if (m_frames.empty()) {   // the root always breaks
+        if (f.hasChildren) breakContainer(f);
+        m_seps.resize(f.sepBegin);
+        return;
+    }
+    // Whether it fits depends on a trailing comma we only learn from the next token.
+    m_pending = f;
+    m_hasPending = true;
+}
+
+// Decides the layout of the last closed container. It still sits at the tail of the
+// buffer: nothing has been written after it.
+void JsonWriter::resolvePending(bool trailingComma) {
+    if (!m_hasPending) return;
+    m_hasPending = false;
+    const Frame& p = m_pending;
+    const uint32_t oneLine = p.end - p.start + 1;
+    const bool fits = !p.hasChildren ||
+                      (!p.brokenChild && p.column + oneLine + (trailingComma ? 1u : 0u) <= m_width);
+    if (!fits) {
+        breakContainer(p);
+        m_frames.back().brokenChild = true;
+    }
+    m_seps.resize(p.sepBegin);
+}
+
+// Rewrites the container at the tail from its one-line form to one child per line. Its
+// children are already in their final form (broken children carry absolute indents).
+void JsonWriter::breakContainer(const Frame& f) {
+    const uint32_t pad = f.object ? 2u : 1u;   // "{ " / " }" versus "[" / "]"
+    const uint32_t contentBegin = f.start + pad;
+    const uint32_t contentEnd = static_cast<uint32_t>(m_out.size()) - pad;
+    m_scratch.assign(m_out.data() + contentBegin, contentEnd - contentBegin);
+    m_out.resize(f.start + 1);
+    const std::size_t indent = 2u * (f.depth + 1u);
+    std::size_t pos = 0;
+    for (std::size_t k = f.sepBegin; k < m_seps.size(); ++k) {
+        const std::size_t sep = m_seps[k] - contentBegin;
+        m_out.push_back('\n');
+        m_out.append(indent, ' ');
+        m_out.append(m_scratch, pos, sep - pos);
+        m_out.push_back(',');
+        pos = sep + 2;
+    }
+    m_out.push_back('\n');
+    m_out.append(indent, ' ');
+    m_out.append(m_scratch, pos, std::string::npos);
+    m_out.push_back('\n');
+    m_out.append(indent - 2, ' ');
+    m_out.push_back(f.object ? '}' : ']');
+}
+
+void JsonWriter::beginObject() { openContainer(true); }
+void JsonWriter::endObject() { closeContainer(true); }
+void JsonWriter::beginArray() { openContainer(false); }
+void JsonWriter::endArray() { closeContainer(false); }
 
 void JsonWriter::key(std::string_view k) {
-    separator();
+    beforeValue();
+    if (m_layout == JsonLayout::Compact) {
+        appendString(k);
+        m_out.push_back(':');
+        m_needComma = false;
+        return;
+    }
+    const std::size_t start = m_out.size();
     appendString(k);
-    m_out.push_back(':');
-    m_needComma = false;
+    m_out.append(": ", 2);
+    m_nextColumn += static_cast<uint32_t>(m_out.size() - start);
+    m_afterKey = true;
 }
 
-void JsonWriter::null() { separator(); m_out.append("null", 4); m_needComma = true; }
+void JsonWriter::null() { beforeValue(); m_out.append("null", 4); m_needComma = true; }
+
 void JsonWriter::boolean(bool v) {
-    separator();
+    beforeValue();
     if (v) m_out.append("true", 4);
     else m_out.append("false", 5);
     m_needComma = true;
 }
 
 void JsonWriter::int64(int64_t v) {
-    separator();
+    beforeValue();
     char buf[24];
     auto r = std::to_chars(buf, buf + sizeof(buf), v);
     m_out.append(buf, r.ptr);
@@ -53,7 +171,7 @@ void JsonWriter::int64(int64_t v) {
 }
 
 void JsonWriter::uint64(uint64_t v) {
-    separator();
+    beforeValue();
     char buf[24];
     auto r = std::to_chars(buf, buf + sizeof(buf), v);
     m_out.append(buf, r.ptr);
@@ -66,7 +184,7 @@ void JsonWriter::float32(float v) {
         null();
         return;
     }
-    separator();
+    beforeValue();
     char buf[32];
     // Fast path for whole numbers below 10^4, common in scenes (0, 1, scales, unit
     // quaternions). It prints exactly what to_chars does: shortest form picks fixed
@@ -89,7 +207,7 @@ void JsonWriter::float32(float v) {
 }
 
 void JsonWriter::hex64(uint64_t v) {
-    separator();
+    beforeValue();
     static constexpr char kDigits[] = "0123456789abcdef";
     char buf[18];
     buf[0] = '"';
@@ -99,8 +217,14 @@ void JsonWriter::hex64(uint64_t v) {
     m_needComma = true;
 }
 
+void JsonWriter::numberToken(std::string_view token) {
+    beforeValue();
+    m_out.append(token);
+    m_needComma = true;
+}
+
 void JsonWriter::string(std::string_view s) {
-    separator();
+    beforeValue();
     appendString(s);
     m_needComma = true;
 }
@@ -134,9 +258,54 @@ void JsonWriter::appendString(std::string_view s) {
 }
 
 void JsonWriter::raw(std::string_view compactJson) {
-    separator();
-    m_out.append(compactJson);
+    if (compactJson.empty()) { null(); return; }
+    if (m_layout == JsonLayout::Compact) {
+        beforeValue();
+        m_out.append(compactJson);
+        m_needComma = true;
+        return;
+    }
+    rawValue(compactJson, 0);
+}
+
+// Re-emits one canonical compact value through the writer so it gets the same layout
+// as everything else. Strings and numbers are copied verbatim (already canonical).
+std::size_t JsonWriter::rawValue(std::string_view s, std::size_t i) {
+    const char c = s[i];
+    if (c == '{') {
+        beginObject();
+        ++i;
+        while (i < s.size() && s[i] != '}') {
+            const std::size_t e = stringEnd(s, i);
+            beforeValue();
+            const std::size_t start = m_out.size();
+            m_out.append(s.data() + i, e - i + 1);
+            m_out.append(": ", 2);
+            m_nextColumn += static_cast<uint32_t>(m_out.size() - start);
+            m_afterKey = true;
+            i = rawValue(s, e + 2);   // past the ':'
+            if (i < s.size() && s[i] == ',') ++i;
+        }
+        endObject();
+        return i + 1;
+    }
+    if (c == '[') {
+        beginArray();
+        ++i;
+        while (i < s.size() && s[i] != ']') {
+            i = rawValue(s, i);
+            if (i < s.size() && s[i] == ',') ++i;
+        }
+        endArray();
+        return i + 1;
+    }
+    std::size_t e = i;
+    if (c == '"') e = stringEnd(s, i) + 1;
+    else while (e < s.size() && s[e] != ',' && s[e] != '}' && s[e] != ']') ++e;
+    beforeValue();
+    m_out.append(s.data() + i, e - i);
     m_needComma = true;
+    return e;
 }
 
 void JsonWriter::fail(std::string message) {
@@ -144,20 +313,10 @@ void JsonWriter::fail(std::string message) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Pretty printing
+// prettyPrint: the same layout from finished compact text (used by tools converting
+// between the two renderings, and by the tests as an independent implementation).
 
 namespace {
-
-// Index of the closing quote of the string token that starts at s[i] == '"'.
-std::size_t stringEnd(std::string_view s, std::size_t i) {
-    ++i;
-    while (i < s.size()) {
-        const char c = s[i];
-        if (c == '"') return i;
-        i += (c == '\\') ? 2 : 1;
-    }
-    return s.size() - 1;
-}
 
 // One entry per container, in document order. The one-line form of a container is its
 // compact text plus one space after every ':' and ',' inside it and two padding spaces

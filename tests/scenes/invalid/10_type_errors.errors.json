@@ -1,0 +1,7 @@
+[
+  { "code": "E_TYPE", "path": "/entities/0/Name/value", "line": 7 },
+  { "code": "E_TYPE", "path": "/entities/0/Transform/position", "line": 8 },
+  { "code": "E_TYPE", "path": "/entities/0/Transform/scale", "line": 8 },
+  { "code": "E_TYPE", "path": "/entities/0/Light/type", "line": 9 },
+  { "code": "E_TYPE", "path": "/entities/0/Light/color/1", "line": 9 }
+]

@@ -1,0 +1,9 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    { "id": "0000000000000000" },
+    { "id": "ABC" },
+    { "Name": { "value": "no id" } }
+  ]
+}

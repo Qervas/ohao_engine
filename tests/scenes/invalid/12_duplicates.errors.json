@@ -1,0 +1,4 @@
+[
+  { "code": "E_DUPLICATE_KEY", "path": "/entities/0/Light", "line": 5 },
+  { "code": "E_DUPLICATE_KEY", "path": "/entities/1/Light/intensity", "line": 6 }
+]

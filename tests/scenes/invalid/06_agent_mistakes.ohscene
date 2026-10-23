@@ -1,0 +1,14 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    {
+      "id": "00000000000000a1",
+      "Light": { "type": "Spto", "intensty": 2, "radius": -1 }
+    },
+    {
+      "id": "00000000000000a2",
+      "Parent": { "entity": "00000000000000ff" }
+    }
+  ]
+}

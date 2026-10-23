@@ -6,10 +6,17 @@
 // Step 2: t05 entity ids, t01 completeness of the real component registrations, the
 // engine catalogue golden, and an informational write benchmark on real components.
 #include "ecs/components.hpp"
+#include "ecs/json_parse.hpp"
 #include "ecs/render_extract.hpp"
+#include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
 #include "reflect/schema.hpp"
+
+#include <bit>
+#include <cfloat>
+#include <limits>
 
 #include <boost/pfr.hpp>
 
@@ -244,6 +251,8 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<EmissiveProxyLight>(r, checked);
     ok &= complete<GiMaterialLegacy>(r, checked);
     ok &= complete<CreationOrder>(r, checked);
+    ok &= complete<PreservedComponent>(r, checked);
+    ok &= complete<PreservedComponents>(r, checked);
     ok &= complete<TransformDirty>(r, checked);
     ok &= complete<RenderDirty>(r, checked);
     ok &= complete<MovedLastFrame>(r, checked);
@@ -288,6 +297,353 @@ static void t12_engine_catalogue_matches_golden() {
           "engine catalogue unchanged (scene_tests --update-golden after a deliberate change)");
     CHECK(reflect::exportSceneJsonSchema(a) == readFile(kGolden / "engine_ohscene.schema.json"),
           "engine scene JSON Schema unchanged");
+}
+
+// ---- step 3: scene codec ------------------------------------------------------------------
+
+static const reflect::TypeRegistry& engineTypes() {
+    static reflect::TypeRegistry r;
+    static const bool once = (registerSceneTypes(r), true);
+    (void)once;
+    return r;
+}
+
+static const fs::path kScenes = fs::path(OHAO_SOURCE_DIR) / "tests" / "scenes";
+
+static std::string save(const World& w, reflect::JsonLayout layout = reflect::JsonLayout::Pretty) {
+    auto s = saveScene(w, engineTypes(), SaveOptions{layout});
+    if (!s) std::printf("\n      save failed: %s", s.error().message.c_str());
+    return s ? s.value() : std::string();
+}
+
+static bool load(World& w, std::string_view text) {
+    auto r = loadScene(w, text, engineTypes());
+    if (!r) std::printf("\n      load failed: %s", diagnosticsJson(r.error()).c_str());
+    return static_cast<bool>(r);
+}
+
+static float pickFloat(std::mt19937_64& rng, bool nonNegative) {
+    static const float kExtreme[] = {0.0f, -0.0f, 0.1f, FLT_MIN, -FLT_MIN, FLT_MAX, -FLT_MAX,
+                                     std::numeric_limits<float>::denorm_min(), 1e-40f, 123456.789f,
+                                     -3.5f, 1.0f, 16777216.0f, 1e30f, 0.3f, 9999.0f, 10000.0f};
+    float v;
+    if (rng() % 2) {
+        v = kExtreme[rng() % std::size(kExtreme)];
+    } else {
+        do v = std::bit_cast<float>(static_cast<uint32_t>(rng()));
+        while (!std::isfinite(v));
+    }
+    return nonNegative ? std::fabs(v) : v;
+}
+
+static std::string pickName(std::mt19937_64& rng, int i) {
+    static const char* kNames[] = {"plain", "quote\" back\\slash", "tab\tnew\nline\x01", "Ωmega 名前 🚀",
+                                   "", "with / slash ~ tilde"};
+    return std::string(kNames[rng() % std::size(kNames)]) + "_" + std::to_string(i);
+}
+
+// n entities: every light type, extreme floats, unicode names, hierarchy depth <= 32 with
+// some wide fans. Built through the public World API only.
+static void buildRandomWorld(World& w, uint64_t seed, int n) {
+    w.seedIds(seed);
+    std::mt19937_64 rng(seed);
+    std::vector<entt::entity> es;
+    std::vector<int> depth;
+    for (int i = 0; i < n; ++i) {
+        Transform t;
+        t.position = {pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)};
+        t.rotation = {pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)};
+        t.scale = {pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)};
+        const auto e = w.create(pickName(rng, i), t);
+        int d = 0;
+        if (i > 0 && rng() % 3 != 0) {
+            // Mostly recent entities (deep chains), sometimes entity 0..3 (wide fans).
+            const auto p = static_cast<std::size_t>(rng() % 4 == 0 ? rng() % std::min<std::size_t>(4, es.size())
+                                                                    : es.size() - 1 - rng() % std::min<std::size_t>(3, es.size()));
+            if (depth[p] < 32 && w.setParent(e, es[p])) d = depth[p] + 1;
+        }
+        if (rng() % 5 == 0) {
+            Light l;
+            l.type = static_cast<LightType>(rng() % 4);
+            l.color = {pickFloat(rng, true), pickFloat(rng, true), pickFloat(rng, true)};
+            l.intensity = pickFloat(rng, true);
+            l.range = pickFloat(rng, true);
+            l.radius = pickFloat(rng, true);
+            l.innerConeDeg = static_cast<float>(rng() % 181);
+            l.outerConeDeg = std::nextafter(180.0f, 0.0f);
+            l.areaEdge1 = {pickFloat(rng, false), 0.0f, -0.0f};
+            w.registry().emplace<Light>(e, l);
+        }
+        es.push_back(e);
+        depth.push_back(d);
+    }
+}
+
+// Every saved component of every entity equal (bit-exact), matched by id; Parent compared
+// by the parent's id.
+static bool sameWorld(const World& a, const World& b) {
+    if (a.idCount() != b.idCount()) return false;
+    const auto& r = engineTypes();
+    for (auto [ea, id] : a.registry().view<const EntityId>().each()) {
+        const entt::entity eb = b.findById(id.value);
+        if (eb == entt::null) return false;
+        for (const reflect::TypeInfo* t : r.types()) {
+            const ComponentOps* ops = t->serialized ? componentOps(*t) : nullptr;
+            if (!ops || t == r.find<Parent>()) continue;
+            const void* va = ops->tryGet(a.registry(), ea);
+            const void* vb = ops->tryGet(b.registry(), eb);
+            if ((va == nullptr) != (vb == nullptr)) return false;
+            if (va && !reflect::equalStruct(va, vb, *t)) return false;
+        }
+        const auto* pa = a.registry().try_get<Parent>(ea);
+        const auto* pb = b.registry().try_get<Parent>(eb);
+        if ((pa == nullptr) != (pb == nullptr)) return false;
+        if (pa && a.idOf(pa->entity) != b.idOf(pb->entity)) return false;
+    }
+    return true;
+}
+
+static void t02_round_trip_is_byte_identical() {
+    World a;
+    a.seedIds(11);
+    const auto root = a.create("Room");
+    const auto lamp = a.create("Lamp", Transform{{0.0f, 2.5f, -1.0f}});
+    a.setParent(lamp, root);
+    Light l;
+    l.type = LightType::Spot;
+    l.color = {1.0f, 0.9f, 0.7f};
+    a.registry().emplace<Light>(lamp, l);
+    for (auto layout : {reflect::JsonLayout::Pretty, reflect::JsonLayout::Compact}) {
+        const std::string first = save(a, layout);
+        World b;
+        CHECK(load(b, first), "the saved text loads");
+        const std::string second = save(b, layout);
+        CHECK(!first.empty() && first == second, "save -> load -> save is byte-identical");
+        CHECK(sameWorld(a, b), "every component is equal, field by field");
+    }
+    const std::string pretty = save(a);
+    const std::string compact = save(a, reflect::JsonLayout::Compact);
+    CHECK(pretty == reflect::prettyPrint(compact) + "\n", "pretty file == prettyPrint(compact) + newline");
+    CHECK(pretty.find('\r') == std::string::npos && pretty.back() == '\n', "LF only, trailing newline");
+}
+
+static void t03_random_worlds_round_trip() {
+    for (uint64_t seed : {101u, 202u, 303u}) {
+        World a;
+        buildRandomWorld(a, seed, 1000);
+        const std::string first = save(a);
+        World b;
+        CHECK(load(b, first), "a random world loads");
+        CHECK(save(b) == first, "a random world round-trips byte-identically");
+        CHECK(sameWorld(a, b), "extreme floats, unicode names and every light type survive bit-exactly");
+        World c;
+        CHECK(load(c, save(a, reflect::JsonLayout::Compact)), "the compact form loads too");
+        CHECK(sameWorld(a, c), "and gives the same world");
+    }
+}
+
+static void t04_hierarchy_and_order_are_rebuilt() {
+    World a;
+    buildRandomWorld(a, 7, 600);
+    updateTransforms(a.registry());
+    World b;
+    CHECK(load(b, save(a)), "loads");
+    updateTransforms(b.registry());
+    for (auto [ea, id, wt] : a.registry().view<const EntityId, const WorldTransform>().each()) {
+        const auto& wb = b.registry().get<WorldTransform>(b.findById(id.value));
+        CHECK(std::memcmp(&wt.world, &wb.world, sizeof(glm::mat4)) == 0, "world matrices are bit-identical");
+    }
+    // Creation order (draw and light order) follows the original creation order.
+    const auto orderOf = [](const World& w) {
+        std::vector<std::pair<uint64_t, uint64_t>> v;
+        for (auto [e, id, co] : w.registry().view<const EntityId, const CreationOrder>().each()) v.emplace_back(co.seq, id.value);
+        std::sort(v.begin(), v.end());
+        std::vector<uint64_t> ids;
+        for (auto& [s, id] : v) ids.push_back(id);
+        return ids;
+    };
+    CHECK(orderOf(a) == orderOf(b), "entities are recreated in the original creation order");
+    const auto lightsOf = [&](const World& w) {
+        std::vector<uint64_t> out;
+        for (uint64_t id : orderOf(w))
+            if (w.registry().all_of<Light>(w.findById(id))) out.push_back(id);
+        return out;
+    };
+    CHECK(lightsOf(a) == lightsOf(b), "light order is preserved");
+}
+
+static void t04_references_before_their_target_resolve() {
+    const std::string text = R"({
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    { "id": "00000000000000c1", "Name": { "value": "child" }, "Parent": { "entity": "00000000000000b1" } },
+    { "id": "00000000000000b1", "Name": { "value": "parent" }, "Transform": { "position": [5, 0, 0] } }
+  ]
+}
+)";
+    World w;
+    CHECK(load(w, text), "a reference to a later entity loads");
+    const auto child = w.findById(0xc1), parent = w.findById(0xb1);
+    CHECK(w.registry().get<Parent>(child).entity == parent, "the parent is the later entity");
+    const auto& kids = w.registry().get<Children>(parent).entities;
+    CHECK(kids.size() == 1 && kids[0] == child, "Children is rebuilt");
+    w.update(0.0f);
+    CHECK(w.registry().get<WorldTransform>(child).world[3].x == 5.0f, "and the child follows its parent");
+    CHECK(w.registry().get<Transform>(child).scale == glm::vec3(1.0f), "missing components take defaults");
+}
+
+struct ExpectedError {
+    std::string code, path;
+    std::string line;         // "" = not checked
+    std::string suggestion;   // "" = not checked
+};
+
+static std::vector<ExpectedError> expectedErrors(const fs::path& p) {
+    std::vector<ExpectedError> out;
+    const auto parsed = parseJson(readFile(p));
+    if (!parsed) return out;
+    const auto& doc = parsed.value();
+    for (uint32_t i = 0; i < doc.root().count; ++i) {
+        const auto& e = doc.child(doc.root(), i);
+        ExpectedError x;
+        if (const auto* v = doc.member(e, "code")) x.code = v->text;
+        if (const auto* v = doc.member(e, "path")) x.path = v->text;
+        if (const auto* v = doc.member(e, "line")) x.line = v->text;
+        if (const auto* v = doc.member(e, "suggestion")) x.suggestion = v->text;
+        out.push_back(std::move(x));
+    }
+    return out;
+}
+
+static void t06_error_corpus() {
+    std::vector<fs::path> files;
+    for (const auto& e : fs::directory_iterator(kScenes / "invalid"))
+        if (e.path().extension() == ".ohscene") files.push_back(e.path());
+    std::sort(files.begin(), files.end());
+    CHECK(files.size() >= 15, "the corpus is present");
+    for (const auto& f : files) {
+        const auto want = expectedErrors(fs::path(f).replace_extension(".errors.json"));
+        const auto report = validateScene(readFile(f), engineTypes());
+        bool same = !want.empty() && report.errors.size() == want.size();
+        for (std::size_t i = 0; same && i < want.size(); ++i) {
+            const auto& d = report.errors[i];
+            same = d.code == want[i].code && d.path == want[i].path &&
+                   (want[i].line.empty() || std::to_string(d.line) == want[i].line) &&
+                   (want[i].suggestion.empty() || d.suggestion == want[i].suggestion);
+        }
+        if (!same) {
+            std::printf("\n      %s\n        got:  %s", f.filename().string().c_str(),
+                        diagnosticsJson(report.errors).c_str());
+        }
+        CHECK(same, "every corpus file reports exactly its expected errors");
+        World w;
+        auto r = loadScene(w, readFile(f), engineTypes());
+        CHECK(!r && w.idCount() == 0 && w.registry().storage<entt::entity>().in_use() == 0,
+              "a failed load leaves the world untouched");
+    }
+}
+
+static void t06_world_must_be_empty() {
+    World w;
+    w.create("already here");
+    auto r = loadScene(w, R"({"format":"ohao.scene","version":1,"entities":[]})", engineTypes());
+    CHECK(!r && r.error().size() == 1 && r.error()[0].code == "E_WORLD_NOT_EMPTY", "loading into a non-empty world fails");
+    CHECK(w.idCount() == 1, "and changes nothing");
+}
+
+static void t06_errors_are_capped_at_one_hundred() {
+    std::string text = R"({"format":"ohao.scene","version":1,"entities":[)";
+    for (int i = 0; i < 150; ++i) {
+        if (i) text += ",";
+        char id[17];
+        std::snprintf(id, sizeof(id), "%016x", i + 1);
+        text += std::string(R"({"id":")") + id + R"(","Light":{"intensty":1}})";
+    }
+    text += "]}";
+    const auto report = validateScene(text, engineTypes());
+    CHECK(report.errors.size() == 101, "100 errors are reported");
+    CHECK(report.errors.back().code == "E_TOO_MANY_ERRORS", "then one E_TOO_MANY_ERRORS");
+    CHECK(report.errors[0].suggestion == "intensity", "each carries its suggestion");
+}
+
+static void t07_unknown_components_survive_byte_identically() {
+    const std::string text = R"({
+  "format": "ohao.scene",
+  "version": 1,
+  "components": { "FutureThing": 3, "Name": 1, "Transform": 1 },
+  "entities": [
+    {
+      "id": "00000000000000a1",
+      "Name": { "value": "x" },
+      "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+      "FutureThing": { "power": 9001, "tags": ["a", "b"], "nested": { "deep": [1.5, null, true] } }
+    }
+  ]
+}
+)";
+    World w;
+    auto r = loadScene(w, text, engineTypes());
+    CHECK(r && r.value().preservedUnknown == 1, "an unknown component loads and is kept");
+    CHECK(r.value().warnings.empty(), "a name far from every known component draws no warning");
+    CHECK(save(w) == text, "and is written back byte-identically (with its header version)");
+}
+
+static void t07_unknown_fields_fail_and_near_misses_warn() {
+    const auto report = validateScene(R"({"format":"ohao.scene","version":1,"entities":[
+{"id":"00000000000000a1","Light":{"colour":[1,1,1],"intensity":2}},
+{"id":"00000000000000a2","Ligth":{"x":1}}]})",
+                                      engineTypes());
+    CHECK(report.errors.size() == 1, "only the misspelled field is an error (Light has no alias 'colour')");
+    CHECK(report.errors[0].code == "E_UNKNOWN_FIELD" && report.errors[0].path == "/entities/0/Light/colour",
+          "an unknown field is E_UNKNOWN_FIELD with its path");
+    CHECK(report.errors[0].suggestion == "color" && report.errors[0].line == 2, "with a suggestion and its line");
+    CHECK(report.warnings.size() == 1 && report.warnings[0].code == "W_UNKNOWN_COMPONENT" &&
+              report.warnings[0].suggestion == "Light",
+          "a component name one typo from Light is kept but warned about");
+}
+
+// ---- informational benchmark (step 6 gates the real budget) -------------------------------
+
+static void bench_scene_save_load_10k() {
+    World w;
+    w.seedIds(1);
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<float> pos(-50.0f, 50.0f), ang(0.0f, 6.2831853f);
+    std::vector<entt::entity> es;
+    for (int i = 0; i < 10'000; ++i) {
+        Transform t;
+        t.position = {pos(rng), pos(rng), pos(rng)};
+        t.rotation = glm::angleAxis(ang(rng), glm::normalize(glm::vec3(pos(rng), pos(rng), pos(rng)) + 0.001f));
+        const auto e = w.create("Entity_" + std::to_string(i), t);
+        if (i >= 9'900) w.registry().emplace<Light>(e);
+        if (i % 3 == 1) w.setParent(e, es[static_cast<std::size_t>(i - 1)]);
+        es.push_back(e);
+    }
+    const auto timeIt = [](auto&& fn) {
+        double best = 1e9;
+        for (int rep = 0; rep < 10; ++rep) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            best = std::min(best, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        return best;
+    };
+    std::string pretty, compact;
+    const double tPretty = timeIt([&] { pretty = save(w); });
+    const double tCompact = timeIt([&] { compact = save(w, reflect::JsonLayout::Compact); });
+    const double tParseCold = timeIt([&] { (void)parseJson(pretty); });
+    JsonParser warm;
+    const double tParse = timeIt([&] { (void)warm.parse(pretty); });
+    const double tValidate = timeIt([&] { (void)validateScene(pretty, engineTypes()); });
+    const double tLoad = timeIt([&] {
+        World b;
+        (void)loadScene(b, pretty, engineTypes());
+    });
+    std::printf("\n      10k entities: save pretty %.2f ms (%.2f MB), save compact %.2f ms (%.2f MB), "
+                "parse %.2f ms (cold parser %.2f ms), validate %.2f ms, load %.2f ms (incl. world teardown)  ",
+                tPretty, pretty.size() / 1e6, tCompact, compact.size() / 1e6, tParse, tParseCold, tValidate, tLoad);
+    CHECK(!pretty.empty(), "saved");
 }
 
 // ---- informational benchmark (step 6 gates the real budget) -------------------------------
@@ -371,7 +727,17 @@ int main(int argc, char** argv) {
     RUN(t01_registrations_lint_clean);
     RUN(t01_authoring_and_runtime_split);
     RUN(t12_engine_catalogue_matches_golden);
+    RUN(t02_round_trip_is_byte_identical);
+    RUN(t03_random_worlds_round_trip);
+    RUN(t04_hierarchy_and_order_are_rebuilt);
+    RUN(t04_references_before_their_target_resolve);
+    RUN(t06_error_corpus);
+    RUN(t06_world_must_be_empty);
+    RUN(t06_errors_are_capped_at_one_hundred);
+    RUN(t07_unknown_components_survive_byte_identically);
+    RUN(t07_unknown_fields_fail_and_near_misses_warn);
     RUN(bench_write_authoring_components);
+    RUN(bench_scene_save_load_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

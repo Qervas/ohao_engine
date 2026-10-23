@@ -18,23 +18,23 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
 
     // ---- authoring components (saved in scene files) -----------------------------------
 
-    r.type<Name>("Name").component()
+    r.type<Name>("Name").component().host(makeComponentOps<Name>())
         .doc("Display name for people and agents. Not unique; entities are identified by id.")
         .field("value", &Name::value).doc("The name");
 
-    r.type<Transform>("Transform").component()
+    r.type<Transform>("Transform").component().host(makeComponentOps<Transform>())
         .doc("Local transform relative to the parent (or the world for a root entity). "
              "World matrix = parent world * T * R * S.")
         .field("position", &Transform::position).doc("Local translation").unit("m")
         .field("rotation", &Transform::rotation).doc("Local rotation as a unit quaternion, written [x, y, z, w]").unitless()
         .field("scale", &Transform::scale).doc("Local scale per axis; a negative value mirrors").unitless();
 
-    r.type<Parent>("Parent").component()
+    r.type<Parent>("Parent").component().host(makeComponentOps<Parent>())
         .doc("Attaches the entity to a parent; its Transform is then relative to the parent. "
              "Cycles are rejected.")
         .field("entity", &Parent::entity).doc("The parent entity's id; null makes the entity a root");
 
-    r.type<Light>("Light").component()
+    r.type<Light>("Light").component().host(makeComponentOps<Light>())
         .doc("A light source. Position and direction come from the transform (direction = -Z).")
         .field("type", &Light::type).doc("Light shape")
         .field("color", &Light::color).doc("Emitted color").unit("linear-rgb").color().min(0.0)
@@ -84,6 +84,14 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<CreationOrder>("CreationOrder").component().runtime()
         .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
         .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");
+    r.type<PreservedComponent>("PreservedComponent").runtime()
+        .doc("One unknown component kept from a scene file.")
+        .field("name", &PreservedComponent::name).doc("Component name as written in the file")
+        .field("version", &PreservedComponent::version).doc("Its version from the file header (1 if absent)").unitless()
+        .field("json", &PreservedComponent::json).doc("Its value as canonical compact JSON");
+    r.type<PreservedComponents>("PreservedComponents").component().runtime()
+        .doc("Components a scene file carried that this build does not know; written back on save.")
+        .field("entries", &PreservedComponents::entries).doc("The kept components, in file order");
     r.type<TransformDirty>("TransformDirty").component().runtime()
         .doc("Tag: the local transform changed; world matrices are recomputed this frame.");
     r.type<RenderDirty>("RenderDirty").component().runtime()
