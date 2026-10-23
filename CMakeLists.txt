@@ -166,9 +166,15 @@ if(BUILD_ECS_TESTS)
 endif()
 
 option(BUILD_REFLECT_TESTS "Build reflection tests (registry, schema export, dependency rule)" ON)
+option(BUILD_SCENE_TESTS "Build scene tests (entity ids, component registrations; CPU only)" ON)
+if(BUILD_REFLECT_TESTS OR BUILD_SCENE_TESTS)
+    include(${CMAKE_SOURCE_DIR}/external/cmake/pfr.cmake)   # test-only
+endif()
 if(BUILD_REFLECT_TESTS)
-    include(${CMAKE_SOURCE_DIR}/external/cmake/pfr.cmake)
     add_subdirectory(tests/reflect)
+endif()
+if(BUILD_SCENE_TESTS)
+    add_subdirectory(tests/scene)
 endif()
 
 

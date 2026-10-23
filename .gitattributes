@@ -7,4 +7,5 @@
 # Canonical engine output is compared byte-for-byte and is LF by definition: goldens
 # of generated schemas and scene files must check out exactly as the engine writes them.
 tests/reflect/golden/** text eol=lf
+tests/scene/golden/** text eol=lf
 *.ohscene text eol=lf

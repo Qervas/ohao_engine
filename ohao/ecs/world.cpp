@@ -5,16 +5,40 @@
 
 #include <algorithm>
 #include <iostream>
+#include <random>
 
 namespace ohao::ecs {
+
+namespace {
+
+// splitmix64 (Steele, Lea, Flood 2014): a bijective 64-bit mixer, so for a fixed seed
+// the ids seed+0, seed+1, ... never repeat before 2^64 creations.
+constexpr uint64_t splitmix64(uint64_t x) noexcept {
+    x += 0x9e3779b97f4a7c15ull;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+    return x ^ (x >> 31);
+}
+
+uint64_t randomSeed() {
+    std::random_device rd;
+    return (static_cast<uint64_t>(rd()) << 32) ^ rd();
+}
+
+} // namespace
 
 glm::mat4 Transform::matrix() const {
     return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation) *
            glm::scale(glm::mat4(1.0f), scale);
 }
 
-World::World() {
+World::World() : m_idGen{randomSeed(), 0} {
     m_registry.on_update<Transform>().connect<&World::onTransformChanged>(this);
+    // The id index follows EntityId on every path (World::destroy, registry().destroy,
+    // registry().clear). These hooks only touch m_byId, never a pool.
+    m_registry.on_construct<EntityId>().connect<&World::onIdConstructed>(this);
+    m_registry.on_destroy<EntityId>().connect<&World::onIdDestroyed>(this);
+    m_registry.on_update<EntityId>().connect<&World::onIdUpdated>(this);
     // Hierarchy hooks keep Parent/Children consistent on every destroy path,
     // registry().destroy() and registry().clear() included. Pool creation order is
     // deliberate: registry().clear() empties pools newest first, so Children is
@@ -52,8 +76,54 @@ void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {
     }
 }
 
+void World::onIdConstructed(entt::registry& r, entt::entity e) {
+    const uint64_t id = r.get<EntityId>(e).value;
+    if (!m_byId.try_emplace(id, e).second)
+        std::cerr << "[ecs] EntityId " << id << " emplaced on a second entity; use World::createWithId\n";
+}
+
+void World::onIdDestroyed(entt::registry& r, entt::entity e) {
+    const uint64_t id = r.get<EntityId>(e).value;
+    if (auto it = m_byId.find(id); it != m_byId.end() && it->second == e) m_byId.erase(it);
+}
+
+// An id edited in place (EntityId should never be edited): re-index the entity.
+void World::onIdUpdated(entt::registry& r, entt::entity e) {
+    for (auto it = m_byId.begin(); it != m_byId.end(); ++it)
+        if (it->second == e) { m_byId.erase(it); break; }
+    onIdConstructed(r, e);
+}
+
+uint64_t World::nextId() {
+    for (;;) {
+        const uint64_t id = splitmix64(m_idGen.seed + m_idGen.counter++);
+        if (id != 0 && !m_byId.contains(id)) return id;
+    }
+}
+
+entt::entity World::findById(uint64_t id) const {
+    const auto it = m_byId.find(id);
+    return it == m_byId.end() ? entt::null : it->second;
+}
+
+uint64_t World::idOf(entt::entity e) const {
+    if (!m_registry.valid(e)) return 0;
+    const auto* id = m_registry.try_get<EntityId>(e);
+    return id ? id->value : 0;
+}
+
 entt::entity World::create(std::string_view name, const Transform& local) {
+    return createImpl(nextId(), name, local);
+}
+
+entt::entity World::createWithId(uint64_t id, std::string_view name, const Transform& local) {
+    if (id == 0 || m_byId.contains(id)) return entt::null;
+    return createImpl(id, name, local);
+}
+
+entt::entity World::createImpl(uint64_t id, std::string_view name, const Transform& local) {
     const entt::entity e = m_registry.create();
+    m_registry.emplace<EntityId>(e, id);
     m_registry.emplace<Name>(e, std::string(name));
     m_registry.emplace<Transform>(e, local);
     m_registry.emplace<Children>(e);

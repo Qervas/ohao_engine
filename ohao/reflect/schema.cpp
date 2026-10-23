@@ -146,13 +146,14 @@ void writeValueSchema(JsonWriter& w, const TypeDesc& d, const NumericLimits& l) 
     case Kind::String:
         w.beginObject(); w.key("type"); w.string("string"); w.endObject();
         break;
-    case Kind::Vec2: case Kind::Vec3: case Kind::Vec4: case Kind::Quat: {
-        const int n = d.kind == Kind::Vec2 ? 2 : d.kind == Kind::Vec3 ? 3 : 4;
+    case Kind::Vec2: case Kind::Vec3: case Kind::Vec4: case Kind::Quat: case Kind::Mat4: {
+        const int n = d.kind == Kind::Vec2 ? 2 : d.kind == Kind::Vec3 ? 3 : d.kind == Kind::Mat4 ? 16 : 4;
         TypeDesc f;
         f.kind = Kind::Float;
         w.beginObject();
         w.key("type"); w.string("array");
-        w.key("items"); writeNumberSchema(w, f, d.kind == Kind::Quat ? NumericLimits{} : l);
+        w.key("items");
+        writeNumberSchema(w, f, (d.kind == Kind::Quat || d.kind == Kind::Mat4) ? NumericLimits{} : l);
         w.key("minItems"); w.int64(n);
         w.key("maxItems"); w.int64(n);
         w.endObject();

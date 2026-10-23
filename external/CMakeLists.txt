@@ -2,6 +2,7 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/json.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/glm.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/entt.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/unordered_dense.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vma.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tinygltf.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/miniaudio.cmake)

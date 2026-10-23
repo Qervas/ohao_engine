@@ -11,6 +11,11 @@
 
 namespace ohao::ecs {
 
+// The entity's stable identity: never recycled, survives save/load and snapshots, and is
+// what files, commands and (later) prefabs and scripts refer to. Assigned by
+// World::create / createWithId; 0 is invalid. Do not emplace or edit it directly.
+struct EntityId { uint64_t value{0}; };
+
 struct Name { std::string value; };
 
 // Local transform. Write it with registry.patch<Transform>() or World::setTransform();

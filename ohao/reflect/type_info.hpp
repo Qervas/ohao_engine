@@ -17,6 +17,7 @@ enum class Kind : uint8_t {
     Vec2, Vec3, Vec4, Quat,
     Enum, Struct, Vector, Optional, Variant,
     AssetRef, EntityRef,
+    Mat4,   // 16 floats, column-major (glm order)
 };
 
 struct TypeInfo;

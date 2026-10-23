@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ohao:ohscene:1",
+  "title": "OHAO scene (.ohscene), document version 1",
+  "description": "Generated from the engine type registry; schemaHash f0bd3b568080d8b5. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "type": "object",
+  "required": ["format", "version", "entities"],
+  "properties": {
+    "format": { "const": "ohao.scene" },
+    "version": { "const": 1 },
+    "components": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+    "entities": { "type": "array", "items": { "$ref": "#/$defs/Entity" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "EntityId": {
+      "description": "Stable entity id: 16 lowercase hex digits, never all zero.",
+      "type": "string",
+      "pattern": "^(?!0{16})[0-9a-f]{16}$"
+    },
+    "AssetRef": {
+      "description": "Asset reference: project-relative path with '/' separators; guid once the asset database exists.",
+      "type": "object",
+      "required": ["path"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "guid": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "Entity": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/EntityId" },
+        "Name": { "$ref": "#/$defs/Name" },
+        "Transform": { "$ref": "#/$defs/Transform" },
+        "Parent": { "$ref": "#/$defs/Parent" },
+        "Light": { "$ref": "#/$defs/Light" }
+      },
+      "additionalProperties": { "type": "object" }
+    },
+    "LightType": {
+      "description": "Light shape. Position and direction come from the entity's world transform; the direction is the entity's -Z axis.",
+      "enum": ["Point", "Directional", "Spot", "AreaRect"]
+    },
+    "Name": {
+      "description": "Display name for people and agents. Not unique; entities are identified by id.",
+      "type": "object",
+      "properties": {
+        "value": { "description": "The name", "default": "", "allOf": [{ "type": "string" }] }
+      },
+      "additionalProperties": false
+    },
+    "Transform": {
+      "description": "Local transform relative to the parent (or the world for a root entity). World matrix = parent world * T * R * S.",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Local translation",
+          "default": [0, 0, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "rotation": {
+          "description": "Local rotation as a unit quaternion, written [x, y, z, w]",
+          "default": [0, 0, 0, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+          ]
+        },
+        "scale": {
+          "description": "Local scale per axis; a negative value mirrors",
+          "default": [1, 1, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Parent": {
+      "description": "Attaches the entity to a parent; its Transform is then relative to the parent. Cycles are rejected.",
+      "type": "object",
+      "properties": {
+        "entity": {
+          "description": "The parent entity's id; null makes the entity a root",
+          "default": null,
+          "allOf": [{ "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/EntityId" }] }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Light": {
+      "description": "A light source. Position and direction come from the transform (direction = -Z).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "Light shape",
+          "default": "Point",
+          "allOf": [{ "$ref": "#/$defs/LightType" }]
+        },
+        "color": {
+          "description": "Emitted color",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "intensity": {
+          "description": "Brightness multiplier on color",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "range": {
+          "description": "Distance at which a Point/Spot light's contribution reaches zero",
+          "default": 10,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "radius": {
+          "description": "Emitter radius; larger values give softer shadows",
+          "default": 0.1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "innerConeDeg": {
+          "description": "Spot: full-intensity cone angle",
+          "default": 30,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 180 }]
+        },
+        "outerConeDeg": {
+          "description": "Spot: cone angle where intensity reaches zero",
+          "default": 45,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 180 }]
+        },
+        "areaEdge1": {
+          "description": "AreaRect: first edge vector, local space",
+          "default": [1, 0, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "areaEdge2": {
+          "description": "AreaRect: second edge vector, local space",
+          "default": [0, 0, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

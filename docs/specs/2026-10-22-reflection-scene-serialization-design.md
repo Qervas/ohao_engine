@@ -166,7 +166,8 @@ the editor. Simulation and rendering never go through it.
 - Supported field kinds:
   - scalars and strings: `bool`, `int32_t`, `uint32_t`, `uint64_t`, `float`,
     `std::string`;
-  - glm: `vec2`, `vec3`, `vec4`, `quat`;
+  - glm: `vec2`, `vec3`, `vec4`, `quat`, `mat4` (16 floats, column-major; used by
+    runtime `WorldTransform`, so agents can query world matrices);
   - registered enums (written by name) and nested registered structs;
   - containers: `std::vector<T>`, `std::optional<T>`, `std::variant` of
     registered structs;
@@ -293,10 +294,16 @@ stay byte-identical.
   - The counter is part of every snapshot, so a restored world creates the same IDs
     again.
 - `World::findById(uint64_t) -> entt::entity` is backed by an open-addressing flat map
-  (`ankerl::unordered_dense`). It is kept current through EnTT `on_construct`/`on_destroy`
-  of `EntityId`.
-- Commands and files may also supply explicit IDs (valid, unique), so agent-authored
-  content can be fully deterministic.
+  (`ankerl::unordered_dense`). It is kept current through EnTT `on_construct`,
+  `on_destroy` and `on_update` of `EntityId`, so it holds on every destroy path
+  (`World::destroy`, `registry().destroy`, `registry().clear`).
+- Commands and files may also supply explicit IDs (valid, unique) through
+  `World::createWithId(id, name, transform)`, which returns `entt::null` for 0 or an id
+  in use. Generated ids skip ids in use, so explicit and generated ids never collide.
+  Agent-authored content can therefore be fully deterministic.
+- `World::idGenState()` / `setIdGenState()` expose the `(seed, counter)` pair that
+  snapshots capture. `EntityId` itself is not a registered component: it is the entity's
+  key, written as `"id"`.
 - An `EntityRef` is written as the target's ID, or `null` if the target is dead. On
   load it's resolved after all entities exist, so file order doesn't matter.
 
@@ -829,7 +836,9 @@ These are cheap, and they document what 3 itself creates:
 
 ## Test plan
 
-CPU tests (`tests/ecs` / `tests/api`):
+CPU tests (`tests/reflect` → `reflect_tests` for the library alone; `tests/scene` →
+`scene_tests` for the engine registrations, ids and later the codec, commands and
+snapshots; neither creates a GPU device):
 
 1. **Completeness:**
    - for every registered aggregate, registered + skipped fields ==
@@ -938,7 +947,9 @@ Each step ends with the engine running and every suite green.
    fetched by the step that first uses it, so no step carries an unused one.)*
 2. `EntityId` (splitmix64 generator, `seedIds`, `findById`; unordered_dense fetched
    here). Register all current authoring components with docs, units and limits.
-   Test 5.
+   Test 5. *(Done 2026-10-23. Runtime components are registered too, as `.runtime()`,
+   so the catalogue describes every component. The engine catalogue and scene schema
+   have goldens in `tests/scene/golden`.)*
 3. simdjson reader (fetched here), two-phase load, structured validation, error corpus.
    Tests 2–4, 6, 7.
 4. Versioning and migrations, `tests/scenes/v1` corpus. Test 8.

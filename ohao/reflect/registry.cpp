@@ -33,7 +33,7 @@ bool isNumeric(Kind k) noexcept {
 }
 
 bool takesUnit(const TypeDesc& d) noexcept {
-    if (isNumeric(d.kind) || d.kind == Kind::Quat) return true;
+    if (isNumeric(d.kind) || d.kind == Kind::Quat || d.kind == Kind::Mat4) return true;
     if ((d.kind == Kind::Vector || d.kind == Kind::Optional) && d.element) return takesUnit(*d.element);
     return false;
 }
@@ -83,6 +83,7 @@ std::string typeName(const TypeDesc& d) {
     case Kind::Vec3: return "vec3";
     case Kind::Vec4: return "vec4";
     case Kind::Quat: return "quat";
+    case Kind::Mat4: return "mat4";
     case Kind::AssetRef: return "assetRef";
     case Kind::EntityRef: return "entityRef";
     case Kind::Enum: return d.enumType->name;

@@ -53,6 +53,7 @@ constexpr Kind kindOf() {
     else if constexpr (std::is_same_v<V, glm::vec3>) return Kind::Vec3;
     else if constexpr (std::is_same_v<V, glm::vec4>) return Kind::Vec4;
     else if constexpr (std::is_same_v<V, glm::quat>) return Kind::Quat;
+    else if constexpr (std::is_same_v<V, glm::mat4>) return Kind::Mat4;
     else if constexpr (std::is_same_v<V, AssetRef>) return Kind::AssetRef;
     else if constexpr (std::is_enum_v<V>) return Kind::Enum;
     else if constexpr (detail::IsVector<V>::value) return Kind::Vector;
@@ -90,6 +91,11 @@ void writeValue(const V& v, JsonWriter& w, const TypeDesc& d) {
     } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
         w.beginArray();
         for (int i = 0; i < V::length(); ++i) w.float32(v[i]);
+        w.endArray();
+    } else if constexpr (k == Kind::Mat4) {
+        w.beginArray();   // column-major
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) w.float32(v[c][r]);
         w.endArray();
     } else if constexpr (k == Kind::Quat) {
         w.beginArray();   // glTF order
@@ -136,6 +142,11 @@ bool equalValue(const V& a, const V& b, const TypeDesc& d) {
     } else if constexpr (k == Kind::Vec2 || k == Kind::Vec3 || k == Kind::Vec4) {
         for (int i = 0; i < V::length(); ++i)
             if (std::bit_cast<uint32_t>(a[i]) != std::bit_cast<uint32_t>(b[i])) return false;
+        return true;
+    } else if constexpr (k == Kind::Mat4) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                if (std::bit_cast<uint32_t>(a[c][r]) != std::bit_cast<uint32_t>(b[c][r])) return false;
         return true;
     } else if constexpr (k == Kind::Quat) {
         return std::bit_cast<uint32_t>(a.x) == std::bit_cast<uint32_t>(b.x) &&
