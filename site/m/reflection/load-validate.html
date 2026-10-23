@@ -62,7 +62,7 @@
 <li>a second singleton, an unknown or repeated field, a value outside its limits, an escaped member name, or more than 64 component types or fields;</li>
 <li>a vector whose elements hold entity references, since its pending reference pointers would dangle as it grows:</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">// References into a growing vector would dangle: leave those to the tree decoder.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L459" target="_blank" rel="noopener">ohao/reflect/codec.hpp:459</a></div>
+<div class="citation-chip"><code class="citation-code">// References into a growing vector would dangle: leave those to the tree decoder.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/codec.hpp#L479" target="_blank" rel="noopener">ohao/reflect/codec.hpp:479</a></div>
 <ul>
 <li>a missing asset under `checkAssets`, an unresolved reference, or a parent cycle.</li>
 </ul>
@@ -76,17 +76,17 @@
 <div class="prose reveal">
 <p>A `Diagnostic` has a stable `code` from the `errorCodes()` table, which is part of the catalogue. It has a JSON Pointer `path` with RFC 6901 escaping, such as `/entities/0/Light/intensty`, and the holding entity&#x27;s id when there is one. Its byte offset becomes a 1-based line and byte column. It also carries `message`, `expected`, `got` and `suggestion`; `got` is the offending value rendered compactly and cut at 80 characters. Errors and warnings are stable-sorted by offset, so they read top to bottom.</p>
 <p>Suggestions use an optimal-string-alignment distance, case-insensitive. Insertions, deletions, substitutions and adjacent swaps cost 1 each, and a candidate is accepted only within a length-scaled threshold:</p>
-<div class="citation-chip"><code class="citation-code">const std::size_t limit = std::max&lt;std::size_t&gt;(1, word.size() / 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L161" target="_blank" rel="noopener">ohao/reflect/decode.cpp:161</a></div>
+<div class="citation-chip"><code class="citation-code">const std::size_t limit = std::max&lt;std::size_t&gt;(1, word.size() / 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L164" target="_blank" rel="noopener">ohao/reflect/decode.cpp:164</a></div>
 <p>The candidates are field names, enum values, variant alternatives, root members and component names. The corpus file `06_agent_mistakes` shows the result. `&quot;type&quot;: &quot;Spto&quot;` gives `E_ENUM` with suggestion `Spot`. `&quot;intensty&quot;` gives `E_UNKNOWN_FIELD` with suggestion `intensity` and the field list in `expected`. A negative `radius` gives `E_RANGE`, and a dangling `Parent` gives `E_PARENT_MISSING`.</p>
 <p>The 101st error becomes one `E_TOO_MANY_ERRORS`. It stays last after sorting and sets `full()`, which the decode loops poll so that they stop early:</p>
-<div class="citation-chip"><code class="citation-code">void DecodeContext::error(std::string_view code, const JsonNode&amp; at, std::string message, std::string expected,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L246" target="_blank" rel="noopener">ohao/reflect/decode.cpp:246</a></div>
+<div class="citation-chip"><code class="citation-code">void DecodeContext::error(std::string_view code, const JsonNode&amp; at, std::string message, std::string expected,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L249" target="_blank" rel="noopener">ohao/reflect/decode.cpp:249</a></div>
 <p>Warnings are not capped. `scene.validate` trims both lists to its `limit` (default 20, maximum 100) and reports the count it cut as `more`.</p>
 </div>
 <div class="section-rule"><h2 id="numbers">Numbers</h2></div>
 <div class="prose reveal">
 <p>A float goes straight from its token to a correctly rounded `float` through `fast_float`, never via `double`. Overflow (`1e39`) and a nonzero literal that underflows to zero (`1e-50`) are both `E_RANGE`. JSON cannot spell NaN or infinity, so `NaN` is `E_PARSE` and no non-finite value enters through a file. `E_NONFINITE` is the save-side error for a NaN already in the world. Integer fields demand an integer token, so `&quot;version&quot;: 1.0` is `E_TYPE`. Registered limits are checked after a clean decode, so `&quot;innerConeDeg&quot;: 181` is `E_RANGE`, with the limits written out in `expected`.</p>
 <p>Validation keeps no values, so it skips the conversion when the verdict does not need it:</p>
-<div class="citation-chip"><code class="citation-code">if (!ctx.needValue &amp;&amp; floatFitsQuick(n.text)) return true;   // validation only; `out` is not used</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L357" target="_blank" rel="noopener">ohao/reflect/decode.cpp:357</a></div>
+<div class="citation-chip"><code class="citation-code">if (!ctx.needValue &amp;&amp; floatFitsQuick(n.text)) return true;   // validation only; `out` is not used</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/decode.cpp#L360" target="_blank" rel="noopener">ohao/reflect/decode.cpp:360</a></div>
 <p>`floatFitsQuick` judges from the decimal exponent of the leading digit. Anything from 10^-44 to 10^37 certainly fits. Tokens near either end, or with exponents longer than three digits, are converted. Fields with limits always convert, because the limit test needs the value. `t06_validate_reports_what_load_reports_for_float_edges` checks that validate and load agree on tokens such as `3.4028236e38` and `7e-46`.</p>
 </div>
 <div class="section-rule"><h2 id="versions-and-upgrades">Versions and upgrades</h2></div>

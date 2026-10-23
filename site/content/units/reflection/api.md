@@ -15,9 +15,13 @@ The signature is untyped on purpose. The `ohao` CLI, its script lines, the plann
 
 ## The method table and the error envelope
 
-Twelve methods live in two parallel arrays: `kMethods` (name, params, result, doc), which is exported as the catalogue's `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). Only their lengths are tied at compile time; `api_tests` checks that every documented name dispatches.
+Fourteen methods live in two tables: `buildMethods` (name, params struct, result, doc), exported as the catalogue's `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). `api_tests` checks that every documented name dispatches and has a params struct.
 
-{{cite ohao/api/session.cpp "static_assert(std::size(kDispatch) == std::size(kMethods));"}}
+Each method's params are a struct registered in its own registry (`ohao/api/params.hpp`), so one definition is the validation, the catalogue's JSON Schema and the MCP tool's input schema. A method starts with `decodeParams`, the typed struct decoder of scene files (MCP's `_meta` skipped):
+
+{{cite ohao/api/internal.hpp "reflect::readStruct(&out, *t, params, ctx,"}}
+
+Unknown members, types, enums and limits are reported exactly as in scene files (`E_UNKNOWN_FIELD` with a suggestion, `E_RANGE` with the limits). Errors found there, or by a rule on the params alone, mark the call `BadParams`, which the protocol server answers with JSON-RPC's -32602; anything later is a domain error.
 
 A reply is exactly one of `{"result": …}` or `{"error": {"code", "message", "data"}}`. `call` opens the envelope, writes the result straight into it, and throws the writer away if the method fails. The writer is given the world's id mapper, so entity references go out as 16-hex-digit stable ids, never as `entt::entity` values. On failure, `code` and `message` come from the first diagnostic, with ` (+N more)` appended, and `data` carries at most 20 diagnostics, each with a JSON-pointer path into the params (`/commands/4/value`):
 
@@ -98,5 +102,5 @@ The work is done by whatever `setRenderHandler` installed, a `std::function<Rend
 
 - A command must finish all its checks before its first change. Rollback replays the inverses of the commands *before* the failing one; a command that changes the world and then fails is never undone.
 - A method that returns false must report a diagnostic. Otherwise the envelope makes up an `E_COMMAND`, "the request failed without a diagnostic".
-- `kMethods` and `kDispatch` must list the same methods. The compiler checks only the count; the catalogue lists `kMethods` order.
+- `buildMethods` and `kDispatch` must list the same methods; `api_tests` checks it. The catalogue and `tools/list` follow `buildMethods` order.
 - The `Session` does not own the world, the registry or the resolver. All three must outlive it.

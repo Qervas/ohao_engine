@@ -39,18 +39,20 @@
 <div class="section-rule"><h2 id="one-function-text-in-and-text-out">One function, text in and text out</h2></div>
 <div class="prose reveal">
 <p>Every authoring operation in OHAO is a method name plus a JSON params object, answered by one function. `api::Session` holds a `World&amp;` and the `TypeRegistry`; it owns nothing else that matters, apart from named snapshots and two optional hooks (an asset resolver and a render handler):</p>
-<div class="citation-chip"><code class="citation-code">[[nodiscard]] std::string call(std::string_view method, std::string_view params = {});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.hpp#L60" target="_blank" rel="noopener">ohao/api/session.hpp:60</a></div>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] std::string call(std::string_view method, std::string_view params = {});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.hpp#L103" target="_blank" rel="noopener">ohao/api/session.hpp:103</a></div>
 <p>The signature is untyped on purpose. The `ohao` CLI, its script lines, the planned `ohao serve` JSON-RPC/MCP server and the planned C ABI all pass a method string and a params text and print what comes back, so each operation has one decoder, one set of limit checks and one error shape. The alternative is a typed C++ function per operation plus a JSON wrapper per transport. That puts validation and error formatting in every wrapper, and the wrappers drift apart. The cost is one parse per call. The params parser is a session member that keeps its buffers between parses. The step-9 record measures a 100-command `world.apply` batch on the 10k-entity bench world at a 0.182 ms median, against a 0.2 ms budget.</p>
 </div>
 <div class="section-rule"><h2 id="the-method-table-and-the-error-envelope">The method table and the error envelope</h2></div>
 <div class="prose reveal">
-<p>Twelve methods live in two parallel arrays: `kMethods` (name, params, result, doc), which is exported as the catalogue&#x27;s `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). Only their lengths are tied at compile time; `api_tests` checks that every documented name dispatches.</p>
-<div class="citation-chip"><code class="citation-code">static_assert(std::size(kDispatch) == std::size(kMethods));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L433" target="_blank" rel="noopener">ohao/api/session.cpp:433</a></div>
+<p>Fourteen methods live in two tables: `buildMethods` (name, params struct, result, doc), exported as the catalogue&#x27;s `methods` table and hashed into `schemaHash`, and `kDispatch` (name, function pointer). `api_tests` checks that every documented name dispatches and has a params struct.</p>
+<p>Each method&#x27;s params are a struct registered in its own registry (`ohao/api/params.hpp`), so one definition is the validation, the catalogue&#x27;s JSON Schema and the MCP tool&#x27;s input schema. A method starts with `decodeParams`, the typed struct decoder of scene files (MCP&#x27;s `_meta` skipped):</p>
+<div class="citation-chip"><code class="citation-code">reflect::readStruct(&amp;out, *t, params, ctx, &quot;_meta&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/internal.hpp#L100" target="_blank" rel="noopener">ohao/api/internal.hpp:100</a></div>
+<p>Unknown members, types, enums and limits are reported exactly as in scene files (`E_UNKNOWN_FIELD` with a suggestion, `E_RANGE` with the limits). Errors found there, or by a rule on the params alone, mark the call `BadParams`, which the protocol server answers with JSON-RPC&#x27;s -32602; anything later is a domain error.</p>
 <p>A reply is exactly one of `{&quot;result&quot;: …}` or `{&quot;error&quot;: {&quot;code&quot;, &quot;message&quot;, &quot;data&quot;}}`. `call` opens the envelope, writes the result straight into it, and throws the writer away if the method fails. The writer is given the world&#x27;s id mapper, so entity references go out as 16-hex-digit stable ids, never as `entt::entity` values. On failure, `code` and `message` come from the first diagnostic, with ` (+N more)` appended, and `data` carries at most 20 diagnostics, each with a JSON-pointer path into the params (`/commands/4/value`):</p>
-<div class="citation-chip"><code class="citation-code">constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L54" target="_blank" rel="noopener">ohao/api/session.cpp:54</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L16" target="_blank" rel="noopener">ohao/api/session.cpp:16</a></div>
 <p>An unknown method is `E_METHOD` with an edit-distance suggestion. Every method first checks its member names, so `limt` is `E_UNKNOWN_FIELD` at `/limt`, with the suggestion `limit`.</p>
 <p>The table is the only description of a method&#x27;s params and result that agents see, so it has to match the code; nothing checks that mechanically. One row drifted until step 10: `world.summary` documented a `truncated?` member that `methodSummary` never writes. It now names what the code writes — `moreRoots` at the top level and `more` on outline nodes — and the fix changed `schemaHash`, as any table edit does:</p>
-<div class="citation-chip"><code class="citation-code">&quot;{entities, roots, components, bounds?, outline, moreRoots?}&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L29" target="_blank" rel="noopener">ohao/api/session.cpp:29</a></div>
+<div class="citation-chip"><code class="citation-code">{&quot;world.summary&quot;, p.find&lt;WorldSummaryParams&gt;(), &quot;{entities, roots, components, bounds?, outline, moreRoots?}&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L38" target="_blank" rel="noopener">ohao/api/session.cpp:38</a></div>
 </div>
 <div class="section-rule"><h2 id="a-batch-is-atomic-without-a-snapshot">A batch is atomic without a snapshot</h2></div>
 <div class="prose reveal">
@@ -58,7 +60,7 @@
 <p>Inside a command, everything is checked before anything changes. `entity.create` decodes every component and preserved value and resolves every entity reference, and only then reaches the line after which nothing can fail:</p>
 <div class="citation-chip"><code class="citation-code">const uint64_t seq = world.nextCreationSeq();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/commands.cpp#L308" target="_blank" rel="noopener">ohao/api/commands.cpp:308</a></div>
 <p>The main run always records each command&#x27;s inverse, because the inverse is part of the result. So rollback costs only a replay. When command *i* fails, the inverses of commands 0 to *i*−1 are joined last-first, parsed with a second parser, and run with inverse recording off. Then two counters that the replay cannot undo are put back:</p>
-<div class="citation-chip"><code class="citation-code">s.world.setNextCreationSeq(nextSeq);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/commands.cpp#L829" target="_blank" rel="noopener">ohao/api/commands.cpp:829</a></div>
+<div class="citation-chip"><code class="citation-code">s.world.setNextCreationSeq(nextSeq);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/commands.cpp#L828" target="_blank" rel="noopener">ohao/api/commands.cpp:828</a></div>
 <p>Generated ids are `splitmix64(seed + counter++)`, so creates that were rolled back still advanced the counter. Without restoring the generator, the next id after a failed batch would differ from a world where the batch never ran. `t09_failing_command_rolls_back_the_batch` checks both: after a five-command batch fails on its last command, the save is byte-identical, and the next generated id equals a fresh world&#x27;s. If the replay itself fails, a second `E_COMMAND` diagnostic says the world may be partially edited.</p>
 </div>
 <div class="section-rule"><h2 id="inverses-and-what-byte-identical-covers">Inverses, and what &quot;byte-identical&quot; covers</h2></div>
@@ -81,14 +83,14 @@
 <div class="prose reveal">
 <p>`world.query` filters, and every given filter must match: `ids` (any of; ids that do not exist are listed in `missing`, not reported as errors), `names` (exact, any of), `nameContains` (substring) and `has` (every listed component, runtime ones included). Matches come in creation order. `limit` (default 50) and `offset` page them, `count` is the total number of matches, and `next` appears only when more remain.</p>
 <p>The projection decides how much comes back. Without `fields`, each entity is its compact file form. `&quot;/Type&quot;` gives a whole component with default-valued fields left out unless `defaults: true`. `&quot;/Type/field&quot;` gives that field even when it equals its default, because it was asked for by name. `fields: []` gives ids only. A path deeper than a field is refused:</p>
-<div class="citation-chip"><code class="citation-code">ctx.error(&quot;E_PATH&quot;, f, &quot;projections stop at a field&quot;, &quot;\&quot;/Type/field\&quot;&quot;, ctx.gotText(f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/query.cpp#L55" target="_blank" rel="noopener">ohao/api/query.cpp:55</a></div>
+<div class="citation-chip"><code class="citation-code">ctx.error(&quot;E_PATH&quot;, f, &quot;projections stop at a field&quot;, &quot;\&quot;/Type/field\&quot;&quot;, ctx.gotText(f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/query.cpp#L45" target="_blank" rel="noopener">ohao/api/query.cpp:45</a></div>
 <p>`world.summary` returns entity and root counts, the count of each component type, the bounds of entity origins and a hierarchy outline capped by `depth`, `maxChildren` and `maxNodes`. The bounds are composed from local transforms, so they are correct before the first step. This is the agent&#x27;s token budget. The step-5 record measured a 10k-entity summary at 3.3 KB (about 830 tokens), a one-field query at 61 + 98 bytes, and the whole compact scene at 1.26 MB. An agent orients with the summary and then reads only the fields it needs.</p>
 </div>
 <div class="section-rule"><h2 id="time-and-pixels">Time and pixels</h2></div>
 <div class="prose reveal">
 <p>`world.step {frames = 1, dt = 1/60}` calls `World::update(dt)` once per frame with a fixed `dt` in (0, 1] and counts the session&#x27;s frames. `world.restore` resets that count to the snapshot&#x27;s.</p>
 <p>`render.capture` is checked entirely in the session: the path, the mode and denoiser names, `spp`, `frames`, sizes from 16 to 8192, each `post` effect name, and exposure in (0, 64]. Only then does the session look for a handler:</p>
-<div class="citation-chip"><code class="citation-code">ctx.error(&quot;E_COMMAND&quot;, params, &quot;this session has no renderer; render.capture needs a host with a GPU (ohao run)&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L401" target="_blank" rel="noopener">ohao/api/session.cpp:401</a></div>
+<div class="citation-chip"><code class="citation-code">ctx.error(&quot;E_COMMAND&quot;, params, &quot;this session has no renderer; render.capture needs a host with a GPU (ohao run)&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L366" target="_blank" rel="noopener">ohao/api/session.cpp:366</a></div>
 <p>The work is done by whatever `setRenderHandler` installed, a `std::function&lt;RenderOutcome(const RenderRequest&amp;)&gt;`, and the outcome&#x27;s diagnostics become the reply&#x27;s. `ohao_api` therefore never links the renderer. In the API tests, malformed captures fail before the fake host is ever called.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
@@ -96,17 +98,17 @@
 <ul>
 <li>A command must finish all its checks before its first change. Rollback replays the inverses of the commands *before* the failing one; a command that changes the world and then fails is never undone.</li>
 <li>A method that returns false must report a diagnostic. Otherwise the envelope makes up an `E_COMMAND`, &quot;the request failed without a diagnostic&quot;.</li>
-<li>`kMethods` and `kDispatch` must list the same methods. The compiler checks only the count; the catalogue lists `kMethods` order.</li>
+<li>`buildMethods` and `kDispatch` must list the same methods; `api_tests` checks it. The catalogue and `tools/list` follow `buildMethods` order.</li>
 <li>The `Session` does not own the world, the registry or the resolver. All three must outlive it.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/api/session.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/internal.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/api/session.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/api/commands.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/api/query.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/api/internal.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

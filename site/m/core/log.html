@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="one-path-for-every-engine-message">One path for every engine message</h2></div>
 <div class="prose reveal">
 <p>Every message the engine writes goes through one macro, with a level, a channel and a `std::format` string checked at compile time. The renderer, the GPU layer, physics, asset loading, audio, the ECS and the runtime all use it; nothing under `ohao/` writes to `std::cout`, `std::cerr` or `printf` any more, and a test keeps it that way:</p>
-<div class="citation-chip"><code class="citation-code">static void sp4_t02_engine_prints_only_through_the_logger() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L873" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:873</a></div>
+<div class="citation-chip"><code class="citation-code">static void sp4_t02_engine_prints_only_through_the_logger() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L890" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:890</a></div>
 <p>The reason is the agent server that follows it: `ohao serve` owns stdout for its protocol, and a message an agent cannot query is a message it never sees. So the logger keeps the last records in memory, where `log.read` can page them, and sends them on to whatever sinks are attached.</p>
 </div>
 <div class="section-rule"><h2 id="below-the-threshold-one-load-and-a-compare">Below the threshold, one load and a compare</h2></div>

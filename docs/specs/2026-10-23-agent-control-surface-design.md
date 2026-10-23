@@ -222,6 +222,24 @@ Params that are free JSON by nature (`world.apply`'s `commands`, `scene.load`'s 
 stay free JSON inside the struct (a `JsonValue` field kind, written as `{}` in the schema
 with a doc string), and are checked by the existing command and scene decoders.
 
+*As built (step 5, 2026-10-23).* The params structs live in their own registry,
+`api::paramsRegistry()` (`ohao/api/params.{hpp,cpp}`), not the engine's: they are not scene
+types, so the scene JSON Schema and the catalogue's type list are unchanged, and each
+method's params appear in the catalogue's method table as a self-contained JSON Schema
+(`reflect::writeParamsSchema`: no `$ref`, `additionalProperties: false`, defaults, limits,
+`required`). The free-JSON kind is `Kind::Json` holding a `reflect::JsonRef`, a pointer
+into the request's document, not an owning `JsonValue`: no copy of a 100-command batch
+(`world.apply` 100 `field.set` stays at 0.06 ms in-process). Also added to reflection:
+`Kind::Int64` (a JSON integer; `log.read`'s `since`), `.required()` (schema `required`,
+checked by `decodeParams` as `E_COMMAND`), limits on optionals and vectors of numbers,
+and `readStruct`'s ignored key (MCP's `_meta`). `Session::call` gains an overload over an
+already parsed request returning `{status: Ok | UnknownMethod | BadParams | Failed |
+Cancelled, result, errors}`; errors in the params struct (or a rule on the params alone)
+are `BadParams`, which the server maps to -32602. `api::exitClass` (shared with the CLI)
+gives a domain error's code. The full `Host` interface is not built yet:
+`Session::setHostKind` reports the host in `engine.info` and `world.info`, and
+`render.capture` still goes through `setRenderHandler`; time control comes in step 7.
+
 ## Protocol
 
 ### Transport and framing
@@ -309,6 +327,23 @@ example `world.step` while realtime is running), `E_ACCESS` (a path outside the 
   reached through `schema_get`.
 - **Size budget.** `tools/list` is gated at ≤ 24 KB (≈ 6k tokens; a test measures it), so
   connecting costs an agent a bounded, known amount.
+
+*As built (step 5).* `ohao/rpc` (`ohao_rpc`, CPU-only): `LineReader` (newline framing,
+`\r` dropped, an oversize line skipped without being kept), `StdioTransport` (stdin read
+raw; `separateStdout()` points descriptor 1 at stderr and keeps a private binary copy,
+which on Windows also redirects the console handle), and `Server`. The reader thread
+answers `ping` and handles `notifications/cancelled` itself; every other message,
+including the replies to unparseable or invalid lines, is queued and answered by the
+engine thread in arrival order, so a scripted session's stdout is deterministic. End of
+input cancels the running request **and drops the queued ones** (nobody is left to
+answer), then `run()` returns and `ohao serve` exits 0: a client waits for its last reply
+before closing stdin. A request id is echoed as its raw text (strings with their escapes,
+numbers beyond 64 bits). `notifications/progress` is sent at most every 250 ms, so a
+short step sends none. An unknown tool is -32601 with a suggestion, as specified (MCP
+itself uses -32602; OHAO keeps one code for "no such method"). `tools/list` is 7,811
+bytes for the 14 tools. `logging/setLevel` installs the RPC log sink and lowers the
+capture threshold if needed; MCP's `notice` maps to warn, `critical`/`alert`/`emergency`
+to error.
 
 ### Method table
 
@@ -610,6 +645,14 @@ SSAO into lighting is a look change and goes to 2b's renderer findings.
   resolver rules (no absolute paths, no `..`). Reads are confined to `--root` (default:
   the working directory); writes to `--out` (default `<root>/agent_out/`, git-ignored).
   Anything else is `E_ACCESS`. `--allow-path DIR` (repeatable) adds a root explicitly.
+  *As built (step 5):* `api::PathPolicy` / `resolvePath` (`ohao/api/paths.{hpp,cpp}`),
+  set by `ohao serve` with `Session::setPathPolicy`; the CLI keeps paths as given. A
+  relative path resolves against the root and may not contain `..` or `\`; reads stay in
+  the root, writes in `--out` (created, and a write's parent directories with it); an
+  absolute path is admitted only inside an `--allow-path` root, which admits reads and
+  writes. Containment is element by element on canonical paths (a sibling directory that
+  shares a root's prefix is outside it). Results echo the path as given. `agent_out/` is
+  git-ignored.
 - **No code execution.** No method runs a shell, loads a library or evaluates script in 4.
 - **Bounded work.** Message size, batch size (10,000 commands), `world.step` frames
   (1,000,000 per call) and log page sizes are capped; long work is cancellable.
@@ -924,6 +967,21 @@ CPU (no device):
    with checked-in expected stdout, byte-identical twice (the `check_cli.py` pattern).
 10. **Stdout stays clean:** a test-only build of the server with a method that prints to
     stdout and stderr through every C and C++ path; the stream still parses.
+   - *As built (step 5):* tests 7 and 8 in-process are `rpc_tests` (quick, 10 tests
+     `sp4_t07_*`/`sp4_t08_*`, a scripted in-memory transport: byte-by-byte reads, CRLF,
+     oversize lines through `LineReader` with a 7-byte chunk, the error table including
+     class 3 from a fake renderer, ids, notifications, ping answered during a long step,
+     progress, cancelling a running and a queued request, end of input, initialize for
+     both versions and an unknown one, `tools/list` coverage and size, `tools/call`
+     results and errors, `logging/setLevel`), plus `api_tests`
+     `sp4_t07_cancel_leaves_whole_steps` (a cancelled step leaves the world bit-identical to
+     the same number of whole steps) and `sp4_t08_params_structs_lint_clean_…`. Tests 8
+     (schemas through `jsonschema`), 9, 10 and 15 (paths) run the process:
+     `tests/serve/check_serve.py` (quick, 105 checks). Test 8's examples are one per tool
+     in the script until the agent guide (step 11) has its own. Test 9's sessions are
+     `tests/serve/sessions/{native,errors,mcp}.jsonl` with `expected/` beside them. Test
+     10's server is `rpc_print_server` (printf, puts, fprintf, fwrite, fputs, putchar,
+     cout, `_write(1)` and `WriteFile` on the console handle; all reached stderr).
 11. **Time model:** simulate systems run once per step, sync once per batch; lockstep
     counts are exact; `world.step watch`; `E_STATE` rules per host and mode; `dt` default;
     a realtime-paused-stepped sequence reaches the same hash as pure lockstep.
@@ -941,6 +999,9 @@ CPU (no device):
 15. **Security:** absolute paths, `..`, and writes outside `--out` are `E_ACCESS`;
     `--allow-path` admits exactly its root; a second pipe client is refused; the size
     and step caps hold.
+   - *As built (step 5, paths part):* `api_tests` `sp4_t15_paths_are_confined_to_the_sandbox`
+     and `check_serve.py`'s sandbox checks, with the message-size cap (`--max-message`)
+     and the step cap. The pipe and the remaining caps are step 10's.
 
 GPU:
 
@@ -1035,6 +1096,12 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
    catalogue's method table gains schemas; `schemaHash` changes once), `engine.info`,
    `scene.load replace`, the file sandbox, `ohao serve` headless over stdio, protocol
    goldens. Tests 7–10, 15 (paths part).
+   - *Done 2026-10-23.* See the as-built notes under "Method params are reflected
+     structs", "MCP mapping" and "Security". Also built here: `log.read` (no step named it;
+     the logger exists since step 4 and `logging/setLevel` needed the sink), `world.info`'s
+     `host`, and the error codes `E_ACCESS`, `E_STATE`, `E_REPLAY` in the catalogue.
+     `schemaHash` changed once (CLI, catalogue and serve goldens updated after review).
+     `engine.info`'s `time` is lockstep-only until step 7.
 6. **`serve_bench`, CPU budgets.** The child-process client, calibration, the CPU budget
    table, `tools/list` size gate. Test 18 (CPU part).
 7. **Time model, hash, diff.** System phases, `World::simulate`/`sync`, lockstep and

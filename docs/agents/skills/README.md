@@ -7,8 +7,8 @@ when it is installed there, and from here otherwise.
 Waiting:
 - `verify/SKILL.md`: leads with `python tools/check.py`, the one build-and-verify command
   (sub-project 4, step 2); points failing goldens at their heatmap and crop and wedged
-  GPUs at `ohao doctor`, adds `log_tests` and `log_bench`, the validation line format and
-  the `noisy` bench verdict (step 4), `test_golden_diff.py`, `check_doctor.py` (step 3) and
+  GPUs at `ohao doctor`, adds `rpc_tests` and `check_serve.py` (step 5), `log_tests` and
+  `log_bench`, the validation line format and the `noisy` bench verdict (step 4), `test_golden_diff.py`, `check_doctor.py` (step 3) and
   `check_tests.py` (step 2) to the CPU gates and
   `deferred_determinism_gpu_test` to the GPU gates (step 1); says the deferred goldens are
   exact (step 1).

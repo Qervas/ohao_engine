@@ -30,6 +30,7 @@ $ build/Release/log_tests.exe > /dev/null
 $ build/Release/reflect_tests.exe > /dev/null
 $ build/Release/scene_tests.exe > /dev/null
 $ build/Release/api_tests.exe > /dev/null
+$ build/Release/rpc_tests.exe > /dev/null
 $ build/Release/systems_tests.exe > /dev/null
 $ build/Release/physics_backend_tests.exe > /dev/null
 $ build/Release/audio_system_tests.exe > /dev/null
@@ -42,6 +43,7 @@ $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
 $ python tests/golden/test_golden_diff.py > /dev/null
 $ python tests/doctor/check_doctor.py > /dev/null
+$ python tests/serve/check_serve.py > /dev/null
 ```
 
 ## 2. GPU gates (a minute or two; when rendering, ECS, scene or API code changed)
@@ -85,9 +87,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   pass or a regression.
 - **Validation** messages are stderr lines `W validation: <VUID> | <text>`; run with
   `OHAO_LOG_LEVEL=debug` for the engine's detail lines around them.
-- **The CLI or doc checks** show a stdout diff: if the change was deliberate (a new
-  component changes `schemaHash`), rerun with `--update` (CLI) or fix the doc, and check
-  that the diff is only what you meant.
+- **The CLI, serve or doc checks** show a stdout diff: if the change was deliberate (a
+  new component or method changes `schemaHash`), rerun with `--update` (`check_cli.py`,
+  `check_serve.py`) or fix the doc, and check that the diff is only what you meant.
 - **Device lost (-4) everywhere** after a crash is a wedged GPU, not your change: reboot.
   `build/Release/ohao doctor` says so (`gpu.wedged`), and names any other environment
   problem (stale SPIR-V, missing assets, conda's cmake, missing Python modules) with its fix.
