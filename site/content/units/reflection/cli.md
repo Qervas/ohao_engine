@@ -60,34 +60,39 @@ Once a capture has run, the world holds the render extract and instantiate syste
 
 The first `capture` creates the `VulkanRenderer` at the requested size. If initialization fails, the host remembers it and every later capture fails at once with `E_RENDER`. On success it reads the default exposure from the deferred post-processing chain, then installs the render extract and instantiate into the world the session already loaded:
 
-{{cite tools/ohao/render_host.cpp "ecs::installInstantiate(world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);"}}
+{{cite tools/ohao/render_host.cpp "ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);"}}
 
 Both systems tag the entities that already exist when they are installed (see the instantiate page), so a scene loaded on the CPU renders completely on its first frame. Later captures call `resize`, which does nothing at the same size.
 
 ## One capture
 
-Each capture applies the world's `Camera` and `Environment`, then sets the mode and the denoiser. In deferred mode it also sets bloom, TAA and SSAO, each on or off according to `post`, and sets the exposure to the requested value or to the default it read at startup. These post settings persist inside the renderer, so they are all set on every capture. Otherwise a capture with `post: ["taa"]` or `exposure: 1` would leak into the next capture that asked for neither. The default exposure is the renderer's own 0.6, set in `initializeDeferredRenderer`. `PostProcessingPipeline`'s member initializer of 1.0 never survives startup, and the step-9 record lists assuming 1.0 as one of the bugs it fixed.
+`RenderHost` is the session's `api::Host` (kind `cli` or `headless`); its `capture` brings the renderer up and then hands the request to `runtime::captureFrame` in `ohao/runtime/frame_capture.cpp`, the one capture procedure the window's `LiveHost` also runs. Each capture applies the world's `Camera` and `Environment`, then sets the mode and the denoiser. In deferred mode it also sets bloom, TAA and SSAO, each on or off according to `post`, and sets the exposure to the requested value or to the default it read at startup. These post settings persist inside the renderer, so they are all set on every capture. Otherwise a capture with `post: ["taa"]` or `exposure: 1` would leak into the next capture that asked for neither. The default exposure is the renderer's own 0.6, set in `initializeDeferredRenderer`. `PostProcessingPipeline`'s member initializer of 1.0 never survives startup, and the step-9 record lists assuming 1.0 as one of the bugs it fixed.
 
-The frame count defaults to what the examples render:
+Without `frames`, the frame count is one per path-tracer sample, and for deferred one frame, or ten when TAA is on and blends a history:
 
-{{cite tools/ohao/render_host.cpp "const int frames = r.frames > 0 ? r.frames : (mode == RenderMode::Deferred ? 10 : r.spp + 3);"}}
-{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
+{{cite ohao/runtime/frame_capture.cpp "if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame"}}
+{{cite ohao/runtime/frame_capture.cpp "return std::find(r.post.begin(), r.post.end(), "taa") != r.post.end() ? 10 : 1;"}}
 
-Each frame runs `world.update(0.0f)` and then `render()`, as the examples do. A zero `dt` means `spin` does not turn anything during a capture, and the session's frame counter does not move. After the first frame's update, any entity carrying `InstantiateError` turns the capture into an error that names the entity, before any pixel is rendered. A missing model therefore exits 2, not 3. The image is read back and written with `stbi_write_png`. A path that cannot be written is `E_RENDER`, which the `render_unwritable` case uses to cover exit 3.
+There is no `+ 3`. The examples need it because `getPixels()` delivers the frame from `MAX_FRAMES_IN_FLIGHT` calls earlier; a capture asks for its last frame with `requestReadback()` and takes exactly that frame from `readback()`. The CPU denoisers (OIDN, NRD) read the live images back themselves through `getPixelSpan()`.
+
+{{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
+
+Each frame runs `world.sync()` and then `render()`: the sync phase only, so `spin` does not turn anything during a capture and the session's frame counter does not move. After the first frame's sync, any entity carrying `InstantiateError` turns the capture into an error that names the entity, before any pixel is rendered. A missing model therefore exits 2, not 3. The image is then cropped to `region` if one was given, written as a PNG if a path was given, and encoded as an inline preview if one was asked for. A path that cannot be written is `E_RENDER`, which the `render_unwritable` case uses to cover exit 3.
 
 A second capture in the same process must not inherit the first one's history:
 
-{{cite tools/ohao/render_host.cpp "if (m_captures > 0) renderer.resetAccumulation();"}}
+{{cite tools/ohao/render_host.cpp "settings.reset = m_captures > 0;   // the first capture renders exactly as a fresh renderer does (the goldens)"}}
+{{cite ohao/runtime/frame_capture.cpp "if (settings.reset) renderer.resetAccumulation();"}}
 
-For the path tracers this restarts accumulation. For deferred, `resetAccumulation` idles the device and sets the frame slot (which also indexes TAA's jitter) back to 0. It then calls `DeferredRenderer::resetTemporalState()`, which zeroes the clock, sets the previous view-projection to the current one, and clears the RT GI and post-processing histories. Before that change, the step-9 record says, a deferred capture after a restore differed by up to 14 levels from a fresh render. The first capture skips the reset, so it renders exactly as a fresh renderer does. That is what the goldens need.
+For the path tracers this restarts accumulation. For deferred, `resetAccumulation` idles the device and sets the frame slot (which also indexes TAA's jitter) back to 0. It then calls `DeferredRenderer::resetTemporalState()`, which zeroes the clock, sets the previous view-projection to the current one, and clears the RT GI and post-processing histories. Before that change, the step-9 record says, a deferred capture after a restore differed by up to 14 levels from a fresh render. The first capture skips the reset, so it renders exactly as a fresh renderer does. That is what the goldens need. The window's `LiveHost`, whose renderer has always been presenting, resets on every lockstep capture.
 
 ## Reproducing the examples' goldens
 
 Five `cli_*` entries in the golden manifest render the checked-in scene files through `ohao run` and compare them with the *examples'* goldens, using the same tolerances. Sharing the golden means the scene file and the code-built scene cannot drift apart unnoticed. A scene file holds no render settings, so a capture that has to match `model_viewer` states them on the command line:
 
-{{cite tests/golden/manifest.json "run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30"}}
+{{cite tests/golden/manifest.json "run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 27"}}
 
-That entry adds `--post taa,ssao,bloom --exposure 1`, which are the settings `model_viewer` turns on in code. The step-9 record reports the largest per-channel difference against the examples' goldens as 0 or 1 for four of the entries, and 4 for `cli_cornell_box_rt_realtime`.
+That entry adds `--post taa,ssao,bloom --exposure 1`, which are the settings `model_viewer` turns on in code. The frame counts are the examples' minus the ring depth: `model_viewer` renders 30 deferred frames and its lagging readback writes frame 27, `cornell_box` renders 10 and writes frame 7, so the deferred entries pass `--frames 27` and `--frames 7`. The RT entry passes `--spp 16`, which renders the 16 frames that `cornell_box`'s `16 + 3` loop delivers. The step-9 record reports the largest per-channel difference against the examples' goldens as 0 or 1 for four of the entries, and 4 for `cli_cornell_box_rt_realtime`.
 
 ## Git Bash and `--seed`
 

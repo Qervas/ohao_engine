@@ -266,8 +266,9 @@ cancel a value held inside Jolt.
 `step()` returns immediately unless the state is exactly `RUNNING`. `resume()`
 only lifts `PAUSED` and `pause()` only leaves `RUNNING`, so the sole route out of
 `STOPPED` is `setSimulationState` — which no call site in `ohao/` uses. And no
-host steps the world in the first place: `Application` runs the game's fixed and
-per-frame hooks, then `ecs::World::update`, then the renderer, and none of the
+host steps the world in the first place: `LiveHost` runs the session's simulation
+steps and the game's fixed and per-frame hooks, then `ecs::World::sync`, then the
+renderer, and none of the
 engine's systems owns a `PhysicsWorld`. There is no ECS physics sync yet — no
 system copies a body's pose onto an entity's `Transform`, or an entity's onto the
 body — so a game that wants physics has to create the world, step it from its own

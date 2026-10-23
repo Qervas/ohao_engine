@@ -72,8 +72,8 @@ answer is known a priori, since the glTF specification mandates Y-up:
 
 {{cite ohao/render/camera/scene_framer.hpp "bool forceYUp = false);"}}
 
-No caller in the tree passes it. Every call site — `model_viewer`, `ohao_game` and
-two tests — uses the default, and `env_demo`
+No caller in the tree passes it. Every call site — `model_viewer` and two tests —
+uses the default, and `env_demo`
 re-implements the same `extent.y >= extent.z` test inline without any override at
 all. The parameter is dead; the heuristic it guards is not.
 
@@ -122,21 +122,19 @@ The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
 
 {{cite examples/example_scenes.hpp "wall: the camera looks in from outside."}}
 
-`model_viewer` no longer calls `applyCamera`. Its builder copies the framed
+`model_viewer` does not call `applyCamera`. Its builder copies the framed
 position and FOV onto a `Camera` entity, which the host applies through
 `applySceneView`; `scene_view_gpu_test` renders that path against a hand-applied
-`applyCamera` and checks the two agree. The one program that still calls
-`applyCamera`, the windowed host `ohao_game`, builds no room at all — one floor
-quad at y = −S under the model:
+`applyCamera` and checks the two agree, and is the only caller `applyCamera` has.
+The windowed host `ohao_game` calls neither function: it loads
+`assets/scenes/helmet_game.scene.json`, which holds the framer's output for the
+helmet as data — the same front-less bedroom, the four-light rig, and the camera
+entity (with a `FlyController`) at z = 1.7·S = 25.5:
 
-{{cite examples/ohao_game.cpp "m.vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};"}}
+{{cite assets/scenes/helmet_game.scene.json ""Transform": { "position": [0, -6, 25.5] },"}}
 
-and then takes the framer's camera and light rig unchanged, so its fly camera
-starts at z = 1.7·S like `model_viewer`'s still one does:
-
-{{cite examples/ohao_game.cpp "SceneFramer::applyCamera(renderer.getCamera(), frame);"}}
-
-The z = +S wall that the camera sits behind is therefore built by neither caller.
+A change to the framer therefore reaches `ohao_game` only when that file is
+rewritten. No program builds the z = +S wall that the camera sits behind.
 
 {{figure camera-scene-framer-room-elevation "Elevation through the Y–Z plane, drawn to scale from the constants in scene_framer.cpp: the room as model_viewer builds it (front wall omitted), scaled model, the camera at z = 1.7S, and the light spheres at true radius. Conceptual diagram, not a captured render."}}
 
@@ -219,8 +217,8 @@ shading lines is compiled in but never entered.
 The light radii are geometry, not aesthetics. With the clamp off on the offline
 profile, the only defence against an unbounded NEE sample is keeping every light
 sphere strictly inside the surfaces it can illuminate — and *which* surfaces those
-are is per-caller: `model_viewer` builds a floor, a ceiling and the back and side
-walls, `ohao_game` only the floor, and neither builds the z = +S wall that
+are is per-caller: `model_viewer` and the scene file `ohao_game` loads build a floor,
+a ceiling and the back and side walls, and neither builds the z = +S wall that
 `FrontFill`'s comment measures against. Moving a light "a bit closer to the ceiling" is a rendering
 bug, not a lighting tweak.
 :::
@@ -228,8 +226,8 @@ bug, not a lighting tweak.
 ## Contracts
 
 - Light positions are not multiples of `S`. `CeilingLight` carries an absolute z = 2, `WindowLight` an absolute y = 3 and z = 5, and `BedsideLamp` is affine throughout (`S*0.55`, `-S + 6`, `-S + 2`). Only the single wall-facing coordinate of the three commented lights — `S*0.85`, `S*0.8`, `S*0.85` — is a plain multiple, and all four radii are absolute constants. So the clearances hold only while `0.85 S + 1.2 < S`, i.e. `S > 8`; shrinking the room without shrinking the radii pushes `CeilingLight` through `model_viewer`'s ceiling, and `FrontFill` past a z = +S plane that a caller building a front wall would have to respect.
-- `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` omits it, `ohao_game` builds no walls — or move the camera.
+- `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` and `helmet_game.scene.json` omit it — or move the camera.
 - Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.
 - `FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.
-- Of the programs, only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
+- Of the programs, only `model_viewer` calls this; `ohao_game` plays a scene file that holds a fixed copy of its output for the helmet. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
 - On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `spawnFramedLights` silently spawns nothing.

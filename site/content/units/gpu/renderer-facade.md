@@ -8,15 +8,17 @@ figures: [gpu-renderer-facade-ring-lag]
 
 ## A renderer that does not own its window
 
-`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What it delivers depends on which `initialize` overload ran. The headless one delivers a `std::vector<uint8_t>` of RGBA8 pixels through `getPixels()`; the PNG writers, the golden smoke test and every example except `ohao_game` drive that `render()` → `getPixels()` pair. The windowed overload takes a `PresentTarget` and ends each frame by presenting into a swapchain, reading nothing back.
+`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What it delivers depends on which `initialize` overload ran. The headless one delivers a `std::vector<uint8_t>` of RGBA8 pixels through `getPixels()`; the PNG writers, the golden smoke test and every example except `ohao_game` drive that `render()` → `getPixels()` pair. The windowed overload takes a `PresentTarget` and ends each frame by presenting into a swapchain, reading nothing back unless the caller asked for that frame with `requestReadback()`. That request works in both modes and is what the shared capture procedure (`runtime::captureFrame`, behind `ohao run --render` and `render.capture`) uses: it asks for its last frame and takes it from `readback()`, which returns that frame and not one from three calls earlier.
+
+{{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
 {{cite ohao/gpu/vulkan/renderer.hpp "[[nodiscard]] bool initialize(const PresentTarget& target);"}}
 
-Neither overload makes the renderer a windowing client. The window belongs to `ohao/runtime`: `Application` creates it, builds the renderer at the window's framebuffer size, passes the window's `PresentTarget` in, and forwards drawable-size changes through `setPresentExtent`. The renderer sees a surface-creation callback and an extent, never a window handle.
+Neither overload makes the renderer a windowing client. The window belongs to `ohao/runtime`: `LiveHost` creates it, builds the renderer at the window's framebuffer size, passes the window's `PresentTarget` in, and forwards drawable-size changes through `setPresentExtent`. The renderer sees a surface-creation callback and an extent, never a window handle.
 
-{{cite ohao/runtime/application.cpp "if (m_window.consumeResized()) m_renderer->setPresentExtent(m_window.framebufferExtent());"}}
+{{cite ohao/runtime/live_host.cpp "m_renderer->setPresentExtent(m_window.framebufferExtent());"}}
 
-The two modes are distinguishable from outside. `isPresenting()` reports whether a swapchain exists, and `readbackCopyCount()` counts the deferred staging copies recorded since initialisation — zero in a windowed deferred renderer, by construction. `ohao_game` turns that into an exit code: a windowed run that recorded any readback copy fails.
+The two modes are distinguishable from outside. `isPresenting()` reports whether a swapchain exists, and `readbackCopyCount()` counts the headless deferred staging copies recorded since initialisation — zero in a windowed deferred renderer, by construction; copies a window makes because a frame was requested are counted apart, by `requestedReadbackCount()`. `ohao_game` turns the first into an exit code: a windowed run that recorded any unrequested readback copy fails.
 
 {{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
 
@@ -125,7 +127,7 @@ Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell
 
 Under `--denoise=none` that arithmetic lands exactly: after `spp + 3` calls the last copy delivered call `spp - 1`, the frame that had accumulated `spp` samples. No comment at any of those sites ties the `+ 3` to the ring depth, though, and it cannot be the whole story — the default offline configuration is `DenoiseMode::OIDN`, whose `getPixels()` branch never reads `m_pixelBuffer`. There the three extra frames buy three extra samples and compensate no lag.
 
-A windowed deferred renderer has no lag to account for: the swapchain image is written by the same submission that recorded the frame, and `m_pixelBuffer` is never filled at all. `getPixels()` on a presenting renderer returns a buffer of the right size that nothing writes.
+A windowed deferred renderer has no lag to account for: the swapchain image is written by the same submission that recorded the frame, and `m_pixelBuffer` is never filled at all. `getPixels()` on a presenting renderer returns a buffer of the right size that nothing writes. A requested frame has no lag either, in both modes: `readback()` waits on the requested frame's own slot and returns that slot's staging buffer, which is why a capture keeps the last frame it renders where an example's `getPixels()` keeps the one three calls earlier.
 
 ## getPixels() is four branches wearing one signature
 
@@ -158,7 +160,7 @@ Below that sits the bulk of the translation unit — more than half of `renderer
 ## Contracts
 
 - On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — a headless `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
-- A presenting renderer's deferred frames never reach `m_pixelBuffer`. Read pixels from a headless renderer; `readbackCopyCount()` stays 0 in windowed deferred mode and a nonzero count there is a bug.
+- A presenting renderer's deferred frames never reach `m_pixelBuffer`. Read pixels from a headless renderer, or request the frame (`requestReadback()` before `render()`, then `readback()`); `readbackCopyCount()` stays 0 in windowed deferred mode and a nonzero count there is a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
 - Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.

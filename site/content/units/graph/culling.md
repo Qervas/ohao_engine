@@ -94,7 +94,7 @@ short-circuits to `glm::vec2(0.0f)` while it stays off:
 {{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_taaEnabled{false};"}}
 
 The sites in the tree that enable it are `examples/model_viewer.cpp` on the
-`deferred` path, the `ohao_game` windowed host and one resize test in `engine_tests`; `cornell_box`, `interactive`,
+`deferred` path, the `ohao_game` windowed host, one resize test in `engine_tests`, and the shared capture procedure (`ohao/runtime/frame_capture.cpp`) when a request's `post` names `taa`; `cornell_box`, `interactive`,
 `env_demo` and `turntable` never touch it. When jitter *is* live it is added to two
 entries of the projection's third column:
 

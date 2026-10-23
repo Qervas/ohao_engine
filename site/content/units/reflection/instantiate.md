@@ -94,11 +94,11 @@ $W$ is not read from `WorldTransform`. It is rebuilt from `Transform` and `Paren
 
 ## Applying it: `applySceneView`
 
-The host half is header-only in `tools/ohao/scene_host.hpp`, and `cornell_box`, `model_viewer` and the CLI's render host share it. It sets the renderer camera's position, its perspective (the field of view and planes come from the component, and the aspect ratio stays the render target's) and its pitch and yaw. For the environment it resolves the HDRI through the same resolver and sets the intensity scale:
+The host half is `runtime::applySceneView`, header-only in `ohao/runtime/scene_view_apply.hpp`, and `cornell_box`, `model_viewer`, the shared capture procedure (`runtime::captureFrame`, behind the CLI's render host) and the window's `LiveHost` all call it; the live host does so before every frame it renders. It sets the renderer camera's position, its perspective (the field of view and planes come from the component, and the aspect ratio stays the render target's) and its pitch and yaw. For the environment it resolves the HDRI through the same resolver and sets the intensity scale:
 
-{{cite tools/ohao/scene_host.hpp "renderer.setEnvironmentMap(path.string());"}}
+{{cite ohao/runtime/scene_view_apply.hpp "renderer.setEnvironmentMap(path.string());"}}
 
-An HDRI path the resolver rejects becomes a warning, not an error. Removing the HDRI does not unload a map the renderer already holds, because the renderer has no unload. `applySceneView` also does not reset path-tracer accumulation. A host that changes the view between frames has to do that itself; the CLI's render host restarts accumulation on every capture after the first.
+An HDRI path the resolver rejects becomes a warning, not an error. Removing the HDRI does not unload a map the renderer already holds, because the renderer has no unload. `applySceneView` also does not reset path-tracer accumulation. A host that changes the view between frames has to do that itself; the CLI's render host restarts accumulation on every capture after the first, and the live host on every lockstep capture.
 
 ## Contracts
 

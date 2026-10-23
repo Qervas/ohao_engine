@@ -343,8 +343,11 @@ cases) checks transform propagation and hierarchy rules — parenting, cyclic
 renderer that it skips when no device exists, the render extract: slot creation and
 release, lights following transforms in creation order, a model's materials becoming
 submeshes, an emissive texture yielding a proxy light, and unknown mesh handles being
-skipped. `runtime_tests` (21 cases) needs no GPU: it pins the fixed-step clock, the
-input action map and the swapchain-selection helpers.
+skipped. `runtime_tests` (29 cases) needs no GPU: it pins the fixed-step clock, the
+timeline's lockstep, realtime and paused modes, the input action map, the capture's
+image helpers (a lossless PNG round trip, crop, scale and the JPEG preview) and the
+swapchain-selection helpers. The live host's loop itself is exercised by running
+`ohao_game --frames N`, not by this suite.
 
 {{cite CMakeLists.txt "option(BUILD_PHYSICS_TESTS"}}
 

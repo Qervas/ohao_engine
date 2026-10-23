@@ -103,7 +103,7 @@ $ python tests/serve/check_serve.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG) |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
@@ -131,6 +131,7 @@ $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
+$ python tests/serve/check_live.py > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
 $ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
@@ -142,7 +143,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
-  captures.
+  captures. `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
+  previews, a region, another size and a path-traced mode refused), log.read; a lockstep
+  window capture equals a headless capture of the same world bit for bit (post off and
+  on); minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
+  readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
+  camera moves 3 m in 60 injected steps.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
@@ -165,7 +172,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
   `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
   round trips, transport overhead, apply, step, hash, diff, the logger's per-call costs, the
-  `tools/list` size), results in `build/serve_bench.json`. `serve_bench` times a
+  `tools/list` size; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
+  its frame is presented, a frame's readback, inline and PNG captures, the reader thread's
+  CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
+  `build/serve_bench.json`. `serve_bench` times a
   calibration loop before and after its blocks and records every other process that
   used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
   by `serve_bench --calibrate` on a quiet machine) or beside other processes using more
@@ -217,6 +227,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   one without keeps the bindings made in code.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
+- Readback: `getPixelSpan()` is the headless ring, which lags the last `render()` by
+  `MAX_FRAMES_IN_FLIGHT` frames (10 frames rendered: frame 7's pixels; 3 or fewer: black).
+  To read the frame you just rendered, `requestReadback()` before its `render()` and
+  `readback()` after (that frame's fence only). Buffers the CPU reads must be host-cached
+  memory: uncached host-visible memory read one 1280x720 frame in ~20 ms.
+- A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
+  keeps a history: frame 1 and frame 10 of Cornell differ (max_abs 29). Pass `frames` for
+  a converged image; the deferred goldens state theirs (`--frames 7`, `--frames 27`).
 - The validation layer stops at 10 reports per VUID; set
   `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see them all. The engine names no Vulkan
   objects: find a handle's creation site by temporarily printing handles at `vkCreate*`.

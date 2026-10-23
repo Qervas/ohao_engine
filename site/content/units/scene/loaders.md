@@ -8,10 +8,10 @@ figures: [scene-loaders-routing]
 
 ## Two front doors, four parsers
 
-The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly: `model_viewer` and the windowed host `ohao_game` reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.
+The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly. Everything reaches it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else, and it has two callers: `model_viewer`, for a model outside the project, and the file asset resolver, which every `ModelAsset` in a scene goes through — so `ohao_game` (playing `helmet_game.scene.json`), `ohao run` and `model_viewer`'s in-project models all load this way.
 
 {{cite ohao/scene/asset/model_loader.cpp "// GLB, GLTF, DAE, etc → Assimp"}}
-{{cite examples/ohao_game.cpp "auto loaded = ModelLoader::loadResult(modelPath);"}}
+{{cite ohao/ecs/asset_resolver.cpp "auto loaded = ModelLoader::loadResult(key);"}}
 
 The tinygltf importer in `model_gltf.cpp` is therefore unreachable from the facade — but it is not dead. `env_demo` and `turntable` call `Model::loadFromGLTF` directly, skipping `ModelLoader` entirely.
 
@@ -79,10 +79,10 @@ A file whose meshes are positioned by node transforms — a wheel parented under
 
 {{cite ohao/scene/asset/model_fbx.cpp "geoTransform = toGlm(mesh->instances.data[0]->geometry_to_node);"}}
 
-Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult`, and both callers that load through the facade copy it into the model entity's local `Transform` before spawning it, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.
+Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult`, and `model_viewer`'s scene builder copies it into the model entity's local `Transform` (a scene file saved from it keeps it there), so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried. A scene file loaded by itself, as `ohao_game` and `ohao run` do, gets only the rotation its `Transform` states.
 
 {{cite ohao/render/camera/scene_framer.cpp "result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));"}}
-{{cite examples/ohao_game.cpp "t.rotation = frame.modelRotation;"}}
+{{cite examples/example_scenes.hpp "out.modelTransform.rotation = flipY ? glm::quat(glm::radians(glm::vec3(0, 180, 0))) : frame.modelRotation;"}}
 
 ## Roughness arrives by four different roads
 
@@ -133,12 +133,12 @@ So a glTF with the spec-default `baseColorFactor` of 1 renders through `ModelLoa
 
 ## Procedural primitives
 
-`PrimitiveMeshGenerator` is the fifth producer of `Model`s and the only one that reads no file. It builds a cube, a UV sphere, a platform, a cylinder and a cone, each behind a `make*` factory that returns a `shared_ptr<Model>`; `cornell_box` spawns its spheres from `makeSphere` and `ohao_game` its spinning cube from `makeCube`.
+`PrimitiveMeshGenerator` is the fifth producer of `Model`s and the only one that reads no file. It builds a cube, a UV sphere, a platform, a cylinder, a cone, a quad and an axis-aligned box. Its caller in the engine is instantiate, which turns each primitive alternative of a `MeshSource` (`SpherePrim`, `CubePrim`, …, `QuadPrim`, `BoxPrim`) into the matching `generate*` call; that is how `cornell_box`'s spheres and walls and `helmet_game.scene.json`'s spinning cube (a `BoxPrim`) are built. The `make*` factories that return a `shared_ptr<Model>` are left to tests.
 
-{{cite examples/ohao_game.cpp "*PrimitiveMeshGenerator::makeCube()"}}
+{{cite ohao/ecs/instantiate.cpp "[&](const CubePrim& p) { PrimitiveMeshGenerator::generateCube(*m, p.size); },"}}
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {"}}
 
-What the generator fills is geometry only: none of the per-material arrays below. That is not a gap the caller has to close by hand — `render::uploadModel` treats a `Model` without `materialColors` as one submesh with one material, the caller's override material or the table's default — but it means a primitive's color always comes from the spawn call, never from the generator.
+What the generator fills is geometry only: none of the per-material arrays below. That is not a gap the caller has to close by hand — `render::uploadModel` treats a `Model` without `materialColors` as one submesh with one material, the caller's override material or the table's default — but it means a primitive's color always comes from the entity's `MaterialOverride` (or the spawn call), never from the generator.
 
 {{cite ohao/render/scene/model_upload.cpp "mats.push_back(overrideMaterial ? *overrideMaterial : MaterialDesc{});"}}
 

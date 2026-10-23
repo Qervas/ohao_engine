@@ -28,7 +28,7 @@ and run. SSAO is the opt-in half of that split — its pipeline gate defaults fa
 
 {{cite ohao/render/deferred/post_processing_pipeline.cpp "if (m_ssaoEnabled && m_ssaoPass) {"}}
 
-and the production callers that open it are `model_viewer`'s deferred path and the `ohao_game` host. A
+and the production callers that open it are `model_viewer`'s deferred path, the `ohao_game` host and a capture whose `post` list names `ssao`. A
 default deferred frame therefore dispatches no SSAO at all; what follows is what
 the dispatch computes when a caller does ask for it.
 
@@ -338,4 +338,4 @@ other layout would desynchronise every reader after it.
 - `SSAOPass::onResize` destroys the AO image and descriptor pool, allocates a fresh set, and writes it immediately from the depth and normal views it already holds. Those must be the resized G-buffer's views by then: `DeferredRenderer::onResize` hands them to `PostProcessingPipeline::setGBufferInputs` right after the G-buffer resizes and before post-processing's own `onResize` runs. The single set is safe without a per-frame copy because it is written only at setup and on resize, never per frame.
 - `execute()` early-outs unless both the depth and normal views are non-null, so a caller that never wires the GBuffer gets a silently absent pass rather than a crash.
 - The pass samples two GBuffer attachments — depth at binding 0 and normal at binding 1, both routed in from `GBufferPass` through `PostProcessingPipeline` — so it must be dispatched after the GBuffer render pass has ended. Binding 0 declares `DEPTH_STENCIL_READ_ONLY_OPTIMAL`, the layout depth holds from the end of the G-buffer pass to the end of the frame (see the callout above). The render graph declares only the normal read; neither the depth read nor the AO write is declared, so one of the pass's three image dependencies is on the ledger.
-- SSAO is off by default (`m_ssaoEnabled{false}`); the production callers that enable it are `model_viewer`'s deferred path and the `ohao_game` host. Since nothing samples the result, enabling it currently costs up to 65 depth taps per pixel and changes no output pixel.
+- SSAO is off by default (`m_ssaoEnabled{false}`); the production callers that enable it are `model_viewer`'s deferred path, the `ohao_game` host and a capture whose `post` list names `ssao`. Since nothing samples the result, enabling it currently costs up to 65 depth taps per pixel and changes no output pixel.

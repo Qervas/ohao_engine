@@ -74,7 +74,7 @@ runs real scenes with the variable set and fails on any message, warning or erro
 
 and two `engine_tests` cases set it around `initialize()` and assert that a
 deferred resize — SSAO, TAA and bloom included — leaves the layer silent. A third
-route is `ohao_game` itself: `Application::shutdown` returns the validation
+route is `ohao_game` itself: `LiveHost::shutdown` returns the validation
 messages seen over the whole run including teardown, so a windowed run with the
 variable set exits nonzero on any report.
 

@@ -7,7 +7,7 @@ standard: v2
 
 ## Two bodies that share a skeleton
 
-`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines seven functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other five are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToPixelBuffer` (the two ends a deferred frame can reach, next section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
+`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines nine functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other seven are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToPixelBuffer` (the two ends a deferred frame can reach, next section), `readback` and `finishReadbackRequest` (readback on request, same section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "rtPipeline && getRTRenderer(m_renderMode) && isRTSupported()) {"}}
 
@@ -23,9 +23,13 @@ The first command each body records is `RenderScene::recordUpdates` for the slot
 
 ## Two ends for a deferred frame
 
-A deferred frame ends in one of two places, decided by whether `initialize(const PresentTarget&)` built a swapchain. Headless, it is copied into the slot's staging buffer and read back `MAX_FRAMES_IN_FLIGHT` frames later; windowed, it is blitted into an acquired swapchain image and presented, and nothing is read back.
+A deferred frame ends in one of two places, decided by whether `initialize(const PresentTarget&)` built a swapchain. Headless, it is copied into the slot's staging buffer and read back `MAX_FRAMES_IN_FLIGHT` frames later; windowed, it is blitted into an acquired swapchain image and presented, and nothing is read back unless asked for.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "else             copyDeferredOutputToPixelBuffer(cmd);   // headless readback"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp ": copyDeferredOutputToPixelBuffer(cmd);   // headless readback"}}
+
+Asking is `requestReadback()` before the `render()` call. The request belongs to that one frame: `renderDeferred` takes it with `std::exchange`; a headless frame's own copy serves it, a windowed frame also copies its final image (already a transfer source for the blit) into the slot's staging buffer, and `readback()` waits on that slot's fence and returns the bytes — the frame just rendered, with no ring lag. The RT body marks its staging copy as the requested one the same way. `readbackCopyCount()` still counts only the headless copies, so it stays 0 in a window; copies made for a request are counted in `requestedReadbackCount()`.
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// A request belongs to this frame; a frame that is not rendered leaves no readback."}}
 
 The windowed path changes the prologue in two places. Swapchain recreation runs first, before a slot is chosen, because recreating calls `resize()`, which idles the device and resets `m_currentFrame`; recreating after the slot was taken would wait on one slot's fence and reset another's.
 
@@ -37,9 +41,9 @@ Image acquisition then sits between the fence wait and the fence reset, so every
 
 `vkQueuePresentKHR` returning `OUT_OF_DATE` or `SUBOPTIMAL` only marks the swapchain dirty; the rebuild happens at the top of the next frame, as does one requested by `setPresentExtent` when the window's drawable size changes.
 
-The RT body has no present path. It always records the staging copy and never acquires, so a windowed renderer switched to `RTRealtime` or `RTOffline` renders frames nobody sees. The windowed host does not offer the choice: `Application::initialize` pins the mode to Deferred.
+The RT body has no present path. It always records the staging copy and never acquires, so a windowed renderer switched to `RTRealtime` or `RTOffline` renders frames nobody sees. The windowed host does not offer the choice: `LiveHost::initialize` pins the mode to Deferred, and its `capture` refuses any other mode.
 
-{{cite ohao/runtime/application.cpp "m_renderer->setRenderMode(RenderMode::Deferred);"}}
+{{cite ohao/runtime/live_host.cpp "m_renderer->setRenderMode(RenderMode::Deferred);"}}
 
 ## Three ways to reach a transfer layout
 
@@ -81,7 +85,7 @@ Every staging buffer in the ring is sized for four bytes per pixel.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!m_deferredRenderer->finalOutputIsRGBA8()) {"}}
 
-The windowed end is format-tolerant where the copy is not: `vkCmdBlitImage` converts between formats, and `createPresentation` refuses to start unless both candidate formats support `BLIT_SRC` on the device.
+The windowed end is format-tolerant where the copy is not (its requested-readback copy makes the same RGBA8 check and is skipped otherwise): `vkCmdBlitImage` converts between formats, and `createPresentation` refuses to start unless both candidate formats support `BLIT_SRC` on the device.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "for (VkFormat f : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT}) {"}}
 

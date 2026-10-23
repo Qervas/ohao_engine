@@ -113,9 +113,10 @@ The transform system recomputes the world matrix and tags `RenderDirty`, and the
 
 A second restore must report `{created: 0, destroyed: 0, changed: 0}` and upload 0 instance bytes. With post effects off, the capture after the restore must be bit-identical to the first.
 
-The pixels need one more thing. The deferred path carries temporal state across frames: TAA history, RT GI history, a clock and the frame slot that indexes TAA's jitter. A capture taken after restoring would otherwise blend in history from the moved sphere. `RenderHost` resets it before every capture except the first, so that the first capture still renders exactly as a fresh renderer does and the goldens hold:
+The pixels need one more thing. The deferred path carries temporal state across frames: TAA history, RT GI history, a clock and the frame slot that indexes TAA's jitter. A capture taken after restoring would otherwise blend in history from the moved sphere. `RenderHost` resets it before every capture except the first, so that the first capture still renders exactly as a fresh renderer does and the goldens hold; the window's `LiveHost` resets before every lockstep capture. Both pass the choice to the shared capture procedure:
 
-{{cite tools/ohao/render_host.cpp "if (m_captures > 0) renderer.resetAccumulation();"}}
+{{cite tools/ohao/render_host.cpp "settings.reset = m_captures > 0;   // the first capture renders exactly as a fresh renderer does (the goldens)"}}
+{{cite ohao/runtime/frame_capture.cpp "if (settings.reset) renderer.resetAccumulation();"}}
 
 In deferred mode, `VulkanRenderer::resetAccumulation` idles the device, zeroes the frame slot and calls `DeferredRenderer::resetTemporalState`. In the RT modes it resets the path tracer's accumulation. With TAA, SSAO and bloom on the restored capture is bit-identical too. Until sub-project 4 step 1 the test allowed 1 LSB there, because two fresh deferred renderers differed: bloom's mip chain sampled each mip before the previous render pass's writes were visible, and TAA's first frame took its motion from a previous view-projection that a fresh renderer never set. The reset now leaves that matrix unset as well, so the first frame after it, like a fresh renderer's first frame, uses its own:
 
@@ -123,7 +124,7 @@ In deferred mode, `VulkanRenderer::resetAccumulation` idles the device, zeroes t
 
 ## Sharp edges
 
-- **The reset belongs to the capture, not the restore.** A windowed host that restores mid-run keeps its TAA and RT GI history unless it calls `resetAccumulation` itself.
+- **The reset belongs to the capture, not the restore.** The live host's presented frames after a restore keep their TAA and RT GI history; only a lockstep capture resets it, and a realtime capture returns the next presented frame as is.
 - **Silent in-place writes.** The `CreationOrder` correction in step 1 and the `Children` reordering in step 5 write into the component in place, with no signal. A system that ordered work by the old sequence is not told.
 - **Only `Parent` is remapped.** Columns copy values verbatim. `Parent` is today the only saved component holding an `entt::entity`, and it is stored as a row. A future saved component with an entity field would be restored with the old handle, which is stale if restore recreated its target.
 - **The registry must outlive the snapshot.** Columns hold `const TypeInfo*`, and restore dispatches through `componentOps(*c.type)`. The snapshot must come from a world with the same registrations, and nothing checks that.

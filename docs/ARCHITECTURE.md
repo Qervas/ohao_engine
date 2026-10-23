@@ -21,9 +21,9 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, EnTT (simdjson privately) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components, systems (spin, fly controller, transform, instantiate, render extract), the scene codec, snapshots, the world hash and diff, the scene view |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox. GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams and the MCP adapter (`ohao serve`): reader and engine threads, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
-| `ohao_runtime` | `runtime/` | `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | the windowed `Application` loop (stepped by a `Timeline`), frame statistics, input actions, swapchain |
+| `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
 | `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics and audio, not yet driven by the ECS |
-| `ohao_host` | `tools/ohao/` | `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the GPU side of `render.capture` |
+| `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
 `env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` and `serve_bench`
@@ -41,8 +41,8 @@ Dependency rules:
 - **Reflection stays off the frame.** `render/`, `gpu/` and the per-frame ECS system
   sources (`transform_system`, `render_extract`, `instantiate`, `spin_system`) include
   nothing from `reflect/` or `api/`. `reflect_tests` (t13) enforces it.
-- **The API is GPU-free.** Anything that needs a renderer is a host handler
-  (`Session::setRenderHandler`), installed by a program that owns one.
+- **The API is GPU-free.** Anything that needs a renderer goes through the session's
+  `api::Host` (`Session::setHost`): the headless `RenderHost` or the window's `LiveHost`.
 - **The engine prints only through the logger.** `OHAO_LOG(level, channel, fmt, args...)`
   (`core/log.hpp`): levels `Trace` … `Error`, channels `render`, `gpu`, `validation`,
   `ecs`, `asset`, `physics`, `audio`, `api`, `rpc`, `runtime`, a `std::format` string.
@@ -60,13 +60,13 @@ systems come in two phases, each a fixed list run in order, never discovered or 
 ```
 the timeline (core/timeline.hpp) decides the steps: lockstep, on request (world.step);
 realtime, whole fixed steps from wall time (paused: none)
-for each step:
+for each step (api::Session::step: world.step, input.replay, a window's realtime steps):
   World::stepInput(events)   device events since the last step, then injected ones
-                             (api: Session::step; InputActions rebinds the map first)
-  host / game hooks (fixedUpdate)                       write components with patch/replace
+                             (InputActions rebinds the map first)
   World::simulate(fixedDt)
     spin            engine-provided: Spin -> Transform (patch)        every World
     fly_controller  engine-provided: input + FlyController -> Transform   every World
+  a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
@@ -74,11 +74,23 @@ World::sync()
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
                   and the light list                                    a renderer (addSyncAfter)
-host: applySceneView (Camera, Environment -> renderer camera, HDRI)   tools/ohao/scene_host.hpp
+host: applySceneView (Camera, Environment -> renderer camera, HDRI)   runtime/scene_view_apply.hpp
 VulkanRenderer::render()
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit
-  deferred passes or a path tracer, then present (window) or readback (headless)
+  deferred passes or a path tracer, then present (window) or readback (headless); a
+  window frame reads back only when asked (requestReadback, then readback(): that frame's
+  fence, never the queue)
 ```
+
+The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
+frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
+to 16 ms while nothing steps); the timeline's steps (`Session::step` each, then the
+`fixedUpdate` hook); the `update` hook; render and present (realtime: every frame;
+lockstep or paused: only when `Session::changeCount()` moved or the window resized);
+then send the replies those requests produced (`flush`), after the frame they caused.
+While nothing steps the window's own input is dropped, and stepping resumes with a focus
+loss. A capture in lockstep is `runtime::captureFrame`, the procedure the headless
+`RenderHost` runs, so both give the same pixels for the same world.
 
 - **Change tracking is by signal.** `patch`/`replace`/`emplace` fire EnTT signals that
   set `TransformDirty`, `InstantiateDirty` and `RenderDirty`; each system works only on
@@ -89,7 +101,7 @@ VulkanRenderer::render()
   lockstep run of the same steps reach the same state (the same `world.hash`).
   `World::update(dt)` is one `simulate(dt)` and one `sync()`, for tests and tools.
 - **The fixed `dt` is the only clock** a system may read. `world.step` in the API,
-  `ohao run --steps` and `Application`'s timeline pass it.
+  `ohao run --steps` and `LiveHost`'s timeline pass it.
 - **Teardown order:** the `World` before the renderer. Its systems release their
   `RenderScene` slots when it is destroyed.
 

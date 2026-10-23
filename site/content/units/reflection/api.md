@@ -122,11 +122,13 @@ A step whose length differs from the fixed step (a realtime host's clamp after a
 
 ## Pixels
 
-`render.capture` is checked entirely in the session: the path, the mode and denoiser names, `spp`, `frames`, sizes from 16 to 8192, each `post` effect name, and exposure in (0, 64]. Only then does the session look for a handler:
+`render.capture` is checked entirely in the session: the path, the mode and denoiser names, `spp`, `frames`, sizes from 16 to 8192, each `post` effect name, and exposure in (0, 64]. Only then does the session look for a host:
 
 {{cite ohao/api/session.cpp "this session has no renderer; render.capture needs a host with a GPU (ohao run)"}}
 
-The work is done by whatever `setRenderHandler` installed, a `std::function<RenderOutcome(const RenderRequest&)>`, and the outcome's diagnostics become the reply's. `ohao_api` therefore never links the renderer. In the API tests, malformed captures fail before the fake host is ever called.
+The work is done by the `api::Host` that `setHost` installed, an interface with two members — `kind()` and `capture(const RenderRequest&)` — and the outcome's diagnostics become the reply's. `setHost` also takes the session's host kind from it. Two hosts implement it: the CLI's headless `host::RenderHost` and the window's `runtime::LiveHost`, and both run the same capture procedure, `runtime::captureFrame`. `ohao_api` therefore never links the renderer. In the API tests, malformed captures fail before the fake host is ever called.
+
+{{cite ohao/api/session.hpp "[[nodiscard]] virtual RenderOutcome capture(const RenderRequest& request) = 0;"}}
 
 ## Contracts
 

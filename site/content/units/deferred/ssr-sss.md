@@ -75,7 +75,7 @@ while `SSRPass` is handed the clean, unjittered matrix:
 so every `sampleUV` the march computes is offset from the depth buffer it reads by that
 frame's sub-pixel jitter, in a different direction each frame. `m_taaEnabled` defaults
 to false, which makes the offset exactly zero; the `model_viewer` example in deferred
-mode and the `ohao_game` host both enable TAA, and there the offset is always present.
+mode and the `ohao_game` host both enable TAA, as does a capture whose `post` names `taa`, and there the offset is always present.
 
 Two thresholds decide which pixels get a ray at all. Rough dielectrics are skipped,
 metals always traced:

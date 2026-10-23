@@ -73,7 +73,10 @@ With everything installed, a step runs `spin` then `fly_controller` (after the W
 
 The split is what makes a frame's simulation independent of how often it is rendered: `world.step` with 100 frames simulates 100 times and syncs once, a window host simulates once per fixed step of wall time and syncs once per presented frame, and a capture only syncs — rendering never advances the simulation. A realtime session and a lockstep one that run the same steps reach the same state, bit for bit.
 
-{{cite ohao/runtime/application.cpp "m_world->simulate(fixedDt);"}}
+In the window host each step is `Session::step`, which hands the step's input to the world and then simulates once:
+
+{{cite ohao/runtime/live_host.cpp "m_session->step(m_events, fixedDt);"}}
+{{cite ohao/api/input.cpp "s.world.simulate(dt);"}}
 
 `addSyncAfter` and `addSyncBefore` with a name that is not in the list append instead of failing; plain `addSync` always appends — once the extract is installed, *after* `render_extract`, so what such a system writes reaches the GPU one sync late. A sync system cannot take a dt by its type, so stepping behaviour cannot hide there.
 

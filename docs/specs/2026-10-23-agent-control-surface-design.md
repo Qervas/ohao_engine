@@ -213,6 +213,14 @@ World's `InputMap`, writes them to a recording, simulates, and advances the fram
 window host (step 9) calls it once per realtime step with the events polled since the
 previous step; `world.step` and `input.replay` call it with none.
 
+*As built (step 9).* `api::Host` is `{kind(), capture(const RenderRequest&)}` and
+`Session::setHost(Host*)` replaces `setRenderHandler` (and sets the host kind;
+`setHostKind` stays for sessions without a host). The headless `host::RenderHost`
+(`tools/ohao`) and the window's `runtime::LiveHost` implement it; `ohao_runtime` now
+links `ohao_api`. `Session::changeCount()` counts the calls that may change the world
+(`scene.load`, `world.apply`, `world.step`, `world.restore`, `input.replay`) and
+`Session::step`, so a window host knows when a lockstep frame is due.
+
 ### Method params are reflected structs
 
 Every method's params become a registered struct, for example:
@@ -404,6 +412,31 @@ world.sync()                            -> instantiate, transform, render extrac
 render + present                        -> skipped while nothing changed in lockstep
 complete pending captures               -> readback of the frame just rendered, encode off-thread
 ```
+
+*As built (step 9, 2026-10-23).* `runtime::LiveHost` (`ohao/runtime/live_host.{hpp,cpp}`)
+replaces `Application` (deleted). It owns the window, the renderer, the asset resolver,
+the World (instantiate and the render extract installed) and an `api::Session` sharing
+its `Timeline`. Per frame: poll the window; pump the requests (a `RequestPump`: the
+server's `poll(wait)` runs what is queued on this thread, waiting up to 16 ms while
+nothing steps, 0 in realtime); the timeline's steps, each `Session::step(device events,
+fixedDt)` and then the game's `fixedUpdate` hook (it reads the step's input; the spec's
+"before the step" slot is gone because `Session::step` is one call); the `update` hook;
+`World::sync`, the world's view (`applySceneView`) and render + present, every frame in
+realtime and in lockstep or paused only when `Session::changeCount()` moved or the
+window resized; then `flush`, which sends the replies held since the poll: a reply is
+sent after the frame its request caused was presented. While nothing steps, the window's
+device events are dropped and the next step starts with a focus loss, so a lockstep
+world only sees injected input and a key let go meanwhile is never left held. Captures
+run inside the poll, synchronously (the encode is not moved off-thread: it is a few
+milliseconds, and the reply waits for it anyway). `rpc::Server` gained `start`,
+`poll(wait)`, `flush` and `stop` (`run` is `start`, `poll` until the input ends, `stop`)
+and `ServerOptions::holdReplies`; `stop` interrupts a read the client left open
+(`Transport::interruptRead`: `CancelSynchronousIo` on Windows), so closing the window
+ends the session too. The reader thread is named `ohao rpc reader` (serve_bench finds it).
+`ohao_game` loads `assets/scenes/helmet_game.scene.json` (the helmet room, the spinning
+cube as a `Spin`, the camera with a `FlyController`, an `InputActions` entity with WASD,
+Q/E, right mouse to look, Shift, Escape as `quit`) and keeps only host settings in code
+(post effects on, exposure 1; quit and cursor capture in its hooks).
 
 ### System phases
 
@@ -629,6 +662,54 @@ presentation gate's unrequested-readback count stays 0, and the gate checks it.
 - Result: `{path?, image?, width, height, frames, ms, deterministic, validation?}`.
 
 Capturing while the window is minimized is `E_STATE`.
+
+*As built (step 9, 2026-10-23).*
+- **One procedure.** `runtime::captureFrame` (`ohao/runtime/frame_capture.cpp`) is what
+  both hosts run: the world's Camera and Environment, the mode, denoiser, post effects and
+  exposure, a temporal reset (except on a renderer that has rendered nothing), `frames`
+  frames each after `World::sync()`, the last one read back on request, then the region,
+  the PNG file and the preview. A lockstep window capture therefore equals a headless
+  capture of the same world at the same size by construction, and the test shows it bit
+  for bit with post effects off and on. A lockstep capture keeps the window's own post
+  settings (it puts them back after) and leaves its last frame on screen.
+- **Frames.** Defaults: deferred 1, or 10 when TAA is on (as specified); the path tracer
+  `spp`, not `spp + 3`. *Correction:* the `+3` compensated a lag: the headless renderer
+  copies every frame into its slot's staging buffer and `getPixelSpan()` returns the copy
+  made `MAX_FRAMES_IN_FLIGHT` (3) frames earlier, so the examples' 10-frame deferred
+  images are frame 7 (and a capture of 3 frames or fewer was black). A capture now keeps
+  the frame it rendered last; the deferred CLI goldens state `--frames 7` and
+  `--frames 27` (the frames the examples write), and the path-traced ones are unchanged
+  at `spp` frames. *Correction:* "no temporal effect" is not true of the hybrid: RT GI
+  keeps a history, so frame 1 and frame 10 of Cornell differ (max_abs 29, 8% of pixels
+  above 4). A converged image needs `frames`.
+- **Readback on request.** `VulkanRenderer::requestReadback()` marks the next frame;
+  `readback()` waits for that frame's fence only and returns its pixels from the frame
+  slot's persistently mapped staging buffer. A window frame copies its final image there
+  (inside the swapchain blit, the image already a transfer source) only when asked;
+  `readbackCopyCount()` still counts only the headless ring (0 in a window) and
+  `requestedReadbackCount()` the asked-for copies. The staging buffers are now
+  host-cached memory when the device offers it coherent: the CPU read of one 1280x720
+  frame from uncached memory took ~20 ms, and every headless frame paid it (a one-frame
+  headless capture went from ~45 ms of CPU to ~1 ms).
+- **Params and result.** `path` is optional; `inline`, `format` (`jpeg` | `png`),
+  `maxSize` (default 768) and `region` are added; `width`/`height` are optional (headless
+  1920x1080; a window host its own size, another is `E_COMMAND`). The result is
+  `{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic,
+  validation?}` and the image travels beside it (`api::CallOutcome::image`): an MCP
+  `image` content block, or natively `"image"` (base64) and `"mimeType"` in the result.
+- **A window host captures deferred only.** *Correction:* the path tracer does not
+  present (its frames have no swapchain path), so a window host answers a path-traced
+  capture with `E_COMMAND`; a headless host renders it.
+- **PNG and JPEG.** *Ruling (ledgered):* stb_image_write's PNG took 7.3 s for one
+  1280x720 Cornell frame, so the capture path writes PNG with its own encoder
+  (`ohao/runtime/image.cpp`): filter Up, the fixed Huffman codes with runs as distance-1
+  matches, four bands of rows deflated on four threads (each byte-aligned by an empty
+  stored block; Adler-32 combined), and stored blocks for a band that does not compress.
+  fpng, the spec's named fallback, would need the network and a new dependency; this
+  needs neither, and `runtime_tests` proves it lossless through stb_image's decoder.
+  Measured on synthetic 1280x720 frames: 4.1 ms (mixed), 6.1 ms (all noise). The preview
+  is an area downscale (3 ms for 1280x720 to 768x432) and stb's JPEG at quality 85
+  (4 ms).
 
 ## Logging
 
@@ -912,6 +993,26 @@ ms (p95 at most 0.6831); the step 6 ops stayed where they were (`world.info` 0.0
 `world.apply` 0.0952–0.0982, `world.step` 0.0387–0.0409 ms). `tools/list` is 10,357 B for
 18 tools.
 
+*As built (step 9), the GPU part.* `serve_bench` starts `ohao serve --window 1280x720
+--hidden assets/scenes/cornell_box.scene.json` (lockstep, no post) as a second child and
+runs 5 warm-up and 50 timed rounds of five `world.step {frames: 1}` (each reply after its
+frame is presented), one `render.capture {inline: true}` and one to a PNG file; the
+readback is the captures' `readbackMs` (that frame's fence and the copy out). Then
+`time.set realtime`, at least 600 idle steps, and the reader thread's CPU time over them
+by `QueryThreadCycleTime` (the thread is found by its name; `GetThreadTimes` counts in
+15.625 ms ticks). Its own load record decides `noisy` (the window host is excluded).
+Measured on 2026-10-23, every run noisy (UnrealEditor 230–313% of a core, or another
+session's python at 85–89%): step to present 0.43–0.56 ms median; PNG capture
+16.5–25.2 ms; reader thread 0.078 ms over 604 steps; **readback 5.39–5.44 ms** (8.3 ms
+under UnrealEditor's GPU load) **and inline capture 26.8–30.9 ms (55 ms under it), over
+their budgets of 2 and 20 ms.** Both are the frame's GPU cost: the renderer's timestamps
+put one Cornell deferred frame at 1280x720 at 5.0–5.6 ms (RT shadows at 8 rays and RT GI
+at 32 samples a pixel), and a fence wait for a frame cannot be shorter than its GPU time;
+the readback itself adds ~0.3 ms. The inline capture in the bench follows five steps
+whose frames are still on the GPU (2–3 frames, 10–15 ms of backlog), then renders and
+reads back its own; with the GPU idle first it measures 12–15 ms. No budget was changed;
+the two go to Frank with the options in the step 9 change record.
+
 ## Engine development by agents (G2)
 
 ### One entry point: `python tools/check.py`
@@ -1060,6 +1161,8 @@ orient, edit, play, capture, replay, read logs), checked by `check_docs.py`.
 - **`ohao serve [scene] [--window [WxH]] [--lockstep | --realtime] [--root DIR] [--out DIR]
   [--allow-path DIR] [--seed S] [--pipe NAME] [--log-level L] [--vsync]`**: headless by
   default; `--window` is the live host. Lockstep by default.
+  *As built (step 9):* also `--hidden` (a window that is never shown, for tests; it
+  presents); `--window` alone is 1280x720.
 - **`ohao doctor [--cpu-only]`** (above).
 - **`ohao run`** gains nothing new but runs on the same host interface; its goldens stay.
 - **`ohao_game [scene]`**: the live host in realtime with no protocol; default scene
@@ -1207,6 +1310,15 @@ GPU:
 17. **`ohao_game` from a scene:** the presentation gate passes unchanged; the scene file
     saves byte-identically after load; the fly camera responds to injected input as test
     14 says.
+   - *As built (step 9):* tests 16 and 17 are `tests/serve/check_live.py` (label `gpu`,
+     22 checks, a hidden window: it presents and captures as a visible one does) and the
+     unchanged `ohao_game_presentation` CTest (600 frames, a resize, 0 readbacks, 0
+     validation messages through teardown, now from the scene file). Also: `api_tests`
+     `sp4_t16_*` (2: the inline image beside the result, natively and for MCP, and the
+     params rules; `changeCount`), `rpc_tests` `sp4_t16_*` (3: `poll` holds replies until
+     `flush` while ping is answered; `stop` interrupts an open read; the MCP image block),
+     `runtime_tests` `sp4_t16_*` (2: the PNG writer round trips through stb_image for a
+     frame, all noise and odd sizes; crop, the area downscale, the JPEG).
 18. **Benchmarks:** `serve_bench --check` passes every budget, five consecutive runs.
 19. **End-to-end MCP acceptance:** `tests/serve/e2e_mcp.py` (stdlib-only MCP client)
     runs: initialize → load `helmet_game` → summary → apply an edit → record → inject a
@@ -1323,6 +1435,9 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
    engine thread, lockstep render-on-demand, readback on request, inline previews,
    `ohao_game` on `helmet_game.scene.json`, GPU budgets in `serve_bench`. Tests 16, 17,
    18 (GPU part).
+   - *Built 2026-10-23.* See "Live host" and "Frame capture", as built, the host
+     interface note, and "Budgets", as built: two GPU budgets (readback, inline capture)
+     miss on the frame's own GPU cost and wait for Frank's ruling.
 10. **Named pipe and limits.** `--pipe`, the DACL and remote rejection, single client, the
     remaining caps. Test 15 (rest).
 11. **Acceptance and docs.** `tests/serve/e2e_mcp.py`, `.mcp.json`, the manual Claude Code

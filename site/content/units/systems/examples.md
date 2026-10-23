@@ -7,8 +7,8 @@ standard: v2
 
 ## A scene is a `main()` — or a file the `main()` can write
 
-The examples build their scenes two ways. The older way is still how `turntable`,
-`env_demo` and `ohao_game` work: the scene exists only as the C++ that constructs it —
+The examples build their scenes two ways. The older way is still how `turntable`
+and `env_demo` work: the scene exists only as the C++ that constructs it —
 an `ecs::World`, then `ecs::spawnModel` for each mesh (which registers the geometry
 and materials with the renderer's `RenderScene` and creates an entity carrying a
 `MeshRenderer`) and `ecs::spawnLight` for each light.
@@ -22,7 +22,7 @@ GPU-free builders in `examples/example_scenes.hpp` — `buildCornellBox` and
 {{cite examples/example_scenes.hpp "addMesh(world, name, ecs::MeshSource{ecs::QuadPrim{a, b, c, d, normal, color}}, surface(color, 0.95f));"}}
 
 The instantiate system turns each `MeshSource` into a `MeshRenderer`, and
-`host::applySceneView` (`tools/ohao/scene_host.hpp`) pushes the camera and the
+`runtime::applySceneView` (`ohao/runtime/scene_view_apply.hpp`) pushes the camera and the
 environment into the renderer. Because nothing in the builder touches the GPU, both
 examples take `--save-scene <path>`, which writes the world as a canonical scene file
 and exits before a renderer exists:
@@ -33,7 +33,9 @@ The two files that flag produced are checked in as `assets/scenes/cornell_box.sc
 and `assets/scenes/damaged_helmet.scene.json`, and they are what the `ohao` CLI
 (`tools/ohao`) loads: `schema`, `validate`, `fmt`, `apply`, `query`, `summary`, and
 `run`, whose `--render` renders a scene file through the same instantiate and
-scene-view path. In
+scene-view path. A third file, `assets/scenes/helmet_game.scene.json`, is the helmet
+scene plus a spinning cube (a `Spin`), a `FlyController` on the camera and an
+`InputActions` entity binding the keys; it is what `ohao_game` plays. In
 every driver the render extract is installed on the world once, and from then on
 `world.sync()` is what turns entity edits into GPU state.
 
@@ -46,11 +48,15 @@ own bounds by `SceneFramer`. `turntable` picks its room from a mode string and
 orbits. `env_demo` drops a 50 m procedural ground quad under the model so it stops
 floating in void.
 
-The fifth, `ohao_game`, is not a harness. It hands a helmet-on-a-floor scene to
-`ohao_runtime`'s `Application`, which renders deferred into a swapchain and runs a
-fixed-step loop with a WASD fly camera; nothing is read back to the CPU, and its
-`--frames N` mode fails the run if anything was.
+The fifth, `ohao_game`, is not a harness and builds no scene. It loads a scene file
+(by default `helmet_game.scene.json`) with a `scene.load` call on the session of
+`ohao_runtime`'s `LiveHost`, turns bloom, TAA and SSAO on at exposure 1, and runs the
+host's realtime loop: deferred into a swapchain, a fixed-step simulation, the scene's
+`FlyController` flying the camera and its `Spin` turning the cube. Its own code only
+quits on the `quit` action and captures the cursor while `look` is held. Nothing is
+read back to the CPU unasked, and its `--frames N` mode fails the run if anything was.
 
+{{cite examples/ohao_game.cpp "const std::string loaded = host.session().call("scene.load", params);"}}
 {{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
 
 Everything below — the `+ 3` loop, the shared argv parser, the destruction
@@ -98,12 +104,14 @@ argument entirely.
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
 
-The `ohao` CLI's render host copies the rule — `spp + 3` RT frames, ten deferred
-unless `--frames` says otherwise — so a checked-in scene rendered by `ohao run`
-lands on the same frame count as the example that wrote it; the helmet's deferred
-run has to ask for its thirty explicitly.
+The `ohao` CLI does not copy the rule, because it has no lag to drain: its capture
+asks for the last frame it renders (`requestReadback()`) and reads exactly that
+frame back. It renders `spp` RT frames, and one deferred frame (ten with TAA) unless
+`--frames` says otherwise. To land on the frame an example saved, a scene rendered by
+`ohao run` asks for the example's count minus three — the golden manifest passes
+`--frames 7` for the Cornell box and `--frames 27` for the helmet.
 
-{{cite tools/ohao/render_host.cpp "const int frames = r.frames > 0 ? r.frames : (mode == RenderMode::Deferred ? 10 : r.spp + 3);"}}
+{{cite ohao/runtime/frame_capture.cpp "if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame"}}
 
 ## Where the formula actually holds
 

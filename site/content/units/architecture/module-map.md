@@ -77,21 +77,23 @@ headers (`RenderScene`, `model_upload`, the camera framer) and calls into
 `ecs/` header, so the edge points one way.
 
 `ohao_api` is the agent API — the `Session` method table, edit commands and queries —
-over the ECS and reflect, and it never touches the GPU: rendering is a handler a host
-installs.
+over the ECS and reflect, and it never touches the GPU: rendering is an `api::Host`
+that the host program installs with `Session::setHost`.
 
 {{cite ohao/api/CMakeLists.txt "target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_reflect ohao_unordered_dense)"}}
 
-`ohao_runtime` — window, input, fixed-step clock, application loop — is the host
-layer. It links core, the ECS, the GPU archive and GLFW:
+`ohao_runtime` — window, fixed-step clock, the live host's loop, the shared frame
+capture — is the host layer. It links the API, core, the ECS, the GPU archive and GLFW:
 
-{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_core ohao_ecs ohao_gpu_vulkan glm glfw"}}
+{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_api ohao_core ohao_ecs ohao_gpu_vulkan glm glfw"}}
 
-Nothing else in `ohao/` includes a `runtime/` header, and only `ohao_game` and
-`runtime_tests` link it. `Application` owns the window, the renderer and the
-`ecs::World`, so the archive is the one place where all three layers meet; it adds
-a layer and no edge back down. The engine's cyclic surface is the pair of archives
-below it, not the host.
+Nothing else in `ohao/` includes a `runtime/` header. `ohao_game`, the CLI's
+`ohao_host` and `runtime_tests` link it; `cornell_box`, `model_viewer` and
+`scene_view_gpu_test` include only its header-only `scene_view_apply.hpp`.
+`runtime::LiveHost` owns the window, the renderer, the `ecs::World` and an
+`api::Session`, so the archive is the one place where all of those layers meet; it
+adds a layer and no edge back down. The engine's cyclic surface is the pair of
+archives below it, not the host.
 
 ## The one cycle: GPU calls up into render
 

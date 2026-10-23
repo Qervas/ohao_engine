@@ -54,7 +54,7 @@ The extract records which entity it gave each slot to, and it only ever updates 
 
 Teardown is the same ownership read in reverse. `World`'s member order destroys its systems before its registry, so `ExtractState`'s destructor still has a live registry to disconnect from, and it destroys every instance it owns and clears the light list it set. That is why the host must drop the world before the renderer:
 
-{{cite ohao/runtime/application.cpp "m_world.reset();   // releases its RenderScene slots while the RenderScene exists"}}
+{{cite ohao/runtime/live_host.cpp "m_world.reset();   // releases its RenderScene slots while the RenderScene exists"}}
 
 ## Lights, in creation order
 
@@ -90,4 +90,4 @@ The skip is final until something re-dirties the entity. Step 4 clears `RenderDi
 - The `RenderScene` must outlive the `World`. Destroying the world releases its slots and clears its lights through the scene. `VulkanRenderer::shutdown()` only shuts the scene down; the object lives, inert, until the renderer is destroyed, so a world released after an explicit shutdown is safe.
 - `MeshRenderer`, `Light`, `EmissiveProxyLight` and `GiMaterialLegacy` are seen only through EnTT signals: write them with `patch` or `replace` (or emplace/remove them). A write through `get<>()` never reaches the scene.
 - At most one extract per world. One `RenderScene` may serve several worlds, but each world's light rebuild replaces the whole light list, so only one of them can own lights.
-- A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `Application` loop destroys in its update hook and runs `World::update` before `render()`, so it never renders in that gap.
+- A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `LiveHost` loop destroys in its hooks (or a request it pumped) and runs `World::sync()` before every `render()`, so it never renders in that gap.

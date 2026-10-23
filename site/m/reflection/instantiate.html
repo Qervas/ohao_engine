@@ -102,9 +102,9 @@ $$</div>
 </div>
 <div class="section-rule"><h2 id="applying-it-applysceneview">Applying it: `applySceneView`</h2></div>
 <div class="prose reveal">
-<p>The host half is header-only in `tools/ohao/scene_host.hpp`, and `cornell_box`, `model_viewer` and the CLI&#x27;s render host share it. It sets the renderer camera&#x27;s position, its perspective (the field of view and planes come from the component, and the aspect ratio stays the render target&#x27;s) and its pitch and yaw. For the environment it resolves the HDRI through the same resolver and sets the intensity scale:</p>
-<div class="citation-chip"><code class="citation-code">renderer.setEnvironmentMap(path.string());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/scene_host.hpp#L47" target="_blank" rel="noopener">tools/ohao/scene_host.hpp:47</a></div>
-<p>An HDRI path the resolver rejects becomes a warning, not an error. Removing the HDRI does not unload a map the renderer already holds, because the renderer has no unload. `applySceneView` also does not reset path-tracer accumulation. A host that changes the view between frames has to do that itself; the CLI&#x27;s render host restarts accumulation on every capture after the first.</p>
+<p>The host half is `runtime::applySceneView`, header-only in `ohao/runtime/scene_view_apply.hpp`, and `cornell_box`, `model_viewer`, the shared capture procedure (`runtime::captureFrame`, behind the CLI&#x27;s render host) and the window&#x27;s `LiveHost` all call it; the live host does so before every frame it renders. It sets the renderer camera&#x27;s position, its perspective (the field of view and planes come from the component, and the aspect ratio stays the render target&#x27;s) and its pitch and yaw. For the environment it resolves the HDRI through the same resolver and sets the intensity scale:</p>
+<div class="citation-chip"><code class="citation-code">renderer.setEnvironmentMap(path.string());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/scene_view_apply.hpp#L46" target="_blank" rel="noopener">ohao/runtime/scene_view_apply.hpp:46</a></div>
+<p>An HDRI path the resolver rejects becomes a warning, not an error. Removing the HDRI does not unload a map the renderer already holds, because the renderer has no unload. `applySceneView` also does not reset path-tracer accumulation. A host that changes the view between frames has to do that itself; the CLI&#x27;s render host restarts accumulation on every capture after the first, and the live host on every lockstep capture.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
@@ -123,9 +123,10 @@ $$</div>
         <div class="row"><code>ohao/ecs/asset_resolver.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/world.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/scene_view.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>tools/ohao/scene_host.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/scene_view_apply.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/asset_resolver.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/scene_view.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/ohao/scene_host.hpp</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

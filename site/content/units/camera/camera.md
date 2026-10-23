@@ -50,8 +50,13 @@ eagerly.
 
 :::why
 There is no dirty flag: `setPosition` recomputes a perspective matrix that cannot
-have changed, and `ohao_game`'s fly camera calls `setPosition` every frame and
-`setRotation` on every frame the look button is held. The rejected
+have changed, and every host calls `setPosition`, `setPerspectiveProjection` and
+`setRotation` on every frame it renders a world with a camera — `ohao_game` included,
+whose `FlyController` moves the camera entity's `Transform`, not the `Camera`:
+
+{{cite ohao/runtime/scene_view_apply.hpp "cam.setRotation(c.pitchDeg, c.yawDeg);"}}
+
+The rejected
 alternative — lazy recompute behind a dirty bit — would force `getViewMatrix() const`
 to be mutable-cached and would open the classic stale-matrix window where a setter
 runs after the frame's matrices were already read. A few redundant
@@ -61,13 +66,14 @@ view matrix is a wrong image.
 
 ## The basis reaches the renderer through the view matrix
 
-`getFront`, `getRight`, `getPitch` and `getYaw` have one caller in the tree, the
-windowed host's fly camera, which seeds its angles from the camera and moves along
-its basis:
+`getFront`, `getUp`, `getRight`, `getPitch` and `getYaw` have no caller in the
+tree. The windowed host's fly camera is an ECS system that turns and moves the
+camera entity's `Transform` from the world's input, and the scene view hands the
+result to the camera as a position and two angles:
 
-{{cite examples/ohao_game.cpp "cam.getFront() * (a.input().axis("}}
+{{cite ohao/ecs/world.cpp "addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); });"}}
 
-`getUp` has none. No renderer reads the basis through these accessors — it
+No renderer reads the basis through these accessors either — it
 round-trips through the view matrix. `glm::lookAt` packs the three axes into the
 rotation block:
 

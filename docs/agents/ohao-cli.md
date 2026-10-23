@@ -138,8 +138,10 @@ $ build/Release/ohao fmt build/doc_tmp/edited.scene.json --compact -o build/doc_
 ### Render
 
 Rendering needs a GPU. The first capture starts the renderer (a second or so); `ms` in
-the result includes that. Without `--post`, a deferred capture renders as `cornell_box`
-does; `model_viewer` turns on `--post taa,ssao,bloom --exposure 1`.
+the result includes that. A capture renders `--frames` frames from a reset and keeps the
+last: by default 1 deferred frame (10 with TAA) or `--spp` path-traced ones. The hybrid's
+RT GI keeps a history, so give `--frames` (about 10) for converged indirect light. Without
+`--post` no post effect is on; `model_viewer` turns on `--post taa,ssao,bloom --exposure 1`.
 
 ```console
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell.png --mode deferred --size 960x540   # gpu
@@ -205,6 +207,18 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
   a root for both. Anything else is `E_ACCESS`.
 - **Closing stdin ends the session:** the running request is cancelled, queued ones are
   dropped, and the server exits 0. Wait for your last reply before you close.
+- **`--window [WxH]`** (default 1280x720) serves from the live host: a window a human can
+  watch, lockstep by default (`--realtime` to play; `time.set` switches), `--hidden` for
+  tests, `--vsync`. Requests run once per frame, and each reply is sent after the frame
+  it caused was presented. In lockstep the window renders only when the world changed;
+  `render.capture` renders the world as a headless host would (the same pixels, deferred
+  only, at the window's size), in realtime it returns the next presented frame
+  (`deterministic: false`). A minimized window cannot capture (`E_STATE`). Closing the
+  window ends the session like closing stdin.
+- **Images.** `render.capture {inline: true}` returns a preview beside the result: over
+  MCP an `image` content block, natively `"image"` (base64) and `"mimeType"`. A JPEG at
+  most 768 px on its long side costs ~440 tokens; `region: [x, y, w, h]` zooms first,
+  `format: "png"` gives exact pixels, `path` writes the full PNG.
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
@@ -238,7 +252,7 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `world.snapshot` | `{name}` → `{name, entities, bytes}` | Captures the world in memory under a name. |
 | `world.diff` | `{snapshot, fields?, limit = 50}` → `{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}` | What changed since a snapshot. `"/Type/field"` with old and new values in file form, `"/Type"` for a component added or removed; `fields` keeps only the listed ones. `count` counts changed entities; `more` what `limit` left out. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
-| `render.capture` | `{path, mode = deferred, spp = 16, frames?, width = 1920, height = 1080, denoise = none, post = [], exposure?}` → `{path, frames, ms, validation?}` | Renders through the world's Camera and Environment to a PNG (needs `ohao run` or `ohao serve`, a GPU). |
+| `render.capture` | `{path?, inline = false, format = jpeg, maxSize = 768, region?, mode = deferred, spp = 16, frames?, width?, height?, denoise = none, post = [], exposure?}` → `{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?}` (+ the inline image) | Renders through the world's Camera and Environment: `frames` from a reset (default 1 deferred, 10 with TAA, `spp` path-traced), the last kept, to a PNG (`path`) and/or a preview (`inline`). Needs a GPU host (`ohao run`, `ohao serve`; a window host captures deferred at its own size). Size defaults to 1920x1080 headless. |
 | `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
 
 ## Edit commands

@@ -46,7 +46,7 @@
 $$</div>
 <p>with $\wedge$ the bitwise AND over eight bits. The scheme the header sketches gives bit 0 the meaning &quot;GI and shadow rays may see this,&quot; reserving bits 1–7 for ray classes that do not exist yet (reflection, AO). A ray that wants only rigid geometry passes $m_r = \texttt{0x01}$; geometry it must not see clears bit 0.</p>
 <p>Only the ray-mask half is hybrid-specific. Every `traceRayEXT` in `pt_raygen.rgen`, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` passes `0xFF`, so the path tracers never cull by mask; `rt_shadow.rgen` and `rt_gi.rgen` are the only rays in the tree that pass anything else. The instance-mask half is *shared*: the `RenderScene` stamps the mask into every instance of its one TLAS, and that same TLAS is what the deferred renderer&#x27;s RT passes and the path tracer both trace.</p>
-<div class="citation-chip"><code class="citation-code">rtRenderer-&gt;setSceneBuffers(*m_renderScene);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L254" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:254</a></div>
+<div class="citation-chip"><code class="citation-code">rtRenderer-&gt;setSceneBuffers(*m_renderScene);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L303" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:303</a></div>
 <p>A bad instance mask is therefore not contained to the hybrid passes.</p>
 </div>
 <div class="section-rule"><h2 id="two-masks-in-use-five-constants-named">Two masks in use, five constants named</h2></div>

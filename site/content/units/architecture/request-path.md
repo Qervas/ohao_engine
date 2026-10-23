@@ -23,21 +23,23 @@ in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer`
 {{cite examples/cornell_box.cpp "const uint32_t W = 1920, H = 1080;"}}
 
 The windowed host, `ohao_game`, runs the same sequence through `ohao_runtime`'s
-`Application` with two substitutions: the renderer is sized from the window's
+`LiveHost` with two substitutions: the renderer is sized from the window's
 framebuffer extent and initialised against a present target, and the loop presents
-to a swapchain instead of reading pixels back. `Application` also owns the
-`ecs::World` and installs the extract itself:
+to a swapchain instead of reading pixels back. `LiveHost` also owns the
+`ecs::World` and an `api::Session` on it, and installs the extract and instantiate
+itself:
 
-{{cite ohao/runtime/application.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
+{{cite ohao/runtime/live_host.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
 
 Scene construction takes one of two forms. `cornell_box` and `model_viewer` build
 the entities a scene file holds — a `MeshSource` naming a primitive or a model path,
 a `MaterialOverride`, lights, a `Camera` and an `Environment` — and install
-instantiate, which builds each GPU mesh on the first update:
+instantiate, which builds each GPU mesh on the first update; `ohao_game` and
+`ohao run` load those entities from a scene file instead:
 
 {{cite examples/cornell_box.cpp "ecs::installInstantiate(world, renderer.renderScene(), renderer.getTextureManager(), assets);"}}
 
-`env_demo`, `turntable` and `ohao_game` still call the `spawn` helpers, which upload
+`env_demo` and `turntable` still call the `spawn` helpers, which upload
 directly. `spawnModel` registers the mesh and its materials with the `RenderScene` —
 an upload and a BLAS build, blocking, at load time — and returns an entity carrying a
 `MeshRenderer` that holds the handles:
@@ -50,14 +52,15 @@ and neither makes anything visible yet: an entity reaches the screen only after 
 
 ## The frame, from game hooks to passes
 
-One frame is the same chain in every host. In `ohao_game` the loop runs the steps
-its timeline (`core/timeline.hpp`) owes for the wall time that passed — for each, the
-fixed-step game hook and the world's simulate phase — then the per-frame hook once,
-then the world's sync phase, then the renderer:
+One frame is the same chain in every host. In `ohao_game` the live host runs the
+steps its timeline (`core/timeline.hpp`) owes for the wall time that passed — for
+each, `Session::step` (the step's input, then the world's simulate phase) and then
+the fixed-step game hook — then the per-frame hook once, then the world's sync phase,
+then the renderer:
 
-{{cite ohao/runtime/application.cpp "m_world->sync();"}}
+{{cite ohao/runtime/live_host.cpp "m_world->sync();   // instantiate, transforms, the render extract: never a simulation step"}}
 
-The headless drivers have no `Application`, so they call `world.sync()` before each
+The headless drivers have no live host, so they call `world.sync()` before each
 `render()` themselves: a render never steps the simulation. The sync phase runs its
 systems in exactly the order they were added. The constructor adds the structural
 `transform` (and, to the simulate phase, the engine-provided `spin`):
@@ -90,7 +93,7 @@ RT path the profile is handed the freshly updated buffers first:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->setSceneBuffers(*m_renderScene);"}}
 
-So the order is game hooks → spin → instantiate → `TransformSystem` → `RenderExtract`
+So the order is spin → game hooks → instantiate → `TransformSystem` → `RenderExtract`
 → `RenderScene::recordUpdates` → passes, and every arrow is a one-way hand-off.
 
 Two mistakes in that order fail silently. `renderScene()` dereferences the
@@ -110,7 +113,7 @@ sky-lit frame — not black, and not an error either.
 Teardown runs the same chain backwards. The world holds `RenderScene` slots, so it
 goes first, while the scene still exists:
 
-{{cite ohao/runtime/application.cpp "// releases its RenderScene slots while the RenderScene exists"}}
+{{cite ohao/runtime/live_host.cpp "m_world.reset();   // releases its RenderScene slots while the RenderScene exists"}}
 
 ## Why ray tracing has nothing to replay
 
@@ -271,7 +274,7 @@ down would buy it nothing.
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
 
 :::key
-Scene data reaches the GPU along one chain — game hooks, spin, instantiate,
+Scene data reaches the GPU along one chain — spin, game hooks, instantiate,
 `TransformSystem`, `RenderExtract`, `RenderScene::recordUpdates`, passes — and there is one authority
 over RT behaviour (the active `IRTRenderPipeline`, reasserted every frame). Ordering
 mistakes around the chain fail *silently* — an extract that was never installed, a
@@ -282,8 +285,8 @@ empty frame or ignores a flag, suspect call order before suspecting the shaders.
 ## Contracts
 
 - `initialize()` must precede `renderScene()`. Before it, the `RenderScene` does not exist and the accessor returns a null reference.
-- Install the render extract (`ecs::installRenderExtract`, or let `Application` do it) before expecting entities on screen, and run `world.sync()` before every `render()` (never `update`, which would also step the simulation). Spawning uploads a mesh and its materials; only the extract makes an instance of it.
-- The `RenderScene` must outlive the `ecs::World`. `Application` resets the world first; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
+- Install the render extract (`ecs::installRenderExtract`, or let `LiveHost` do it) before expecting entities on screen, and run `world.sync()` before every `render()` (never `update`, which would also step the simulation). Spawning uploads a mesh and its materials; only the extract makes an instance of it.
+- The `RenderScene` must outlive the `ecs::World`. `LiveHost::shutdown` resets the session and then the world before the renderer; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
 - `setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.
 - In the modes that return the ring buffer (None, Atrous, DLSSRR) the pixels trail the GPU by `MAX_FRAMES_IN_FLIGHT` calls. Reading them after fewer than four `render()` calls returns a staging slot that was never written.
 - Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the `getDefaultSettings()` reset inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.

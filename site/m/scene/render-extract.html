@@ -72,7 +72,7 @@
 <div class="citation-chip"><code class="citation-code">if (rs-&gt;slot &lt; m_owner.size() &amp;&amp; m_owner[rs-&gt;slot] == e)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L104" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:104</a></div>
 <p>`RenderSlot` is an ordinary component, visible to game code, but it is the extract&#x27;s alone to write. The owner check means a hand-written or copied `RenderSlot` can never redirect another entity&#x27;s instance; the cost is that an entity carrying a forged one is neither updated (owner mismatch) nor given a real slot (it already has a `RenderSlot`), and simply never renders.</p>
 <p>Teardown is the same ownership read in reverse. `World`&#x27;s member order destroys its systems before its registry, so `ExtractState`&#x27;s destructor still has a live registry to disconnect from, and it destroys every instance it owns and clears the light list it set. That is why the host must drop the world before the renderer:</p>
-<div class="citation-chip"><code class="citation-code">m_world.reset();   // releases its RenderScene slots while the RenderScene exists</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/application.cpp#L78" target="_blank" rel="noopener">ohao/runtime/application.cpp:78</a></div>
+<div class="citation-chip"><code class="citation-code">m_world.reset();   // releases its RenderScene slots while the RenderScene exists</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L216" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:216</a></div>
 </div>
 <div class="section-rule"><h2 id="lights-in-creation-order">Lights, in creation order</h2></div>
 <div class="prose reveal">
@@ -100,14 +100,14 @@ $$</div>
 <li>The `RenderScene` must outlive the `World`. Destroying the world releases its slots and clears its lights through the scene. `VulkanRenderer::shutdown()` only shuts the scene down; the object lives, inert, until the renderer is destroyed, so a world released after an explicit shutdown is safe.</li>
 <li>`MeshRenderer`, `Light`, `EmissiveProxyLight` and `GiMaterialLegacy` are seen only through EnTT signals: write them with `patch` or `replace` (or emplace/remove them). A write through `get&lt;&gt;()` never reaches the scene.</li>
 <li>At most one extract per world. One `RenderScene` may serve several worlds, but each world&#x27;s light rebuild replaces the whole light list, so only one of them can own lights.</li>
-<li>A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `Application` loop destroys in its update hook and runs `World::update` before `render()`, so it never renders in that gap.</li>
+<li>A slot is released at the start of the next `render_extract` run, not when the entity is destroyed. A frame rendered between the two still draws and traces the instance at its last pose; the `LiveHost` loop destroys in its hooks (or a request it pumped) and runs `World::sync()` before every `render()`, so it never renders in that gap.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/ecs/render_extract.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/render_extract.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/runtime/application.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/live_host.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/light_table.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/spawn.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/spawn.cpp</code><span class="desc"></span></div>
