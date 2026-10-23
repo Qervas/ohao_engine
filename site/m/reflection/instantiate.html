@@ -58,7 +58,7 @@
 <div class="section-rule"><h2 id="one-mesh-per-distinct-value">One mesh per distinct value</h2></div>
 <div class="prose reveal">
 <p>Meshes are shared by value, not by entity. The cache key is the variant&#x27;s alternative index followed by the raw bytes of the primitive&#x27;s parameters, or, for a model, its path and GUID:</p>
-<div class="citation-chip"><code class="citation-code">static_assert(sizeof(SpherePrim) == 12 &amp;&amp; sizeof(CubePrim) == 4 &amp;&amp; sizeof(PlatformPrim) == 12 &amp;&amp;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L32" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:32</a></div>
+<div class="citation-chip"><code class="citation-code">static_assert(sizeof(SpherePrim) == 12 &amp;&amp; sizeof(CubePrim) == 4 &amp;&amp; sizeof(PlatformPrim) == 12 &amp;&amp;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L33" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:33</a></div>
 <p>The `static_assert` is the guard: keying on bytes is only sound if the primitive structs have no padding, since padding bytes are indeterminate. Two consequences follow from a byte key:</p>
 <ul>
 <li>Two values that compare equal but differ in bits get two meshes. `-0.0` and `0.0` are an example.</li>
@@ -71,7 +71,7 @@
 <div class="section-rule"><h2 id="materials-by-value-for-a-reason">Materials by value, for a reason</h2></div>
 <div class="prose reveal">
 <p>`MaterialTable` has a fixed capacity of 4096 entries and no way to free one. When it is full it logs once and returns the default material. Registering a material per entity would fill it in a 10k-entity scene, and every edit would use up another slot. So override materials are deduplicated on the bit patterns of their six floats, in a map that lives as long as the system:</p>
-<div class="citation-chip"><code class="citation-code">const std::array&lt;uint32_t, 6&gt; key{std::bit_cast&lt;uint32_t&gt;(d.baseColor.r), std::bit_cast&lt;uint32_t&gt;(d.baseColor.g),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L223" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:223</a></div>
+<div class="citation-chip"><code class="citation-code">const std::array&lt;uint32_t, 6&gt; key{std::bit_cast&lt;uint32_t&gt;(d.baseColor.r), std::bit_cast&lt;uint32_t&gt;(d.baseColor.g),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L224" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:224</a></div>
 <p>A model that has its own materials always uses them. For such a model the override only feeds the legacy GI word, which is what `spawnModel` does too (t11 checks both). Model materials are cached in the mesh entry, not in that map. If a model&#x27;s last user goes and the model is instantiated again later, its materials are registered a second time and take more table slots.</p>
 </div>
 <div class="section-rule"><h2 id="model-files-through-the-resolver">Model files through the resolver</h2></div>
@@ -86,7 +86,7 @@
 <div class="citation-chip"><code class="citation-code">// Structural: transforms are propagated before every host system (instantiate is</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.cpp#L54" target="_blank" rel="noopener">ohao/ecs/world.cpp:54</a></div>
 <p>The order is what makes a new mesh appear in the frame its `MeshSource` appears. Emplacing a `MeshRenderer` fires the extract&#x27;s construct signal, which tags the entity `RenderDirty`, and the extract runs later in the same update and gives it an instance slot. If instantiate ran after the extract, every new or edited mesh would be one frame late. A second `installInstantiate` on the same world logs and is ignored; a flag in the registry context guards it.</p>
 <p>The system also works on a world that already has entities. Its constructor tags every existing `MeshSource`, and the render extract&#x27;s constructor does the same for existing `MeshRenderer`s:</p>
-<div class="citation-chip"><code class="citation-code">for (const entt::entity e : m_reg.view&lt;MeshSource&gt;()) m_reg.emplace_or_replace&lt;InstantiateDirty&gt;(e);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L127" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:127</a></div>
+<div class="citation-chip"><code class="citation-code">for (const entt::entity e : m_reg.view&lt;MeshSource&gt;()) m_reg.emplace_or_replace&lt;InstantiateDirty&gt;(e);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/instantiate.cpp#L128" target="_blank" rel="noopener">ohao/ecs/instantiate.cpp:128</a></div>
 <p>`ohao run` depends on this. It loads the scene with no GPU, and installs the extract and instantiate only on the first `render.capture`.</p>
 </div>
 <div class="section-rule"><h2 id="the-scene-view">The scene view</h2></div>

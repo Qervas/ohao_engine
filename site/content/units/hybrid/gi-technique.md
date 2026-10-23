@@ -252,10 +252,10 @@ VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00292, whose runtime
 consequence is undefined — not a guaranteed error code to branch on. Should
 `vkCreatePipelineLayout` return failure anyway, the fallback is orderly and loud:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "[RTGI] Failed to create pipeline layout"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "RTGI: failed to create pipeline layout"}}
 
-`init()` then returns false, the renderer prints `DeferredRenderer: RTGI not
-available`, and the frame runs without GI. Soft, but not silent.
+`init()` then returns false, the renderer logs `DeferredRenderer: RTGI not
+available` (a warning on the `render` channel), and the frame runs without GI. Soft, but not silent.
 
 ## The binding that names direct light and holds depth
 

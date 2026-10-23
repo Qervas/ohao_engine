@@ -250,9 +250,9 @@ light buffer and the two CDFs.
 Adding a storage-image or storage-buffer binding without bumping that count makes
 `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and
 `createDescriptorResources` return false. That failure is named, not silent —
-`init()` prints it to stderr and aborts:
+`init()` logs it as an error on the `render` channel and aborts:
 
-{{cite ohao/render/rt/path_tracer.cpp "[PathTracer] Failed to create descriptor resources"}}
+{{cite ohao/render/rt/path_tracer.cpp "PathTracer: failed to create descriptor resources"}}
 
 It is total, though. `ensureRTRenderer` drops the half-built profile when `init`
 fails, and the RT dispatch then returns immediately because `getRTRenderer` hands

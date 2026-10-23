@@ -518,6 +518,22 @@ enum class Level : uint8_t { Trace, Debug, Info, Warn, Error };
   with a channel and level. A source lint then forbids them under `ohao/` (tests and tools
   keep their own output).
 
+*As built (step 4, 2026-10-23).* `ohao/core/log.{hpp,cpp}`. `OHAO_LOG(Info, render, "…{}",
+x)`: level and channel are tokens, the rest a `std::format` string checked at compile time;
+below the threshold the arguments are not evaluated. Above it the message is formatted into
+a thread-local buffer, cut at 1 KB on a whole UTF-8 character, and written to the ring under
+one mutex. A repeat raises the newest record's `repeat` in place (no new `seq`), so a reader
+past it does not see the new count. Sinks have their own level, receive `write` and
+`repeated` under the logger's lock in record order, and must not log. The stderr sink prints
+`<L> <channel>: <msg>` (`L` in `TDIWE`) and folds a run of repeats into
+`... repeated N more times`. `OHAO_LOG_LEVEL` sets the threshold at start-up. The renderer
+stamps the frame (`log::setFrame`) as each deferred or RT frame starts. Validation messages
+are `Error`/`Warn` records on `validation` as `<VUID> | <text>`; `check_validation.py` reads
+those lines and the repeat lines. The old `ConsoleWidget` facade (five physics files, its
+own `OHAO_LOG(msg)` macro) is deleted. The print lint is `reflect_tests` `sp4_t02_*` (whole
+words: `snprintf` is not `printf`; the logger's own stderr sink is the one allowlisted use).
+The state is a leaked singleton, so records written during static teardown are safe.
+
 ## Determinism
 
 Spec 3's contract, extended:
@@ -891,6 +907,10 @@ CPU (no device):
      and `--gpu` (gpu, the device checks pass on this machine).
 6. **Logger:** level filtering, ring wrap and `dropped`, repeat collapse, channel filter,
    `since` paging, concurrent writers (no torn records), sink routing.
+   - *As built (step 4):* `log_tests` (quick, 10 tests `sp4_t06_*`): also arguments below
+     the threshold are not evaluated, the frame and time stamps, the 1 KB cut on a UTF-8
+     boundary, level and channel names, and the stderr line format with repeats folded
+     (stderr redirected to a file).
 7. **JSON-RPC framing:** CRLF, partial reads across buffer boundaries, oversize lines,
    invalid JSON (-32700), non-objects and batches (-32600), ids echoed byte for byte
    (strings, negatives, 2^63), notifications get no reply, unknown methods (-32601 with a
@@ -1002,6 +1022,14 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
      `_Python3_EXECUTABLE`), so its module check used whichever Python ran it.
 4. **Logger.** `ohao/core/log`; every engine print migrated; validation messages into
    their channel; the print lint. Test 6, test 2 (print part); log budgets measured.
+   - *Done 2026-10-23.* See "Logging", as built. The log budgets are measured by
+     `log_bench` (`tools/bench`, label `bench`) against `tests/bench/serve_budgets.json`,
+     not yet by `serve_bench`, which step 6 builds; step 6 folds them in. `log_bench`
+     already applies the calibration rule (`--calibrate` writes
+     `build/serve_bench_reference.json`; >25% slower is `noisy`, exit 2) and, at the
+     reviewer's request, records every other process that used CPU during the run
+     (`tools/bench/bench_env.hpp`): more than 50% of a core in total is also `noisy`.
+     The check script's rerun of a noisy bench is still step 6's.
 5. **Protocol core and headless `ohao serve`.** `ohao_rpc` (framing, ordering, errors,
    cancellation, progress), the MCP adapter, method params as reflected structs (the
    catalogue's method table gains schemas; `schemaHash` changes once), `engine.info`,

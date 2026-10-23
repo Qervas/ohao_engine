@@ -43,9 +43,9 @@ window.OHAO_NAV_TREE = [
         "href": "m/core/command-result.html"
       },
       {
-        "id": "core/console-widget",
-        "title": "Console widget",
-        "href": "m/core/console-widget.html"
+        "id": "core/log",
+        "title": "Logger",
+        "href": "m/core/log.html"
       }
     ]
   },

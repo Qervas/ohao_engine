@@ -9,11 +9,11 @@ standard: v2
 
 `ohao` is the session API as a process: `schema`, `validate`, `fmt`, `apply`, `query`, `summary` and `run`. Its caller is usually a script or an agent that parses stdout, so its contract is strict. Each invocation prints one JSON document, `{"result": …}` or `{"error": {code, message, data}}`. `run --script` prints one JSON line per operation instead. Logs never appear on stdout, and the exit code gives the class of failure.
 
-Keeping logs off stdout takes some work, because the engine logs to `std::cout`. `VulkanRenderer` alone prints several lines while it creates its deferred renderer. The first thing `main` does is redirect at the descriptor level:
+The engine's own messages already stay off stdout: they go through the logger, whose default sink writes to stderr. Third-party code is another matter (Jolt, NRD, assimp and the driver can all print), so the first thing `main` does is redirect at the descriptor level:
 
 {{cite tools/ohao/main.cpp "const int json = _dup(_fileno(stdout));"}}
 
-The real stdout is duplicated into a private descriptor, and descriptor 1 is then pointed at stderr with `_dup2`. Every later `printf` or `std::cout` from anywhere in the engine lands on stderr, and the CLI writes its JSON through a `FILE*` opened on the private copy. That copy is set to binary first: a duplicated descriptor keeps text mode, and the step-9 record lists the resulting `\r\n` line endings as one of the bugs found while building the CLI. `emit` flushes after every document, so a consumer reading line by line sees each operation as it finishes. If the duplication itself fails, nothing is redirected, and logs share stdout with the JSON.
+The real stdout is duplicated into a private descriptor, and descriptor 1 is then pointed at stderr with `_dup2`. Every later `printf` or `std::cout` from anywhere in the process lands on stderr, and the CLI writes its JSON through a `FILE*` opened on the private copy. That copy is set to binary first: a duplicated descriptor keeps text mode, and the step-9 record lists the resulting `\r\n` line endings as one of the bugs found while building the CLI. `emit` flushes after every document, so a consumer reading line by line sees each operation as it finishes. If the duplication itself fails, nothing is redirected, and logs share stdout with the JSON.
 
 ## Exit classes
 

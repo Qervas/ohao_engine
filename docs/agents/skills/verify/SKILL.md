@@ -26,6 +26,7 @@ first (the `build` skill) when running suites by hand.
 
 ```console
 $ build/Release/runtime_tests.exe > /dev/null
+$ build/Release/log_tests.exe > /dev/null
 $ build/Release/reflect_tests.exe > /dev/null
 $ build/Release/scene_tests.exe > /dev/null
 $ build/Release/api_tests.exe > /dev/null
@@ -64,6 +65,7 @@ $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /
 ```console
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
+$ build/Release/log_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -78,6 +80,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Validation** reports messages: set `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see
   every report.
 - **The bench** reports `OVER`: budgets change only by Frank's ruling; report the numbers.
+  `log_bench` exiting 2 (`noisy`) means the machine was loaded (it lists the busy
+  processes) or slower than its calibration: rerun, and report it as noisy, not as a
+  pass or a regression.
+- **Validation** messages are stderr lines `W validation: <VUID> | <text>`; run with
+  `OHAO_LOG_LEVEL=debug` for the engine's detail lines around them.
 - **The CLI or doc checks** show a stdout diff: if the change was deliberate (a new
   component changes `schemaHash`), rerun with `--update` (CLI) or fix the doc, and check
   that the diff is only what you meant.

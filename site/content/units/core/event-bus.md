@@ -25,12 +25,13 @@ mutex-guarded vector that `step()` drains and hands to a *single*
 
 {{cite ohao/physics/backend/jolt/jolt_backend.cpp "m_userContactListener->onContactBegin(event); break;"}}
 
-and log fan-out is one `std::function`, settable and clearable, not a list:
+and log fan-out is the logger's own short list of typed sinks, called in record order
+under the logger's lock (see the Logger unit):
 
-{{cite ohao/core/console_widget.hpp "using LogCallback = std::function<void(LogLevel, std::string_view)>;"}}
+{{cite ohao/core/log.hpp "virtual void write(const Record& record) = 0;"}}
 
-Both are single-consumer, statically typed, and free of string keys — which is
-also a fair summary of what those subsystems actually needed. The bus is the
+Both are statically typed and free of string keys, and the contact path is
+single-consumer — which is also a fair summary of what those subsystems actually needed. The bus is the
 generalisation nobody has yet had to reach for. What follows is what it commits
 you to when someone does.
 

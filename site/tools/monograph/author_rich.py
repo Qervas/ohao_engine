@@ -108,15 +108,17 @@ KNOWLEDGE: dict[str, dict] = {
         ],
         "why": "Load failures and missing files are expected; exceptions are for bugs. Undo is optional tooling, not render-critical.",
     },
-    "core/console-widget": {
+    "core/log": {
         "what": [
-            "Optional in-engine console / log surface for debug tooling. Not on the hot render path.",
+            "The engine's one logger: OHAO_LOG(level, channel, fmt, args...) into a 4,096-record ring, then to the sinks (stderr by default; the RPC sink in ohao serve).",
         ],
         "how": [
-            "ConsoleWidget buffers log lines and presents a simple UI surface for tools/examples.",
-            "Stays in core so gpu/ remains free of UI dependencies.",
+            "Below the capture threshold: one relaxed load and a compare, arguments unevaluated.",
+            "Above it: std::format into a thread-local buffer, cut at 1 KB on a UTF-8 boundary, then one locked ring write; identical consecutive records collapse into a repeat count.",
+            "read(since, level, channel, limit) pages the ring by sequence number and reports dropped records.",
         ],
-        "why": "Debuggability without dragging ImGui or similar into every library target.",
+        "why": "ohao serve owns stdout for its protocol, and an agent can only act on messages it can query.",
+        "contracts": ["sinks run under the logger's lock and must not log", "a repeat updates the newest record in place; seq does not advance"],
     },
     "scene/world": {
         "what": [

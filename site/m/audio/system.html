@@ -85,7 +85,7 @@ $$</div>
 <p>The third one bites. Both play paths capture a raw `ma_sound*`, move the owning instance into the map, release the lock, and only then start the sound. Nothing in the code says why the start is outside the critical section, and there is little to buy: `ma_sound_start` on a freshly initialised sound takes no lock of its own — it reads a few atomics and exchanges the node&#x27;s state. What the ordering costs is a window in which a raw pointer to a map-owned object is live while the map is unlocked, and `stopAll` needs no handle to run:</p>
 <div class="citation-chip"><code class="citation-code">void AudioSystem::stopAll() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L272" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:272</a></div>
 <p>and clearing the map runs `MaSoundDeleter`, which uninitialises and frees the object that raw pointer still refers to:</p>
-<div class="citation-chip"><code class="citation-code">ma_sound_uninit(sound);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L20" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:20</a></div>
+<div class="citation-chip"><code class="citation-code">ma_sound_uninit(sound);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L21" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:21</a></div>
 <p>A `stopAll` or `stopCategory` landing in that window starts a freed `ma_sound`. `stopSound` cannot reach it — the handle has not been returned yet — but the category-wide and global stops can, and the mutex exists precisely to promise they cannot.</p>
 <p>The fourth is the widest, and it is not a window but a whole function. `shutdown()` takes no lock at all: it clears `m_sounds`, destroys the engine and clears `m_initialized`, and the destructor calls it.</p>
 <div class="citation-chip"><code class="citation-code">m_engine.reset(); // MaEngineDeleter uninits the engine</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L54" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:54</a></div>
@@ -131,7 +131,7 @@ $$</div>
 <li>Handles are never recycled and 0 is reserved, so a stale handle is a lookup miss and every setter no-ops. &quot;Reaped&quot;, &quot;stopped&quot; and &quot;never existed&quot; are indistinguishable from outside — `isPlaying` returns false for all three, and for a paused sound as well.</li>
 <li>One listener, index 0, fixed at engine init. Split-screen would need `listenerCount` raised and a pinned listener index per sound; neither exists.</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">config.listenerCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L36" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:36</a></div>
+<div class="citation-chip"><code class="citation-code">config.listenerCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L37" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:37</a></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">

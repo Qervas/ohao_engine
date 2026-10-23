@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01b · Core · Logger — OHAO Monograph</title>
+  <meta name="description" content="OHAO_LOG: levels, channels, a 4,096-record ring and sinks; every engine message." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="core/log" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Logger</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">core</p>
+          <h1>Logger</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>OHAO_LOG: levels, channels, a 4,096-record ring and sinks; every engine message.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-path-for-every-engine-message">One path for every engine message</a></li><li><a href="#below-the-threshold-one-load-and-a-compare">Below the threshold, one load and a compare</a></li><li><a href="#the-ring">The ring</a></li><li><a href="#sinks">Sinks</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-path-for-every-engine-message">One path for every engine message</h2></div>
+<div class="prose reveal">
+<p>Every message the engine writes goes through one macro, with a level, a channel and a `std::format` string checked at compile time. The renderer, the GPU layer, physics, asset loading, audio, the ECS and the runtime all use it; nothing under `ohao/` writes to `std::cout`, `std::cerr` or `printf` any more, and a test keeps it that way:</p>
+<div class="citation-chip"><code class="citation-code">static void sp4_t02_engine_prints_only_through_the_logger() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L873" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:873</a></div>
+<p>The reason is the agent server that follows it: `ohao serve` owns stdout for its protocol, and a message an agent cannot query is a message it never sees. So the logger keeps the last records in memory, where `log.read` can page them, and sends them on to whatever sinks are attached.</p>
+</div>
+<div class="section-rule"><h2 id="below-the-threshold-one-load-and-a-compare">Below the threshold, one load and a compare</h2></div>
+<div class="prose reveal">
+<p>The macro checks the capture threshold before it touches its arguments. A record below it costs a relaxed atomic load and a branch; its arguments are never evaluated, so a `Debug` line in a hot loop is free in a run that does not want it:</p>
+<div class="citation-chip"><code class="citation-code">return static_cast&lt;uint8_t&gt;(level) &gt;= detail::g_threshold.load(std::memory_order_relaxed);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.hpp#L117" target="_blank" rel="noopener">ohao/core/log.hpp:117</a></div>
+<p>Above it, the message is formatted into a per-thread buffer a few bytes larger than the 1 KB limit, so the cut can land on a whole UTF-8 character:</p>
+<div class="citation-chip"><code class="citation-code">thread_local char buf[cap];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.hpp#L107" target="_blank" rel="noopener">ohao/core/log.hpp:107</a></div>
+<div class="citation-chip"><code class="citation-code">while (n &gt; 0 &amp;&amp; (static_cast&lt;unsigned char&gt;(msg[n]) &amp; 0xC0) == 0x80) --n;   // whole UTF-8</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L87" target="_blank" rel="noopener">ohao/core/log.cpp:87</a></div>
+<p>`log_bench` measures both paths against their budgets: 0.20 ns below the threshold (budget 5 ns) and 200 ns for an 80-character record into the ring (budget 300 ns).</p>
+</div>
+<div class="section-rule"><h2 id="the-ring">The ring</h2></div>
+<div class="prose reveal">
+<p>The ring holds the newest 4,096 records, each with a sequence number, the time since start, the frame it was written in, its level, channel and text:</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr std::size_t kRingCapacity = 4096;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.hpp#L33" target="_blank" rel="noopener">ohao/core/log.hpp:33</a></div>
+<p>A record identical to the one before it (same level, channel and text) does not take a slot; it raises that record&#x27;s repeat count, so a validation message fired every frame costs one line, not four thousand:</p>
+<div class="citation-chip"><code class="citation-code">if (last.level == level &amp;&amp; last.channel == channel &amp;&amp; last.msg == msg) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L163" target="_blank" rel="noopener">ohao/core/log.cpp:163</a></div>
+<p>Reading is by sequence number: `read(since, minLevel, channel, limit)` returns what came after `since`, and a reader that fell behind is told how many records it missed:</p>
+<div class="citation-chip"><code class="citation-code">page.dropped = oldest - seq;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L191" target="_blank" rel="noopener">ohao/core/log.cpp:191</a></div>
+<p>The frame is stamped by the renderer as each deferred or RT frame starts, so a validation message carries the frame it happened in:</p>
+<div class="citation-chip"><code class="citation-code">uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L336" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:336</a></div>
+</div>
+<div class="section-rule"><h2 id="sinks">Sinks</h2></div>
+<div class="prose reveal">
+<p>A sink receives each new record at or above its own level, and each growth of the newest record&#x27;s repeat count, under the logger&#x27;s lock and in record order. The default sink writes `&lt;L&gt; &lt;channel&gt;: &lt;message&gt;` to stderr and folds a run of repeats into one trailing line:</p>
+<div class="citation-chip"><code class="citation-code">std::format_to(std::back_inserter(line_), &quot;{} {}: ... repeated {} more times\n&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L40" target="_blank" rel="noopener">ohao/core/log.cpp:40</a></div>
+<p>Vulkan validation messages are records on the `validation` channel, `Error` or `Warn` by the layer&#x27;s severity, as `&lt;VUID&gt; | &lt;text&gt;`; `check_validation.py` reads those lines (and the repeat lines) back:</p>
+<div class="citation-chip"><code class="citation-code">OHAO_LOG(Warn, validation, &quot;{} | {}&quot;, vuid, msg);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L107" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:107</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The logger&#x27;s state is a leaked singleton, created on first use and never destroyed:  {{cite ohao/core/log.cpp &quot;static State* s = new State;&quot;}}  Engine objects log from destructors that run during static teardown; a logger that was itself destroyed by then would be a use-after-free in exactly the path that reports shutdown problems. The cost is one allocation the OS reclaims.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>One macro, ten channels, five levels. Below the threshold a call costs a load and a compare; above it, a format into a thread-local buffer and a short critical section. The ring is always on; sinks are optional; stdout is never written.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>A sink must not log: it runs under the logger&#x27;s lock, a `std::mutex`, and a sink</li>
+</ul>
+<p>that logs deadlocks on its first record.</p>
+<ul>
+<li>`seq` advances once per record, not per call: a repeat changes the newest record&#x27;s</li>
+</ul>
+<p>`repeat` in place, so a reader that has already passed it does not see the new count.</p>
+<ul>
+<li>`OHAO_LOG_LEVEL` (`trace` … `error`, `off`) sets the threshold and the stderr sink&#x27;s</li>
+</ul>
+<p>level at start-up; `setLevel` changes the threshold at run time.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>tests/reflect/reflect_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/log.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/log.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="command-result.html"><div class="label">← Prev</div><div class="title">Command history &amp; Result</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -31,11 +31,11 @@ MODULE = {
             design=['Result avoids exceptions on expected failures in loaders and init paths.'],
         ),
         page(
-            'console-widget',
-            'Console widget',
-            'In-engine console / log surface for debug tooling.',
-            files=['ohao/core/console_widget.hpp', 'ohao/core/console_widget.cpp'],
-            design=['Optional UI-facing log sink used by tools and examples; not on the hot render path.', 'Keeps console I/O out of gpu/ so core stays Vulkan-free.'],
+            'log',
+            'Logger',
+            'OHAO_LOG: levels, channels, a 4,096-record ring and sinks; every engine message.',
+            files=['ohao/core/log.hpp', 'ohao/core/log.cpp'],
+            design=['Below the threshold a call is one atomic load and a compare; arguments are not evaluated.', 'The ring is always on, so an agent can page recent records; stdout is never written.'],
         ),
     ],
 }
