@@ -907,6 +907,10 @@ ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
   framing, the method table above, and a `protocolVersion` and `schemaHash` handshake.
   MCP clients connect natively: each method is exposed as an MCP tool, and its params
   schema comes from the catalogue.
+  - *Corrected 2026-10-23 by the sub-project 4 spec:* MCP's stdio transport is
+    newline-delimited JSON, not `Content-Length` framing, so `ohao serve` uses newline
+    framing (`docs/specs/2026-10-23-agent-control-surface-design.md`, "Transport and
+    framing").
 - **Binary payloads** (PNG renders, bulk observations) go by file path in v1. Shared
   memory comes later.
 - **The C ABI** wraps the same dispatch:
@@ -1744,7 +1748,7 @@ technology calls; these were decided on that delegation:
 | 17 | One API | `ohao/api` method table shared by the CLI, future RPC, C ABI and editor. Authoring edits go only through commands. |
 | 18 | Edits | Typed commands, atomic batches, inverse returned (undo = replay inverses) |
 | 19 | CLI | `ohao` with `schema`/`validate`/`fmt`/`apply`/`query`/`summary`/`run`; JSON on stdout; JSON-Lines scripts = JSON-RPC requests minus the envelope |
-| 20 | Control surface | Designed now (JSON-RPC 2.0 over stdio, MCP-native, `Content-Length` framing), built in sub-project 4 |
+| 20 | Control surface | Designed now (JSON-RPC 2.0 over stdio, MCP-native, `Content-Length` framing), built in sub-project 4. *Corrected by the sub-project 4 spec: newline-delimited framing, as MCP's stdio transport.* |
 | 21 | Determinism | World state and CPU stdout bit-identical per build, inputs and seed. Pixels within golden tolerances. |
 | 22 | Performance gate | `scene_bench` budgets (bench10k), medians gated; budget changes need Frank's OK |
 | 23 | Reflection on hot paths | Never. Dependency rule tested. |
