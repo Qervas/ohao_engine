@@ -184,5 +184,7 @@ option(BUILD_SCENE_BENCH "Build scene_bench (scene codec/snapshot/API budgets; C
 if(BUILD_SCENE_BENCH)
     add_subdirectory(tools/bench)
 endif()
+# The ohao CLI (validate, fmt, apply, query, summary, run, schema) and its render host.
+add_subdirectory(tools/ohao)
 
 

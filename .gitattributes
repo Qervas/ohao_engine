@@ -10,3 +10,5 @@ tests/reflect/golden/** text eol=lf
 tests/scene/golden/** text eol=lf
 tests/scenes/** text eol=lf
 *.scene.json text eol=lf
+# The CLI's expected stdout and the inputs its cases feed it (sub-project 3, step 9).
+tests/cli/** text eol=lf

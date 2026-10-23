@@ -80,6 +80,18 @@ if(MSVC)
 endif()
 add_dependencies(scene_view_gpu_test shaders)
 
+# Snapshot/restore on the GPU through the CLI's stack (api::Session + RenderHost): a
+# restored world renders bit-identically and uploads only what changed (sub-project 3, step 9).
+add_executable(restore_render_gpu_test restore_render_gpu_test.cpp)
+target_compile_features(restore_render_gpu_test PRIVATE cxx_std_20)
+target_compile_definitions(restore_render_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    OHAO_BINARY_DIR="${CMAKE_BINARY_DIR}")
+target_link_libraries(restore_render_gpu_test PRIVATE ohao_host)
+if(MSVC)
+    target_link_options(restore_render_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(restore_render_gpu_test shaders)
+
 # Env CDF unit test
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp

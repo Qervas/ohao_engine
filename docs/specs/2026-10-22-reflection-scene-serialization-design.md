@@ -626,6 +626,7 @@ file.)
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
   | Assets | `E_ASSET_NOT_FOUND` (validate with `checkAssets` / `--check-assets` for model assets and environment images, and instantiate), `E_ASSET_INVALID`, `E_MESH_INVALID` (instantiate) |
   | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH`, `E_SNAPSHOT_UNKNOWN` (and `E_ENTITY_NOT_FOUND` for command targets) |
+  | Rendering and host (step 9) | `E_RENDER` (`render.capture`: no usable GPU, a failed frame, an image that could not be written), `E_INTERNAL` (an exception escaped; the CLI's exit code 3) |
   | Limits | `E_TOO_MANY_ERRORS` |
 
   Warnings use the same shape with `W_` codes. `line`/`column` are present for file
@@ -698,7 +699,7 @@ through this table, so there is exactly one implementation of each operation.
 | `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` |
 | `world.snapshot` | `{name}` → `{name, entities, bytes}`. Captures in memory under that name; an existing snapshot of that name is overwritten, reusing its memory. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}`. The snapshot is kept; restoring it again is cheap. An unknown name is `E_SNAPSHOT_UNKNOWN`. |
-| `render.capture` | `{path, mode, spp, width, height, denoise}` → `{path, ms}`. The renderer is initialized lazily on first use. (step 9) |
+| `render.capture` | `{path, mode, spp, frames?, width, height, denoise, post, exposure?}` → `{path, frames, ms, validation?}`. The renderer is initialized lazily on first use. (step 9; as built: `frames` defaults to 10 deferred / spp + 3 path traced, as the examples render; `post` lists the deferred effects to turn on (`bloom`, `taa`, `ssao`; none by default); `exposure` defaults to the renderer's own (0.6); `validation` is the message count when the layers are on. `ohao_api` checks the params and stays GPU-free; the host that owns a renderer does the work through `Session::setRenderHandler` (`tools/ohao/render_host`). Each later capture restarts accumulation, deferred included, so it renders as a fresh renderer does.) |
 
 - `scene` is the scene as a JSON object: it costs no string escaping, which matters
   when an agent writes it. `text` is the same as a string, `path` a file. `seed` (16
@@ -859,6 +860,26 @@ ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
 
 - **No GPU unless needed:** without a `render.capture` (or `--render`), no Vulkan
   device is created. Load, validate, query, apply, step, snapshot and save run CPU-only.
+- *As built (step 9):*
+  - **Extra options.** `run --render` also takes `--frames N`, `--post bloom,taa,ssao`
+    and `--exposure E` (the `render.capture` params). Every scene command takes
+    `--root DIR`, the project root asset paths resolve against (default: the working
+    directory). `validate` takes `--limit N`. `--seed` is 16 hex digits, like an id.
+  - **Order in `run`:** `scene.load`, `--steps`, the script lines, `--render`, `--save`.
+    Without `--script` the output is one document,
+    `{"result": {"scene.load": …, "world.step": …, "render.capture": …, "scene.save": …}}`
+    with the operations that ran. The first failure stops the run and is printed as
+    `{"method": …, "error": {…}}`. With `--script`, every line runs and the exit code is
+    the worst one seen.
+  - **Exit class of an error code:** `E_ASSET_NOT_FOUND`, `E_ASSET_INVALID` and
+    `E_MESH_INVALID` give 2; `E_RENDER` and `E_INTERNAL` give 3; every other code gives 1.
+    `validate` exits 2 only when every error is an asset error.
+  - **Stdout carries only JSON.** The engine logs to stdout, so the CLI keeps a private
+    binary-mode copy of stdout for its JSON and points descriptor 1 at stderr.
+  - **What `--render` reproduces.** The scene file holds no render settings. Without
+    `--post`, a deferred capture renders as `cornell_box` does; `model_viewer` turns on
+    TAA, SSAO and bloom at exposure 1 and renders 30 frames, so its manifest entry says
+    `--frames 30 --post taa,ssao,bloom --exposure 1`.
 - **Determinism contract:**
   - After any sequence of `scene.load`, `world.apply`, `world.step`, `world.snapshot`,
     `world.restore` and `scene.save`, the world state and stdout are bit-identical
@@ -1074,6 +1095,20 @@ Snapshot, the restores and query are within budget. Of the bench100k ratios, all
 except `restore_empty` (×12.3–14.6). The rewrite does not touch restore, and that ratio
 sits at the line as in step 8. It is reported, not loosened.
 
+At the end of step 9 (`scene_bench --check`, 50 rounds): save pretty 9.02 ms, load
+12.77 ms, validate 8.12 ms, snapshot 0.53 ms, restore unchanged / 1% / empty 0.59 /
+0.48 / 2.24 ms, apply 0.182 ms, query 1.18 ms; every budget passes. bench100k:
+every ratio passes (×1.3–×11.8) except `restore_empty` at ×13.5, as above.
+
+Recorded (step 9, process wall time, median of 7 after a warm-up; `scene_bench
+--write-scene` writes the bench10k file, 5.13 MB):
+
+| | Median | Range |
+|---|---|---|
+| `ohao validate` bench10k | 43.0 ms | 35.8–66.6 ms |
+| `ohao run --steps 1` bench10k | 45.8 ms | 44.4–47.1 ms |
+| Cornell load-to-first-frame (`ohao run … --render --mode deferred --frames 1`, renderer start included) | 481 ms | 401–625 ms |
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1276,6 +1311,10 @@ These are cheap, and they document what 3 itself creates:
     - **Failed meshes.** If any `InstantiateError` exists after the first update, the
       example exits with code 2 instead of rendering a scene with missing meshes.
 - **`scene_bench`** generates the bench scenes, runs the budget gate and dumps JSON.
+  `--write-scene <path>` writes the bench10k scene (step 9, for timing the CLI).
+- **`ohao_host`** (step 9, `tools/ohao`): the static library behind `render.capture`
+  (`RenderHost`), shared by the CLI and `restore_render_gpu_test`. The render extract
+  and instantiate install into a world that already has entities, and pick them up.
 - **Checked-in scenes:**
   - `assets/scenes/cornell_box.scene.json`;
   - `assets/scenes/damaged_helmet.scene.json`, with the baked `SceneFramer` room, camera
@@ -1354,6 +1393,12 @@ CLI and GPU tests:
       have checked-in expected stdout;
     - two runs are byte-identical;
     - each exit code is covered.
+    - *As built (step 9):* `python tests/cli/check_cli.py` runs `tests/cli/cases.json`
+      (27 cases; `--cpu-only` skips the 4 that create a device). Each case runs twice and
+      compares exit code, stdout and written files across the runs and against
+      `tests/cli/expected/` or a checked-in file. Exit 3 is a render to an unwritable
+      path, and exit 2 both `validate --check-assets` and a render of a missing model.
+      Tests 16 and 18 are cases in the same table.
 15. **Scene goldens:** five manifest entries render `ohao run <scene> --render …` and
     compare against the **existing** golden images with the existing tolerances:
     - `cornell_box` RT: exact;
@@ -1361,6 +1406,9 @@ CLI and GPU tests:
     - `damaged_helmet` RT: 4 / 0.01;
     - `damaged_helmet_deferred`: 6 / 0.05;
     - `cornell_box_rt_realtime`: 10 / 0.05.
+    - *As built (step 9):* the `cli_*` entries in `tests/golden/manifest.json`. Measured:
+      Cornell RT and deferred max_abs 0, helmet RT 1 / 0.00006, helmet deferred 1–3 /
+      0.034, Cornell realtime 3 / 0.014.
 16. **Code-built vs file:**
     - `cornell_box --save-scene` and `model_viewer … --save-scene` reproduce the
       checked-in files byte-for-byte;
@@ -1368,9 +1416,28 @@ CLI and GPU tests:
 17. **Restore renders identically:**
     - Render cornell deferred, snapshot, move a sphere, render, restore and render.
       The final image must be bit-identical to the pre-move one.
-    - The restore frame must upload 0 instance bytes (`RenderScene::stats()`).
+    - ~~The restore frame must upload 0 instance bytes (`RenderScene::stats()`).~~
+      *Corrected in step 9:* that cannot hold after a move, because the restore has to put
+      the sphere's old transform back on the GPU. What the test requires instead
+      (`restore_render_gpu_test`):
+      - the restore frame uploads exactly what the move's frame did (one instance,
+        160 bytes, not the table);
+      - a second, unchanged restore reports no change and its frame uploads 0 bytes.
+    - *As built:* through the CLI's own stack (`api::Session` + `RenderHost`), one renderer,
+      validation on (0 messages). The same sequence runs again with TAA, SSAO and bloom
+      on. There the bar is the fresh-renderer floor, max 1 LSB: two fresh renderers
+      already differ by 1 LSB on ~1.4k pixels with those effects. Without the TAA history
+      reset the difference is 14.
+    - A finding it forced: `VulkanRenderer::resetAccumulation()` reset only the path
+      tracers. A deferred capture after another inherited RT GI's history and frame
+      index, the clock behind its seeds, TAA's history and the frame slot that indexes
+      TAA's jitter (max abs 14 on the restored image). Deferred mode now idles the
+      device and restarts all of them (`DeferredRenderer::resetTemporalState`).
 18. **Validation:** `ohao run` with a render under `OHAO_VALIDATION=1` reports zero
     messages for both scenes (deferred). `check_validation.py` stays clean.
+    - *As built:* the `validation_*` cases in `tests/cli/cases.json` (the render result's
+      `validation` count is 0). The stderr of both runs, teardown included, has no
+      validation message.
 19. **Benchmarks:** `scene_bench --check` passes every budget in "Performance".
 20. **Scene view** (added in step 8):
     - CPU (`scene_tests` t20, `api_tests` t20):
@@ -1474,6 +1541,22 @@ Each step ends with the engine running and every suite green.
    - The budget gate still waits on open decision 1.
 9. `ohao` CLI, checked-in scenes, scene goldens, CLI goldens, restore-render test.
    Tests 14–18, then the full set for 19.
+   - *Done 2026-10-23.* First, as its own commit, the codec speed rewrite (Frank's
+     ruling on open decision 1). Every budget passes; the bench100k `restore_empty` ratio
+     is over the 12× line (×13.5) and reported.
+   - Built: `tools/ohao` (the CLI and `ohao_host`); the checked-in scenes; `render.capture`
+     with `E_RENDER`/`E_INTERNAL`; the five `cli_*` goldens; `tests/cli`;
+     `restore_render_gpu_test`.
+   - Fixed on the way:
+     - **Two VMA builds in one binary.** `NRI_VK.lib` compiles its own VMA from the same
+       checkout, with dynamic function loading. Under `/FORCE:MULTIPLE` the copy the
+       linker keeps depends on link order. The CLI got NRI's, which then crashed in
+       `vmaCreateAllocator` (no `vkGet*ProcAddr` given). `gpu_allocator.cpp` now uses
+       NRI's configuration and passes the two entry points, so either copy behaves the
+       same.
+     - **Deferred `resetAccumulation`** (test 17 above).
+     - **`render_golden.py`'s binary lookup** took `build/ohao`, the CMake binary
+       directory of `ohao/`, for the executable. It now accepts files only.
 10. Agent guide, `AGENTS.md`/`CLAUDE.md`, `docs/ARCHITECTURE.md`, skills refresh,
     monograph units, roadmap, change record.
 

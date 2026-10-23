@@ -1,0 +1,1 @@
+{"error":{"code":"E_COMMAND","message":"--exposure needs a number, got 'bright'","data":[{"code":"E_COMMAND","path":"","message":"--exposure needs a number, got 'bright'"}]}}

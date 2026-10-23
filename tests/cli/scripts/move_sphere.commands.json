@@ -1,0 +1,4 @@
+[
+  {"op": "field.set", "id": "b1ab29372b0e7edc", "path": "/Transform/position", "value": [2, -3.2, 0.5]},
+  {"op": "component.set", "id": "b1ab29372b0e7edc", "type": "MaterialOverride", "value": {"baseColor": [1, 0.8, 0.2], "roughness": 0.3}}
+]

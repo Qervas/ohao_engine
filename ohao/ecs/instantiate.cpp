@@ -122,6 +122,9 @@ public:
         m_reg.on_construct<MaterialOverride>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_update<MaterialOverride>().connect<&InstantiateState::markDirty>(this);
         m_reg.on_destroy<MaterialOverride>().connect<&InstantiateState::onOverrideDestroy>(this);
+        // Installed into a world that already has sources (a host that starts its renderer
+        // after loading, like `ohao run`): they are instantiated on the first run.
+        for (const entt::entity e : m_reg.view<MeshSource>()) m_reg.emplace_or_replace<InstantiateDirty>(e);
     }
 
     ~InstantiateState() {

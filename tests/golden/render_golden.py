@@ -54,13 +54,14 @@ _SUFFIXES = ("", ".exe")
 
 
 def resolve_exe(argv0):
-    if os.path.exists(argv0):
+    # isfile, not exists: ./build/ohao is also the binary directory of the ohao/ tree.
+    if os.path.isfile(argv0):
         return argv0
     head, tail = os.path.split(argv0)
     for cfg in _CONFIG_DIRS:
         for sfx in _SUFFIXES:
             cand = os.path.join(head, cfg, tail + sfx)
-            if os.path.exists(cand):
+            if os.path.isfile(cand):
                 return cand
     return argv0          # let subprocess report it, with the manifest's own spelling
 

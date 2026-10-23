@@ -84,6 +84,46 @@
       "max_abs_diff": 10,
       "max_diff_frac": 0.05,
       "_note": "Realtime path tracer (ReSTIR GI reservoirs, temporal history, 19 frames). Added 2026-10-10 after it lost the device and wrote an all-black frame on master and on this branch: bindings 29-35 (reservoirs, spec hit-distance) were never written into the descriptor set. A black frame fails here twice -- the uniform-frame check and max_abs 225. Not bit-exact run-to-run: pt_raygen_realtime.rgen reads accumBuffer/normalAOV at neighbour pixels in the same dispatch that writes them, a race. Fresh-vs-fresh measured max_abs 3-5, diff_frac ~0.015 at compare res, hence 10 / 0.05."
+    },
+    {
+      "name": "cli_cornell_box",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode rt_offline --spp 16 --denoise none",
+      "golden": "tests/golden/cornell_box.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01,
+      "_note": "Scene goldens (reflection spec, step 9): the checked-in scene file rendered by the ohao CLI must match the golden the example renders from code. Same PNG, same tolerance as cornell_box; a separate golden would let the two drift apart."
+    },
+    {
+      "name": "cli_damaged_helmet",
+      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode rt_offline --spp 16 --denoise none",
+      "golden": "tests/golden/damaged_helmet.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01,
+      "_note": "As cli_cornell_box, against damaged_helmet's golden."
+    },
+    {
+      "name": "cli_cornell_box_deferred",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred",
+      "golden": "tests/golden/cornell_box_deferred.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01,
+      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. 10 frames and no post effects: what the example does."
+    },
+    {
+      "name": "cli_damaged_helmet_deferred",
+      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/damaged_helmet_deferred.png",
+      "max_abs_diff": 6,
+      "max_diff_frac": 0.05,
+      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6); the scene file holds no render settings, so the command line states them."
+    },
+    {
+      "name": "cli_cornell_box_rt_realtime",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode rt_realtime --spp 16 --denoise none",
+      "golden": "tests/golden/cornell_box_rt_realtime.png",
+      "max_abs_diff": 10,
+      "max_diff_frac": 0.05,
+      "_note": "As cli_cornell_box, against cornell_box_rt_realtime's golden."
     }
   ]
 }

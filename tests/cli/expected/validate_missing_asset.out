@@ -1,0 +1,1 @@
+{"result":{"ok":false,"errors":[{"code":"E_ASSET_NOT_FOUND","path":"/entities/0/MeshSource/source/ModelAsset/asset/path","entity":"00000000000000a1","line":10,"column":70,"message":"no model file 'assets/test_models/NoSuchModel.glb' in the project","expected":"a project-relative path to an existing file","got":"\"assets/test_models/NoSuchModel.glb\""}]}}

@@ -1,0 +1,1 @@
+{"method":"render.capture","error":{"code":"E_RANGE","message":"the integer is out of range","data":[{"code":"E_RANGE","path":"/width","message":"the integer is out of range","expected":"an integer in [16, 8192]","got":"8"}]}}

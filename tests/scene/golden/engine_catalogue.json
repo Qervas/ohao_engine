@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "541042bdae0b2aff",
+  "schemaHash": "44e08107a6524c9a",
   "units": [
     "m",
     "m/s",
@@ -94,6 +94,14 @@
     {
       "code": "E_MESH_INVALID",
       "meaning": "A MeshSource that gives no usable geometry (InstantiateError)."
+    },
+    {
+      "code": "E_RENDER",
+      "meaning": "render.capture failed: no usable GPU, a frame that failed, or an image that could not be written."
+    },
+    {
+      "code": "E_INTERNAL",
+      "meaning": "An internal error in a tool (a bug); the operation did not complete (ohao exits with 3)."
     },
     {
       "code": "W_UNKNOWN_COMPONENT",

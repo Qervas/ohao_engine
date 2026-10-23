@@ -41,6 +41,13 @@ constexpr reflect::MethodDoc kMethods[] = {
      "component, the id generator and the frame."},
     {"world.restore", "{name}", "{created, destroyed, changed, frame}",
      "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
+    {"render.capture",
+     "{path, mode = deferred | rt_realtime | rt_offline, spp = 16, frames?, width = 1920, height = 1080, "
+     "denoise = none, post = [], exposure?}",
+     "{path, frames, ms, validation?}",
+     "Renders the world through its Camera and Environment to a PNG. Needs a host with a GPU (ohao run); the "
+     "renderer starts on first use. frames defaults to 10 (deferred) or spp + 3 (path tracer); post turns on "
+     "deferred effects (bloom, taa, ssao); exposure defaults to the renderer's own (0.6)."},
 };
 
 constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope
@@ -323,6 +330,95 @@ bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& par
     return true;
 }
 
+// A string member that must be one of `allowed` (absent: `out` unchanged). False after reporting.
+bool optEnum(const JsonDocument& doc, const JsonNode& params, std::string_view key,
+             std::initializer_list<std::string_view> allowed, DecodeContext& ctx, std::string& out) {
+    std::string_view v;
+    if (!optString(doc, params, key, ctx, v)) return false;
+    if (!doc.member(params, key)) return true;
+    if (std::find(allowed.begin(), allowed.end(), v) == allowed.end()) {
+        const std::span<const std::string_view> names(allowed.begin(), allowed.size());
+        ctx.push(key);
+        ctx.error("E_ENUM", *doc.member(params, key), "'" + std::string(v) + "' is not a " + std::string(key),
+                  reflect::oneOf(names), "\"" + std::string(v) + "\"", reflect::suggest(v, names));
+        ctx.pop();
+        return false;
+    }
+    out = std::string(v);
+    return true;
+}
+
+bool renderCapture(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                   JsonWriter& out) {
+    if (!checkKeys(doc, params, {"path", "mode", "spp", "frames", "width", "height", "denoise", "post", "exposure"},
+                   "render.capture params", ctx))
+        return false;
+    RenderRequest r;
+    std::string_view path;
+    int64_t spp = r.spp, frames = r.frames, width = r.width, height = r.height;
+    if (!optString(doc, params, "path", ctx, path) ||
+        !optEnum(doc, params, "mode", {"deferred", "rt_realtime", "rt_offline"}, ctx, r.mode) ||
+        !optEnum(doc, params, "denoise", {"none", "oidn", "nrd", "atrous", "dlss"}, ctx, r.denoise) ||
+        !optInt(doc, params, "spp", ctx, 1, 65536, spp) || !optInt(doc, params, "frames", ctx, 0, 100000, frames) ||
+        !optInt(doc, params, "width", ctx, 16, 8192, width) || !optInt(doc, params, "height", ctx, 16, 8192, height))
+        return false;
+    if (path.empty()) {
+        ctx.error("E_COMMAND", params, "render.capture needs a \"path\" for the PNG", "{\"path\": \"out.png\"}");
+        return false;
+    }
+    if (const JsonNode* p = doc.member(params, "post")) {
+        ctx.push("post");
+        if (p->type != JsonType::Array) {
+            ctx.error("E_TYPE", *p, "expected an array of effect names", "[\"bloom\", \"taa\", \"ssao\"]", ctx.gotText(*p));
+            ctx.pop();
+            return false;
+        }
+        static constexpr std::string_view kEffects[] = {"bloom", "taa", "ssao"};
+        for (uint32_t i = 0; i < p->count; ++i) {
+            const JsonNode& e = doc.child(*p, i);
+            ctx.push(i);
+            if (e.type != JsonType::String || std::find(std::begin(kEffects), std::end(kEffects), e.text) == std::end(kEffects))
+                ctx.error("E_ENUM", e, "not a post effect", reflect::oneOf(kEffects), ctx.gotText(e),
+                          e.type == JsonType::String ? reflect::suggest(e.text, kEffects) : std::string());
+            else r.post.emplace_back(e.text);
+            ctx.pop();
+        }
+        ctx.pop();
+        if (!ctx.errors.empty()) return false;
+    }
+    if (const JsonNode* e = doc.member(params, "exposure")) {
+        ctx.push("exposure");
+        float exposure = 0.0f;
+        const bool ok = reflect::readFloat(*e, ctx, exposure);
+        if (ok && !(exposure > 0.0f && exposure <= 64.0f))
+            ctx.error("E_RANGE", *e, "exposure is out of range", "in (0, 64]", std::string(e->text));
+        r.exposure = exposure;
+        ctx.pop();
+        if (!ctx.errors.empty()) return false;
+    }
+    if (!s.render) {
+        ctx.error("E_COMMAND", params, "this session has no renderer; render.capture needs a host with a GPU (ohao run)");
+        return false;
+    }
+    r.path = std::string(path);
+    r.spp = static_cast<int>(spp);
+    r.frames = static_cast<int>(frames);
+    r.width = static_cast<uint32_t>(width);
+    r.height = static_cast<uint32_t>(height);
+    RenderOutcome o = s.render(r);
+    if (!o.errors.empty()) {
+        reportAll(ctx, o.errors);
+        return false;
+    }
+    out.beginObject();
+    out.key("path"); out.string(r.path);
+    out.key("frames"); out.int64(o.frames);
+    out.key("ms"); out.float32(static_cast<float>(o.ms));
+    if (o.validationMessages) { out.key("validation"); out.uint64(*o.validationMessages); }
+    out.endObject();
+    return true;
+}
+
 struct MethodEntry {
     std::string_view name;
     MethodFn fn;
@@ -331,7 +427,7 @@ constexpr MethodEntry kDispatch[] = {
     {"schema.get", schemaGet},       {"scene.validate", sceneValidate}, {"scene.load", sceneLoad},
     {"scene.save", sceneSave},       {"world.info", worldInfo},         {"world.summary", methodSummary},
     {"world.query", methodQuery},    {"world.apply", methodApply},      {"world.step", worldStep},
-    {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore},
+    {"world.snapshot", worldSnapshot}, {"world.restore", worldRestore}, {"render.capture", renderCapture},
 };
 static_assert(std::size(kDispatch) == std::size(kMethods));
 
@@ -495,6 +591,7 @@ Session::~Session() = default;
 ecs::World& Session::world() noexcept { return m->world; }
 uint64_t Session::frame() const noexcept { return m->frame; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
+void Session::setRenderHandler(RenderHandler handler) { m->render = std::move(handler); }
 
 std::string Session::call(std::string_view method, std::string_view params) {
     const auto found = std::find_if(std::begin(kDispatch), std::end(kDispatch),

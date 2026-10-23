@@ -352,9 +352,17 @@ int main(int argc, char** argv) {
         else if (a == "--breakdown") {
             breakdown(i + 1 < argc ? std::max(1000, std::atoi(argv[i + 1])) : 10'000);
             return 0;
+        } else if (a == "--write-scene" && i + 1 < argc) {
+            // The bench10k scene as a file, for timing the ohao CLI on it (spec, "Recorded").
+            World w;
+            buildBenchWorld(w, 10'000, 2026);
+            std::ofstream f(argv[i + 1], std::ios::binary | std::ios::trunc);
+            f << save(w);
+            return f ? 0 : 2;
         } else {
             std::fprintf(stderr, "usage: scene_bench [--check budgets.json] [--out file] [--no-scale] [--iters N]\n"
-                                 "       scene_bench --breakdown [entities]\n");
+                                 "       scene_bench --breakdown [entities]\n"
+                                 "       scene_bench --write-scene out.scene.json\n");
             return 2;
         }
     }

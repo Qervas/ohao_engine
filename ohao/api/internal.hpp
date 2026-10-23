@@ -44,6 +44,7 @@ struct Session::Impl {
     std::vector<std::string_view> savedNames;    // for "did you mean"
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
     ecs::AssetResolver* assets{nullptr};                           // checkAssets
+    RenderHandler render;                                          // render.capture
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};
     const TypeInfo* tParent{nullptr};

@@ -49,6 +49,10 @@ public:
         reg.on_construct<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_update<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_destroy<EmissiveProxyLight>().connect<&ExtractState::markLightsDirty>(this);
+        // Installed into a world that already has renderables or lights (a host that
+        // starts its renderer after loading): they are picked up on the first run.
+        for (const entt::entity e : reg.view<MeshRenderer>()) reg.emplace_or_replace<RenderDirty>(e);
+        m_lightsDirty = !reg.view<Light>().empty() || !reg.view<EmissiveProxyLight>().empty();
     }
 
     ~ExtractState() {

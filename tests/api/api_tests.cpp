@@ -160,7 +160,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 11, "eleven methods");
+    CHECK(api::methods().size() == 12, "twelve methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -184,6 +184,49 @@ static void t09_schema_get_includes_methods() {
           "Name and Transform are marked alwaysPresent");
     CHECK(r.text.find("E_PATH") != std::string::npos && r.text.find("E_COMPONENT_UNKNOWN") != std::string::npos,
           "and the new error codes are in the table");
+}
+
+// render.capture (step 9): checked by the session, carried out by a host. No host: E_COMMAND.
+static void t09_render_capture_needs_a_host_and_checks_its_params() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("render.capture", R"({"path":"a.png"})")).code() == "E_COMMAND",
+          "without a renderer render.capture is E_COMMAND");
+    std::vector<api::RenderRequest> seen;
+    s.setRenderHandler([&](const api::RenderRequest& r) {
+        seen.push_back(r);
+        api::RenderOutcome o;
+        o.frames = r.frames ? r.frames : 7;
+        if (r.path == "fail.png") {
+            reflect::Diagnostic d;
+            d.code = "E_RENDER";
+            d.message = "cannot write fail.png";
+            o.errors.push_back(d);
+        }
+        return o;
+    });
+    const Reply ok(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"size":1})"));
+    CHECK(ok.code() == "E_UNKNOWN_FIELD" && ok.str("/error/data/0/path") == "/size", "unknown params are refused");
+    const Reply good(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"width":640,)"
+                                              R"("height":360,"denoise":"none","post":["taa","ssao"],"exposure":1.5})"));
+    CHECK(good.ok() && good.str("/result/path") == "a.png" && good.str("/result/frames") == "7" && seen.size() == 1,
+          "a valid capture reaches the host and reports frames and ms");
+    const api::RenderRequest& r = seen.back();
+    const std::vector<std::string> effects{"taa", "ssao"};
+    CHECK(r.mode == "rt_offline" && r.spp == 4 && r.width == 640 && r.height == 360 && r.denoise == "none" &&
+              r.post == effects && r.exposure == 1.5f && r.frames == 0,
+          "with every param as given");
+    CHECK(Reply(s.call("render.capture", R"({"path":"a.png","mode":"raster"})")).code() == "E_ENUM" &&
+              Reply(s.call("render.capture", R"({"path":"a.png","post":["glow"]})")).code() == "E_ENUM" &&
+              Reply(s.call("render.capture", R"({"path":"a.png","width":8})")).code() == "E_RANGE" &&
+              Reply(s.call("render.capture", R"({"path":"a.png","exposure":0})")).code() == "E_RANGE" &&
+              Reply(s.call("render.capture", "{}")).code() == "E_COMMAND",
+          "a bad mode, effect, size or exposure, or no path, is refused before the host is called");
+    CHECK(seen.size() == 1, "(the host saw none of them)");
+    CHECK(Reply(s.call("render.capture", R"({"path":"fail.png"})")).code() == "E_RENDER",
+          "the host's errors are the reply's");
+    CHECK(seen.size() == 2 && !seen.back().exposure && seen.back().mode == "deferred" && seen.back().post.empty(),
+          "without exposure the host keeps the renderer's own; the mode defaults to deferred, effects to none");
 }
 
 // ---- t09: commands ------------------------------------------------------------------------
@@ -866,6 +909,7 @@ int main() {
     std::printf("api_tests\n");
     RUN(t09_method_table_dispatch_and_errors);
     RUN(t09_schema_get_includes_methods);
+    RUN(t09_render_capture_needs_a_host_and_checks_its_params);
     RUN(t09_each_command_applies_and_returns_its_inverse);
     RUN(t09_failing_command_rolls_back_the_batch);
     RUN(t09_batch_then_inverse_is_byte_identical);

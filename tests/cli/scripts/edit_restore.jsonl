@@ -1,0 +1,11 @@
+{"method":"world.info","params":{}}
+{"method":"world.snapshot","params":{"name":"base"}}
+{"method":"world.apply","params":{"commands":[{"op":"field.set","id":"499421b6ef3e75a9","path":"/Transform/position/0","value":-1},{"op":"entity.create","name":"Fill","components":{"Transform":{"position":[0,3,4]},"Light":{"intensity":2}}}]}}
+{"method":"world.step","params":{"frames":10}}
+{"method":"world.query","params":{"ids":["499421b6ef3e75a9"],"fields":["/Transform"]}}
+{"method":"world.query","params":{"nameContains":"Fill","fields":["/Light/intensity"]}}
+{"method":"world.restore","params":{"name":"base"}}
+{"method":"world.query","params":{"ids":["499421b6ef3e75a9"],"fields":["/Transform"]}}
+{"method":"world.query","params":{"nameContains":"Fill"}}
+{"method":"world.info","params":{}}
+{"method":"scene.save","params":{"path":"build/cli_tmp/edit_restore.scene.json","layout":"pretty"}}
