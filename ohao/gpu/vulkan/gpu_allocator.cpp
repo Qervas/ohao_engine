@@ -1,4 +1,14 @@
-// Define VMA implementation in this translation unit
+// Define VMA implementation in this translation unit.
+//
+// NRI_VK.lib compiles a second VMA implementation from the same checkout (vma-src),
+// configured as below. Under /FORCE:MULTIPLE the linker keeps whichever object it pulls
+// first, and that depends on CMake's link order for the target: the examples get this
+// one, the ohao CLI got NRI's. The two must therefore behave identically. NRI's is
+// built with dynamic function loading, which needs vkGet*ProcAddr in pVulkanFunctions;
+// without them its vmaCreateAllocator calls through a null pointer. So this copy uses
+// NRI's exact configuration and initialize() always passes the two entry points.
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #define VMA_IMPLEMENTATION
 #include "gpu_allocator.hpp"
 
@@ -47,6 +57,12 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
     allocatorInfo.instance = instance;
     allocatorInfo.physicalDevice = physicalDevice;
     allocatorInfo.device = device;
+
+    // VMA loads every other entry point through these (see the top of this file).
+    VmaVulkanFunctions functions{};
+    functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+    allocatorInfo.pVulkanFunctions = &functions;
 
     // Enable buffer device address support. Required so VMA tags memory
     // allocated for VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT buffers with
