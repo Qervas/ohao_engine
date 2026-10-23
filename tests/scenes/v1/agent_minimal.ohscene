@@ -1,5 +1,0 @@
-{"format":"ohao.scene","version":1,"entities":[
-{"Light":{"type":"AreaRect","areaEdge1":[2,0,0]},"id":"00000000000000b1"},
-{"id":"00000000000000b2","Transform":{"position":[0,1,0]},"Parent":{"entity":"00000000000000b1"},"Name":{"value":"Panel child"}},
-{"id":"00000000000000b3"}
-]}
