@@ -1,5 +1,6 @@
 #include "ecs/scene_io.hpp"
 
+#include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_types.hpp"
@@ -165,6 +166,7 @@ public:
     }
 
     const bool keep;
+    const AssetResolver* assets{nullptr};   // validation with checkAssets
     std::vector<DecodedEntity> entities;
     std::vector<DecodedValue> values;
     std::vector<PreservedComponent> preserved;
@@ -234,6 +236,26 @@ bool sortByOffset(std::vector<Diagnostic>& v) {
     return overflow;
 }
 
+// checkAssets: a ModelAsset whose file the resolver does not have is E_ASSET_NOT_FOUND,
+// at the path member (ctx is at the MeshSource block `c`).
+void checkAsset(const MeshSource& ms, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
+                DecodeContext& ctx) {
+    const auto* model = std::get_if<ModelAsset>(&ms.source);
+    if (!model || assets.exists(model->asset)) return;
+    const JsonNode* at = &c;
+    int depth = 0;
+    for (const char* key : {"source", "ModelAsset", "asset", "path"}) {
+        const JsonNode* next = at->type == JsonType::Object ? doc.member(*at, key) : nullptr;
+        if (!next) break;
+        ctx.push(key);
+        at = next;
+        ++depth;
+    }
+    ctx.error("E_ASSET_NOT_FOUND", *at, "no model file '" + model->asset.path + "' in the project",
+              "a project-relative path to an existing file", "\"" + model->asset.path + "\"");
+    while (depth-- > 0) ctx.pop();
+}
+
 std::string hexId(uint64_t id) {
     JsonWriter w;
     w.hex64(id);
@@ -246,6 +268,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                     DecodeContext& ctx, Decoded& out) {
     ankerl::unordered_dense::map<const TypeInfo*, std::size_t> upgradeCounts;
     const TypeInfo* parentType = r.find<Parent>();
+    const TypeInfo* meshSourceType = r.find<MeshSource>();
     std::vector<std::string_view> knownNames;
     ankerl::unordered_dense::map<std::string_view, const TypeInfo*> byName;
     for (const TypeInfo* t : r.types()) {
@@ -334,6 +357,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                         ++upgradeCounts[t];
                     }
                     ctx.component = nullptr;
+                    if (out.assets && t == meshSourceType) checkAsset(*static_cast<const MeshSource*>(v), doc, c, *out.assets, ctx);
                 }
             } else if (t) {
                 const std::string why = !t->serialized ? "is runtime state and is never saved"
@@ -645,14 +669,29 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     }
     w.endArray();
     w.endObject();
-    if (report) report->warnings.clear();
+    if (report) {
+        // A mesh made in code (spawnModel) has no MeshSource: the file cannot rebuild it.
+        report->warnings.clear();
+        for (std::size_t n = 0; n < order.size(); ++n) {
+            const entt::entity e = order[n].second;
+            if (!reg.all_of<MeshRenderer>(e) || reg.all_of<MeshSource>(e)) continue;
+            Diagnostic d;
+            d.code = "W_UNSAVEABLE_MESH";
+            d.path = "/entities/" + std::to_string(n);
+            d.entity = world.idOf(e);
+            d.message = "entity " + hexId(d.entity) + " renders a mesh made in code; the file has no MeshSource for it";
+            d.suggestion = "MeshSource";
+            report->warnings.push_back(std::move(d));
+        }
+    }
     std::string out = w.take();
     if (options.layout == reflect::JsonLayout::Pretty) out.push_back('\n');
     return R::ok(std::move(out));
 }
 
-ValidationReport validateScene(std::string_view text, const TypeRegistry& types) {
+ValidationReport validateScene(std::string_view text, const TypeRegistry& types, const AssetResolver* assets) {
     Decoded d(false);
+    d.assets = assets;
     decode(text, types, d);
     return ValidationReport{std::move(d.errors), std::move(d.warnings), std::move(d.upgraded)};
 }

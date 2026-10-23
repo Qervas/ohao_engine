@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 6c89af0a951cb2f3. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash f06a6a882f30630b. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -33,7 +33,9 @@
         "Name": { "$ref": "#/$defs/Name" },
         "Transform": { "$ref": "#/$defs/Transform" },
         "Parent": { "$ref": "#/$defs/Parent" },
-        "Light": { "$ref": "#/$defs/Light" }
+        "Light": { "$ref": "#/$defs/Light" },
+        "MeshSource": { "$ref": "#/$defs/MeshSource" },
+        "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -148,6 +150,304 @@
           "allOf": [
             { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelAsset": {
+      "description": "A model file (glb, gltf, fbx, obj) loaded through the asset resolver; its own materials are used.",
+      "type": "object",
+      "properties": {
+        "asset": {
+          "description": "Project-relative path of the model file, '/' separators",
+          "default": { "path": "" },
+          "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpherePrim": {
+      "description": "A UV sphere around the origin.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Radius",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "sectors": {
+          "description": "Segments around the equator",
+          "default": 32,
+          "allOf": [{ "type": "integer", "minimum": 3, "maximum": 1024 }]
+        },
+        "stacks": {
+          "description": "Segments from pole to pole",
+          "default": 16,
+          "allOf": [{ "type": "integer", "minimum": 2, "maximum": 1024 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CubePrim": {
+      "description": "A cube around the origin.",
+      "type": "object",
+      "properties": {
+        "size": {
+          "description": "Edge length",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlatformPrim": {
+      "description": "A flat box (a floor slab or platform) around the origin.",
+      "type": "object",
+      "properties": {
+        "width": {
+          "description": "Size along X",
+          "default": 2,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "height": {
+          "description": "Size along Y",
+          "default": 0.4,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "depth": {
+          "description": "Size along Z",
+          "default": 2,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CylinderPrim": {
+      "description": "A capped cylinder along Y, centered on the origin.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Radius",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "height": {
+          "description": "Height along Y",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "segments": {
+          "description": "Segments around the axis",
+          "default": 16,
+          "allOf": [{ "type": "integer", "minimum": 3, "maximum": 1024 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConePrim": {
+      "description": "A capped cone along Y, centered on the origin.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Base radius",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "height": {
+          "description": "Height along Y",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "segments": {
+          "description": "Segments around the axis",
+          "default": 16,
+          "allOf": [{ "type": "integer", "minimum": 3, "maximum": 1024 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "QuadPrim": {
+      "description": "One quad a-b-c-d (triangles a-b-c, a-c-d) with a flat normal and a vertex color.",
+      "type": "object",
+      "properties": {
+        "a": {
+          "description": "First corner",
+          "default": [-0.5, -0.5, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "b": {
+          "description": "Second corner",
+          "default": [0.5, -0.5, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "c": {
+          "description": "Third corner",
+          "default": [0.5, 0.5, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "d": {
+          "description": "Fourth corner",
+          "default": [-0.5, 0.5, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "normal": {
+          "description": "Normal of every vertex",
+          "default": [0, 0, 1],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "color": {
+          "description": "Vertex color",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BoxPrim": {
+      "description": "An axis-aligned box from lo to hi: 6 faces with flat normals and a vertex color.",
+      "type": "object",
+      "properties": {
+        "lo": {
+          "description": "Minimum corner",
+          "default": [-0.5, -0.5, -0.5],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "hi": {
+          "description": "Maximum corner",
+          "default": [0.5, 0.5, 0.5],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "color": {
+          "description": "Vertex color",
+          "default": [1, 1, 1],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MeshSource": {
+      "description": "Where the entity's mesh comes from: a model asset or a primitive. Instantiate builds the GPU mesh; entities with equal sources share one mesh.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "Exactly one of the alternatives, as {\"Name\": {...}}",
+          "default": { "ModelAsset": { "asset": { "path": "" } } },
+          "allOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": { "ModelAsset": { "$ref": "#/$defs/ModelAsset" } },
+                  "required": ["ModelAsset"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "SpherePrim": { "$ref": "#/$defs/SpherePrim" } },
+                  "required": ["SpherePrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "CubePrim": { "$ref": "#/$defs/CubePrim" } },
+                  "required": ["CubePrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "PlatformPrim": { "$ref": "#/$defs/PlatformPrim" } },
+                  "required": ["PlatformPrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "CylinderPrim": { "$ref": "#/$defs/CylinderPrim" } },
+                  "required": ["CylinderPrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "ConePrim": { "$ref": "#/$defs/ConePrim" } },
+                  "required": ["ConePrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "QuadPrim": { "$ref": "#/$defs/QuadPrim" } },
+                  "required": ["QuadPrim"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": { "BoxPrim": { "$ref": "#/$defs/BoxPrim" } },
+                  "required": ["BoxPrim"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MaterialOverride": {
+      "description": "The material of a mesh without its own materials (primitives). For a model with materials it only sets the legacy RT GI albedo.",
+      "type": "object",
+      "properties": {
+        "baseColor": {
+          "description": "Albedo",
+          "default": [0.8, 0.8, 0.8],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
+        },
+        "roughness": {
+          "description": "GGX roughness",
+          "default": 0.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "metallic": {
+          "description": "0 = dielectric, 1 = metal",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "emissiveStrength": {
+          "description": "Emission multiplier",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
         }
       },
       "additionalProperties": false

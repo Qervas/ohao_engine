@@ -34,8 +34,9 @@ struct RenderScene::Impl {
     std::array<GpuBuffer, MAX_FRAMES_IN_FLIGHT> staging{};
     std::array<VkDeviceSize, MAX_FRAMES_IN_FLIGHT> stagingCapacity{};
 
-    // A retired entry holds a buffer, or TLAS storage / scratch (RT only).
-    struct Retired { uint64_t retireAt; GpuBuffer buf; RetiredTlas tlas; };
+    // A retired entry holds a buffer, TLAS storage / scratch, or a released mesh's BLAS
+    // (RT only).
+    struct Retired { uint64_t retireAt; GpuBuffer buf; RetiredTlas tlas; BlasHandle blas{INVALID_BLAS}; };
     std::vector<Retired> retireQueue;
     uint64_t frameCounter{0};
 
@@ -65,6 +66,7 @@ struct RenderScene::Impl {
         allocator.destroyBuffer(r.buf);
         if (rtAccel && (r.tlas.as != VK_NULL_HANDLE || r.tlas.buffer != VK_NULL_HANDLE))
             rtAccel->destroyRetired(r.tlas);
+        if (rtAccel && r.blas != INVALID_BLAS) rtAccel->destroyBLAS(r.blas);
     }
 
     [[nodiscard]] GpuBuffer createTlasInstanceBuffer(uint32_t capacity) {
@@ -90,9 +92,12 @@ struct RenderScene::Impl {
         const glm::mat4 rowMajor = glm::transpose(g.world);   // rows 0..2 = the 3x4 matrix
         std::memcpy(&vi.transform, &rowMajor, sizeof(VkTransformMatrixKHR));
         vi.instanceCustomIndex = slot & 0xFFFFFFu;   // 24 bits
-        // A reference of 0 makes the instance inactive (no BLAS: failed build).
-        vi.accelerationStructureReference = mesh ? rtAccel->getBlasAddress(mesh->blas) : 0;
-        const bool visible = instances.live(slot) && (g.flags & kInstanceVisible) != 0;
+        // A reference of 0 makes the instance inactive (no BLAS: failed build). A
+        // destroyed slot gets 0 too: its mesh may be released and the BLAS destroyed
+        // while the slot sits unused (releaseMesh).
+        const bool live = instances.live(slot);
+        vi.accelerationStructureReference = mesh && live ? rtAccel->getBlasAddress(mesh->blas) : 0;
+        const bool visible = live && (g.flags & kInstanceVisible) != 0;
         vi.mask = visible ? 0xFFu : 0u;
         vi.instanceShaderBindingTableRecordOffset = 0;
         vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -283,6 +288,14 @@ MeshHandle RenderScene::registerMesh(const MeshData& data) {
     m->stats.arenaGrowths += grown;
     m->retire(retired);
     return h;
+}
+
+void RenderScene::releaseMesh(MeshHandle h) {
+    if (!m->initialized) return;
+    // Frames in flight may still trace the BLAS: it is destroyed once they retire.
+    const BlasHandle blas = m->meshes.release(h);
+    if (blas != INVALID_BLAS)
+        m->retireQueue.push_back(Impl::Retired{m->frameCounter + MAX_FRAMES_IN_FLIGHT, GpuBuffer{}, {}, blas});
 }
 
 MaterialHandle RenderScene::registerMaterial(const MaterialDesc& desc) {

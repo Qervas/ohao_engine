@@ -26,6 +26,10 @@ public:
     // reference their inputs and stay as they are. `grown` counts the arenas that grew.
     MeshHandle registerMesh(const MeshData& data, std::vector<GpuBuffer>& retired, uint32_t& grown);
 
+    // Marks the mesh released (info() returns null from now on; its index is never
+    // reused, so stale handles stay detectably stale) and hands back its BLAS for the
+    // caller to destroy once no frame in flight uses it. INVALID_BLAS if none or unknown.
+    [[nodiscard]] BlasHandle release(MeshHandle h);
     [[nodiscard]] const MeshInfo* info(MeshHandle h) const;
     [[nodiscard]] uint32_t count() const noexcept { return static_cast<uint32_t>(m_meshes.size()); }
 

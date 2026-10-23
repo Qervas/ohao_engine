@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "02863136e5e19f9c",
+  "schemaHash": "8e36a1441b0b70e7",
   "units": [
     "m",
     "m/s",
@@ -84,8 +84,24 @@
     },
     { "code": "E_SNAPSHOT_UNKNOWN", "meaning": "No snapshot has this name (world.restore)." },
     {
+      "code": "E_ASSET_NOT_FOUND",
+      "meaning": "An asset path that names no file in the project (or leaves the project)."
+    },
+    {
+      "code": "E_ASSET_INVALID",
+      "meaning": "An asset file that exists but cannot be loaded (format or content)."
+    },
+    {
+      "code": "E_MESH_INVALID",
+      "meaning": "A MeshSource that gives no usable geometry (InstantiateError)."
+    },
+    {
       "code": "W_UNKNOWN_COMPONENT",
       "meaning": "Warning: an unknown component close to a known name. It is kept, but may be a typo."
+    },
+    {
+      "code": "W_UNSAVEABLE_MESH",
+      "meaning": "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."
     }
   ],
   "methods": [],

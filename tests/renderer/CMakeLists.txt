@@ -45,6 +45,23 @@ add_dependencies(renderer_test shaders)
 
 message(STATUS "Standalone renderer test configured")
 
+# Instantiate on a real RenderScene vs spawnModel: bit-identical deferred images, mesh
+# release, validation clean (sub-project 3, step 7).
+add_executable(instantiate_gpu_test instantiate_gpu_test.cpp)
+target_compile_features(instantiate_gpu_test PRIVATE cxx_std_20)
+target_include_directories(instantiate_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS})
+target_compile_definitions(instantiate_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(instantiate_gpu_test PRIVATE
+    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+if(TARGET Jolt)
+    target_link_libraries(instantiate_gpu_test PRIVATE Jolt)
+endif()
+if(MSVC)
+    target_link_options(instantiate_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(instantiate_gpu_test shaders)
+
 # Env CDF unit test
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp

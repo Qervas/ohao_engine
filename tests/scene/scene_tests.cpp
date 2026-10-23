@@ -5,7 +5,9 @@
 //
 // Step 2: t05 entity ids, t01 completeness of the real component registrations, the
 // engine catalogue golden, and an informational write benchmark on real components.
+#include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
+#include "ecs/instantiate.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_io.hpp"
@@ -14,6 +16,9 @@
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
 #include "reflect/schema.hpp"
+#include "render/scene/model_upload.hpp"
+#include "scene/asset/model.hpp"
+#include "scene/asset/primitive_mesh_generator.hpp"
 
 #include <bit>
 #include <cfloat>
@@ -258,6 +263,18 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<TransformDirty>(r, checked);
     ok &= complete<RenderDirty>(r, checked);
     ok &= complete<MovedLastFrame>(r, checked);
+    ok &= complete<ModelAsset>(r, checked);
+    ok &= complete<SpherePrim>(r, checked);
+    ok &= complete<CubePrim>(r, checked);
+    ok &= complete<PlatformPrim>(r, checked);
+    ok &= complete<CylinderPrim>(r, checked);
+    ok &= complete<ConePrim>(r, checked);
+    ok &= complete<QuadPrim>(r, checked);
+    ok &= complete<BoxPrim>(r, checked);
+    ok &= complete<MeshSource>(r, checked);
+    ok &= complete<MaterialOverride>(r, checked);
+    ok &= complete<InstantiateDirty>(r, checked);
+    ok &= complete<InstantiateError>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -381,6 +398,31 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             l.outerConeDeg = std::nextafter(180.0f, 0.0f);
             l.areaEdge1 = {pickFloat(rng, false), 0.0f, -0.0f};
             w.registry().emplace<Light>(e, l);
+        }
+        // Every MeshSource alternative (test 3), and materials within their limits.
+        if (rng() % 3 == 0) {
+            const auto f = [&] { return pickFloat(rng, false); };
+            const auto fp = [&] { return pickFloat(rng, true); };
+            const auto n = [&](int lo) { return static_cast<int32_t>(lo + rng() % 64); };
+            MeshSource ms;
+            switch (rng() % 8) {
+            case 0: ms.source = ModelAsset{AssetRef{"assets/models/m_" + std::to_string(i) + ".glb",
+                                                    rng() % 2 ? std::string() : "guid-" + std::to_string(i)}}; break;
+            case 1: ms.source = SpherePrim{fp(), n(3), n(2)}; break;
+            case 2: ms.source = CubePrim{fp()}; break;
+            case 3: ms.source = PlatformPrim{fp(), fp(), fp()}; break;
+            case 4: ms.source = CylinderPrim{fp(), fp(), n(3)}; break;
+            case 5: ms.source = ConePrim{fp(), fp(), n(3)}; break;
+            case 6: ms.source = QuadPrim{{f(), f(), f()}, {f(), f(), f()}, {f(), f(), f()}, {f(), f(), f()},
+                                         {f(), f(), f()}, {fp(), fp(), fp()}}; break;
+            default: ms.source = BoxPrim{{f(), f(), f()}, {f(), f(), f()}, {fp(), fp(), fp()}}; break;
+            }
+            w.registry().emplace<MeshSource>(e, ms);
+        }
+        if (rng() % 4 == 0) {
+            const auto unit = [&] { return std::min(1.0f, pickFloat(rng, true)); };
+            w.registry().emplace<MaterialOverride>(e, MaterialOverride{{unit(), unit(), unit()}, unit(), unit(),
+                                                                       pickFloat(rng, true)});
         }
         es.push_back(e);
         depth.push_back(d);
@@ -1083,6 +1125,302 @@ static void t06_validate_reports_what_load_reports_for_float_edges() {
     }
 }
 
+// ---- step 7: instantiate with a fake resolver and backend (test 11) -------------------------
+
+// Hands out mesh/material handles and counts what instantiate asks for. No GPU.
+struct FakeBackend final : InstantiateBackend {
+    int uploads = 0, releases = 0, modelMaterialCalls = 0, materials = 0;
+    std::vector<render::MeshHandle> live;   // uploaded, not yet released
+    std::vector<std::string> names;
+    render::MaterialDesc lastMaterial;
+    render::MeshHandle uploadMesh(const Model&, std::string_view name) override {
+        const render::MeshHandle h{static_cast<uint32_t>(uploads++), 0};
+        live.push_back(h);
+        names.emplace_back(name);
+        return h;
+    }
+    void releaseMesh(render::MeshHandle h) override {
+        ++releases;
+        std::erase(live, h);
+    }
+    std::vector<render::MaterialHandle> modelMaterials(const Model& m) override {
+        ++modelMaterialCalls;
+        std::vector<render::MaterialHandle> out;
+        for (std::size_t i = 0; i < m.materialColors.size(); ++i) out.push_back({static_cast<uint32_t>(100 + i), 0});
+        return out;
+    }
+    render::MaterialHandle material(const render::MaterialDesc& d) override {
+        lastMaterial = d;
+        return {static_cast<uint32_t>(++materials), 0};
+    }
+};
+
+// Models held in memory: nothing touches the disk.
+struct FakeResolver final : AssetResolver {
+    int loads = 0;
+    std::map<std::string, std::shared_ptr<const Model>> files;
+    Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& r) override {
+        ++loads;
+        const auto it = files.find(r.path);
+        if (it == files.end())
+            return Result<std::shared_ptr<const Model>, AssetError>::err({"E_ASSET_NOT_FOUND", "no file '" + r.path + "'"});
+        return Result<std::shared_ptr<const Model>, AssetError>::ok(it->second);
+    }
+    bool exists(const AssetRef& r) const override { return files.contains(r.path); }
+    fs::path absolutePath(const AssetRef& r) const override { return r.path; }
+};
+
+struct InstantiateFixture {
+    World world;
+    std::shared_ptr<FakeBackend> backend = std::make_shared<FakeBackend>();
+    FakeResolver files;
+    InstantiateFixture() { installInstantiate(world, backend, files); }
+    entt::entity add(const char* name, MeshSource ms) {
+        const entt::entity e = world.create(name);
+        world.registry().emplace<MeshSource>(e, std::move(ms));
+        return e;
+    }
+    void step() { world.update(1.0f / 60.0f); }
+};
+
+// A model with two materials and > 100 vertices, as a loader would return it.
+static std::shared_ptr<Model> twoMaterialModel() {
+    auto m = PrimitiveMeshGenerator::makeSphere(0.5f, 16, 8);
+    m->materialColors = {glm::vec4(0.2f, 0.3f, 0.4f, 0.6f), glm::vec4(0.9f, 0.9f, 0.9f, 0.1f)};
+    m->materialMetallic = {1.0f, 0.0f};
+    return m;
+}
+
+static void t11_primitive_becomes_a_mesh_renderer() {
+    InstantiateFixture f;
+    const auto e = f.add("ball", MeshSource{SpherePrim{}});
+    const MaterialOverride mo{{0.9f, 0.1f, 0.1f}, 0.3f, 1.0f, 0.0f};
+    f.world.registry().emplace<MaterialOverride>(e, mo);
+    f.step();
+    const auto& reg = f.world.registry();
+    const auto* mr = reg.try_get<MeshRenderer>(e);
+    CHECK(mr && mr->mesh.valid() && mr->materials.size() == 1 && mr->visible, "instantiate emplaces a MeshRenderer");
+    CHECK(f.backend->uploads == 1 && f.files.loads == 0 && f.backend->names[0] == "SpherePrim",
+          "one mesh generated, no file touched");
+    CHECK(f.backend->lastMaterial.baseColor == mo.baseColor && f.backend->lastMaterial.roughness == mo.roughness &&
+              f.backend->lastMaterial.metallic == mo.metallic,
+          "the material is the override");
+    render::MaterialDesc desc;
+    desc.baseColor = mo.baseColor;
+    desc.roughness = mo.roughness;
+    desc.metallic = mo.metallic;
+    CHECK(reg.get<GiMaterialLegacy>(e).packed ==
+              render::giMaterialLegacyPacked(*PrimitiveMeshGenerator::makeSphere(), &desc),
+          "and the legacy GI word is spawnModel's");
+    CHECK(!reg.all_of<InstantiateDirty>(e) && !reg.all_of<InstantiateError>(e), "no tag or error left behind");
+    f.step();
+    CHECK(f.backend->uploads == 1 && f.backend->materials == 1, "an unchanged entity is not instantiated again");
+}
+
+static void t11_missing_asset_is_an_instantiate_error() {
+    InstantiateFixture f;
+    const auto e = f.add("lamp", MeshSource{ModelAsset{AssetRef{"props/lamp.glb", {}}}});
+    f.step();
+    const auto& reg = f.world.registry();
+    const auto* err = reg.try_get<InstantiateError>(e);
+    CHECK(err && err->code == "E_ASSET_NOT_FOUND" && err->message.find("props/lamp.glb") != std::string::npos,
+          "a missing asset leaves InstantiateError with the path");
+    CHECK(!reg.all_of<MeshRenderer>(e) && f.backend->uploads == 0, "and no mesh");
+    CHECK(instantiateErrors(f.world) == std::vector<entt::entity>{e}, "instantiateErrors lists it");
+    f.files.files["props/lamp.glb"] = twoMaterialModel();
+    f.world.registry().patch<MeshSource>(e, [](MeshSource&) {});
+    f.step();
+    CHECK(reg.all_of<MeshRenderer>(e) && !reg.all_of<InstantiateError>(e) && instantiateErrors(f.world).empty(),
+          "once the asset exists, re-instantiating clears the error");
+
+    const auto empty = f.add("empty", MeshSource{ModelAsset{AssetRef{"props/empty.glb", {}}}});
+    f.files.files["props/empty.glb"] = std::make_shared<Model>();
+    f.step();
+    CHECK(reg.get<InstantiateError>(empty).code == "E_MESH_INVALID", "a model with no triangles is E_MESH_INVALID");
+}
+
+static void t11_model_asset_uses_its_own_materials() {
+    InstantiateFixture f;
+    f.files.files["props/vase.glb"] = twoMaterialModel();
+    const auto a = f.add("a", MeshSource{ModelAsset{AssetRef{"props/vase.glb", {}}}});
+    const auto b = f.add("b", MeshSource{ModelAsset{AssetRef{"props/vase.glb", {}}}});
+    f.world.registry().emplace<MaterialOverride>(b, MaterialOverride{{0.5f, 0.6f, 0.7f}, 0.9f, 0.0f, 0.0f});
+    f.step();
+    const auto& reg = f.world.registry();
+    CHECK(f.files.loads == 1 && f.backend->uploads == 1 && f.backend->modelMaterialCalls == 1,
+          "one load, one mesh, one set of model materials for both entities");
+    CHECK(reg.get<MeshRenderer>(a).materials.size() == 2 &&
+              reg.get<MeshRenderer>(a).materials == reg.get<MeshRenderer>(b).materials && f.backend->materials == 0,
+          "a model with materials uses them, override or not");
+    const auto model = twoMaterialModel();
+    render::MaterialDesc desc;
+    desc.baseColor = {0.5f, 0.6f, 0.7f};
+    desc.roughness = 0.9f;
+    CHECK(reg.get<GiMaterialLegacy>(a).packed == render::giMaterialLegacyPacked(*model, nullptr) &&
+              reg.get<GiMaterialLegacy>(b).packed == render::giMaterialLegacyPacked(*model, &desc),
+          "the override only feeds the legacy GI albedo, as in spawnModel");
+}
+
+static void t11_meshes_are_shared_and_released_with_their_last_user() {
+    InstantiateFixture f;
+    const auto s1 = f.add("s1", MeshSource{SpherePrim{}});
+    const auto s2 = f.add("s2", MeshSource{SpherePrim{}});
+    const auto s3 = f.add("s3", MeshSource{SpherePrim{}});
+    const auto c1 = f.add("c1", MeshSource{CubePrim{}});
+    f.step();
+    auto& reg = f.world.registry();
+    CHECK(f.backend->uploads == 2 && reg.get<MeshRenderer>(s1).mesh == reg.get<MeshRenderer>(s3).mesh,
+          "equal sources share one mesh");
+    f.world.destroy(s1);
+    f.step();
+    CHECK(f.backend->releases == 0, "a mesh with users left stays");
+    reg.replace<MeshSource>(s2, MeshSource{CubePrim{}});
+    f.step();
+    CHECK(f.backend->uploads == 2 && f.backend->releases == 0 && reg.get<MeshRenderer>(s2).mesh == reg.get<MeshRenderer>(c1).mesh,
+          "switching to an existing source reuses its mesh");
+    f.world.destroy(s3);
+    f.step();
+    CHECK(f.backend->releases == 1 && f.backend->live.size() == 1, "the last sphere user gone: its mesh is released");
+    reg.remove<MeshSource>(c1);
+    f.step();
+    CHECK(!reg.all_of<MeshRenderer>(c1) && !reg.all_of<GiMaterialLegacy>(c1) && f.backend->releases == 1,
+          "removing MeshSource takes the mesh renderer away; the cube still has a user");
+    f.world.destroy(s2);
+    f.step();
+    CHECK(f.backend->releases == 2 && f.backend->live.empty(), "every mesh released with its last user");
+}
+
+static void t11_materials_are_registered_once_per_value() {
+    InstantiateFixture f;
+    auto& reg = f.world.registry();
+    const MaterialOverride red{{0.8f, 0.1f, 0.1f}, 0.5f, 0.0f, 0.0f};
+    std::vector<entt::entity> es;
+    for (int i = 0; i < 5; ++i) {
+        es.push_back(f.add("r", MeshSource{CubePrim{}}));
+        reg.emplace<MaterialOverride>(es.back(), red);
+    }
+    const auto blue = f.add("b", MeshSource{CubePrim{}});
+    reg.emplace<MaterialOverride>(blue, MaterialOverride{{0.1f, 0.1f, 0.8f}, 0.5f, 0.0f, 0.0f});
+    const auto plain = f.add("p", MeshSource{CubePrim{}});
+    f.step();
+    CHECK(f.backend->materials == 3, "three distinct materials (red, blue, default) for seven entities");
+    reg.remove<MaterialOverride>(es[0]);
+    f.step();
+    CHECK(reg.get<MeshRenderer>(es[0]).materials == reg.get<MeshRenderer>(plain).materials && f.backend->materials == 3 &&
+              f.backend->uploads == 1,
+          "removing the override switches to the default material; the mesh is not rebuilt");
+}
+
+static void t11_generators_match_the_example_builders() {
+    Model q;
+    PrimitiveMeshGenerator::generateQuad(q, {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {0.73f, 0.73f, 0.73f});
+    CHECK(q.vertices.size() == 4 && q.indices == std::vector<uint32_t>({0, 1, 2, 0, 2, 3}), "a quad is two triangles");
+    for (const Vertex& v : q.vertices)
+        CHECK(v.normal == glm::vec3(0, 0, 1) && v.color == glm::vec3(0.73f) && v.texCoord == glm::vec2(0) &&
+                  v.tangent == glm::vec4(1, 0, 0, 1) && v.boneIndices == glm::ivec4(0) &&
+                  v.boneWeights == glm::vec4(1, 0, 0, 0),
+              "every quad vertex as the example built it");
+    CHECK(q.vertices[2].position == glm::vec3(1, 1, 0), "corners in order");
+    Model b;
+    PrimitiveMeshGenerator::generateBox(b, {-1, -2, -3}, {1, 2, 3}, {0.2f, 0.4f, 0.6f});
+    CHECK(b.vertices.size() == 24 && b.indices.size() == 36, "a box is 6 faces of 4 vertices");
+    CHECK(b.vertices[0].position == glm::vec3(-1, -2, 3) && b.vertices[0].normal == glm::vec3(0, 0, 1) &&
+              b.vertices[20].normal == glm::vec3(0, -1, 0),
+          "faces in the example's order (front first, bottom last) with flat normals");
+}
+
+static void t11_restore_reinstantiates_changed_sources() {
+    InstantiateFixture f;
+    auto& reg = f.world.registry();
+    const auto e = f.add("thing", MeshSource{SpherePrim{}});
+    f.step();
+    const Snapshot snap = takeSnapshot(f.world, engineTypes());
+    reg.replace<MeshSource>(e, MeshSource{ConePrim{}});
+    f.step();
+    CHECK(f.backend->uploads == 2 && f.backend->releases == 1, "the sphere was replaced by a cone");
+    restoreSnapshot(f.world, snap);
+    f.step();
+    CHECK(std::holds_alternative<SpherePrim>(reg.get<MeshSource>(e).source) && f.backend->uploads == 3 &&
+              f.backend->live.size() == 1 && reg.get<MeshRenderer>(e).mesh == f.backend->live[0],
+          "restore puts the sphere back and instantiate rebuilds its mesh");
+}
+
+static void t11_unsaveable_mesh_warns_on_save() {
+    InstantiateFixture f;
+    const auto data = f.add("data", MeshSource{CubePrim{}});
+    f.step();
+    const auto code = f.world.create("code");
+    f.world.registry().emplace<MeshRenderer>(code, MeshRenderer{render::MeshHandle{7, 0}, {}, true});
+    SaveReport report;
+    CHECK(saveScene(f.world, engineTypes(), {}, &report), "saves");
+    CHECK(report.warnings.size() == 1 && report.warnings[0].code == "W_UNSAVEABLE_MESH" &&
+              report.warnings[0].entity == f.world.idOf(code),
+          "a mesh made in code warns W_UNSAVEABLE_MESH; one from a MeshSource does not");
+    (void)data;
+}
+
+static void t11_check_assets_reports_missing_models() {
+    FakeResolver files;
+    files.files["props/chair.glb"] = twoMaterialModel();
+    const std::string text = R"({"format":"ohao.scene","version":1,"entities":[)"
+                             R"({"id":"00000000000000a1","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"props/missing.glb"}}}}},)"
+                             R"({"id":"00000000000000a2","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"props/chair.glb"}}}}},)"
+                             R"({"id":"00000000000000a3","MeshSource":{"source":{"SpherePrim":{}}}}]})";
+    CHECK(validateScene(text, engineTypes()).ok(), "without a resolver, asset paths are not checked");
+    const auto r = validateScene(text, engineTypes(), &files);
+    CHECK(r.errors.size() == 1 && r.errors[0].code == "E_ASSET_NOT_FOUND" &&
+              r.errors[0].path == "/entities/0/MeshSource/source/ModelAsset/asset/path" && r.errors[0].line == 1,
+          "checkAssets reports the missing model at its path");
+    CHECK(files.loads == 0, "checking never loads");
+}
+
+static void t11_file_resolver_paths_and_cache() {
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    const AssetRef helmet{"assets/test_models/DamagedHelmet.glb", {}};
+    CHECK(files.exists(helmet) && !files.absolutePath(helmet).empty(), "a project file exists");
+    auto first = files.loadModel(helmet);
+    auto second = files.loadModel(helmet);
+    CHECK(first && second && first.value() == second.value() && !first.value()->vertices.empty(),
+          "a model loads once and is cached");
+    for (const char* bad : {"../outside.glb", "assets/../../outside.glb", "C:/Windows/x.glb", "/abs/x.glb", ""}) {
+        const auto r = files.loadModel(AssetRef{bad, {}});
+        CHECK(!r && r.error().code == "E_ASSET_NOT_FOUND" && files.absolutePath(AssetRef{bad, {}}).empty() &&
+                  !files.exists(AssetRef{bad, {}}),
+              "absolute paths and paths leaving the project are rejected");
+    }
+    const auto missing = files.loadModel(AssetRef{"assets/nope.glb", {}});
+    CHECK(!missing && missing.error().code == "E_ASSET_NOT_FOUND", "a missing file is E_ASSET_NOT_FOUND");
+    const auto notModel = files.loadModel(AssetRef{"tests/scenes/v1/rooms.scene.json", {}});
+    CHECK(!notModel && notModel.error().code == "E_ASSET_INVALID", "a file that is not a model is E_ASSET_INVALID");
+}
+
+static void t11_scene_text_round_trips_mesh_sources() {
+    // An agent's minimal file: defaults fill in the primitive.
+    World w;
+    CHECK(load(w, R"({"format":"ohao.scene","version":1,"entities":[)"
+                  R"({"id":"00000000000000b1","MeshSource":{"source":{"SpherePrim":{}}},"MaterialOverride":{"metallic":1}},)"
+                  R"({"id":"00000000000000b2","MeshSource":{"source":{"QuadPrim":{"color":[0.73,0.73,0.73]}}}}]})"),
+          "loads");
+    const auto& reg = w.registry();
+    const auto& sphere = std::get<SpherePrim>(reg.get<MeshSource>(w.findById(0xb1)).source);
+    CHECK(sphere.radius == 0.5f && sphere.sectors == 32 && sphere.stacks == 16 &&
+              reg.get<MaterialOverride>(w.findById(0xb1)).metallic == 1.0f,
+          "missing fields take their defaults");
+    const std::string saved = save(w, reflect::JsonLayout::Compact);
+    CHECK(saved.find(R"("MeshSource":{"source":{"SpherePrim":{"radius":0.5,"sectors":32,"stacks":16}}},"MaterialOverride":{"metallic":1})") !=
+              std::string::npos,
+          "the variant's value is written in full; the override omits its defaults");
+    World again;
+    CHECK(load(again, saved) && save(again, reflect::JsonLayout::Compact) == saved, "and round-trips");
+    const auto bad = validateScene(R"({"format":"ohao.scene","version":1,"entities":[)"
+                                   R"({"id":"00000000000000b1","MeshSource":{"source":{"SpherPrim":{}}}},)"
+                                   R"({"id":"00000000000000b2","MeshSource":{"source":{"SpherePrim":{"sectors":2}}}}]})",
+                                   engineTypes());
+    CHECK(bad.errors.size() == 2 && bad.errors[0].code == "E_TYPE" && bad.errors[0].suggestion == "SpherePrim" &&
+              bad.errors[1].code == "E_RANGE",
+          "a misspelled alternative and a value below its limit are reported");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -1134,6 +1472,17 @@ int main(int argc, char** argv) {
     RUN(t10_restore_after_structural_changes_keeps_creation_order);
     RUN(t10_children_order_is_restored);
     RUN(t10_recapture_reuses_memory_and_matches_a_fresh_snapshot);
+    RUN(t11_primitive_becomes_a_mesh_renderer);
+    RUN(t11_missing_asset_is_an_instantiate_error);
+    RUN(t11_model_asset_uses_its_own_materials);
+    RUN(t11_meshes_are_shared_and_released_with_their_last_user);
+    RUN(t11_materials_are_registered_once_per_value);
+    RUN(t11_generators_match_the_example_builders);
+    RUN(t11_restore_reinstantiates_changed_sources);
+    RUN(t11_unsaveable_mesh_warns_on_save);
+    RUN(t11_check_assets_reports_missing_models);
+    RUN(t11_file_resolver_paths_and_cache);
+    RUN(t11_scene_text_round_trips_mesh_sources);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

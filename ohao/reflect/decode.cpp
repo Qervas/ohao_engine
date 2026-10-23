@@ -88,7 +88,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 26> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 30> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -114,7 +114,11 @@ constexpr std::array<ErrorCodeInfo, 26> kCodes = {{
     {"E_COMPONENT_UNKNOWN", "A request names a type that is not a component (or, for edits, not a saved one)."},
     {"E_PATH", "A path that reaches no field: \"/Type/field\", then optionally member names or array indices."},
     {"E_SNAPSHOT_UNKNOWN", "No snapshot has this name (world.restore)."},
+    {"E_ASSET_NOT_FOUND", "An asset path that names no file in the project (or leaves the project)."},
+    {"E_ASSET_INVALID", "An asset file that exists but cannot be loaded (format or content)."},
+    {"E_MESH_INVALID", "A MeshSource that gives no usable geometry (InstantiateError)."},
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
+    {"W_UNSAVEABLE_MESH", "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."},
 }};
 } // namespace
 

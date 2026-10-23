@@ -38,6 +38,10 @@ public:
     void shutdown();
 
     MeshHandle registerMesh(const MeshData& data);            // uploads + BLAS now (blocking, load time)
+    // The handle becomes stale (meshInfo returns null) and its BLAS is destroyed after
+    // the frames in flight retire. Instances must stop using it first (the ECS extract
+    // releases them when MeshRenderer changes). Arena space is not reused yet.
+    void releaseMesh(MeshHandle h);
     MaterialHandle registerMaterial(const MaterialDesc& desc);
     uint32_t createInstance(const InstanceDesc& desc);        // returns slot
     void updateInstance(uint32_t slot, const InstanceDesc& desc);

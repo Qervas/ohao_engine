@@ -64,9 +64,11 @@ template <class T>
 
 // Registers every ECS component, authoring and runtime, in a fixed order (the order of
 // the catalogue and of component blocks in scene files):
-//   authoring (saved):  Name, Transform, Parent, Light
+//   authoring (saved):  Name, Transform, Parent, Light, MeshSource, MaterialOverride
+//     (MeshSource's alternatives ModelAsset and the *Prim structs are nested types)
 //   runtime (catalogue only): Children, WorldTransform, MeshRenderer, RenderSlot,
-//     EmissiveProxyLight, GiMaterialLegacy, CreationOrder and the dirty tags.
+//     EmissiveProxyLight, GiMaterialLegacy, CreationOrder, PreservedComponents,
+//     InstantiateError and the dirty tags.
 // EntityId is not registered: it is the entity's key ("id" in scene files).
 void registerSceneTypes(reflect::TypeRegistry& r);
 

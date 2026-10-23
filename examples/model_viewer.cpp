@@ -8,6 +8,7 @@
 
 #include "gpu/vulkan/renderer.hpp"
 #include "scene/asset/model_loader.hpp"
+#include "scene/asset/primitive_mesh_generator.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "ecs/framing.hpp"
 #include "ecs/render_extract.hpp"
@@ -98,14 +99,7 @@ int main(int argc, char* argv[]) {
     auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
                        glm::vec3 normal, glm::vec3 color, float roughness) {
         Model m;
-        auto mkv = [&](glm::vec3 pos) {
-            Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
-            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
-            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
-            return v;
-        };
-        m.vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
-        m.indices = {0,1,2, 0,2,3};
+        PrimitiveMeshGenerator::generateQuad(m, a, b, c, d, normal, color);
         render::MaterialDesc mat;
         mat.baseColor = color;
         mat.roughness = roughness;
@@ -116,24 +110,7 @@ int main(int argc, char* argv[]) {
     auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
                       glm::vec3 color, float roughness, float metallic = 0.0f) {
         Model m;
-        auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
-            Vertex v{}; v.position = pos; v.normal = n; v.color = color;
-            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
-            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
-            return v;
-        };
-        glm::vec3 c[8] = {
-            {lo.x,lo.y,lo.z}, {hi.x,lo.y,lo.z}, {hi.x,hi.y,lo.z}, {lo.x,hi.y,lo.z},
-            {lo.x,lo.y,hi.z}, {hi.x,lo.y,hi.z}, {hi.x,hi.y,hi.z}, {lo.x,hi.y,hi.z}
-        };
-        // 6 faces: front, back, left, right, top, bottom
-        int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
-        glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
-        for (int f = 0; f < 6; f++) {
-            uint32_t base = (uint32_t)m.vertices.size();
-            for (int k = 0; k < 4; k++) m.vertices.push_back(mkv(c[faces[f][k]], normals[f]));
-            m.indices.insert(m.indices.end(), {base,base+1,base+2, base,base+2,base+3});
-        }
+        PrimitiveMeshGenerator::generateBox(m, lo, hi, color);
         render::MaterialDesc mat;
         mat.baseColor = color;
         mat.roughness = roughness;

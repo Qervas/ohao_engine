@@ -279,6 +279,51 @@ void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float 
     }
 }
 
+// Moved verbatim from the examples' quad builders (cornell_box addQuad, model_viewer
+// addQuad), so scenes built from QuadPrim keep byte-identical vertex streams.
+void PrimitiveMeshGenerator::generateQuad(Model& model, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                                          glm::vec3 normal, glm::vec3 color) {
+    model.vertices.clear();
+    model.indices.clear();
+    auto makeVert = [&](glm::vec3 pos) {
+        Vertex v{};
+        v.position = pos;
+        v.normal = normal;
+        v.color = color;
+        v.texCoord = glm::vec2(0);
+        v.tangent = glm::vec4(1,0,0,1);
+        v.boneIndices = glm::ivec4(0);
+        v.boneWeights = glm::vec4(1,0,0,0);
+        return v;
+    };
+    model.vertices = {makeVert(a), makeVert(b), makeVert(c), makeVert(d)};
+    model.indices = {0, 1, 2, 0, 2, 3};
+}
+
+// Moved verbatim from model_viewer's addBox: 6 faces of 4 vertices, flat normals.
+void PrimitiveMeshGenerator::generateBox(Model& model, glm::vec3 lo, glm::vec3 hi, glm::vec3 color) {
+    model.vertices.clear();
+    model.indices.clear();
+    auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
+        Vertex v{}; v.position = pos; v.normal = n; v.color = color;
+        v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+        v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+        return v;
+    };
+    glm::vec3 c[8] = {
+        {lo.x,lo.y,lo.z}, {hi.x,lo.y,lo.z}, {hi.x,hi.y,lo.z}, {lo.x,hi.y,lo.z},
+        {lo.x,lo.y,hi.z}, {hi.x,lo.y,hi.z}, {hi.x,hi.y,hi.z}, {lo.x,hi.y,hi.z}
+    };
+    // 6 faces: front, back, left, right, top, bottom
+    int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
+    glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
+    for (int f = 0; f < 6; f++) {
+        uint32_t base = (uint32_t)model.vertices.size();
+        for (int k = 0; k < 4; k++) model.vertices.push_back(mkv(c[faces[f][k]], normals[f]));
+        model.indices.insert(model.indices.end(), {base,base+1,base+2, base,base+2,base+3});
+    }
+}
+
 void PrimitiveMeshGenerator::generateCone(Model& model, float radius, float height, int segments) {
     model.vertices.clear();
     model.indices.clear();

@@ -161,7 +161,18 @@ std::optional<EmissiveProxy> emissiveProxy(const Model& model) {
     return std::nullopt;
 }
 
-glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial) {
+GiModelInputs giModelInputs(const Model& model) {
+    GiModelInputs in;
+    in.hasMaterials = !model.materialColors.empty();
+    if (in.hasMaterials) {
+        in.roughness0 = model.materialColors[0].w;
+        in.metallic0 = !model.materialMetallic.empty() ? model.materialMetallic[0] : 0.0f;
+    }
+    in.manyVertices = model.vertices.size() > 100;
+    return in;
+}
+
+glm::vec4 giMaterialLegacyPacked(const GiModelInputs& model, const MaterialDesc* overrideMaterial) {
     glm::vec3 albedo(0.73f);
     float roughness = 0.95f;
     float metallic = 0.0f;
@@ -172,18 +183,20 @@ glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrid
     }
     // Roughness/metallic come from model material 0 whenever the model has materials,
     // even with an override material (the override sets only the albedo).
-    if (!model.materialColors.empty()) {
-        roughness = model.materialColors[0].w;
-        metallic = !model.materialMetallic.empty() ? model.materialMetallic[0] : 0.0f;
+    if (model.hasMaterials) {
+        roughness = model.roughness0;
+        metallic = model.metallic0;
     }
     float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;
-    if (model.vertices.size() > 100) packed += (packed >= 0 ? 10.0f : -10.0f);
+    if (model.manyVertices) packed += (packed >= 0 ? 10.0f : -10.0f);
     return glm::vec4(albedo, packed);
 }
 
-UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, const Model& model,
-                          std::string_view debugName, const MaterialDesc* overrideMaterial) {
-    UploadedModel out;
+glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial) {
+    return giMaterialLegacyPacked(giModelInputs(model), overrideMaterial);
+}
+
+MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_view debugName) {
     const uint32_t triangleCount = static_cast<uint32_t>(model.indices.size() / 3);
 
     MeshData md;
@@ -200,8 +213,11 @@ UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, 
             std::copy_n(model.materialPerTriangle.begin(), n, md.triangleMaterialSlot.begin());
         }
     }
-    out.mesh = scene.registerMesh(md);
+    return scene.registerMesh(md);
+}
 
+std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const Model& model,
+                                         const MaterialDesc* overrideMaterial) {
     std::vector<MaterialDesc> mats;
     if (!model.materialColors.empty()) {
         // The old GBufferPass::execute hasModelMaterial branch.
@@ -222,9 +238,16 @@ UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, 
     for (auto& m : mats)
         if (m.albedoTex == kNoTexture && m.legacyRtTintTex == kNoTexture)
             m.legacyRtTintTex = legacyRtTintTexture(textures, m.baseColor);
+    return mats;
+}
+
+UploadedModel uploadModel(RenderScene& scene, BindlessTextureManager* textures, const Model& model,
+                          std::string_view debugName, const MaterialDesc* overrideMaterial) {
+    UploadedModel out;
+    out.mesh = uploadModelMesh(scene, model, debugName);
+    const std::vector<MaterialDesc> mats = modelMaterials(textures, model, overrideMaterial);
     out.materials.reserve(mats.size());
     for (const auto& m : mats) out.materials.push_back(scene.registerMaterial(m));
-
     out.emissive = emissiveProxy(model);
     return out;
 }

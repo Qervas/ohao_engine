@@ -317,13 +317,44 @@ static void float_text_round_trips_bit_exact() {
 static void writer_fast_path_matches_to_chars() {
     std::vector<float> values = {-0.0f, 0.0f, 9999.0f, -9999.0f, 10000.0f, 1000.0f, 9999.5f};
     for (int i = -10000; i <= 10000; ++i) values.push_back(static_cast<float>(i));
+    // The short-decimal path (step 7): every decimal with up to 4 fractional digits in
+    // [0.001, 16), its float neighbours, and the range's edges.
+    for (int i = 10; i < 160000; ++i) {
+        const float f = static_cast<float>(i) / 10000.0f;
+        values.insert(values.end(), {f, -f, std::nextafter(f, 0.0f), std::nextafter(f, 100.0f)});
+    }
+    for (float e : {0.001f, 16.0f, 0.73f, 0.95f, 0.05f, 15.999999f, 0.0009999999f})
+        values.insert(values.end(), {e, std::nextafter(e, 0.0f), std::nextafter(e, 100.0f)});
+    std::size_t mismatches = 0;
     for (float v : values) {
         JsonWriter w;
         w.float32(v);
         char buf[32];
         auto r = std::to_chars(buf, buf + sizeof(buf), v);
-        CHECK(w.str() == std::string(buf, r.ptr), "fast path output == std::to_chars output");
+        if (w.str() != std::string(buf, r.ptr) && mismatches++ < 5)
+            std::printf("\n      %.9g: wrote %s, to_chars %s", v, w.str().c_str(), std::string(buf, r.ptr).c_str());
     }
+    CHECK(mismatches == 0, "fast path output == std::to_chars output");
+}
+
+// Every float in [0.001, 16) (both signs), strided: the short-decimal path or its
+// fallback must match to_chars on all of them.
+static void writer_short_decimals_match_to_chars_across_the_range() {
+    const uint32_t lo = std::bit_cast<uint32_t>(0.001f), hi = std::bit_cast<uint32_t>(16.0f);
+    std::size_t checked = 0, mismatches = 0;
+    JsonWriter w(64);
+    char buf[32];
+    for (uint32_t bits = lo; bits <= hi; bits += 61) {
+        for (const float v : {std::bit_cast<float>(bits), -std::bit_cast<float>(bits)}) {
+            w = JsonWriter(64);
+            w.float32(v);
+            const auto r = std::to_chars(buf, buf + sizeof(buf), v);
+            if (w.str() != std::string_view(buf, static_cast<std::size_t>(r.ptr - buf)) && mismatches++ < 5)
+                std::printf("\n      %.9g: wrote %s, to_chars %s", v, w.str().c_str(), std::string(buf, r.ptr).c_str());
+            ++checked;
+        }
+    }
+    CHECK(mismatches == 0 && checked > 3'000'000, "every sampled float in [0.001, 16) formats exactly as to_chars");
 }
 
 static void pretty_layout_rules() {
@@ -858,6 +889,7 @@ int main(int argc, char** argv) {
     RUN(decoder_floats_match_from_chars);
     RUN(pretty_layout_rules);
     RUN(pretty_strips_back_to_compact);
+    RUN(writer_short_decimals_match_to_chars_across_the_range);
     RUN(pretty_single_pass_matches_pretty_print);
     RUN(t02_pretty_writer_matches_pretty_print_on_random_trees);
     RUN(struct_writes_canonically);

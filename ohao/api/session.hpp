@@ -3,6 +3,7 @@
 // params object and a JSON result; the CLI, the JSON-RPC/MCP server (sub-project 4), the
 // C ABI and the editor all dispatch through Session::call, so each operation has exactly
 // one implementation.
+#include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
 #include "reflect/schema.hpp"
@@ -34,6 +35,8 @@ public:
 
     [[nodiscard]] ecs::World& world() noexcept;
     [[nodiscard]] uint64_t frame() const noexcept;
+    // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
+    void setAssetResolver(ecs::AssetResolver* assets) noexcept;
 
     struct Impl;
 

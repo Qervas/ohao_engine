@@ -254,8 +254,19 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     return MeshHandle{index, 0};
 }
 
+BlasHandle MeshRegistry::release(MeshHandle h) {
+    if (!info(h)) return INVALID_BLAS;
+    MeshInfo& mesh = m_meshes[h.index];
+    mesh.released = true;
+    const BlasHandle blas = mesh.blas;
+    mesh.blas = INVALID_BLAS;
+    mesh.submeshes.clear();
+    mesh.submeshes.shrink_to_fit();
+    return blas;
+}
+
 const MeshInfo* MeshRegistry::info(MeshHandle h) const {
-    if (!h.valid() || h.index >= m_meshes.size() || h.generation != 0) return nullptr;
+    if (!h.valid() || h.index >= m_meshes.size() || h.generation != 0 || m_meshes[h.index].released) return nullptr;
     return &m_meshes[h.index];
 }
 

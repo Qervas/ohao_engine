@@ -270,8 +270,10 @@ struct PlatformPrim { float width{2.0f}; float height{0.4f}; float depth{2.0f}; 
 struct CylinderPrim { float radius{0.5f}; float height{1.0f}; int32_t segments{16}; };
 struct ConePrim     { float radius{0.5f}; float height{1.0f}; int32_t segments{16}; };
 // The examples' inline builders, made reusable (vertex color = color, uv 0, tangent (1,0,0,1)).
-struct QuadPrim     { glm::vec3 a, b, c, d; glm::vec3 normal; glm::vec3 color{1.0f}; };
-struct BoxPrim      { glm::vec3 lo, hi; glm::vec3 color{1.0f}; };
+// Defaults (step 7): a unit quad in the XY plane facing +Z, and a unit box at the origin.
+struct QuadPrim     { glm::vec3 a{-0.5f,-0.5f,0}, b{0.5f,-0.5f,0}, c{0.5f,0.5f,0}, d{-0.5f,0.5f,0};
+                      glm::vec3 normal{0,0,1}; glm::vec3 color{1.0f}; };
+struct BoxPrim      { glm::vec3 lo{-0.5f}, hi{0.5f}; glm::vec3 color{1.0f}; };
 
 struct MeshSource {
     std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim,
@@ -287,6 +289,10 @@ struct Environment { std::optional<AssetRef> hdri; float intensity{1.0f}; };
 `QuadPrim` and `BoxPrim` come from two new generator functions, `generateQuad` and
 `generateBox`. They are moved verbatim from the example lambdas, so the vertex streams
 stay byte-identical.
+
+*Step 7:* the spec gave `QuadPrim`/`BoxPrim` no defaults. Canonical files omit default
+fields, so every field needs one. The ones above were chosen so a bare `QuadPrim {}` or
+`BoxPrim {}` is a visible unit shape.
 
 ### Stable entity IDs
 
@@ -313,31 +319,58 @@ stay byte-identical.
 ### Instantiate system and scene view
 
 ```cpp
+struct AssetError { std::string code; std::string message; };  // E_ASSET_NOT_FOUND | E_ASSET_INVALID
 class AssetResolver {                                    // ohao/ecs/asset_resolver.hpp
 public:
     virtual ~AssetResolver() = default;
-    virtual Result<std::shared_ptr<const Model>> loadModel(const AssetRef&) = 0;
-    virtual bool exists(const AssetRef&) const = 0;      // validate --check-assets, no load
-    virtual std::filesystem::path absolutePath(const AssetRef&) const = 0;
+    virtual Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef&) = 0;
+    virtual bool exists(const AssetRef&) const = 0;      // validate checkAssets, no load
+    virtual std::filesystem::path absolutePath(const AssetRef&) const = 0;  // empty if rejected
 };
-class FileAssetResolver final : public AssetResolver { /* project root; caches models by normalized path */ };
+// Project root; rejects empty, absolute and "../" paths; caches models by normalized path.
+class FileAssetResolver final : public AssetResolver { /* ... */ };
 
-// "instantiate" runs FIRST (before "transform"). Requires installRenderExtract.
+// What instantiate needs from the renderer; the RenderScene overload wraps the real one,
+// tests pass a fake (test 11).
+class InstantiateBackend {
+    virtual render::MeshHandle uploadMesh(const Model&, std::string_view debugName) = 0;
+    virtual void releaseMesh(render::MeshHandle) = 0;
+    virtual std::vector<render::MaterialHandle> modelMaterials(const Model&) = 0;
+    virtual render::MaterialHandle material(const render::MaterialDesc&) = 0;
+};
+
+// "instantiate" runs FIRST (World::addSystemBefore("transform", ...)). Requires installRenderExtract.
 void installInstantiate(World&, render::RenderScene&, BindlessTextureManager*, AssetResolver&);
+void installInstantiate(World&, std::shared_ptr<InstantiateBackend>, AssetResolver&);
 [[nodiscard]] std::vector<entt::entity> instantiateErrors(const World&);
 
-[[nodiscard]] SceneView resolveSceneView(const World&);  // active camera params (pitch/yaw from -Z), environment
+[[nodiscard]] SceneView resolveSceneView(const World&);  // step 8: active camera params (pitch/yaw from -Z), environment
 ```
 
 - **Trigger:** `MeshSource`/`MaterialOverride` construct, update or replace tags the
-  entity `InstantiateDirty`.
-- **Work:** the system builds the `Model` (from the resolver or the generator), then
-  calls `ecs::uploadModel` with the override, then emplaces or replaces `MeshRenderer`,
+  entity `InstantiateDirty`. Removing `MaterialOverride` re-instantiates with the
+  default material. Removing `MeshSource`, or destroying the entity, removes what
+  instantiate made and drops the entity's mesh reference.
+- **Work:** the system builds the `Model` (from the resolver or the generator). It then
+  uploads the geometry with `render::uploadModelMesh` and gets the materials from
+  `render::modelMaterials` (with the override) — the two halves `uploadModel` is now
+  composed of. Last, it emplaces or replaces `MeshRenderer` (keeping `visible`),
   `GiMaterialLegacy` and `EmissiveProxyLight`. This is the same data path as
-  `spawnModel`.
-- **Caching:** meshes are cached per distinct `MeshSource` value, with a reference count
-  released when the last user goes. Materials are registered per entity.
-- **Failure:** `InstantiateError{code, message}`, logged once.
+  `spawnModel`. Dirty entities are processed in `CreationOrder`, so meshes register in
+  a deterministic order.
+- **Caching:** meshes are cached per distinct `MeshSource` value (the alternative plus
+  its raw bytes, or path and guid), with a user count. They are released through the
+  new `RenderScene::releaseMesh` when the last user goes. `releaseMesh` marks the mesh
+  released, retires its BLAS after `MAX_FRAMES_IN_FLIGHT` frames, and gives dead TLAS
+  slots reference 0. Mesh indices are not reused, and arena space is not reclaimed yet.
+- **Materials** are registered once per distinct value, not per entity *(step 7
+  ruling)*. The material table is fixed at 4,096 entries (`MaterialTable::kCapacity`)
+  and never frees, so per-entity registration would exhaust it in a 10k-entity scene. It would also leak a slot
+  per edit. Equal values give the same `MaterialHandle`, which the renderer cannot tell
+  apart from separate registrations.
+- **Failure:** `InstantiateError{code, message}`, logged once. Codes: the resolver's
+  `E_ASSET_NOT_FOUND` / `E_ASSET_INVALID`, and `E_MESH_INVALID` for a model with no
+  triangles or a failed upload.
 - **Scene view:** a host helper (`tools/ohao/scene_host.hpp`, shared with the two
   examples) applies the `SceneView` to `VulkanRenderer` through its existing camera and
   environment setters. `ohao_ecs` gains no dependency on the renderer camera.
@@ -548,9 +581,9 @@ file.)
   | Parsing and document | `E_PARSE`, `E_FORMAT`, `E_VERSION_UNSUPPORTED`, `E_COMPONENT_VERSION`, `E_UPGRADE`, `E_WORLD_NOT_EMPTY` |
   | Values | `E_UNKNOWN_FIELD`, `E_DUPLICATE_KEY`, `E_TYPE`, `E_ENUM`, `E_RANGE`, `E_NONFINITE` |
   | References | `E_ENTITY_NOT_FOUND` (an entity reference other than `Parent`) |
-  | Warnings | `W_UNKNOWN_COMPONENT` |
+  | Warnings | `W_UNKNOWN_COMPONENT`, `W_UNSAVEABLE_MESH` (save) |
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
-  | Assets | `E_ASSET_NOT_FOUND` (with `--check-assets`) |
+  | Assets | `E_ASSET_NOT_FOUND` (validate with `checkAssets` / `--check-assets`, and instantiate), `E_ASSET_INVALID`, `E_MESH_INVALID` (instantiate) |
   | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH`, `E_SNAPSHOT_UNKNOWN` (and `E_ENTITY_NOT_FOUND` for command targets) |
   | Limits | `E_TOO_MANY_ERRORS` |
 
@@ -628,8 +661,9 @@ through this table, so there is exactly one implementation of each operation.
 
 - `scene` is the scene as a JSON object: it costs no string escaping, which matters
   when an agent writes it. `text` is the same as a string, `path` a file. `seed` (16
-  hex digits) fixes the id generator for later creates. `checkAssets` arrives with
-  assets (step 7).
+  hex digits) fixes the id generator for later creates. `checkAssets` (step 7)
+  reports `E_ASSET_NOT_FOUND` for model paths the session's resolver
+  (`Session::setAssetResolver`) cannot find. It is `E_COMMAND` without a resolver.
 - **`world.query`:**
   - Filters all have to match: `ids` (any of), `names` (exact, any of), `nameContains`
     (substring), `has` (every listed component, runtime ones included).
@@ -904,6 +938,24 @@ on the full scene. The 3.2 MB scene passes with about 17% headroom on save and 2
 validate (step 6 change record), so the full scene needs more codec speed or a budget
 ruling then.
 
+*Step 7 note:* every renderable now has a `MeshSource` primitive (all six procedural
+kinds from a size palette) and a `MaterialOverride` (color and roughness palettes,
+metallic on one in five). bench10k is 5.13 MB pretty and 3.77 MB compact, the
+spec-sized scene less `Camera`/`Environment`. Step 7 made two codec changes:
+- variant decode builds its error strings only on error;
+- the pretty writer has a short-decimal fast path for 0.001 ≤ |v| < 16, exact against
+  `to_chars`.
+
+Together they took validate from 19.4 to about 14 ms and save from 14.9 to about
+13.9 ms. Load passes (about 18.3 ms of 20), as do the other budgets and every scaling
+ratio (9.6–11.0× on a quiet run). **Save pretty (about 13.9 ms) and validate (about
+14.0 ms) remain over their 10 ms budgets.** That needs Frank's ruling (open
+decision 1). The options are:
+1. scale the budgets with the scene (×1.6 by size);
+2. allow multi-threaded save and validate;
+3. a codec rewrite: a validate that streams without the value tree, and per-type
+   specialized writers.
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1147,6 +1199,11 @@ snapshots; neither creates a GPU device):
     - an unchanged restore writes no component.
 11. **Fake resolver:** instantiate emplaces `MeshRenderer` or `InstantiateError`
     without touching the disk.
+    - *As built (step 7):* a fake `InstantiateBackend` covers mesh sharing and release,
+      per-value materials, restore re-instantiating, the generators against the example
+      builders, `W_UNSAVEABLE_MESH` and `checkAssets`.
+    - `instantiate_gpu_test` renders Cornell deferred both ways and requires bit-identical
+      pixels and zero validation messages.
 12. **Schema:**
     - `ohao_schema.json` is deterministic and its `schemaHash` stable;
     - `scene.schema.json` accepts every checked-in scene and rejects the type and
@@ -1228,6 +1285,16 @@ Each step ends with the engine running and every suite green.
    API.)*
 7. `MeshSource`, `MaterialOverride`, `generateQuad`/`generateBox`, instantiate, resolver.
    Test 11.
+   - *Done 2026-10-23*, except the save/validate budgets on the grown bench10k (open
+     decision 1).
+   - Also built: `RenderScene::releaseMesh`; `uploadModel` split into `uploadModelMesh`
+     + `modelMaterials`; `World::addSystemBefore`; the `InstantiateBackend` seam; and
+     `checkAssets` on `validateScene` and `scene.validate`.
+   - Materials are deduplicated by value.
+   - Test 11 also has a GPU half (`instantiate_gpu_test`). Cornell deferred built
+     through instantiate is bit-identical to `spawnModel`, the shared sphere mesh is
+     released only with its last user, and validation reports 0 messages.
+   - The RT shared-BLAS risk is decided when the examples convert in step 8.
 8. `Camera`, `Environment`, scene view. `cornell_box`/`model_viewer` converted, with
    `--save-scene`; their existing goldens must still pass.
 9. `ohao` CLI, checked-in scenes, scene goldens, CLI goldens, restore-render test.
@@ -1337,4 +1404,11 @@ Answered by Frank on 2026-10-22:
 
 ## Open decisions
 
-None.
+1. **Save/validate budgets on the full bench10k (raised in step 7, needs Frank).**
+   - On the 5.13 MB scene: save pretty median about 13.9 ms, validate about 14.0 ms;
+     both budgets are 10 ms. Every other budget and scaling ratio passes.
+   - The options, as set out under "Budgets":
+     1. scale the budgets;
+     2. allow threads;
+     3. rewrite the codec's validate and writer.
+   - Until this is ruled, `scene_bench --check` fails on these two lines only.

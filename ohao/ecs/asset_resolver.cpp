@@ -1,0 +1,58 @@
+#include "ecs/asset_resolver.hpp"
+
+#include "scene/asset/model.hpp"
+#include "scene/asset/model_loader.hpp"
+
+namespace ohao::ecs {
+
+namespace fs = std::filesystem;
+
+FileAssetResolver::FileAssetResolver(fs::path projectRoot)
+    : m_root(fs::absolute(std::move(projectRoot)).lexically_normal()) {}
+
+fs::path FileAssetResolver::absolutePath(const AssetRef& ref) const {
+    if (ref.path.empty()) return {};
+    const fs::path rel = fs::path(ref.path).lexically_normal();
+    if (rel.is_absolute() || rel.has_root_name() || rel.has_root_directory()) return {};
+    if (!rel.empty() && *rel.begin() == "..") return {};   // leaves the project
+    return (m_root / rel).lexically_normal();
+}
+
+bool FileAssetResolver::exists(const AssetRef& ref) const {
+    const fs::path p = absolutePath(ref);
+    std::error_code ec;
+    return !p.empty() && fs::is_regular_file(p, ec);
+}
+
+Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(const AssetRef& ref) {
+    using R = Result<std::shared_ptr<const Model>, AssetError>;
+    const fs::path p = absolutePath(ref);
+    if (p.empty())
+        return R::err({"E_ASSET_NOT_FOUND", ref.path.empty() ? "the asset path is empty"
+                                                             : "'" + ref.path + "' is not a relative path inside the project"});
+    const std::string key = p.generic_string();
+    {
+        std::lock_guard lock(m_mutex);
+        if (const auto it = m_models.find(key); it != m_models.end()) return R::ok(it->second);
+    }
+    std::error_code ec;
+    if (!fs::is_regular_file(p, ec)) return R::err({"E_ASSET_NOT_FOUND", "no file '" + ref.path + "' in the project"});
+    if (!ModelLoader::isSupportedExtension(ModelLoader::getExtension(key)))
+        return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf, fbx, obj)"});
+    auto loaded = ModelLoader::loadResult(key);
+    if (!loaded || !loaded.value()) {
+        const std::string why = loaded ? std::string("the loader returned nothing") : loaded.error();
+        return R::err({"E_ASSET_INVALID", "'" + ref.path + "' could not be loaded: " + why});
+    }
+    std::shared_ptr<const Model> model = std::move(loaded.value());
+    std::lock_guard lock(m_mutex);
+    m_models.emplace(key, model);
+    return R::ok(std::move(model));
+}
+
+void FileAssetResolver::clearCache() {
+    std::lock_guard lock(m_mutex);
+    m_models.clear();
+}
+
+} // namespace ohao::ecs

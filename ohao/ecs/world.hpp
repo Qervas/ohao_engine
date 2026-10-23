@@ -73,6 +73,8 @@ public:
     void addSystem(std::string name, System fn);
     // Inserts right after the system named `after` (appends if there is none).
     void addSystemAfter(std::string_view after, std::string name, System fn);
+    // Inserts right before the system named `before` (appends if there is none).
+    void addSystemBefore(std::string_view before, std::string name, System fn);
     void update(float dt);
     [[nodiscard]] std::vector<std::string> systemNames() const;
     // Debug builds: before running systems, update() checks every untagged entity's

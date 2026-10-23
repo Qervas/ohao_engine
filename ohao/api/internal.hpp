@@ -43,6 +43,7 @@ struct Session::Impl {
     std::vector<const TypeInfo*> saved;          // the subset written to files
     std::vector<std::string_view> savedNames;    // for "did you mean"
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
+    ecs::AssetResolver* assets{nullptr};                           // checkAssets
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};
     const TypeInfo* tParent{nullptr};

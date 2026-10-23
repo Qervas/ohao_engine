@@ -334,13 +334,17 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
         v.emplace();
         readValue(*v, n, ctx, *d.element);
     } else if constexpr (k == Kind::Variant) {
-        std::string names;
-        for (const TypeInfo* alt : d.alternatives) {
-            if (!names.empty()) names += "|";
-            names += alt->name;
-        }
-        const std::string what = "a one-key object {\"" + names + "\": {...}}";
+        // The alternatives' names, only for an error message (decoding stays allocation-free).
+        const auto names = [&] {
+            std::string s;
+            for (const TypeInfo* alt : d.alternatives) {
+                if (!s.empty()) s += "|";
+                s += alt->name;
+            }
+            return s;
+        };
         if (n.type != JsonType::Object || n.count != 1) {
+            const std::string what = "a one-key object {\"" + names() + "\": {...}}";
             ctx.error("E_TYPE", n, "expected " + what, what, ctx.gotText(n));
             return;
         }
@@ -356,7 +360,7 @@ void readValue(V& v, const JsonNode& n, DecodeContext& ctx, const TypeDesc& d) {
         std::vector<std::string_view> alts;
         for (const TypeInfo* alt : d.alternatives) alts.push_back(alt->name);
         ctx.push(m.key);
-        ctx.error("E_TYPE", m, "'" + std::string(m.key) + "' is not one of the alternatives", names,
+        ctx.error("E_TYPE", m, "'" + std::string(m.key) + "' is not one of the alternatives", names(),
                   "\"" + std::string(m.key) + "\"", suggest(m.key, alts));
         ctx.pop();
     } else {

@@ -34,7 +34,7 @@ struct SaveOptions {
 };
 
 struct SaveReport {
-    std::vector<Diagnostic> warnings;
+    std::vector<Diagnostic> warnings;   // W_UNSAVEABLE_MESH: a mesh made in code, with no MeshSource
 };
 
 // One component type migrated on load: `count` blocks went from version `from` to `to`.
@@ -64,8 +64,12 @@ struct ValidationReport {
 [[nodiscard]] Result<std::string, Diagnostic> saveScene(const World& world, const reflect::TypeRegistry& types,
                                                         SaveOptions options = {}, SaveReport* report = nullptr);
 
-// Phase 1 only: every error and warning a load would report, without a World.
-[[nodiscard]] ValidationReport validateScene(std::string_view text, const reflect::TypeRegistry& types);
+class AssetResolver;
+
+// Phase 1 only: every error and warning a load would report, without a World. With
+// `assets` (checkAssets), a ModelAsset whose file the resolver lacks is E_ASSET_NOT_FOUND.
+[[nodiscard]] ValidationReport validateScene(std::string_view text, const reflect::TypeRegistry& types,
+                                             const AssetResolver* assets = nullptr);
 
 // `dst` must be empty (E_WORLD_NOT_EMPTY otherwise). On error `dst` is unchanged.
 [[nodiscard]] Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_view text,

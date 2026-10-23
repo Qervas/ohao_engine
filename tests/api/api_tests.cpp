@@ -723,6 +723,38 @@ static void t10_snapshot_and_restore_through_the_api() {
     CHECK(resnap.ok() && resnap.str("/result/entities") == "5", "snapshotting a name again replaces it");
 }
 
+// ---- t11: assets through the API --------------------------------------------------------------
+
+namespace {
+// Knows one model path; never touches the disk.
+struct OneFileResolver final : ecs::AssetResolver {
+    Result<std::shared_ptr<const Model>, ecs::AssetError> loadModel(const ecs::AssetRef&) override {
+        return Result<std::shared_ptr<const Model>, ecs::AssetError>::err({"E_ASSET_NOT_FOUND", "fake"});
+    }
+    bool exists(const ecs::AssetRef& r) const override { return r.path == "props/chair.glb"; }
+    std::filesystem::path absolutePath(const ecs::AssetRef& r) const override { return r.path; }
+};
+} // namespace
+
+static void t11_validate_checks_assets_when_asked() {
+    World w;
+    api::Session s(w, engineTypes());
+    const std::string scene =
+        R"({"format":"ohao.scene","version":1,"entities":[)"
+        R"({"id":"00000000000000a1","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"props/chair.glb"}}}}},)"
+        R"({"id":"00000000000000a2","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"props/sofa.glb"}}}}}]})";
+    CHECK(Reply(s.call("scene.validate", "{\"scene\":" + scene + ",\"checkAssets\":true}")).code() == "E_COMMAND",
+          "checkAssets without a resolver is E_COMMAND");
+    OneFileResolver files;
+    s.setAssetResolver(&files);
+    const Reply plain(s.call("scene.validate", "{\"scene\":" + scene + "}"));
+    CHECK(plain.json("/result/ok") == "true", "without checkAssets, paths are not checked");
+    const Reply checked(s.call("scene.validate", "{\"scene\":" + scene + ",\"checkAssets\":true}"));
+    CHECK(checked.json("/result/ok") == "false" && checked.str("/result/errors/0/code") == "E_ASSET_NOT_FOUND" &&
+              checked.str("/result/errors/0/path") == "/entities/1/MeshSource/source/ModelAsset/asset/path",
+          "with it, the missing model is E_ASSET_NOT_FOUND at its path");
+}
+
 // ---- informational benchmark (step 6 gates the budgets) -------------------------------------
 
 static void bench_apply_and_query_10k() {
@@ -820,6 +852,7 @@ int main() {
     RUN(t09_summary_is_small_and_complete);
     RUN(t09_scene_methods_load_save_validate);
     RUN(t10_snapshot_and_restore_through_the_api);
+    RUN(t11_validate_checks_assets_when_asked);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

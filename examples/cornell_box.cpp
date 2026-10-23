@@ -27,35 +27,11 @@ using ohao::examples::argOr;
 using ohao::examples::applyDenoiseOverride;
 using ohao::examples::resolveMode;
 
-// Create a single quad (2 triangles)
-void addQuad(std::vector<Vertex>& verts, std::vector<uint32_t>& inds,
-             glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
-             glm::vec3 normal, glm::vec3 color) {
-    uint32_t base = static_cast<uint32_t>(verts.size());
-    auto makeVert = [&](glm::vec3 pos) {
-        Vertex v{};
-        v.position = pos;
-        v.normal = normal;
-        v.color = color;
-        v.texCoord = glm::vec2(0);
-        v.tangent = glm::vec4(1,0,0,1);
-        v.boneIndices = glm::ivec4(0);
-        v.boneWeights = glm::vec4(1,0,0,0);
-        return v;
-    };
-    verts.push_back(makeVert(a));
-    verts.push_back(makeVert(b));
-    verts.push_back(makeVert(c));
-    verts.push_back(makeVert(d));
-    inds.push_back(base+0); inds.push_back(base+1); inds.push_back(base+2);
-    inds.push_back(base+0); inds.push_back(base+2); inds.push_back(base+3);
-}
-
 void addWall(ecs::World& world, VulkanRenderer& renderer, std::string_view name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
              glm::vec3 normal, glm::vec3 color) {
     Model model;
-    addQuad(model.vertices, model.indices, a, b, c, d, normal, color);
+    PrimitiveMeshGenerator::generateQuad(model, a, b, c, d, normal, color);
     render::MaterialDesc mat;
     mat.baseColor = color;
     mat.roughness = 0.95f;

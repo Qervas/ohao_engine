@@ -232,6 +232,12 @@ void World::addSystemAfter(std::string_view after, std::string name, System fn) 
     m_systems.emplace(it, std::move(name), std::move(fn));
 }
 
+void World::addSystemBefore(std::string_view before, std::string name, System fn) {
+    const auto it = std::find_if(m_systems.begin(), m_systems.end(),
+                                 [&](const auto& s) { return s.first == before; });
+    m_systems.emplace(it, std::move(name), std::move(fn));
+}
+
 std::vector<std::string> World::systemNames() const {
     std::vector<std::string> out;
     for (const auto& [name, fn] : m_systems) out.push_back(name);

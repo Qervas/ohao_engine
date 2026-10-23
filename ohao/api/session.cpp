@@ -15,8 +15,10 @@ namespace {
 constexpr reflect::MethodDoc kMethods[] = {
     {"schema.get", "{}", "the catalogue (ohao_schema.json), compact",
      "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
-    {"scene.validate", "{text | path | scene, limit = 20}", "{ok, errors?, warnings?, upgraded?, more?}",
-     "Checks a scene exactly as scene.load would, without touching the world."},
+    {"scene.validate", "{text | path | scene, limit = 20, checkAssets = false}",
+     "{ok, errors?, warnings?, upgraded?, more?}",
+     "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
+     "files that do not exist (E_ASSET_NOT_FOUND)."},
     {"scene.load", "{text | path | scene, seed?}", "{entities, preserved?, upgraded?, warnings?}",
      "Loads a scene into the session's world, which must be empty. All or nothing. seed (16 hex digits) "
      "fixes the id generator for later creates."},
@@ -127,12 +129,19 @@ bool schemaGet(Session::Impl& s, const JsonDocument& doc, const JsonNode& params
 
 bool sceneValidate(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
-    if (!checkKeys(doc, params, {"text", "path", "scene", "limit"}, "scene.validate params", ctx)) return false;
+    if (!checkKeys(doc, params, {"text", "path", "scene", "limit", "checkAssets"}, "scene.validate params", ctx))
+        return false;
     int64_t limit = 20;
-    if (!optInt(doc, params, "limit", ctx, 0, 100, limit)) return false;
+    bool checkAssets = false;
+    if (!optInt(doc, params, "limit", ctx, 0, 100, limit) || !optBool(doc, params, "checkAssets", ctx, checkAssets))
+        return false;
+    if (checkAssets && !s.assets) {
+        ctx.error("E_COMMAND", params, "this session has no asset resolver, so it cannot check assets");
+        return false;
+    }
     std::string text;
     if (!sceneSource(doc, params, ctx, text)) return false;
-    const ecs::ValidationReport r = ecs::validateScene(text, s.types);
+    const ecs::ValidationReport r = ecs::validateScene(text, s.types, checkAssets ? s.assets : nullptr);
     const auto n = static_cast<std::size_t>(limit);
     out.beginObject();
     out.key("ok"); out.boolean(r.ok());
@@ -485,6 +494,7 @@ Session::~Session() = default;
 
 ecs::World& Session::world() noexcept { return m->world; }
 uint64_t Session::frame() const noexcept { return m->frame; }
+void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 
 std::string Session::call(std::string_view method, std::string_view params) {
     const auto found = std::find_if(std::begin(kDispatch), std::end(kDispatch),

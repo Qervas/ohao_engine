@@ -135,6 +135,7 @@ struct MeshInfo {
     glm::vec3 aabbMin, aabbMax;
     BlasHandle blas{INVALID_BLAS};
     std::string debugName;
+    bool released{false};   // RenderScene::releaseMesh
 };
 
 struct RenderSceneStats {

@@ -1,4 +1,5 @@
 #pragma once
+#include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
 #include "render/scene/handles.hpp"
 
 #include <entt/entt.hpp>
@@ -7,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace ohao::ecs {
@@ -93,5 +95,50 @@ struct PreservedComponents { std::vector<PreservedComponent> entries; };
 struct TransformDirty {};
 struct RenderDirty {};
 struct MovedLastFrame {};
+
+// ---- meshes from data (instantiate, ecs/instantiate.hpp) ------------------------------------
+
+using AssetRef = reflect::AssetRef;   // {path (project-relative, '/'), guid (empty until the asset DB)}
+
+struct ModelAsset   { AssetRef asset; };
+struct SpherePrim   { float radius{0.5f}; int32_t sectors{32}; int32_t stacks{16}; };
+struct CubePrim     { float size{1.0f}; };
+struct PlatformPrim { float width{2.0f}; float height{0.4f}; float depth{2.0f}; };
+struct CylinderPrim { float radius{0.5f}; float height{1.0f}; int32_t segments{16}; };
+struct ConePrim     { float radius{0.5f}; float height{1.0f}; int32_t segments{16}; };
+// The examples' builders, made reusable (vertex color = color, uv 0, tangent (1,0,0,1)).
+// Defaults: a unit quad facing +Z, a unit box around the origin.
+struct QuadPrim {
+    glm::vec3 a{-0.5f, -0.5f, 0.0f};
+    glm::vec3 b{0.5f, -0.5f, 0.0f};
+    glm::vec3 c{0.5f, 0.5f, 0.0f};
+    glm::vec3 d{-0.5f, 0.5f, 0.0f};
+    glm::vec3 normal{0.0f, 0.0f, 1.0f};
+    glm::vec3 color{1.0f};
+};
+struct BoxPrim { glm::vec3 lo{-0.5f}; glm::vec3 hi{0.5f}; glm::vec3 color{1.0f}; };
+
+// Where an entity's mesh comes from. Instantiate builds MeshRenderer (and the derived
+// GiMaterialLegacy / EmissiveProxyLight) from it; meshes are shared per distinct value.
+struct MeshSource {
+    std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;
+};
+
+// The material of a mesh without its own materials (primitives); for a model with
+// materials it only feeds the legacy RT GI word. Same rules as uploadModel's override.
+struct MaterialOverride {
+    glm::vec3 baseColor{0.8f};
+    float roughness{0.5f};
+    float metallic{0.0f};
+    float emissiveStrength{0.0f};
+};
+
+// Instantiate's bookkeeping: tagged when MeshSource/MaterialOverride change; the error
+// when a mesh could not be built (no MeshRenderer then).
+struct InstantiateDirty {};
+struct InstantiateError {
+    std::string code;      // E_ASSET_NOT_FOUND, E_ASSET_INVALID, E_MESH_INVALID
+    std::string message;
+};
 
 } // namespace ohao::ecs

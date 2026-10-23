@@ -12,9 +12,8 @@
 // code fails. Results go to scene_bench.json; with --check the exit code is 1 when a
 // median is over its budget or a bench100k median is more than maxRatio times bench10k's.
 //
-// The scene holds the components that exist so far (Name, Transform, Parent, Light). The
-// generator gains MeshSource, MaterialOverride, Camera and Environment as steps 7 and 8
-// add them, and the budgets are re-checked then.
+// The scene holds the components that exist so far (Name, Transform, Parent, Light,
+// MeshSource, MaterialOverride). The generator gains Camera and Environment in step 8.
 #include "api/session.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
@@ -60,8 +59,9 @@ const reflect::TypeRegistry& engineTypes() {
 }
 
 // bench10k/bench100k: n entities with Name and Transform (random position, rotation and
-// scale), 1% of them lights of every type, and a hierarchy up to 8 deep (about 60% of the
-// entities have a parent among the 64 created just before them).
+// scale) and a hierarchy up to 8 deep (about 60% of the entities have a parent among the
+// 64 created just before them). 99% are renderables (a MeshSource primitive and a
+// MaterialOverride, from palettes), 1% lights of every type.
 void buildBenchWorld(World& w, int n, uint64_t seed) {
     w.seedIds(seed);
     std::mt19937_64 rng(seed);
@@ -90,6 +90,27 @@ void buildBenchWorld(World& w, int n, uint64_t seed) {
             l.intensity = pos01(rng) * 20.0f;
             l.range = 5.0f + pos01(rng) * 40.0f;
             w.registry().emplace<Light>(e, l);
+        } else {
+            // A renderable: a primitive and a material. Authored scenes reuse sizes and
+            // materials, so both come from small palettes (the transforms stay random).
+            static constexpr float kSizes[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
+            const float s = kSizes[rng() % std::size(kSizes)];
+            MeshSource ms;
+            switch (rng() % 6) {
+            case 0: ms.source = SpherePrim{s, 32, 16}; break;
+            case 1: ms.source = CubePrim{s}; break;
+            case 2: ms.source = PlatformPrim{s * 2.0f, 0.4f, s * 2.0f}; break;
+            case 3: ms.source = CylinderPrim{s * 0.5f, s, 24}; break;
+            case 4: ms.source = ConePrim{s * 0.5f, s, 24}; break;
+            default: ms.source = BoxPrim{glm::vec3(-s), glm::vec3(s), glm::vec3(0.73f)}; break;
+            }
+            w.registry().emplace<MeshSource>(e, ms);
+            static constexpr float kChannel[] = {0.05f, 0.12f, 0.25f, 0.45f, 0.65f, 0.73f, 0.85f, 0.95f};
+            const auto c = [&] { return kChannel[rng() % std::size(kChannel)]; };
+            static constexpr float kRoughness[] = {0.05f, 0.2f, 0.35f, 0.5f, 0.75f, 0.95f};
+            w.registry().emplace<MaterialOverride>(
+                e, MaterialOverride{{c(), c(), c()}, kRoughness[rng() % std::size(kRoughness)],
+                                    rng() % 5 == 0 ? 1.0f : 0.0f, 0.0f});
         }
         es.push_back(e);
         depth.push_back(d);

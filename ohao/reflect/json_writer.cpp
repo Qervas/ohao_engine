@@ -245,6 +245,44 @@ void JsonWriter::float32(float v) {
         m_needComma = true;
         return;
     }
+    // Fast path for short decimals in [0.001, 16): colors, roughness, sizes (0.73, 0.05,
+    // 1.5). Prints exactly what to_chars does:
+    //  - a*1e6 is exact in double; m = its nearest integer is the closest 6-digit
+    //    decimal to a;
+    //  - float(m) / 1e6f is a single correctly rounded division of exact floats (m <
+    //    2^24), so it equals the correctly rounded value of the decimal m*1e-6, and the
+    //    test below is an exact round-trip check;
+    //  - below 16 half an ulp is under 0.5e-6, so every shorter round-tripping decimal is
+    //    m with trailing zeros: stripping them gives the shortest digits, and m was the
+    //    closest candidate, as to_chars picks;
+    //  - in [0.001, 16) fixed notation is never longer than scientific.
+    // Anything else (most random floats fail the check) takes to_chars.
+    const float a = std::fabs(v);
+    if (a >= 0.001f && a < 16.0f) {
+        const auto m = static_cast<uint32_t>(std::nearbyint(static_cast<double>(a) * 1e6));
+        if (static_cast<float>(m) / 1e6f == a) {
+            uint32_t digits = m;
+            int k = 6;
+            while (digits % 10 == 0) {
+                digits /= 10;
+                --k;
+            }
+            static constexpr uint32_t kPow10[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
+            const uint32_t whole = digits / kPow10[k];
+            uint32_t frac = digits % kPow10[k];
+            char* p = buf;
+            if (std::signbit(v)) *p++ = '-';
+            p = std::to_chars(p, buf + sizeof(buf), whole).ptr;
+            *p++ = '.';
+            for (int i = k - 1; i >= 0; --i) {
+                p[i] = static_cast<char>('0' + frac % 10);
+                frac /= 10;
+            }
+            m_out.append(buf, p + k);
+            m_needComma = true;
+            return;
+        }
+    }
     auto r = std::to_chars(buf, buf + sizeof(buf), v);   // shortest round-trip
     m_out.append(buf, r.ptr);
     m_needComma = true;
