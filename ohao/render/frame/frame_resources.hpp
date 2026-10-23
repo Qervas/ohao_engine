@@ -157,13 +157,15 @@ private:
     bool createSyncObjects();
     bool createStagingBuffers(size_t size);
 
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+    // The first type with all of `properties`, else (when given) all of `fallback`.
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkMemoryPropertyFlags fallback = 0);
     bool createBuffer(
         VkDeviceSize size,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags properties,
         VkBuffer& buffer,
-        VkDeviceMemory& bufferMemory
+        VkDeviceMemory& bufferMemory,
+        VkMemoryPropertyFlags fallback = 0
     );
 
     VkDevice m_device{VK_NULL_HANDLE};

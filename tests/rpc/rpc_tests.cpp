@@ -11,10 +11,12 @@
 #include "rpc/server.hpp"
 #include "rpc/transport.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -64,6 +66,11 @@ public:
         m_closed = true;
         m_cv.notify_all();
     }
+    void interruptRead(void*) override {
+        ++interrupts;
+        close();
+    }
+    std::atomic<int> interrupts{0};
     // Waits until a line contains `needle` (true) or `ms` pass (false).
     bool waitFor(std::string_view needle, int ms = 20000) {
         std::unique_lock lock(m_mutex);
@@ -84,6 +91,13 @@ private:
     std::deque<std::string> m_in;
     std::vector<std::string> m_out;
     bool m_closed{false};
+};
+
+// A host whose captures `fn` answers (no GPU in these tests).
+struct FakeHost final : api::Host {
+    std::function<api::RenderOutcome(const api::RenderRequest&)> fn;
+    [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Headless; }
+    [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& r) override { return fn(r); }
 };
 
 // A session on its own world with a server running on another thread.
@@ -218,14 +232,16 @@ void sp4_t07_errors_follow_the_table() {
     rpc::ServerOptions o;
     o.maxMessage = 256;
     Rig r(o);
-    r.session.setRenderHandler([](const api::RenderRequest&) {
+    FakeHost host;
+    host.fn = [](const api::RenderRequest&) {
         api::RenderOutcome out;
         reflect::Diagnostic d;
         d.code = "E_RENDER";
         d.message = "no GPU in this test";
         out.errors.push_back(d);
         return out;
-    });
+    };
+    r.session.setHost(&host);
     r.start();
     r.io.feed("{not json\n");
     r.io.feed("42\n");
@@ -407,6 +423,95 @@ void sp4_t08_logging_set_level_sends_notifications() {
     CHECK(reply(lines, "4").str({"error", "code"}) == "-32602", "an unknown level is -32602");
 }
 
+// ---- step 9: the window host's pump and capture images ------------------------------------
+
+// A window host drives the server from its own loop: poll() runs what is queued on the
+// calling thread, held replies go out on flush() (after the frame is presented), ping is
+// answered by the reader at once, and poll() says when the input has ended.
+void sp4_t16_poll_holds_replies_until_flush() {
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    ScriptTransport io;
+    rpc::ServerOptions o;
+    o.holdReplies = true;
+    rpc::Server server(session, io, o);
+    server.start();
+    CHECK(server.poll(std::chrono::milliseconds(0)), "nothing queued: poll returns at once, still serving");
+    io.feed(req("1", "world.step", R"({"frames":2})") + req("2", "world.info") + req("3", "ping"));
+    CHECK(io.waitFor("\"id\":3,"), "ping is answered by the reader while nothing ran (1 and 2 are queued by then)");
+    CHECK(server.poll(std::chrono::milliseconds(1000)), "poll runs the queued requests");
+    CHECK(reply(io.lines(), "1").text.empty() && reply(io.lines(), "2").text.empty(),
+          "their replies are held");
+    CHECK(session.frame() == 2, "but they ran");
+    server.flush();
+    const auto lines = io.lines();
+    CHECK(reply(lines, "1").str({"result", "frame"}) == "2" && reply(lines, "2").str({"result", "frame"}) == "2",
+          "flush sends them, in order");
+    io.close();
+    bool serving = true;
+    for (int i = 0; i < 100 && serving; ++i) serving = server.poll(std::chrono::milliseconds(20));
+    CHECK(!serving, "after the input ends poll returns false");
+    server.stop();
+}
+
+// A window closed by its user while the client keeps the input open: stop() interrupts the
+// reader's blocked read and joins it.
+void sp4_t16_stop_interrupts_a_read_left_open() {
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    ScriptTransport io;
+    rpc::Server server(session, io);
+    server.start();
+    io.feed(req("1", "world.info"));
+    CHECK(server.poll(std::chrono::milliseconds(2000)) && io.waitFor("\"id\":1,"), "serving");
+    server.stop();
+    CHECK(io.interrupts >= 1, "stop interrupted the open read and returned");
+}
+
+// render.capture inline over MCP: the result as text and the preview as an image block;
+// over native JSON-RPC: the result with "image" (base64) and "mimeType".
+void sp4_t16_a_capture_preview_is_an_mcp_image_block() {
+    Rig r;
+    FakeHost host;
+    host.fn = [](const api::RenderRequest& req) {
+        api::RenderOutcome out;
+        out.frames = 1;
+        out.width = 64;
+        out.height = 32;
+        if (req.inlineImage) {
+            out.image = "PNG!";   // base64: UE5HIQ==
+            out.imageMime = req.format == "png" ? "image/png" : "image/jpeg";
+            out.imageWidth = 64;
+            out.imageHeight = 32;
+        }
+        return out;
+    };
+    r.session.setHost(&host);
+    r.start();
+    r.io.feed(req("1", "tools/call", R"({"name":"render_capture","arguments":{"inline":true,"format":"png"}})"));
+    r.io.feed(req("2", "render.capture", R"({"inline":true})"));
+    r.io.feed(req("3", "tools/call", R"({"name":"render_capture","arguments":{"path":"a.png"}})"));
+    const auto lines = r.finish("3");
+    const Msg mcp = reply(lines, "1");
+    const JsonNode* content = mcp.at({"result", "content"});
+    CHECK(content && content->count == 2, "two content blocks");
+    const JsonNode& text = mcp.doc.child(*content, 0);
+    const JsonNode& image = mcp.doc.child(*content, 1);
+    CHECK(mcp.doc.member(text, "type")->text == "text" &&
+              mcp.doc.member(text, "text")->text.find("\"image\"") == std::string_view::npos,
+          "the text block holds the result without the image");
+    CHECK(mcp.doc.member(image, "type")->text == "image" && mcp.doc.member(image, "data")->text == "UE5HIQ==" &&
+              mcp.doc.member(image, "mimeType")->text == "image/png",
+          "the image block holds the preview, base64, with its type");
+    const Msg native = reply(lines, "2");
+    CHECK(native.str({"result", "image"}) == "UE5HIQ==" && native.str({"result", "mimeType"}) == "image/jpeg" &&
+              native.str({"result", "frames"}) == "1",
+          "native JSON-RPC: the image inside the result");
+    const Msg file = reply(lines, "3");
+    CHECK(file.at({"result", "content"}) && file.at({"result", "content"})->count == 1,
+          "a capture to a file only: one text block");
+}
+
 } // namespace
 
 int main() {
@@ -422,5 +527,8 @@ int main() {
     RUN(sp4_t08_tools_list_covers_every_method_within_budget);
     RUN(sp4_t08_tools_call_results_and_errors);
     RUN(sp4_t08_logging_set_level_sends_notifications);
+    RUN(sp4_t16_poll_holds_replies_until_flush);
+    RUN(sp4_t16_stop_interrupts_a_read_left_open);
+    RUN(sp4_t16_a_capture_preview_is_an_mcp_image_block);
     return ohao::test::finish("rpc_tests");
 }

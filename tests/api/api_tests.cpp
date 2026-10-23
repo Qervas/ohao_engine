@@ -15,7 +15,9 @@
 #include "reflect/json_writer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <functional>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -196,6 +198,14 @@ static void t09_schema_get_includes_methods() {
           "and the new error codes are in the table");
 }
 
+// A host that records the requests it gets and answers with `fn`.
+struct FakeHost final : api::Host {
+    std::function<api::RenderOutcome(const api::RenderRequest&)> fn;
+    api::HostKind hostKind{api::HostKind::Headless};
+    [[nodiscard]] api::HostKind kind() const noexcept override { return hostKind; }
+    [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& r) override { return fn(r); }
+};
+
 // render.capture (step 9): checked by the session, carried out by a host. No host: E_COMMAND.
 static void t09_render_capture_needs_a_host_and_checks_its_params() {
     World w;
@@ -203,7 +213,8 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
     CHECK(Reply(s.call("render.capture", R"({"path":"a.png"})")).code() == "E_COMMAND",
           "without a renderer render.capture is E_COMMAND");
     std::vector<api::RenderRequest> seen;
-    s.setRenderHandler([&](const api::RenderRequest& r) {
+    FakeHost host;
+    host.fn = [&](const api::RenderRequest& r) {
         seen.push_back(r);
         api::RenderOutcome o;
         o.frames = r.frames ? r.frames : 7;
@@ -214,7 +225,8 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
             o.errors.push_back(d);
         }
         return o;
-    });
+    };
+    s.setHost(&host);
     const Reply ok(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"size":1})"));
     CHECK(ok.code() == "E_UNKNOWN_FIELD" && ok.str("/error/data/0/path") == "/size", "unknown params are refused");
     const Reply good(s.call("render.capture", R"({"path":"a.png","mode":"rt_offline","spp":4,"width":640,)"
@@ -223,8 +235,8 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
           "a valid capture reaches the host and reports frames and ms");
     const api::RenderRequest& r = seen.back();
     const std::vector<std::string> effects{"taa", "ssao"};
-    CHECK(r.mode == "rt_offline" && r.spp == 4 && r.width == 640 && r.height == 360 && r.denoise == "none" &&
-              r.post == effects && r.exposure == 1.5f && r.frames == 0,
+    CHECK(r.mode == "rt_offline" && r.spp == 4 && r.width == 640u && r.height == 360u && r.denoise == "none" &&
+              r.post == effects && r.exposure == 1.5f && r.frames == 0 && !r.inlineImage && !r.region,
           "with every param as given");
     CHECK(Reply(s.call("render.capture", R"({"path":"a.png","mode":"raster"})")).code() == "E_ENUM" &&
               Reply(s.call("render.capture", R"({"path":"a.png","post":["glow"]})")).code() == "E_ENUM" &&
@@ -235,8 +247,95 @@ static void t09_render_capture_needs_a_host_and_checks_its_params() {
     CHECK(seen.size() == 1, "(the host saw none of them)");
     CHECK(Reply(s.call("render.capture", R"({"path":"fail.png"})")).code() == "E_RENDER",
           "the host's errors are the reply's");
-    CHECK(seen.size() == 2 && !seen.back().exposure && seen.back().mode == "deferred" && seen.back().post.empty(),
-          "without exposure the host keeps the renderer's own; the mode defaults to deferred, effects to none");
+    CHECK(seen.size() == 2 && !seen.back().exposure && seen.back().mode == "deferred" && seen.back().post.empty() &&
+              !seen.back().width && !seen.back().height,
+          "without exposure the host keeps the renderer's own; the mode defaults to deferred, effects to none, the "
+          "size to the host's");
+}
+
+// render.capture's preview (step 9): inline without a path, the image beside the result
+// (Session::call(string) puts it in the result; the parsed call hands it over separately for
+// MCP's image block), region and format checked by the session.
+static void sp4_t16_an_inline_capture_carries_its_image_beside_the_result() {
+    World w;
+    api::Session s(w, engineTypes());
+    std::vector<api::RenderRequest> seen;
+    FakeHost host;
+    host.fn = [&](const api::RenderRequest& r) {
+        seen.push_back(r);
+        api::RenderOutcome o;
+        o.frames = 1;
+        o.width = 1280;
+        o.height = 720;
+        if (r.inlineImage) {
+            o.image = std::string("\xff\xd8\xff", 3);   // base64: "/9j/"
+            o.imageMime = "image/jpeg";
+            o.imageWidth = 768;
+            o.imageHeight = 432;
+        }
+        return o;
+    };
+    s.setHost(&host);
+    CHECK(Reply(s.call("world.info")).str("/result/host") == "headless", "setHost sets the host kind");
+
+    const Reply r(s.call("render.capture", R"({"inline":true})"));
+    CHECK(r.ok() && !r.at("/result/path") && r.str("/result/image") == "/9j/" &&
+              r.str("/result/mimeType") == "image/jpeg" && r.str("/result/imageSize/0") == "768" &&
+              r.str("/result/width") == "1280" && r.json("/result/deterministic") == "true",
+          "inline without a path: the preview in the result, base64, with its size and the frame's");
+    CHECK(seen.back().inlineImage && seen.back().path.empty() && seen.back().format == "jpeg" &&
+              seen.back().maxSize == 768,
+          "the host is asked for a JPEG preview at most 768 px");
+
+    const auto doc = ecs::parseJson(R"({"inline":true,"format":"png","maxSize":256,"region":[10,20,300,200]})");
+    const api::CallOutcome o = s.call("render.capture", doc.value(), doc.value().root());
+    CHECK(o.status == api::CallStatus::Ok && o.image && o.image->base64 == "/9j/" &&
+              o.result.find("\"image\"") == std::string::npos,
+          "the parsed call hands the image over beside a result without it (MCP's image block)");
+    const auto& req = seen.back();
+    const std::array<int32_t, 4> wantRegion{10, 20, 300, 200};
+    CHECK(req.format == "png" && req.maxSize == 256 && req.region && *req.region == wantRegion,
+          "format, maxSize and region reach the host");
+
+    const std::size_t before = seen.size();
+    CHECK(Reply(s.call("render.capture", R"({"inline":true,"region":[0,0,300]})")).code() == "E_COMMAND" &&
+              Reply(s.call("render.capture", R"({"inline":true,"region":[0,0,0,10]})")).code() == "E_COMMAND" &&
+              Reply(s.call("render.capture", R"({"inline":true,"format":"gif"})")).code() == "E_ENUM" &&
+              Reply(s.call("render.capture", R"({"inline":true,"maxSize":8})")).code() == "E_RANGE" &&
+              Reply(s.call("render.capture", R"({"path":""})")).code() == "E_COMMAND" &&
+              Reply(s.call("render.capture", R"({"inline":false})")).code() == "E_COMMAND",
+          "a region that is not [x, y, w, h], a bad format or size, an empty path, or neither path nor inline");
+    CHECK(seen.size() == before, "(none reached the host)");
+}
+
+// Session::changeCount (step 9): a window host renders in lockstep only when the world may
+// have moved, so the count rises for the methods that change it and for steps, not reads.
+static void sp4_t16_change_count_rises_only_for_methods_that_change_the_world() {
+    World w;
+    api::Session s(w, engineTypes());
+    uint64_t last = s.changeCount();
+    const auto moved = [&] {
+        const bool m = s.changeCount() != last;
+        last = s.changeCount();
+        return m;
+    };
+    (void)s.call("world.info");
+    (void)s.call("world.query", R"({"limit":1})");
+    (void)s.call("world.hash");
+    (void)s.call("world.snapshot", R"({"name":"a"})");
+    (void)s.call("time.get");
+    (void)s.call("input.state");
+    CHECK(!moved(), "reads, snapshots and time.get do not count");
+    (void)s.call("world.apply", R"({"commands":[{"op":"entity.create","name":"A"}]})");
+    CHECK(moved(), "world.apply counts");
+    (void)s.call("world.step", R"({"frames":2})");
+    CHECK(moved(), "world.step counts");
+    (void)s.call("world.restore", R"({"name":"a"})");
+    CHECK(moved(), "world.restore counts");
+    s.step({}, 1.0f / 60.0f);
+    CHECK(moved(), "a host's step counts");
+    (void)s.call("world.apply", R"({"commands":[{"op":"entity.destroy","id":"ffffffffffffffff"}]})");
+    CHECK(moved(), "a failed batch counts too (cheap: one render it did not need)");
 }
 
 // ---- t09: commands ------------------------------------------------------------------------
@@ -1693,6 +1792,8 @@ int main() {
     RUN(t09_method_table_dispatch_and_errors);
     RUN(t09_schema_get_includes_methods);
     RUN(t09_render_capture_needs_a_host_and_checks_its_params);
+    RUN(sp4_t16_an_inline_capture_carries_its_image_beside_the_result);
+    RUN(sp4_t16_change_count_rises_only_for_methods_that_change_the_world);
     RUN(t09_each_command_applies_and_returns_its_inverse);
     RUN(t09_duplicate_copies_a_subtree_with_fresh_ids);
     RUN(t09_failing_command_rolls_back_the_batch);

@@ -14,6 +14,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace ohao::rpc {
 
 using reflect::Diagnostic;
@@ -205,6 +211,9 @@ struct Server::Impl {
     bool eof{false};
     std::string runningId;   // the request on the engine thread (raw id), or empty
     std::atomic<bool> cancelRunning{false};
+    std::thread reader;
+    std::atomic<bool> readerDone{false};
+    std::vector<std::string> held;   // replies waiting for flush() (holdReplies); engine thread only
 
     std::map<std::string, std::function<std::string(std::string_view)>, std::less<>> extra;
     std::map<std::string, std::string, std::less<>> toolToMethod;
@@ -214,6 +223,12 @@ struct Server::Impl {
     void send(std::string_view line) {
         std::lock_guard lock(writeMutex);
         transport.write(line);
+    }
+
+    // A reply from the engine thread: sent, or held for flush().
+    void reply(std::string line) {
+        if (options.holdReplies) held.push_back(std::move(line));
+        else send(line);
     }
 
     void enqueue(std::shared_ptr<Item> item) {
@@ -234,6 +249,9 @@ struct Server::Impl {
     // ---- reader thread ----------------------------------------------------------------
 
     void readerLoop() {
+#ifdef _WIN32
+        SetThreadDescription(GetCurrentThread(), L"ohao rpc reader");   // serve_bench finds it by name
+#endif
         LineReader lines(transport, options.maxMessage);
         std::string line;
         for (;;) {
@@ -255,6 +273,7 @@ struct Server::Impl {
             cancelRunning = true;        // the running request stops at its next whole step
         }
         queueReady.notify_all();
+        readerDone = true;
     }
 
     void readLine(const std::string& line) {
@@ -336,14 +355,25 @@ struct Server::Impl {
 
     // ---- engine thread ----------------------------------------------------------------
 
-    void run() {
-        std::thread reader([this] { readerLoop(); });
+    void start() {
+        if (!reader.joinable()) reader = std::thread([this] { readerLoop(); });
+    }
+
+    // Runs what is queued; waits for the first message up to `wait` (negative: forever).
+    // False once the input has ended and the queue is empty.
+    bool poll(std::chrono::milliseconds wait) {
+        bool waited = false;
         for (;;) {
             std::shared_ptr<Item> item;
             {
                 std::unique_lock lock(queueMutex);
-                queueReady.wait(lock, [&] { return !queue.empty() || eof; });
-                if (queue.empty()) break;
+                if (!waited) {
+                    const auto ready = [&] { return !queue.empty() || eof; };
+                    if (wait.count() < 0) queueReady.wait(lock, ready);
+                    else queueReady.wait_for(lock, wait, ready);
+                    waited = true;
+                }
+                if (queue.empty()) return !eof;
                 item = std::move(queue.front());
                 queue.pop_front();
                 if (item->cancelled) continue;   // MCP: a cancelled request gets no response
@@ -354,20 +384,40 @@ struct Server::Impl {
             std::lock_guard lock(queueMutex);
             runningId.clear();
         }
+    }
+
+    void flush() {
+        for (const std::string& line : held) send(line);
+        held.clear();
+    }
+
+    void stop() {
+        if (!reader.joinable()) return;
+        while (!readerDone) {   // the client still holds the input open: interrupt the read
+            transport.interruptRead(reader.native_handle());
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
         reader.join();
+    }
+
+    void run() {
+        start();
+        while (poll(std::chrono::milliseconds(-1))) flush();
+        flush();
+        stop();
     }
 
     void execute(const Item& item) {
         try {
             switch (item.kind) {
-            case Item::Kind::Reply: send(item.reply); return;
+            case Item::Kind::Reply: reply(item.reply); return;
             case Item::Kind::Notification: notification(item); return;
             case Item::Kind::Request: request(item); return;
             }
         } catch (const std::exception& e) {
             if (item.kind == Item::Kind::Request)
-                send(errorLine(item.id, 3, std::string("internal error: ") + e.what(),
-                               R"({"code":"E_INTERNAL","diagnostics":[]})"));
+                reply(errorLine(item.id, 3, std::string("internal error: ") + e.what(),
+                                R"({"code":"E_INTERNAL","diagnostics":[]})"));
         }
     }
 
@@ -400,16 +450,16 @@ struct Server::Impl {
         const JsonDocument& doc = item.params ? *item.doc : emptyObject();
         const JsonNode& params = item.params ? *item.params : emptyObject().root();
         const std::string& m = item.method;
-        if (m == "initialize") return send(resultLine(item.id, initialize(doc, params)));
-        if (m == "tools/list") return send(resultLine(item.id, tools()));
+        if (m == "initialize") return reply(resultLine(item.id, initialize(doc, params)));
+        if (m == "tools/list") return reply(resultLine(item.id, tools()));
         if (m == "tools/call") return toolsCall(item, doc, params);
         if (m == "logging/setLevel") return setLevel(item, doc, params);
         if (const auto it = extra.find(m); it != extra.end())
-            return send(resultLine(item.id, it->second(compact(doc, params))));
+            return reply(resultLine(item.id, it->second(compact(doc, params))));
         const api::CallControl c = control(item);
         api::CallOutcome o = session.call(m, doc, params, &c);
         switch (o.status) {
-        case api::CallStatus::Ok: send(resultLine(item.id, o.result)); break;
+        case api::CallStatus::Ok: reply(resultLine(item.id, o.image ? api::withImage(o.result, *o.image) : o.result)); break;
         case api::CallStatus::Cancelled: break;   // no response (MCP's rule)
         case api::CallStatus::UnknownMethod: {
             JsonWriter w;
@@ -417,11 +467,11 @@ struct Server::Impl {
             w.key("code"); w.string("E_METHOD");
             if (!o.errors.front().suggestion.empty()) { w.key("suggestion"); w.string(o.errors.front().suggestion); }
             w.endObject();
-            send(errorLine(item.id, -32601, messageOf(o.errors), w.str()));
+            reply(errorLine(item.id, -32601, messageOf(o.errors), w.str()));
             break;
         }
         case api::CallStatus::BadParams:
-            send(errorLine(item.id, -32602, messageOf(o.errors), diagnosticsJson(o.errors)));
+            reply(errorLine(item.id, -32602, messageOf(o.errors), diagnosticsJson(o.errors)));
             break;
         case api::CallStatus::Failed: {
             JsonWriter w(256);
@@ -429,7 +479,7 @@ struct Server::Impl {
             w.key("code"); w.string(o.errors.front().code);
             w.key("diagnostics"); writeDiagnostics(w, o.errors);
             w.endObject();
-            send(errorLine(item.id, api::exitClass(o.errors.front().code), messageOf(o.errors), w.str()));
+            reply(errorLine(item.id, api::exitClass(o.errors.front().code), messageOf(o.errors), w.str()));
             break;
         }
         }
@@ -481,10 +531,10 @@ struct Server::Impl {
     void toolsCall(const Item& item, const JsonDocument& doc, const JsonNode& params) {
         const JsonNode* name = params.type == JsonType::Object ? doc.member(params, "name") : nullptr;
         if (!name || name->type != JsonType::String)
-            return send(errorLine(item.id, -32602, "tools/call needs the tool's \"name\""));
+            return reply(errorLine(item.id, -32602, "tools/call needs the tool's \"name\""));
         const JsonNode* args = doc.member(params, "arguments");
         if (args && args->type != JsonType::Object)
-            return send(errorLine(item.id, -32602, "\"arguments\" is an object"));
+            return reply(errorLine(item.id, -32602, "\"arguments\" is an object"));
         const auto tool = toolToMethod.find(name->text);
         if (tool == toolToMethod.end()) {
             std::vector<std::string_view> names;
@@ -494,17 +544,17 @@ struct Server::Impl {
             w.key("code"); w.string("E_METHOD");
             if (const std::string s = reflect::suggest(name->text, names); !s.empty()) { w.key("suggestion"); w.string(s); }
             w.endObject();
-            return send(errorLine(item.id, -32601, "no tool is named '" + std::string(name->text) + "'", w.str()));
+            return reply(errorLine(item.id, -32601, "no tool is named '" + std::string(name->text) + "'", w.str()));
         }
         const api::CallControl c = control(item);
         api::CallOutcome o = args ? session.call(tool->second, doc, *args, &c)
                                   : session.call(tool->second, emptyObject(), emptyObject().root(), &c);
         if (o.status == api::CallStatus::Cancelled) return;
         if (o.status == api::CallStatus::BadParams)
-            return send(errorLine(item.id, -32602, messageOf(o.errors), diagnosticsJson(o.errors)));
+            return reply(errorLine(item.id, -32602, messageOf(o.errors), diagnosticsJson(o.errors)));
         const bool failed = o.status != api::CallStatus::Ok;
         const std::string text = failed ? api::errorObject(std::move(o.errors)) : std::move(o.result);
-        JsonWriter w(text.size() + 64);
+        JsonWriter w(text.size() + (o.image ? o.image->base64.size() : 0) + 128);
         w.beginObject();
         w.key("content");
         w.beginArray();
@@ -512,17 +562,24 @@ struct Server::Impl {
         w.key("type"); w.string("text");
         w.key("text"); w.string(text);
         w.endObject();
+        if (!failed && o.image) {   // render.capture inline: the image a model looks at
+            w.beginObject();
+            w.key("type"); w.string("image");
+            w.key("data"); w.string(o.image->base64);
+            w.key("mimeType"); w.string(o.image->mimeType);
+            w.endObject();
+        }
         w.endArray();
         if (failed) { w.key("isError"); w.boolean(true); }
         w.endObject();
-        send(resultLine(item.id, w.str()));
+        reply(resultLine(item.id, w.str()));
     }
 
     void setLevel(const Item& item, const JsonDocument& doc, const JsonNode& params) {
         const JsonNode* level = params.type == JsonType::Object ? doc.member(params, "level") : nullptr;
         const auto l = level && level->type == JsonType::String ? fromMcpLevel(level->text) : std::nullopt;
         if (!l)
-            return send(errorLine(item.id, -32602,
+            return reply(errorLine(item.id, -32602,
                                   "\"level\" is one of: debug, info, notice, warning, error, critical, alert, emergency"));
         if (!sink) {
             sink = std::make_shared<Sink>(*this);
@@ -531,15 +588,19 @@ struct Server::Impl {
         }
         sink->level = *l;
         if (log::level() > *l) log::setLevel(*l);   // capture what the client asked for
-        send(resultLine(item.id, "{}"));
+        reply(resultLine(item.id, "{}"));
     }
 };
 
 Server::Server(api::Session& session, Transport& transport, ServerOptions options)
     : m(std::make_unique<Impl>(session, transport, options)) {}
-Server::~Server() = default;
+Server::~Server() { m->stop(); }
 
 void Server::run() { m->run(); }
+void Server::start() { m->start(); }
+bool Server::poll(std::chrono::milliseconds wait) { return m->poll(wait); }
+void Server::flush() { m->flush(); }
+void Server::stop() { m->stop(); }
 
 void Server::addMethod(std::string name, std::function<std::string(std::string_view)> fn) {
     m->extra.emplace(std::move(name), std::move(fn));

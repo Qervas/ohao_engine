@@ -15,7 +15,7 @@
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
 #include "example_scenes.hpp"
-#include "ohao/scene_host.hpp"
+#include "runtime/scene_view_apply.hpp"
 
 #include <iostream>
 #include <filesystem>
@@ -67,7 +67,7 @@ int main(int rawArgc, char* rawArgv[]) {
     ecs::installRenderExtract(world, renderer.renderScene());
     ecs::installInstantiate(world, renderer.renderScene(), renderer.getTextureManager(), assets);
     examples::buildCornellBox(world);
-    for (const auto& w : host::applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
+    for (const auto& w : runtime::applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
         std::cerr << "warning: " << w << "\n";
 
     const RenderMode mode = resolveMode(cli);

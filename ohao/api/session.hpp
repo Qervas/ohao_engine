@@ -12,6 +12,7 @@
 #include "reflect/registry.hpp"
 #include "reflect/schema.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -57,38 +58,72 @@ enum class CallStatus : uint8_t {
     Cancelled,       // stopped by CallControl::cancel; the world is at the last whole step
 };
 
+// An image a result carries (render.capture inline): MCP sends it as an image content
+// block; native JSON-RPC and Session::call(string) put it in the result as "image" (base64)
+// and "mimeType".
+struct ResultImage {
+    std::string mimeType;   // image/jpeg | image/png
+    std::string base64;
+};
+
 struct CallOutcome {
     CallStatus status{CallStatus::Ok};
-    std::string result;                         // Ok: the result value, compact JSON
+    std::string result;                         // Ok: the result value, compact JSON (without the image)
     std::vector<reflect::Diagnostic> errors;    // UnknownMethod, BadParams, Failed
+    std::optional<ResultImage> image;           // Ok: an image beside the result
 };
+
+// `result` (a JSON object) with "image" and "mimeType" members appended.
+[[nodiscard]] std::string withImage(std::string_view result, const ResultImage& image);
 
 // {"code", "message", "data": [diagnostics]}: the error object of a failed call, as the
 // CLI prints it inside {"error": ...}. message is the first diagnostic's, with "(+N more)".
 [[nodiscard]] std::string errorObject(std::vector<reflect::Diagnostic> errors);
 
-// render.capture, checked by the session and carried out by the host that owns a
-// renderer (tools/ohao's RenderHost). ohao_api itself never touches the GPU.
+// render.capture, checked by the session and carried out by the session's host
+// (ohao/runtime: the headless RenderHost and the window's LiveHost). ohao_api itself never
+// touches the GPU.
 struct RenderRequest {
-    std::string path;                  // the PNG to write
+    std::string path;                  // the PNG to write; empty: no file
     std::string mode{"deferred"};      // deferred | rt_realtime | rt_offline
     int spp{16};                       // path tracer samples
-    int frames{0};                     // frames rendered; 0: deferred 10, path tracer spp + 3
-    uint32_t width{1920};
-    uint32_t height{1080};
+    int frames{0};                     // frames rendered, the last one read back; 0: deferred 10, path tracer spp
+    std::optional<uint32_t> width;     // absent: the host's size (headless 1920x1080; a window its own)
+    std::optional<uint32_t> height;
     std::string denoise{"none"};       // none | oidn | nrd | atrous | dlss
     std::vector<std::string> post;     // deferred post effects turned on: bloom, taa, ssao
     std::optional<float> exposure;     // absent: the renderer's own default
+    bool inlineImage{false};           // also return a preview image
+    std::string format{"jpeg"};        // the preview's format: jpeg (quality 85) | png
+    int maxSize{768};                  // the preview's long side at most this, in pixels
+    std::optional<std::array<int32_t, 4>> region;   // [x, y, w, h] of the frame, before scaling
 };
 struct RenderOutcome {
     double ms{0.0};
+    double readbackMs{0.0};   // the last frame's fence and the copy out of its staging buffer
+    double encodeMs{0.0};     // crop, scale, PNG file and preview
     int frames{0};
+    uint32_t width{0};        // the rendered frame
+    uint32_t height{0};
+    bool deterministic{true};   // false: a window's next presented frame, as is (realtime)
     std::optional<uint64_t> validationMessages;   // set when the Vulkan validation layers are on
+    std::string image;          // the encoded preview (inlineImage), raw bytes
+    std::string imageMime;
+    uint32_t imageWidth{0};
+    uint32_t imageHeight{0};
     // E_RENDER (no GPU, a failed frame, an image that could not be written),
-    // E_ASSET_NOT_FOUND / E_ASSET_INVALID / E_MESH_INVALID (meshes that could not be built).
+    // E_ASSET_NOT_FOUND / E_ASSET_INVALID / E_MESH_INVALID (meshes that could not be built),
+    // E_STATE / E_COMMAND (a window host: minimized, another size or mode).
     std::vector<reflect::Diagnostic> errors;
 };
-using RenderHandler = std::function<RenderOutcome(const RenderRequest&)>;
+
+// What a session runs inside, beyond its kind: render.capture's renderer.
+class Host {
+public:
+    virtual ~Host() = default;
+    [[nodiscard]] virtual HostKind kind() const noexcept = 0;
+    [[nodiscard]] virtual RenderOutcome capture(const RenderRequest& request) = 0;
+};
 
 class Session {
 public:
@@ -126,9 +161,15 @@ public:
     [[nodiscard]] uint64_t schemaHash() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;
-    // Lets render.capture render (without one it is E_COMMAND).
-    void setRenderHandler(RenderHandler handler);
+    // The host render.capture renders through (without one it is E_COMMAND); also sets the
+    // host kind. Not owned; it must outlive the session (or be unset with nullptr).
+    void setHost(Host* host) noexcept;
+    // The host kind of a session without a Host (or to override it).
     void setHostKind(HostKind host) noexcept;
+    // Counts calls that may have changed the world (scene.load, world.apply, world.step,
+    // world.restore, input.replay) and steps: a window host renders in lockstep only when
+    // it moved.
+    [[nodiscard]] uint64_t changeCount() const noexcept;
     // Confines every path in params (scene.validate/load/save, render.capture) to the
     // policy's roots (api/paths.hpp). Without one, paths are used as given.
     void setPathPolicy(PathPolicy policy);

@@ -6,6 +6,9 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -45,6 +48,14 @@ std::size_t StdioTransport::read(char* buf, std::size_t cap) {
 void StdioTransport::write(std::string_view line) {
     std::fwrite(line.data(), 1, line.size(), m_out);
     std::fflush(m_out);
+}
+
+void StdioTransport::interruptRead(void* readerThread) {
+#ifdef _WIN32
+    CancelSynchronousIo(static_cast<HANDLE>(readerThread));
+#else
+    (void)readerThread;   // a POSIX host closes stdin instead
+#endif
 }
 
 LineReader::LineReader(Transport& in, std::size_t maxBytes, std::size_t chunkBytes)

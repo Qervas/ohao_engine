@@ -83,7 +83,7 @@ struct LightUniformBuffer {
 
 /**
  * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
- * when initialized with a PresentTarget (see ohao/runtime/Application).
+ * when initialized with a PresentTarget (see ohao/runtime/LiveHost).
  *
  * The scene is renderScene(): an ecs::World with installRenderExtract feeds it
  * (examples/cornell_box.cpp). Headless usage:
@@ -108,6 +108,16 @@ public:
     void setPresentExtent(VkExtent2D extent);
     // Headless readback copies recorded since initialize (windowed mode: always 0).
     [[nodiscard]] uint64_t readbackCopyCount() const noexcept { return m_readbackCopies; }
+    // Readback on request: the next frame render() records also leaves its final RGBA8
+    // image in that frame slot's persistently mapped staging buffer (a window frame copies
+    // only when asked; a headless frame always does). readback() then waits for that
+    // frame's fence (never the queue) and returns its pixels, width * height * 4 bytes,
+    // valid until the next render() or resize(); empty when the frame was not rendered
+    // (minimized, an out-of-date swapchain) or produced no RGBA8 image.
+    void requestReadback() noexcept { m_readbackRequested = true; }
+    [[nodiscard]] std::span<const uint8_t> readback();
+    // Window frames that copied for a request (the unrequested count stays readbackCopyCount).
+    [[nodiscard]] uint64_t requestedReadbackCount() const noexcept { return m_requestedReadbacks; }
     void shutdown();
 
     // Rendering
@@ -382,13 +392,22 @@ private:
     // Presentation (windowed mode only).
     [[nodiscard]] bool createPresentation();
     [[nodiscard]] bool recreatePresentation();
-    void blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex);
+    // Returns whether `staging` received the frame (a requested readback).
+    bool blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkBuffer staging);
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAcquired{};
     bool m_swapchainDirty{false};
     uint64_t m_readbackCopies{0};
+    // Readback on request (requestReadback / readback).
+    bool m_readbackRequested{false};
+    bool m_readbackReady{false};     // m_readbackSlot's staging buffer holds a requested frame
+    uint32_t m_readbackSlot{0};
+    uint64_t m_requestedReadbacks{0};
+    // Marks the frame being recorded on m_currentFrame as the requested one when it wrote
+    // its staging buffer (`copied`), and clears the request.
+    void finishReadbackRequest(bool copied) noexcept;
 
     // Validation messenger state (see validationEnabled()).
     VkDebugUtilsMessengerEXT m_debugMessenger{VK_NULL_HANDLE};
@@ -446,7 +465,8 @@ private:
     [[nodiscard]] bool initializeDeferredRenderer();
     void applyRTRenderSettings();
     void renderDeferred();
-    void copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);
+    // Returns whether the frame's staging buffer received the final image.
+    bool copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);
 
     RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };

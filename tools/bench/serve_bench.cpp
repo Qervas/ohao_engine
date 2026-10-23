@@ -29,8 +29,16 @@
 // beside busy processes, is `noisy` (exit 2), neither a pass nor a failure. Exit 1 when a
 // gated median is over its budget or a reply is wrong.
 //
-// GPU budgets (the window host) arrive with the window host (step 9); --cpu-only is
-// accepted now and changes nothing.
+// GPU (step 9): `ohao serve --window 1280x720 --hidden` on Cornell, deferred, lockstep, no
+// post, as a second child; 50 rounds after 5 warm-ups of five world.step calls, one inline
+// capture and one PNG capture. Gated (medians):
+//   window_step_present      world.step of 1 frame, its reply after the frame is presented <= 8 ms
+//   window_readback          one frame's readback (its fence and the copy out; the
+//                            captures' readbackMs)                                       <= 2 ms
+//   window_capture_inline    render.capture inline (768 px JPEG) end to end              <= 20 ms
+//   window_capture_png       render.capture to a 1280x720 PNG file end to end            <= 30 ms
+//   reader_cpu_idle_600      the reader thread's CPU time over 600 idle realtime frames  <= 1 ms
+// Recorded: start to engine.info, the first step's present. --cpu-only skips the GPU part.
 #include "api/session.hpp"
 #include "bench_env.hpp"
 #include "bench_world.hpp"
@@ -43,13 +51,17 @@
 #include "reflect/json_writer.hpp"
 
 #ifdef _WIN32
+#include <intrin.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -212,6 +224,136 @@ std::string request(int id, std::string_view method, std::string_view params) {
            "\",\"params\":" + std::string(params) + "}\n";
 }
 
+#ifdef _WIN32
+// The CPU cycles the thread named `name` in process `pid` has run (QueryThreadCycleTime:
+// exact, where GetThreadTimes counts in 15.625 ms scheduler ticks); -1 if none.
+double threadCycles(uint32_t pid, const wchar_t* name) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return -1.0;
+    double result = -1.0;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof te;
+    for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid) continue;
+        HANDLE t = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+        if (!t) continue;
+        PWSTR desc = nullptr;
+        if (SUCCEEDED(GetThreadDescription(t, &desc)) && desc && std::wcscmp(desc, name) == 0) {
+            ULONG64 cycles = 0;
+            if (QueryThreadCycleTime(t, &cycles)) result = static_cast<double>(cycles);
+        }
+        if (desc) LocalFree(desc);
+        CloseHandle(t);
+        if (result >= 0) break;
+    }
+    CloseHandle(snap);
+    return result;
+}
+
+// Cycle-counter ticks per millisecond (the counter QueryThreadCycleTime reads), against
+// the performance counter over 100 ms.
+double cyclesPerMs() {
+    LARGE_INTEGER f, a, b;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&a);
+    const uint64_t c0 = __rdtsc();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    QueryPerformanceCounter(&b);
+    const uint64_t c1 = __rdtsc();
+    const double ms = static_cast<double>(b.QuadPart - a.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
+    return static_cast<double>(c1 - c0) / ms;
+}
+#endif
+
+// ---- the GPU part: the window host (Cornell deferred, 1280x720, lockstep, no post) ---------
+
+struct GpuResult {
+    bool ran{false};
+    std::vector<double> step, readback, inlineCapture, pngCapture;
+    double readerCpuMs{-1.0};
+    uint64_t idleFrames{0};
+    double startMs{0.0}, firstFrameMs{0.0};
+    std::vector<std::string> wrong;
+};
+
+#ifdef _WIN32
+GpuResult runGpu(const fs::path& ohaoExe, const fs::path& root, const fs::path& dir, int rounds,
+                 bench::LoadMonitor& monitor) {
+    GpuResult g;
+    Child server;
+    const auto t0 = Clock::now();
+    if (!server.start(ohaoExe.wstring(),
+                      L"serve --window 1280x720 --hidden --out build/serve_bench/out --log-level warn "
+                      L"assets/scenes/cornell_box.scene.json",
+                      root, dir / "server_window.stderr.txt")) {
+        g.wrong.push_back("the window host did not start");
+        return g;
+    }
+    monitor.exclude(server.pid());
+    const std::string info = server.call(request(1, "engine.info", "{}"));
+    g.startMs = ms(Clock::now() - t0);
+    if (info.find("\"host\":\"window\"") == std::string::npos) {
+        g.wrong.push_back("the window host does not answer engine.info (no GPU or window?)");
+        server.close();
+        return g;
+    }
+    const auto f0 = Clock::now();
+    (void)server.call(request(2, "world.step", R"({"frames":1})"));   // load-to-first-frame: the first step's present
+    g.firstFrameMs = ms(Clock::now() - f0);
+    g.ran = true;
+    const std::string stepReq = request(3, "world.step", R"({"frames":1})");
+    const std::string inlineReq = request(4, "render.capture", R"({"inline":true})");
+    const std::string pngReq = request(5, "render.capture", R"({"path":"build/serve_bench/out/bench_capture.png"})");
+    std::string last;
+    for (int r = 0; r < 5 + rounds; ++r) {
+        for (int k = 0; k < 5; ++k) {
+            const auto s = Clock::now();
+            last = server.call(stepReq);
+            if (r >= 5) g.step.push_back(ms(Clock::now() - s));
+        }
+        auto s = Clock::now();
+        last = server.call(inlineReq);
+        const double inl = ms(Clock::now() - s);
+        const double rb1 = jsonNumber(last, "readbackMs", -1.0);
+        const bool inlineOk = last.find("\"mimeType\":\"image/jpeg\"") != std::string::npos;
+        s = Clock::now();
+        last = server.call(pngReq);
+        const double png = ms(Clock::now() - s);
+        const double rb2 = jsonNumber(last, "readbackMs", -1.0);
+        const bool pngOk = last.find("\"path\":") != std::string::npos;
+        if (r == 0 && (!inlineOk || !pngOk)) g.wrong.push_back("render.capture in the window host: " + last.substr(0, 300));
+        if (r < 5) continue;
+        g.inlineCapture.push_back(inl);
+        g.pngCapture.push_back(png);
+        if (rb1 >= 0) g.readback.push_back(rb1);
+        if (rb2 >= 0) g.readback.push_back(rb2);
+    }
+    // The reader thread over 600 idle realtime frames: nothing arrives, so it must sleep.
+    const double perMs = cyclesPerMs();
+    const double before = threadCycles(server.pid(), L"ohao rpc reader");
+    const std::string go = server.call(request(6, "time.set", R"({"mode":"realtime"})"));
+    const uint64_t frame0 = static_cast<uint64_t>(jsonNumber(go, "frame", 0));
+    // 600 steps at 60 Hz is 10 s; a slow machine drops steps (the clock's stall clamp), so
+    // wait until 600 have run, asking once a second (at most 60 s).
+    const auto idleStart = Clock::now();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10'000));
+    while (ms(Clock::now() - idleStart) < 60'000) {
+        const std::string t = server.call(request(8, "time.get", "{}"));
+        if (static_cast<uint64_t>(jsonNumber(t, "frame", 0)) >= frame0 + 600) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1'000));
+    }
+    const double after = threadCycles(server.pid(), L"ohao rpc reader");
+    const std::string stop = server.call(request(7, "time.set", R"({"mode":"lockstep"})"));
+    g.idleFrames = static_cast<uint64_t>(jsonNumber(stop, "frame", 0)) - frame0;
+    if (before >= 0 && after >= 0 && perMs > 0) g.readerCpuMs = (after - before) / perMs;
+    else g.wrong.push_back("the reader thread was not found by name");
+    if (g.idleFrames < 600) g.wrong.push_back("the idle realtime session ran " + std::to_string(g.idleFrames) + " steps, not 600");
+    const int code = server.close();
+    if (code != 0) g.wrong.push_back("the window host exits " + std::to_string(code) + " when stdin closes");
+    return g;
+}
+#endif
+
 struct Op {
     std::string name;
     std::string unit;                 // "ms" or "ns"
@@ -237,6 +379,7 @@ int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/serve_bench.json", refPath = "build/serve_bench_reference.json";
     int rounds = 50;
     bool calibrate = false;
+    bool cpuOnly = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
@@ -244,7 +387,7 @@ int main(int argc, char** argv) {
         else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];
         else if (a == "--rounds" && i + 1 < argc) rounds = std::max(5, std::atoi(argv[++i]));
         else if (a == "--calibrate") calibrate = true;
-        else if (a == "--cpu-only") {}
+        else if (a == "--cpu-only") cpuOnly = true;
         else {
             std::fprintf(stderr, "usage: serve_bench [--check budgets.json] [--out file] [--reference file] "
                                  "[--rounds N] [--cpu-only] | --calibrate\n");
@@ -445,6 +588,18 @@ int main(int argc, char** argv) {
     const int exitCode = server.close();
     expect(exitCode == 0, "the server exits 0 when stdin closes (exit " + std::to_string(exitCode) + ")");
 
+    // The GPU part: the window host, under its own load record.
+    GpuResult gpu;
+    double gpuExternal = 0.0;
+    std::vector<bench::BusyProcess> gpuBusy;
+    if (!cpuOnly) {
+        bench::LoadMonitor gpuMonitor;
+        gpuMonitor.start();
+        gpu = runGpu(ohaoExe, root, dir, rounds, gpuMonitor);
+        gpuBusy = gpuMonitor.stop(5.0, &gpuExternal);
+        for (const auto& w : gpu.wrong) expect(false, w);
+    }
+
     // Transport overhead: per round, the round trip minus the in-process call beside it.
     std::vector<double> overhead;
     for (std::size_t i = 0; i < ops[0].samples.size(); ++i) overhead.push_back(ops[0].samples[i] - ops[1].samples[i]);
@@ -453,7 +608,7 @@ int main(int argc, char** argv) {
     const double ref = bench::readReference(refPath);
     const double slow = ref > 0 ? std::max(cal0, cal1) / ref : 0.0;
     const bool noisyCal = ref > 0 && slow > maxSlowdown;
-    const bool noisyLoad = external > maxExternal;
+    const bool noisyLoad = external > maxExternal || gpuExternal > maxExternal;
     const bool noisy = noisyCal || noisyLoad;
 
     struct Gate {
@@ -473,13 +628,26 @@ int main(int argc, char** argv) {
         {"log_ring_80", "ns", "log_ring_80_ns", stats(ops[8].samples), {}},
         {"tools_list_bytes", "B", "tools_list_bytes", {static_cast<double>(toolsBytes), static_cast<double>(toolsBytes)}, {}},
     };
+    if (gpu.ran) {
+        gates.push_back({"window_step_present", "ms", "window_step_present_ms", stats(gpu.step), {}});
+        gates.push_back({"window_readback", "ms", "window_readback_ms", stats(gpu.readback), {}});
+        gates.push_back({"window_capture_inline", "ms", "window_capture_inline_ms", stats(gpu.inlineCapture), {}});
+        gates.push_back({"window_capture_png", "ms", "window_capture_png_ms", stats(gpu.pngCapture), {}});
+        gates.push_back({"reader_cpu_idle_600", "ms", "reader_cpu_idle_600_ms", {gpu.readerCpuMs, gpu.readerCpuMs}, {}});
+    }
 
-    std::printf("serve_bench (sub-project 4, steps 6-7): ohao serve as a child process, bench10k, %d rounds\n", rounds);
+    std::printf("serve_bench (sub-project 4, steps 6, 7 and 9): ohao serve as a child process, bench10k, %d rounds\n",
+                rounds);
     char refText[96] = "none (run serve_bench --calibrate on a quiet machine)";
     if (ref > 0) std::snprintf(refText, sizeof refText, "%.3f ms (x%.2f)", ref, slow);
     std::printf("    calibration  before %.3f ms  after %.3f ms  reference %s\n", cal0, cal1, refText);
     std::printf("    other processes  %.1f%% of a core in total%s\n", external, busy.empty() ? "" : ":");
     for (const auto& p : busy) std::printf("        %-40s %6.1f%%\n", p.name.c_str(), p.corePct);
+    if (gpu.ran) {
+        std::printf("    window host (Cornell deferred 1280x720, lockstep, no post): other processes %.1f%% of a core%s\n",
+                    gpuExternal, gpuBusy.empty() ? "" : ":");
+        for (const auto& p : gpuBusy) std::printf("        %-40s %6.1f%%\n", p.name.c_str(), p.corePct);
+    }
     std::printf("    in-process world.info median %.4f ms (the overhead's baseline)\n", stats(ops[1].samples).median);
 
     int passed = 0, failed = 0;
@@ -525,6 +693,10 @@ int main(int argc, char** argv) {
     std::printf("    recorded: process start to initialize %.1f ms; scene.load bench10k over stdio %.1f ms; "
                 "initialize reply %zu B (instructions %zu B)\n",
                 startMs, loadMs, init.size(), instrBytes);
+    if (gpu.ran)
+        std::printf("    recorded: window host start (Cornell loaded) to engine.info %.1f ms; first world.step to its "
+                    "present %.1f ms; idle realtime steps %llu\n",
+                    gpu.startMs, gpu.firstFrameMs, static_cast<unsigned long long>(gpu.idleFrames));
     failed += failures;
     const char* verdict = noisy ? "noisy" : (failed ? "over" : "pass");
     json.key("verdict"); json.string(verdict);
@@ -535,6 +707,12 @@ int main(int argc, char** argv) {
     json.key("initializeBytes"); json.uint64(init.size());
     json.key("instructionsBytes"); json.uint64(instrBytes);
     json.key("inprocWorldInfoMs"); json.float32(static_cast<float>(stats(ops[1].samples).median));
+    if (gpu.ran) {
+        json.key("windowStartMs"); json.float32(static_cast<float>(gpu.startMs));
+        json.key("windowFirstFrameMs"); json.float32(static_cast<float>(gpu.firstFrameMs));
+        json.key("windowIdleSteps"); json.uint64(gpu.idleFrames);
+        json.key("windowExternalCorePct"); json.float32(static_cast<float>(gpuExternal));
+    }
     json.endObject();
     json.key("calibration");
     json.beginObject();

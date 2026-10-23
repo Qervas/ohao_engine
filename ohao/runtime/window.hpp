@@ -15,6 +15,7 @@ struct WindowConfig {
     uint32_t    height{1080};
     std::string title{"OHAO"};
     bool        resizable{true};
+    bool        visible{true};   // false: never shown (tests); it still presents
 };
 
 // A GLFW window with no graphics context of its own: the renderer presents into

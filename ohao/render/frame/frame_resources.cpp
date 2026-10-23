@@ -171,13 +171,15 @@ bool FrameResourceManager::createSyncObjects() {
 }
 
 bool FrameResourceManager::createStagingBuffers(size_t size) {
+    // Readback buffers: the CPU reads them, so host-cached memory where the device offers it
+    // coherent. Uncached host-visible memory read 3.7 MB (one 1280x720 frame) in ~20 ms;
+    // cached reads at memory speed.
+    constexpr VkMemoryPropertyFlags kCached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    constexpr VkMemoryPropertyFlags kCoherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     for (auto& frame : m_frames) {
-        if (!createBuffer(
-            size,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            frame.stagingBuffer,
-            frame.stagingBufferMemory))
+        if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, kCached, frame.stagingBuffer,
+                          frame.stagingBufferMemory, kCoherent))
         {
             return false;
         }
@@ -226,14 +228,15 @@ bool FrameResourceManager::resizeStagingBuffers(size_t newSize) {
     return true;
 }
 
-uint32_t FrameResourceManager::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+uint32_t FrameResourceManager::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties,
+                                              VkMemoryPropertyFlags fallback) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);
 
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
+    for (const VkMemoryPropertyFlags want : {properties, fallback}) {
+        if (want == 0) continue;
+        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & want) == want) return i;
         }
     }
 
@@ -245,7 +248,8 @@ bool FrameResourceManager::createBuffer(
     VkBufferUsageFlags usage,
     VkMemoryPropertyFlags properties,
     VkBuffer& buffer,
-    VkDeviceMemory& bufferMemory)
+    VkDeviceMemory& bufferMemory,
+    VkMemoryPropertyFlags fallback)
 {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -263,7 +267,7 @@ bool FrameResourceManager::createBuffer(
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties, fallback);
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, buffer, nullptr);

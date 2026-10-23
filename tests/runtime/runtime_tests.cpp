@@ -1,14 +1,22 @@
 // Runtime host tests. No GPU, no window: every input here is synthetic.
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
 
 #include "runtime/clock.hpp"
+#include "runtime/image.hpp"
 #include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
 
 #include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
+
+// The reference decoder for the capture PNG writer (this file's own copy).
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 using namespace ohao;
 using namespace ohao::runtime;
@@ -369,7 +377,107 @@ static void zero_extent_means_minimized() {
     CHECK(e.width == 0 && e.height == 0, "a minimized window reports 0x0 and must not be inflated");
 }
 
+// ---------------------------------------------------------------- capture images (step 9)
+
+// A 1280x720 frame with what renders produce: flat walls, gradients, noise.
+static ohao::runtime::Rgba8Image syntheticFrame() {
+    ohao::runtime::Rgba8Image im{1280, 720, std::vector<uint8_t>(1280u * 720u * 4u)};
+    uint32_t seed = 12345;
+    for (uint32_t y = 0; y < im.height; ++y)
+        for (uint32_t x = 0; x < im.width; ++x) {
+            uint8_t* p = im.pixels.data() + (static_cast<size_t>(y) * im.width + x) * 4;
+            seed = seed * 1664525u + 1013904223u;
+            if (x < 400) { p[0] = 140; p[1] = 120; p[2] = 100; }                       // a flat wall
+            else if (x < 800) { p[0] = static_cast<uint8_t>(x); p[1] = static_cast<uint8_t>(y); p[2] = 60; }
+            else { p[0] = static_cast<uint8_t>(seed >> 24); p[1] = static_cast<uint8_t>(seed >> 16); p[2] = static_cast<uint8_t>(seed >> 8); }
+            p[3] = 255;
+        }
+    return im;
+}
+
+template <class F>
+static double medianMs(F&& f, int runs = 7) {
+    std::vector<double> t;
+    for (int i = 0; i < runs; ++i) {
+        const auto s = std::chrono::steady_clock::now();
+        f();
+        t.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s).count());
+    }
+    std::sort(t.begin(), t.end());
+    return t[t.size() / 2];
+}
+
+// The capture PNG writer (OHAO's own deflate) is lossless: stb_image decodes exactly the
+// pixels it was given, for a frame, an all-noise frame (a 1-frame RT GI render is mostly
+// noise) and odd sizes.
+static void sp4_t16_capture_png_round_trips_losslessly() {
+    using namespace ohao::runtime;
+    const Rgba8Image frame = syntheticFrame();
+    std::string png;
+    const double ms = medianMs([&] { png = encodePng(frame); });
+    Rgba8Image noise{1280, 720, std::vector<uint8_t>(1280u * 720u * 4u)};
+    uint32_t seed = 99;
+    for (auto& b : noise.pixels) b = static_cast<uint8_t>((seed = seed * 1664525u + 1013904223u) >> 24);
+    std::string noisy;
+    const double noiseMs = medianMs([&] { noisy = encodePng(noise); });
+    int w = 0, h = 0, n = 0;
+    unsigned char* back = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(png.data()),
+                                                static_cast<int>(png.size()), &w, &h, &n, 4);
+    CHECK(back && w == 1280 && h == 720, "the PNG decodes at its size");
+    CHECK(back && std::equal(frame.pixels.begin(), frame.pixels.end(), back), "to exactly the pixels encoded");
+    stbi_image_free(back);
+    back = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(noisy.data()), static_cast<int>(noisy.size()),
+                                 &w, &h, &n, 4);
+    CHECK(back && std::equal(noise.pixels.begin(), noise.pixels.end(), back), "an all-noise frame round trips too");
+    stbi_image_free(back);
+    for (const auto [ow, oh] : {std::pair{1u, 1u}, std::pair{3u, 7u}, std::pair{257u, 5u}}) {
+        Rgba8Image odd{ow, oh, std::vector<uint8_t>(static_cast<size_t>(ow) * oh * 4)};
+        for (size_t i = 0; i < odd.pixels.size(); ++i) odd.pixels[i] = static_cast<uint8_t>(i * 37 % 251);
+        const std::string p = encodePng(odd);
+        unsigned char* b = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(p.data()),
+                                                 static_cast<int>(p.size()), &w, &h, &n, 4);
+        CHECK(b && w == static_cast<int>(ow) && h == static_cast<int>(oh) &&
+                  std::equal(odd.pixels.begin(), odd.pixels.end(), b),
+              "odd sizes round trip too");
+        stbi_image_free(b);
+    }
+    std::printf("\n      1280x720 PNG: %zu bytes (raw %u), encode median %.2f ms; all noise %zu bytes, %.2f ms",
+                png.size(), 1280u * 720u * 4u, ms, noisy.size(), noiseMs);
+}
+
+// Crop, the area downscale and the JPEG preview.
+static void sp4_t16_crop_scale_and_jpeg_preview() {
+    using namespace ohao::runtime;
+    const Rgba8Image frame = syntheticFrame();
+    const Rgba8Image part = crop(frame.pixels, frame.width, frame.height, {10, 20, 300, 200});
+    CHECK(part.width == 300 && part.height == 200 &&
+              std::equal(part.pixels.begin(), part.pixels.begin() + 4, frame.pixels.begin() + (20 * 1280 + 10) * 4),
+          "crop keeps the region's pixels");
+    // 2x2 blocks of known values average exactly at half size.
+    Rgba8Image blocks{4, 2, {}};
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 4; ++x)
+            for (int c = 0; c < 4; ++c) blocks.pixels.push_back(static_cast<uint8_t>(x < 2 ? (y ? 100 : 50) : 200));
+    const Rgba8Image half = fitWithin(blocks, 2);
+    CHECK(half.width == 2 && half.height == 1 && half.pixels[0] == 75 && half.pixels[4] == 200,
+          "the downscale averages the area each output pixel covers");
+    Rgba8Image preview;
+    const double scaleMs = medianMs([&] { preview = fitWithin(frame, 768); });
+    CHECK(preview.width == 768 && preview.height == 432, "a 1280x720 frame previews at 768x432");
+    std::string jpeg;
+    const double jpegMs = medianMs([&] { jpeg = encodeJpeg(preview, 85); });
+    int w = 0, h = 0, n = 0;
+    unsigned char* back = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(jpeg.data()),
+                                                static_cast<int>(jpeg.size()), &w, &h, &n, 3);
+    CHECK(back && w == 768 && h == 432, "the JPEG decodes at its size");
+    stbi_image_free(back);
+    std::printf("\n      preview: downscale median %.2f ms, JPEG %zu bytes median %.2f ms", scaleMs, jpeg.size(), jpegMs);
+}
+
 int main() {
+    std::printf("[capture images]\n");
+    RUN(sp4_t16_capture_png_round_trips_losslessly);
+    RUN(sp4_t16_crop_scale_and_jpeg_preview);
     std::printf("[clock]\n");
     RUN(clock_sixty_frames_of_one_sixtieth_is_sixty_steps);
     RUN(clock_half_step_frames_alternate);

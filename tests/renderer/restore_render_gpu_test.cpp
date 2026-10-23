@@ -46,16 +46,13 @@ Shot capture(api::Session& s, host::RenderHost& h, const std::string& path, cons
     Shot shot;
     shot.reply = s.call("render.capture", "{\"path\":\"" + path +
                                               "\",\"mode\":\"deferred\",\"width\":960,\"height\":540,\"post\":" + post + "}");
-    if (ok(shot.reply) && h.renderer()) {
-        const auto span = h.renderer()->getPixelSpan();
-        shot.pixels.assign(span.begin(), span.end());
-    }
+    if (ok(shot.reply) && h.renderer()) shot.pixels = h.lastPixels();
     return shot;
 }
 
 // One frame as a capture renders it; the instance bytes its RenderScene update uploaded.
 std::size_t frameUpload(ecs::World& world, host::RenderHost& h) {
-    world.update(0.0f);
+    world.sync();
     h.renderer()->render();
     return h.renderer()->renderScene().stats().instanceBytesUploaded;
 }
@@ -89,7 +86,7 @@ Sequence runSequence(const reflect::TypeRegistry& types, ecs::AssetResolver& ass
     api::Session s(world, types);
     s.setAssetResolver(&assets);
     h.bind(world);
-    s.setRenderHandler([&h](const api::RenderRequest& r) { return h.capture(r); });
+    s.setHost(&h);
 
     const auto png = [&](const char* n) { return (out / (tag + "_" + n + ".png")).generic_string(); };
     q.loaded = s.call("scene.load", "{\"path\":\"assets/scenes/cornell_box.scene.json\"}");

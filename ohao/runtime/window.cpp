@@ -19,6 +19,7 @@ bool Window::create(const WindowConfig& cfg) {
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, cfg.resizable ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_VISIBLE, cfg.visible ? GLFW_TRUE : GLFW_FALSE);
     m_window = glfwCreateWindow(static_cast<int>(cfg.width), static_cast<int>(cfg.height),
                                 cfg.title.c_str(), nullptr, nullptr);
     if (!m_window) {

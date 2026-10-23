@@ -15,10 +15,14 @@
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
-//                 the engine as a JSON-RPC 2.0 / MCP server on stdio (headless, lockstep): native
-//                 methods and MCP tools over newline-delimited JSON until stdin closes (ohao/rpc).
+//                 [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
+//                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
+//                 over newline-delimited JSON until stdin closes (ohao/rpc). Headless and lockstep
+//                 by default; --window is the live host (a window, 1280x720 by default, lockstep
+//                 unless --realtime) that renders while an agent drives it and a human watches.
 //                 Paths in params are project-relative; writes go under --out (default
-//                 <root>/agent_out). Exit 0 when stdin closes; 1 if the scene does not load.
+//                 <root>/agent_out). Exit 0 when stdin closes (or the window is closed); 1 if the
+//                 scene does not load; 3 without a window or GPU.
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
@@ -41,7 +45,10 @@
 #include "reflect/schema.hpp"
 #include "rpc/server.hpp"
 #include "rpc/transport.hpp"
+#include "runtime/live_host.hpp"
 
+#include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -259,15 +266,14 @@ struct Context {
     std::unique_ptr<ecs::World> world;
     std::unique_ptr<api::Session> session;
 
-    explicit Context(const std::string& root) {
+    explicit Context(const std::string& root, api::HostKind kind = api::HostKind::Cli) {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
-        render = std::make_unique<host::RenderHost>(*assets);
+        render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
-        session->setHostKind(api::HostKind::Cli);
         render->bind(*world);
-        session->setRenderHandler([r = render.get()](const api::RenderRequest& req) { return r->capture(req); });
+        session->setHost(render.get());
     }
     ~Context() {
         session.reset();
@@ -625,15 +631,71 @@ int cmdDoctor(const Args& a) {
     return doctor::passed(checks) ? kOk : kInput;
 }
 
-// The engine as a server over stdio until stdin closes (headless, lockstep). Nothing is
-// printed on stdout but protocol messages; a scene that does not load is reported on
-// stderr before serving starts.
-int cmdServe(const Args& a, const std::vector<std::string>& allowPaths) {
+// --window [WxH]: absent, or the window's size (default 1280x720).
+struct WindowOption {
+    bool on{false};
+    uint32_t width{1280};
+    uint32_t height{720};
+};
+
+// The engine as a server over stdio until stdin closes: headless (lockstep), or with
+// --window the live host (runtime::LiveHost), which serves requests once per frame and
+// renders and presents while an agent drives it. Nothing is printed on stdout but
+// protocol messages; a scene that does not load is reported on stderr before serving.
+int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const WindowOption& win,
+                std::size_t maxMessage) {
+    runtime::LiveConfig cfg;
+    cfg.window.width = win.width;
+    cfg.window.height = win.height;
+    cfg.window.title = "OHAO serve";
+    cfg.window.visible = !has(a, "--hidden");
+    cfg.vsync = has(a, "--vsync");
+    cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
+    cfg.root = opt(a, "--root", ".");
+    runtime::LiveHost host;
+    if (!host.initialize(cfg, engineTypes())) {
+        OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");
+        return kInternal;
+    }
+    api::PathPolicy policy;
+    policy.root = cfg.root;
+    policy.out = opt(a, "--out");
+    for (const auto& p : allowPaths) policy.allowed.emplace_back(p);
+    host.session().setPathPolicy(std::move(policy));
+    if (!a.positional.empty()) {
+        std::vector<std::pair<std::string, std::string>> p{{"path", jsonString(a.positional[0])}};
+        if (has(a, "--seed")) p.emplace_back("seed", jsonString(opt(a, "--seed")));
+        const std::string reply = host.session().call("scene.load", params(p));
+        if (isError(reply)) {
+            OHAO_LOG(Error, rpc, "serve: the scene did not load: {}", reply);
+            (void)host.shutdown();
+            return replyExit(reply);
+        }
+    }
+    rpc::StdioTransport transport(g_json);
+    rpc::ServerOptions options;
+    options.maxMessage = maxMessage;
+    options.holdReplies = true;   // sent after the frame the requests caused is presented
+    rpc::Server server(host.session(), transport, options);
+    runtime::RequestPump pump;
+    pump.poll = [&server](std::chrono::milliseconds wait) { return server.poll(wait); };
+    pump.flush = [&server] { server.flush(); };
+    server.start();
+    (void)host.run(runtime::GameHooks{}, &pump);
+    server.stop();   // the window closed while the client still holds stdin: stop reading
+    (void)host.shutdown();
+    return kOk;
+}
+
+int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const WindowOption& win) {
     if (a.positional.size() > 1) return usage("serve takes at most one scene");
     long long maxMessage = 64ll << 20;
     std::string err;
     if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
     if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
+    if (has(a, "--lockstep") && has(a, "--realtime")) return usage("--lockstep and --realtime exclude each other");
+    for (const char* o : {"--realtime", "--vsync", "--hidden"})
+        if (has(a, o) && !win.on) return usage(std::string(o) + " needs --window (a headless host is lockstep)");
     if (has(a, "--log-level")) {
         const auto level = log::parseLevel(opt(a, "--log-level"));
         if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
@@ -641,9 +703,9 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths) {
         log::stderrSink()->level = *level == log::Level::Off ? log::Level::Error : *level;
         if (*level == log::Level::Off) log::removeSink(log::stderrSink().get());
     }
+    if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage));
     const std::string root = opt(a, "--root", ".");
-    Context c(root);
-    c.session->setHostKind(api::HostKind::Headless);
+    Context c(root, api::HostKind::Headless);
     api::PathPolicy policy;
     policy.root = root;
     policy.out = opt(a, "--out");
@@ -669,20 +731,41 @@ int run(int argc, char** argv) {
             "usage: ohao <schema|validate|fmt|apply|query|summary|run|doctor|serve> ... (see tools/ohao/main.cpp)");
     const std::string_view cmd = argv[1];
     if (cmd == "serve") {
-        // --allow-path may be given more than once; the rest parses as usual.
+        // --allow-path may be given more than once and --window takes an optional WxH; the
+        // rest parses as usual.
         std::vector<std::string> allow;
+        WindowOption win;
         std::vector<char*> rest{argv[0], argv[1]};
         for (int i = 2; i < argc; ++i) {
-            if (std::string_view(argv[i]) == "--allow-path") {
+            const std::string_view s = argv[i];
+            if (s == "--allow-path") {
                 if (i + 1 >= argc) return usage("--allow-path needs a value");
                 allow.emplace_back(argv[++i]);
+            } else if (s == "--window") {
+                if (win.on) return usage("--window is given twice");
+                win.on = true;
+                if (i + 1 < argc) {   // an optional WxH
+                    const std::string_view v = argv[i + 1];
+                    const std::size_t x = v.find('x');
+                    unsigned w = 0, h = 0;
+                    if (x != std::string_view::npos && x > 0 &&
+                        std::from_chars(v.data(), v.data() + x, w).ptr == v.data() + x &&
+                        std::from_chars(v.data() + x + 1, v.data() + v.size(), h).ptr == v.data() + v.size()) {
+                        if (w < 64 || h < 64 || w > 8192 || h > 8192)
+                            return usage("--window WxH needs sizes in [64, 8192], got '" + std::string(v) + "'");
+                        win.width = w;
+                        win.height = h;
+                        ++i;
+                    }
+                }
             } else {
                 rest.push_back(argv[i]);
             }
         }
-        const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2, {},
+        const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
+                                 {"--lockstep", "--realtime", "--vsync", "--hidden"},
                                  {"--root", "--out", "--seed", "--log-level", "--max-message"});
-        return a.error.empty() ? cmdServe(a, allow) : usage(a.error);
+        return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {
         const Args a = parseArgs(argc, argv, 2, {}, {"-o"});

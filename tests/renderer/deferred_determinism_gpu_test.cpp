@@ -97,10 +97,8 @@ std::string captureParams(const fs::path& png, const Config& c) {
     return "{\"path\":\"" + png.generic_string() + "\",\"mode\":\"deferred\",\"width\":960,\"height\":540," + c.extra + "}";
 }
 
-std::vector<uint8_t> pixelsOf(host::RenderHost& h) {
-    const auto span = h.renderer()->getPixelSpan();
-    return {span.begin(), span.end()};
-}
+// The frame the last capture read back.
+std::vector<uint8_t> pixelsOf(host::RenderHost& h) { return h.lastPixels(); }
 
 // One fresh renderer (RenderHost), one capture of the configuration; with `twice`, a second
 // capture by the same renderer, which must render as a fresh renderer does (RenderHost
@@ -113,7 +111,7 @@ Image renderFresh(const reflect::TypeRegistry& types, ecs::AssetResolver& assets
     api::Session s(world, types);
     s.setAssetResolver(&assets);
     h.bind(world);
-    s.setRenderHandler([&h](const api::RenderRequest& r) { return h.capture(r); });
+    s.setHost(&h);
     const std::string loaded = s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}");
     if (!ok(loaded)) {
         img.error = loaded;
@@ -258,7 +256,7 @@ int main(int argc, char** argv) {
         api::Session s(world, types);
         s.setAssetResolver(&assets);
         h.bind(world);
-        s.setRenderHandler([&h](const api::RenderRequest& r) { return h.capture(r); });
+        s.setHost(&h);
         const bool loaded = ok(s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}"));
         uint32_t initial = UINT32_MAX, after7 = UINT32_MAX, after0 = UINT32_MAX;
         bool rendered = false;

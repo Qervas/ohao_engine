@@ -2,7 +2,7 @@
 // The worlds cornell_box and model_viewer render, built as authoring data only (Camera,
 // Environment, MeshSource, MaterialOverride, Light): no GPU, so --save-scene can write
 // them without a renderer, and tests can build them. Instantiate turns the meshes into
-// MeshRenderers; tools/ohao/scene_host.hpp applies the camera and environment.
+// MeshRenderers; runtime/scene_view_apply.hpp applies the camera and environment.
 //
 // Creation order is draw order and light order, so the builders keep the order the
 // examples always used (camera and environment first: they draw and light nothing).

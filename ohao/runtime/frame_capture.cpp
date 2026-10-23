@@ -1,0 +1,176 @@
+#include "runtime/frame_capture.hpp"
+
+#include "core/log.hpp"
+#include "ecs/components.hpp"
+#include "ecs/instantiate.hpp"
+#include "ecs/scene_view.hpp"
+#include "gpu/vulkan/renderer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
+#include "runtime/image.hpp"
+#include "runtime/scene_view_apply.hpp"
+
+#include <algorithm>
+#include <chrono>
+
+namespace ohao::runtime {
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double msSince(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
+
+reflect::Diagnostic error(std::string code, std::string message) {
+    reflect::Diagnostic d;
+    d.code = std::move(code);
+    d.message = std::move(message);
+    return d;
+}
+
+std::string hexId(uint64_t id) {
+    static constexpr char kDigits[] = "0123456789abcdef";
+    std::string s(16, '0');
+    for (int i = 15; i >= 0; --i, id >>= 4) s[static_cast<std::size_t>(i)] = kDigits[id & 15u];
+    return s;
+}
+
+} // namespace
+
+int captureFrames(const api::RenderRequest& r) noexcept {
+    if (r.frames > 0) return r.frames;
+    if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame
+    // Deferred: one frame, or 10 when TAA blends the history (the spec's defaults). The
+    // hybrid's RT GI keeps a history too, so a converged GI needs frames given.
+    return std::find(r.post.begin(), r.post.end(), "taa") != r.post.end() ? 10 : 1;
+}
+
+std::vector<reflect::Diagnostic> checkRegion(const api::RenderRequest& r, uint32_t width, uint32_t height) {
+    std::vector<reflect::Diagnostic> errors;
+    if (!r.region) return errors;
+    const auto& g = *r.region;
+    if (g[0] < 0 || g[1] < 0 || g[2] < 1 || g[3] < 1 || static_cast<int64_t>(g[0]) + g[2] > width ||
+        static_cast<int64_t>(g[1]) + g[3] > height) {
+        auto d = error("E_COMMAND", "region [" + std::to_string(g[0]) + ", " + std::to_string(g[1]) + ", " +
+                                        std::to_string(g[2]) + ", " + std::to_string(g[3]) + "] is not inside the " +
+                                        std::to_string(width) + "x" + std::to_string(height) + " frame");
+        d.path = "/region";
+        errors.push_back(std::move(d));
+    }
+    return errors;
+}
+
+void writeCaptureOutputs(std::span<const uint8_t> pixels, uint32_t width, uint32_t height,
+                         const api::RenderRequest& r, api::RenderOutcome& out) {
+    const auto start = Clock::now();
+    Rgba8Image image;
+    std::span<const uint8_t> kept = pixels;
+    uint32_t w = width, h = height;
+    if (r.region) {
+        image = crop(pixels, width, height, *r.region);
+        kept = image.pixels;
+        w = image.width;
+        h = image.height;
+    }
+    const double cropMs = msSince(start);
+    if (!r.path.empty() && !writePng(r.path, kept, w, h)) {
+        out.errors.push_back(error("E_RENDER", "cannot write " + r.path));
+        return;
+    }
+    const double fileMs = msSince(start) - cropMs;
+    if (!r.path.empty()) OHAO_LOG(Debug, render, "capture outputs: PNG file {:.2f} ms", fileMs);
+    if (r.inlineImage) {
+        if (!r.region) image = Rgba8Image{w, h, std::vector<uint8_t>(kept.begin(), kept.end())};
+        image = fitWithin(std::move(image), static_cast<uint32_t>(std::max(1, r.maxSize)));
+        const double scaleMs = msSince(start) - cropMs - fileMs;
+        const bool png = r.format == "png";
+        out.image = png ? encodePng(image) : encodeJpeg(image, 85);
+        OHAO_LOG(Debug, render, "capture outputs: crop {:.2f} ms, scale {:.2f} ms, {} {:.2f} ms", cropMs, scaleMs,
+                 png ? "png" : "jpeg", msSince(start) - cropMs - fileMs - scaleMs);
+        out.imageMime = png ? "image/png" : "image/jpeg";
+        out.imageWidth = image.width;
+        out.imageHeight = image.height;
+        if (out.image.empty()) {
+            out.errors.push_back(error("E_RENDER", "the preview could not be encoded"));
+            return;
+        }
+    }
+    out.encodeMs = msSince(start);
+}
+
+api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, const ecs::AssetResolver& assets,
+                                const api::RenderRequest& r, const CaptureSettings& settings) {
+    api::RenderOutcome out;
+    const auto start = Clock::now();
+    out.width = renderer.getWidth();
+    out.height = renderer.getHeight();
+    if (auto e = checkRegion(r, out.width, out.height); !e.empty()) {
+        out.errors = std::move(e);
+        return out;
+    }
+
+    // As the examples: the view first, then the mode, the denoiser and post effects.
+    for (const auto& w : applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
+        OHAO_LOG(Warn, render, "capture: {}", w);
+    const RenderMode mode = r.mode == "rt_realtime" ? RenderMode::RTRealtime
+                            : r.mode == "rt_offline" ? RenderMode::RTOffline
+                                                     : RenderMode::Deferred;
+    renderer.setRenderMode(mode);
+    const DenoiseMode denoise = parseDenoiseMode(r.denoise);
+    renderer.setDenoiseMode(denoise);
+    if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
+        if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
+            const auto on = [&](std::string_view e) { return std::find(r.post.begin(), r.post.end(), e) != r.post.end(); };
+            pp->setBloomEnabled(on("bloom"));
+            pp->setTAAEnabled(on("taa"));
+            pp->setSSAOEnabled(on("ssao"));
+            pp->setExposure(r.exposure.value_or(settings.defaultExposure));
+        }
+    }
+    const double setupMs = msSince(start);
+    // A fresh renderer renders exactly as the examples do (the goldens); one that has
+    // rendered starts its own accumulation, as a fresh one would.
+    if (settings.reset) renderer.resetAccumulation();
+    const double resetMs = msSince(start) - setupMs;
+
+    const int frames = captureFrames(r);
+    Clock::time_point submitted = Clock::now();
+    for (int i = 0; i < frames; ++i) {
+        world.sync();   // derived state only: rendering never steps the simulation
+        if (i == 0) {
+            for (const entt::entity e : ecs::instantiateErrors(world)) {
+                const auto& err = world.registry().get<ecs::InstantiateError>(e);
+                reflect::Diagnostic d = error(err.code, "");
+                d.entity = world.idOf(e);
+                d.message = "entity " + hexId(d.entity) + ": " + err.message;
+                out.errors.push_back(std::move(d));
+            }
+            if (!out.errors.empty()) return out;
+        }
+        if (i == frames - 1) renderer.requestReadback();
+        renderer.render();
+        submitted = Clock::now();
+    }
+    // The CPU denoisers read the last frame back themselves; every other image comes from
+    // the frame's staging buffer.
+    const bool cpuDenoise = isRTRenderMode(mode) && (denoise == DenoiseMode::OIDN || denoise == DenoiseMode::NRD);
+    const std::span<const uint8_t> pixels = cpuDenoise ? renderer.getPixelSpan() : renderer.readback();
+    out.readbackMs = msSince(submitted);
+    if (pixels.size() != static_cast<std::size_t>(out.width) * out.height * 4) {
+        out.errors.push_back(error("E_RENDER", "the renderer produced no image"));
+        return out;
+    }
+    if (settings.keepPixels) settings.keepPixels->assign(pixels.begin(), pixels.end());
+    writeCaptureOutputs(pixels, out.width, out.height, r, out);
+    if (!out.errors.empty()) return out;
+    out.frames = frames;
+    out.ms = msSince(start);
+    OHAO_LOG(Debug, render, "capture: setup {:.2f} ms, reset {:.2f} ms, {} frames submitted {:.2f} ms, readback {:.2f} ms, "
+                            "encode {:.2f} ms; GPU frame (timestamps, an earlier frame) {:.2f} ms",
+             setupMs, resetMs, frames, out.ms - setupMs - resetMs - out.readbackMs - out.encodeMs, out.readbackMs,
+             out.encodeMs, renderer.gpuFrameMs());
+    if (renderer.validationEnabled()) out.validationMessages = renderer.validationMessageCount();
+    return out;
+}
+
+} // namespace ohao::runtime

@@ -5,7 +5,6 @@ function(ohao_example name)
     target_include_directories(${name} PRIVATE
         ${CMAKE_SOURCE_DIR}/ohao
         ${CMAKE_SOURCE_DIR}/examples
-        ${CMAKE_SOURCE_DIR}/tools          # ohao/scene_host.hpp
         ${Vulkan_INCLUDE_DIRS}
         ${stb_SOURCE_DIR})
     target_compile_features(${name} PRIVATE cxx_std_20)
@@ -32,6 +31,6 @@ ohao_example(env_demo)
 ohao_example(turntable)
 
 
-# Windowed host: deferred rendering presented through a swapchain.
+# The windowed game: a scene file played by the live host (ohao_runtime).
 ohao_example(ohao_game)
-target_link_libraries(ohao_game PRIVATE ohao_runtime)
+target_link_libraries(ohao_game PRIVATE ohao_runtime ohao_api)

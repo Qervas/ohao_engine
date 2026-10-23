@@ -1,5 +1,5 @@
 add_executable(runtime_tests runtime_tests.cpp)
-target_include_directories(runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS})
+target_include_directories(runtime_tests PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_compile_features(runtime_tests PRIVATE cxx_std_20)
 target_link_libraries(runtime_tests PRIVATE ohao_runtime ohao_gpu_vulkan ${Vulkan_LIBRARIES} ohao_test_harness)
 if(MSVC)

@@ -71,8 +71,10 @@ struct Session::Impl {
     std::string scenePath;   // the last scene.load path and seed: a recording's header names them
     std::optional<uint64_t> sceneSeed;
     ecs::AssetResolver* assets{nullptr};                           // checkAssets
-    RenderHandler render;                                          // render.capture
+    Host* render{nullptr};                                         // render.capture
     HostKind host{HostKind::None};
+    std::optional<ResultImage> image;   // the call's image (render.capture inline), moved to its outcome
+    uint64_t changes{0};                // Session::changeCount
     std::optional<PathPolicy> paths;                               // the sandbox, when serving
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};

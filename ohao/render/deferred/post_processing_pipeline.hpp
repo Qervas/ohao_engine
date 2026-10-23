@@ -59,6 +59,8 @@ public:
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
     void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
     [[nodiscard]] bool getSSAOEnabled() const { return m_ssaoEnabled; }
+    [[nodiscard]] bool getBloomEnabled() const { return m_bloomEnabled; }
+    [[nodiscard]] bool getTAAEnabled() const { return m_taaEnabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
     // Forget TAA's history, as on a fresh pipeline (DeferredRenderer::resetTemporalState).
     void resetHistory() noexcept;

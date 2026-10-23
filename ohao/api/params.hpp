@@ -141,13 +141,19 @@ struct WorldRestoreParams {
     std::string name;
 };
 
+enum class ImageFormat : uint8_t { jpeg, png };
+
 struct RenderCaptureParams {
-    std::string path;
+    std::optional<std::string> path;
+    bool inlineImage{false};   // "inline"
+    ImageFormat format{ImageFormat::jpeg};
+    int32_t maxSize{768};
+    std::optional<std::vector<int32_t>> region;
     CaptureMode mode{CaptureMode::deferred};
     int32_t spp{16};
     int32_t frames{0};
-    int32_t width{1920};
-    int32_t height{1080};
+    std::optional<int32_t> width;
+    std::optional<int32_t> height;
     Denoiser denoise{Denoiser::none};
     std::vector<PostEffect> post;
     std::optional<float> exposure;

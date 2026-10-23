@@ -22,7 +22,7 @@
 #include "ecs/scene_view.hpp"
 #include "example_scenes.hpp"
 #include "gpu/vulkan/renderer.hpp"
-#include "ohao/scene_host.hpp"
+#include "runtime/scene_view_apply.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
@@ -82,7 +82,7 @@ Shot shoot(const Setup& s, ecs::AssetResolver& assets) {
         if (s.handView) {
             s.handView(renderer);
         } else {
-            const auto applied = host::applySceneView(renderer, ecs::resolveSceneView(world), assets);
+            const auto applied = runtime::applySceneView(renderer, ecs::resolveSceneView(world), assets);
             if (!applied.camera || !applied.environment || !applied.warnings.empty())
                 shot.note += "the scene view was not fully applied; ";
         }

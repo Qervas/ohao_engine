@@ -94,7 +94,7 @@
      "env": {"OHAO_VALIDATION": "1"},
      "argv": ["ohao", "run", "assets/scenes/cornell_box.scene.json", "--render", "build/cli_tmp/cornell.png",
               "--mode", "deferred"],
-     "exit": 0, "contains": ["\"frames\":10", "\"validation\":0}"]},
+     "exit": 0, "contains": ["\"frames\":1,", "\"validation\":0}"]},
     {"name": "validation_helmet_deferred", "gpu": true, "timed": true,
      "_note": "Test 18, the helmet room with model_viewer's post effects.",
      "env": {"OHAO_VALIDATION": "1"},

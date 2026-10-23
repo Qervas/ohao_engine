@@ -1,6 +1,11 @@
 {
-  "comment": "Sub-project 4 spec 'Performance / Budgets', CPU part (serve_bench; medians, Release, reference machine). Step 9 adds the GPU budgets. Changing a budget needs Frank's OK.",
+  "comment": "Sub-project 4 spec 'Performance / Budgets' (serve_bench; medians, Release, reference machine). CPU: ohao serve headless with bench10k. GPU (window_*, reader_*): ohao serve --window 1280x720, Cornell deferred, lockstep, no post. Changing a budget needs Frank's OK.",
   "budgets": {
+    "window_step_present_ms": 8,
+    "window_readback_ms": 2,
+    "window_capture_inline_ms": 20,
+    "window_capture_png_ms": 30,
+    "reader_cpu_idle_600_ms": 1,
     "world_info_rpc_ms": 0.15,
     "transport_overhead_ms": 0.10,
     "world_query_one_rpc_ms": 0.20,

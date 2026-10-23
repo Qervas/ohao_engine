@@ -104,6 +104,8 @@ function(ohao_register_harness_tests)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)
     endif()
+    # The live host (sub-project 4, tests 16 and 17): ohao serve --window driven end to end.
+    ohao_add_python_test(check_live LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/check_live.py)
 
     # Long gates
     # Diff images for failing scenes and the per-scene JSON go to build/golden_diff/.

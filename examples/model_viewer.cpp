@@ -25,7 +25,7 @@
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
 #include "example_scenes.hpp"
-#include "ohao/scene_host.hpp"
+#include "runtime/scene_view_apply.hpp"
 
 #include <iostream>
 #include <memory>
@@ -145,7 +145,7 @@ int main(int rawArgc, char* rawArgv[]) {
         ecs::attachModel(world, scene.model, renderer.renderScene(), renderer.getTextureManager(), *model, "Model", &mat);
     }
     std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
-    for (const auto& w : host::applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
+    for (const auto& w : runtime::applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
         std::cerr << "warning: " << w << "\n";
     auto& camera = renderer.getCamera();
 

@@ -82,9 +82,13 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "component, the id generator and the frame."},
         {"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
          "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
-        {"render.capture", p.find<RenderCaptureParams>(), "{path, frames, ms, validation?}",
-         "Renders the world through its Camera and Environment to a PNG. Needs a host with a GPU; the renderer "
-         "starts on first use. post turns on deferred effects."},
+        {"render.capture", p.find<RenderCaptureParams>(),
+         "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?} (+ the "
+         "inline image)",
+         "Renders the world through its Camera and Environment: frames from a reset, the last kept, to a PNG "
+         "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
+         "at its own size, deferred; in realtime it returns its next presented frame (deterministic false). post "
+         "turns on deferred effects."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
          "Engine log records after since (pass the last read's next), filtered by level and channel."},
     };
@@ -581,12 +585,43 @@ bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& par
     return true;
 }
 
+std::string base64(std::string_view bytes) {
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string s;
+    s.reserve((bytes.size() + 2) / 3 * 4);
+    std::size_t i = 0;
+    for (; i + 3 <= bytes.size(); i += 3) {
+        const uint32_t v = (static_cast<uint8_t>(bytes[i]) << 16) | (static_cast<uint8_t>(bytes[i + 1]) << 8) |
+                           static_cast<uint8_t>(bytes[i + 2]);
+        s += kAlphabet[v >> 18];
+        s += kAlphabet[(v >> 12) & 63];
+        s += kAlphabet[(v >> 6) & 63];
+        s += kAlphabet[v & 63];
+    }
+    if (const std::size_t rest = bytes.size() - i; rest > 0) {
+        uint32_t v = static_cast<uint8_t>(bytes[i]) << 16;
+        if (rest == 2) v |= static_cast<uint8_t>(bytes[i + 1]) << 8;
+        s += kAlphabet[v >> 18];
+        s += kAlphabet[(v >> 12) & 63];
+        s += rest == 2 ? kAlphabet[(v >> 6) & 63] : '=';
+        s += '=';
+    }
+    return s;
+}
+
 bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out) {
     RenderCaptureParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
-    if (p.path.empty()) {
-        ctx.error("E_COMMAND", params, "render.capture needs a \"path\" for the PNG", "{\"path\": \"out.png\"}");
+    if (!p.path && !p.inlineImage) {
+        ctx.error("E_COMMAND", params, "render.capture needs a \"path\" for the PNG, or \"inline\": true for a preview",
+                  "{\"path\": \"out.png\"} or {\"inline\": true}");
+        return badParams(s);
+    }
+    if (p.path && p.path->empty()) {
+        ctx.push("path");
+        ctx.error("E_COMMAND", *ctx.doc.member(params, "path"), "the path is empty", "a file name such as \"out.png\"");
+        ctx.pop();
         return badParams(s);
     }
     if (p.exposure && !(*p.exposure > 0.0f)) {
@@ -596,12 +631,19 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
         ctx.pop();
         return badParams(s);
     }
+    if (p.region && (p.region->size() != 4 || (*p.region)[2] < 1 || (*p.region)[3] < 1)) {
+        ctx.push("region");
+        ctx.error("E_COMMAND", *ctx.doc.member(params, "region"), "region is [x, y, w, h] with w and h at least 1",
+                  "[0, 0, 640, 360]");
+        ctx.pop();
+        return badParams(s);
+    }
     if (!s.render) {
         ctx.error("E_COMMAND", params, "this session has no renderer; render.capture needs a host with a GPU (ohao run)");
         return false;
     }
     std::string file;
-    if (!usePath(s, params, "path", p.path, PathUse::Write, ctx, file)) return false;
+    if (p.path && !usePath(s, params, "path", *p.path, PathUse::Write, ctx, file)) return false;
     static constexpr const char* kModes[] = {"deferred", "rt_realtime", "rt_offline"};
     static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "atrous", "dlss"};
     static constexpr const char* kEffects[] = {"bloom", "taa", "ssao"};
@@ -610,22 +652,36 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     r.mode = kModes[static_cast<int>(p.mode)];
     r.spp = p.spp;
     r.frames = p.frames;
-    r.width = static_cast<uint32_t>(p.width);
-    r.height = static_cast<uint32_t>(p.height);
+    if (p.width) r.width = static_cast<uint32_t>(*p.width);
+    if (p.height) r.height = static_cast<uint32_t>(*p.height);
     r.denoise = kDenoisers[static_cast<int>(p.denoise)];
     for (const PostEffect e : p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
     r.exposure = p.exposure;
-    RenderOutcome o = s.render(r);
+    r.inlineImage = p.inlineImage;
+    r.format = p.format == ImageFormat::png ? "png" : "jpeg";
+    r.maxSize = p.maxSize;
+    if (p.region) r.region = std::array<int32_t, 4>{(*p.region)[0], (*p.region)[1], (*p.region)[2], (*p.region)[3]};
+    RenderOutcome o = s.render->capture(r);
     if (!o.errors.empty()) {
         reportAll(ctx, o.errors);
         return false;
     }
     out.beginObject();
-    out.key("path"); out.string(p.path);
+    if (p.path) { out.key("path"); out.string(*p.path); }
+    out.key("width"); out.uint64(o.width);
+    out.key("height"); out.uint64(o.height);
+    if (p.inlineImage) {
+        out.key("imageSize");
+        out.beginArray(); out.uint64(o.imageWidth); out.uint64(o.imageHeight); out.endArray();
+    }
     out.key("frames"); out.int64(o.frames);
     out.key("ms"); out.float32(static_cast<float>(o.ms));
+    out.key("readbackMs"); out.float32(static_cast<float>(o.readbackMs));
+    out.key("encodeMs"); out.float32(static_cast<float>(o.encodeMs));
+    out.key("deterministic"); out.boolean(o.deterministic);
     if (o.validationMessages) { out.key("validation"); out.uint64(*o.validationMessages); }
     out.endObject();
+    if (p.inlineImage) s.image = ResultImage{o.imageMime, base64(o.image)};
     return true;
 }
 
@@ -659,16 +715,18 @@ bool logRead(Session::Impl& s, const JsonDocument&, const JsonNode& params, Deco
 struct MethodEntry {
     std::string_view name;
     MethodFn fn;
+    bool mutates{false};   // may change the world (Session::changeCount)
 };
 constexpr MethodEntry kDispatch[] = {
     {"engine.info", engineInfo},     {"schema.get", schemaGet},         {"scene.validate", sceneValidate},
-    {"scene.load", sceneLoad},       {"scene.save", sceneSave},         {"world.info", worldInfo},
-    {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply},
-    {"world.step", worldStep},       {"time.get", timeGet},             {"time.set", timeSet},
+    {"scene.load", sceneLoad, true}, {"scene.save", sceneSave},         {"world.info", worldInfo},
+    {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply, true},
+    {"world.step", worldStep, true}, {"time.get", timeGet},             {"time.set", timeSet},
     {"world.hash", worldHash},       {"world.diff", worldDiff},         {"input.inject", methodInputInject},
-    {"input.state", methodInputState}, {"input.record", methodInputRecord}, {"input.replay", methodInputReplay},
+    {"input.state", methodInputState}, {"input.record", methodInputRecord},
+    {"input.replay", methodInputReplay, true},
     {"world.snapshot", worldSnapshot},
-    {"world.restore", worldRestore}, {"render.capture", renderCapture}, {"log.read", logRead},
+    {"world.restore", worldRestore, true}, {"render.capture", renderCapture}, {"log.read", logRead},
 };
 
 const MethodEntry* findMethod(std::string_view name) {
@@ -900,11 +958,18 @@ ecs::World& Session::world() noexcept { return m->world; }
 uint64_t Session::frame() const noexcept { return m->time->frame(); }
 Timeline& Session::timeline() noexcept { return *m->time; }
 void Session::setTimeline(Timeline& timeline) noexcept { m->time = &timeline; }
-void Session::step(std::span<const InputEvent> deviceEvents, float dt) { stepOnce(*m, deviceEvents, dt); }
+void Session::step(std::span<const InputEvent> deviceEvents, float dt) {
+    ++m->changes;
+    stepOnce(*m, deviceEvents, dt);
+}
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
-void Session::setRenderHandler(RenderHandler handler) { m->render = std::move(handler); }
+void Session::setHost(Host* host) noexcept {
+    m->render = host;
+    if (host) m->host = host->kind();
+}
 void Session::setHostKind(HostKind host) noexcept { m->host = host; }
+uint64_t Session::changeCount() const noexcept { return m->changes; }
 void Session::setPathPolicy(PathPolicy policy) { m->paths = normalizePolicy(std::move(policy)); }
 
 namespace {
@@ -920,6 +985,8 @@ CallStatus run(Session::Impl& m, const MethodEntry& method, const JsonDocument& 
     m.control = control;
     m.paramsFailed = false;
     m.cancelled = false;
+    m.image.reset();
+    if (method.mutates) ++m.changes;   // counted whatever the outcome: a cancelled step moved the world too
     ecs::WorldEntityIds ids(m.world);
     out.entityIds = &ids;
     const bool ok = method.fn(m, doc, params, ctx, out) && ctx.errors.empty();
@@ -944,8 +1011,10 @@ CallOutcome Session::call(std::string_view method, const JsonDocument& doc, cons
     DecodeContext ctx(doc);
     JsonWriter out(256);
     o.status = run(*m, *found, doc, params, ctx, out, control);
-    if (o.status == CallStatus::Ok) o.result = out.take();
-    else if (o.status != CallStatus::Cancelled) {
+    if (o.status == CallStatus::Ok) {
+        o.result = out.take();
+        o.image = std::exchange(m->image, std::nullopt);
+    } else if (o.status != CallStatus::Cancelled) {
         o.errors = std::move(ctx.errors);
         if (o.errors.empty()) {
             Diagnostic d;
@@ -975,8 +1044,25 @@ std::string Session::call(std::string_view method, std::string_view params) {
     out.beginObject();
     out.key("result");
     if (run(*m, *found, doc, doc.root(), ctx, out, nullptr) != CallStatus::Ok) return errorEnvelope(ctx.errors);
-    out.endObject();
-    return out.take();
+    if (!m->image) {
+        out.endObject();
+        return out.take();
+    }
+    const std::string result = out.take();   // {"result":{...}
+    const ResultImage image = *std::exchange(m->image, std::nullopt);
+    return withImage(result, image) + "}";
+}
+
+std::string withImage(std::string_view result, const ResultImage& image) {
+    std::string s(result.substr(0, result.size() - 1));   // the object without its closing brace
+    s.reserve(s.size() + image.base64.size() + 64);
+    if (!s.empty() && s.back() != '{') s += ',';
+    s += "\"image\":\"";
+    s += image.base64;   // base64 needs no escaping
+    s += "\",\"mimeType\":\"";
+    s += image.mimeType;
+    s += "\"}";
+    return s;
 }
 
 } // namespace ohao::api

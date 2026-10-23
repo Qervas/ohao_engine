@@ -1,8 +1,7 @@
 #pragma once
-// The host side of the scene view: applies a world's Camera and Environment
-// (ecs::resolveSceneView) to a VulkanRenderer through its existing camera and
-// environment setters. Shared by cornell_box, model_viewer and (step 9) the ohao CLI.
-// Header-only: hosts already link the renderer and ohao_ecs.
+// Applies a world's Camera and Environment (ecs::resolveSceneView) to a VulkanRenderer
+// through its camera and environment setters. Shared by the examples, the headless
+// RenderHost and the window's LiveHost. Header-only.
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_view.hpp"
 #include "gpu/vulkan/renderer.hpp"
@@ -11,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace ohao::host {
+namespace ohao::runtime {
 
 struct SceneViewApplied {
     bool camera{false};
@@ -52,4 +51,4 @@ inline SceneViewApplied applySceneView(VulkanRenderer& renderer, const ecs::Scen
     return applied;
 }
 
-} // namespace ohao::host
+} // namespace ohao::runtime

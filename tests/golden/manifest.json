@@ -103,19 +103,19 @@
     },
     {
       "name": "cli_cornell_box_deferred",
-      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred --frames 7",
       "golden": "tests/golden/cornell_box_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. 10 frames and no post effects: what the example does. Exact, as cornell_box_deferred: the example and the CLI give the same pixels."
+      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. No post effects; 7 frames because the example renders 10 and its readback lags the last frame by MAX_FRAMES_IN_FLIGHT (3), so its PNG is frame 7, while a capture keeps the last frame it renders (sub-project 4 step 9). The RT GI history makes frame 7 differ from frame 1 or 10. Exact, as cornell_box_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_damaged_helmet_deferred",
-      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 27 --post taa,ssao,bloom --exposure 1",
       "golden": "tests/golden/damaged_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6); the scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
+      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6) and, its readback lagging by MAX_FRAMES_IN_FLIGHT (3), writes frame 27; a capture keeps the last frame it renders, hence --frames 27. The scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_cornell_box_rt_realtime",
