@@ -139,10 +139,19 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
   Cornell). It clears on reboot; it is not your change.
-- Monograph: run its Python from the repo root, never from `site/` (that directory
-  shadows the stdlib `site` module). Removing a unit takes three edits: the `.md`, its
-  `page()` entry in `site/tools/monograph/tree/<module>.py`, and its `author_rich.py`
-  block, or the stale page keeps being served.
+- Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
+  (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
+  is the one exception: it imports `tools.monograph`, so it runs from `site/`.
+  `build.py` has no `__main__`, so `python -m tools.monograph.build` does nothing.
+  Removing a unit takes three edits: the `.md`, its `page()` entry in
+  `site/tools/monograph/tree/<module>.py`, and its `author_rich.py` block, or the stale
+  page keeps being served.
+
+```console
+$ python site/tools/check_unit.py reflection/api > /dev/null
+$ python site/tests/test_monograph_structure.py > /dev/null 2>&1
+$ cd site && python -c "from tools.monograph.build import build; build()" > /dev/null   # slow
+```
 
 ## Conventions
 

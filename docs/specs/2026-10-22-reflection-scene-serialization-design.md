@@ -737,6 +737,7 @@ gameplay systems mutate simulation state, and snapshots capture both):
 { "op": "component.set", "id": "…", "type": "Light", "value": { … } }
 { "op": "component.remove", "id": "…", "type": "Light" }
 { "op": "field.set", "id": "…", "path": "/Light/intensity", "value": 12.5 }
+{ "op": "entity.duplicate", "id": "…", "name": "Lamp 2", "parent": "…", "recursive": true }
 ```
 
 - **Atomic batches:**
@@ -769,7 +770,17 @@ gameplay systems mutate simulation state, and snapshots capture both):
     typed decoder, so limits and types are checked exactly as in files. A field of a
     component the entity lacks is `E_COMMAND` (use `component.set`).
   - Command-level `id` and `parent` also accept `"$k"`: the entity created by command
-    `k` of the same batch (an earlier `entity.create`).
+    `k` of the same batch (an earlier `entity.create` or `entity.duplicate`).
+  - `entity.duplicate` (added in step 10):
+    - copies the entity and, by default, its subtree with fresh ids and creation order:
+      every saved component and preserved component;
+    - places the copy under `parent` (default: the source's parent), named `name`
+      (default: the source's);
+    - points Parent references inside the subtree at the copies; any other reference
+      keeps its target;
+    - refuses a subtree holding a singleton (`E_SINGLETON`) or a parent inside the
+      copied subtree (`E_PARENT_CYCLE`);
+    - its inverse is `entity.destroy` of the copy.
 - **Results:** `results[i]` is the id that command `i` created, else `null`.
 - **Inverses:** every applied batch returns its inverse batch. Undo/redo is replaying
   inverses (the inverse of the inverse redoes), and the editor later coalesces a gizmo
@@ -1109,6 +1120,14 @@ Recorded (step 9, process wall time, median of 7 after a warm-up; `scene_bench
 | `ohao run --steps 1` bench10k | 45.8 ms | 44.4–47.1 ms |
 | Cornell load-to-first-frame (`ohao run … --render --mode deferred --frames 1`, renderer start included) | 481 ms | 401–625 ms |
 
+At the end of step 10, two runs of `scene_bench --check`:
+- **bench10k:** every budget passes (save 9.04–9.15 ms, validate 8.17–8.33 ms, load
+  13.1 ms, apply 0.180–0.185 ms).
+- **bench100k `restore_empty`:** ×10.7 (pass), then ×14.9 (over). The 100k median was
+  24.7 and 24.8 ms; the paired 10k median was 2.30 and 1.66 ms. The ratio crosses its
+  line on the noise of the small denominator, not on a change in the work.
+- Every other ratio passes (×0.9–×11.1).
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1236,8 +1255,10 @@ These are cheap, and they document what 3 itself creates:
      - the commit and line-ending rules (`core.autocrlf`);
      - forward-only docs.
 2. **`docs/ARCHITECTURE.md`, a map of the code.** It lists the libraries and their
-   dependency directions, and the frame data flow (game systems → transform →
-   instantiate → extract → `RenderScene` → passes). It also holds recipes with exact
+   dependency directions, and the frame data flow (game systems → instantiate →
+   transform → extract → `RenderScene` → passes; *corrected in step 10*: instantiate
+   has run before transform since step 7, so a mesh it builds gets its world matrix in
+   the same update). It also holds recipes with exact
    files, each one written and then followed once to prove it:
    - add a component (struct, registration with docs/units/limits, completeness test,
      version bump + upgrade when changing it, corpus case);
@@ -1256,6 +1277,26 @@ These are cheap, and they document what 3 itself creates:
    - `scene_bench` (JSON plus budget exit code);
    - the new test suites (a final one-line JSON summary
      `{"suite","passed","failed","failures":[…]}` after the human output).
+
+*As built (step 10):*
+- **Every command in the docs is run by a test.** `tests/docs/check_docs.py` runs the
+  `console` blocks of `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/agents/ohao-cli.md` and
+  the skills, and compares the output they show. `# slow` and `# gpu` mark long or GPU
+  commands.
+- **The recipes were followed with real features, not throwaways.** Each one was
+  written, then followed once, and corrected where reality differed:
+  - add a component: `Spin`, a constant turn about a local axis;
+  - add a system: the spin system, the first engine-provided system. It is built into
+    `World` and runs before `transform`; the spec's "engine-provided systems" through
+    which agents build behaviour start here;
+  - add an API command: `entity.duplicate`;
+  - add a test suite: `systems_tests`.
+- **CLI fixes found by writing the guide:**
+  - Git Bash rewrites arguments that start with `/`, so `--fields` takes `Type/field`;
+  - `apply` gained `--seed`, because the ids of created entities were random.
+- **Skills are written but not installed.** `.claude/` is protected in the session that
+  wrote them, so the three skills wait in `docs/agents/skills/` with a two-command
+  install. `.gitignore` now tracks `.claude/skills/` (the rest of `.claude/` stays local).
 
 ### In sub-project 4, alongside `ohao serve`
 
@@ -1559,6 +1600,13 @@ Each step ends with the engine running and every suite green.
        directory of `ohao/`, for the executable. It now accepts files only.
 10. Agent guide, `AGENTS.md`/`CLAUDE.md`, `docs/ARCHITECTURE.md`, skills refresh,
     monograph units, roadmap, change record.
+    - *Done 2026-10-23*, except installing the skills into `.claude/skills/` (see
+      "Engine development by agents", as built).
+    - Also built: `tests/docs/check_docs.py`; `Spin`, the spin system,
+      `entity.duplicate` and `systems_tests` (the recipes, followed once);
+      `--fields` without the slash; `apply --seed`.
+    - The monograph gained a "Reflection & agent API" module (seven units). The
+      citations that steps 7–9 had broken were repaired.
 
 ## Risks
 
