@@ -249,7 +249,7 @@ both canonical and deterministic:
 | `EntityId { uint64_t value; }` | authoring (the entity's key) | Written as the entity's `"id"`, not as a component block. 0 is invalid. |
 | `Name`, `Transform`, `Parent`, `Light` | authoring | `Transform::matrix()` is a member function, not a field. `Parent::entity` is an `EntityRef`. |
 | `MeshSource`, `MaterialOverride` | authoring | New, see below |
-| `Camera`, `Environment` | authoring, singleton | New. A singleton means at most one active `Camera` and at most one `Environment`. |
+| `Camera`, `Environment` | authoring, singleton | New. A singleton means at most one `Camera` and at most one `Environment` per world (*step 8 ruling:* one `Camera`, active or not, rather than one *active* `Camera`; see "Scene view"). |
 | `Children` | runtime | Rebuilt from `Parent` in load order |
 | `WorldTransform` | runtime | Recomputed by `TransformSystem` |
 | `MeshRenderer`, `RenderSlot` | runtime | Built by instantiate and extract |
@@ -344,7 +344,15 @@ void installInstantiate(World&, render::RenderScene&, BindlessTextureManager*, A
 void installInstantiate(World&, std::shared_ptr<InstantiateBackend>, AssetResolver&);
 [[nodiscard]] std::vector<entt::entity> instantiateErrors(const World&);
 
-[[nodiscard]] SceneView resolveSceneView(const World&);  // step 8: active camera params (pitch/yaw from -Z), environment
+// ohao/ecs/scene_view.hpp (step 8)
+struct CameraView { glm::vec3 position; float pitchDeg, yawDeg, fovDeg, nearPlane, farPlane; };
+struct EnvironmentView { std::optional<AssetRef> hdri; float intensity; };
+struct SceneView { std::optional<CameraView> camera; std::optional<EnvironmentView> environment; };
+[[nodiscard]] SceneView resolveSceneView(const World&);
+[[nodiscard]] glm::vec2 pitchYawDegrees(const glm::vec3& direction);   // renderer convention
+
+// tools/ohao/scene_host.hpp (header-only, step 8)
+SceneViewApplied host::applySceneView(VulkanRenderer&, const ecs::SceneView&, const ecs::AssetResolver&);
 ```
 
 - **Trigger:** `MeshSource`/`MaterialOverride` construct, update or replace tags the
@@ -373,9 +381,38 @@ void installInstantiate(World&, std::shared_ptr<InstantiateBackend>, AssetResolv
   triangles or a failed upload.
 - **Scene view:** a host helper (`tools/ohao/scene_host.hpp`, shared with the two
   examples) applies the `SceneView` to `VulkanRenderer` through its existing camera and
-  environment setters. `ohao_ecs` gains no dependency on the renderer camera.
+  environment setters. `ohao_ecs` gains no dependency on the renderer camera. As built
+  in step 8:
+  - **Camera pose.** It is the camera entity's world matrix, computed from `Transform`
+    and `Parent` with the transform system's arithmetic (root first, `parent * local`).
+    It is therefore right before the first update and bit-equal to `WorldTransform`
+    after it.
+  - **Direction to angles.** The view direction (world -Z) becomes the renderer's
+    pitch/yaw: `pitch = asin(dir.y)`, `yaw = atan2(dir.z, dir.x)`. They are computed in
+    double and rounded once to float, and `-0` is turned into `+0`. Looking down -Z
+    gives exactly `(0, -90)`, the value the examples set by hand.
+  - **What the renderer camera cannot hold.** Roll is ignored, because the renderer
+    camera is pitch/yaw with +Y up. The renderer clamps pitch to ±89°.
+  - **Singletons (ruling).** At most one `Camera` per world, active or not; the spec
+    said one *active* `Camera`. The registry's existing `singleton()` rule enforces this
+    on load and in commands, with no special case. An inactive camera leaves the host's
+    own camera alone. Allowing several cameras later relaxes a constraint, so it breaks
+    no file.
+  - **Applying the view.** `applySceneView` sets the position, then
+    `setPerspectiveProjection(fov, aspect, near, far)` keeping the render target's
+    aspect, then the pitch/yaw. For the hdri it sets the resolver's absolute path
+    (warning if the path is rejected), and it always sets `setEnvIntensityScale`.
+  - **What it leaves alone.** It does not reset path-tracer accumulation: a host that
+    changes the view between frames calls `notifyCameraChanged()`. Removing an hdri
+    does not unload a map the renderer has already loaded, because the renderer has no
+    unload.
+  - **Asset checks.** `checkAssets` also covers `Environment.hdri`, reporting
+    `E_ASSET_NOT_FOUND` at `/entities/i/Environment/hdri/path`.
 - `spawnModel` stays for in-memory models. Such an entity saves without a mesh, and the
-  save report warns `W_UNSAVEABLE_MESH` with its ID.
+  save report warns `W_UNSAVEABLE_MESH` with its ID. *Step 8* split out
+  `ecs::attachModel(world, entity, ...)`, which attaches an in-memory model to an
+  existing entity (`spawnModel` = `create` + `attachModel`). A host can then keep the
+  entity's creation order. `saveSceneFile` also takes an optional `SaveReport*`.
 
 ## Scene file format
 
@@ -583,7 +620,7 @@ file.)
   | References | `E_ENTITY_NOT_FOUND` (an entity reference other than `Parent`) |
   | Warnings | `W_UNKNOWN_COMPONENT`, `W_UNSAVEABLE_MESH` (save) |
   | IDs and hierarchy | `E_ID_INVALID`, `E_ID_DUPLICATE`, `E_PARENT_MISSING`, `E_PARENT_CYCLE`, `E_SINGLETON` |
-  | Assets | `E_ASSET_NOT_FOUND` (validate with `checkAssets` / `--check-assets`, and instantiate), `E_ASSET_INVALID`, `E_MESH_INVALID` (instantiate) |
+  | Assets | `E_ASSET_NOT_FOUND` (validate with `checkAssets` / `--check-assets` for model assets and environment images, and instantiate), `E_ASSET_INVALID`, `E_MESH_INVALID` (instantiate) |
   | API and commands | `E_METHOD`, `E_COMMAND`, `E_COMPONENT_UNKNOWN`, `E_PATH`, `E_SNAPSHOT_UNKNOWN` (and `E_ENTITY_NOT_FOUND` for command targets) |
   | Limits | `E_TOO_MANY_ERRORS` |
 
@@ -956,6 +993,31 @@ decision 1). The options are:
 3. a codec rewrite: a validate that streams without the value tree, and per-type
    specialized writers.
 
+*Step 8 note:* bench10k is now the full spec scene: the n generated entities plus one
+`Camera` (parented to nothing, pitched down) and one `Environment` with an hdri. That is
+10,002 entities, still 5.13 MB pretty. The bench's own checks now count the world's
+entities instead of assuming n.
+
+Three gate runs gave these medians:
+
+| | Measured | Budget |
+|---|---|---|
+| save pretty | 14.3–14.5 ms | 10 ms |
+| validate | 14.0–14.9 ms | 10 ms |
+| load | 18.7–19.3 ms | 20 ms |
+| snapshot and the three restores | — | all within |
+| apply | 0.17–0.21 ms | 0.2 ms; one noisy run over |
+| query | — | within |
+
+Of the bench100k scaling ratios, all pass except `restore_empty`, at ×12.4–16.5 (limit
+12×). An A/B with the two new entities removed gives the same absolute bench100k
+`restore_empty` (27.7 ms, against 26.4–28.2 ms with them) and ×12.0. The ratio swings
+with the paired bench10k sample (1.6–2.3 ms), and a column's restore cost is O(its
+rows), so the new single-row columns add nothing.
+
+In the laptop's current state the whole bench100k column runs about twice as fast as in
+step 7, and this ratio sits at the 12× line. It joins open decision 1.
+
 | Operation (bench10k) | Budget (median) |
 |---|---|
 | `saveScene` pretty, World → string | ≤ 10 ms |
@@ -1140,6 +1202,22 @@ These are cheap, and they document what 3 itself creates:
   - their inline builders become `QuadPrim`/`BoxPrim` entities;
   - they author their camera and environment as entities and apply them through the
     shared scene-host helper.
+  - *As built (step 8):*
+    - **Shared builders.** Both worlds come from GPU-free builders in
+      `examples/example_scenes.hpp` (`buildCornellBox`, `buildModelViewerScene`), so
+      tests build them too. The camera and environment entities come first; they draw
+      and light nothing, so draw and light order are unchanged.
+    - **Fixed id seeds.** Rendering and `--save-scene` seed the ids the same way
+      (`kCornellBoxIdSeed`, `kModelViewerIdSeed`).
+    - **Argument handling.** `--save-scene <path>` and `--save-scene=<path>` are taken
+      out of argv before the positional arguments are parsed, so they can appear
+      anywhere. `model_viewer <model> [flip] --save-scene <path>` works.
+    - **Where the model comes from.** The viewer resolves its model against the
+      working directory, the project root. A model inside the project is a `ModelAsset`
+      loaded through the resolver, whose cache instantiate reuses. One outside it is
+      attached in memory with `attachModel` (`W_UNSAVEABLE_MESH` on save).
+    - **Failed meshes.** If any `InstantiateError` exists after the first update, the
+      example exits with code 2 instead of rendering a scene with missing meshes.
 - **`scene_bench`** generates the bench scenes, runs the budget gate and dumps JSON.
 - **Checked-in scenes:**
   - `assets/scenes/cornell_box.scene.json`;
@@ -1237,12 +1315,29 @@ CLI and GPU tests:
 18. **Validation:** `ohao run` with a render under `OHAO_VALIDATION=1` reports zero
     messages for both scenes (deferred). `check_validation.py` stays clean.
 19. **Benchmarks:** `scene_bench --check` passes every budget in "Performance".
+20. **Scene view** (added in step 8):
+    - CPU (`scene_tests` t20, `api_tests` t20):
+      - axis directions give exact pitch/yaw and never `-0`;
+      - the camera pose follows parents and is bit-equal to `WorldTransform`;
+      - an inactive camera or a missing camera gives no view;
+      - a second `Camera` (even an inactive one) or a second `Environment` is
+        `E_SINGLETON`, in files and in commands, with the batch rolled back;
+      - `checkAssets` covers the hdri;
+      - the two example scenes save deterministically, round-trip byte-identically,
+        pass `checkAssets`, and resolve to the camera the examples set by hand.
+    - GPU (`scene_view_gpu_test`, 960x540, fresh renderer per render): for the Cornell
+      box (deferred) and the helmet room (RT offline), these three renders must match:
+      the hand-set camera and environment, the scene view applied, and the scene saved,
+      loaded and applied.
+      - Deferred is bit-exact, with 0 validation messages.
+      - RT allows its own rare 1-LSB flips: at most 16 bytes may differ, each by 1 (see
+        "Risks").
 
 ## Done criteria
 
 All verified by running, none estimated.
 
-- Tests 1–19 pass. All existing suites and goldens stay green.
+- Tests 1–20 pass. All existing suites and goldens stay green.
 - `ohao schema` emits both files, and an agent-facing guide `docs/agents/ohao-cli.md`
   describes the CLI, the methods, the commands and the error codes. It was checked by
   running every example in it.
@@ -1297,6 +1392,18 @@ Each step ends with the engine running and every suite green.
    - The RT shared-BLAS risk is decided when the examples convert in step 8.
 8. `Camera`, `Environment`, scene view. `cornell_box`/`model_viewer` converted, with
    `--save-scene`; their existing goldens must still pass.
+   - *Done 2026-10-23.* The goldens pass with unchanged tolerances. Both Cornell scenes
+     stay at max_abs 0.
+   - Also built:
+     - `ecs/scene_view` and the header-only `tools/ohao/scene_host.hpp`;
+     - `examples/example_scenes.hpp`;
+     - `ecs::attachModel`, and a `SaveReport*` on `saveSceneFile`;
+     - `checkAssets` for `Environment.hdri`;
+     - the full bench scene;
+     - test 20 (added to the test plan).
+   - Fixed: `OHAO_VALIDATION=0` (any value, in fact) used to enable validation. Now an
+     unset or empty value, or `0`, means off, as documented.
+   - The budget gate still waits on open decision 1.
 9. `ohao` CLI, checked-in scenes, scene goldens, CLI goldens, restore-render test.
    Tests 14–18, then the full set for 19.
 10. Agent guide, `AGENTS.md`/`CLAUDE.md`, `docs/ARCHITECTURE.md`, skills refresh,
@@ -1307,11 +1414,32 @@ Each step ends with the engine running and every suite green.
 - **Camera parity.** The renderer camera takes Euler pitch/yaw, and quaternion →
   pitch/yaw may be off by an ulp, which would break the exact Cornell goldens. Test 15
   catches it at step 8. The fallback is `Camera::setOrientation(front, up)` on the
-  renderer camera, ledgered as a ruling.
+  renderer camera, ledgered as a ruling. *Resolved in step 8, no fallback needed.*
+  - Pitch/yaw are computed in double and rounded once, so -Z gives exactly `(0, -90)`.
+  - The converted examples render byte-identically to the pre-conversion binaries for
+    `cornell_box` RT, `cornell_box` deferred and `damaged_helmet` RT, all in one
+    session.
+  - `scene_view_gpu_test` checks the hand-set camera against the scene view against a
+    loaded file on every run.
 - **Shared meshes.** Caching meshes by `MeshSource` turns the two Cornell spheres into
   one shared BLAS. Traversal should be unchanged, but BLAS float ordering might not be.
   The exact RT golden decides. The fallback is per-entity meshes as today, with sharing
-  recorded as a follow-up.
+  recorded as a follow-up. *Resolved in step 8:* the converted `cornell_box` RT render,
+  with its two spheres sharing one BLAS, is byte-identical to the old per-entity one, and
+  the `cornell_box` golden stays at max_abs 0.
+- **Run-to-run noise in the RT and deferred paths (found in step 8, pre-existing).**
+  - **RT offline flips.** RT offline is not perfectly deterministic: in about one run
+    in seven, one byte of a 960x540 frame differs by 1. `scene_view_gpu_test` allows at
+    most 16 such bytes.
+  - **Deferred helmet.** The helmet deferred render varies from run to run on about
+    1.7% of pixels (max_abs 1–3), so only a statistical A/B can compare it.
+    - It was compared within one session: the old example source (`spawnModel`) and
+      the converted one, built against the same engine.
+    - Old-against-new differed on 1.9% of pixels. Old-against-old differed on 1.8%,
+      and new-against-new on 1.7%.
+    - The per-pixel modes of the two groups differ on fewer pixels (25k) than the old
+      group's own noise floor (42k). The conversion is invisible there.
+  - Neither is a gate problem: the goldens' tolerances cover both.
 - **The budgets were estimates until step 6 measured them.** They were sized from
   simdjson and `to_chars` throughput with headroom. Step 6 met all of them on the
   current 3.2 MB bench10k after profiling (a new reader, warm memory, a faster pretty
@@ -1412,3 +1540,8 @@ Answered by Frank on 2026-10-22:
      2. allow threads;
      3. rewrite the codec's validate and writer.
    - Until this is ruled, `scene_bench --check` fails on these two lines only.
+   - *Step 8:* on the full scene (10,002 entities with `Camera`/`Environment`), save is
+     about 14.4 ms and validate 14.0–14.9 ms. The bench100k `restore_empty` ratio also
+     reads ×12.4–16.5 against 12×; the A/B under "Budgets" shows it is the same without
+     step 8's entities (×12.0). It needs the same ruling: a looser ratio, or a ratio
+     against standalone medians.

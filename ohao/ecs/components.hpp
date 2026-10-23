@@ -7,6 +7,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -139,6 +140,23 @@ struct InstantiateDirty {};
 struct InstantiateError {
     std::string code;      // E_ASSET_NOT_FOUND, E_ASSET_INVALID, E_MESH_INVALID
     std::string message;
+};
+
+// ---- the view (ecs/scene_view.hpp; applied to a renderer by the host) ------------------------
+
+// The scene camera, one per world. Its pose is the entity's world transform: the view
+// looks along -Z with +Y up (roll is ignored; the renderer camera is pitch/yaw).
+struct Camera {
+    float fovDeg{45.0f};       // vertical field of view
+    float nearPlane{0.1f};
+    float farPlane{100.0f};
+    bool active{true};         // false: the host keeps its own camera
+};
+
+// Image-based lighting, one per world. No hdri: the renderer's default sky/black.
+struct Environment {
+    std::optional<AssetRef> hdri;
+    float intensity{1.0f};
 };
 
 } // namespace ohao::ecs

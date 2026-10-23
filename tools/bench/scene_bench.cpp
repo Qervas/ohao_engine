@@ -12,8 +12,8 @@
 // code fails. Results go to scene_bench.json; with --check the exit code is 1 when a
 // median is over its budget or a bench100k median is more than maxRatio times bench10k's.
 //
-// The scene holds the components that exist so far (Name, Transform, Parent, Light,
-// MeshSource, MaterialOverride). The generator gains Camera and Environment in step 8.
+// The scene is the spec's: Name, Transform, Parent, Light, MeshSource, MaterialOverride,
+// and (since step 8) one Camera and one Environment.
 #include "api/session.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
@@ -61,7 +61,8 @@ const reflect::TypeRegistry& engineTypes() {
 // bench10k/bench100k: n entities with Name and Transform (random position, rotation and
 // scale) and a hierarchy up to 8 deep (about 60% of the entities have a parent among the
 // 64 created just before them). 99% are renderables (a MeshSource primitive and a
-// MaterialOverride, from palettes), 1% lights of every type.
+// MaterialOverride, from palettes), 1% lights of every type. Then a camera and an
+// environment entity (n + 2 in all).
 void buildBenchWorld(World& w, int n, uint64_t seed) {
     w.seedIds(seed);
     std::mt19937_64 rng(seed);
@@ -115,6 +116,15 @@ void buildBenchWorld(World& w, int n, uint64_t seed) {
         es.push_back(e);
         depth.push_back(d);
     }
+    // The spec's one camera and one environment, after the n entities (so they leave the
+    // random stream above untouched).
+    Transform cam;
+    cam.position = {0.0f, 20.0f, 120.0f};
+    cam.rotation = glm::angleAxis(glm::radians(-9.5f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const auto c = w.create("MainCamera", cam);
+    w.registry().emplace<ecs::Camera>(c, ecs::Camera{50.0f, 0.1f, 500.0f, true});
+    const auto env = w.create("Environment");
+    w.registry().emplace<Environment>(env, Environment{AssetRef{"assets/env/bench_sky.hdr", {}}, 1.25f});
 }
 
 std::string save(const World& w, JsonLayout layout = JsonLayout::Pretty) {
@@ -224,7 +234,8 @@ public:
             World w;
             check(loadScene(w, m_pretty, engineTypes()) && save(w) == m_pretty, "load does not reproduce the scene");
         }
-        check(takeSnapshot(m_world, engineTypes()).rows() == static_cast<std::size_t>(m_n), "the snapshot misses entities");
+        const std::size_t entities = m_world.idCount();   // m_n plus the camera and environment
+        check(takeSnapshot(m_world, engineTypes()).rows() == entities, "the snapshot misses entities");
         RestoreStats st = restoreSnapshot(m_world, m_snap);
         check(st.created == 0 && st.destroyed == 0 && st.changed == 0, "an unchanged restore wrote something");
         moveOnePercent();
@@ -233,7 +244,7 @@ public:
         {
             World w;
             st = restoreSnapshot(w, m_snap);
-            check(st.created == static_cast<std::size_t>(m_n) && save(w) == m_pretty, "restore into an empty world differs");
+            check(st.created == entities && save(w) == m_pretty, "restore into an empty world differs");
         }
         check(m_session->call("world.apply", m_batch).rfind("{\"result\":{\"applied\":100,", 0) == 0, "world.apply failed");
         (void)restoreSnapshot(m_world, m_snap);
@@ -243,7 +254,7 @@ public:
     }
 
     [[nodiscard]] const std::string& name() const { return m_name; }
-    [[nodiscard]] int entities() const { return m_n; }
+    [[nodiscard]] int entities() const { return static_cast<int>(m_world.idCount()); }
     [[nodiscard]] std::size_t prettyBytes() const { return m_pretty.size(); }
     [[nodiscard]] std::size_t compactBytes() const { return m_compact.size(); }
 

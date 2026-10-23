@@ -73,6 +73,32 @@ struct RenderCliOptions {
     return fallback;
 }
 
+/// argv with "--save-scene <path>" (or "--save-scene=<path>") taken out, so the
+/// positional arguments keep their places wherever the option appears.
+struct SaveSceneArgs {
+    std::vector<char*> argv;              // the remaining arguments, argv[0] first
+    std::optional<std::string> path;      // --save-scene's value
+    bool missingValue{false};             // --save-scene was last, with no path
+    [[nodiscard]] int argc() const noexcept { return static_cast<int>(argv.size()); }
+};
+
+[[nodiscard]] inline SaveSceneArgs extractSaveScene(int argc, char* argv[]) {
+    SaveSceneArgs out;
+    for (int i = 0; i < argc; ++i) {
+        const std::string_view arg = argv[i] ? std::string_view{argv[i]} : std::string_view{};
+        if (i > 0 && arg == "--save-scene") {
+            if (i + 1 < argc && argv[i + 1]) out.path = std::string(argv[++i]);
+            else out.missingValue = true;
+        } else if (i > 0 && arg.starts_with("--save-scene=")) {
+            out.path = std::string(arg.substr(13));
+            if (out.path->empty()) out.missingValue = true;
+        } else {
+            out.argv.push_back(argv[i]);
+        }
+    }
+    return out;
+}
+
 /// Apply denoise override to renderer (uses path-tracer policy via setDenoiseMode).
 inline void applyDenoiseOverride(VulkanRenderer& renderer, const RenderCliOptions& opts) {
     if (opts.denoiseOverride) {

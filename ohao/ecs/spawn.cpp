@@ -22,15 +22,20 @@ SpawnedModel uploadModel(render::RenderScene& scene, BindlessTextureManager* tex
     return SpawnedModel{up.mesh, std::move(up.materials), toComponent(up.emissive)};
 }
 
+void attachModel(World& world, entt::entity e, render::RenderScene& scene, BindlessTextureManager* textures,
+                 const Model& model, std::string_view debugName, const render::MaterialDesc* overrideMaterial) {
+    SpawnedModel up = ecs::uploadModel(scene, textures, model, debugName, overrideMaterial);
+    auto& reg = world.registry();
+    reg.emplace_or_replace<GiMaterialLegacy>(e, GiMaterialLegacy{render::giMaterialLegacyPacked(model, overrideMaterial)});
+    reg.emplace_or_replace<MeshRenderer>(e, MeshRenderer{up.mesh, std::move(up.materials), true});
+    if (up.emissive) reg.emplace_or_replace<EmissiveProxyLight>(e, *up.emissive);
+}
+
 entt::entity spawnModel(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
                         const Model& model, std::string_view name, const Transform& transform,
                         const render::MaterialDesc* overrideMaterial) {
-    SpawnedModel up = ecs::uploadModel(scene, textures, model, name, overrideMaterial);
-    auto& reg = world.registry();
     const entt::entity e = world.create(name, transform);
-    reg.emplace<GiMaterialLegacy>(e, GiMaterialLegacy{render::giMaterialLegacyPacked(model, overrideMaterial)});
-    reg.emplace<MeshRenderer>(e, MeshRenderer{up.mesh, std::move(up.materials), true});
-    if (up.emissive) reg.emplace<EmissiveProxyLight>(e, *up.emissive);
+    attachModel(world, e, scene, textures, model, name, overrideMaterial);
     return e;
 }
 

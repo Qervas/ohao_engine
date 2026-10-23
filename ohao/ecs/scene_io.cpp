@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <initializer_list>
 #include <map>
 #include <memory_resource>
 #include <new>
@@ -236,24 +237,35 @@ bool sortByOffset(std::vector<Diagnostic>& v) {
     return overflow;
 }
 
-// checkAssets: a ModelAsset whose file the resolver does not have is E_ASSET_NOT_FOUND,
-// at the path member (ctx is at the MeshSource block `c`).
-void checkAsset(const MeshSource& ms, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
-                DecodeContext& ctx) {
-    const auto* model = std::get_if<ModelAsset>(&ms.source);
-    if (!model || assets.exists(model->asset)) return;
+// checkAssets: an asset reference whose file the resolver does not have is
+// E_ASSET_NOT_FOUND, at its path member, reached from the component block `c` by `keys`.
+void reportMissingAsset(const AssetRef& ref, std::string_view what, std::initializer_list<const char*> keys,
+                        const JsonDocument& doc, const JsonNode& c, DecodeContext& ctx) {
     const JsonNode* at = &c;
     int depth = 0;
-    for (const char* key : {"source", "ModelAsset", "asset", "path"}) {
+    for (const char* key : keys) {
         const JsonNode* next = at->type == JsonType::Object ? doc.member(*at, key) : nullptr;
         if (!next) break;
         ctx.push(key);
         at = next;
         ++depth;
     }
-    ctx.error("E_ASSET_NOT_FOUND", *at, "no model file '" + model->asset.path + "' in the project",
-              "a project-relative path to an existing file", "\"" + model->asset.path + "\"");
+    ctx.error("E_ASSET_NOT_FOUND", *at, "no " + std::string(what) + " file '" + ref.path + "' in the project",
+              "a project-relative path to an existing file", "\"" + ref.path + "\"");
     while (depth-- > 0) ctx.pop();
+}
+
+void checkAsset(const MeshSource& ms, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
+                DecodeContext& ctx) {
+    const auto* model = std::get_if<ModelAsset>(&ms.source);
+    if (model && !assets.exists(model->asset))
+        reportMissingAsset(model->asset, "model", {"source", "ModelAsset", "asset", "path"}, doc, c, ctx);
+}
+
+void checkAsset(const Environment& env, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
+                DecodeContext& ctx) {
+    if (env.hdri && !assets.exists(*env.hdri))
+        reportMissingAsset(*env.hdri, "environment image", {"hdri", "path"}, doc, c, ctx);
 }
 
 std::string hexId(uint64_t id) {
@@ -269,6 +281,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
     ankerl::unordered_dense::map<const TypeInfo*, std::size_t> upgradeCounts;
     const TypeInfo* parentType = r.find<Parent>();
     const TypeInfo* meshSourceType = r.find<MeshSource>();
+    const TypeInfo* environmentType = r.find<Environment>();
     std::vector<std::string_view> knownNames;
     ankerl::unordered_dense::map<std::string_view, const TypeInfo*> byName;
     for (const TypeInfo* t : r.types()) {
@@ -357,7 +370,11 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                         ++upgradeCounts[t];
                     }
                     ctx.component = nullptr;
-                    if (out.assets && t == meshSourceType) checkAsset(*static_cast<const MeshSource*>(v), doc, c, *out.assets, ctx);
+                    if (out.assets) {
+                        if (t == meshSourceType) checkAsset(*static_cast<const MeshSource*>(v), doc, c, *out.assets, ctx);
+                        else if (t == environmentType)
+                            checkAsset(*static_cast<const Environment*>(v), doc, c, *out.assets, ctx);
+                    }
                 }
             } else if (t) {
                 const std::string why = !t->serialized ? "is runtime state and is never saved"
@@ -765,9 +782,9 @@ Result<LoadReport, std::vector<Diagnostic>> loadScene(World& dst, std::string_vi
 }
 
 Result<bool, Diagnostic> saveSceneFile(const World& world, const TypeRegistry& types,
-                                       const std::filesystem::path& path, SaveOptions options) {
+                                       const std::filesystem::path& path, SaveOptions options, SaveReport* report) {
     using R = Result<bool, Diagnostic>;
-    auto text = saveScene(world, types, options);
+    auto text = saveScene(world, types, options, report);
     if (!text) return R::err(std::move(text.error()));
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     f.write(text.value().data(), static_cast<std::streamsize>(text.value().size()));

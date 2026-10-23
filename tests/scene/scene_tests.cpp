@@ -12,6 +12,7 @@
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/scene_view.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
@@ -19,6 +20,8 @@
 #include "render/scene/model_upload.hpp"
 #include "scene/asset/model.hpp"
 #include "scene/asset/primitive_mesh_generator.hpp"
+
+#include "example_scenes.hpp"   // the cornell_box / model_viewer worlds (examples/)
 
 #include <bit>
 #include <cfloat>
@@ -275,6 +278,8 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<MaterialOverride>(r, checked);
     ok &= complete<InstantiateDirty>(r, checked);
     ok &= complete<InstantiateError>(r, checked);
+    ok &= complete<ecs::Camera>(r, checked);
+    ok &= complete<Environment>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -290,7 +295,8 @@ static void t01_registrations_lint_clean() {
 static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
-    for (const char* saved : {"Name", "Transform", "Parent", "Light"}) {
+    for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
+                              "Environment"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -426,6 +432,18 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
         }
         es.push_back(e);
         depth.push_back(d);
+    }
+    // The singletons (step 8), on entities that may be parented: one Camera, one
+    // Environment with or without an image.
+    if (n > 0) {
+        const auto unitIn = [&](float lo, float hi) { return lo + (hi - lo) * float(rng() % 1000003) / 1000003.0f; };
+        w.registry().emplace<ecs::Camera>(es[rng() % es.size()],
+                                          ecs::Camera{unitIn(1.0f, 179.0f), unitIn(0.001f, 1.0f),
+                                                      unitIn(10.0f, 5000.0f), rng() % 2 == 0});
+        Environment env;
+        if (rng() % 2) env.hdri = AssetRef{"assets/env/e_" + std::to_string(seed) + ".hdr", {}};
+        env.intensity = unitIn(0.0f, 4.0f);
+        w.registry().emplace<Environment>(es[rng() % es.size()], env);
     }
 }
 
@@ -1421,6 +1439,146 @@ static void t11_scene_text_round_trips_mesh_sources() {
           "a misspelled alternative and a value below its limit are reported");
 }
 
+// ---- t20: the scene view (step 8) ----------------------------------------------------------
+
+static void t20_view_angles_are_exact_on_the_axes() {
+    struct Case {
+        glm::vec3 dir;
+        float pitch, yaw;
+    };
+    for (const Case& c : {Case{{0, 0, -1}, 0.0f, -90.0f}, Case{{-0.0f, -0.0f, -1}, 0.0f, -90.0f},
+                          Case{{1, 0, 0}, 0.0f, 0.0f}, Case{{0, 0, 1}, 0.0f, 90.0f}, Case{{-1, 0, 0}, 0.0f, 180.0f},
+                          Case{{0, -1, 0}, -90.0f, 0.0f}, Case{{0, 0, -7}, 0.0f, -90.0f}}) {
+        const glm::vec2 py = pitchYawDegrees(c.dir);
+        const bool negativeZero = (py.x == 0.0f && std::signbit(py.x)) || (py.y == 0.0f && std::signbit(py.y));
+        CHECK(py.x == c.pitch && py.y == c.yaw && !negativeZero, "axis directions give exact angles, never -0");
+    }
+    // The renderer camera (Camera::updateVectors) rebuilds the direction from the angles.
+    std::mt19937 rng(20);
+    std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+    for (int i = 0; i < 1000; ++i) {
+        const glm::vec3 d = glm::normalize(glm::vec3(u(rng), 0.9f * u(rng), u(rng)) + glm::vec3(0.0f, 0.0f, 1e-3f));
+        const glm::vec2 py = pitchYawDegrees(d);
+        const glm::vec3 back(std::cos(glm::radians(py.y)) * std::cos(glm::radians(py.x)), std::sin(glm::radians(py.x)),
+                             std::sin(glm::radians(py.y)) * std::cos(glm::radians(py.x)));
+        CHECK(glm::length(back - d) < 1e-5f, "the angles reproduce the direction");
+    }
+}
+
+static void t20_camera_pose_comes_from_the_world_transform() {
+    World w;
+    Transform pt;
+    pt.position = {1.0f, 2.0f, 3.0f};
+    pt.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));   // -Z turns to -X
+    const auto parent = w.create("rig", pt);
+    Transform ct;
+    ct.position = {0.0f, 0.0f, 5.0f};
+    const auto cam = w.create("cam", ct);
+    w.setParent(cam, parent);
+    w.registry().emplace<ecs::Camera>(cam, ecs::Camera{60.0f, 0.5f, 250.0f, true});
+
+    const SceneView before = resolveSceneView(w);   // no update yet: computed from Transform/Parent
+    CHECK(before.camera && !before.environment, "a camera and no environment");
+    w.update(0.0f);
+    const SceneView after = resolveSceneView(w);
+    const glm::mat4& wt = w.registry().get<WorldTransform>(cam).world;
+    CHECK(after.camera && std::memcmp(&before.camera->position, &after.camera->position, sizeof(glm::vec3)) == 0 &&
+              std::memcmp(&after.camera->position, &wt[3], sizeof(glm::vec3)) == 0,
+          "the pose matches the transform system bit for bit, before and after it runs");
+    CHECK(glm::length(after.camera->position - glm::vec3(6.0f, 2.0f, 3.0f)) < 1e-5f, "the parent moves the camera");
+    CHECK(std::abs(std::abs(after.camera->yawDeg) - 180.0f) < 1e-4f && std::abs(after.camera->pitchDeg) < 1e-4f,
+          "and turns it (looking along -X)");
+    CHECK(after.camera->fovDeg == 60.0f && after.camera->nearPlane == 0.5f && after.camera->farPlane == 250.0f,
+          "the lens comes from the component");
+}
+
+static void t20_inactive_camera_and_environment_views() {
+    World w;
+    CHECK(!resolveSceneView(w).camera && !resolveSceneView(w).environment, "an empty world has no view");
+    const auto e = w.create("cam");
+    w.registry().emplace<ecs::Camera>(e, ecs::Camera{45.0f, 0.1f, 100.0f, false});
+    CHECK(!resolveSceneView(w).camera, "an inactive camera leaves the host's camera alone");
+    const auto env = w.create("env");
+    w.registry().emplace<Environment>(env, Environment{AssetRef{"assets/sky.hdr", {}}, 2.5f});
+    const SceneView v = resolveSceneView(w);
+    CHECK(v.environment && v.environment->hdri && v.environment->hdri->path == "assets/sky.hdr" &&
+              v.environment->intensity == 2.5f,
+          "the environment's image and intensity");
+}
+
+static void t20_cameras_and_environments_are_singletons() {
+    const auto r = validateScene(R"({"format":"ohao.scene","version":1,"entities":[)"
+                                 R"({"id":"00000000000000c1","Camera":{}},{"id":"00000000000000c2","Camera":{"active":false}},)"
+                                 R"({"id":"00000000000000c3","Environment":{}},{"id":"00000000000000c4","Environment":{}}]})",
+                                 engineTypes());
+    CHECK(r.errors.size() == 2 && r.errors[0].code == "E_SINGLETON" && r.errors[0].path == "/entities/1/Camera" &&
+              r.errors[1].code == "E_SINGLETON" && r.errors[1].path == "/entities/3/Environment",
+          "a second Camera (even an inactive one) or Environment is E_SINGLETON");
+    const auto lens = validateScene(R"({"format":"ohao.scene","version":1,"entities":[)"
+                                    R"({"id":"00000000000000c1","Camera":{"fovDeg":180,"nearPlane":0}}]})",
+                                    engineTypes());
+    CHECK(lens.errors.size() == 2 && lens.errors[0].code == "E_RANGE" && lens.errors[1].code == "E_RANGE",
+          "a field of view of 180 degrees and a zero near plane are out of range");
+}
+
+static void t20_check_assets_reports_a_missing_hdri() {
+    FakeResolver files;
+    const std::string text = R"({"format":"ohao.scene","version":1,"entities":[)"
+                             R"({"id":"00000000000000e1","Environment":{"hdri":{"path":"assets/env/sky.hdr"}}}]})";
+    const auto missing = validateScene(text, engineTypes(), &files);
+    CHECK(missing.errors.size() == 1 && missing.errors[0].code == "E_ASSET_NOT_FOUND" &&
+              missing.errors[0].path == "/entities/0/Environment/hdri/path",
+          "checkAssets reports the missing image at its path");
+    files.files["assets/env/sky.hdr"] = nullptr;
+    CHECK(validateScene(text, engineTypes(), &files).ok(), "and accepts one that exists");
+    CHECK(validateScene(text, engineTypes()).ok(), "without checkAssets nothing is checked");
+}
+
+static void t20_example_scenes_save_load_and_validate() {
+    // cornell_box --save-scene: deterministic, canonical, and it loads back to itself.
+    World a, b;
+    a.seedIds(examples::kCornellBoxIdSeed);
+    b.seedIds(examples::kCornellBoxIdSeed);
+    examples::buildCornellBox(a);
+    examples::buildCornellBox(b);
+    const std::string cornell = save(a);
+    CHECK(!cornell.empty() && cornell == save(b), "two builds save byte-identically");
+    CHECK(a.idCount() == 21, "camera, environment, five walls, two spheres, twelve lights");
+    CHECK(cornell.find(R"("Camera": { "fovDeg": 38 })") != std::string::npos &&
+              cornell.find(R"("Environment": {})") != std::string::npos,
+          "the camera keeps only what differs from the defaults; the environment is present and empty");
+    World c;
+    CHECK(load(c, cornell) && save(c) == cornell, "the file loads and re-saves identically");
+    const SceneView v = resolveSceneView(c);
+    CHECK(v.camera && v.camera->position == glm::vec3(0.0f, 0.0f, 13.0f) && v.camera->pitchDeg == 0.0f &&
+              v.camera->yawDeg == -90.0f && v.camera->fovDeg == 38.0f,
+          "the loaded camera is exactly the one the example used to set by hand");
+    CHECK(v.environment && !v.environment->hdri && v.environment->intensity == 1.0f, "no image");
+
+    // model_viewer --save-scene: a model asset and the studio HDRI, both found by checkAssets.
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    const AssetRef helmet{"assets/test_models/DamagedHelmet.glb", {}};
+    auto model = files.loadModel(helmet);
+    CHECK(model, "the helmet loads");
+    const FrameResult frame = SceneFramer::computeFraming(model.value()->vertices);
+    World d;
+    d.seedIds(examples::kModelViewerIdSeed);
+    const auto scene = examples::buildModelViewerScene(d, *model.value(), frame, helmet, false);
+    const std::string viewer = save(d);
+    const auto checked = validateScene(viewer, engineTypes(), &files);
+    CHECK(checked.ok() && checked.warnings.empty(), "the viewer scene validates, its assets present");
+    CHECK(std::get<ModelAsset>(d.registry().get<MeshSource>(scene.model).source).asset.path == helmet.path,
+          "the model is an asset reference");
+    World e;
+    CHECK(load(e, viewer) && save(e) == viewer, "and round-trips");
+    const SceneView vv = resolveSceneView(e);
+    CHECK(vv.camera && vv.camera->position == frame.cameraPosition && vv.camera->fovDeg == frame.cameraFov &&
+              vv.camera->pitchDeg == 0.0f && vv.camera->yawDeg == -90.0f,
+          "the framed camera, as SceneFramer::applyCamera set it");
+    CHECK(vv.environment && vv.environment->hdri && vv.environment->hdri->path == "assets/test_models/env_studio.hdr",
+          "the studio image");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -1483,6 +1641,12 @@ int main(int argc, char** argv) {
     RUN(t11_check_assets_reports_missing_models);
     RUN(t11_file_resolver_paths_and_cache);
     RUN(t11_scene_text_round_trips_mesh_sources);
+    RUN(t20_view_angles_are_exact_on_the_axes);
+    RUN(t20_camera_pose_comes_from_the_world_transform);
+    RUN(t20_inactive_camera_and_environment_views);
+    RUN(t20_cameras_and_environments_are_singletons);
+    RUN(t20_check_assets_reports_a_missing_hdri);
+    RUN(t20_example_scenes_save_load_and_validate);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash f06a6a882f30630b. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 541042bdae0b2aff. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -35,7 +35,9 @@
         "Parent": { "$ref": "#/$defs/Parent" },
         "Light": { "$ref": "#/$defs/Light" },
         "MeshSource": { "$ref": "#/$defs/MeshSource" },
-        "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" }
+        "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" },
+        "Camera": { "$ref": "#/$defs/Camera" },
+        "Environment": { "$ref": "#/$defs/Environment" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -447,6 +449,50 @@
         "emissiveStrength": {
           "description": "Emission multiplier",
           "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Camera": {
+      "description": "The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y up; roll is ignored.",
+      "type": "object",
+      "properties": {
+        "fovDeg": {
+          "description": "Vertical field of view",
+          "default": 45,
+          "allOf": [{ "type": "number", "minimum": 1, "maximum": 179 }]
+        },
+        "nearPlane": {
+          "description": "Near clip distance (raster passes)",
+          "default": 0.1,
+          "allOf": [{ "type": "number", "minimum": 1e-04 }]
+        },
+        "farPlane": {
+          "description": "Far clip distance (raster passes); keep it above nearPlane",
+          "default": 100,
+          "allOf": [{ "type": "number", "minimum": 0.001 }]
+        },
+        "active": {
+          "description": "false: the host keeps its own camera",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Environment": {
+      "description": "Image-based lighting (one per world): an equirectangular HDR image lighting and backing the scene.",
+      "type": "object",
+      "properties": {
+        "hdri": {
+          "description": "Project-relative path of the .hdr image; null for none",
+          "default": null,
+          "allOf": [{ "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/AssetRef" }] }]
+        },
+        "intensity": {
+          "description": "Multiplier on the image's radiance",
+          "default": 1,
           "allOf": [{ "type": "number", "minimum": 0 }]
         }
       },

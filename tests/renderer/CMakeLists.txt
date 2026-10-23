@@ -62,6 +62,24 @@ if(MSVC)
 endif()
 add_dependencies(instantiate_gpu_test shaders)
 
+# The scene view and the example scenes on the GPU: Camera/Environment entities and a
+# saved-and-loaded scene render bit-identically to the hand-set view (sub-project 3, step 8).
+add_executable(scene_view_gpu_test scene_view_gpu_test.cpp)
+target_compile_features(scene_view_gpu_test PRIVATE cxx_std_20)
+target_include_directories(scene_view_gpu_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${CMAKE_SOURCE_DIR}/examples
+    ${CMAKE_SOURCE_DIR}/tools ${Vulkan_INCLUDE_DIRS})
+target_compile_definitions(scene_view_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(scene_view_gpu_test PRIVATE
+    ohao_ecs ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+if(TARGET Jolt)
+    target_link_libraries(scene_view_gpu_test PRIVATE Jolt)
+endif()
+if(MSVC)
+    target_link_options(scene_view_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(scene_view_gpu_test shaders)
+
 # Env CDF unit test
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp

@@ -1,5 +1,11 @@
 // Model Viewer — load any GLTF/OBJ and render in a Cornell box
-// Usage: ./model_viewer <model.glb> [output.png] [samples]
+// Usage: ./model_viewer <model.glb> [output.png] [samples] [deferred|rt_realtime|rt_offline] [flip] [video]
+//                       [--denoise=X] [--print-bounds]
+//        ./model_viewer <model.glb> [flip] --save-scene <path.scene.json>   (writes the scene, renders nothing)
+//
+// A model inside the project (the working directory) becomes a MeshSource asset
+// reference; one outside it is attached as an in-memory mesh, which a saved scene cannot
+// describe (W_UNSAVEABLE_MESH).
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -8,18 +14,22 @@
 
 #include "gpu/vulkan/renderer.hpp"
 #include "scene/asset/model_loader.hpp"
-#include "scene/asset/primitive_mesh_generator.hpp"
 #include "render/deferred/deferred_renderer.hpp"
-#include "ecs/framing.hpp"
+#include "ecs/asset_resolver.hpp"
+#include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
+#include "ecs/scene_view.hpp"
 #include "ecs/spawn.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "example_cli.hpp"
+#include "example_scenes.hpp"
+#include "ohao/scene_host.hpp"
 
-#include <algorithm>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <chrono>
@@ -33,10 +43,32 @@ using ohao::examples::argOr;
 using ohao::examples::applyDenoiseOverride;
 using ohao::examples::resolveMode;
 
-int main(int argc, char* argv[]) {
+namespace {
+
+// The model's path relative to the project root, '/'-separated; none when it lies
+// outside the project (or on another drive).
+std::optional<ecs::AssetRef> projectAsset(const std::filesystem::path& modelPath, const std::filesystem::path& root) {
+    std::error_code ec;
+    const auto rel = std::filesystem::weakly_canonical(std::filesystem::absolute(modelPath), ec).lexically_relative(
+        std::filesystem::weakly_canonical(root, ec));
+    if (ec || rel.empty() || rel.is_absolute() || *rel.begin() == "..") return std::nullopt;
+    return ecs::AssetRef{rel.generic_string(), {}};
+}
+
+} // namespace
+
+int main(int rawArgc, char* rawArgv[]) {
+    auto args = examples::extractSaveScene(rawArgc, rawArgv);
+    if (args.missingValue) {
+        std::cerr << "--save-scene needs a path\n";
+        return 1;
+    }
+    const int argc = args.argc();
+    char** argv = args.argv.data();
     if (argc < 2) {
         std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] "
-                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…] [--print-bounds]\n";
+                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…] [--print-bounds] "
+                     "[--save-scene <path>]\n";
         return 1;
     }
 
@@ -46,28 +78,26 @@ int main(int argc, char* argv[]) {
     // 1080p default: dual PathTracer (realtime+offline) at 4K OOMs on 8 GiB cards
     // and the golden harness only needs a stable offline frame. Override later if needed.
     const uint32_t W = 1920, H = 1080;
-    auto cli = parseRenderFlags(argc, argv, 4);
+    // --save-scene takes no output/samples, so its flags may follow the model directly.
+    auto cli = parseRenderFlags(argc, argv, args.path ? 2 : 4);
 
     std::cout << "OHAO Model Viewer — " << modelPath << "\n";
-    std::cout << W << "x" << H << " @ " << samples << " spp\n";
 
-    VulkanRenderer renderer(W, H);
-    if (!renderer.initialize()) {
-        std::cerr << "FATAL: renderer init failed\n";
-        return 1;
-    }
-
-    // Load model first — room size adapts to model (Result API)
-    std::shared_ptr<Model> model;
-    bool loaded = false;
-    if (auto loadedModel = ModelLoader::loadResult(modelPath)) {
-        model = std::move(loadedModel.value());
-        loaded = true;
+    // Load the model first: the room adapts to its size. A model inside the project
+    // loads through the resolver, whose cache instantiate then reuses.
+    ecs::FileAssetResolver assets(std::filesystem::current_path());
+    std::optional<ecs::AssetRef> asset = projectAsset(modelPath, assets.root());
+    std::shared_ptr<const Model> model;
+    if (asset) {
+        if (auto loaded = assets.loadModel(*asset)) model = std::move(loaded.value());
+        else std::cerr << "[ModelLoader] " << loaded.error().code << ": " << loaded.error().message << "\n";
+    } else if (auto loaded = ModelLoader::loadResult(modelPath)) {
+        model = std::move(loaded.value());
     } else {
-        std::cerr << "[ModelLoader] " << loadedModel.error() << "\n";
+        std::cerr << "[ModelLoader] " << loaded.error() << "\n";
     }
 
-    if (!loaded) {
+    if (!model) {
         // EXIT, do not carry on. Rendering an empty scene after a failed load
         // writes a perfectly valid PNG of nothing, and a caller that checks the
         // exit code and the file's existence -- which is exactly what
@@ -82,111 +112,42 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    // Compute framing (room size, camera, lights) from model bounds
+    // Framing (room size, camera, lights) from the model bounds.
     const FrameResult frame = SceneFramer::computeFraming(model->vertices);
-    const float S = frame.roomHalfSize;
 
-    // Creation order is draw order and light order. Declared after the renderer: the
-    // World releases its RenderScene slots first.
+    if (args.path) {
+        ecs::World world;
+        world.seedIds(examples::kModelViewerIdSeed);
+        examples::buildModelViewerScene(world, *model, frame, asset, cli.flipY);
+        return examples::writeExampleScene(world, *args.path);
+    }
+
+    std::cout << W << "x" << H << " @ " << samples << " spp\n";
+    VulkanRenderer renderer(W, H);
+    if (!renderer.initialize()) {
+        std::cerr << "FATAL: renderer init failed\n";
+        return 1;
+    }
+
+    // Declared after the renderer: the World releases its RenderScene slots (and
+    // instantiate its meshes) first.
     ecs::World world;
+    world.seedIds(examples::kModelViewerIdSeed);
     ecs::installRenderExtract(world, renderer.renderScene());
-    const auto spawn = [&](const Model& m, const std::string& name, const ecs::Transform& t,
-                           const render::MaterialDesc& mat) {
-        return ecs::spawnModel(world, renderer.renderScene(), renderer.getTextureManager(), m, name, t, &mat);
-    };
-
-    // Helper: create a solid quad (wall/floor/furniture face)
-    auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
-                       glm::vec3 normal, glm::vec3 color, float roughness) {
-        Model m;
-        PrimitiveMeshGenerator::generateQuad(m, a, b, c, d, normal, color);
+    ecs::installInstantiate(world, renderer.renderScene(), renderer.getTextureManager(), assets);
+    const examples::ViewerScene scene = examples::buildModelViewerScene(world, *model, frame, asset, cli.flipY);
+    if (!asset) {
+        const ecs::MaterialOverride o = examples::viewerModelMaterial(*model);
         render::MaterialDesc mat;
-        mat.baseColor = color;
-        mat.roughness = roughness;
-        spawn(m, name, ecs::Transform{}, mat);
-    };
-
-    // Helper: create a box (6 faces) for furniture
-    auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
-                      glm::vec3 color, float roughness, float metallic = 0.0f) {
-        Model m;
-        PrimitiveMeshGenerator::generateBox(m, lo, hi, color);
-        render::MaterialDesc mat;
-        mat.baseColor = color;
-        mat.roughness = roughness;
-        mat.metallic = metallic;
-        spawn(m, name, ecs::Transform{}, mat);
-    };
-
-    // === BEDROOM SCENE ===
-    glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
-    glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
-    glm::vec3 ceilColor(0.60f, 0.58f, 0.55f);   // gray ceiling
-
-    // Walls — extend 0.1 past corners to prevent ray leaks at seams
-    float E = 0.1f;
-    addQuad("Back",    {-S-E,-S-E,-S},{S+E,-S-E,-S},{S+E,S+E,-S},{-S-E,S+E,-S},  {0,0,1},  wallColor, 0.9f);
-    // No front wall — camera renders from outside looking in
-    addQuad("Left",    {-S,-S-E,-S-E},{-S,-S-E,S+E},{-S,S+E,S+E},{-S,S+E,-S-E},  {1,0,0},  wallColor, 0.9f);
-    addQuad("Right",   {S,-S-E,S+E},{S,-S-E,-S-E},{S,S+E,-S-E},{S,S+E,S+E},      {-1,0,0}, wallColor, 0.9f);
-    addQuad("Floor",   {-S-E,-S,-S-E},{S+E,-S,-S-E},{S+E,-S,S+E},{-S-E,-S,S+E},  {0,1,0},  floorColor, 0.95f);
-    addQuad("Ceiling", {-S-E,S,-S-E},{S+E,S,-S-E},{S+E,S,S+E},{-S-E,S,S+E},      {0,-1,0}, ceilColor, 0.9f);
-
-    // Bed — behind the model, against back wall
-    float bedW = S * 0.8f, bedH = S * 0.25f, bedD = S * 0.6f;
-    glm::vec3 bedColor(0.85f, 0.82f, 0.78f);     // linen white sheets
-    glm::vec3 frameColor(0.20f, 0.12f, 0.06f);    // dark wood frame
-    addBox("BedFrame", {-bedW, -S, -S}, {bedW, -S + bedH * 0.4f, -S + bedD}, frameColor, 0.5f);
-    addBox("Mattress", {-bedW + 0.2f, -S + bedH * 0.4f, -S + 0.2f},
-                       {bedW - 0.2f, -S + bedH, -S + bedD - 0.2f}, bedColor, 0.95f);
-    // Headboard
-    addBox("Headboard", {-bedW, -S, -S}, {bedW, -S + bedH * 2.5f, -S + 0.3f}, frameColor, 0.4f);
-    // Pillow
-    addBox("Pillow", {-bedW * 0.4f, -S + bedH, -S + 0.4f},
-                     {bedW * 0.4f, -S + bedH + 1.0f, -S + bedD * 0.4f}, {0.92f, 0.90f, 0.88f}, 0.95f);
-
-    // Nightstand — right side
-    float nsX = S * 0.55f;
-    glm::vec3 nsColor(0.22f, 0.14f, 0.07f);
-    addBox("Nightstand", {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, nsColor, 0.45f);
-
-    // The model: one entity, one mesh with a submesh per material run. Its materials
-    // come from the model; the override only feeds the legacy RT GI word (and a model
-    // without materials). A single-material model keeps the old viewer's 0.8/0.7/0.6; a
-    // multi-material one uses its own material 0.
-    ecs::Transform modelTransform;
-    modelTransform.position = frame.modelPosition;
-    modelTransform.rotation = frame.modelRotation;
-    modelTransform.scale = glm::vec3(frame.modelScale);
-    const bool hasMultipleMaterials = !model->materialPerTriangle.empty() &&
-        *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end()) > 0;
-    render::MaterialDesc modelMaterial;
-    if (hasMultipleMaterials && !model->materialColors.empty()) {
-        modelMaterial.baseColor = glm::vec3(model->materialColors[0]);
-        modelMaterial.roughness = model->materialColors[0].w;
-        modelMaterial.metallic = model->materialMetallic.empty() ? 0.0f : model->materialMetallic[0];
-    } else {
-        modelMaterial.baseColor = {0.8f, 0.7f, 0.6f};
-        modelMaterial.roughness = 0.5f;
+        mat.baseColor = o.baseColor;
+        mat.roughness = o.roughness;
+        mat.metallic = o.metallic;
+        ecs::attachModel(world, scene.model, renderer.renderScene(), renderer.getTextureManager(), *model, "Model", &mat);
     }
-    const entt::entity modelEntity = spawn(*model, "Model", modelTransform, modelMaterial);
     std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
-
-    // Environment map
-    renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
-
-    // Auto-framed lights (scaled to room size)
-    ecs::spawnFramedLights(world, frame);
-
-    // Auto-framed camera
+    for (const auto& w : host::applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
+        std::cerr << "warning: " << w << "\n";
     auto& camera = renderer.getCamera();
-    SceneFramer::applyCamera(camera, frame);
-
-    // "flip" — rotate model 180° Y (models facing away from camera)
-    if (cli.flipY) {
-        modelTransform.rotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
-        world.setTransform(modelEntity, modelTransform);
-    }
 
     // "--print-bounds": the model's screen-space box in the path tracer's framing (the
     // 8 corners of the model's world AABB through the camera the RT pass uses), for
@@ -199,7 +160,7 @@ int main(int argc, char* argv[]) {
         if (!model->vertices.empty()) {
             glm::vec3 bmin(1e30f), bmax(-1e30f);
             for (const auto& v : model->vertices) { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
-            const glm::mat4 toWorld = modelTransform.matrix();
+            const glm::mat4 toWorld = scene.modelTransform.matrix();
             for (int c = 0; c < 8; ++c) {
                 const glm::vec3 corner((c & 1) ? bmax.x : bmin.x, (c & 2) ? bmax.y : bmin.y, (c & 4) ? bmax.z : bmin.z);
                 const glm::vec4 clip = proj * view * toWorld * glm::vec4(corner, 1.0f);
@@ -227,8 +188,14 @@ int main(int argc, char* argv[]) {
     }
 
     // Headless: no Application drives the systems, so every frame updates the world.
+    bool firstFrame = true;
     const auto renderFrame = [&] {
         world.update(0.0f);
+        if (firstFrame && !ecs::instantiateErrors(world).empty()) {
+            std::cerr << "FATAL: meshes could not be built (see the instantiate errors above)\n";
+            std::exit(2);
+        }
+        firstFrame = false;
         renderer.render();
     };
 

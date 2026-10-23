@@ -33,9 +33,11 @@ bool VulkanRenderer::createInstance() {
         createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
     }
 
-    // Validation layers — enable with OHAO_VALIDATION=1 env var
+    // Validation layers — enable with OHAO_VALIDATION=1 env var. Unset, empty or "0" is
+    // off (a test can turn it off for one renderer by setting "0").
     const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
-    bool wantValidation = std::getenv("OHAO_VALIDATION") != nullptr;
+    const char* validationVar = std::getenv("OHAO_VALIDATION");
+    bool wantValidation = validationVar && *validationVar && std::strcmp(validationVar, "0") != 0;
     if (wantValidation) {
         uint32_t ln = 0;
         vkEnumerateInstanceLayerProperties(&ln, nullptr);

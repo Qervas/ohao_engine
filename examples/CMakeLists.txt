@@ -5,6 +5,7 @@ function(ohao_example name)
     target_include_directories(${name} PRIVATE
         ${CMAKE_SOURCE_DIR}/ohao
         ${CMAKE_SOURCE_DIR}/examples
+        ${CMAKE_SOURCE_DIR}/tools          # ohao/scene_host.hpp
         ${Vulkan_INCLUDE_DIRS}
         ${stb_SOURCE_DIR})
     target_compile_features(${name} PRIVATE cxx_std_20)

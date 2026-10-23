@@ -272,6 +272,30 @@ static void t09_failing_command_rolls_back_the_batch() {
           "a failing first command changes nothing either");
 }
 
+// Camera and Environment are one per world on the command path too (step 8).
+static void t20_commands_keep_one_camera_and_environment() {
+    World w;
+    loadFile(w, "rooms.scene.json");
+    api::Session s(w, engineTypes());
+    const std::string before = save(w);
+    const Reply two = applyBatch(s, R"([
+        {"op":"entity.create","name":"CamA","components":{"Camera":{"fovDeg":50}}},
+        {"op":"entity.create","name":"CamB","components":{"Camera":{"active":false}}}])");
+    CHECK(two.code() == "E_SINGLETON" && two.str("/error/data/0/path").rfind("/commands/1", 0) == 0,
+          "a second Camera in one batch fails at the second command");
+    CHECK(save(w) == before, "and the batch is rolled back");
+    const Reply one = applyBatch(s, R"([{"op":"component.set","id":"1000000000000001","type":"Environment",)"
+                                    R"("value":{"hdri":{"path":"assets/test_models/env_studio.hdr"}}}])");
+    CHECK(one.ok(), "one Environment is accepted");
+    const Reply again = applyBatch(s, R"([{"op":"component.set","id":"1000000000000001","type":"Environment",)"
+                                      R"("value":{"intensity":2}}])");
+    CHECK(again.ok(), "replacing the same entity's Environment is not a second one");
+    const Reply other = applyBatch(s, R"([{"op":"component.set","id":"1000000000000003","type":"Environment",)"
+                                      R"("value":{}}])");
+    CHECK(other.code() == "E_SINGLETON", "another entity's Environment is E_SINGLETON");
+    CHECK(undo(s, again).ok() && undo(s, one).ok() && save(w) == before, "the inverses restore the file byte-identically");
+}
+
 // A deterministic world through the public World API: hierarchy and lights.
 static void buildWorld(World& w, uint64_t seed, int n) {
     w.seedIds(seed);
@@ -853,6 +877,7 @@ int main() {
     RUN(t09_scene_methods_load_save_validate);
     RUN(t10_snapshot_and_restore_through_the_api);
     RUN(t11_validate_checks_assets_when_asked);
+    RUN(t20_commands_keep_one_camera_and_environment);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

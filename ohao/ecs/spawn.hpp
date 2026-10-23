@@ -28,8 +28,14 @@ SpawnedModel uploadModel(render::RenderScene& scene, BindlessTextureManager* tex
                          const Model& model, std::string_view debugName,
                          const render::MaterialDesc* overrideMaterial = nullptr);
 
-// uploadModel, then an entity with MeshRenderer, GiMaterialLegacy and (when the model
-// has a bright emissive texture) EmissiveProxyLight.
+// uploadModel, then MeshRenderer, GiMaterialLegacy and (when the model has a bright
+// emissive texture) EmissiveProxyLight on `e`. An in-memory model: the entity has no
+// MeshSource, so it saves without a mesh (W_UNSAVEABLE_MESH).
+void attachModel(World& world, entt::entity e, render::RenderScene& scene, BindlessTextureManager* textures,
+                 const Model& model, std::string_view debugName,
+                 const render::MaterialDesc* overrideMaterial = nullptr);
+
+// world.create, then attachModel.
 entt::entity spawnModel(World& world, render::RenderScene& scene, BindlessTextureManager* textures,
                         const Model& model, std::string_view name, const Transform& transform,
                         const render::MaterialDesc* overrideMaterial = nullptr);

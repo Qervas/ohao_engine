@@ -67,7 +67,8 @@ struct ValidationReport {
 class AssetResolver;
 
 // Phase 1 only: every error and warning a load would report, without a World. With
-// `assets` (checkAssets), a ModelAsset whose file the resolver lacks is E_ASSET_NOT_FOUND.
+// `assets` (checkAssets), a ModelAsset or Environment hdri whose file the resolver lacks
+// is E_ASSET_NOT_FOUND.
 [[nodiscard]] ValidationReport validateScene(std::string_view text, const reflect::TypeRegistry& types,
                                              const AssetResolver* assets = nullptr);
 
@@ -77,7 +78,8 @@ class AssetResolver;
 
 // UTF-8, LF, trailing newline (Pretty). E_IO when the file cannot be written or read.
 [[nodiscard]] Result<bool, Diagnostic> saveSceneFile(const World& world, const reflect::TypeRegistry& types,
-                                                     const std::filesystem::path& path, SaveOptions options = {});
+                                                     const std::filesystem::path& path, SaveOptions options = {},
+                                                     SaveReport* report = nullptr);
 [[nodiscard]] Result<LoadReport, std::vector<Diagnostic>> loadSceneFile(World& dst, const std::filesystem::path& path,
                                                                         const reflect::TypeRegistry& types);
 

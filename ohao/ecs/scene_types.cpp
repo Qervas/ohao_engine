@@ -99,6 +99,20 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("metallic", &MaterialOverride::metallic).doc("0 = dielectric, 1 = metal").unitless().min(0.0).max(1.0)
         .field("emissiveStrength", &MaterialOverride::emissiveStrength).doc("Emission multiplier").unitless().min(0.0);
 
+    r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
+        .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "
+             "up; roll is ignored.")
+        .field("fovDeg", &Camera::fovDeg).doc("Vertical field of view").unit("deg").angle().min(1.0).max(179.0)
+        .field("nearPlane", &Camera::nearPlane).doc("Near clip distance (raster passes)").unit("m").min(0.0001)
+        .field("farPlane", &Camera::farPlane).doc("Far clip distance (raster passes); keep it above nearPlane")
+            .unit("m").min(0.001)
+        .field("active", &Camera::active).doc("false: the host keeps its own camera");
+    r.type<Environment>("Environment").component().singleton().host(makeComponentOps<Environment>())
+        .doc("Image-based lighting (one per world): an equirectangular HDR image lighting and backing the scene.")
+        .field("hdri", &Environment::hdri).doc("Project-relative path of the .hdr image; null for none")
+        .field("intensity", &Environment::intensity).doc("Multiplier on the image's radiance").unitless().min(0.0)
+            .uiRange(0.0, 10.0);
+
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 
     r.type<MeshHandle>("MeshHandle").runtime()
