@@ -67,7 +67,7 @@ $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /
 ```console
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
-$ build/Release/log_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
+$ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -82,9 +82,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Validation** reports messages: set `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see
   every report.
 - **The bench** reports `OVER`: budgets change only by Frank's ruling; report the numbers.
-  `log_bench` exiting 2 (`noisy`) means the machine was loaded (it lists the busy
-  processes) or slower than its calibration: rerun, and report it as noisy, not as a
-  pass or a regression.
+  `serve_bench` exiting 2 (`noisy`) means the machine was loaded (it lists the busy
+  processes) or slower than its calibration: `tools/check.py` reruns it at most twice
+  and lists every attempt; report a run still noisy as noisy, not as a pass or a
+  regression. A budget is met after five consecutive passes.
 - **Validation** messages are stderr lines `W validation: <VUID> | <text>`; run with
   `OHAO_LOG_LEVEL=debug` for the engine's detail lines around them.
 - **The CLI, serve or doc checks** show a stdout diff: if the change was deliberate (a

@@ -49,7 +49,8 @@
 <p>Above it, the message is formatted into a per-thread buffer a few bytes larger than the 1 KB limit, so the cut can land on a whole UTF-8 character:</p>
 <div class="citation-chip"><code class="citation-code">thread_local char buf[cap];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.hpp#L107" target="_blank" rel="noopener">ohao/core/log.hpp:107</a></div>
 <div class="citation-chip"><code class="citation-code">while (n &gt; 0 &amp;&amp; (static_cast&lt;unsigned char&gt;(msg[n]) &amp; 0xC0) == 0x80) --n;   // whole UTF-8</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L87" target="_blank" rel="noopener">ohao/core/log.cpp:87</a></div>
-<p>`log_bench` measures both paths against their budgets: 0.20 ns below the threshold (budget 5 ns) and 200 ns for an 80-character record into the ring (budget 300 ns).</p>
+<p>`serve_bench` measures both paths against their budgets, beside the protocol&#x27;s: 0.20 ns below the threshold (budget 5 ns) and 195 ns for an 80-character record into the ring (budget 300 ns):</p>
+<div class="citation-chip"><code class="citation-code">//   log_ring_80              OHAO_LOG into the ring, an 80-character message      &lt;= 300 ns</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/bench/serve_bench.cpp#L15" target="_blank" rel="noopener">tools/bench/serve_bench.cpp:15</a></div>
 </div>
 <div class="section-rule"><h2 id="the-ring">The ring</h2></div>
 <div class="prose reveal">
@@ -91,6 +92,7 @@
         <div class="row"><code>tests/reflect/reflect_tests.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/log.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/log.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/bench/serve_bench.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
       </div>

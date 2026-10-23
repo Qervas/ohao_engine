@@ -26,8 +26,9 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_host` | `tools/ohao/` | `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the GPU side of `render.capture` |
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
-`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` and `log_bench`
-(`tools/bench`).
+`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` and `serve_bench`
+(`tools/bench`; they share the bench10k builder, `bench_world.hpp`, and `serve_bench`'s
+calibration and load record, `bench_env.hpp`).
 
 Dependency rules:
 

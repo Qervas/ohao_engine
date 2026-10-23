@@ -748,6 +748,24 @@ GPU (window host, Cornell deferred, 1280x720, lockstep, no post):
 Recorded, not gated: process start to `initialize` reply (headless and window), Cornell
 load-to-first-frame in the window host, `tools/list` and `instructions` byte counts.
 
+*As built (step 6), the CPU part.* `serve_bench` builds bench10k (seed 2026), saves it
+under `build/serve_bench/`, loads it both into an in-process `Session` and into
+`ohao serve` started as a child process on pipes (high priority, `--log-level warn`), and
+gives the first 100 entities a `Spin`. Each round runs every operation as one block
+(20 calls; 10 for `world.apply` and `world.step`; 10^6 log calls below the threshold,
+20,000 into the ring), operations interleaved, 5 warm-up rounds then 50; the transport
+overhead is each round's RPC median minus its in-process median. Server page faults per
+call are reported beside every RPC median. After timing it checks the replies (10,002
+entities, `count` 1, `applied` 100, a `frame`) and that the server exits 0 when stdin
+closes, so a bench of broken code fails rather than timing errors. The load monitor
+excludes the server it started. Five consecutive passes on 2026-10-23 (medians, ranges
+over the five): `world.info` round trip 0.0179–0.0196 ms, transport overhead
+0.0176–0.0203 ms, `world.query` 0.0186–0.0216 ms, `world.apply` 100 0.0888–0.0955 ms,
+`world.step` 0.0374–0.0397 ms, `OHAO_LOG` below the threshold 0.195 ns, into the ring
+193.9–195.8 ns, `tools/list` 7,811 B. Recorded: start to `initialize` 18.7–20.2 ms,
+`scene.load` bench10k over stdio 27.4–30.0 ms, `initialize` reply 725 B (`instructions`
+551 B).
+
 ## Engine development by agents (G2)
 
 ### One entry point: `python tools/check.py`
@@ -901,7 +919,8 @@ orient, edit, play, capture, replay, read logs), checked by `check_docs.py`.
 - **`ohao_game [scene]`**: the live host in realtime with no protocol; default scene
   `assets/scenes/helmet_game.scene.json`. Its flags and the presentation gate are
   unchanged.
-- **`serve_bench [--check FILE] [--cpu-only] [--calibrate]`**: the new budgets.
+- **`serve_bench [--check FILE] [--out FILE] [--reference FILE] [--rounds N] [--cpu-only]
+  | --calibrate`**: the new budgets (as built, step 6: results in `build/serve_bench.json`).
 - **`.mcp.json`** at the repo root: the project MCP server
   (`build/Release/ohao.exe serve --window assets/scenes/helmet_game.scene.json`), so Claude
   Code offers it in this repo after Frank approves it once.
@@ -1085,12 +1104,11 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
    their channel; the print lint. Test 6, test 2 (print part); log budgets measured.
    - *Done 2026-10-23.* See "Logging", as built. The log budgets are measured by
      `log_bench` (`tools/bench`, label `bench`) against `tests/bench/serve_budgets.json`,
-     not yet by `serve_bench`, which step 6 builds; step 6 folds them in. `log_bench`
-     already applies the calibration rule (`--calibrate` writes
+     not yet by `serve_bench`, which step 6 builds; step 6 folded them in and deleted
+     `log_bench`. `log_bench` already applied the calibration rule (`--calibrate` writes
      `build/serve_bench_reference.json`; >25% slower is `noisy`, exit 2) and, at the
-     reviewer's request, records every other process that used CPU during the run
+     reviewer's request, recorded every other process that used CPU during the run
      (`tools/bench/bench_env.hpp`): more than 50% of a core in total is also `noisy`.
-     The check script's rerun of a noisy bench is still step 6's.
 5. **Protocol core and headless `ohao serve`.** `ohao_rpc` (framing, ordering, errors,
    cancellation, progress), the MCP adapter, method params as reflected structs (the
    catalogue's method table gains schemas; `schemaHash` changes once), `engine.info`,
@@ -1104,6 +1122,13 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
      `engine.info`'s `time` is lockstep-only until step 7.
 6. **`serve_bench`, CPU budgets.** The child-process client, calibration, the CPU budget
    table, `tools/list` size gate. Test 18 (CPU part).
+   - *Done 2026-10-23.* See "Budgets", as built. `log_bench` is folded into `serve_bench`
+     and deleted; `scene_bench` and `serve_bench` share the bench10k builder
+     (`tools/bench/bench_world.hpp`). `tools/check.py` reruns a test whose summary line
+     says `"noisy": true` alone, at most twice, and reports every attempt
+     (`attempts: [{ok, noisy, seconds}]`); one still noisy after that is not passed and
+     keeps `noisy` in `check.json`. `world.hash` and `world.diff` budgets wait for step 7,
+     which builds the methods.
 7. **Time model, hash, diff.** System phases, `World::simulate`/`sync`, lockstep and
    realtime clocks in `Application`, `time.get`/`time.set`, `world.step watch`,
    `world.hash`, `world.diff`. Tests 11, 12.

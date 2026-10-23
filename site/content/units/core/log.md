@@ -34,8 +34,11 @@ the 1 KB limit, so the cut can land on a whole UTF-8 character:
 
 {{cite ohao/core/log.cpp "while (n > 0 && (static_cast<unsigned char>(msg[n]) & 0xC0) == 0x80) --n;"}}
 
-`log_bench` measures both paths against their budgets: 0.20 ns below the threshold
-(budget 5 ns) and 200 ns for an 80-character record into the ring (budget 300 ns).
+`serve_bench` measures both paths against their budgets, beside the protocol's: 0.20 ns
+below the threshold (budget 5 ns) and 195 ns for an 80-character record into the ring
+(budget 300 ns):
+
+{{cite tools/bench/serve_bench.cpp "//   log_ring_80              OHAO_LOG into the ring, an 80-character message      <= 300 ns"}}
 
 ## The ring
 

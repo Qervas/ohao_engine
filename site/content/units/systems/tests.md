@@ -390,6 +390,13 @@ JSON line; a failing one carries the last 40 lines of its output.
 
 {{cite tools/check.py "entry["tail"] = tail(output)"}}
 
+A benchmark that shared the machine with other busy processes, or ran slower than its
+calibration loop, says so in its summary line (`noisy`, exit 2): its numbers are no
+verdict on the code. The check reruns such a test alone, at most twice, and lists every
+attempt; one still noisy after that has not passed and stays marked `noisy`:
+
+{{cite tools/check.py "MAX_NOISY_RERUNS = 2"}}
+
 Every C++ suite ends with the same summary line, from `tests/common/harness.hpp`; the
 three GoogleTest suites get it from a main that replaces `gtest_main`. Tests that share
 a scratch directory under `build/` hold a common lock as well: the CLI check writes
@@ -397,7 +404,8 @@ a scratch directory under `build/` hold a common lock as well: the CLI check wri
 
 `tests/check/check_tests.py` tests the check itself: against fixtures configured into
 their own build tree, a failing test must fail the check and arrive with its summary and
-tail, and every test executable the build produces must be registered.
+tail, a noisy bench must be rerun at most twice, and every test executable the build
+produces must be registered.
 
 Before any test runs, the check asks `ohao doctor` whether the machine can run them at
 all: the Vulkan device, stale or missing SPIR-V (following each shader's includes the way

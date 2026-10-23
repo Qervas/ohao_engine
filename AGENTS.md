@@ -133,7 +133,7 @@ $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
-$ build/Release/log_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
+$ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -162,13 +162,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   drift by 1 LSB on a few pixels across sessions with identical SPIR-V; never compare
   their md5s across days.
 - **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
-  results in `build/scene_bench.json`. `log_bench --check`: the logger's budgets in
-  `tests/bench/serve_budgets.json`, results in `build/log_bench.json`. `log_bench`
-  times a calibration loop before and after its blocks and records every other process
-  that used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json`
-  (written by `log_bench --calibrate` on a quiet machine) or beside other busy processes
-  is `noisy`, exit 2: rerun it, it is neither a pass nor a regression. A budget changes
-  only by Frank's ruling.
+  results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
+  `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
+  round trips, transport overhead, apply, step, the logger's per-call costs, the
+  `tools/list` size), results in `build/serve_bench.json`. `serve_bench` times a
+  calibration loop before and after its blocks and records every other process that
+  used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
+  by `serve_bench --calibrate` on a quiet machine) or beside other processes using more
+  than half a core in total is `noisy`, exit 2: it is neither a pass nor a regression,
+  and `tools/check.py` reruns it, at most twice. A budget is met after five consecutive
+  passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   guide and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
   `docs/agents/skills/` until they are installed there; see its README).
