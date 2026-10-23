@@ -3,7 +3,7 @@
 //   ohao schema   [-o dir]
 //   ohao validate <scene> [--check-assets] [--limit N]
 //   ohao fmt      <scene> [--check] [--compact] [-o out]
-//   ohao apply    <scene> <commands.json> [-o out]
+//   ohao apply    <scene> <commands.json> [-o out] [--seed S]
 //   ohao query    <scene> [--ids a,b] [--name N] [--name-contains S] [--has T,U] [--fields /T,/T/f]
 //                 [--limit N] [--offset N] [--defaults]
 //   ohao summary  <scene> [--depth D] [--max-children N] [--max-nodes N]
@@ -423,7 +423,8 @@ int cmdFmt(const Args& a) {
 int cmdApply(const Args& a) {
     if (a.positional.size() != 2) return usage("apply needs a scene file and a commands file");
     Context c(opt(a, "--root", "."));
-    if (std::string err = loadScene(c, a.positional[0]); !err.empty()) {
+    // --seed fixes the ids the commands create (as in run); without it they are random.
+    if (std::string err = loadScene(c, a.positional[0], opt(a, "--seed")); !err.empty()) {
         emit(err);
         return replyExit(err);
     }
@@ -461,7 +462,14 @@ int cmdQuery(const Args& a) {
     if (has(a, "--name")) p.emplace_back("names", jsonStrings({opt(a, "--name")}));
     if (has(a, "--name-contains")) p.emplace_back("nameContains", jsonString(opt(a, "--name-contains")));
     if (has(a, "--has")) p.emplace_back("has", jsonStrings(splitList(opt(a, "--has"))));
-    if (has(a, "--fields")) p.emplace_back("fields", jsonStrings(splitList(opt(a, "--fields"))));
+    if (has(a, "--fields")) {
+        // "Type/field" is accepted for "/Type/field": Git Bash (MSYS) rewrites an argument
+        // that starts with '/' into a Windows path before the program sees it.
+        auto fields = splitList(opt(a, "--fields"));
+        for (auto& f : fields)
+            if (!f.empty() && f[0] != '/') f.insert(f.begin(), '/');
+        p.emplace_back("fields", jsonStrings(fields));
+    }
     long long limit = 50, offset = 0;
     std::string err;
     if (!intOpt(a, "--limit", 0, 1'000'000, limit, err) || !intOpt(a, "--offset", 0, 1'000'000'000, offset, err))
@@ -629,7 +637,7 @@ int run(int argc, char** argv) {
         return a.error.empty() ? cmdFmt(a) : usage(a.error);
     }
     if (cmd == "apply") {
-        const Args a = parseArgs(argc, argv, 2, {}, {"-o", "--root"});
+        const Args a = parseArgs(argc, argv, 2, {}, {"-o", "--root", "--seed"});
         return a.error.empty() ? cmdApply(a) : usage(a.error);
     }
     if (cmd == "query") {

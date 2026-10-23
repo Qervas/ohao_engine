@@ -1,0 +1,5 @@
+[
+  {"op": "entity.duplicate", "id": "b1ab29372b0e7edc", "name": "GlassSphere 2"},
+  {"op": "field.set", "id": "$0", "path": "/Transform/position/0", "value": -0.5},
+  {"op": "component.set", "id": "$0", "type": "Spin", "value": {"axis": [1, 0, 0], "degreesPerSecond": -15}}
+]

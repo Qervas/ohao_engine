@@ -53,8 +53,9 @@ external/imgui
 *.tmp
 *.temp
 
-# Claude context (local only)
-.claude/
+# Claude context: local only, except the project skills (shared, see AGENTS.md)
+.claude/*
+!.claude/skills/
 
 # Skill / plugin install artifacts
 .agents/
@@ -82,7 +83,6 @@ imgui.ini
 Downloads/
 ohao_engine
 renders/
-CLAUDE.md
 .gstack/
 external/DLSS/
 tools/dlss_probe/dlss_probe
