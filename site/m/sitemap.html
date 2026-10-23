@@ -43,6 +43,16 @@
 <li><a href="scene/render-scene.html">RenderScene</a> — Mesh arenas with one BLAS per mesh, material/instance/light tables, per-slot staging, retire queue, TLAS build vs refit.</li>
 <li><a href="scene/loaders.html">Asset loaders</a> — Assimp (GLB/GLTF), ufbx + Assimp (FBX), native OBJ, tinygltf direct route, procedural primitives.</li>
 </ul>
+<h2 class="gloss-group">12 · Reflection &amp; agent API</h2><ul class="prose">
+<li><a href="reflection/index.html"><strong>Hub</strong></a></li>
+<li><a href="reflection/registry.html">Type registry &amp; schema</a> — Registered types with docs, units and limits; the lint; the catalogue, the scene JSON Schema and schemaHash.</li>
+<li><a href="reflection/scene-files.html">Canonical scene files</a> — Stable entity ids, defaults omitted, the one pretty layout, per-type writers and shortest floats.</li>
+<li><a href="reflection/load-validate.html">Loading &amp; validation</a> — Two-phase load, the streaming fast path and the tree decoder, structured diagnostics, versions and upgrades.</li>
+<li><a href="reflection/snapshots.html">Snapshots &amp; restore</a> — Columnar captures of every saved component, and a restore that writes only what differs.</li>
+<li><a href="reflection/api.html">Session, commands &amp; queries</a> — The method table, atomic command batches with inverses and rollback, $k references, queries and summaries.</li>
+<li><a href="reflection/instantiate.html">Instantiate &amp; the scene view</a> — MeshSource to MeshRenderer through a backend seam, shared meshes, the asset resolver, Camera and Environment.</li>
+<li><a href="reflection/cli.html">The ohao CLI &amp; render host</a> — One JSON document on stdout, exit classes, scripts as RPC requests, render.capture through a host.</li>
+</ul>
 <h2 class="gloss-group">03 · GPU / Vulkan</h2><ul class="prose">
 <li><a href="gpu.html"><strong>Hub</strong> — gpu.html</a></li>
 <li><a href="gpu/renderer-facade.html">VulkanRenderer facade</a> — Public API: modes, setScene, ensureRT, denoise, pixels, present.</li>
@@ -155,7 +165,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">85 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">92 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

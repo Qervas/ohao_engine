@@ -21,8 +21,10 @@ The extract keeps no list of "renderables to check". Work arrives as the `Render
 - `MeshRenderer` or `RenderSlot` destroyed → the entity's slot is queued for release.
 - `Light` or `EmissiveProxyLight` constructed, updated or destroyed → the light list is marked dirty.
 - The transform system tags `RenderDirty` on every entity whose world matrix it recomputed, including the settle frame after a move.
+- Installation itself, when the world already has renderables or lights: a host that starts its renderer after loading a scene (`ohao run --render`) installs the extract into a populated world, and the constructor tags every existing `MeshRenderer` and marks the lights, so the first run picks them up.
 
 {{cite ohao/ecs/render_extract.cpp "reg.on_update<MeshRenderer>().connect<&ExtractState::markRenderDirty>(this);"}}
+{{cite ohao/ecs/render_extract.cpp "for (const entt::entity e : reg.view<MeshRenderer>()) reg.emplace_or_replace<RenderDirty>(e);"}}
 
 The same write rule as `Transform` follows: a `MeshRenderer` change must go through `patch` or `replace`. Hiding an entity with `get<MeshRenderer>().visible = false` is not seen — the instance stays visible, in raster and in the TLAS, until something else dirties the entity.
 

@@ -6,12 +6,13 @@ standard: v2
 figures: [systems-build-shader-artifact-path]
 ---
 
-## Eight archives and one edge nobody declared
+## Ten archives and one edge nobody declared
 
-`ohao/CMakeLists.txt` is eight `add_subdirectory` lines and a comment; each leaf
+`ohao/CMakeLists.txt` is ten `add_subdirectory` lines and a comment; each leaf
 directory globs its own sources into a static library. The *declared* dependency
 graph is a clean DAG — `ohao_runtime` → `ohao_ecs` → `ohao_renderer` →
-`ohao_gpu_vulkan` → `ohao_scene` → `ohao_core`. The *reference* graph is not.
+`ohao_gpu_vulkan` → `ohao_scene` → `ohao_core`, with `ohao_api` sitting on
+`ohao_ecs` and `ohao_reflect` beneath both. The *reference* graph is not.
 `VulkanRenderer`, compiled into `ohao_gpu_vulkan`, owns a
 `std::unique_ptr<DeferredRenderer>` and calls through it every frame, while
 `DeferredRenderer` is compiled into `ohao_renderer`:
@@ -110,9 +111,9 @@ DLSS build, far from the cause.
 ## What is actually optional
 
 It is tempting to read the option list as "the heavy dependencies are all
-switchable". The top-level file declares eleven `option()`s, and nine of them are test
-suites and the Python bindings; the only dependency switches are `OHAO_NRD` and
-`OHAO_DLSS`. OpenImageDenoise is neither: it is looked up quietly, and its absence
+switchable". The top-level file declares sixteen `option()`s, and fourteen of them are
+test suites, the scene benchmark and the Python bindings; the only dependency
+switches are `OHAO_NRD` and `OHAO_DLSS`. OpenImageDenoise is neither: it is looked up quietly, and its absence
 only turns the OIDN backend into a stub. `ohao_renderer` defines `OHAO_OIDN_ENABLED`
 only when the package was found, and the denoise entry point compiles to a warning and
 a `false` return otherwise:
@@ -208,9 +209,17 @@ of the default build in its own right:
 
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
-It is reached only because one test target names it as a dependency, which is also
+It is reached only because other targets name it as a dependency, which is also
 what makes `cmake --build build` — the "build all" invocation — produce SPIR-V at
-all:
+all. The one that is always configured is the `ohao` CLI, which the root file adds
+unconditionally:
+
+{{cite tools/ohao/CMakeLists.txt "add_dependencies(ohao shaders)"}}
+
+`renderer_test` and the three `*_gpu_test` targets add the same edge, but only when
+`BUILD_RENDERER_TESTS` is on. Nothing else does: the examples, `engine_tests` and
+`ecs_tests` load SPIR-V without depending on its build, so a targeted
+`--target cornell_box` compiles none.
 
 {{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
@@ -223,8 +232,8 @@ single-config ones.
 
 {{cite shaders/CMakeLists.txt "COMMENT "Copying shader SPVs to runtime output directory""}}
 
-Configure with `-DBUILD_RENDERER_TESTS=OFF` and nothing asks for the target at all, so
-nothing populates it. What rescues the documented invocations is a three-entry search
+Build only an example and nothing asks for the target at all, so nothing populates
+that directory. What rescues the documented invocations is a three-entry search
 list inside the SPV loader. All three entries are relative paths resolved against the
 *working* directory; the second is the CMake output tree and the third the
 Visual Studio per-config runtime tree:
@@ -264,7 +273,7 @@ measuring.
 
 - `external/cmake/nri.cmake` must be included before `nrd.cmake`, or NRI's cache options are set after NRD's FetchContent has already consumed them.
 - `OHAO_DLSS_ENABLED` must be defined on **both** `ohao_renderer` and `ohao_gpu_vulkan`. It is `PRIVATE` on each, so removing either definition silently desynchronises `sizeof(PathTracer)` between the two archives.
-- The `shaders` target is not in `all`. It is built by `cmake --build build` only through `renderer_test`'s dependency on it; with `BUILD_RENDERER_TESTS=OFF` it must be requested with `--target shaders`.
+- The `shaders` target is not in `all`. It is built by `cmake --build build` only through the dependencies the `ohao` CLI, `renderer_test` and the `*_gpu_test` targets declare on it; building only an example, `engine_tests` or `ecs_tests` compiles no SPIR-V, so request `--target shaders` alongside.
 - Every source glob except the NRD-integration one lacks `CONFIGURE_DEPENDS`; adding a `.cpp` or a `.rgen` requires re-running `cmake` before it is compiled at all.
 - The path tracer's SPV loader tries `bin/shaders/<name>` relative to the CWD *before* `build/shaders/` and `build/Release/bin/shaders/`. A leftover `bin/shaders/` in the working directory silently shadows every freshly compiled raygen, miss and hit shader.
 - A new executable that links the engine must list `ohao_ecs` and `ohao_renderer` alongside the other archives (inside the group on GNU) and carry the matching multiple-definition option, or stb's duplicate symbols fail the link.

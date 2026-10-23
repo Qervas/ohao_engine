@@ -188,7 +188,7 @@ one frame later rather than carrying a stale delta forever.
 One asymmetry remains. The current frame's projection is TAA-jittered before it
 reaches the pass, while the stored previous view-projection is not:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;   // unjittered"}}
 
 The recorded delta therefore carries this frame's sub-pixel jitter. Anything
 consuming the buffer for other than `historyUV = uv - velocity` — an optical-flow

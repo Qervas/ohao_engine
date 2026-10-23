@@ -179,26 +179,34 @@ any neighbour is folded in; the spatial result is shading-only:
 {{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(currGIReservoir0, pixel, vec4(merged.xs, merged.M));"}}
 {{cite shaders/rt/pt_raygen_realtime.rgen "GIReservoir spatialR = merged;"}}
 
-## The host wiring that does not exist
+## The host wiring, and the switches nothing sets
 
-Everything above is live GLSL and the layout still reserves 29–34, but no host
-code joins them: the descriptor update in `PathTracer::render`
-builds a 32-entry write array whose last image write is binding 28; the only
-`dstBinding` above 28 is the pair of `RenderScene` buffers at 36 and 37, and none
-in 29–35 exists anywhere in the tree.
+The layout reserves 29–34 and the host now fills them every frame. Inside the one
+`vkUpdateDescriptorSets` in `PathTracer::render`, the *prev* planes (index
+`1 - m_giReservoirWriteIndex`) go to 29–31 and the *curr* planes to 32–34, in
+binding order:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "for (uint32_t i = 0; i < 6; ++i) addImage(29u + i, &giReservoirInfo[i]);"}}
 
-`m_giReservoirViews` appears only at image creation and destruction, no barrier
-moves those images to `VK_IMAGE_LAYOUT_GENERAL`, and `m_giReservoirWriteIndex` is
-assigned `0` in three places and incremented in none — the ping-pong cannot
-alternate. The shader's four `PT_FLAG_RESTIRGI_*` bits, 5–8 of `pc.control.x`,
-are set by nothing.
+This is not optional plumbing. The realtime raygen touches all six planes on every
+frame whatever its flags say, so a set with these bindings unwritten loses the
+device — which is how their absence was found. Before the trace a barrier moves each
+plane to `VK_IMAGE_LAYOUT_GENERAL`, from `UNDEFINED` until that half of the
+ping-pong has been written once (tracked by `m_giReservoirInitialized`), from
+`GENERAL` with a shader-write source after that. Once the frame is recorded the pair
+swaps:
 
-Bindings 29–34 carry no `PARTIALLY_BOUND` flag — that is on binding 12 alone — so
-this is not a legal "optional descriptor" configuration. A statically-used
-descriptor that is never written is undefined behaviour; what a driver does with
-it is not characterised here.
+{{cite ohao/render/rt/path_tracer_render.cpp "m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;"}}
+
+Recreating the planes, or a render-settings change that alters the buffer
+dimensions, clears both initialized flags and the write index; `resetAccumulation`
+alone does not touch them. Either way the first frame's *prev* planes hold
+undefined content, and what keeps it out of the estimate is the shader side: both
+`giReuse` and `spatialOn` require `historyFrameCount > 0`, which the reset zeroes.
+
+What the host still does not drive are the shader's four `PT_FLAG_RESTIRGI_*` bits,
+5–8 of `pc.control.x`: nothing in the tree sets them, so the off, GI-only, legacy
+and no-spatial modes are reachable only by editing the push constants.
 
 ## Two sharp edges in the layout
 
@@ -225,5 +233,5 @@ nothing.
 
 - $\hat p$ must be re-evaluated at the current primary hit before the held sample is shaded. Reusing the stored $\hat p$, or a stale `W`, distorts the GI while still looking smooth.
 - The spatial pass must not write back into the ping-pong planes; persisting it compounds sample correlation until the GI bakes.
-- Bindings 29–34 must be written every frame with prev/curr swapped and the images in `VK_IMAGE_LAYOUT_GENERAL` before the raygen runs. Neither happens in HEAD.
+- Bindings 29–34 must be written in every frame-slot set with prev/curr swapped and the images in `VK_IMAGE_LAYOUT_GENERAL` before the raygen runs; the raygen touches them unconditionally, so dropping the write loses the device and dropping the barrier hands it images in an undefined layout.
 - The `{STORAGE_IMAGE, 25 * kSets}` entry is exact: bump it whenever a storage-image `add(...)` is added to the layout. The `29..34` loop adds the six planes in binding order, so the plane index equals the binding number minus 29.

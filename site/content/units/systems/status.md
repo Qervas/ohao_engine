@@ -139,13 +139,19 @@ $$\max_{p,c}\bigl|A_{pc}-G_{pc}\bigr| \le \tau \quad\wedge\quad \frac{1}{N}\Bigl
 $\tau$ and $\phi$ are per-scene manifest fields, not constants of the gate: the
 harness reads `max_abs_diff` and `max_diff_frac` off each scene entry, falling
 back to `DEFAULT_MAX_ABS_DIFF = 4` / `DEFAULT_MAX_DIFF_FRAC = 0.01` only where a
-scene omits them. Every committed scene sets them explicitly. Three take exactly
-those defaults; the deferred helmet loosens them to 6 and 0.05, and its manifest note
-records why — it is not bit-exact run to run, with a fresh-versus-fresh max difference
-of 3 and a differing-pixel fraction near 0.026 — so a scene added later with looser
-numbers would be held to a looser contract than the one written here.
+scene omits them. Every committed scene sets them explicitly. The ten scenes are five
+pairs: each example render (`cornell_box`, `model_viewer`, in path-traced, deferred
+and realtime modes) and the same scene rendered by `ohao run` from its checked-in
+scene file, held to the same golden image and the same numbers. Three pairs take
+exactly those defaults. The deferred helmet loosens them to 6 and 0.05, and its
+manifest note records why — it is not bit-exact run to run, with a fresh-versus-fresh
+max difference of 3 and a differing-pixel fraction near 0.026:
 
-{{cite tests/golden/manifest.json ""max_diff_frac": 0.05,"}}
+{{cite tests/golden/manifest.json "fresh-vs-fresh max_abs 3, diff_frac ~0.026 measured 2026-10-09"}}
+
+The realtime path tracer loosens them to 10 and 0.05 for a read-write race in its
+raygen, which its note names. A scene added later with looser numbers would be held to
+a looser contract than the one written here.
 
 {{cite tests/golden/render_golden.py "DEFAULT_MAX_ABS_DIFF)"}}
 

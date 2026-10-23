@@ -72,7 +72,8 @@ answer is known a priori, since the glTF specification mandates Y-up:
 
 {{cite ohao/render/camera/scene_framer.hpp "bool forceYUp = false);"}}
 
-No caller in the tree passes it. Both call sites use the default, and `env_demo`
+No caller in the tree passes it. Every call site — `model_viewer`, `ohao_game` and
+two tests — uses the default, and `env_demo`
 re-implements the same `extent.y >= extent.z` test inline without any override at
 all. The parameter is dead; the heuristic it guards is not.
 
@@ -116,12 +117,17 @@ of height subtend $18/(2 \cdot 16.5 \tan 22.5^\circ) \approx 1.32$ of the frame 
 overflow it. The framer normalises the largest extent, not the projected one.
 
 The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
-`model_viewer` accommodates that by not building a front wall at all:
+`model_viewer`'s room builder, `buildModelViewerScene` in
+`examples/example_scenes.hpp`, accommodates that by not building a front wall at all:
 
-{{cite examples/model_viewer.cpp "// No front wall"}}
+{{cite examples/example_scenes.hpp "wall: the camera looks in from outside."}}
 
-`applyCamera` has two callers. The other, the windowed host `ohao_game`, builds no
-room at all — one floor quad at y = −S under the model:
+`model_viewer` no longer calls `applyCamera`. Its builder copies the framed
+position and FOV onto a `Camera` entity, which the host applies through
+`applySceneView`; `scene_view_gpu_test` renders that path against a hand-applied
+`applyCamera` and checks the two agree. The one program that still calls
+`applyCamera`, the windowed host `ohao_game`, builds no room at all — one floor
+quad at y = −S under the model:
 
 {{cite examples/ohao_game.cpp "m.vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};"}}
 
@@ -148,13 +154,13 @@ names no wall — only a parenthetical that it is already interior:
 
 {{cite ohao/render/camera/scene_framer.cpp "already interior"}}
 
-It does clear the walls, and it fails on the furniture. `model_viewer` builds a
-nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over
+It does clear the walls, and it fails on the furniture. `model_viewer`'s room
+builder adds a nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over
 $z \in [-15,-12]$; the lamp sits at $y = -S + 6 = -9$ with radius 1.0, so the
 sphere's lower cap is 0.625 units inside the solid it is meant to light — the exact
 configuration the other three comments exist to rule out.
 
-{{cite examples/model_viewer.cpp "nsX + 3.0f, -S + bedH * 1.5f"}}
+{{cite examples/example_scenes.hpp "nsX + 3.0f, -S + bedH * 1.5f"}}
 
 Those radii travel intact. `spawnFramedLights` makes each one a point-light entity
 whose `radius` is the framer's number, and the light table copies that radius into the
@@ -225,5 +231,5 @@ bug, not a lighting tweak.
 - `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` omits it, `ohao_game` builds no walls — or move the camera.
 - Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.
 - `FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.
-- Only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
+- Of the programs, only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
 - On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `spawnFramedLights` silently spawns nothing.

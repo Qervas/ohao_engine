@@ -176,7 +176,7 @@ What a script line or (later) an RPC request can call. Params with `=` have that
 | `scene.load` | `{text \| path \| scene, seed?}` → `{entities, preserved?, upgraded?, warnings?}` | Loads into the session's world, which must be empty. All or nothing. `seed` (16 hex digits) fixes the id generator. |
 | `scene.save` | `{path?, layout = compact \| pretty, defaults = false}` → `{scene}` or `{path, bytes}` | The canonical scene; without a path it is returned as an object. |
 | `world.info` | `{}` → `{entities, frame, schemaHash, idCounter}` | Cheap orientation. |
-| `world.summary` | `{depth = 2, maxChildren = 8, maxNodes = 64}` → `{entities, roots, components, bounds?, outline, truncated?}` | Counts, bounds and a capped hierarchy outline. |
+| `world.summary` | `{depth = 2, maxChildren = 8, maxNodes = 64}` → `{entities, roots, components, bounds?, outline, moreRoots?}` | Counts, bounds and a capped hierarchy outline; a node with unlisted children carries `more`. |
 | `world.query` | `{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}` → `{count, entities, missing?, next?}` | Entities in creation order, filtered and projected (`"/Type"`, `"/Type/field"`). |
 | `world.apply` | `{commands}` → `{applied, results, inverse}` | One atomic batch; on any error nothing changes. |
 | `world.step` | `{frames = 1, dt = 1/60}` → `{frame}` | Runs the world's systems with a fixed `dt`. |

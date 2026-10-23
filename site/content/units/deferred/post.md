@@ -251,7 +251,7 @@ The two matrices that do have to agree do not. The G-buffer rasterises the
 current frame through `jitteredProj`, but the matrix saved for next frame's
 motion vectors is the unjittered one:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;   // unjittered"}}
 
 so the velocity a fragment writes is the true screen motion plus that frame's own
 jitter:

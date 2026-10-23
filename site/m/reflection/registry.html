@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>12 · Reflection &amp; agent API · Type registry &amp; schema — OHAO Monograph</title>
+  <meta name="description" content="Registered types with docs, units and limits; the lint; the catalogue, the scene JSON Schema and schemaHash." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="reflection/registry" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Type registry &amp; schema</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">reflection</p>
+          <h1>Type registry &amp; schema</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Registered types with docs, units and limits; the lint; the catalogue, the scene JSON Schema and schemaHash.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#a-registry-written-out-by-hand">A registry written out by hand</a></li><li><a href="#what-the-hand-written-chain-gives-up-and-the-test-that-buys-it-back">What the hand-written chain gives up, and the test that buys it back</a></li><li><a href="#what-a-registration-carries">What a registration carries</a></li><li><a href="#what-the-registry-refuses">What the registry refuses</a></li><li><a href="#type-erased-component-operations">Type-erased component operations</a></li><li><a href="#two-exports-and-one-hash">Two exports and one hash</a></li><li><a href="#never-on-a-frame">Never on a frame</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="a-registry-written-out-by-hand">A registry written out by hand</h2></div>
+<div class="prose reveal">
+<p>Scene files, validation, commands, snapshots and the agent catalogue all need to know what a component is, field by field. That knowledge lives in a `reflect::TypeRegistry`, an ordinary object filled by `ecs::registerSceneTypes`. There is no global instance and no static registration. Each field is one call in a builder chain, a template over the member pointer:</p>
+<div class="citation-chip"><code class="citation-code">f.ops = std::make_unique&lt;MemberOps&lt;T, M&gt;&gt;(member);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L273" target="_blank" rel="noopener">ohao/reflect/registry.hpp:273</a></div>
+<p>`MemberOps&lt;T, M&gt;` implements `FieldOps` (write, tree read, streaming read, bit-exact equality, limit check, address) by calling `writeValue&lt;M&gt;`, `readValue&lt;M&gt;` and so on directly. A field operation is therefore one virtual call into code compiled for the member&#x27;s exact C++ type, with no switch over field kinds. `kindOf&lt;V&gt;()` maps the member type to one of 18 kinds and `static_assert`s on anything it cannot serialize, so an unsupported member fails to compile at its registration line.</p>
+<p>The design record states the choice (decision 1: own registry, member-pointer registration) without arguing against named alternatives, but the registrations show why the struct alone could not be enough. Most of a registration is information the C++ type does not contain:</p>
+<div class="citation-chip"><code class="citation-code">.field(&quot;intensity&quot;, &amp;Light::intensity).doc(&quot;Brightness multiplier on color&quot;).unitless().min(0.0).uiRange(0.0, 100.0)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.cpp#L41" target="_blank" rel="noopener">ohao/ecs/scene_types.cpp:41</a></div>
+<p>That line goes on to say the value is dimensionless, has a hard minimum of 0 and an editor range of 0 to 100. Automatic aggregate reflection could enumerate `Light`&#x27;s members, but it could not supply any of that.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-hand-written-chain-gives-up-and-the-test-that-buys-it-back">What the hand-written chain gives up, and the test that buys it back</h2></div>
+<div class="prose reveal">
+<p>Nothing ties the chain to the struct. Add a member to `Light` and forget the `.field` call, and the member is never saved or loaded, with no warning. Boost.PFR is used for the one thing it does well, counting an aggregate&#x27;s members, and it is linked into the tests only:</p>
+<div class="citation-chip"><code class="citation-code">const bool ok = t-&gt;fields.size() + t-&gt;skipped.size() == boost::pfr::tuple_size_v&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L240" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:240</a></div>
+<p>Each member must be either a field or an explicit `.skip(name, &amp;T::m, reason)`, and a skip needs a non-empty reason that the catalogue publishes. The test lists types by hand, and it also checks `checked == r.types().size()`, so a registered type cannot be left out of the list. It has two blind spots. It compares counts, not identities: a member registered twice under two names, with another one forgotten, still balances. And a component struct that was never registered at all is invisible to it.</p>
+</div>
+<div class="section-rule"><h2 id="what-a-registration-carries">What a registration carries</h2></div>
+<div class="prose reveal">
+<p>A `TypeInfo` holds the name, doc, version, role flags, the fields in registration order (also the key order in files), the skipped members, the upgrades, and what reflection needs to treat the type as raw memory: size, alignment, construct, destroy, copy, and a shared default instance. Per field, `FieldAttrs` carries:</p>
+<ul>
+<li>`doc` and `tooltip`.</li>
+<li>`unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 18 names, from `m` and `deg/s` to `linear-rgb`, `lux` and `nits`:</li>
+</ul>
+<div class="citation-chip"><code class="citation-code">constexpr std::array&lt;std::string_view, 18&gt; kUnits = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.cpp#L8" target="_blank" rel="noopener">ohao/reflect/registry.cpp:8</a></div>
+<ul>
+<li>`min` and `max`, which are hard limits enforced by validation and commands, per component for vectors. `uiRange` and `step` are editor hints and are not enforced.</li>
+<li>`color()` (only on vec3 and vec4), `angle()` (only on float), `hidden`, `readOnly`, and `alias`, an older name that is still accepted on load.</li>
+</ul>
+<p>Roles are flags on the type:</p>
+<ul>
+<li>`component()` makes the type a top-level block in an entity. Without it, the type is a nested value, such as the `*Prim` structs inside `MeshSource`.</li>
+<li>`runtime()` puts the type in the catalogue as `serialized: false`, and it is never saved. `WorldTransform`, `MeshRenderer` and the dirty tags are runtime.</li>
+<li>`singleton()` (`Camera`, `Environment`) means at most one per world. The scene decoder reports `E_SINGLETON`, and commands refuse a second one. `World` does not enforce it, so `registry().emplace&lt;Camera&gt;` on a second entity succeeds.</li>
+<li>`alwaysPresent()` (`Name`, `Transform`) marks a component that every entity has. It is left out of files when it is entirely default, and the remove command refuses it.</li>
+</ul>
+<p>The version starts at 1, and version N needs `.upgrade(v, fn)` for every v &lt; N. The catalogue lists the versions a type can read as `readsVersions`. Every engine type is at version 1 today, so only the test fixtures register upgrades.</p>
+<p>The chain&#x27;s grammar has one trap: an attribute call binds to the most recent field, or to the type when no field has been added yet. `.doc()` written before the first `.field` documents the type, and the same call written after it documents the field.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-registry-refuses">What the registry refuses</h2></div>
+<div class="prose reveal">
+<p>Builder mistakes are recorded in `errors()` rather than thrown. They include names that are not identifiers, duplicate type, enum, field or alias names, a C++ type registered twice, a field whose nested type is not registered yet (nested types must come first), a unit outside the vocabulary or on a non-numeric field, `min &gt; max`, `uiRange` with lo &gt; hi, a step that is not positive, an upgrade outside `[1, version)`, and a default that its own limits reject:</p>
+<div class="citation-chip"><code class="citation-code">m_r.error(&quot;field &quot; + m_t.name + &quot;.&quot; + f.name + &quot;: default value is outside [min, max]&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L304" target="_blank" rel="noopener">ohao/reflect/registry.hpp:304</a></div>
+<p>That last check runs against the default-constructed instance, so a type&#x27;s defaults can never fail the type&#x27;s own validation. `lint()` adds the rules agents depend on: docs on every type, field, enum and enum value; no empty enums; no serialized component without fields; an upgrade for every older version; and a unit or `unitless()` on every numeric field of a serialized type:</p>
+<div class="citation-chip"><code class="citation-code">issues.push_back(t-&gt;name + &quot;.&quot; + f.name + &quot;: numeric field needs .unit() or .unitless()&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L302" target="_blank" rel="noopener">ohao/reflect/schema.cpp:302</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>No engine code calls `lint()` or `errors()`. The only gate is `t01_registrations_lint_clean`. If a field is rejected in a build that skipped the tests, the field is simply absent from the registry: its member is never written or read, and nothing at runtime says so.</p></div>
+</div>
+<div class="section-rule"><h2 id="type-erased-component-operations">Type-erased component operations</h2></div>
+<div class="prose reveal">
+<p>Reflect never includes EnTT. Two seams connect it to the ECS. The first is `ValueTraits&lt;entt::entity&gt;`, specialized in `scene_types.hpp`, which turns entity handle members into `EntityRef` fields that files write as the target&#x27;s id. The second is `TypeInfo::host`, an opaque pointer that the ECS fills with a `ComponentOps` built by `makeComponentOps&lt;T&gt;()`:</p>
+<ul>
+<li>`emplace`, which calls `emplace_or_replace` and so fires EnTT signals.</li>
+<li>`tryGet`, `remove` and `count`.</li>
+<li>`capture` and `restore` for snapshot columns.</li>
+<li>`pool` and `tryGetIn`, which resolve the storage once per pass rather than once per entity.</li>
+<li>`writeFields`, the per-type scene writer, found by a requires-expression:</li>
+</ul>
+<div class="citation-chip"><code class="citation-code">if constexpr (requires(const T&amp; v, FieldSink&amp; s) { writeFields(v, &amp;v, s); }) return &amp;writeFieldsErased&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.hpp#L60" target="_blank" rel="noopener">ohao/ecs/scene_types.hpp:60</a></div>
+<p>If no overload is visible, `writeFields` is null and the save falls back to the generic reflection writer. Tag types carry no ops. Nothing requires the ops, either: a serialized component registered without `.host(...)` is quietly left out of every save:</p>
+<div class="citation-chip"><code class="citation-code">if (const ComponentOps* ops = componentOps(*t)) out.push_back({t, ops});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_io.cpp#L45" target="_blank" rel="noopener">ohao/ecs/scene_io.cpp:45</a></div>
+<p>On load, its block is rejected as &quot;not a component (it is a nested value type)&quot;. Lint cannot see this, because reflect never looks inside `host`. For engine types, `t21_every_authoring_component_has_a_writer` catches it.</p>
+</div>
+<div class="section-rule"><h2 id="two-exports-and-one-hash">Two exports and one hash</h2></div>
+<div class="prose reveal">
+<p>`exportCatalogue` writes `ohao_schema.json`: the unit vocabulary, the error-code table, the API method table, and every enum and type in registration order with every attribute, its default and its skipped members. A field shows unit `&quot;1&quot;` when it is `unitless()` and `null` when it has no unit. `schemaHash` is a 64-bit FNV-1a of the compact catalogue body, without the `schemaHash` member itself:</p>
+<div class="citation-chip"><code class="citation-code">return fnv1a64(w.str());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L311" target="_blank" rel="noopener">ohao/reflect/schema.cpp:311</a></div>
+<p>Every byte of that body counts, so rewording a doc string changes the hash just as a new field does (`t12_catalogue_is_deterministic_and_hashed` tests exactly that). An agent comparing hashes sees any edit to the registry as a changed engine.</p>
+<p>`exportSceneJsonSchema` writes a draft 2020-12 schema for `*.scene.json` from the serialized types only:</p>
+<ul>
+<li>Known structs set `additionalProperties: false`, and unknown component blocks are accepted as opaque objects.</li>
+<li>Ids must match `^(?!0{16})[0-9a-f]{16}$`.</li>
+<li>Limits become `minimum` and `maximum`, clamped to the int32 or uint32 range. Quat and mat4 drop theirs.</li>
+<li>Aliases appear as deprecated properties.</li>
+<li>Cross-entity rules (unique ids, parents, cycles, singletons) stay with the engine&#x27;s validator.</li>
+</ul>
+<p>There is a sharp edge between the two exports. `ohao schema` writes the catalogue with the API method table:</p>
+<div class="citation-chip"><code class="citation-code">const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L328" target="_blank" rel="noopener">tools/ohao/main.cpp:328</a></div>
+<p>The scene schema, however, embeds a hash computed with no methods:</p>
+<div class="citation-chip"><code class="citation-code">h.hex64(schemaHash(r));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L332" target="_blank" rel="noopener">ohao/reflect/schema.cpp:332</a></div>
+<p>So one `ohao schema` run writes two files that name different hashes: the catalogue&#x27;s covers the method table, the scene schema&#x27;s does not (a scene file does not depend on the API). A cache keyed on one cannot be checked against the other.</p>
+</div>
+<div class="section-rule"><h2 id="never-on-a-frame">Never on a frame</h2></div>
+<div class="prose reveal">
+<p>`t13_no_reflection_on_hot_paths` scans every file under `ohao/render` and `ohao/gpu`, plus the transform, render-extract, instantiate and spin system sources, for an `#include` naming `reflect/` or `api/`:</p>
+<div class="citation-chip"><code class="citation-code">for (const char* dir : {&quot;ohao/render&quot;, &quot;ohao/gpu&quot;})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L693" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:693</a></div>
+<p>A second test holds `ohao/reflect` to glm and the standard library, with no EnTT, Vulkan, `core/`, `gpu/`, `render/` or `ecs/` includes. Both tests match include lines as text and do not follow includes. A system source that included `ecs/scene_types.hpp` would pull in the whole registry and still pass. Inside `ohao/`, only `scene_types.cpp`, `scene_io.cpp`, `snapshot.cpp` and `api/internal.hpp` include that header today.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/reflect/registry.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/scene_types.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/scene/scene_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/reflect/registry.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/reflect/schema.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/scene_types.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/scene_io.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/ohao/main.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/reflect/reflect_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/reflect/type_info.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="index.html"><div class="label">← Hub</div><div class="title">12 · Reflection &amp; agent API</div></a><a class="next" href="scene-files.html"><div class="label">Next →</div><div class="title">Canonical scene files</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

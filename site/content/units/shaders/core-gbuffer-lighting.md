@@ -145,7 +145,7 @@ so a moving object is reprojected from where it was, and TAA's history follows i
 rather than smearing it. What it does not capture is the other half of the pair: the
 current projection is Halton-jittered for TAA while the stored previous one is not:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_prevViewProj = m_proj * m_view;   // unjittered"}}
 
 so a static camera over a static scene still writes a non-zero velocity — that
 frame's jitter offset, and nothing else. It is smaller than it sounds: the Halton

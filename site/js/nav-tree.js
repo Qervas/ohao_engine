@@ -82,6 +82,48 @@ window.OHAO_NAV_TREE = [
     ]
   },
   {
+    "id": "reflection",
+    "title": "12 \u00b7 Reflection & agent API",
+    "href": "m/reflection/index.html",
+    "children": [
+      {
+        "id": "reflection/registry",
+        "title": "Type registry & schema",
+        "href": "m/reflection/registry.html"
+      },
+      {
+        "id": "reflection/scene-files",
+        "title": "Canonical scene files",
+        "href": "m/reflection/scene-files.html"
+      },
+      {
+        "id": "reflection/load-validate",
+        "title": "Loading & validation",
+        "href": "m/reflection/load-validate.html"
+      },
+      {
+        "id": "reflection/snapshots",
+        "title": "Snapshots & restore",
+        "href": "m/reflection/snapshots.html"
+      },
+      {
+        "id": "reflection/api",
+        "title": "Session, commands & queries",
+        "href": "m/reflection/api.html"
+      },
+      {
+        "id": "reflection/instantiate",
+        "title": "Instantiate & the scene view",
+        "href": "m/reflection/instantiate.html"
+      },
+      {
+        "id": "reflection/cli",
+        "title": "The ohao CLI & render host",
+        "href": "m/reflection/cli.html"
+      }
+    ]
+  },
+  {
     "id": "gpu",
     "title": "03 \u00b7 GPU / Vulkan",
     "href": "m/gpu.html",

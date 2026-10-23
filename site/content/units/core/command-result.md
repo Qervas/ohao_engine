@@ -115,9 +115,10 @@ third "empty" state to test for — the only public ways in are the named `ok` a
 
 The intended call shape is a condition-declaration: it binds the result, tests it
 contextually, and keeps both `value()` and `error()` in scope for their
-respective branches.
+respective branches. `model_viewer` loads a model from outside the project that
+way, and its trailing `else` prints `loaded.error()` from the same declaration:
 
-{{cite examples/model_viewer.cpp "if (auto loadedModel = ModelLoader::loadResult(modelPath)) {"}}
+{{cite examples/model_viewer.cpp "} else if (auto loaded = ModelLoader::loadResult(modelPath)) {"}}
 
 `operator bool` being explicit is not what permits that — a condition converts
 contextually either way. What `explicit` buys is the rejection of everything

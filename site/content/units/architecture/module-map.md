@@ -27,16 +27,16 @@ load-bearing evidence for what this page is about.
 
 {{figure architecture-module-map-link-graph "Conceptual. Solid edges are read from the target_link_libraries calls in each module's CMakeLists.txt; dashed edges are #include lines that have no corresponding link edge. Third-party edges (Jolt, miniaudio, Vulkan, VMA, assimp, EnTT, GLFW) and transitive core and scene edges are omitted. Not a measured link-time symbol graph."}}
 
-## Eight archives, and a directory that is not one
+## Ten archives, and a directory that is not one
 
-`ohao/CMakeLists.txt` adds exactly eight subdirectories, and eight archives come
+`ohao/CMakeLists.txt` adds exactly ten subdirectories, and ten archives come
 out — but not one target per directory:
 
 {{cite ohao/CMakeLists.txt "add_subdirectory(render)"}}
 
 `ohao/gpu/` declares no library at all; its entire `CMakeLists.txt` is one
 `add_subdirectory(vulkan)` line, and `ohao_gpu_vulkan` is defined a level down. Two
-of the other seven are conditional rather than literal: `ohao/core/` degrades to an
+of the other nine are conditional rather than literal: `ohao/core/` degrades to an
 `INTERFACE` library if its `.cpp` files ever disappear, and `ohao/render/` omits
 the `STATIC` keyword, so `ohao_renderer`'s type follows `BUILD_SHARED_LIBS` — `OFF`
 in this configuration, hence static in practice.
@@ -59,20 +59,28 @@ exercise them, and the physics archive is where that module's mass is — it car
 
 {{cite ohao/physics/CMakeLists.txt "target_link_libraries(ohao_physics PUBLIC Jolt)"}}
 
-The last two archives sit above the rest and add no edge back down. `ohao_ecs` is
-the game world — an EnTT registry, the ordered systems, the transform pass and the
-render extract. It links core, the renderer, scene, glm and EnTT, and it is the
-only archive that sees EnTT:
+`ohao_reflect` sits beside core: the type registry, schema export and the JSON
+reader and writer, with no engine dependency at all (glm, and fast_float privately).
 
-{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene glm EnTT::EnTT)"}}
+The next three archives sit above the rest and add no edge back down. `ohao_ecs` is
+the game world — an EnTT registry, the ordered systems (spin, transform, instantiate,
+the render extract), the scene codec and snapshots. It links core, the renderer,
+scene and reflect, and it is the only engine archive that sees EnTT:
 
-Every `<entt/entt.hpp>` include in the tree sits under `ohao/ecs/`; the renderer's
-side of the seam is `render::RenderScene`, a plain-struct GPU world that knows
-nothing about registries. The ECS includes render headers (`RenderScene`,
-`model_upload`, the camera framer) and calls into `libohao_renderer.a` — seven
-distinct undefined symbols in the ECS archive that only the renderer defines — and
-nothing in core, scene, gpu or render includes an `ecs/` header, so the edge points
-one way.
+{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect glm EnTT::EnTT"}}
+
+Every `<entt/entt.hpp>` include in the engine sits under `ohao/ecs/` (and above it, in
+`api/` and the tools); the renderer's side of the seam is `render::RenderScene`, a
+plain-struct GPU world that knows nothing about registries. The ECS includes render
+headers (`RenderScene`, `model_upload`, the camera framer) and calls into
+`libohao_renderer.a`, and nothing in core, reflect, scene, gpu or render includes an
+`ecs/` header, so the edge points one way.
+
+`ohao_api` is the agent API — the `Session` method table, edit commands and queries —
+over the ECS and reflect, and it never touches the GPU: rendering is a handler a host
+installs.
+
+{{cite ohao/api/CMakeLists.txt "target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_reflect ohao_unordered_dense)"}}
 
 `ohao_runtime` — window, input, fixed-step clock, application loop — is the host
 layer. It links core, the ECS, the GPU archive and GLFW:

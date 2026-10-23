@@ -641,7 +641,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     timerEnd();  // Gizmo
 
     // Store current view-proj for next frame's motion vectors
-    m_prevViewProj = m_proj * m_view;
+    m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
 }
 
 void DeferredRenderer::onResize(uint32_t width, uint32_t height) {

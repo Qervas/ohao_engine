@@ -105,12 +105,12 @@ backend's real header.
 ## One descriptor set per frame slot, rewritten every frame
 
 There is no descriptor caching: the pool holds one set per frame in flight, and
-`render()` rebuilds up to thirty writes from scratch into the set of the frame slot
-it is given before every trace. The array is sized with two entries of slack above
-the worst case, so adding more than two unconditional bindings without growing it
-overruns a stack buffer.
+`render()` rebuilds up to thirty-seven writes from scratch into the set of the frame
+slot it is given before every trace. The array is sized with three entries of slack
+above the worst case, so adding more than three unconditional bindings without
+growing it overruns a stack buffer.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[40] = {};"}}
 
 The scene bindings are not owned here. `setSceneBuffers` copies the handles the
 `RenderScene` currently exposes — TLAS, arenas, tables, instance buffers and the
@@ -206,11 +206,11 @@ a stale "already transitioned".
 
 {{cite ohao/render/rt/path_tracer_images.cpp "m_nrdComposeFirstFrame = true;"}}
 
-## Seven images that are allocated and never bound
+## Seven images only one raygen reads
 
 The descriptor set layout declares 37 bindings, numbered 0–37 with 3 unused. Bindings 29–34 are the ReSTIR GI
 reservoir ping-pong and 35 is the DLSS specular hit-distance guide; all seven images
-are created and destroyed with the rest, and the realtime raygen declares all seven.
+are created and destroyed with the rest, and only the realtime raygen declares them.
 It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, declared
 `readonly` and only ever `imageLoad`ed. Stores go to 32–34, the *curr* half declared
 `writeonly`, and to 35.
@@ -219,10 +219,15 @@ It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, de
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0;"}}
 
-No `vkUpdateDescriptorSets` call anywhere in `ohao/` targets those bindings — the
-per-frame rewrite stops at 28, and only binding 12 carries `PARTIALLY_BOUND`. Those
-descriptors are never written while a shader reads them. Treat the reservoir plumbing
-as allocated-but-unwired until a writer appears.
+The per-frame rewrite fills all seven in every set, whichever profile owns the
+`PathTracer`, swapping prev and curr each frame. It has to: the realtime raygen
+touches them every frame, only binding 12 carries `PARTIALLY_BOUND`, and with these
+bindings left unwritten `rt_realtime` lost the device. A barrier takes all seven to
+`GENERAL` before the trace — the reservoirs from `UNDEFINED` until their half of the
+ping-pong has been written once, the hit-distance guide from `UNDEFINED` every frame,
+since the raygen rewrites it whole.
+
+{{cite ohao/render/rt/path_tracer_render.cpp "addImage(35, &specHitDistInfo);"}}
 
 :::key
 `PathTracer` holds only *borrowed* handles for scene data. The environment CDF

@@ -90,13 +90,21 @@ also a footgun: ~6 MB next to a sub-500 KB golden, and `.gitignore` covers only
 
 ## Which shader the goldens actually gate
 
-The manifest is four scenes invoked through the example binaries with the denoiser
-explicitly off: the harness pins raw deterministic beauty, treating denoised
-output as a separate, unpinned concern. Two scenes are path traced and two are the
-deferred hybrid on the same content, `cornell_box_deferred` and
-`damaged_helmet_deferred`.
+The manifest is ten scenes, all with the denoiser explicitly off: the harness pins
+raw deterministic beauty, treating denoised output as a separate, unpinned concern.
+Five run the example binaries. Two of those are path traced on the offline profile,
+two are the deferred hybrid on the same content (`cornell_box_deferred` and
+`damaged_helmet_deferred`), and one, `cornell_box_rt_realtime`, runs the realtime
+profile.
 
 {{cite tests/golden/manifest.json "./build/cornell_box {out} 16 --denoise=none"}}
+
+The other five render the checked-in scene files in `assets/scenes/` through the
+`ohao` CLI, one per example scene, and compare against the *example's* golden
+rather than a copy of it — two goldens would let the file and the code drift apart
+unnoticed. Five PNGs back ten scenes.
+
+{{cite tests/golden/manifest.json "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode rt_offline --spp 16 --denoise none"}}
 
 The RT profile that command selects is not obvious. With no mode flag the
 examples default to `RenderMode::RTOffline`, which instantiates
@@ -108,8 +116,8 @@ member initializer.
 
 That covers more than one file. `RTRealtimeRenderer` names the same miss,
 closest-hit and any-hit SPIR-V modules as the offline profile and differs only in
-the raygen entry, so three of the realtime profile's four stages are already under
-the golden.
+the raygen entry, so three of the realtime profile's four stages are under the
+offline goldens before `cornell_box_rt_realtime` adds the fourth.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_realtime.rgen.spv"}}
 
@@ -120,10 +128,16 @@ realtime raygen includes.
 
 {{cite shaders/rt/pt_raygen_offline.rgen "includes/rt/nrd_frontend.glsl"}}
 
-What has no golden is `pt_raygen_realtime.rgen` itself, every denoised path, and
-the PCG branch of `sampler_api.glsl` — the sampler is a specialization constant
-baked at pipeline creation, and the offline profile bakes Sobol, so the branch the
-realtime settings ask for is never executed under the gate.
+The realtime scene was added after `rt_realtime` lost the device and wrote an
+all-black frame — bindings 29–35 were never written into the descriptor set — and
+it is looser than the offline pair (`max_abs_diff` 10, `max_diff_frac` 0.05),
+because `pt_raygen_realtime.rgen` reads neighbour pixels of images the same
+dispatch writes and is not bit-exact run to run. It also puts the PCG branch of
+`sampler_api.glsl` under the gate: the sampler is a specialization constant baked at
+pipeline creation, the offline profile bakes Sobol, and the realtime profile PCG.
+What has no golden is every denoised path.
+
+{{cite tests/golden/manifest.json "bindings 29-35 (reservoirs, spec hit-distance) were never written into the descriptor set"}}
 
 The deferred pair covers the other half. They render the G-buffer, the cascaded
 shadow pass, deferred lighting, the post chain and, where the device supports it, the
@@ -139,7 +153,7 @@ count, and the count is ignored: the same line fixes a deferred run at ten frame
 
 {{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
 
-All four scenes run on a fresh clone, which was not true for two months and is
+All ten scenes run on a fresh clone, which was not true for two months and is
 worth the paragraph.
 
 The second scene used to invoke `model_viewer` on
@@ -240,6 +254,23 @@ have provided nobody reads its `ALL PASS` as a claim about the image.
 
 {{cite tests/renderer/renderer_test.cpp "=== ALL PASS ==="}}
 
+Three more binaries in the same directory do inspect pixels, by comparing renders
+with each other rather than with a committed image, and each ends with a one-line
+JSON summary. The first two build a fresh renderer per render. `instantiate_gpu_test` renders the
+deferred Cornell box once from hand-spawned meshes and once from `MeshSource`
+entities through the instantiate system, and requires the two to be bit-identical.
+`scene_view_gpu_test` renders the Cornell box and `model_viewer`'s helmet room three
+ways — camera and environment set by hand, applied from the world's `Camera` and
+`Environment` entities, and after a round trip through scene text — and requires
+them to match: exactly for deferred, within the RT path's rare 1-LSB flips for the
+helmet. `restore_render_gpu_test` drives the CLI's own session and render host on
+the checked-in Cornell scene with one renderer per sequence: a capture, a move that
+must change the image, a `world.restore` after which the capture must equal the
+first — bit-identical with post effects off, within 1 LSB with TAA, SSAO and bloom
+on. Validation is on for every deferred run and must report nothing.
+
+{{cite tests/renderer/scene_view_gpu_test.cpp "{"cornell: the Camera entity renders exactly as the hand-set camera", c12.bytes == 0},"}}
+
 `engine_tests` runs nine sections. Two are the ones its header comment numbers first —
 `EventBus` and `CommandHistory` — and a third, `Assets`, checks the loader's extension
 list; scene entities are covered by `ecs_tests`. The fourth, `runMetaTests`, is the only
@@ -300,7 +331,7 @@ and handle state). They share `engine_tests`' hand-rolled `TEST_BEGIN`/`TEST_PAS
 harness rather than GoogleTest, and each is a plain `main` returning non-zero on
 failure.
 
-Two more binaries cover the entity layer and the windowed host. `ecs_tests` (20
+Two more binaries cover the entity layer and the windowed host. `ecs_tests` (26
 cases) checks transform propagation and hierarchy rules — parenting, cyclic
 `setParent` rejection, subtree destruction, system order — and, on a headless
 renderer that it skips when no device exists, the render extract: slot creation and
@@ -310,6 +341,30 @@ skipped. `runtime_tests` (21 cases) needs no GPU: it pins the fixed-step clock, 
 input action map and the swapchain-selection helpers.
 
 {{cite CMakeLists.txt "option(BUILD_PHYSICS_TESTS"}}
+
+The scene-file layer has its own CPU-only suites, each a plain `main` that ends with
+a one-line JSON summary. `reflect_tests` covers the type registry, schema export,
+the JSON writer and reader, float formatting, and the rule that the ECS system
+sources may not include `reflect/` or `api/`. `scene_tests` covers the engine's
+component registrations, entity ids, the scene codec with its error corpus and
+migration, snapshots, and instantiate against a fake backend. `api_tests` covers the
+agent API's methods, commands and their inverses, queries and summaries;
+`systems_tests` the engine-provided spin system.
+
+{{cite CMakeLists.txt "option(BUILD_API_TESTS"}}
+
+Two Python harnesses sit beside them. `tests/cli/check_cli.py` runs each case in
+`tests/cli/cases.json` twice from a fresh scratch directory, requiring the same
+bytes both times and, where a case says so, stdout and written files equal to
+checked-in expectations; `--cpu-only` skips the cases that create a device. Its last
+two cases are what keep the checked-in scenes honest: each example's
+`--save-scene` output must equal its file under `assets/scenes/` byte for byte, so
+editing a builder without regenerating the file fails here.
+
+{{cite tests/cli/cases.json ""files": {"build/cli_tmp/cornell_box.scene.json": "assets/scenes/cornell_box.scene.json"}},"}}
+
+`tests/reflect/check_scene_schema.py` runs the generated JSON Schemas through a stock
+validator and needs the `jsonschema` package.
 
 ## What only looks wired up
 
@@ -347,10 +402,10 @@ far — logging each feature checked against a committed reference render. Nothi
 scripts it; it is a review artifact, not a gate.
 
 :::key
-The whole automated image-quality net is four 640×360 PNGs, compared under two
-tolerances, by a hook a developer must opt into, on a machine with a GPU. Every scene
-loads only tracked assets, so on a fresh clone all four run — but only where the hook
-is installed and the engine built. Judge this suite by what executes, not by what is
+The whole automated image-quality net is five 640×360 PNGs backing ten scenes,
+compared under two tolerances, by a hook a developer must opt into, on a machine with
+a GPU. Every scene loads only tracked assets, so on a fresh clone all ten run — but
+only where the hook is installed and the engine built. Judge this suite by what executes, not by what is
 checked in.
 :::
 
@@ -359,4 +414,4 @@ checked in.
 - Re-enabling temporal reprojection in `pt_raygen_offline.rgen` does not merely change the goldens, it makes them unreproducible: the race has no defined ordering, so `--selftest` starts failing against itself.
 - The harness must run from the repository root — manifest commands and golden paths are repo-relative. The executable is resolved through the per-configuration subdirectories and the `.exe` suffix, so `./build/cornell_box` finds `build/Release/cornell_box.exe`; one that is genuinely absent is reported as a scene FAIL (`could not launch …`), not a traceback. The pre-push hook sidesteps the working-directory requirement by `cd`-ing to the toplevel first.
 - Goldens must come from `--update`, which stores the downscaled image. One regenerated at full resolution is a shape mismatch, reported cleanly as `size mismatch vs golden` in check mode. `--selftest` never opens the golden at all — it renders twice and diffs actual against actual — but it dereferences its stats dict unguarded, so if the two renders of one command ever disagree in shape it raises instead of reporting.
-- Adding a manifest scene is the only way a fixed bug becomes non-regressible; nothing else in the tree gates an image.
+- Adding a manifest scene is the only way a fixed bug becomes non-regressible; nothing else in the tree pins an image against a committed reference — the `*_gpu_test`s only compare fresh renders with each other.

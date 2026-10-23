@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>12 · Reflection &amp; agent API — OHAO Monograph</title>
+  <meta name="description" content="12 · Reflection &amp; agent API hub" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="reflection/index" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> · 12 · Reflection &amp; agent API</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">▸</div>
+        <div>
+          <p class="chapter-kicker">Module hub</p>
+          <h1>12 · Reflection &amp; agent API</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Module</div>
+        <p>Design units under <strong>reflection</strong> — what it is, how it is implemented, why the design exists.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page. Full tree: <a href="../sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="registry.html">
+          <div class="num">registry</div>
+          <h3>Type registry &amp; schema</h3>
+          <p>Registered types with docs, units and limits; the lint; the catalogue, the scene JSON Schema and schemaHash.</p>
+        </a>
+        <a class="tree-card" href="scene-files.html">
+          <div class="num">scene-files</div>
+          <h3>Canonical scene files</h3>
+          <p>Stable entity ids, defaults omitted, the one pretty layout, per-type writers and shortest floats.</p>
+        </a>
+        <a class="tree-card" href="load-validate.html">
+          <div class="num">load-validate</div>
+          <h3>Loading &amp; validation</h3>
+          <p>Two-phase load, the streaming fast path and the tree decoder, structured diagnostics, versions and upgrades.</p>
+        </a>
+        <a class="tree-card" href="snapshots.html">
+          <div class="num">snapshots</div>
+          <h3>Snapshots &amp; restore</h3>
+          <p>Columnar captures of every saved component, and a restore that writes only what differs.</p>
+        </a>
+        <a class="tree-card" href="api.html">
+          <div class="num">api</div>
+          <h3>Session, commands &amp; queries</h3>
+          <p>The method table, atomic command batches with inverses and rollback, $k references, queries and summaries.</p>
+        </a>
+        <a class="tree-card" href="instantiate.html">
+          <div class="num">instantiate</div>
+          <h3>Instantiate &amp; the scene view</h3>
+          <p>MeshSource to MeshRenderer through a backend seam, shared meshes, the asset resolver, Camera and Environment.</p>
+        </a>
+        <a class="tree-card" href="cli.html">
+          <div class="num">cli</div>
+          <h3>The ohao CLI &amp; render host</h3>
+          <p>One JSON document on stdout, exit classes, scripts as RPC requests, render.capture through a host.</p>
+        </a>
+      </div>
+
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -28,11 +28,11 @@ float.
 
 Before OHAO carried a continuous metallic, `.x` did double duty. A *negative*
 value meant "metal"; on top of that, ±10 was added as a *shape* flag — sphere
-versus cube, detected on the C++ side from vertex count — which works because
-roughness itself never reaches 1, so a magnitude of 10 or more can only be the
-flag:
+versus cube, detected on the C++ side from vertex count (`manyVertices`, more than
+100 vertices) — which works because roughness itself never reaches 1, so a
+magnitude of 10 or more can only be the flag:
 
-{{cite ohao/render/scene/model_upload.cpp "if (model.vertices.size() > 100) packed += (packed >= 0 ? 10.0f : -10.0f);"}}
+{{cite ohao/render/scene/model_upload.cpp "if (model.manyVertices) packed += (packed >= 0 ? 10.0f : -10.0f);"}}
 
 `unpackHitPbr` still honours both rules, gating the sign one on `.y` being near
 zero — the signature of a producer that never filled the metallic channel:
@@ -47,8 +47,10 @@ positive and never near 10:
 {{cite shaders/rt/pt_closesthit.rchit "roughness = max(roughness, 0.04);"}}
 
 The *encoding* is not dead, though — only its route into the payload is.
-`giMaterialLegacyPacked` still builds the signed, shifted float, per model, and the
-render extractor copies it into the instance table's `giAlbedoPacked.a`:
+`giMaterialLegacyPacked` still builds the signed, shifted float, per model —
+`spawn` and the instantiate system store it on the entity as a `GiMaterialLegacy`
+component — and the render extractor copies it into the instance table's
+`giAlbedoPacked.a`:
 
 {{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
 

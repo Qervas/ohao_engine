@@ -55,14 +55,15 @@ object-space coordinate:
 
 A box normal is right for an axis-aligned quad and wrong for anything curved,
 which is why the two-sided flip is gated on that same branch. In the shipped
-scenes neither ever runs. Each Cornell wall is handed an explicit inward unit
-normal that `addQuad` copies into all four of its vertices, the primitive sphere
-uses its normalised position, and the shader reads `Vertex::normal` verbatim out
-of the arena — so the squared length is 1, the interpolated branch always wins,
+scenes neither ever runs. Each Cornell wall is a `QuadPrim` carrying an explicit
+inward unit normal, which `PrimitiveMeshGenerator::generateQuad` copies into all
+four of its vertices when the instantiate system builds the mesh; the primitive
+sphere uses its normalised position, and the shader reads `Vertex::normal` verbatim
+out of the arena — so the squared length is 1, the interpolated branch always wins,
 and the fallback is dead code on the reference scene rather than the thing that
 makes it work.
 
-{{cite examples/cornell_box.cpp "v.normal = normal;"}}
+{{cite ohao/scene/asset/primitive_mesh_generator.cpp "v.normal = normal;"}}
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "vertex.normal = {x, y, z};"}}
 {{cite shaders/rt/pt_closesthit.rchit "vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }"}}
 

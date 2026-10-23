@@ -5,23 +5,46 @@ title: Examples map
 standard: v2
 ---
 
-## A scene is a `main()`
+## A scene is a `main()` — or a file the `main()` can write
 
-OHAO has no scene file format. There is no loader that turns a `.scene` into
-entities, and nothing under `ohao/scene/` deserialises anything but a mesh asset.
-A scene exists only as the C++ that constructs it — an `ecs::World`, then
-`ecs::spawnModel` for each mesh (which registers the geometry and materials with the
-renderer's `RenderScene` and creates an entity carrying a `MeshRenderer`) and
-`ecs::spawnLight` for each light. The drivers install the render extract on the world
-once, and from then on `world.update()` is what turns entity edits into GPU state.
+The examples build their scenes two ways. The older way is still how `turntable`,
+`env_demo` and `ohao_game` work: the scene exists only as the C++ that constructs it —
+an `ecs::World`, then `ecs::spawnModel` for each mesh (which registers the geometry
+and materials with the renderer's `RenderScene` and creates an entity carrying a
+`MeshRenderer`) and `ecs::spawnLight` for each light.
+
+`cornell_box` and `model_viewer` build theirs as data. Their worlds come from
+GPU-free builders in `examples/example_scenes.hpp` — `buildCornellBox` and
+`buildModelViewerScene` — that create only authoring components: a `Camera`, an
+`Environment`, `Light`s, and `MeshSource` entities naming a primitive (`QuadPrim`,
+`BoxPrim`, `SpherePrim`) or a model asset, each with a `MaterialOverride`:
+
+{{cite examples/example_scenes.hpp "addMesh(world, name, ecs::MeshSource{ecs::QuadPrim{a, b, c, d, normal, color}}, surface(color, 0.95f));"}}
+
+The instantiate system turns each `MeshSource` into a `MeshRenderer`, and
+`host::applySceneView` (`tools/ohao/scene_host.hpp`) pushes the camera and the
+environment into the renderer. Because nothing in the builder touches the GPU, both
+examples take `--save-scene <path>`, which writes the world as a canonical scene file
+and exits before a renderer exists:
+
+{{cite examples/cornell_box.cpp "// The world is authoring data only; --save-scene writes it without a renderer."}}
+
+The two files that flag produced are checked in as `assets/scenes/cornell_box.scene.json`
+and `assets/scenes/damaged_helmet.scene.json`, and they are what the `ohao` CLI
+(`tools/ohao`) loads: `schema`, `validate`, `fmt`, `apply`, `query`, `summary`, and
+`run`, whose `--render` renders a scene file through the same instantiate and
+scene-view path. In
+every driver the render extract is installed on the world once, and from then on
+`world.update()` is what turns entity edits into GPU state.
 
 `examples/` builds four offline binaries and one windowed host. The four
-offline ones are half scene description, half harness. `cornell_box` writes its walls as raw `Vertex` quads and stacks twelve
-coloured sphere lights in the box as a many-light stress case. `model_viewer`
-builds a bedroom — bed, headboard, nightstand — around whatever model you pass,
-sized from the model's own bounds by `SceneFramer`. `turntable` picks its room
-from a mode string and orbits. `env_demo` drops a 50 m procedural ground quad
-under the model so it stops floating in void.
+offline ones are half scene description, half harness. `cornell_box` authors its
+five walls as `QuadPrim`s and stacks twelve coloured sphere lights in the box as a
+many-light stress case. `model_viewer` builds a bedroom — bed, headboard,
+nightstand, as `BoxPrim`s — around whatever model you pass, sized from the model's
+own bounds by `SceneFramer`. `turntable` picks its room from a mode string and
+orbits. `env_demo` drops a 50 m procedural ground quad under the model so it stops
+floating in void.
 
 The fifth, `ohao_game`, is not a harness. It hands a helmet-on-a-floor scene to
 `ohao_runtime`'s `Application`, which renders deferred into a swapchain and runs a
@@ -74,6 +97,13 @@ seventh and `model_viewer`'s thirty save the twenty-seventh. Both ignore the spp
 argument entirely.
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
+
+The `ohao` CLI's render host copies the rule — `spp + 3` RT frames, ten deferred
+unless `--frames` says otherwise — so a checked-in scene rendered by `ohao run`
+lands on the same frame count as the example that wrote it; the helmet's deferred
+run has to ask for its thirty explicitly.
+
+{{cite tools/ohao/render_host.cpp "const int frames = r.frames > 0 ? r.frames : (mode == RenderMode::Deferred ? 10 : r.spp + 3);"}}
 
 ## Where the formula actually holds
 
@@ -224,17 +254,21 @@ that is not `RTRealtime` — including `Deferred`.
 
 ## One model, one entity, N submeshes
 
-`model_viewer` spawns a multi-material model as a single entity. `uploadModel` does
-the splitting that the renderer needs, on the index buffer rather than the geometry:
+`model_viewer` gives a multi-material model a single entity. A model inside the
+project becomes a `MeshSource` naming the asset, which the instantiate system loads
+and uploads; one outside it is attached in memory with `ecs::attachModel`. Both
+paths reach `uploadModelMesh`, which does the splitting that the renderer needs, on
+the index buffer rather than the geometry:
 it walks the per-triangle material list and emits one submesh per contiguous run of
 equal materials, so the vertex data stays welded and the mesh keeps one BLAS.
 
 {{cite ohao/render/scene/model_upload.cpp "std::vector<SubmeshDesc> materialRuns(const Model& model, uint32_t triangleCount) {"}}
 
 The entity's `MeshRenderer` lists one material handle per submesh, in submesh order,
-and the driver spawns the whole model in one call:
+and the builder creates the whole model as one entity, whichever path then gives it
+a mesh:
 
-{{cite examples/model_viewer.cpp "const entt::entity modelEntity = spawn(*model, "Model", modelTransform, modelMaterial);"}}
+{{cite examples/example_scenes.hpp "out.model = world.create("Model", out.modelTransform);"}}
 
 Both render paths the driver can select read that one description. The G-buffer pass
 draws one call per submesh, and the path tracer finds a triangle's material through
@@ -262,6 +296,6 @@ buffer or refuses to accumulate into it.
 
 - Under `--denoise=none`, `render()` must be called `spp + MAX_FRAMES_IN_FLIGHT` times to land `spp` accumulated samples in the host buffer. The same loop hands OIDN `spp + 3` samples and `Atrous`/`DLSSRR` exactly 1. If the ring depth ever changes, every driver's `+ 3` is wrong and only `--denoise=none` output will show it.
 - Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.
-- The `ecs::World` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the world second, so reverse-order destruction of locals gets it right; the render extract releases its instances and lights from the `RenderScene` as the world goes. Swapping those two declarations would make the extract release into a render world that has already been shut down.
+- The `ecs::World` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the world second, so reverse-order destruction of locals gets it right; the render extract releases its instances and lights from the `RenderScene` as the world goes, and in `cornell_box` and `model_viewer` the instantiate system releases its meshes. Swapping those two declarations would make the extract release into a render world that has already been shut down.
 - `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.
 - An unknown trailing flag is silently ignored by `parseRenderFlags` and by `env_demo`'s own parser — typos degrade to defaults rather than failing the run.

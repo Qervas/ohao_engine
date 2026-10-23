@@ -57,7 +57,7 @@
 <p>All three branches land the model identically — feet on the floor at y = −S, AABB centre on x = 0 and z = 0 — which is the invariant the camera solve leans on.</p>
 <p>The heuristic&#x27;s failure mode is exact and easy to hit: a Y-up model that is deeper than it is tall — a car, a ground plane, a sofa — reads as Z-up and gets tipped onto its face. The header declares an escape hatch for the one format where the answer is known a priori, since the glTF specification mandates Y-up:</p>
 <div class="citation-chip"><code class="citation-code">bool forceYUp = false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.hpp#L44" target="_blank" rel="noopener">ohao/render/camera/scene_framer.hpp:44</a></div>
-<p>No caller in the tree passes it. Both call sites use the default, and `env_demo` re-implements the same `extent.y &gt;= extent.z` test inline without any override at all. The parameter is dead; the heuristic it guards is not.</p>
+<p>No caller in the tree passes it. Every call site — `model_viewer`, `ohao_game` and two tests — uses the default, and `env_demo` re-implements the same `extent.y &gt;= extent.z` test inline without any override at all. The parameter is dead; the heuristic it guards is not.</p>
 </div>
 <div class="section-rule"><h2 id="the-camera-solve-has-one-free-number">The camera solve has one free number</h2></div>
 <div class="prose reveal">
@@ -73,9 +73,9 @@
 \text{fill} \;=\; \frac{h}{2\,d\,\tan(\theta/2)} \;=\; \frac{1.2\,S}{2\,(1.7\,S)\tan 22.5^\circ} \;\approx\; 0.85
 $$</div>
 <p>The room half-size $S$ cancels — the framing is scale-free, and the only thing the value 15 actually decides is the unit system in which the light rig is tuned. Two assumptions are buried in that 0.85: that the model&#x27;s longest axis is its up axis, so $h = 1.2\,S$; and that its silhouette is planar at the model centre, so $d = 1.7\,S$ across all of it. A model as deep as it is tall breaks the second — 18 units of depth centred on z = 0 puts the near face at $d = 16.5$, where 18 units of height subtend $18/(2 \cdot 16.5 \tan 22.5^\circ) \approx 1.32$ of the frame and overflow it. The framer normalises the largest extent, not the projected one.</p>
-<p>The 1.7 also puts the camera at z = 25.5, *outside* the room&#x27;s z = +S = 15 wall. `model_viewer` accommodates that by not building a front wall at all:</p>
-<div class="citation-chip"><code class="citation-code">// No front wall — camera renders from outside looking in</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L152" target="_blank" rel="noopener">examples/model_viewer.cpp:152</a></div>
-<p>`applyCamera` has two callers. The other, the windowed host `ohao_game`, builds no room at all — one floor quad at y = −S under the model:</p>
+<p>The 1.7 also puts the camera at z = 25.5, *outside* the room&#x27;s z = +S = 15 wall. `model_viewer`&#x27;s room builder, `buildModelViewerScene` in `examples/example_scenes.hpp`, accommodates that by not building a front wall at all:</p>
+<div class="citation-chip"><code class="citation-code">// wall: the camera looks in from outside.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_scenes.hpp#L153" target="_blank" rel="noopener">examples/example_scenes.hpp:153</a></div>
+<p>`model_viewer` no longer calls `applyCamera`. Its builder copies the framed position and FOV onto a `Camera` entity, which the host applies through `applySceneView`; `scene_view_gpu_test` renders that path against a hand-applied `applyCamera` and checks the two agree. The one program that still calls `applyCamera`, the windowed host `ohao_game`, builds no room at all — one floor quad at y = −S under the model:</p>
 <div class="citation-chip"><code class="citation-code">m.vertices = {mkv({-S, -S, -S}), mkv({S, -S, -S}), mkv({S, -S, S}), mkv({-S, -S, S})};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/ohao_game.cpp#L79" target="_blank" rel="noopener">examples/ohao_game.cpp:79</a></div>
 <p>and then takes the framer&#x27;s camera and light rig unchanged, so its fly camera starts at z = 1.7·S like `model_viewer`&#x27;s still one does:</p>
 <div class="citation-chip"><code class="citation-code">SceneFramer::applyCamera(renderer.getCamera(), frame);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/ohao_game.cpp#L113" target="_blank" rel="noopener">examples/ohao_game.cpp:113</a></div>
@@ -88,8 +88,8 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">{&quot;CeilingLight&quot;, {0.0f, S * 0.85f, 2.0f}, {1.0f, 0.92f, 0.82f}, 800.0f, 1.2f},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L86" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:86</a></div>
 <p>The fourth is asserted rather than derived. `BedsideLamp` gets no arithmetic and names no wall — only a parenthetical that it is already interior:</p>
 <div class="citation-chip"><code class="citation-code">// Bedside lamp — warm point light on the nightstand (already interior).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L90" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:90</a></div>
-<p>It does clear the walls, and it fails on the furniture. `model_viewer` builds a nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over $z \in [-15,-12]$; the lamp sits at $y = -S + 6 = -9$ with radius 1.0, so the sphere&#x27;s lower cap is 0.625 units inside the solid it is meant to light — the exact configuration the other three comments exist to rule out.</p>
-<div class="citation-chip"><code class="citation-code">addBox(&quot;Nightstand&quot;, {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, nsColor, 0.45f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L174" target="_blank" rel="noopener">examples/model_viewer.cpp:174</a></div>
+<p>It does clear the walls, and it fails on the furniture. `model_viewer`&#x27;s room builder adds a nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over $z \in [-15,-12]$; the lamp sits at $y = -S + 6 = -9$ with radius 1.0, so the sphere&#x27;s lower cap is 0.625 units inside the solid it is meant to light — the exact configuration the other three comments exist to rule out.</p>
+<div class="citation-chip"><code class="citation-code">box(&quot;Nightstand&quot;, {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, {0.22f, 0.14f, 0.07f}, 0.45f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_scenes.hpp#L178" target="_blank" rel="noopener">examples/example_scenes.hpp:178</a></div>
 <p>Those radii travel intact. `spawnFramedLights` makes each one a point-light entity whose `radius` is the framer&#x27;s number, and the light table copies that radius into the RT light record&#x27;s `dirAndParam.w`, which the raygen reads as the sphere radius.</p>
 <div class="citation-chip"><code class="citation-code">float dirParam = d.radius;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/light_table.cpp#L176" target="_blank" rel="noopener">ohao/render/scene/light_table.cpp:176</a></div>
 <p>The reason the clearances matter is visible in the next-event estimator — and *which* estimator depends on the profile. `RenderMode::RTOffline` selects `RTOfflineRenderer`, whose `PathTracer` is constructed with the offline raygen SPV, so the shader below is `pt_raygen_offline.rgen`; the `pt_raygen.rgen` named as the `PathTracerShaderSet` default is overridden by both profile renderers and never dispatched.</p>
@@ -114,7 +114,7 @@ $$</div>
 <li>`cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` omits it, `ohao_game` builds no walls — or move the camera.</li>
 <li>Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.</li>
 <li>`FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.</li>
-<li>Only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.</li>
+<li>Of the programs, only `model_viewer` and `ohao_game` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.</li>
 <li>On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `spawnFramedLights` silently spawns nothing.</li>
 </ul>
 </div>
@@ -123,7 +123,7 @@ $$</div>
         <div class="row"><code>ohao/render/camera/scene_framer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/camera/scene_framer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/example_scenes.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/ohao_game.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/light_table.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>

@@ -26,8 +26,9 @@ constexpr reflect::MethodDoc kMethods[] = {
      "The canonical scene. Without a path it is returned as an object (compact)."},
     {"world.info", "{}", "{entities, frame, schemaHash, idCounter}", "Cheap orientation: sizes and identity."},
     {"world.summary", "{depth = 2, maxChildren = 8, maxNodes = 64}",
-     "{entities, roots, components, bounds?, outline, truncated?}",
-     "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline."},
+     "{entities, roots, components, bounds?, outline, moreRoots?}",
+     "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline. A node whose "
+     "children are not all listed carries more (the count left out); moreRoots counts unlisted roots."},
     {"world.query",
      "{ids?, names?, nameContains?, has?, fields?, limit = 50, offset = 0, defaults = false}",
      "{count, entities, missing?, next?}",

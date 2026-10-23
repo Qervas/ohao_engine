@@ -14,6 +14,7 @@ there because Spin also has a system).
 $ git grep -l --untracked "Spin" -- ohao tests/scene tests/scenes tests/systems
 ohao/ecs/components.hpp
 ohao/ecs/scene_types.cpp
+ohao/ecs/scene_types.hpp
 ohao/ecs/scene_writers.cpp
 ohao/ecs/scene_writers.hpp
 ohao/ecs/spin_system.cpp

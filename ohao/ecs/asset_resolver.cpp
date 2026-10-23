@@ -38,7 +38,7 @@ Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(co
     std::error_code ec;
     if (!fs::is_regular_file(p, ec)) return R::err({"E_ASSET_NOT_FOUND", "no file '" + ref.path + "' in the project"});
     if (!ModelLoader::isSupportedExtension(ModelLoader::getExtension(key)))
-        return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf, fbx, obj)"});
+        return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf, fbx, obj, dae, blend, 3ds, ply)"});
     auto loaded = ModelLoader::loadResult(key);
     if (!loaded || !loaded.value()) {
         const std::string why = loaded ? std::string("the loader returned nothing") : loaded.error();

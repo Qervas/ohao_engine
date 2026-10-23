@@ -179,39 +179,38 @@ with no light entities and leans on the HDR environment alone.
 
 The writes are packed rather than sparse: a running `writeCount` skips the
 optional bindings (12 when the table is empty, 17 and 18 without CDF buffers), so
-the write index and the binding number diverge. The array is sized one step above
-the maximum the function can emit — five unconditional writes for bindings 0, 1,
-2, 6 and 7, the eight `RenderScene` buffers (4, 5, 8, 9, 10, 11, 36, 37) in a
-loop, the three optional ones, and fourteen more for 13–16 and 19–28 — thirty
-writes in a 32-entry array:
+the write index and the binding number diverge. The array is sized three entries
+above the maximum the function can emit — five unconditional writes for bindings
+0, 1, 2, 6 and 7, the eight `RenderScene` buffers (4, 5, 8, 9, 10, 11, 36, 37) in
+a loop, the three optional ones, fourteen more for 13–16 and 19–28, and seven for
+29–35 — thirty-seven writes in a 40-entry array:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32] = {};"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[40] = {};"}}
 
-Add three more unconditional bindings to that function without raising the 32, and
-the last write lands past the end of a stack array.
+Add four more unconditional bindings to that function without raising the 40, and
+the last write lands past the end of a stack array. Nothing checks `writeCount`
+against the array size.
 
-## Where the invariant stops holding: 29–35
+## 29–35: one profile's bindings, written for both
 
 Bindings 29–34 are the ReSTIR GI reservoir ping-pong (three RGBA32F planes read,
-three written) and 35 is the DLSS-RR specular hit-distance guide. They are in the
-layout, their images are created and destroyed alongside the rest, and the
-realtime raygen declares and uses them:
+three written) and 35 is the DLSS-RR specular hit-distance guide. Only the
+realtime raygen declares them:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0"}}
 
-But `PathTracer` issues exactly one descriptor update, and the last image it
-writes targets binding 28:
+They are written in every frame-slot set all the same, at the tail of the one
+descriptor update, with the *prev* half of the ping-pong at 29–31 and the *curr*
+half at 32–34:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "for (uint32_t i = 0; i < 6; ++i) addImage(29u + i, &giReservoirInfo[i]);"}}
 
-Grepping the engine for `m_giReservoirViews` and `m_specHitDistView` turns up
-image creation and teardown, plus two `m_specHitDistView` getters with no callers
-— and no `VkDescriptorImageInfo` built from any of them. On the realtime profile
-those seven descriptors are therefore bound but never written, in each of the three
-frame-slot sets, and unlike binding 12 they carry no `PARTIALLY_BOUND` flag. This
-is a structural reading of the code, not an observed failure: the validation run
-the repository ships covers the deferred pipeline, and the shader-side ReSTIR code
-(temporal and spatial reuse both) is present and compiled in.
+These seven were the last holes in the invariant, and the hole was not
+theoretical. Until they were written, the realtime profile bound seven
+statically-used storage images that no `VkWriteDescriptorSet` ever filled, with no
+`PARTIALLY_BOUND` cover, and `rt_realtime` lost the device; the comment above the
+writes records it. Writing them for the offline profile too costs seven descriptor
+writes per frame and keeps the write function profile-blind.
 
 ## Format qualifiers are load-bearing
 
@@ -295,14 +294,16 @@ pools, and two per-frame write functions to keep in step. The union buys exactly
 one property: the host descriptor code never has to know which profile it is
 serving, so adding a profile is a subclass plus a raygen, not a third descriptor
 path. Everything this page keeps running into — a texture array sized to the whole
-table whatever the scene holds, seven unwritten bindings, a variable-count flag
-stranded in the middle of the set — is the bill for that property.
+table whatever the scene holds, seven realtime-only bindings written every frame for
+a profile that never reads them, a variable-count flag stranded in the middle of
+the set — is the bill for that property.
 :::
 
 :::key
 Set 0 is a union, not a contract. A binding appearing in `createDescriptorResources`
 proves only that a slot was reserved. Whether anything is written into it lives in
-`path_tracer_render.cpp`, and for 29–35 it currently is not.
+`path_tracer_render.cpp`, and 29–35 sat declared but unwritten until a lost device
+forced the writes in.
 :::
 
 ## Contracts
@@ -312,4 +313,4 @@ proves only that a slot was reserved. Whether anything is written into it lives 
 - Bindings 4, 5, 8, 9, 10, 36 and 37 are hit-stage only (closest-hit and any-hit), and 12 excludes raygen. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.
 - Binding 12's size is a specialization constant on miss, closest-hit and any-hit as well as a layout count. The two must come from the same `bindlessCapacity()`; a shader built with a larger constant than the layout would index past the array.
 - Binding 11 is always backed: `LightTable` owns the buffer and writes a header with `count = 0` when there are no lights. Bindings 17 and 18 are backed by one-float dummies when there is no environment map.
-- There is one descriptor set per frame in flight (`MAX_FRAMES_IN_FLIGHT = 3`). `render()` writes only the set of the slot it is given, after that slot's fence wait, so the writes never touch a set a pending submission reads. Bindings 29–35 are written in none of them.
+- There is one descriptor set per frame in flight (`MAX_FRAMES_IN_FLIGHT = 3`). `render()` writes only the set of the slot it is given, after that slot's fence wait, so the writes never touch a set a pending submission reads. Every binding except 12 must be written in every set, the realtime-only 29–35 included.

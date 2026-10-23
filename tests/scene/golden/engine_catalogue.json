@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "99c31cef530c678d",
+  "schemaHash": "f833b6d37287de17",
   "units": [
     "m",
     "m/s",
@@ -435,7 +435,7 @@
     },
     {
       "name": "ModelAsset",
-      "doc": "A model file (glb, gltf, fbx, obj) loaded through the asset resolver; its own materials are used.",
+      "doc": "A model file (glb, gltf, fbx, obj, dae, blend, 3ds, ply) loaded through the asset resolver; its own materials are used.",
       "role": "struct",
       "serialized": true,
       "singleton": false,

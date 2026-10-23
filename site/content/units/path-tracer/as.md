@@ -153,10 +153,16 @@ No raygen in `shaders/` requests `gl_RayFlagsCullBackFacingTrianglesEXT` or its
 front-facing twin, so the bit changes no behaviour today. What it insures against is
 geometry a ray meets from the far side — an imported mesh with inconsistent winding,
 a single-sided sheet seen from behind. It does *not* insure the Cornell box, tempting
-as that reading is: `addQuad` emits its first triangle as `base+0, base+1, base+2`,
-and the back wall hands it LBB, RBB, RTB,
+as that reading is. Each wall is a `QuadPrim` that `buildCornellBox` (in
+`examples/example_scenes.hpp`) authors and the instantiate system turns into a mesh
+through `PrimitiveMeshGenerator::generateQuad`, whose first triangle is indices
+`0, 1, 2` of the four corners as given:
 
-{{cite examples/cornell_box.cpp "LBB, RBB, RTB, LTB, {0,0,1},  white);"}}
+{{cite ohao/scene/asset/primitive_mesh_generator.cpp "model.indices = {0, 1, 2, 0, 2, 3};"}}
+
+The back wall hands it LBB, RBB, RTB,
+
+{{cite examples/example_scenes.hpp "wall("Back", LBB, RBB, RTB, LTB, {0, 0, 1}, white);"}}
 
 whose edge cross product points along +z, into the room. Every wall follows the same
 convention, so an interior ray already strikes the front face and back-face culling

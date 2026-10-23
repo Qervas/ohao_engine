@@ -680,8 +680,9 @@ bool entityDuplicate(Batch& b, const JsonNode& cmd) {
         types.push_back(t);
     }
 
-    // Apply. Nothing below can fail. Values are copied out before each emplace: a pool
-    // may grow (and move its values) when the copy is added to it.
+    // Apply. Nothing below can fail. Each value is copied before it is emplaced:
+    // ComponentOps::emplace moves from its argument, which would empty the source's
+    // strings and vectors if it were given the source's own value.
     ecs::World& world = b.s.world;
     std::vector<std::pair<entt::entity, entt::entity>> copies;   // source -> copy
     copies.reserve(order.size());

@@ -10,9 +10,11 @@ figures: [architecture-request-path-frame-ring]
 
 OHAO has no editor host. The offline examples — `cornell_box`, `model_viewer`,
 `env_demo`, `turntable` — are thin `main()`s over one sequence: construct a `VulkanRenderer` at a fixed output size, bring
-up the device, create an `ecs::World` and wire its render extract to the renderer's
-`RenderScene`, spawn entities, choose a `RenderMode`, then loop
-`world.update()` and `render()` and read the pixels back. `cornell_box`
+up the device, create an `ecs::World` and wire its render extract (and, for a world
+built from data, instantiate) to the renderer's `RenderScene`, build entities, apply
+the world's camera and environment, choose a `RenderMode`, then loop
+`world.update()` and `render()` and read the pixels back. `ohao run --render` runs the
+same sequence on a scene file. `cornell_box`
 is the shortest complete instance of it, and it shows the one convention that
 surprises people reading the CLI: the output resolution is a compile-time constant
 in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer` and
@@ -28,14 +30,21 @@ to a swapchain instead of reading pixels back. `Application` also owns the
 
 {{cite ohao/runtime/application.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
 
-Scene construction is a handful of `spawn` calls. `spawnModel` registers the mesh
-and its materials with the `RenderScene` — an upload and a BLAS build, blocking, at
-load time — and returns an entity carrying a `MeshRenderer` that holds the
-handles:
+Scene construction takes one of two forms. `cornell_box` and `model_viewer` build
+the entities a scene file holds — a `MeshSource` naming a primitive or a model path,
+a `MaterialOverride`, lights, a `Camera` and an `Environment` — and install
+instantiate, which builds each GPU mesh on the first update:
+
+{{cite examples/cornell_box.cpp "ecs::installInstantiate(world, renderer.renderScene(), renderer.getTextureManager(), assets);"}}
+
+`env_demo`, `turntable` and `ohao_game` still call the `spawn` helpers, which upload
+directly. `spawnModel` registers the mesh and its materials with the `RenderScene` —
+an upload and a BLAS build, blocking, at load time — and returns an entity carrying a
+`MeshRenderer` that holds the handles:
 
 {{cite ohao/ecs/spawn.hpp "entt::entity spawnModel(World& world, render::RenderScene& scene, BindlessTextureManager* textures,"}}
 
-`spawnLight` makes an entity with a `Light`. Neither call touches a command buffer,
+`spawnLight` makes an entity with a `Light`. Neither path touches a command buffer,
 and neither makes anything visible yet: an entity reaches the screen only after a
 `world.update()`.
 
@@ -49,13 +58,17 @@ then the renderer:
 
 The headless drivers have no `Application`, so they call `world.update(0.0f)` before
 each `render()` themselves. The world runs its systems in exactly the order they
-were added. The first is structural, added by the constructor:
+were added. The constructor adds two: the engine-provided `spin`, which turns
+entities carrying a `Spin` (a no-op at `dt = 0`, which is why headless renders are
+unaffected), then the structural `transform`:
 
 {{cite ohao/ecs/world.cpp "addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });"}}
 
-`TransformSystem` recomputes `WorldTransform` for every dirty entity and its
-descendants, parents first, and tags the movers `RenderDirty`. The render extract
-is installed straight after it and consumes those tags:
+Instantiate, when installed, goes immediately before `transform`, so a mesh it builds
+gets its world matrix in the same update. `TransformSystem` recomputes `WorldTransform`
+for every dirty entity and its descendants, parents first, and tags the movers
+`RenderDirty`. The render extract is installed straight after it and consumes those
+tags:
 
 {{cite ohao/ecs/render_extract.cpp "world.addSystemAfter("transform", "render_extract","}}
 
@@ -77,8 +90,8 @@ RT path the profile is handed the freshly updated buffers first:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->setSceneBuffers(*m_renderScene);"}}
 
-So the order is game hooks → `TransformSystem` → `RenderExtract` →
-`RenderScene::recordUpdates` → passes, and every arrow is a one-way hand-off.
+So the order is game hooks → spin → instantiate → `TransformSystem` → `RenderExtract`
+→ `RenderScene::recordUpdates` → passes, and every arrow is a one-way hand-off.
 
 Two mistakes in that order fail silently. `renderScene()` dereferences the
 renderer's `RenderScene` without a check, and that object exists only after
@@ -258,8 +271,8 @@ down would buy it nothing.
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
 
 :::key
-Scene data reaches the GPU along one chain — game hooks, `TransformSystem`,
-`RenderExtract`, `RenderScene::recordUpdates`, passes — and there is one authority
+Scene data reaches the GPU along one chain — game hooks, spin, instantiate,
+`TransformSystem`, `RenderExtract`, `RenderScene::recordUpdates`, passes — and there is one authority
 over RT behaviour (the active `IRTRenderPipeline`, reasserted every frame). Ordering
 mistakes around the chain fail *silently* — an extract that was never installed, a
 refused mode, a stale override — never with an error. When an OHAO driver renders an

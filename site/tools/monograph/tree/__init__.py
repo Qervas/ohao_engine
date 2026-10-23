@@ -18,12 +18,14 @@ from . import (
     physics,
     audio,
     systems,
+    reflection,
 )
 
 MODULES = [
     architecture.MODULE,
     core.MODULE,
     scene.MODULE,
+    reflection.MODULE,
     gpu.MODULE,
     materials.MODULE,
     deferred.MODULE,

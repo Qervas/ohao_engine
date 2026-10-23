@@ -5,9 +5,13 @@ title: ECS world & hierarchy
 standard: v2
 ---
 
-## An entity is five components before it is anything
+## An entity is six components before it is anything
 
-Game state lives in an EnTT registry owned by `ohao::ecs::World`. `World::create` is the only sanctioned way to make an entity, and it never returns a bare id: every entity leaves it carrying a `Name`, a local `Transform`, an empty `Children` list, the `TransformDirty` tag and a `CreationOrder` stamp.
+Game state lives in an EnTT registry owned by `ohao::ecs::World`. `World::create` (or `createWithId`, for an id from a file or a command) is the only sanctioned way to make an entity, and it never returns a bare handle: every entity leaves it carrying a stable `EntityId`, a `Name`, a local `Transform`, an empty `Children` list, the `TransformDirty` tag and a `CreationOrder` stamp.
+
+{{cite ohao/ecs/world.cpp "m_registry.emplace<EntityId>(e, id);"}}
+
+The `EntityId` is what files, commands and snapshots refer to; the reflection module's scene-files unit covers how it is generated and kept unique.
 
 {{cite ohao/ecs/world.cpp "m_registry.emplace<CreationOrder>(e, m_nextSeq++);"}}
 
@@ -21,17 +25,26 @@ It is the tiebreaker the render extract uses for instance slots and the light ta
 
 ## The components
 
-`ohao/ecs/components.hpp` is the whole vocabulary. Data components:
+`ohao/ecs/components.hpp` is the whole vocabulary. It splits into what a scene file saves (authoring components) and what the engine derives each frame (runtime components); the type registry records which is which.
 
-- `Transform` — local position, unit quaternion, per-axis scale.
-- `WorldTransform` — this frame's object-to-world matrix and last frame's.
-- `Parent` / `Children` — the hierarchy, stored in both directions.
-- `MeshRenderer` — a `MeshHandle`, one `MaterialHandle` per submesh, a `visible` flag.
+Authoring components:
+
+- `Name`, `Transform` (local position, unit quaternion, per-axis scale), `Parent`.
 - `Light` — type, color, intensity, range, radius, cone angles, area-rect edges. No position or direction field: both come from `WorldTransform`.
+- `MeshSource` and `MaterialOverride` — where the mesh comes from (a model asset or a primitive) and the material of a primitive; the instantiate system turns them into a `MeshRenderer`.
+- `Camera` and `Environment` — the view and the image-based lighting, one of each per world.
+- `Spin` — a constant turn about a local axis, applied by the spin system.
+
+Runtime components:
+
+- `WorldTransform` — this frame's object-to-world matrix and last frame's.
+- `Children` — the hierarchy's other direction.
+- `MeshRenderer` — a `MeshHandle`, one `MaterialHandle` per submesh, a `visible` flag.
 - `EmissiveProxyLight` — a point light standing in for a mesh's emissive texture, in model space.
 - `GiMaterialLegacy` — the RT GI bounce-albedo word copied into each instance.
+- `RenderSlot`, `CreationOrder`, `InstantiateError`, `PreservedComponents` (unknown components a file carried, written back on save).
 
-and three empty tags: `TransformDirty`, `RenderDirty`, `MovedLastFrame`.
+and the empty tags `TransformDirty`, `RenderDirty`, `MovedLastFrame` and `InstantiateDirty`.
 
 A `MeshRenderer` may list fewer materials than its mesh has submeshes. That is legal, not an error path: the missing submeshes render with material 0, the material table's default.
 
@@ -47,17 +60,21 @@ With GLM's column-vector convention the rightmost factor applies first, so scale
 
 ## Systems run in the order they were added
 
-A system is a `std::function<void(World&, float)>`. There is no discovery, no dependency graph, no sort: `World::update` walks a vector. The constructor puts `transform` in it first, and `installRenderExtract` inserts `render_extract` immediately after it with `addSystemAfter`:
+A system is a `std::function<void(World&, float)>`. There is no discovery, no dependency graph, no sort: `World::update` walks a vector. The constructor puts two systems in it — the engine-provided `spin`, then `transform` — and a host that owns a renderer inserts its two around `transform` by name:
 
+{{cite ohao/ecs/world.cpp "addSystem("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });"}}
 {{cite ohao/ecs/world.cpp "addSystem("transform", [](World& w, float) { updateTransforms(w.registry()); });"}}
+{{cite ohao/ecs/instantiate.cpp "world.addSystemBefore("transform", "instantiate", [state](World&, float) { state->run(); });"}}
 {{cite ohao/ecs/render_extract.cpp "world.addSystemAfter("transform", "render_extract","}}
 
-`addSystemAfter` with a name that is not in the list appends instead of failing. Plain `addSystem` always appends — which, once the extract is installed, means *after* `render_extract`. A gameplay system registered that way and moving an entity is seen by the transform system and the extract only on the next `update`: one frame of latency, silently. Nothing in the tree registers such a system today. `ohao_game` moves its cube in the `Application`'s `update` hook, which runs before `World::update`:
+With everything installed the order is `spin`, `instantiate`, `transform`, `render_extract`. Systems that move entities run before `transform`, so a change made in one update reaches the world matrices and the GPU in the same update. Instantiate also runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — that same update.
+
+`addSystemAfter` and `addSystemBefore` with a name that is not in the list append instead of failing. Plain `addSystem` always appends — which, once the extract is installed, means *after* `render_extract`. A gameplay system registered that way and moving an entity is seen by the transform system and the extract only on the next `update`: one frame of latency, silently. Engine-provided systems therefore go into the constructor before `transform`; `ohao_game` moves its cube in the `Application`'s `update` hook, which runs before `World::update`:
 
 {{cite ohao/runtime/application.cpp "m_world->update(frameDt);"}}
 
 :::why
-A fixed list instead of a scheduler: with two engine systems and no threading, an explicit order is something a reader can verify by looking at one vector, and the only ordering bug it admits — appending after the extract — is visible in `systemNames()`. A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
+A fixed list instead of a scheduler: with four systems and no threading, an explicit order is something a reader can verify by looking at one vector, and the only ordering bug it admits — appending after the extract — is visible in `systemNames()`. A dependency-sorted scheduler earns its cost when there are dozens of systems and parallel stages; neither exists yet.
 :::
 
 ## Hierarchy: both directions, cycles rejected

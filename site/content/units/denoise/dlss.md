@@ -219,26 +219,27 @@ Two subsystems here read as working features and are not.
 The specular hit-distance guide looks finished from either side alone: binding 35 is
 in the descriptor set *layout*, an R32F image is allocated at render resolution, the
 realtime raygen ends with an `imageStore` into it, and the wrapper forwards it as
-`pInSpecularHitDistance` whenever the view handle is non-null. It is detached at both
-ends.
+`pInSpecularHitDistance` whenever the view handle is non-null. Only the producer half
+is connected.
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)"}}
 
-The write side breaks first. The RT descriptor set is updated by exactly one
-`vkUpdateDescriptorSets`, fed by a fixed `VkWriteDescriptorSet writes[32]` array whose
-last image `dstBinding` is 28 and none of whose writes targets 35 — so binding 35 is declared and never populated, and the
-shader store has no descriptor through which to reach `m_specHitDistImage`:
+The write side works. The RT descriptor set is updated by exactly one
+`vkUpdateDescriptorSets`, and binding 35 is now among its writes — it has to be,
+because the realtime raygen stores to it every frame and an unwritten storage image
+there lost the device. A barrier takes the image from `UNDEFINED` to `GENERAL` before
+each trace (the raygen rewrites every pixel, so nothing is preserved), and the shader
+store lands in `m_specHitDistImage`:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "VkWriteDescriptorSet writes[32]"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "addImage(35, &specHitDistInfo);"}}
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "imageStore(specHitDistAOV, pixel, vec4(specHitDist, 0.0, 0.0, 0.0));"}}
 
-The read side breaks independently: the one site that fills `EvalInputs` never
+The read side is still detached: the one site that fills `EvalInputs` never
 assigns `specHitDistView`, and the two `getSpecHitDistAOV*` accessors have no callers
-anywhere — `m_specHitDistView` appears only at creation, destruction, and those
-accessors. The guide is always omitted, so the glossy-reflection reprojection it was
-written to fix is not in effect, and wiring the eval side alone would forward an
-image nothing has written.
+anywhere. The guide is always omitted, so the glossy-reflection reprojection it was
+written to fix is not in effect even though the image it would forward is now
+written every frame.
 
 The upscaling presets are the second. `OHAO_DLSS_QUALITY` is parsed into a
 `DlssQuality`, and the tracer really does shrink its internal trace resolution to an
