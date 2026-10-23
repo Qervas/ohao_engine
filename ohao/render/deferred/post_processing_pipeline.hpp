@@ -60,10 +60,13 @@ public:
     void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
     [[nodiscard]] bool getSSAOEnabled() const { return m_ssaoEnabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
+    // Forget TAA's history, as on a fresh pipeline (DeferredRenderer::resetTemporalState).
+    void resetHistory() noexcept;
 
     // Tonemapping configuration
     void setTonemapOperator(TonemapOperator op) { m_tonemapOp = op; }
     void setExposure(float exposure) { m_exposure = exposure; }
+    float getExposure() const { return m_exposure; }
     void setGamma(float gamma) { m_gamma = gamma; }
     // Lightning flash — set each frame (0=off, 3+=bright strike)
     void setFlashIntensity(float v) { m_flashIntensity = glm::max(v, 0.0f); }

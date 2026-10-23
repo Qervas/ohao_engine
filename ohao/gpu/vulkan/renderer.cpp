@@ -463,6 +463,16 @@ void VulkanRenderer::forEachRTRenderer(const std::function<void(IRTRendererProfi
 }
 
 void VulkanRenderer::resetAccumulation() {
+    if (m_renderMode == RenderMode::Deferred) {
+        // The deferred path accumulates too (RT GI and TAA history, a clock, the frame
+        // slot that indexes TAA's jitter). Idle, then start over as a fresh renderer does,
+        // the way resize() restarts the slots.
+        if (!m_deferredRenderer || !m_initialized) return;
+        vkDeviceWaitIdle(m_device);
+        m_currentFrame = 0;
+        m_deferredRenderer->resetTemporalState();
+        return;
+    }
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->resetAccumulation();
     }

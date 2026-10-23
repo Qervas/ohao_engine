@@ -32,6 +32,12 @@ public:
     void destroy() override;
 
     void setSampleCount(int samples) { m_sampleCount = samples; }
+    // Forget the temporal history and restart the frame index, as on a fresh technique.
+    // The device must be idle (the next render() clears the history from UNDEFINED).
+    void resetHistory() noexcept {
+        m_historyValid = false;
+        m_frameIndex = 0;
+    }
 
 private:
     // G-buffer sampler. Lives as long as the technique: it is written into a

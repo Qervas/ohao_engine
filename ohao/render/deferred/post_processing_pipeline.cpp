@@ -218,6 +218,10 @@ void PostProcessingPipeline::setTAABlendFactor(float factor) {
     if (m_taaPass) m_taaPass->setBlendFactor(factor);
 }
 
+void PostProcessingPipeline::resetHistory() noexcept {
+    if (m_taaPass) m_taaPass->resetHistory();
+}
+
 glm::vec2 PostProcessingPipeline::getJitterOffset(uint32_t frameIndex) const {
     if (m_taaPass && m_taaEnabled) {
         return m_taaPass->getJitterOffset(frameIndex);

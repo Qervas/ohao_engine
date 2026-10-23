@@ -43,6 +43,11 @@ public:
     // Resize handling
     void onResize(uint32_t width, uint32_t height);
 
+    // Restart everything that carries over from frame to frame (the clock behind RT GI's
+    // seeds and the sky, RT GI's and TAA's history, the previous view-projection), so the
+    // frames that follow render as a fresh renderer's would. The device must be idle.
+    void resetTemporalState();
+
     // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
     // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
     void setRenderScene(const render::RenderScene* scene);

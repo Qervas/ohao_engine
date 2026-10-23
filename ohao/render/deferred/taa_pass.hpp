@@ -37,6 +37,13 @@ public:
     // Get jitter for current frame
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
+    // Forget the history, as on a fresh pass. The device must be idle (the next execute()
+    // clears both images from UNDEFINED).
+    void resetHistory() noexcept {
+        m_historyValid = false;
+        m_currentHistoryIndex = 0;
+    }
+
 private:
     [[nodiscard]] bool createHistoryBuffers();
     [[nodiscard]] bool createRenderPass();

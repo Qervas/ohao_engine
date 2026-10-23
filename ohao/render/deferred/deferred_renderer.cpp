@@ -703,6 +703,13 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     importGraphTextures();
 }
 
+void DeferredRenderer::resetTemporalState() {
+    m_totalTime = 0.0f;
+    m_prevViewProj = m_proj * m_view;   // no motion into the first frame
+    if (m_rtGI) m_rtGI->resetHistory();
+    if (m_postProcessing) m_postProcessing->resetHistory();
+}
+
 void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
     m_textureManager = texManager;
     if (m_gbufferPass) {
