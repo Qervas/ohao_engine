@@ -1,4 +1,5 @@
 #include "ecs/world.hpp"
+#include "ecs/fly_controller_system.hpp"
 #include "ecs/spin_system.hpp"
 #include "ecs/transform_system.hpp"
 #include "core/log.hpp"
@@ -48,8 +49,13 @@ World::World() : m_idGen{randomSeed(), 0} {
     m_registry.storage<TransformDirty>();
     m_registry.on_destroy<Parent>().connect<&World::onParentDestroyed>(this);
     m_registry.on_destroy<Children>().connect<&World::onChildrenDestroyed>(this);
+    // The controls: the input map is rebuilt from InputActions at the next step.
+    m_registry.on_construct<InputActions>().connect<&World::onInputActionsChanged>(this);
+    m_registry.on_update<InputActions>().connect<&World::onInputActionsChanged>(this);
+    m_registry.on_destroy<InputActions>().connect<&World::onInputActionsChanged>(this);
     // Engine-provided behaviour, once per fixed step.
     addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });
+    addSimulate("fly_controller", [](World& w, float dt) { updateFlyControllers(w.registry(), w.input(), dt); });
     // Structural: transforms are propagated before every host system (instantiate is
     // inserted right before it, the render extract right after).
     addSync("transform", [](World& w) { updateTransforms(w.registry()); });
@@ -78,6 +84,25 @@ void World::onChildrenDestroyed(entt::registry& r, entt::entity parent) {
             r.emplace_or_replace<TransformDirty>(c);
         }
     }
+}
+
+void World::onInputActionsChanged(entt::registry&, entt::entity) { m_bindingsDirty = true; }
+
+void World::stepInput(std::span<const InputEvent> events) {
+    if (m_bindingsDirty) {
+        m_bindingsDirty = false;
+        m_input.clearBindings();
+        const auto view = m_registry.view<const InputActions>();
+        if (!view.empty()) {
+            const InputActions& a = view.get<const InputActions>(view.front());
+            const Binding none{InputDevice::Key, 0};   // GLFW never reports key 0
+            for (const ActionBinding& b : a.actions)
+                if (const auto k = keyBinding(b.key)) m_input.bindAction(b.action, *k);
+            for (const AxisBinding& b : a.axes)
+                m_input.bindAxis(b.axis, keyBinding(b.positive).value_or(none), keyBinding(b.negative).value_or(none));
+        }
+    }
+    m_input.beginStep(events);
 }
 
 void World::onIdConstructed(entt::registry& r, entt::entity e) {

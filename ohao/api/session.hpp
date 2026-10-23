@@ -4,6 +4,7 @@
 // C ABI and the editor all dispatch through Session::call, so each operation has exactly
 // one implementation.
 #include "api/paths.hpp"
+#include "core/input.hpp"
 #include "core/timeline.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
@@ -116,6 +117,12 @@ public:
     // both count on one frame axis. Not owned; it must outlive the session.
     [[nodiscard]] Timeline& timeline() noexcept;
     void setTimeline(Timeline& timeline) noexcept;
+    // One simulation step, as a window host runs it in realtime: `deviceEvents` (the real
+    // input since the previous step), then the events input.inject stamped for this step,
+    // go to the world's input map; the simulate systems run with dt; the frame advances; a
+    // recording in progress gets the events and its checkpoints. world.step and
+    // input.replay step through it too. The caller runs World::sync() before rendering.
+    void step(std::span<const InputEvent> deviceEvents, float dt);
     [[nodiscard]] uint64_t schemaHash() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;

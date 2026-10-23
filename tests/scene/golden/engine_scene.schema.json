@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash eab21e250bf7e019. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 271d9962e1b21db0. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -38,13 +38,104 @@
         "MaterialOverride": { "$ref": "#/$defs/MaterialOverride" },
         "Camera": { "$ref": "#/$defs/Camera" },
         "Environment": { "$ref": "#/$defs/Environment" },
-        "Spin": { "$ref": "#/$defs/Spin" }
+        "Spin": { "$ref": "#/$defs/Spin" },
+        "InputActions": { "$ref": "#/$defs/InputActions" },
+        "FlyController": { "$ref": "#/$defs/FlyController" }
       },
       "additionalProperties": { "type": "object" }
     },
     "LightType": {
       "description": "Light shape. Position and direction come from the entity's world transform; the direction is the entity's -Z axis.",
       "enum": ["Point", "Directional", "Spot", "AreaRect"]
+    },
+    "Key": {
+      "description": "A keyboard key or mouse button an action or axis is bound to",
+      "enum": [
+        "None",
+        "Space",
+        "Apostrophe",
+        "Comma",
+        "Minus",
+        "Period",
+        "Slash",
+        "Digit0",
+        "Digit1",
+        "Digit2",
+        "Digit3",
+        "Digit4",
+        "Digit5",
+        "Digit6",
+        "Digit7",
+        "Digit8",
+        "Digit9",
+        "Semicolon",
+        "Equal",
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z",
+        "LeftBracket",
+        "Backslash",
+        "RightBracket",
+        "GraveAccent",
+        "Escape",
+        "Enter",
+        "Tab",
+        "Backspace",
+        "Insert",
+        "Delete",
+        "Right",
+        "Left",
+        "Down",
+        "Up",
+        "PageUp",
+        "PageDown",
+        "Home",
+        "End",
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "F6",
+        "F7",
+        "F8",
+        "F9",
+        "F10",
+        "F11",
+        "F12",
+        "LeftShift",
+        "LeftControl",
+        "LeftAlt",
+        "RightShift",
+        "RightControl",
+        "RightAlt",
+        "MouseLeft",
+        "MouseRight",
+        "MouseMiddle"
+      ]
     },
     "Name": {
       "description": "Display name for people and agents. Not unique; entities are identified by id.",
@@ -514,6 +605,109 @@
           "description": "Turn rate; negative turns the other way",
           "default": 90,
           "allOf": [{ "type": "number" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ActionBinding": {
+      "description": "An action name bound to a key: held while the key is down.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The action's name, as systems and input.inject use it",
+          "default": "",
+          "allOf": [{ "type": "string" }]
+        },
+        "key": {
+          "description": "The key or mouse button",
+          "default": "None",
+          "allOf": [{ "$ref": "#/$defs/Key" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AxisBinding": {
+      "description": "An axis name bound to two keys: +1 while positive is down, -1 while negative is, 0 for both or neither.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "The axis's name, as systems and input.inject use it",
+          "default": "",
+          "allOf": [{ "type": "string" }]
+        },
+        "positive": {
+          "description": "The key for +1 (None: no key)",
+          "default": "None",
+          "allOf": [{ "$ref": "#/$defs/Key" }]
+        },
+        "negative": {
+          "description": "The key for -1 (None: no key)",
+          "default": "None",
+          "allOf": [{ "$ref": "#/$defs/Key" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InputActions": {
+      "description": "The world's controls (one per world): action and axis names over keys. The world's input map is rebuilt from it whenever it is set, changed or removed.",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "Action bindings; an action with several keys is held while any is",
+          "default": [],
+          "allOf": [{ "type": "array", "items": { "$ref": "#/$defs/ActionBinding" } }]
+        },
+        "axes": {
+          "description": "Axis bindings",
+          "default": [],
+          "allOf": [{ "type": "array", "items": { "$ref": "#/$defs/AxisBinding" } }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FlyController": {
+      "description": "Flies the entity from named axes and actions, once per fixed step: forward along its -Z, right along its +X, up along world +Y; while `look` is held the mouse turns it (yaw about world +Y, pitch about its +X). On the Camera entity it is a fly camera.",
+      "type": "object",
+      "properties": {
+        "moveSpeed": {
+          "description": "Speed at an axis value of 1",
+          "default": 3,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "fastMultiplier": {
+          "description": "Speed multiplier while `fast` is held",
+          "default": 4,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "lookDegPerUnit": {
+          "description": "Turn per unit of mouse movement while `look` is held",
+          "default": 0.1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "moveForward": {
+          "description": "Axis moving along the entity's -Z",
+          "default": "move_forward",
+          "allOf": [{ "type": "string" }]
+        },
+        "moveRight": {
+          "description": "Axis moving along the entity's +X",
+          "default": "move_right",
+          "allOf": [{ "type": "string" }]
+        },
+        "moveUp": {
+          "description": "Axis moving along world +Y",
+          "default": "move_up",
+          "allOf": [{ "type": "string" }]
+        },
+        "look": {
+          "description": "Action that, while held, lets the mouse turn the entity",
+          "default": "look",
+          "allOf": [{ "type": "string" }]
+        },
+        "fast": {
+          "description": "Action that, while held, multiplies the speed",
+          "default": "fast",
+          "allOf": [{ "type": "string" }]
         }
       },
       "additionalProperties": false

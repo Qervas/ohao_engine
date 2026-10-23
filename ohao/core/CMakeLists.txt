@@ -14,4 +14,5 @@ target_include_directories(ohao_core
 if(TARGET ohao_core)
     # Propagate C++20 to all dependents (scene, gpu, examples, tests).
     target_compile_features(ohao_core PUBLIC cxx_std_20)
+    target_link_libraries(ohao_core PUBLIC glm)   # input.hpp's mouse delta
 endif()

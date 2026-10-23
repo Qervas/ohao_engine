@@ -29,5 +29,7 @@ void writeFields(const MaterialOverride& v, const MaterialOverride* omit, FieldS
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out);
 void writeFields(const Environment& v, const Environment* omit, FieldSink& out);
 void writeFields(const Spin& v, const Spin* omit, FieldSink& out);
+void writeFields(const InputActions& v, const InputActions* omit, FieldSink& out);
+void writeFields(const FlyController& v, const FlyController* omit, FieldSink& out);
 
 } // namespace ohao::ecs

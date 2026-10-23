@@ -11,5 +11,6 @@
     "apply_100_field_set": 0.2,
     "query_1000_ids": 2
   },
-  "scaling": { "scene": "bench100k", "maxRatio": 12 }
+  "scaling": { "scene": "bench100k", "maxRatio": 12 },
+  "noise": { "maxCalibrationSlowdown": 1.25, "maxExternalCorePct": 50 }
 }

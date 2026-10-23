@@ -1,8 +1,20 @@
 // scene_bench: the scene codec, snapshot and API budgets (spec "Performance").
 //
 //   scene_bench [--check budgets.json] [--out build/scene_bench.json] [--no-scale] [--iters N]
+//               [--reference build/serve_bench_reference.json]
 //   scene_bench --breakdown [N]        the codec's phases timed separately, and restore into
 //                                      an empty world with its page faults (not gated)
+//   scene_bench --machine-test [S]     the CPU probe alone for S seconds: whether this machine
+//                                      slows a busy core by itself, and when
+//
+// The machine is recorded beside the gated rounds (bench_env.hpp): a calibration loop before
+// and after, every other process's CPU time, and per round a CPU and a memory probe that
+// share nothing with the benchmark. A run that is >25% slower than the reference
+// calibration, beside other processes using more than half a core, or with over a quarter
+// of its rounds contended (a probe over 1.5x its fastest round) is `noisy`: exit 2, neither
+// a pass nor a regression (tools/check.py reruns it). Each op's median in clean and in
+// contended rounds is printed, so a slowdown that follows the probes is the machine's and
+// one that does not is the code's.
 //
 // Generates bench10k (and bench100k for the scaling check) with a fixed seed and times
 // every gated operation: median of N (50) after 5 warm-ups, p95 reported, single thread.
@@ -16,7 +28,9 @@
 // The scene is the spec's: Name, Transform, Parent, Light, MeshSource, MaterialOverride,
 // and (since step 8) one Camera and one Environment.
 #include "api/session.hpp"
+#include "bench_env.hpp"
 #include "bench_world.hpp"
+#include "common/harness.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
@@ -124,9 +138,17 @@ std::vector<Op> coldCopy(const std::vector<Op>& ops) {
     return out;
 }
 
-// One run of every op per round; the first `warmups` rounds are not recorded.
-void runRounds(const std::vector<Op*>& ops, int warmups, int rounds) {
-    for (int r = 0; r < warmups + rounds; ++r)
+// The machine beside each recorded round (bench_env.hpp's probes).
+struct RoundProbe {
+    double cpuMs{0};
+    double memoryMs{0};
+};
+
+// One run of every op per round; the first `warmups` rounds are not recorded. With
+// `probes`, each recorded round starts by timing the CPU and memory probes.
+void runRounds(const std::vector<Op*>& ops, int warmups, int rounds, std::vector<RoundProbe>* probes = nullptr) {
+    for (int r = 0; r < warmups + rounds; ++r) {
+        if (probes && r >= warmups) probes->push_back({bench::cpuProbeMs(), bench::memoryProbeMs()});
         for (Op* op : ops) {
             if (op->setup) op->setup();
             const uint64_t f0 = pageFaults();
@@ -140,6 +162,7 @@ void runRounds(const std::vector<Op*>& ops, int warmups, int rounds) {
                 op->faults.push_back(static_cast<double>(f1 - f0));
             }
         }
+    }
 }
 
 // ---- the benchmark scene and its gated operations -------------------------------------------
@@ -340,17 +363,37 @@ int main(int argc, char** argv) {
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);   // less scheduling noise (spec "Risks")
 #endif
     // Results go under build/ (git-ignored) unless --out says otherwise.
-    std::string checkPath, outPath = "build/scene_bench.json";
+    std::string checkPath, outPath = "build/scene_bench.json", refPath = "build/serve_bench_reference.json";
     bool scale = true;
     int iters = 50;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
-        else if (a == "--no-scale") scale = false;
+        else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];        else if (a == "--no-scale") scale = false;
         else if (a == "--iters" && i + 1 < argc) iters = std::max(1, std::atoi(argv[++i]));
         else if (a == "--breakdown") {
             breakdown(i + 1 < argc ? std::max(1000, std::atoi(argv[i + 1])) : 10'000);
+            return 0;
+        } else if (a == "--machine-test") {
+            // The CPU probe alone, back to back for N seconds, no benchmark work: whether this
+            // machine slows a busy core by itself after a while (power limits), and when.
+            const int seconds = i + 1 < argc ? std::max(1, std::atoi(argv[i + 1])) : 30;
+            const auto start = std::chrono::steady_clock::now();
+            int second = 0;
+            std::vector<double> in;
+            while (second < seconds) {
+                in.push_back(bench::cpuProbeMs());
+                const int now = static_cast<int>(
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+                if (now > second) {
+                    std::sort(in.begin(), in.end());
+                    std::printf("  second %3d: cpu probe min %.3f ms, median %.3f ms (%zu probes)\n", second, in.front(),
+                                in[in.size() / 2], in.size());
+                    in.clear();
+                    second = now;
+                }
+            }
             return 0;
         } else if (a == "--write-scene" && i + 1 < argc) {
             // The bench10k scene as a file, for timing the ohao CLI on it (spec, "Recorded").
@@ -370,6 +413,7 @@ int main(int argc, char** argv) {
     // Budgets: {"budgetsMs": {"op": ms, ...}, "scaling": {"maxRatio": r}}.
     std::map<std::string, double> budgets;
     double maxRatio = 0.0;
+    double maxSlowdown = 1.25, maxExternal = 50.0;   // "noise": as serve_bench's
     if (!checkPath.empty()) {
         auto doc = parseJson(readFile(checkPath));
         if (!doc) {
@@ -382,6 +426,10 @@ int main(int argc, char** argv) {
                 budgets[std::string(d.child(*b, i).key)] = std::stod(std::string(d.child(*b, i).text));
         if (const auto* s = d.member(d.root(), "scaling"))
             if (const auto* r = d.member(*s, "maxRatio")) maxRatio = std::stod(std::string(r->text));
+        if (const auto* n = d.member(d.root(), "noise")) {
+            if (const auto* v = d.member(*n, "maxCalibrationSlowdown")) maxSlowdown = std::stod(std::string(v->text));
+            if (const auto* v = d.member(*n, "maxExternalCorePct")) maxExternal = std::stod(std::string(v->text));
+        }
     }
 
     std::printf("scene_bench (Release, single thread, no GPU; %d rounds after 5 warm-ups)\n", iters);
@@ -413,11 +461,21 @@ int main(int argc, char** argv) {
         runBlock(cold10);
     }
 
-    {   // The gated bench10k rounds.
+    // The gated bench10k rounds, with the machine recorded beside them (bench_env.hpp): a
+    // calibration loop before and after, every other process's CPU time, and per round a
+    // CPU and a memory probe.
+    std::vector<RoundProbe> probes;
+    bench::LoadMonitor monitor;
+    monitor.start();
+    const double cal0 = bench::calibrationMs();
+    {
         std::vector<Op*> list;
         for (Op& op : s10.ops) list.push_back(&op);
-        runRounds(list, 5, iters);
+        runRounds(list, 5, iters, &probes);
     }
+    const double cal1 = bench::calibrationMs();
+    double external = 0.0;
+    const auto busy = monitor.stop(5.0, &external);
     std::vector<std::string> failures = s10.verify();
 
     if (scale) {
@@ -427,6 +485,7 @@ int main(int argc, char** argv) {
         for (auto& p : s100->verify()) failures.push_back(std::move(p));
     }
 
+    const std::size_t wrong = failures.size();   // verify() problems, before any budget verdict
     JsonWriter w(4096, JsonLayout::Pretty);
     w.beginObject();
     w.key("suite"); w.string("scene_bench");
@@ -483,6 +542,76 @@ int main(int argc, char** argv) {
     report(s10, true);
     if (s100) report(*s100, false);
     w.endArray();
+
+    // ---- the machine during the gated rounds ----------------------------------------------
+    const double ref = bench::readReference(refPath);
+    const double slow = ref > 0 ? std::max(cal0, cal1) / ref : 0.0;
+    std::vector<double> cpu, mem;
+    for (const RoundProbe& p : probes) {
+        cpu.push_back(p.cpuMs);
+        mem.push_back(p.memoryMs);
+    }
+    const double memMin = mem.empty() ? 0.0 : *std::min_element(mem.begin(), mem.end());
+    const double cpuMin = cpu.empty() ? 0.0 : *std::min_element(cpu.begin(), cpu.end());
+    // A round is contended when either probe ran more than 1.5x its fastest round: the probes
+    // touch nothing of the benchmark's, so only the machine can slow them.
+    std::vector<uint8_t> contended(probes.size(), 0);
+    std::size_t nContended = 0;
+    for (std::size_t r = 0; r < probes.size(); ++r) {
+        contended[r] = probes[r].memoryMs > 1.5 * memMin || probes[r].cpuMs > 1.5 * cpuMin;
+        nContended += contended[r];
+    }
+    const bool noisyCal = ref > 0 && slow > maxSlowdown;
+    const bool noisyLoad = external > maxExternal;
+    const bool noisyRounds = !probes.empty() && nContended * 4 > probes.size();   // over a quarter
+    const bool noisy = noisyCal || noisyLoad || noisyRounds;
+    char refText[96] = "none (run serve_bench --calibrate on a quiet machine)";
+    if (ref > 0) std::snprintf(refText, sizeof refText, "%.3f ms (x%.2f)", ref, slow);
+    std::printf("  machine during the gated rounds:\n");
+    std::printf("    calibration  before %.3f ms  after %.3f ms  reference %s\n", cal0, cal1, refText);
+    std::printf("    other processes  %.1f%% of a core in total%s\n", external, busy.empty() ? "" : ":");
+    for (const auto& p : busy) std::printf("        %-40s %6.1f%%\n", p.name.c_str(), p.corePct);
+    std::printf("    probes per round: cpu median %.3f ms (min %.3f, p95 %.3f), memory median %.3f ms (min %.3f, p95 %.3f)\n",
+                stats(cpu).median, cpuMin, stats(cpu).p95, stats(mem).median, memMin, stats(mem).p95);
+    std::printf("    contended rounds (a probe over 1.5x its fastest): %zu of %zu\n", nContended, probes.size());
+    // Each gated op's median in clean and in contended rounds: if the slowdown follows the
+    // probes it is the machine; if clean rounds are slow too, it is the code.
+    for (const Op& op : s10.ops) {
+        std::vector<double> clean, hit;
+        for (std::size_t r = 0; r < op.samples.size() && r < contended.size(); ++r)
+            (contended[r] ? hit : clean).push_back(op.samples[r]);
+        std::printf("    %-22s clean rounds median %9.3f ms (%zu)   contended %9.3f ms (%zu)\n", op.name.c_str(),
+                    stats(clean).median, clean.size(), stats(hit).median, hit.size());
+    }
+    w.key("machine");
+    w.beginObject();
+    w.key("calibrationBeforeMs"); w.float32(static_cast<float>(cal0));
+    w.key("calibrationAfterMs"); w.float32(static_cast<float>(cal1));
+    w.key("referenceMs"); w.float32(static_cast<float>(ref));
+    w.key("externalCorePct"); w.float32(static_cast<float>(external));
+    w.key("busy");
+    w.beginArray();
+    for (const auto& p : busy) {
+        w.beginObject();
+        w.key("name"); w.string(p.name);
+        w.key("corePct"); w.float32(static_cast<float>(p.corePct));
+        w.endObject();
+    }
+    w.endArray();
+    w.key("contendedRounds"); w.uint64(nContended);
+    w.key("rounds");
+    w.beginArray();   // per gated round: the probes and every op's time
+    for (std::size_t r = 0; r < probes.size(); ++r) {
+        w.beginObject();
+        w.key("cpuProbeMs"); w.float32(static_cast<float>(probes[r].cpuMs));
+        w.key("memoryProbeMs"); w.float32(static_cast<float>(probes[r].memoryMs));
+        for (const Op& op : s10.ops)
+            if (r < op.samples.size()) { w.key(op.name); w.float32(static_cast<float>(op.samples[r])); }
+        w.endObject();
+    }
+    w.endArray();
+    w.endObject();
+    w.key("noisy"); w.boolean(noisy);
     w.key("checked"); w.boolean(!checkPath.empty());
     w.key("passed"); w.boolean(failures.empty());
     w.key("failures");
@@ -497,6 +626,21 @@ int main(int argc, char** argv) {
     std::ofstream(outPath, std::ios::binary) << w.str() << '\n';
 
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
-    std::printf("%s (results in %s)\n", failures.empty() ? "PASS" : "FAIL", outPath.c_str());
+    if (noisy)
+        std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",
+                    noisyCal ? "calibration over the reference by more than 25%; " : "",
+                    noisyLoad ? "other processes were busy; " : "",
+                    noisyRounds ? "over a quarter of the rounds were contended" : "");
+    std::printf("%s (results in %s)\n", noisy ? "NOISY" : failures.empty() ? "PASS" : "FAIL", outPath.c_str());
+    // The shared summary line; "noisy" lets tools/check.py rerun a noisy run.
+    std::string line = "{\"suite\":\"scene_bench\",\"passed\":" + std::to_string(failures.empty() && !noisy ? 1 : 0) +
+                       ",\"failed\":" + std::to_string(failures.empty() && !noisy ? 0 : 1) + ",\"failures\":[";
+    if (noisy) failures.push_back("noisy run (see the machine section above)");
+    for (std::size_t i = 0; i < failures.size(); ++i) line += (i ? "," : "") + test::jsonString(failures[i]);
+    line += "]";
+    if (noisy) line += ",\"noisy\":true";
+    std::printf("%s}\n", line.c_str());
+    if (wrong) return 1;   // a wrong result fails whatever the machine did
+    if (noisy) return 2;
     return failures.empty() ? 0 : 1;
 }

@@ -1,0 +1,15 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    {
+      "id": "0000000000000201",
+      "InputActions": {
+        "actions": [{ "action": "jump", "key": "Spcae" }, { "action": "fire", "key": 1 }],
+        "axes": [{ "axis": "move_forward", "positive": "W", "negativ": "S" }]
+      }
+    },
+    { "id": "0000000000000202", "InputActions": {} },
+    { "id": "0000000000000203", "FlyController": { "moveSpeed": -1, "moveSped": 3 } }
+  ]
+}

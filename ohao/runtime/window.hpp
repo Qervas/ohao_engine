@@ -4,7 +4,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 #include "gpu/vulkan/present_target.hpp"
-#include "runtime/input.hpp"
+#include "core/input.hpp"
 
 struct GLFWwindow;
 

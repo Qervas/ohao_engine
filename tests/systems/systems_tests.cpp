@@ -51,7 +51,8 @@ static void spin_runs_before_the_transform_system() {
     World w;
     const auto simulate = w.simulateNames();
     const auto sync = w.syncNames();
-    CHECK(simulate.size() == 1 && simulate[0] == "spin", "every world simulates spin once per fixed step");
+    CHECK(simulate.size() == 2 && simulate[0] == "spin" && simulate[1] == "fly_controller",
+          "every world simulates spin and the fly controller once per fixed step");
     CHECK(sync.size() == 1 && sync[0] == "transform", "and syncs transforms after each batch of steps");
 }
 
@@ -155,6 +156,95 @@ static void spin_through_the_api_steps_saves_and_restores() {
     CHECK(saveScene(w, engineTypes()).value() == before.value(), "and the world saves as it did before stepping");
 }
 
+// ---- fly controller (sub-project 4, test 14) ------------------------------------------------
+
+static InputEvent axisEvent(const char* name, float v) {
+    InputEvent e{InputEvent::Type::AxisSet};
+    e.name = name;
+    e.value = v;
+    return e;
+}
+
+static InputEvent actionEvent(const char* name, bool down) {
+    InputEvent e{down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp};
+    e.name = name;
+    return e;
+}
+
+// Steps the world `n` times with `first` as the first step's input.
+static void fly(World& w, std::vector<InputEvent> first, int n, float dt) {
+    for (int i = 0; i < n; ++i) {
+        w.stepInput(i == 0 ? std::span<const InputEvent>(first) : std::span<const InputEvent>());
+        w.simulate(dt);
+    }
+    w.sync();
+}
+
+static void sp4_t14_sixty_steps_forward_move_speed_dt_sixty_along_the_front() {
+    World w;
+    const auto e = w.create("eye");
+    w.registry().emplace<FlyController>(e);   // moveSpeed 3
+    fly(w, {axisEvent("move_forward", 1.0f)}, 60, 1.0f / 60.0f);
+    const glm::vec3 p = w.registry().get<Transform>(e).position;
+    CHECK(p.x == 0.0f && p.y == 0.0f && std::fabs(p.z - (-3.0f)) < 1e-5f,
+          "moveSpeed * dt * 60 = 3 m along -Z, the front of an unrotated entity");
+    // A turned entity moves along its own front.
+    World r;
+    Transform t;
+    t.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));   // front is now -X
+    const auto turned = r.create("turned", t);
+    r.registry().emplace<FlyController>(turned);
+    fly(r, {axisEvent("move_forward", 1.0f)}, 60, 1.0f / 60.0f);
+    const glm::vec3 q = r.registry().get<Transform>(turned).position;
+    CHECK(std::fabs(q.x - (-3.0f)) < 1e-5f && std::fabs(q.z) < 1e-5f && q.y == 0.0f, "along its rotated front (-X)");
+    // Right and up.
+    World s;
+    const auto side = s.create("side");
+    s.registry().emplace<FlyController>(side);
+    fly(s, {axisEvent("move_right", 1.0f), axisEvent("move_up", -1.0f)}, 30, 1.0f / 60.0f);
+    const glm::vec3 u = s.registry().get<Transform>(side).position;
+    CHECK(std::fabs(u.x - 1.5f) < 1e-5f && std::fabs(u.y + 1.5f) < 1e-5f && u.z == 0.0f, "right +X, up world +Y");
+}
+
+static void sp4_t14_look_turns_by_the_configured_rate() {
+    World w;
+    const auto e = w.create("eye");
+    w.registry().emplace<FlyController>(e, FlyController{3.0f, 4.0f, 0.5f});   // 0.5 deg per unit
+    InputEvent mouse{InputEvent::Type::MouseDelta};
+    mouse.x = 12.0;   // right
+    fly(w, {mouse}, 1, 1.0f / 60.0f);
+    CHECK(w.registry().get<Transform>(e).rotation == glm::quat(1, 0, 0, 0), "without look held the mouse turns nothing");
+    fly(w, {actionEvent("look", true), mouse}, 1, 1.0f / 60.0f);
+    const glm::quat want = glm::angleAxis(glm::radians(-6.0f), glm::vec3(0, 1, 0));   // 12 * 0.5 deg to the right
+    CHECK(near(w.registry().get<Transform>(e).rotation, want, 1e-6f), "12 units right turn 6 degrees right about +Y");
+    InputEvent down{InputEvent::Type::MouseDelta};
+    down.y = 4.0;   // down
+    fly(w, {down}, 1, 1.0f / 60.0f);
+    const glm::quat pitched = want * glm::angleAxis(glm::radians(-2.0f), glm::vec3(1, 0, 0));
+    CHECK(near(w.registry().get<Transform>(e).rotation, pitched, 1e-6f), "4 units down pitch 2 degrees down about its +X");
+}
+
+static void sp4_t14_fast_multiplies_and_idle_writes_nothing() {
+    World w;
+    const auto e = w.create("eye");
+    w.registry().emplace<FlyController>(e);   // fastMultiplier 4
+    w.sync();
+    std::size_t patched = 0;
+    w.registry().on_update<Transform>().connect<&countWrite>(patched);
+    fly(w, {}, 10, 1.0f / 60.0f);
+    CHECK(patched == 0, "an idle controller leaves its entity untouched");
+    fly(w, {axisEvent("move_forward", 1.0f), actionEvent("fast", true)}, 60, 1.0f / 60.0f);
+    CHECK(std::fabs(w.registry().get<Transform>(e).position.z - (-12.0f)) < 1e-4f, "fast: 4 x 3 m");
+    // The names are data: a controller reading other axes ignores move_forward.
+    World o;
+    const auto other = o.create("other");
+    FlyController fc;
+    fc.moveForward = "thrust";
+    o.registry().emplace<FlyController>(other, fc);
+    fly(o, {axisEvent("move_forward", 1.0f)}, 10, 1.0f / 60.0f);
+    CHECK(o.registry().get<Transform>(other).position == glm::vec3(0), "it reads its own axis names");
+}
+
 int main() {
     std::printf("systems_tests\n");
     RUN(spin_runs_before_the_transform_system);
@@ -163,5 +253,8 @@ int main() {
     RUN(spin_negative_rates_turn_back_and_steps_add_up);
     RUN(spin_is_deterministic_and_children_follow);
     RUN(spin_through_the_api_steps_saves_and_restores);
+    RUN(sp4_t14_sixty_steps_forward_move_speed_dt_sixty_along_the_front);
+    RUN(sp4_t14_look_turns_by_the_configured_rate);
+    RUN(sp4_t14_fast_multiplies_and_idle_writes_nothing);
     return ohao::test::finish("systems_tests");
 }

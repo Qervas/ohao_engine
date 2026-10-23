@@ -170,7 +170,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 18, "eighteen methods");
+    CHECK(api::methods().size() == 22, "twenty-two methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -1473,6 +1473,221 @@ static void sp4_t12_diff_respects_limit_fields_and_names() {
     CHECK(Reply(s.call("world.diff", "{}")).code() == "E_COMMAND", "snapshot is required");
 }
 
+// ---- test 13: input as data -----------------------------------------------------------
+
+// A world with controls (fire on the left mouse button, move_forward on W/S, look on the
+// right button) and a fly camera, its id generator seeded.
+static const std::string kControls =
+    R"({"commands":[{"op":"entity.create","name":"Controls","components":{"InputActions":{)"
+    R"("actions":[{"action":"fire","key":"MouseLeft"},{"action":"look","key":"MouseRight"},{"action":"fast","key":"LeftShift"}],)"
+    R"("axes":[{"axis":"move_forward","positive":"W","negative":"S"},{"axis":"move_right","positive":"D","negative":"A"}]}}},)"
+    R"({"op":"entity.create","name":"Eye","components":{"FlyController":{},"Transform":{"position":[0,1,5]}}}]})";
+
+static bool loadControls(World& w, api::Session& s) {
+    w.seedIds(0xc0de);
+    return Reply(s.call("world.apply", kControls)).ok();
+}
+
+static bool step1(api::Session& s) { return Reply(s.call("world.step")).ok(); }
+
+static void sp4_t13_injection_is_stamped_by_step() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s), "controls");
+    const Reply q(s.call("input.inject", R"({"events":[{"step":2,"action":"fire","down":true},{"step":5,"action":"fire","down":false}]})"));
+    CHECK(q.ok() && q.str("/result/queued") == "2" && q.str("/result/firstStep") == "2" && q.str("/result/lastStep") == "5",
+          "two events queued for absolute steps 2 and 5");
+    const auto fire = [&](const char* what) { return Reply(s.call("input.state")).json(std::string("/result/actions/fire/") + what); };
+    CHECK(step1(s) && step1(s) && fire("held") == "false", "steps 0 and 1: not yet");
+    CHECK(step1(s) && fire("pressed") == "true" && fire("held") == "true", "step 2: pressed, exactly on its step");
+    CHECK(step1(s) && fire("pressed") == "false" && fire("held") == "true", "step 3: held, no longer pressed");
+    CHECK(step1(s) && fire("held") == "true", "step 4: still held");
+    CHECK(step1(s) && fire("released") == "true" && fire("held") == "false", "step 5: released on the release step");
+    const Reply past(s.call("input.inject", R"({"events":[{"step":-1,"action":"fire","down":true}]})"));
+    CHECK(past.code() == "E_RANGE" && past.str("/error/data/0/path") == "/events/0/step", "no event in the past");
+}
+
+static void sp4_t13_axis_override_holds_and_releases_to_the_keys() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s), "controls");
+    const auto axis = [&] { return Reply(s.call("input.state")).str("/result/axes/move_forward"); };
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"W","down":true}]})")).ok() && step1(s) && axis() == "1",
+          "a key goes through the bindings like a real key");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"axis":"move_forward","value":-0.5}]})")).ok() && step1(s) &&
+              axis() == "-0.5",
+          "an injected value overrides the keys");
+    CHECK(step1(s) && step1(s) && axis() == "-0.5", "and holds until changed");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"axis":"move_forward","value":null}]})")).ok() && step1(s) &&
+              axis() == "1",
+          "value null releases it back to its keys");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"W","down":false}]})")).ok() && step1(s) && axis() == "0",
+          "key up");
+    const Reply bad(s.call("input.inject", R"({"events":[{"axis":"move_forward"}]})"));
+    CHECK(bad.code() == "E_COMMAND" && bad.str("/error/data/0/path") == "/events/0", "an axis event needs a value");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"action":"fire","key":"W","down":true}]})")).code() == "E_COMMAND",
+          "exactly one kind per event");
+}
+
+static void sp4_t13_input_actions_rebind_on_change() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s), "controls");
+    const auto fireHeld = [&] { return Reply(s.call("input.state")).json("/result/actions/fire/held"); };
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"MouseLeft","down":true}]})")).ok() && step1(s) &&
+              fireHeld() == "true",
+          "fire on the left button");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"MouseLeft","down":false}]})")).ok() && step1(s), "let go");
+    const std::string controls = Reply(s.call("world.query", R"({"names":["Controls"],"fields":[]})")).str("/result/entities/0/id");
+    const Reply set = applyBatch(s, R"([{"op":"field.set","id":")" + controls +
+                                        R"(","path":"/InputActions/actions/0/key","value":"Space"}])");
+    CHECK(set.ok(), "rebind fire to Space through a command");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"MouseLeft","down":true}]})")).ok() && step1(s) &&
+              fireHeld() == "false",
+          "the old binding is gone at the next step");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"Space","down":true}]})")).ok() && step1(s) &&
+              fireHeld() == "true",
+          "the new one holds fire");
+    CHECK(applyBatch(s, R"([{"op":"component.remove","id":")" + controls + R"(","type":"InputActions"}])").ok() &&
+              step1(s) && fireHeld() == "false",
+          "removing InputActions drops every binding");
+}
+
+static void sp4_t13_focus_lost_releases_everything() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s), "controls");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"key":"W","down":true},{"action":"look","down":true},)"
+                                         R"({"axis":"move_right","value":0.25},{"key":"MouseLeft","down":true}]})")).ok() &&
+              step1(s),
+          "a key, an injected action, an axis value, a button");
+    const Reply held(s.call("input.state"));
+    CHECK(held.str("/result/axes/move_forward") == "1" && held.json("/result/actions/look/held") == "true" &&
+              held.str("/result/axes/move_right") == "0.25" && held.json("/result/actions/fire/held") == "true",
+          "all held");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"focusLost":true}]})")).ok() && step1(s), "focus lost");
+    const Reply after(s.call("input.state"));
+    CHECK(after.str("/result/axes/move_forward") == "0" && after.json("/result/actions/look/released") == "true" &&
+              after.str("/result/axes/move_right") == "0" && after.json("/result/actions/fire/held") == "false",
+          "everything released, real and injected");
+}
+
+static void sp4_t13_unknown_key_names_are_e_enum_with_a_suggestion() {
+    World w;
+    api::Session s(w, engineTypes());
+    const Reply cmd(s.call("input.inject", R"({"events":[{"key":"Spcae","down":true}]})"));
+    CHECK(cmd.code() == "E_ENUM" && cmd.str("/error/data/0/suggestion") == "Space" &&
+              cmd.str("/error/data/0/path") == "/events/0/key",
+          "in commands");
+    const Reply file(s.call("scene.validate", R"({"text":"{\"format\":\"ohao.scene\",\"version\":1,\"entities\":[{\"id\":\"00000000000000a1\",)"
+                                              R"(\"InputActions\":{\"actions\":[{\"action\":\"run\",\"key\":\"LeftShit\"}]}}]}"})"));
+    CHECK(file.json("/result/ok") == "false" && file.str("/result/errors/0/code") == "E_ENUM" &&
+              file.str("/result/errors/0/suggestion") == "LeftShift",
+          "in files");
+}
+
+// A flight: fly forward, turn with the mouse while looking, strafe, stop.
+static const std::string kFlight =
+    R"({"events":[{"step":0,"axis":"move_forward","value":1},{"step":30,"action":"look","down":true},)"
+    R"({"step":30,"mouse":[12,-4]},{"step":31,"mouse":[3,0]},{"step":40,"action":"look","down":false},)"
+    R"({"step":70,"key":"D","down":true},{"step":95,"key":"D","down":false},{"step":110,"axis":"move_forward","value":null}]})";
+
+static std::string tmpDir(const char* name) {
+    const fs::path d = fs::path(OHAO_SOURCE_DIR) / "build" / (std::string(name) + "_" + std::to_string(processId()));
+    fs::create_directories(d);
+    return d.generic_string();
+}
+
+static void sp4_t13_record_then_replay_matches_every_checkpoint() {
+    const std::string dir = tmpDir("api_input");
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s) && Reply(s.call("world.snapshot", R"({"name":"start"})")).ok(), "controls, snapshot");
+    const std::string path = dir + "/flight.input.jsonl";
+    CHECK(Reply(s.call("input.record", "{\"path\":\"" + path + "\"}")).ok(), "record");
+    CHECK(Reply(s.call("input.inject", kFlight)).ok() && Reply(s.call("world.step", R"({"frames":150})")).ok(), "fly 150 steps");
+    const std::string flown = worldHashOf(s);
+    const Reply stop(s.call("input.record", R"({"stop":true})"));
+    CHECK(stop.ok() && stop.str("/result/steps") == "150" && stop.str("/result/events") == "8", "150 steps, 8 events");
+    const std::string eye = Reply(s.call("world.query", R"({"names":["Eye"],"fields":["/Transform/position"]})")).json("/result/entities/0");
+    CHECK(Reply(s.call("world.restore", R"({"name":"start"})")).ok() && worldHashOf(s) != flown, "back at the start");
+    const Reply replay(s.call("input.replay", "{\"path\":\"" + path + "\"}"));
+    CHECK(replay.ok() && replay.str("/result/steps") == "150" && replay.str("/result/events") == "8" &&
+              replay.str("/result/checkpoints") == "3",
+          "150 steps, 8 events, checkpoints at 60, 120 and the end");
+    CHECK(worldHashOf(s) == flown, "the replay reaches the recorded world");
+    CHECK(Reply(s.call("world.query", R"({"names":["Eye"],"fields":["/Transform/position"]})")).json("/result/entities/0") == eye &&
+              eye.find("[0,1,5]") == std::string::npos,
+          "the camera flew, and the replay flew it to the same place");
+    const Reply wrong(s.call("input.replay", "{\"path\":\"" + path + "\"}"));
+    CHECK(wrong.code() == "E_REPLAY" && wrong.str("/error/message").find("does not match the recording's start") != std::string::npos,
+          "from another world it refuses to start");
+    CHECK(Reply(s.call("input.replay", "{\"path\":\"" + path + "\",\"verify\":false}")).ok(), "unless verify is false");
+}
+
+static void sp4_t13_a_tampered_recording_fails_at_the_right_step() {
+    const std::string dir = tmpDir("api_input_tamper");
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(loadControls(w, s) && Reply(s.call("world.snapshot", R"({"name":"start"})")).ok(), "controls, snapshot");
+    const std::string path = dir + "/flight.input.jsonl";
+    CHECK(Reply(s.call("input.record", "{\"path\":\"" + path + "\"}")).ok() && Reply(s.call("input.inject", kFlight)).ok() &&
+              Reply(s.call("world.step", R"({"frames":150})")).ok() && Reply(s.call("input.record", R"({"stop":true})")).ok(),
+          "record a flight");
+    std::string text = readFile(path);
+    const std::string from = R"({"step":70,"key":"D","down":true})";
+    const auto at = text.find(from);
+    CHECK(at != std::string::npos, "the strafe is in the recording");
+    text.replace(at, from.size(), R"({"step":70,"key":"A","down":true})");   // strafe left instead
+    std::ofstream(path, std::ios::binary | std::ios::trunc) << text;
+    CHECK(Reply(s.call("world.restore", R"({"name":"start"})")).ok(), "restore");
+    const Reply r(s.call("input.replay", "{\"path\":\"" + path + "\"}"));
+    CHECK(r.code() == "E_REPLAY" && r.str("/error/message").find("at step 120") != std::string::npos,
+          "fails at the first checkpoint after the change (step 120), not before");
+    CHECK(s.frame() == 120, "having run exactly the steps before it");
+}
+
+// A realtime session recorded by hand (the window host's loop), with a long stall the clock
+// clamps (dropped time), replays exactly in lockstep.
+static void sp4_t13_a_realtime_recording_with_dropped_time_replays_exactly() {
+    using namespace std::chrono_literals;
+    const std::string dir = tmpDir("api_input_realtime");
+    World w;
+    api::Session s(w, engineTypes());
+    s.setHostKind(api::HostKind::Window);
+    CHECK(loadControls(w, s) && Reply(s.call("world.snapshot", R"({"name":"start"})")).ok(), "controls, snapshot");
+    const std::string path = dir + "/realtime.input.jsonl";
+    CHECK(Reply(s.call("input.record", "{\"path\":\"" + path + "\"}")).ok(), "record");
+    CHECK(Reply(s.call("time.set", R"({"mode":"realtime"})")).ok(), "realtime");
+    Timeline& t = s.timeline();
+    const InputEvent wDown{InputEvent::Type::Down, InputDevice::Key, 87}, wUp{InputEvent::Type::Up, InputDevice::Key, 87};
+    std::vector<InputEvent> pending;
+    const Nanos walls[] = {16'666'667ns, 9'000'000ns, 2'000'000'000ns /* a stall: clamped */, 33'000'000ns, 16'666'667ns};
+    std::size_t clamped = 0;
+    for (int frame = 0; frame < 30; ++frame) {
+        if (frame == 2) pending.push_back(wDown);   // device events arrive between frames
+        if (frame == 20) pending.push_back(wUp);
+        const Tick tick = t.advance(walls[frame % 5]);
+        clamped += tick.discarded.count() > 0;
+        for (int i = 0; i < tick.steps; ++i) {
+            s.step(pending, t.fixedDt());   // the step that consumes them
+            pending.clear();
+        }
+        w.sync();
+    }
+    CHECK(clamped > 0, "the stall dropped time");
+    CHECK(Reply(s.call("time.set", R"({"paused":true})")).ok(), "pause");
+    const std::string played = worldHashOf(s);
+    const Reply stop(s.call("input.record", R"({"stop":true})"));
+    CHECK(stop.ok() && stop.str("/result/events") == "2", "both key events recorded");
+    CHECK(Reply(s.call("time.set", R"({"mode":"lockstep","paused":false})")).ok() &&
+              Reply(s.call("world.restore", R"({"name":"start"})")).ok(),
+          "lockstep, back at the start");
+    const Reply r(s.call("input.replay", "{\"path\":\"" + path + "\"}"));
+    CHECK(r.ok(), "replays");
+    CHECK(worldHashOf(s) == played, "to the world the realtime session reached");
+}
+
 int main() {
     std::printf("api_tests\n");
     RUN(t09_method_table_dispatch_and_errors);
@@ -1505,6 +1720,14 @@ int main() {
     RUN(sp4_t12_hash_changes_on_any_authoring_change);
     RUN(sp4_t12_diff_equals_a_diff_of_the_two_saves);
     RUN(sp4_t12_diff_respects_limit_fields_and_names);
+    RUN(sp4_t13_injection_is_stamped_by_step);
+    RUN(sp4_t13_axis_override_holds_and_releases_to_the_keys);
+    RUN(sp4_t13_input_actions_rebind_on_change);
+    RUN(sp4_t13_focus_lost_releases_everything);
+    RUN(sp4_t13_unknown_key_names_are_e_enum_with_a_suggestion);
+    RUN(sp4_t13_record_then_replay_matches_every_checkpoint);
+    RUN(sp4_t13_a_tampered_recording_fails_at_the_right_step);
+    RUN(sp4_t13_a_realtime_recording_with_dropped_time_replays_exactly);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

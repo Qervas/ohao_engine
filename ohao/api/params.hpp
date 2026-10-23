@@ -7,7 +7,10 @@
 // They live in their own registry: they are not scene types and never appear in files.
 // Free-JSON members (world.apply's commands, an inline scene) are JsonRefs, checked by the
 // command and scene decoders.
+#include "core/input.hpp"
 #include "core/timeline.hpp"
+
+#include <glm/vec2.hpp>
 #include "reflect/json_value.hpp"
 #include "reflect/registry.hpp"
 
@@ -95,6 +98,34 @@ struct TimeSetParams {
 };
 
 struct WorldHashParams {};
+
+using ohao::Key;
+
+// One injected input event, stamped `step` steps after the next step to run (0: the next).
+// Exactly one of action, axis, key, mouse, focusLost.
+struct InjectEvent {
+    int32_t step{0};
+    std::optional<std::string> action;   // with down
+    std::optional<std::string> axis;     // with value (a number, or null to release)
+    std::optional<Key> key;              // with down: through the bindings, like a real key
+    std::optional<glm::vec2> mouse;      // a mouse delta
+    std::optional<bool> down;
+    std::optional<float> value;
+    bool focusLost{false};               // releases everything held
+};
+
+struct InputInjectParams {
+    std::vector<InjectEvent> events;
+};
+struct InputStateParams {};
+struct InputRecordParams {
+    std::optional<std::string> path;
+    bool stop{false};
+};
+struct InputReplayParams {
+    std::string path;
+    bool verify{true};
+};
 
 struct WorldDiffParams {
     std::string snapshot;

@@ -31,9 +31,7 @@ RunReport Application::run(const GameHooks& hooks) {
         if (m_cfg.frameLimit > 0 && frame >= m_cfg.frameLimit) break;
         if (frame == m_cfg.resizeAtFrame) m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
-        m_events.clear();
-        m_window.poll(m_events);
-        m_input.beginFrame(m_events);
+        m_window.poll(m_events);   // appended: kept until a step consumes them
         if (m_window.consumeResized()) m_renderer->setPresentExtent(m_window.framebufferExtent());
 
         const auto now = Clock::now();
@@ -42,6 +40,8 @@ RunReport Application::run(const GameHooks& hooks) {
 
         const float fixedDt = m_time.fixedDt();
         for (int i = 0; i < tick.steps; ++i) {
+            m_world->stepInput(m_events);
+            m_events.clear();
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
             m_world->simulate(fixedDt);
             m_time.stepped(1);

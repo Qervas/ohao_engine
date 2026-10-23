@@ -63,6 +63,20 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "What changed since a snapshot: per entity, \"/Type/field\" (or \"/Type\" for a component added or "
          "removed) with old and new values in file form; created and destroyed ids. count: changed entities; more: "
          "entries left out by limit."},
+        {"input.inject", p.find<InputInjectParams>(), "{queued, firstStep, lastStep}",
+         "Queues input events stamped by simulation step, relative to the next step (0). Actions and axes act as "
+         "one more device (an axis value holds until changed; null releases it), keys go through the bindings, "
+         "mouse entries are deltas. Same-step events apply in order, after the step's device events."},
+        {"input.state", p.find<InputStateParams>(), "{actions: {name: {held, pressed, released}}, axes: {name: value}}",
+         "The input map as the last step saw it."},
+        {"input.record", p.find<InputRecordParams>(), "{path, steps, events}",
+         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording under the output directory: every event "
+         "that reached the input map with its step, a {step, hash} checkpoint every 60 steps, the final hash. "
+         "Starting releases everything held, as a replay does."},
+        {"input.replay", p.find<InputReplayParams>(), "{steps, events, checkpoints, frame}",
+         "Replays a recording in lockstep from the current world, which must hash as the recording's start (load "
+         "the scene with its seed, or restore a snapshot, first). E_REPLAY names the first diverging step. "
+         "Cancellable between steps."},
         {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
          "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
          "component, the id generator and the frame."},
@@ -219,6 +233,7 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
             if (!reg.all_of<ecs::Parent>(e)) roots.push_back(e);
         for (const entt::entity e : roots) s.world.destroy(e);   // each subtree
         s.time->setFrame(0);
+        dropInjected(s);
     }
     auto r = ecs::loadScene(s.world, text, s.types);
     if (!r) {
@@ -226,6 +241,8 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         return false;
     }
     if (p.seed) s.world.seedIds(*p.seed);
+    s.scenePath = p.path.value_or("");
+    s.sceneSeed = p.seed;
     const ecs::LoadReport& rep = r.value();
     out.beginObject();
     out.key("entities"); out.uint64(rep.entities);
@@ -332,8 +349,7 @@ bool worldStep(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
             s.cancelled = true;
             return false;
         }
-        s.world.simulate(dt);
-        s.time->stepped(1);
+        stepOnce(s, {}, dt);
         if (s.control && s.control->progress) s.control->progress(i + 1, frames);
     }
     s.world.sync();   // derived state once per batch
@@ -555,6 +571,7 @@ bool worldRestore(Session::Impl& s, const JsonDocument& doc, const JsonNode& par
     if (!snap) return false;
     const ecs::RestoreStats st = ecs::restoreSnapshot(s.world, *snap);
     s.time->setFrame(snap->frame);
+    dropInjected(s);
     out.beginObject();
     out.key("created"); out.uint64(st.created);
     out.key("destroyed"); out.uint64(st.destroyed);
@@ -648,7 +665,9 @@ constexpr MethodEntry kDispatch[] = {
     {"scene.load", sceneLoad},       {"scene.save", sceneSave},         {"world.info", worldInfo},
     {"world.summary", methodSummary}, {"world.query", methodQuery},     {"world.apply", methodApply},
     {"world.step", worldStep},       {"time.get", timeGet},             {"time.set", timeSet},
-    {"world.hash", worldHash},       {"world.diff", worldDiff},         {"world.snapshot", worldSnapshot},
+    {"world.hash", worldHash},       {"world.diff", worldDiff},         {"input.inject", methodInputInject},
+    {"input.state", methodInputState}, {"input.record", methodInputRecord}, {"input.replay", methodInputReplay},
+    {"world.snapshot", worldSnapshot},
     {"world.restore", worldRestore}, {"render.capture", renderCapture}, {"log.read", logRead},
 };
 
@@ -881,6 +900,7 @@ ecs::World& Session::world() noexcept { return m->world; }
 uint64_t Session::frame() const noexcept { return m->time->frame(); }
 Timeline& Session::timeline() noexcept { return *m->time; }
 void Session::setTimeline(Timeline& timeline) noexcept { m->time = &timeline; }
+void Session::step(std::span<const InputEvent> deviceEvents, float dt) { stepOnce(*m, deviceEvents, dt); }
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 void Session::setRenderHandler(RenderHandler handler) { m->render = std::move(handler); }

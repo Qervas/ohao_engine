@@ -178,4 +178,70 @@ void writeFields(const Spin& v, const Spin* omit, FieldSink& out) {
     if (!omit || !same(v.degreesPerSecond, omit->degreesPerSecond)) t.f32("\"degreesPerSecond\"", v.degreesPerSecond);
 }
 
+namespace {
+
+void key(LayoutTree& t, std::string_view field, Key k) {
+    const std::string_view name = keyName(k);
+    if (name.empty()) {
+        t.fail("value " + std::to_string(static_cast<int64_t>(k)) + " is not registered in enum Key");
+        t.null(field);
+        return;
+    }
+    t.string(field, name);
+}
+
+bool sameBindings(const InputActions& a, const InputActions& b, bool actions) {
+    if (actions) {
+        if (a.actions.size() != b.actions.size()) return false;
+        for (std::size_t i = 0; i < a.actions.size(); ++i)
+            if (a.actions[i].action != b.actions[i].action || a.actions[i].key != b.actions[i].key) return false;
+        return true;
+    }
+    if (a.axes.size() != b.axes.size()) return false;
+    for (std::size_t i = 0; i < a.axes.size(); ++i)
+        if (a.axes[i].axis != b.axes[i].axis || a.axes[i].positive != b.axes[i].positive ||
+            a.axes[i].negative != b.axes[i].negative)
+            return false;
+    return true;
+}
+
+} // namespace
+
+void writeFields(const InputActions& v, const InputActions* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || !sameBindings(v, *omit, true)) {
+        t.beginArray("\"actions\"");
+        for (const ActionBinding& b : v.actions) {   // array elements in full
+            t.beginObject();
+            t.string("\"action\"", b.action);
+            key(t, "\"key\"", b.key);
+            t.endObject();
+        }
+        t.endArray();
+    }
+    if (!omit || !sameBindings(v, *omit, false)) {
+        t.beginArray("\"axes\"");
+        for (const AxisBinding& b : v.axes) {
+            t.beginObject();
+            t.string("\"axis\"", b.axis);
+            key(t, "\"positive\"", b.positive);
+            key(t, "\"negative\"", b.negative);
+            t.endObject();
+        }
+        t.endArray();
+    }
+}
+
+void writeFields(const FlyController& v, const FlyController* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || !same(v.moveSpeed, omit->moveSpeed)) t.f32("\"moveSpeed\"", v.moveSpeed);
+    if (!omit || !same(v.fastMultiplier, omit->fastMultiplier)) t.f32("\"fastMultiplier\"", v.fastMultiplier);
+    if (!omit || !same(v.lookDegPerUnit, omit->lookDegPerUnit)) t.f32("\"lookDegPerUnit\"", v.lookDegPerUnit);
+    if (!omit || v.moveForward != omit->moveForward) t.string("\"moveForward\"", v.moveForward);
+    if (!omit || v.moveRight != omit->moveRight) t.string("\"moveRight\"", v.moveRight);
+    if (!omit || v.moveUp != omit->moveUp) t.string("\"moveUp\"", v.moveUp);
+    if (!omit || v.look != omit->look) t.string("\"look\"", v.look);
+    if (!omit || v.fast != omit->fast) t.string("\"fast\"", v.fast);
+}
+
 } // namespace ohao::ecs

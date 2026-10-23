@@ -1,4 +1,5 @@
 #pragma once
+#include "core/input.hpp"          // Key
 #include "reflect/asset_ref.hpp"   // a plain struct; no reflection machinery
 #include "render/scene/handles.hpp"
 
@@ -13,6 +14,8 @@
 #include <vector>
 
 namespace ohao::ecs {
+
+using ohao::Key;
 
 // The entity's stable identity: never recycled, survives save/load and snapshots, and is
 // what files, commands and (later) prefabs and scripts refer to. Assigned by
@@ -166,6 +169,41 @@ struct Environment {
 struct Spin {
     glm::vec3 axis{0.0f, 1.0f, 0.0f};   // local frame; normalized when applied; zero: no turn
     float degreesPerSecond{90.0f};      // negative turns the other way
+};
+
+// ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
+
+struct ActionBinding {
+    std::string action;   // "jump"
+    Key key{Key::None};   // "Space"
+};
+struct AxisBinding {
+    std::string axis;          // "move_forward"
+    Key positive{Key::None};   // +1 while held
+    Key negative{Key::None};   // -1 while held
+};
+// The world's controls, one per world: action and axis names over keys, so a scene file
+// carries them and an agent edits them like any component. The World's InputMap is
+// rebuilt from it whenever it is set, changed or removed.
+struct InputActions {
+    std::vector<ActionBinding> actions;
+    std::vector<AxisBinding> axes;
+};
+
+// Flies the entity from the named axes and actions (the fly_controller system, once per
+// fixed step): forward along its -Z, right along its +X, up along world +Y, at moveSpeed
+// (times fastMultiplier while `fast` is held); while `look` is held the mouse turns it,
+// yaw about world +Y and pitch about its own +X. Put on the Camera entity, it is a fly
+// camera.
+struct FlyController {
+    float moveSpeed{3.0f};
+    float fastMultiplier{4.0f};
+    float lookDegPerUnit{0.1f};
+    std::string moveForward{"move_forward"};
+    std::string moveRight{"move_right"};
+    std::string moveUp{"move_up"};
+    std::string look{"look"};
+    std::string fast{"fast"};
 };
 
 } // namespace ohao::ecs

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "runtime/clock.hpp"
-#include "runtime/input.hpp"
+#include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
 
 #include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
@@ -126,14 +126,14 @@ static void press_hold_release_edges() {
     InputMap m;
     m.bindAction("jump", {InputDevice::Key, KEY_SPACE});
     std::vector<InputEvent> f1{down(KEY_SPACE)};
-    m.beginFrame(f1);
+    m.beginStep(f1);
     CHECK(m.pressed("jump") && m.held("jump") && !m.released("jump"), "frame of the press");
-    m.beginFrame({});
+    m.beginStep({});
     CHECK(!m.pressed("jump") && m.held("jump"), "next frame: held, not pressed again");
     std::vector<InputEvent> f3{up(KEY_SPACE)};
-    m.beginFrame(f3);
+    m.beginStep(f3);
     CHECK(!m.held("jump") && m.released("jump"), "frame of the release");
-    m.beginFrame({});
+    m.beginStep({});
     CHECK(!m.released("jump"), "released is a one-frame edge");
 }
 
@@ -142,7 +142,7 @@ static void tap_within_one_frame() {
     m.bindAction("fire", {InputDevice::MouseButton, MOUSE_LEFT});
     std::vector<InputEvent> f{{InputEvent::Type::Down, InputDevice::MouseButton, MOUSE_LEFT},
                               {InputEvent::Type::Up,   InputDevice::MouseButton, MOUSE_LEFT}};
-    m.beginFrame(f);
+    m.beginStep(f);
     CHECK(m.pressed("fire"), "a tap shorter than a frame must still register as pressed");
     CHECK(m.released("fire"), "...and as released");
     CHECK(!m.held("fire"), "...but not as held");
@@ -154,9 +154,9 @@ static void repress_within_one_frame() {
     InputMap m;
     m.bindAction("fire", {InputDevice::Key, KEY_W});
     std::vector<InputEvent> a{down(KEY_W)};
-    m.beginFrame(a);
+    m.beginStep(a);
     std::vector<InputEvent> b{up(KEY_W), down(KEY_W)};
-    m.beginFrame(b);
+    m.beginStep(b);
     CHECK(m.pressed("fire"), "a re-press inside one frame must register as pressed");
     CHECK(m.released("fire"), "...and the let-go as released");
     CHECK(m.held("fire"), "...and the key is held at frame end");
@@ -167,7 +167,7 @@ static void press_after_focus_loss_in_one_frame() {
     InputMap m;
     m.bindAction("jump", {InputDevice::Key, KEY_W});
     std::vector<InputEvent> a{{InputEvent::Type::FocusLost}, down(KEY_W)};
-    m.beginFrame(a);
+    m.beginStep(a);
     CHECK(m.held("jump") && m.pressed("jump"), "a Down after FocusLost in the same frame survives");
 }
 
@@ -176,9 +176,9 @@ static void two_bindings_one_action() {
     m.bindAction("forward", {InputDevice::Key, KEY_W});
     m.bindAction("forward", {InputDevice::Key, KEY_UP});
     std::vector<InputEvent> a{down(KEY_W), down(KEY_UP)};
-    m.beginFrame(a);
+    m.beginStep(a);
     std::vector<InputEvent> b{up(KEY_W)};
-    m.beginFrame(b);
+    m.beginStep(b);
     CHECK(m.held("forward"), "releasing one binding keeps the action held by the other");
     CHECK(!m.released("forward"), "and is not a release of the action");
 }
@@ -189,10 +189,10 @@ static void rebind_replaces() {
     m.clearAction("jump");
     m.bindAction("jump", {InputDevice::Key, KEY_W});
     std::vector<InputEvent> f{down(KEY_SPACE)};
-    m.beginFrame(f);
+    m.beginStep(f);
     CHECK(!m.held("jump"), "the old key no longer triggers the action");
     std::vector<InputEvent> g{down(KEY_W)};
-    m.beginFrame(g);
+    m.beginStep(g);
     CHECK(m.held("jump"), "the new key does");
 }
 
@@ -201,9 +201,9 @@ static void focus_loss_releases_everything() {
     m.bindAction("sprint", {InputDevice::Key, KEY_W});
     m.bindAxis("move", {InputDevice::Key, KEY_W}, {InputDevice::Key, KEY_S});
     std::vector<InputEvent> a{down(KEY_W)};
-    m.beginFrame(a);
+    m.beginStep(a);
     std::vector<InputEvent> b{{InputEvent::Type::FocusLost}};
-    m.beginFrame(b);
+    m.beginStep(b);
     CHECK(!m.held("sprint") && m.released("sprint"), "alt-tab must release held actions");
     CHECK(m.axis("move") == 0.0f, "and zero every axis");
 }
@@ -212,32 +212,32 @@ static void axis_from_key_pair() {
     InputMap m;
     m.bindAxis("move", {InputDevice::Key, KEY_W}, {InputDevice::Key, KEY_S});
     std::vector<InputEvent> a{down(KEY_W)};
-    m.beginFrame(a);
+    m.beginStep(a);
     CHECK(m.axis("move") == 1.0f, "positive key");
     std::vector<InputEvent> b{down(KEY_S)};
-    m.beginFrame(b);
+    m.beginStep(b);
     CHECK(m.axis("move") == 0.0f, "both keys cancel");
     std::vector<InputEvent> c{up(KEY_W)};
-    m.beginFrame(c);
+    m.beginStep(c);
     CHECK(m.axis("move") == -1.0f, "negative key");
 }
 
 static void mouse_delta_no_first_jump() {
     InputMap m;
     std::vector<InputEvent> a{{InputEvent::Type::MouseMove, InputDevice::Key, 0, 500.0, 300.0}};
-    m.beginFrame(a);
+    m.beginStep(a);
     CHECK(m.mouseDelta() == glm::vec2(0.0f), "first move establishes position, no jump");
     std::vector<InputEvent> b{{InputEvent::Type::MouseMove, InputDevice::Key, 0, 510.0, 295.0},
                               {InputEvent::Type::MouseMove, InputDevice::Key, 0, 512.0, 290.0}};
-    m.beginFrame(b);
+    m.beginStep(b);
     CHECK(m.mouseDelta() == glm::vec2(12.0f, -10.0f), "deltas sum within a frame");
-    m.beginFrame({});
+    m.beginStep({});
     CHECK(m.mouseDelta() == glm::vec2(0.0f), "no motion, no delta");
 }
 
 static void unknown_names_are_inert() {
     InputMap m;
-    m.beginFrame({});
+    m.beginStep({});
     CHECK(!m.pressed("nope") && !m.held("nope") && !m.released("nope"), "unbound action is false");
     CHECK(m.axis("nope") == 0.0f, "unbound axis is zero");
 }
@@ -258,6 +258,73 @@ static void choose_format_prefers_unorm_bgra() {
           "any UNORM 8-bit format beats an sRGB one");
     VkSurfaceFormatKHR only[] = {{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
     CHECK(ohao::Swapchain::chooseFormat(only).format == VK_FORMAT_R8G8B8A8_UNORM, "else first offered");
+}
+
+// ---------------------------------------------------------------- input as data (sub-project 4, test 13)
+
+static void sp4_t13_key_names_round_trip() {
+    int n = 0;
+    for (const KeyName& k : keyNames()) {
+        CHECK(keyFromName(k.name) == k.key && keyName(k.key) == k.name, "name -> key -> name, for every key");
+        ++n;
+    }
+    CHECK(n > 80, "letters, digits, F-keys, modifiers, arrows, mouse buttons");
+    CHECK(keyBinding(Key::W) == Binding(InputDevice::Key, 87) && keyBinding(Key::MouseRight) == Binding(InputDevice::MouseButton, 1),
+          "keys are GLFW codes; mouse buttons are buttons");
+    CHECK(!keyBinding(Key::None) && !keyFromName("Spcae") && keyName(static_cast<Key>(12345)).empty(), "None binds nothing");
+}
+
+static InputEvent virt(InputEvent::Type t, const char* name, float v = 0.0f) {
+    InputEvent e{t};
+    e.name = name;
+    e.value = v;
+    return e;
+}
+
+static void sp4_t13_virtual_device_acts_like_a_device() {
+    InputMap m;
+    m.bindAction("fire", {InputDevice::Key, KEY_SPACE});
+    std::vector<InputEvent> a{virt(InputEvent::Type::ActionDown, "fire")};
+    m.beginStep(a);
+    CHECK(m.pressed("fire") && m.held("fire"), "an injected press is a press");
+    std::vector<InputEvent> b{down(KEY_SPACE)};
+    m.beginStep(b);
+    CHECK(!m.pressed("fire") && m.held("fire"), "a real key on top changes nothing");
+    std::vector<InputEvent> c{virt(InputEvent::Type::ActionUp, "fire")};
+    m.beginStep(c);
+    CHECK(m.held("fire") && !m.released("fire"), "the key still holds it");
+    std::vector<InputEvent> d{up(KEY_SPACE)};
+    m.beginStep(d);
+    CHECK(m.released("fire") && !m.held("fire"), "both let go: released");
+    std::vector<InputEvent> e{virt(InputEvent::Type::ActionDown, "dash")};
+    m.beginStep(e);
+    CHECK(m.pressed("dash") && m.held("dash"), "an action with no binding exists while injected");
+    std::vector<InputEvent> f{virt(InputEvent::Type::ActionUp, "dash")};
+    m.beginStep(f);
+    CHECK(m.released("dash") && !m.held("dash"), "and is released");
+    InputEvent md{InputEvent::Type::MouseDelta};
+    md.x = 3;
+    md.y = -2;
+    std::vector<InputEvent> g{md, md};
+    m.beginStep(g);
+    CHECK(m.mouseDelta() == glm::vec2(6, -4), "mouse deltas add up within a step");
+    m.beginStep({});
+    CHECK(m.mouseDelta() == glm::vec2(0, 0), "and do not carry over");
+}
+
+static void sp4_t13_a_rebind_counts_at_the_next_step_without_an_event() {
+    InputMap m;
+    m.bindAction("fire", {InputDevice::Key, KEY_SPACE});
+    std::vector<InputEvent> a{down(KEY_SPACE)};
+    m.beginStep(a);
+    CHECK(m.held("fire"), "held");
+    m.clearBindings();
+    m.bindAction("fire", {InputDevice::Key, KEY_W});
+    m.beginStep({});
+    CHECK(!m.held("fire") && m.released("fire"), "rebound away from the held key: released at the next step");
+    m.bindAction("fire", {InputDevice::Key, KEY_SPACE});
+    m.beginStep({});
+    CHECK(m.held("fire") && m.pressed("fire"), "bound to a key already down: pressed at the next step");
 }
 
 static void choose_present_mode() {
@@ -325,6 +392,9 @@ int main() {
     RUN(axis_from_key_pair);
     RUN(mouse_delta_no_first_jump);
     RUN(unknown_names_are_inert);
+    RUN(sp4_t13_key_names_round_trip);
+    RUN(sp4_t13_virtual_device_acts_like_a_device);
+    RUN(sp4_t13_a_rebind_counts_at_the_next_step_without_an_event);
     std::printf("[swapchain choice]\n");
     RUN(choose_format_prefers_unorm_bgra);
     RUN(choose_present_mode);

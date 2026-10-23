@@ -281,6 +281,10 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<ecs::Camera>(r, checked);
     ok &= complete<Environment>(r, checked);
     ok &= complete<Spin>(r, checked);
+    ok &= complete<ActionBinding>(r, checked);
+    ok &= complete<AxisBinding>(r, checked);
+    ok &= complete<InputActions>(r, checked);
+    ok &= complete<FlyController>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -297,7 +301,7 @@ static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
-                              "Environment", "Spin"}) {
+                              "Environment", "Spin", "InputActions", "FlyController"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -448,6 +452,22 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
         if (rng() % 2) env.hdri = AssetRef{"assets/env/e_" + std::to_string(seed) + ".hdr", {}};
         env.intensity = unitIn(0.0f, 4.0f);
         w.registry().emplace<Environment>(es[rng() % es.size()], env);
+        // Controls (sub-project 4, step 8): every key name somewhere over a few worlds,
+        // None included, and fly controllers with any names and speeds.
+        const auto keys = keyNames();
+        const auto key = [&] { return keys[rng() % keys.size()].key; };
+        InputActions ia;
+        for (int k = 0, nk = static_cast<int>(rng() % 6); k < nk; ++k) ia.actions.push_back({pickName(rng, k), key()});
+        for (int k = 0, nk = static_cast<int>(rng() % 4); k < nk; ++k) ia.axes.push_back({pickName(rng, k), key(), key()});
+        w.registry().emplace<InputActions>(es[rng() % es.size()], ia);
+        for (int k = 0; k < 3; ++k) {
+            const auto e = es[rng() % es.size()];
+            if (w.registry().all_of<FlyController>(e)) continue;
+            FlyController fc{pickFloat(rng, true), pickFloat(rng, true), pickFloat(rng, true)};
+            if (rng() % 2) fc.moveForward = pickName(rng, k);
+            if (rng() % 2) fc.look = "";
+            w.registry().emplace<FlyController>(e, fc);
+        }
     }
 }
 

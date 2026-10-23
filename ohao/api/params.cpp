@@ -1,5 +1,7 @@
 #include "api/params.hpp"
 
+#include "ecs/scene_types.hpp"   // registerKeyEnum
+
 #include <limits>
 
 namespace ohao::api {
@@ -107,6 +109,28 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("fixedDt", &TimeSetParams::fixedDt).doc("Fixed step length, in (0, 1]").unit("s").min(0.0).max(1.0);
 
     r.type<WorldHashParams>("WorldHashParams").doc("world.hash params");
+
+    ecs::registerKeyEnum(r);
+    r.type<InjectEvent>("InjectEvent").doc("One input event; exactly one of action, axis, key, mouse, focusLost")
+        .field("step", &InjectEvent::step).doc("Steps after the next step to run (0: the next); not in the past")
+            .unitless().min(0).max(10'000'000)
+        .field("action", &InjectEvent::action).doc("An action held (down: true) or let go (down: false)")
+        .field("axis", &InjectEvent::axis).doc("An axis forced to value until changed; value null releases it")
+        .field("key", &InjectEvent::key).doc("A key pressed or released (down), through the bindings like a real key")
+        .field("mouse", &InjectEvent::mouse).doc("A mouse movement [dx, dy]").unitless()
+        .field("down", &InjectEvent::down).doc("For action and key: held (true) or let go (false)")
+        .field("value", &InjectEvent::value).doc("For axis: the value, or null to release it").unitless()
+        .field("focusLost", &InjectEvent::focusLost).doc("Releases everything held, real and injected");
+    r.type<InputInjectParams>("InputInjectParams").doc("input.inject params")
+        .field("events", &InputInjectParams::events).doc("Events in order; same-step events apply in this order, "
+                                                          "after that step's device events").required();
+    r.type<InputStateParams>("InputStateParams").doc("input.state params");
+    r.type<InputRecordParams>("InputRecordParams").doc("input.record params")
+        .field("path", &InputRecordParams::path).doc("JSON-Lines file to write, under the output directory (starts)")
+        .field("stop", &InputRecordParams::stop).doc("Stops the recording in progress");
+    r.type<InputReplayParams>("InputReplayParams").doc("input.replay params")
+        .field("path", &InputReplayParams::path).doc("A recording written by input.record (or by hand)").required()
+        .field("verify", &InputReplayParams::verify).doc("Require the start hash and compare every checkpoint");
     r.type<WorldDiffParams>("WorldDiffParams").doc("world.diff params")
         .field("snapshot", &WorldDiffParams::snapshot).doc("Name given to world.snapshot").required()
         .field("fields", &WorldDiffParams::fields).doc("Only these: \"/Type\" or \"/Type/field\"; absent: everything")

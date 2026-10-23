@@ -42,6 +42,35 @@ inline double calibrationMs() {
     return best;
 }
 
+// Short probes taken once per round, beside the measured operations, so a slow round can
+// be told from a slow machine: the CPU (a fixed integer loop, ~2 ms, no memory traffic) and
+// the memory system (a read of every cache line of 64 MB, larger than any L3 in use: what
+// another process's memory traffic or a cache-hungry neighbour slows down).
+inline double cpuProbeMs() {
+    const auto t0 = std::chrono::steady_clock::now();
+    uint64_t x = 88172645463325252ull;
+    for (int i = 0; i < 2'000'000; ++i) {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    volatile uint64_t sink = x;
+    (void)sink;
+    return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+inline double memoryProbeMs() {
+    static std::vector<uint64_t> buffer((std::size_t{64} << 20) / sizeof(uint64_t), 1);   // touched once
+    const auto t0 = std::chrono::steady_clock::now();
+    uint64_t sum = 0;
+    for (std::size_t i = 0; i < buffer.size(); i += 8) sum += buffer[i];   // one load per 64-byte line
+    const auto t1 = std::chrono::steady_clock::now();
+    volatile uint64_t sink = sum;
+    (void)sink;
+    return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
 // The reference calibration written by `--calibrate`, or 0 when there is none.
 inline double readReference(const std::string& path) {
     std::ifstream f(path);

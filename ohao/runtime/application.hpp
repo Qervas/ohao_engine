@@ -6,7 +6,6 @@
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "runtime/clock.hpp"
-#include "runtime/input.hpp"
 #include "runtime/window.hpp"
 
 namespace ohao::runtime {
@@ -42,8 +41,10 @@ struct RunReport {
 };
 
 // Owns the window, input, renderer and the game World, and runs the loop:
-//   poll -> input -> the timeline's steps, each: fixedUpdate, world.simulate(fixedDt)
+//   poll -> the timeline's steps, each: input, fixedUpdate, world.simulate(fixedDt)
 //        -> update -> world.sync -> render/present
+// Device events are stamped with the step that consumes them: the first step after they
+// arrive (a frame that runs no step keeps them for the next).
 // The timeline (core/timeline.hpp) decides the steps: realtime, whole fixed steps from
 // wall time; paused or lockstep, none (a host steps the world on request). The World's
 // render extract feeds the renderer's RenderScene. Minimized windows keep simulating and
@@ -66,7 +67,9 @@ public:
     // The game world; valid between initialize() and shutdown(). Its render extract
     // is installed on renderer().renderScene().
     [[nodiscard]] ecs::World& world() { return *m_world; }
-    [[nodiscard]] InputMap& input() { return m_input; }
+    // The world's input map: stepped once per simulation step with the device events that
+    // arrived since the previous step.
+    [[nodiscard]] InputMap& input() { return m_world->input(); }
     [[nodiscard]] Window& window() { return m_window; }
     // The frame counter, mode and pause state.
     [[nodiscard]] Timeline& timeline() { return m_time; }
@@ -75,12 +78,11 @@ public:
 private:
     AppConfig m_cfg;
     Window m_window;
-    InputMap m_input;
     std::unique_ptr<VulkanRenderer> m_renderer;
     std::unique_ptr<ecs::World> m_world;   // destroyed before the renderer (it holds RenderScene slots)
     Timeline m_time;
     FrameStats m_stats;
-    std::vector<InputEvent> m_events;
+    std::vector<InputEvent> m_events;   // polled, not yet consumed by a step
     bool m_quit{false};
     uint64_t m_validationAtShutdown{0};
 };

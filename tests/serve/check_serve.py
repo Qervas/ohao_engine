@@ -53,13 +53,20 @@ EXAMPLES = {
     "time_get": {},
     "time_set": {"fixedDt": 0.02, "paused": False},
     "world_hash": {},
+    "input_inject": {"events": [{"step": 0, "axis": "move_forward", "value": 1}, {"step": 2, "key": "Space", "down": True},
+                                {"step": 3, "mouse": [4, -2]}, {"step": 4, "focusLost": True}]},
+    "input_state": {},
+    "input_record": {"path": "OUT/example.input.jsonl"},
+    "input_replay": {"path": "OUT/example.input.jsonl", "verify": False},
     "world_snapshot": {"name": "a"},
     "world_diff": {"snapshot": "a", "fields": ["/Transform"], "limit": 5},
     "world_restore": {"name": "a"},
     "render_capture": {"path": "OUT/x.png", "mode": "deferred", "width": 64, "height": 64, "post": ["taa"]},
     "log_read": {"level": "warn", "channel": "rpc", "limit": 10},
 }
-CALL = [n for n in EXAMPLES if n != "render_capture"]   # render_capture would start a GPU
+# render_capture would start a GPU; input_replay would read the recording input_record is
+# still writing (api_tests replays recordings).
+CALL = [n for n in EXAMPLES if n not in ("render_capture", "input_replay")]
 
 passed = 0
 failed = 0

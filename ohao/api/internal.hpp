@@ -11,8 +11,11 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include <fstream>
 #include <initializer_list>
 #include <map>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,6 +52,24 @@ struct Session::Impl {
     std::map<std::string, ecs::Snapshot, std::less<>> snapshots;   // by name
     ecs::Snapshot hashScratch;                                     // world.hash's capture, reused
     ecs::WorldDiff diffScratch;                                    // world.diff's result, reused
+
+    // Input (input.cpp). Injected events wait here, stamped with an absolute step, in the
+    // order they apply (by step, then as given).
+    struct PendingInput {
+        uint64_t step;
+        InputEvent event;
+    };
+    std::vector<PendingInput> injected;
+    struct Recording {
+        std::ofstream file;
+        std::string path;        // as given
+        uint64_t startFrame{0};
+        float fixedDt{0.0f};
+        uint64_t events{0};
+    };
+    std::optional<Recording> recording;
+    std::string scenePath;   // the last scene.load path and seed: a recording's header names them
+    std::optional<uint64_t> sceneSeed;
     ecs::AssetResolver* assets{nullptr};                           // checkAssets
     RenderHandler render;                                          // render.capture
     HostKind host{HostKind::None};
@@ -74,6 +95,21 @@ bool methodApply(Session::Impl& s, const JsonDocument& doc, const JsonNode& para
 bool methodQuery(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 bool methodSummary(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                    JsonWriter& out);
+bool methodInputInject(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
+bool methodInputState(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                      JsonWriter& out);
+bool methodInputRecord(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
+bool methodInputReplay(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
+
+// One simulation step (input.cpp): the host's device events, then the events injected for
+// this step, into the world's input map (and the recording); the simulate systems with dt;
+// the frame advanced; a recording checkpoint every 60 steps. Session::step's body.
+void stepOnce(Session::Impl& s, std::span<const InputEvent> deviceEvents, float dt);
+// Forgets injected events (the world's time axis was reset: a restore or a reload).
+void dropInjected(Session::Impl& s);
 
 // ---- query planning (query.cpp), shared by world.query, world.step's watch and world.diff --
 

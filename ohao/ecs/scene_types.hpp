@@ -100,13 +100,16 @@ template <class T>
 // Registers every ECS component, authoring and runtime, in a fixed order (the order of
 // the catalogue and of component blocks in scene files):
 //   authoring (saved):  Name, Transform, Parent, Light, MeshSource, MaterialOverride,
-//     Camera, Environment (both singletons), Spin. MeshSource's alternatives
-//     ModelAsset and the *Prim structs are nested types.
+//     Camera, Environment (both singletons), Spin, InputActions (singleton),
+//     FlyController. MeshSource's alternatives ModelAsset and the *Prim structs, and
+//     ActionBinding/AxisBinding, are nested types.
 //   runtime (catalogue only): Children, WorldTransform, MeshRenderer, RenderSlot,
 //     EmissiveProxyLight, GiMaterialLegacy, CreationOrder, PreservedComponents,
 //     InstantiateError and the dirty tags.
 // EntityId is not registered: it is the entity's key ("id" in scene files).
 void registerSceneTypes(reflect::TypeRegistry& r);
+// The Key enum (core/input.hpp's table), for any registry whose types name keys.
+void registerKeyEnum(reflect::TypeRegistry& r);
 
 // Writes entity references as the target's EntityId; dead or id-less targets as null.
 class WorldEntityIds final : public reflect::EntityIdMapper {

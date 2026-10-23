@@ -1,4 +1,5 @@
 #pragma once
+#include "core/input.hpp"
 #include "ecs/components.hpp"
 
 #include <ankerl/unordered_dense.h>
@@ -6,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -94,6 +96,14 @@ public:
     }
     [[nodiscard]] std::vector<std::string> simulateNames() const;
     [[nodiscard]] std::vector<std::string> syncNames() const;
+
+    // The world's input (core/input.hpp), read by simulate systems. Hosts step it once per
+    // simulation step, before simulate(), with that step's events (stepInput). Its bindings
+    // follow the InputActions singleton: rebuilt at the next stepInput whenever one is set,
+    // changed or removed. A world without InputActions keeps bindings made in code.
+    [[nodiscard]] InputMap& input() noexcept { return m_input; }
+    [[nodiscard]] const InputMap& input() const noexcept { return m_input; }
+    void stepInput(std::span<const InputEvent> events);
     // Debug builds: before running sync systems, sync() checks every untagged entity's
     // WorldTransform against its local Transform (verifyTransforms) and logs the first
     // nonzero result once per World. This is that result (0: none seen; always 0 in
@@ -107,6 +117,7 @@ private:
     void onIdConstructed(entt::registry& r, entt::entity e);
     void onIdDestroyed(entt::registry& r, entt::entity e);
     void onIdUpdated(entt::registry& r, entt::entity e);
+    void onInputActionsChanged(entt::registry& r, entt::entity e);
     entt::entity createImpl(uint64_t id, std::string_view name, const Transform& local);
     uint64_t nextId();
     bool claim(uint64_t id);
@@ -117,6 +128,8 @@ private:
     IdGenState m_idGen;
     std::vector<std::pair<std::string, SimulateSystem>> m_simulate;
     std::vector<std::pair<std::string, SyncSystem>> m_sync;
+    InputMap m_input;
+    bool m_bindingsDirty{false};
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };

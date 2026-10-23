@@ -156,16 +156,17 @@ int main(int argc, char** argv) {
     float cubeAngle = 0.0f;
     GameHooks hooks;
     hooks.update = [&](Application& a, float dt, float) {
-        if (a.input().pressed("quit")) a.quit();
-
         // Spin the cube: a tracked transform write moves it in raster and RT alike.
         cubeAngle += dt * 1.2f;
         ecs::Transform t = a.world().registry().get<ecs::Transform>(cube);
         t.rotation = glm::angleAxis(cubeAngle, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
         a.world().setTransform(cube, t);
-
+        a.window().setCursorCaptured(a.input().held("look"));
+    };
+    // Input is stepped once per fixed step, so it is read there.
+    hooks.fixedUpdate = [&](Application& a, float dt) {
+        if (a.input().pressed("quit")) a.quit();
         const bool looking = a.input().held("look");
-        a.window().setCursorCaptured(looking);
         if (looking) {
             const glm::vec2 d = a.input().mouseDelta();
             yaw += d.x * 0.1f;
