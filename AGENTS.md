@@ -45,8 +45,9 @@ $ python tools/check.py --all   # slow
 ```
 
 It finds the real CMake (refusing conda's), configures if needed, builds the `shaders`
-target and then everything with at most 6 jobs, runs every CTest test with the chosen
-labels, and writes one verdict: `build/check/check.json`, also the last line it prints
+target and then everything with at most 6 jobs, runs `ohao doctor` (below; a failing
+environment stops the run there), runs every CTest test with the chosen labels, and
+writes one verdict: `build/check/check.json`, also the last line it prints
 (`{ok, labels, build, doctor, tests: [{name, labels, ok, seconds, passed, failed,
 failures, tail}], counts}`), plus `build/check/junit.xml` and the logs beside them. A
 failing test's entry carries the last 40 lines of its output. Exit 0 = all passed, 1 =
@@ -60,6 +61,17 @@ something failed, 2 = the environment is wrong (the message says how).
   in its `CMakeLists.txt`, and end its `main` with `ohao::test::finish(...)` from
   `tests/common/harness.hpp` (or its `CHECK`/`RUN` macros), so the summary line is
   there. `check_tests` fails if a test executable is built but not registered.
+- **The environment:** `ohao doctor` answers whether this machine can build, run and test
+  OHAO, as `{"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}}`: the Vulkan
+  instance, device, ray tracing and validation layer; every shader's SPIR-V present and
+  newer than its source and every file it includes; the assets the checked-in scenes
+  reference; glslc, cmake (not conda's) and the harnesses' Python modules; and a 64x64
+  deferred frame within 2 s (a wedged GPU after a crash fails here, not in every render
+  test). Exit 1 when an error-level check fails; `--cpu-only` creates no device.
+
+```console
+$ build/Release/ohao doctor --cpu-only > /dev/null
+```
 
 Every suite exits 0 on success and nonzero on any failure; that is the pass criterion.
 Every suite ends with one JSON line, `{"suite", "passed", "failed", "failures"}`. The
@@ -82,6 +94,8 @@ $ build/Release/sobol_test.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
+$ python tests/golden/test_golden_diff.py > /dev/null
+$ python tests/doctor/check_doctor.py > /dev/null
 ```
 
 | Suite | Covers |
@@ -94,6 +108,8 @@ $ python tests/check/check_tests.py > /dev/null
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
+| `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
+| `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes) and on the real tree; `--gpu` adds the device checks |
 
 GPU suites and harnesses (each creates a Vulkan device):
 
@@ -107,6 +123,7 @@ $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
+$ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
@@ -120,10 +137,15 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   post effects included, bit-identical across fresh renderers, processes and repeated
   captures.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included.
-  `check_validation.py` renders deferred Cornell and the helmet under the layers.
+  `check_validation.py` renders deferred Cornell and the helmet under the layers;
+  `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
 - **Render goldens** (`tests/golden/manifest.json`, 10 scenes: 5 examples, 5 through
   `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
-  first). They are a hash of an unchanged sampler, not an image-quality gate: anything
+  first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
+  regions where the image changed); a failing scene also gets
+  `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
+  (expected | actual | heat of the worst region), `--heatmaps all` for every scene.
+  `--selftest --json` records the run-to-run floor. They are a hash of an unchanged sampler, not an image-quality gate: anything
   that perturbs the sample sequence moves every pixel by the noise. Never widen a
   tolerance to make one pass. The four deferred scenes are exact (max_abs 0): deferred
   rendering is deterministic, so any difference there is a change. Path-traced renders
@@ -172,7 +194,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
-  Cornell). It clears on reboot; it is not your change.
+  Cornell). It clears on reboot; it is not your change. `ohao doctor`'s `gpu.wedged`
+  check says so.
 - Monograph: run its tests and `check_unit.py` from the repo root, never from `site/`
   (that directory shadows the stdlib `site` module and breaks `_ctypes`). The site build
   is the one exception: it imports `tools.monograph`, so it runs from `site/`.

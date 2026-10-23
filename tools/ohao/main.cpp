@@ -11,6 +11,9 @@
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--exposure E]]
 //                 [--save out.scene.json]
+//   ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
+//                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
+//                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
@@ -26,6 +29,7 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
+#include "ohao/doctor.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
 #include "reflect/schema.hpp"
@@ -621,8 +625,21 @@ int cmdRun(const Args& a) {
     return worst;
 }
 
+int cmdDoctor(const Args& a) {
+    if (!a.positional.empty()) return usage("doctor takes no scene");
+    doctor::Options o;
+    o.cpuOnly = has(a, "--cpu-only");
+    o.root = opt(a, "--root", ".");
+    if (has(a, "--shader-dir")) o.shaderDir = opt(a, "--shader-dir");
+    if (has(a, "--spirv-dir")) o.spirvDir = opt(a, "--spirv-dir");
+    const auto checks = doctor::run(o);
+    emit("{\"result\":" + doctor::toJson(checks, o.cpuOnly) + "}");
+    return doctor::passed(checks) ? kOk : kInput;
+}
+
 int run(int argc, char** argv) {
-    if (argc < 2) return usage("usage: ohao <schema|validate|fmt|apply|query|summary|run> ... (see tools/ohao/main.cpp)");
+    if (argc < 2)
+        return usage("usage: ohao <schema|validate|fmt|apply|query|summary|run|doctor> ... (see tools/ohao/main.cpp)");
     const std::string_view cmd = argv[1];
     if (cmd == "schema") {
         const Args a = parseArgs(argc, argv, 2, {}, {"-o"});
@@ -655,7 +672,12 @@ int run(int argc, char** argv) {
                                   "--denoise", "--size", "--post", "--exposure", "--save", "--root"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);
     }
-    return usage("unknown command '" + std::string(cmd) + "'; one of: schema, validate, fmt, apply, query, summary, run");
+    if (cmd == "doctor") {
+        const Args a = parseArgs(argc, argv, 2, {"--cpu-only"}, {"--root", "--shader-dir", "--spirv-dir"});
+        return a.error.empty() ? cmdDoctor(a) : usage(a.error);
+    }
+    return usage("unknown command '" + std::string(cmd) +
+                 "'; one of: schema, validate, fmt, apply, query, summary, run, doctor");
 }
 
 } // namespace

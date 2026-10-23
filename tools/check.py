@@ -2,15 +2,17 @@
 """check.py -- build OHAO and run its tests from one command, with one verdict.
 
     python tools/check.py [--labels quick,gpu,docs] [--all] [--jobs 6] [--config Release]
-                          [--no-build] [--build-dir build] [--out DIR] [--ctest-jobs 4]
+                          [--no-build] [--no-doctor] [--build-dir build] [--out DIR] [--ctest-jobs 4]
 
 Steps (sub-project 4 spec, "One entry point"):
   1. preflight: the CMake to use (never conda's) and the Python modules the harnesses need;
   2. configure, if the build directory has no CMakeCache.txt;
   3. build the `shaders` target first, then everything (at most 6 jobs: heavier parallel
      load has crashed the reference machine);
-  4. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
-  5. the verdict: <out>/check.json, also printed as the last line of stdout.
+  4. `ohao doctor` (--cpu-only unless a gpu or golden label is chosen): when an
+     error-level check fails the run stops there, with the doctor's verdict in check.json;
+  5. ctest with the chosen labels: JUnit XML, output on failure, an error if no test matches;
+  6. the verdict: <out>/check.json, also printed as the last line of stdout.
 
 check.json: {ok, labels, build: {ok, seconds, tail?}, doctor, tests: [{name, labels, ok,
 seconds, passed?, failed?, failures?, tail?}], counts: {tests, passed, failed}}. passed /
@@ -42,7 +44,8 @@ KNOWN_LABELS = ALL_LABELS + ["selftest"]
 MAX_JOBS = int(os.environ.get("OHAO_MAX_JOBS", "6"))
 TAIL_LINES = 40
 # Modules the harnesses import, by the label whose tests need them.
-MODULES_BY_LABEL = {"quick": ["jsonschema"], "golden": ["numpy", "PIL"], "gpu": ["numpy", "PIL"]}
+MODULES_BY_LABEL = {"quick": ["jsonschema", "numpy", "PIL"], "golden": ["numpy", "PIL"], "gpu": ["numpy", "PIL"]}
+GPU_LABELS = {"gpu", "golden"}
 
 
 class EnvError(Exception):
@@ -161,6 +164,29 @@ def build(cmake, build_dir, config, jobs, out):
     return {"ok": True, "seconds": round(time.perf_counter() - t0, 1)}
 
 
+def ohao_exe(build_dir, config):
+    for c in (build_dir / config / "ohao.exe", build_dir / config / "ohao", build_dir / "ohao.exe"):
+        if c.is_file():
+            return c
+    return None
+
+
+def run_doctor(build_dir, config, labels, out):
+    """`ohao doctor` (--cpu-only unless a GPU label is selected) -> its verdict, or None
+    when this build has no ohao executable (the check's own fixtures)."""
+    exe = ohao_exe(build_dir, config)
+    if exe is None:
+        return None
+    cmd = [str(exe), "doctor"] + ([] if GPU_LABELS & set(labels) else ["--cpu-only"])
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    (out / "doctor.log").write_text(r.stderr, encoding="utf-8")
+    try:
+        verdict = json.loads(r.stdout.strip().splitlines()[-1])["result"]
+    except (IndexError, KeyError, ValueError):
+        verdict = {"ok": False, "checks": [], "error": f"ohao doctor printed no verdict (exit {r.returncode})"}
+    return verdict
+
+
 def test_labels(ctest, build_dir, config):
     r = subprocess.run([str(ctest), "--test-dir", str(build_dir), "-C", config, "-N",
                         "--show-only=json-v1"], capture_output=True, text=True, cwd=ROOT)
@@ -209,6 +235,7 @@ def main(argv=None):
     ap.add_argument("--ctest-jobs", type=int, default=4, help="tests run at once (GPU tests never overlap)")
     ap.add_argument("--config", default="Release")
     ap.add_argument("--no-build", action="store_true", help="test what is built")
+    ap.add_argument("--no-doctor", action="store_true", help="skip `ohao doctor`")
     ap.add_argument("--build-dir", default="build")
     ap.add_argument("--out", default=None, help="where check.json, junit.xml and logs go (default <build>/check)")
     args = ap.parse_args(argv)
@@ -234,7 +261,9 @@ def main(argv=None):
             if rc != 0:
                 result["build"] = {"ok": False, "seconds": 0.0, "tail": tail(text)}
                 return finish(result, out)
-        python = cache_value(build_dir, "Python3_EXECUTABLE") or sys.executable
+        # The interpreter CTest runs the harnesses with (FindPython keeps it internal).
+        python = (cache_value(build_dir, "Python3_EXECUTABLE") or cache_value(build_dir, "_Python3_EXECUTABLE")
+                  or sys.executable)
         check_modules(python, labels)
     except EnvError as e:
         result["error"] = str(e)
@@ -249,6 +278,15 @@ def main(argv=None):
         print(f"check: build {'ok' if result['build']['ok'] else 'FAILED'} in {result['build']['seconds']} s", flush=True)
         if not result["build"]["ok"]:
             return finish(result, out)
+
+    if not args.no_doctor:
+        result["doctor"] = run_doctor(build_dir, args.config, labels, out)
+        if result["doctor"] is not None:
+            bad = [c for c in result["doctor"]["checks"] if not c["ok"]]
+            print(f"check: doctor {'ok' if result['doctor']['ok'] else 'FAILED'}"
+                  + (f" ({', '.join(c['id'] + ' ' + c['level'] for c in bad)})" if bad else ""), flush=True)
+            if not result["doctor"]["ok"]:
+                return finish(result, out)   # the environment cannot run the tests: say so, run nothing
 
     junit = out / "junit.xml"
     if junit.exists():

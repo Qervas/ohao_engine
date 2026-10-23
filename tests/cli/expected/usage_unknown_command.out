@@ -1,1 +1,1 @@
-{"error":{"code":"E_COMMAND","message":"unknown command 'frobnicate'; one of: schema, validate, fmt, apply, query, summary, run","data":[{"code":"E_COMMAND","path":"","message":"unknown command 'frobnicate'; one of: schema, validate, fmt, apply, query, summary, run"}]}}
+{"error":{"code":"E_COMMAND","message":"unknown command 'frobnicate'; one of: schema, validate, fmt, apply, query, summary, run, doctor","data":[{"code":"E_COMMAND","path":"","message":"unknown command 'frobnicate'; one of: schema, validate, fmt, apply, query, summary, run, doctor"}]}}

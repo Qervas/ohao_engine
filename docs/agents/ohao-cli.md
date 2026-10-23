@@ -40,6 +40,7 @@ ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
                      [--post bloom,taa,ssao] [--exposure E]]
                     [--save OUT.scene.json]
+ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 every scene command: [--root DIR]  the project root that asset paths resolve against (default .)
 ```
 
@@ -163,6 +164,20 @@ anything in it does. The reply is `{"result": {"files": [...], "schemaHash": "�
 $ build/Release/ohao schema -o build/doc_tmp/schema
 $ python -c "import json; c = json.load(open('build/doc_tmp/schema/ohao_schema.json')); print(sorted(c))"
 ['enums', 'errors', 'format', 'methods', 'schemaHash', 'types', 'units', 'version']
+```
+
+### The environment
+
+When something fails in a way that does not look like your change — no device, a render
+that takes seconds, a shader that behaves like an old one — ask `ohao doctor` before
+anything else. Each check is `{id, ok, level, detail, fix?}`; read the failing ones'
+`fix`. `level` `error` means OHAO cannot work here (exit 1), `warn` that something
+degrades. `--cpu-only` skips the device checks.
+
+```console
+$ build/Release/ohao doctor --cpu-only > build/doc_tmp/doctor.json
+$ python -c "import json; r = json.load(open('build/doc_tmp/doctor.json'))['result']; print([c['id'] for c in r['checks']])"
+['shaders.complete', 'shaders.fresh', 'assets.present', 'tools.glslc', 'tools.cmake', 'python.deps']
 ```
 
 ## Methods

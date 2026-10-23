@@ -12,7 +12,7 @@ if(TARGET Jolt)
     target_link_libraries(ohao_host PUBLIC Jolt)
 endif()
 
-add_executable(ohao main.cpp)
+add_executable(ohao main.cpp doctor.cpp doctor.hpp)
 target_compile_features(ohao PRIVATE cxx_std_20)
 target_link_libraries(ohao PRIVATE ohao_host)
 if(MSVC)

@@ -89,18 +89,24 @@ function(ohao_register_harness_tests)
     # tools/check.py's own test (test 3): runs the selftest fixtures in their own build tree,
     # build/check_fixture (also run inside check_docs: the lock `check_fixture`).
     ohao_add_python_test(check_tests LABEL quick TIMEOUT 600 LOCKS check_fixture SCRIPT tests/check/check_tests.py)
+    # The golden harness's diff report (test 4) and `ohao doctor` (test 5).
+    ohao_add_python_test(test_golden_diff LABEL quick SCRIPT tests/golden/test_golden_diff.py)
+    ohao_add_python_test(check_doctor LABEL quick SCRIPT tests/doctor/check_doctor.py)
+    ohao_add_python_test(check_doctor_gpu LABEL gpu GPU SCRIPT tests/doctor/check_doctor.py ARGS --gpu)
 
     # GPU harnesses and the presentation gate
     ohao_add_python_test(check_cli LABEL gpu GPU LOCKS cli_tmp SCRIPT tests/cli/check_cli.py)
-    ohao_add_python_test(check_validation LABEL gpu GPU SCRIPT tests/validation/check_validation.py)
+    ohao_add_python_test(check_validation LABEL gpu GPU SCRIPT tests/validation/check_validation.py
+        ARGS --json build/check_validation.json)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)
     endif()
 
     # Long gates
+    # Diff images for failing scenes and the per-scene JSON go to build/golden_diff/.
     ohao_add_python_test(render_golden LABEL golden GPU TIMEOUT 1800
-        SCRIPT tests/golden/render_golden.py ARGS tests/golden/manifest.json)
+        SCRIPT tests/golden/render_golden.py ARGS tests/golden/manifest.json --json build/golden_diff/golden.json)
     if(TARGET reflect_tests)
         ohao_add_test(reflect_exhaustive_floats LABEL slow TIMEOUT 1800
             COMMAND reflect_tests --exhaustive-floats)

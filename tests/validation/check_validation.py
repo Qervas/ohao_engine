@@ -19,9 +19,15 @@ without that confirmation did not check anything and is reported as such.
 Usage (from repo root):
   python tests/validation/check_validation.py        # all scenes
   python tests/validation/check_validation.py -v     # also list every distinct VUID
+  python tests/validation/check_validation.py --json FILE   # also one object per scene
+
+The --json object: {"suite": "check_validation", "passed", "failed", "skipped", "scenes":
+[{name, status: pass|fail|skip, messages, distinct, first?: {vuid, text}, counts?, exit?}]}.
+The last stdout line is the shared JSON summary {"suite", "passed", "failed", "failures"}.
 
 Exit 0 when every scene is clean, 1 otherwise, 2 if validation did not run.
 """
+import json
 import os
 import re
 import subprocess
@@ -40,6 +46,7 @@ MSG = re.compile(r"^\[validation\] ([^|]*?) \| (.*)$", re.M)
 
 
 def run(name, argv, verbose):
+    """-> (ok, message, record): ok is None when the layer did not load."""
     with tempfile.TemporaryDirectory() as tmp:
         argv = [a.replace("{out}", os.path.join(tmp, "out.png")) for a in argv]
         argv[0] = os.path.abspath(os.path.normpath(argv[0]))   # CreateProcess wants a real path
@@ -47,32 +54,57 @@ def run(name, argv, verbose):
         r = subprocess.run(argv, env=env, capture_output=True, text=True, errors="replace")
     log = r.stdout + r.stderr
     if "Validation layers ENABLED" not in log:
-        return None, f"{name}: validation layer did not load -- check NOT run"
+        return None, f"{name}: validation layer did not load -- check NOT run", {"name": name, "status": "skip"}
     msgs = MSG.findall(log)
+    counts = {}
+    for v, _ in msgs:
+        counts[v] = counts.get(v, 0) + 1
+    rec = {"name": name, "messages": len(msgs), "distinct": len(counts)}
+    if msgs:
+        rec["first"] = {"vuid": msgs[0][0].strip(), "text": msgs[0][1].strip()[:260]}
+        rec["counts"] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:12])
     if r.returncode != 0:
-        return False, f"{name}: exited {r.returncode} ({len(msgs)} validation messages)"
+        rec.update(status="fail", exit=r.returncode)
+        return False, f"{name}: exited {r.returncode} ({len(msgs)} validation messages)", rec
     if not msgs:
-        return True, f"{name}: clean"
+        rec["status"] = "pass"
+        return True, f"{name}: clean", rec
+    rec["status"] = "fail"
     vuid, text = msgs[0]
-    out = (f"{name}: {len(msgs)} validation messages, {len({v for v, _ in msgs})} distinct\n"
-           f"      first: {vuid}\n             {text.strip()[:260]}")
+    nl = chr(10)
+    out = (f"{name}: {len(msgs)} validation messages, {len(counts)} distinct{nl}"
+           f"      first: {vuid}{nl}             {text.strip()[:260]}")
     if verbose:
-        counts = {}
-        for v, _ in msgs:
-            counts[v] = counts.get(v, 0) + 1
-        out += "\n" + "\n".join(f"      {n:4d}  {v}" for v, n in sorted(counts.items(), key=lambda kv: -kv[1]))
-    return False, out
+        out += nl + nl.join(f"      {n:4d}  {v}" for v, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    return False, out, rec
 
 
 def main():
     verbose = "-v" in sys.argv
+    json_path = None
+    if "--json" in sys.argv:
+        i = sys.argv.index("--json")
+        if i + 1 >= len(sys.argv):
+            sys.exit("--json needs a file")
+        json_path = sys.argv[i + 1]
     results = [run(n, a, verbose) for n, a in SCENES]
-    for ok, msg in results:
+    for ok, msg, _ in results:
         tag = "PASS" if ok else ("SKIP" if ok is None else "FAIL")
         print(f"[{tag}]  {msg}")
-    if any(ok is None for ok, _ in results):
+    records = [rec for _, _, rec in results]
+    passed = sum(1 for r in records if r["status"] == "pass")
+    failed = sum(1 for r in records if r["status"] == "fail")
+    skipped = sum(1 for r in records if r["status"] == "skip")
+    if json_path:
+        os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"suite": "check_validation", "passed": passed, "failed": failed, "skipped": skipped,
+                       "scenes": records}, f, indent=1)
+    print(json.dumps({"suite": "check_validation", "passed": passed, "failed": failed + skipped,
+                      "failures": [r["name"] for r in records if r["status"] != "pass"]}, separators=(",", ":")))
+    if skipped:
         return 2
-    return 0 if all(ok for ok, _ in results) else 1
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":
