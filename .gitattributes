@@ -9,4 +9,4 @@
 tests/reflect/golden/** text eol=lf
 tests/scene/golden/** text eol=lf
 tests/scenes/** text eol=lf
-*.ohscene text eol=lf
+*.scene.json text eol=lf

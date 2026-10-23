@@ -24,7 +24,7 @@ def main() -> int:
     passed = 0
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run([str(exe), "--dump-schema", tmp], check=True, stdout=subprocess.DEVNULL)
-        schema = json.loads((pathlib.Path(tmp) / "ohscene.schema.json").read_text(encoding="utf-8"))
+        schema = json.loads((pathlib.Path(tmp) / "scene.schema.json").read_text(encoding="utf-8"))
         json.loads((pathlib.Path(tmp) / "ohao_schema.json").read_text(encoding="utf-8"))  # parses
 
     jsonschema.Draft202012Validator.check_schema(schema)

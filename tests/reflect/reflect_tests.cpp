@@ -531,7 +531,7 @@ static void t12_scene_json_schema_matches_golden() {
     CHECK(got == exportSceneJsonSchema(r), "deterministic");
     CHECK(got.find("RuntimeCache") == std::string::npos, "runtime types are not part of scene files");
     CHECK(got.find("\"colour\"") != std::string::npos, "aliases are accepted");
-    const std::string want = readFile(kGolden / "fixture_ohscene.schema.json");
+    const std::string want = readFile(kGolden / "fixture_scene.schema.json");
     CHECK(got == want, "JSON Schema format unchanged (update the golden deliberately)");
 }
 
@@ -772,7 +772,7 @@ static int dumpSchema(const fs::path& dir) {
     TypeRegistry r;
     registerFixture(r);
     writeFile(dir / "ohao_schema.json", exportCatalogue(r));
-    writeFile(dir / "ohscene.schema.json", exportSceneJsonSchema(r));
+    writeFile(dir / "scene.schema.json", exportSceneJsonSchema(r));
     std::printf("wrote %s\n", dir.generic_string().c_str());
     return 0;
 }
@@ -783,7 +783,7 @@ int main(int argc, char** argv) {
         TypeRegistry r;
         registerFixture(r);
         writeFile(kGolden / "fixture_catalogue.json", exportCatalogue(r));
-        writeFile(kGolden / "fixture_ohscene.schema.json", exportSceneJsonSchema(r));
+        writeFile(kGolden / "fixture_scene.schema.json", exportSceneJsonSchema(r));
         std::printf("updated %s\n", kGolden.generic_string().c_str());
         return 0;
     }

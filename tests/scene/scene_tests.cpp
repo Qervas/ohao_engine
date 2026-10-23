@@ -295,7 +295,7 @@ static void t12_engine_catalogue_matches_golden() {
     CHECK(got == reflect::exportCatalogue(b), "deterministic");
     CHECK(got == readFile(kGolden / "engine_catalogue.json"),
           "engine catalogue unchanged (scene_tests --update-golden after a deliberate change)");
-    CHECK(reflect::exportSceneJsonSchema(a) == readFile(kGolden / "engine_ohscene.schema.json"),
+    CHECK(reflect::exportSceneJsonSchema(a) == readFile(kGolden / "engine_scene.schema.json"),
           "engine scene JSON Schema unchanged");
 }
 
@@ -309,6 +309,12 @@ static const reflect::TypeRegistry& engineTypes() {
 }
 
 static const fs::path kScenes = fs::path(OHAO_SOURCE_DIR) / "tests" / "scenes";
+static constexpr std::string_view kSceneExt = ".scene.json";
+
+static bool isSceneFile(const fs::path& p) {
+    const std::string name = p.filename().string();
+    return name.size() > kSceneExt.size() && name.ends_with(kSceneExt);
+}
 
 static std::string save(const World& w, reflect::JsonLayout layout = reflect::JsonLayout::Pretty) {
     auto s = saveScene(w, engineTypes(), SaveOptions{layout});
@@ -519,11 +525,12 @@ static std::vector<ExpectedError> expectedErrors(const fs::path& p) {
 static void t06_error_corpus() {
     std::vector<fs::path> files;
     for (const auto& e : fs::directory_iterator(kScenes / "invalid"))
-        if (e.path().extension() == ".ohscene") files.push_back(e.path());
+        if (isSceneFile(e.path())) files.push_back(e.path());
     std::sort(files.begin(), files.end());
     CHECK(files.size() >= 15, "the corpus is present");
     for (const auto& f : files) {
-        const auto want = expectedErrors(fs::path(f).replace_extension(".errors.json"));
+        const std::string stem = f.filename().string().substr(0, f.filename().string().size() - kSceneExt.size());
+        const auto want = expectedErrors(f.parent_path() / (stem + ".errors.json"));
         const auto report = validateScene(readFile(f), engineTypes());
         bool same = !want.empty() && report.errors.size() == want.size();
         for (std::size_t i = 0; same && i < want.size(); ++i) {
@@ -744,7 +751,7 @@ static void t08_v1_corpus_loads_with_expected_values() {
     };
     {
         World w;
-        CHECK(loadV1(w, "rooms.ohscene"), "rooms.ohscene loads");
+        CHECK(loadV1(w, "rooms.scene.json"), "rooms.scene.json loads");
         const auto& reg = w.registry();
         const auto room = w.findById(0x1000000000000001), lamp = w.findById(0x1000000000000002);
         const auto sun = w.findById(0x1000000000000003), shade = w.findById(0x1000000000000004);
@@ -761,7 +768,7 @@ static void t08_v1_corpus_loads_with_expected_values() {
     }
     {
         World w;
-        CHECK(loadV1(w, "agent_minimal.ohscene"), "agent_minimal.ohscene loads");
+        CHECK(loadV1(w, "agent_minimal.scene.json"), "agent_minimal.scene.json loads");
         const auto& reg = w.registry();
         const auto panel = w.findById(0xb1), child = w.findById(0xb2), bare = w.findById(0xb3);
         const auto& l = reg.get<Light>(panel);
@@ -775,7 +782,7 @@ static void t08_v1_corpus_loads_with_expected_values() {
     }
     {
         World w;
-        CHECK(loadV1(w, "preserved.ohscene"), "preserved.ohscene loads");
+        CHECK(loadV1(w, "preserved.scene.json"), "preserved.scene.json loads");
         const auto speaker = w.findById(0xc1);
         const auto& p = w.registry().get<PreservedComponents>(speaker).entries;
         CHECK(p.size() == 1 && p[0].name == "AudioSource" && p[0].version == 2 &&
@@ -890,7 +897,7 @@ int main(int argc, char** argv) {
         reflect::TypeRegistry r;
         registerSceneTypes(r);
         writeFile(kGolden / "engine_catalogue.json", reflect::exportCatalogue(r));
-        writeFile(kGolden / "engine_ohscene.schema.json", reflect::exportSceneJsonSchema(r));
+        writeFile(kGolden / "engine_scene.schema.json", reflect::exportSceneJsonSchema(r));
         std::printf("updated %s\n", kGolden.generic_string().c_str());
         return 0;
     }

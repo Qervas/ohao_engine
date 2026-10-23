@@ -20,7 +20,7 @@ namespace ohao::reflect {
 [[nodiscard]] std::string exportCatalogue(const TypeRegistry& r);
 [[nodiscard]] uint64_t schemaHash(const TypeRegistry& r);
 
-// JSON Schema (draft 2020-12) for .ohscene documents built from the serialized types:
+// JSON Schema (draft 2020-12) for scene documents (*.scene.json) built from the serialized types:
 // any validator can check a scene's shape, enums, limits and id syntax. Cross-entity
 // rules (unique ids, parents, cycles, singletons) stay with the engine's validator.
 [[nodiscard]] std::string exportSceneJsonSchema(const TypeRegistry& r);

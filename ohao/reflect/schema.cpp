@@ -309,8 +309,8 @@ std::string exportSceneJsonSchema(const TypeRegistry& r) {
     JsonWriter w(1 << 14);
     w.beginObject();
     w.key("$schema"); w.string("https://json-schema.org/draft/2020-12/schema");
-    w.key("$id"); w.string("urn:ohao:ohscene:1");
-    w.key("title"); w.string("OHAO scene (.ohscene), document version 1");
+    w.key("$id"); w.string("urn:ohao:scene:1");
+    w.key("title"); w.string("OHAO scene (*.scene.json), document version 1");
     w.key("description");
     w.string("Generated from the engine type registry; schemaHash " + [&] {
         JsonWriter h;

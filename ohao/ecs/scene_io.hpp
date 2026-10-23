@@ -1,5 +1,5 @@
 #pragma once
-// Scene files (.ohscene): canonical save, two-phase load, validation without a World.
+// Scene files (*.scene.json): canonical save, two-phase load, validation without a World.
 //
 // Save writes every live entity in creation order: "id" first, then each saved component
 // in registration order, then preserved unknown components by name. The same world
