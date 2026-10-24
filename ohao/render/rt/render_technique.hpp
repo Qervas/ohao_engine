@@ -14,8 +14,11 @@
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <span>
 #include <string>
 #include <cstdint>
+
+namespace ohao::render { struct LightDesc; }
 
 namespace ohao {
 
@@ -28,25 +31,23 @@ struct ShadowInput {
     VkImageView positionBuffer;    // world-space position (GBuffer0)
     VkImageView normalBuffer;      // world-space normal (GBuffer1)
     VkImageView depthBuffer;       // depth buffer
-    glm::mat4 view;
-    glm::mat4 proj;
-    glm::vec3 cameraPos;
     uint32_t width;
     uint32_t height;
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
 
-    // Light data
-    glm::vec3 lightDirection;      // for directional lights
-    glm::vec3 lightPosition;       // for point/spot lights
-    int lightType;                 // 0=dir, 1=point, 2=spot
-    float lightRange;
+    // The scene's shadow-casting lights (RenderScene::shadowLights, or the fallback sun),
+    // <= kMaxShadowLights: light i is traced into shadow-mask channel i.
+    std::span<const render::LightDesc> lights;
+    // Sample seeding: the render seed and the frame index since the last temporal reset.
+    uint32_t renderSeed = 0;
+    uint32_t frameIndex = 0;
 
     // RT-specific: the RenderScene's TLAS (null if rasterization-only)
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 };
 
 struct ShadowOutput {
-    VkImage shadowMask;            // R8 or R16F — 0=shadowed, 1=lit
+    VkImage shadowMask;            // RGBA8, one channel per shadow light — 0=shadowed, 1=lit
     VkImageView shadowMaskView;
 };
 
@@ -83,9 +84,9 @@ struct GIInput {
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;   // RenderScene TLAS (custom index = slot)
     VkBuffer instances = VK_NULL_HANDLE;                // RenderScene instance table (InstanceGpu[])
 
-    // Light info for indirect bounce calculation
-    glm::vec3 lightPos{0.0f, 4.5f, 0.0f};
-    float lightIntensity{10.0f};
+    // The bounce light: the scene's brightest light (no scene light: intensity 0, no bounce)
+    glm::vec3 lightPos{0.0f};
+    float lightIntensity{0.0f};
 };
 
 struct GIOutput {

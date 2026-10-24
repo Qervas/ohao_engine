@@ -2,8 +2,9 @@
 
 // RT Shadow Technique — hardware ray traced shadows.
 //
-// Fires shadow rays from each visible pixel toward the light source.
-// Produces a soft shadow mask with proper penumbra based on light size.
+// Fires shadow rays from each visible pixel toward up to kMaxShadowLights scene lights
+// (ShadowInput::lights), sampling points on each light's area for the penumbra, and
+// writes one RGBA8 mask channel per light.
 //
 // Replaces: CSM (cascade shadow maps) with 3x3 PCF
 // Advantages: pixel-perfect shadows, all light types, soft penumbra, no cascade artifacts
@@ -12,6 +13,7 @@
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/frame/frame_resources.hpp"
+#include <algorithm>
 #include <array>
 
 namespace ohao {
@@ -35,9 +37,12 @@ public:
     [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // shadow mask size
     void destroy() override;
 
-    // RT shadow config
-    void setLightRadius(float radius) { m_lightRadius = radius; }  // for soft shadows
-    void setSampleCount(int samples) { m_sampleCount = samples; }  // 1=hard, 4-16=soft
+    // Shadow rays a pixel, shared evenly by the frame's shadow lights (each gets
+    // max(1, rays / lights)): the pass costs about the same with one light or four.
+    void setRaysPerPixel(uint32_t rays) { m_raysPerPixel = rays; }
+    [[nodiscard]] static uint32_t raysPerLight(uint32_t raysPerPixel, uint32_t lights) {
+        return lights == 0 ? 0u : std::max(1u, raysPerPixel / lights);
+    }
 
 private:
     // G-buffer sampler. Lives as long as the technique: it is written into a
@@ -55,9 +60,7 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
 
-    // Shadow config
-    float m_lightRadius = 0.05f;   // sun angular radius for penumbra
-    int m_sampleCount = 1;          // shadow rays per pixel
+    uint32_t m_raysPerPixel = 8;
 
     // Output shadow mask
     VkImage m_shadowMask = VK_NULL_HANDLE;
@@ -81,14 +84,18 @@ private:
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};  // empty, not used
 
-    // Push constants for shadow ray configuration
-    struct ShadowPushConstants {
-        glm::mat4 invView;
-        glm::mat4 invProj;
-        glm::vec4 lightDirAndRadius;   // xyz=direction, w=angular radius
-        glm::vec4 lightPosAndRange;    // xyz=position, w=range
-        glm::uvec4 params;             // x=width, y=height, z=lightType, w=sampleCount
+    // Push constants (rt_shadow.rgen), 224 bytes: three vec4s a light, then the params.
+    struct ShadowLightGpu {
+        glm::vec4 positionAndType;   // xyz = position (directional: travel direction), w = 0 dir, 1 sphere, 2 rect
+        glm::vec4 edge1AndRadius;    // xyz = rect edge 1, w = sphere radius (directional: angular radius, rad)
+        glm::vec4 edge2AndRange;     // xyz = rect edge 2, w = range (0: unlimited)
     };
+    struct ShadowPushConstants {
+        ShadowLightGpu lights[4];
+        glm::uvec4 params;           // x=width, y=height, z=light count, w=rays per light
+        glm::uvec4 seed;             // x=render seed, y=frame index since the last temporal reset
+    };
+    static_assert(sizeof(ShadowPushConstants) <= 256, "within the guaranteed push-constant range");
 
     // Function pointers
     PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR = nullptr;

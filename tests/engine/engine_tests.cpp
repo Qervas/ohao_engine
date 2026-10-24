@@ -43,6 +43,7 @@
 #include "ecs/spawn.hpp"
 #include "scene/asset/model.hpp"
 #include "scene/asset/model_loader.hpp"
+#include "scene/asset/primitive_mesh_generator.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
 
@@ -1647,6 +1648,112 @@ static void runReadbackTests() {
 }
 
 // =============================================================================
+// SECTION — RT SHADOWS FROM THE SCENE'S LIGHTS (sub-project 2b, test 9, lights part)
+// =============================================================================
+
+// A floor, a box floating above it, one point light at `lightPos`, the camera above and
+// in front looking down: one deferred frame with RT shadows. Empty without RT.
+static std::vector<uint8_t> shadowSceneFrame(glm::vec3 lightPos, bool castShadows) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize() || !r.isRTSupported()) return {};
+    std::vector<uint8_t> out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, box;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        ohao::PrimitiveMeshGenerator::generateBox(box, {-0.5f, 1.0f, -0.5f}, {0.5f, 2.0f, 0.5f}, {1, 1, 1});
+        ohao::render::MaterialDesc mat;
+        mat.baseColor = {0.7f, 0.7f, 0.7f};
+        mat.roughness = 0.9f;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &mat);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), box, "box", {}, &mat);
+        ohao::ecs::Light light;
+        light.intensity = 60.0f;
+        light.range = 40.0f;
+        light.radius = 0.05f;
+        light.castShadows = castShadows;
+        ohao::ecs::spawnLight(world, "light", light, ohao::ecs::Transform{lightPos});
+        r.getCamera().setPosition({0.0f, 7.0f, 7.0f});
+        r.getCamera().setRotation(-45.0f, -90.0f);
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.assign(px.begin(), px.end());
+    }
+    return out;
+}
+
+// Pixels at least 40 levels darker (green channel) in `shadowed` than in `unshadowed`, and
+// their mean x as a fraction of the width.
+static std::pair<int, double> darkened(const std::vector<uint8_t>& shadowed, const std::vector<uint8_t>& unshadowed) {
+    int n = 0;
+    double sx = 0.0;
+    for (std::size_t p = 0; p + 3 < shadowed.size() && p + 3 < unshadowed.size(); p += 4)
+        if (int(unshadowed[p + 1]) - int(shadowed[p + 1]) >= 40) {
+            ++n;
+            sx += double((p / 4) % 160) / 160.0;
+        }
+    return {n, n ? sx / n : 0.0};
+}
+
+static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not() {
+    TEST_BEGIN("sp2b_t09: RT shadows come from the scene's lights; castShadows=false casts none");
+    const auto leftCast = shadowSceneFrame({-3.0f, 4.0f, 0.0f}, true);
+    if (leftCast.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const auto leftNone = shadowSceneFrame({-3.0f, 4.0f, 0.0f}, false);
+    const auto rightCast = shadowSceneFrame({3.0f, 4.0f, 0.0f}, true);
+    const auto rightNone = shadowSceneFrame({3.0f, 4.0f, 0.0f}, false);
+    const auto [nl, xl] = darkened(leftCast, leftNone);
+    const auto [nr, xr] = darkened(rightCast, rightNone);
+    std::cout << "(shadow px: light left " << nl << " at x " << xl << ", light right " << nr << " at x " << xr << ") ";
+    EXPECT(nl > 160 && nr > 160, "a light that casts shadows darkens the floor behind the box (>= 1% of the frame)");
+    EXPECT(xl > 0.55 && xr < 0.45,
+           "the shadow falls away from the scene's light: right of centre for a light on the left, left for one "
+           "on the right (a fixed light would put it in one place)");
+    EXPECT(darkened(leftNone, leftCast).first == 0, "castShadows=false is never darker than castShadows=true");
+
+    // The light table: the first kMaxShadowLights casting lights own a channel each, in
+    // light order; a non-casting light has none (-1); a casting light past the channels
+    // gets kShadowNoSlot (4).
+    ohao::VulkanRenderer r(64, 64);
+    EXPECT(r.initialize(), "the renderer starts");
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        const bool casts[6] = {true, true, false, true, true, true};
+        for (int k = 0; k < 6; ++k) {
+            ohao::ecs::Light l;
+            l.castShadows = casts[k];
+            l.intensity = float(k + 1);
+            ohao::ecs::spawnLight(world, "l" + std::to_string(k), l, ohao::ecs::Transform{{float(k), 3.0f, 0.0f}});
+        }
+        world.sync();
+        const auto raster = r.renderScene().rasterLights();
+        const float expected[6] = {0, 1, ohao::render::kShadowNever, 2, 3, ohao::render::kShadowNoSlot};
+        bool slots = raster.size() == 6;
+        for (std::size_t k = 0; slots && k < 6; ++k) slots = raster[k].params.w == expected[k];
+        EXPECT(slots, "params.w: channels 0, 1, never, 2, 3, no channel");
+        const auto shadow = r.renderScene().shadowLights();
+        EXPECT(shadow.size() == ohao::render::kMaxShadowLights && shadow[0].intensity == 1.0f &&
+                   shadow[1].intensity == 2.0f && shadow[2].intensity == 4.0f && shadow[3].intensity == 5.0f,
+               "shadowLights(): the four casting lights in channel order");
+    }
+    TEST_PASS();
+}
+
+static void runRTShadowTests() {
+    std::cout << "\n=== RT shadows ===" << std::endl;
+    sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not();
+}
+
+// =============================================================================
 // SECTION — RENDER SCENE (persistent GPU render world)
 // =============================================================================
 
@@ -2151,6 +2258,7 @@ int main() {
     runHeadlessDeferredRenderTests();
     runPassTimingTests();
     runReadbackTests();
+    runRTShadowTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

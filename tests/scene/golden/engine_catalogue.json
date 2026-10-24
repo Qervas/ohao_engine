@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "271d9962e1b21db0",
+  "schemaHash": "164f3e4493e49cca",
   "units": [
     "m",
     "m/s",
@@ -518,6 +518,23 @@
           "default": [0, 0, 1],
           "doc": "AreaRect: second edge vector, local space",
           "unit": "m",
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "castShadows",
+          "type": "bool",
+          "default": true,
+          "doc": "Whether geometry blocks this light in the raster frame: RT shadows (one shadow-mask channel each, for the first 4 lights that cast them), or the cascaded shadow map for a directional light when RT shadows are off. False lights through everything. The path tracer always traces visibility",
+          "unit": null,
           "min": null,
           "max": null,
           "uiRange": null,

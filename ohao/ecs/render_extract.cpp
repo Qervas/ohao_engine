@@ -160,6 +160,7 @@ private:
             d.outerConeDeg = l.outerConeDeg;
             d.areaEdge1 = basis * l.areaEdge1;
             d.areaEdge2 = basis * l.areaEdge2;
+            d.castShadows = l.castShadows;
             d.order = creationSeq(m_reg, e);
             m_lights.push_back(d);
         }

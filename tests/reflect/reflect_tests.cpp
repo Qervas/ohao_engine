@@ -27,6 +27,7 @@
 #include <fstream>
 #include <limits>
 #include <random>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -884,6 +885,59 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
     CHECK(allUsed, "every allowlist entry still matches (remove the ones that do not)");
 }
 
+// ---- sub-project 2b, test 9 (lint part, step 4): no hard-coded light in the renderer --------
+// Every light the renderer shades, shadows or traces comes from the scene (the RenderScene
+// light table) or from the documented fallback sun, whose direction follows the sky. A
+// light position written as numbers -- `lightPos{0.0f, 4.5f, 0.0f}`, `si.lightPosition =
+// glm::vec3(0, 4.5f, 0)`, the two hard-coded lights this rule deleted -- is a light no
+// scene can move. A single scalar (`lightPos{0.0f}`, a zero default) is not a position.
+
+static std::vector<NondeterminismHit> hardCodedLightHits(const std::string& file, const std::string& text) {
+    static const std::regex kLiteralLightPos(
+        R"(light\w*pos(ition)?\w*\s*(=|\{)\s*(glm::vec[34]\s*[\(\{])?\s*[-+]?[0-9][0-9.]*f?\s*,)", std::regex::icase);
+    std::vector<NondeterminismHit> hits;
+    std::istringstream in(text);
+    std::string line;
+    int n = 0;
+    while (std::getline(in, line)) {
+        ++n;
+        const std::string code = line.substr(0, line.find("//"));
+        std::smatch m;
+        if (std::regex_search(code, m, kLiteralLightPos)) hits.push_back({file, n, m.str(0), line});
+    }
+    return hits;
+}
+
+static void sp2b_t09_lint_finds_hard_coded_light_positions() {
+    const std::string sample =
+        "si.lightPosition = glm::vec3(0, 4.5f, 0);\n"
+        "glm::vec3 lightPos{0.0f, 4.5f, 0.0f};\n"
+        "glm::vec3 lightPos{0.0f};   // a zero default, not a light\n"
+        "gi.lightPos = l.position;\n"
+        "// lightPos = glm::vec3(1, 2, 3) in a comment is fine\n"
+        "glm::vec3 lightPos = sceneCenter - lightDir * 100.0f;\n";
+    const auto hits = hardCodedLightHits("sample.cpp", sample);
+    CHECK(hits.size() == 2 && hits[0].line == 1 && hits[1].line == 2,
+          "finds the two literal light positions; skips a zero default, a scene light, a comment and an expression");
+}
+
+static void sp2b_t09_no_hard_coded_light_in_render_or_gpu() {
+    const fs::path root(OHAO_SOURCE_DIR);
+    std::vector<NondeterminismHit> offending;
+    std::size_t files = 0;
+    for (const char* tree : {"ohao/render", "ohao/gpu"})
+        for (const auto& e : fs::recursive_directory_iterator(root / tree)) {
+            const auto ext = e.path().extension();
+            if (!e.is_regular_file() || (ext != ".cpp" && ext != ".hpp" && ext != ".h")) continue;
+            ++files;
+            for (auto& h : hardCodedLightHits(fs::relative(e.path(), root).generic_string(), readFile(e.path())))
+                offending.push_back(std::move(h));
+        }
+    CHECK(files > 50, "the renderer and GPU sources were found");
+    for (const auto& h : offending) std::printf("\n      %s:%d: %s", h.file.c_str(), h.line, h.text.c_str());
+    CHECK(offending.empty(), "no light position is written as numbers in ohao/render or ohao/gpu");
+}
+
 // ---- sub-project 4, test 2 (rpc part, step 5): the protocol server is CPU-only ------------
 static void sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header() {
     const fs::path root(OHAO_SOURCE_DIR);
@@ -1267,6 +1321,8 @@ int main(int argc, char** argv) {
     RUN(sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_systems);
     RUN(sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header);
     RUN(sp4_t02_lint_finds_prints);
+    RUN(sp2b_t09_lint_finds_hard_coded_light_positions);
+    RUN(sp2b_t09_no_hard_coded_light_in_render_or_gpu);
     RUN(sp4_t02_engine_prints_only_through_the_logger);
     RUN(sp4_t15_max_items_is_checked_before_reading);
     RUN(bench_typed_write);

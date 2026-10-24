@@ -135,6 +135,7 @@ void writeFields(const Light& v, const Light* omit, FieldSink& out) {
     if (!omit || !same(v.outerConeDeg, omit->outerConeDeg)) t.f32("\"outerConeDeg\"", v.outerConeDeg);
     if (!omit || !same(v.areaEdge1, omit->areaEdge1)) vec3(t, "\"areaEdge1\"", v.areaEdge1);
     if (!omit || !same(v.areaEdge2, omit->areaEdge2)) vec3(t, "\"areaEdge2\"", v.areaEdge2);
+    if (!omit || v.castShadows != omit->castShadows) t.boolean("\"castShadows\"", v.castShadows);
 }
 
 void writeFields(const MeshSource& v, const MeshSource* omit, FieldSink& out) {

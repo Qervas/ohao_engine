@@ -2,31 +2,42 @@
 #extension GL_EXT_ray_tracing : require
 
 // Ray Generation Shader — RT Soft Shadow Pass
-// Traces multiple shadow rays with jittered light position for penumbra.
-// Outputs shadow mask: 0.0 = fully shadowed, 1.0 = fully lit.
+// For each of up to 4 scene lights, traces rays toward points sampled on the light's
+// area (penumbra) and writes the light's visibility into its own mask channel:
+// 0.0 = fully shadowed, 1.0 = fully lit. Unused channels are 1.
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
-layout(set = 0, binding = 1, r8) uniform image2D shadowMask;
+layout(set = 0, binding = 1, rgba8) uniform image2D shadowMask;
 layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;
 layout(set = 0, binding = 3) uniform sampler2D gBufferNormal;
 
+struct ShadowLight {
+    vec4 positionAndType;   // xyz = position (directional: travel direction), w = 0 dir, 1 sphere, 2 rect
+    vec4 edge1AndRadius;    // xyz = rect edge 1, w = sphere radius (directional: angular radius, rad)
+    vec4 edge2AndRange;     // xyz = rect edge 2, w = range (0: unlimited)
+};
+
 layout(push_constant) uniform PushConstants {
-    mat4 invView;
-    mat4 invProj;
-    vec4 lightDirAndRadius;    // xyz=direction (toward light), w=angular radius (radians)
-    vec4 lightPosAndRange;     // xyz=position, w=range (0=directional)
-    uvec4 params;              // x=width, y=height, z=lightType (0=dir,1=point), w=sampleCount
+    ShadowLight lights[4];
+    uvec4 params;           // x=width, y=height, z=light count, w=rays per light
+    uvec4 seed;             // x=render seed, y=frame index since the last temporal reset
 } pc;
 
 layout(location = 0) rayPayloadEXT float shadowPayload;
 
 #include "includes/common/encoding.glsl"
 
-// Simple hash for per-pixel randomization
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+// PCG hash (Jarzynski & Olano 2020): integer in, integer out, no float state.
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// A uniform number in [0, 1) from (render seed, frame index, pixel, light, sample, dimension).
+float rand01(uvec2 pixel, uint light, uint s, uint dim) {
+    uint h = pcg(pc.seed.x ^ pcg(pc.seed.y ^ pcg(pixel.x ^ pcg(pixel.y ^ pcg((light << 24u) ^ (s << 4u) ^ dim)))));
+    return float(h >> 8u) * (1.0 / 16777216.0);
 }
 
 // Tangent/bitangent from a direction vector
@@ -57,56 +68,64 @@ void main() {
     // Bias the ray origin along normal
     vec3 origin = worldPos + N * 0.05;
 
-    uint lightType = pc.params.z;
-    uint sampleCount = max(pc.params.w, 1u);
-    float lightRadius = pc.lightDirAndRadius.w;
-
-    float visibility = 0.0;
+    uint lightCount = min(pc.params.z, 4u);
+    uint rays = max(pc.params.w, 1u);
     uint rayFlags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;
 
-    for (uint s = 0u; s < sampleCount; s++) {
-        // Per-sample random offset for soft shadow penumbra
-        float r1 = hash(vec2(pixel) + vec2(float(s) * 7.13, float(s) * 13.37));
-        float r2 = hash(vec2(pixel) + vec2(float(s) * 31.17, float(s) * 47.53));
+    vec4 mask = vec4(1.0);
+    for (uint l = 0u; l < lightCount; l++) {
+        ShadowLight light = pc.lights[l];
+        uint type = uint(light.positionAndType.w + 0.5);
+        float range = light.edge2AndRange.w;
 
-        vec3 L;
-        float tMax;
+        // Out of a point light's range the light contributes nothing: leave it lit.
+        if (type != 0u && range > 0.0 && distance(worldPos, light.positionAndType.xyz) > range + light.edge1AndRadius.w)
+            continue;
 
-        if (lightType == 0u) {
-            // Directional light — jitter around light direction for soft shadow
-            vec3 lightDir = normalize(-pc.lightDirAndRadius.xyz);
-            vec3 T, B;
-            buildBasis(lightDir, T, B);
-            float angle = lightRadius * sqrt(r1);
-            float phi = 6.2831853 * r2;
-            L = normalize(lightDir + T * (angle * cos(phi)) + B * (angle * sin(phi)));
-            tMax = 10000.0;
-        } else {
-            // Point/spot light — jitter the light position within a sphere
-            vec3 lightPos = pc.lightPosAndRange.xyz;
-            // Random point on sphere of radius lightRadius
-            float theta = 6.2831853 * r1;
-            float phi = acos(1.0 - 2.0 * r2);
-            vec3 offset = lightRadius * vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
-            vec3 jitteredPos = lightPos + offset;
+        float visibility = 0.0;
+        for (uint s = 0u; s < rays; s++) {
+            float r1 = rand01(uvec2(pixel), l, s, 0u);
+            float r2 = rand01(uvec2(pixel), l, s, 1u);
 
-            vec3 toLight = jitteredPos - worldPos;
-            float dist = length(toLight);
-            L = toLight / dist;
-            tMax = dist;
+            vec3 L;
+            float tMax;
+            if (type == 0u) {
+                // Directional: a direction within the light's angular radius
+                vec3 lightDir = normalize(-light.positionAndType.xyz);
+                vec3 T, B;
+                buildBasis(lightDir, T, B);
+                float angle = light.edge1AndRadius.w * sqrt(r1);
+                float phi = 6.2831853 * r2;
+                L = normalize(lightDir + T * (angle * cos(phi)) + B * (angle * sin(phi)));
+                tMax = 10000.0;
+            } else {
+                vec3 target;
+                if (type == 2u) {
+                    // Rectangle: position is a corner, edges span it
+                    target = light.positionAndType.xyz + light.edge1AndRadius.xyz * r1 + light.edge2AndRange.xyz * r2;
+                } else {
+                    // Sphere of the light's radius
+                    float theta = 6.2831853 * r1;
+                    float phi = acos(1.0 - 2.0 * r2);
+                    target = light.positionAndType.xyz +
+                             light.edge1AndRadius.w * vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+                }
+                vec3 toLight = target - worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+                tMax = dist;
+            }
+
+            // A surface facing away from the sample gets nothing from it
+            if (dot(N, L) <= 0.0) continue;
+
+            shadowPayload = 0.0;
+            // Only trace against static geometry (RT_RAY_MASK_STATIC, see rt_visibility.hpp)
+            traceRayEXT(topLevelAS, rayFlags, 0x01 /*RT_RAY_MASK_STATIC*/, 0, 0, 0,
+                        origin, 0.001, L, tMax, 0);
+            visibility += shadowPayload;
         }
-
-        // Skip surfaces facing away from light
-        if (dot(N, L) <= 0.0) continue;
-
-        shadowPayload = 0.0;
-        // Only trace against static geometry (RT_RAY_MASK_STATIC, see rt_visibility.hpp)
-        traceRayEXT(topLevelAS, rayFlags, 0x01 /*RT_RAY_MASK_STATIC*/, 0, 0, 0,
-                     origin, 0.001, L, tMax, 0);
-
-        visibility += shadowPayload;
+        mask[l] = visibility / float(rays);
     }
-
-    visibility /= float(sampleCount);
-    imageStore(shadowMask, pixel, vec4(visibility));
+    imageStore(shadowMask, pixel, mask);
 }

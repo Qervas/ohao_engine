@@ -13,6 +13,9 @@ namespace ohao {
 
 namespace {
 
+// The fallback sun's angular radius for its RT shadow penumbra: the real sun's, 0.267 deg.
+constexpr float kSunAngularRadius = 0.00465f;
+
 // The copy into a staging buffer, visible to the host once the frame's fence signals.
 void stagingToHost(VkCommandBuffer cmd, VkBuffer staging) {
     VkBufferMemoryBarrier b{};
@@ -148,6 +151,20 @@ void VulkanRenderer::renderDeferred() {
     if (ld) {
         const uint32_t lightCount = static_cast<uint32_t>(std::max(1, ld->numLights));
         m_deferredRenderer->setLightBuffer(m_lightBuffers[m_currentFrame], lightCount);
+    }
+
+    // The lights RT shadows trace: the scene's shadow casters, or the fallback sun (its
+    // params.w names channel 0) when the scene has no lights.
+    if (!m_renderScene->rasterLights().empty()) {
+        m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());
+    } else if (ld && ld->lights[0].params.w == 0.0f) {
+        render::LightDesc sun{};
+        sun.kind = render::LightKind::Directional;
+        sun.direction = glm::vec3(ld->lights[0].direction);
+        sun.radius = kSunAngularRadius;
+        m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));
+    } else {
+        m_deferredRenderer->setShadowLights({});
     }
 
     VkCommandBuffer cmd = frame.commandBuffer;
@@ -323,11 +340,9 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 ptView = m_camera->getViewMatrix();
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
-    // Sphere light: position, intensity, color, radius
+    // Lit by the scene's lights: the RenderScene light table (setSceneBuffers above).
     m_passTimer.begin(cmd, "pt.render");
-    rtRenderer->render(cmd, m_currentFrame, ptView, ptProj,
-                       glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
-                       glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
+    rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);
     m_passTimer.end(cmd);
 
     // The path tracer's output into the staging buffer, for a requested frame only.

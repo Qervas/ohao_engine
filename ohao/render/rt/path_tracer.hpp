@@ -16,7 +16,7 @@
 //   // per frame, after RenderScene::recordUpdates:
 //   pt.setSceneBuffers(renderScene);
 //   pt.setBindlessTextures(views, samplers);
-//   pt.render(cmd, frameSlot, view, proj, lightPos, intensity, lightColor, lightRadius);
+//   pt.render(cmd, frameSlot, view, proj);   // lights: the RenderScene light table (binding 11)
 //   // on camera move:
 //   pt.resetAccumulation();
 //   // on window resize:
@@ -84,13 +84,11 @@ public:
                             const std::vector<const char*>& deviceExtensions = {});
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
-    // Traces the scene last given to setSceneBuffers; does nothing without a TLAS.
-    // `frameSlot` is the frame-in-flight slot whose fence was just waited: its own
-    // descriptor set is rewritten and bound (earlier frames may still read theirs).
-    void render(VkCommandBuffer cmd, uint32_t frameSlot,
-                const glm::mat4& view, const glm::mat4& proj,
-                const glm::vec3& lightPos, float lightIntensity,
-                const glm::vec3& lightColor, float lightRadius);
+    // Traces the scene last given to setSceneBuffers, lit by its light table; does
+    // nothing without a TLAS. `frameSlot` is the frame-in-flight slot whose fence was
+    // just waited: its own descriptor set is rewritten and bound (earlier frames may
+    // still read theirs).
+    void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj);
 
     void resize(uint32_t width, uint32_t height);
 

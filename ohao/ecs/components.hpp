@@ -68,6 +68,7 @@ struct Light {
     float outerConeDeg{45.0f};
     glm::vec3 areaEdge1{1.0f, 0.0f, 0.0f};   // AreaRect, local space
     glm::vec3 areaEdge2{0.0f, 0.0f, 1.0f};
+    bool castShadows{true};
 };
 
 // A point light approximating a mesh's emissive texture (ported from the renderer's

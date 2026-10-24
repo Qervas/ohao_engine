@@ -116,7 +116,11 @@ void LightTable::set(std::span<const LightDesc> lights) {
     m_descs = sorted;
 
     // ---- Raster (ported from VulkanRenderer::updateLightBuffer) ----------------
+    // RT shadow slots: the first kMaxShadowLights raster lights, in light order, that
+    // cast shadows each own one shadow-mask channel (params.w); the rest that cast
+    // shadows get kShadowNoSlot.
     std::vector<LightData> raster;
+    m_shadowLights.clear();
     int shadowCasterIndex = -1;  // Index of first shadow-casting light
     for (const LightDesc& d : sorted) {
         if (d.kind == LightKind::EmissiveProxy) continue;
@@ -138,11 +142,19 @@ void LightTable::set(std::span<const LightDesc> lights) {
             }
         }
 
+        float shadowSlot = kShadowNever;
+        if (d.castShadows) {
+            shadowSlot = kShadowNoSlot;
+            if (m_shadowLights.size() < kMaxShadowLights) {
+                shadowSlot = static_cast<float>(m_shadowLights.size());
+                m_shadowLights.push_back(d);
+            }
+        }
         light.params = glm::vec4(
             glm::cos(glm::radians(d.innerConeDeg)),
             glm::cos(glm::radians(d.outerConeDeg)),
             shadowMapIndex,
-            0.0f
+            shadowSlot
         );
 
         if (shadowMapIndex >= 0.0f) {
@@ -160,7 +172,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.position = glm::vec4(d.position, 1.0f);  // type 1 = point light
         light.direction = glm::vec4(0, -1, 0, d.radius * 10.0f);
         light.color = glm::vec4(d.color, d.intensity);
-        light.params = glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
+        light.params = glm::vec4(0.0f, 0.0f, -1.0f, kShadowNever);   // inside its own mesh: never shadowed
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }

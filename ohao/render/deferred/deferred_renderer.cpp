@@ -307,8 +307,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // buffer. Null without RT or before anything was built.
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
 
-    // 3.7. RT Shadows — traces shadow rays using TLAS, outputs shadow mask
-    if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
+    // 3.7. RT Shadows — traces the scene's shadow-casting lights (setShadowLights) through
+    // the TLAS, one shadow-mask channel each. No light casts shadows: no pass.
+    if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass && !m_shadowLights.empty()) {
         m_renderGraph.addComputePass("rt.shadows",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -319,20 +320,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 si.positionBuffer = m_gbufferPass->getPositionView();
                 si.normalBuffer = m_gbufferPass->getNormalView();
                 si.depthBuffer = m_gbufferPass->getDepthView();
-                si.view = m_view;
-                si.proj = m_proj;
-                si.cameraPos = m_cameraPos;
                 si.width = m_width;
                 si.height = m_height;
                 si.frameSlot = frameIndex;
-                si.lightDirection = m_lightDirection;
-                si.lightType = 1;  // point light
-                // Use first scene light position if available, else default
-                si.lightPosition = glm::vec3(0, 4.5f, 0);
-                si.lightRange = 15.0f;
+                si.lights = m_shadowLights;
                 si.tlas = sceneTlas;
-                m_rtShadow->setLightRadius(0.5f);   // soft shadow — 0.5 unit light radius
-                m_rtShadow->setSampleCount(8);       // 8 rays per pixel for penumbra
                 m_rtShadow->render(c, si);
                 // Lighting records after this pass and writes its descriptors then.
                 if (m_rtShadow->rendered() && m_lightingPass)

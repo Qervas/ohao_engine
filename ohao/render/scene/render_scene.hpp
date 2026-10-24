@@ -76,6 +76,8 @@ public:
     // The light list last given to setLights, sorted by order (host copy).
     [[nodiscard]] std::span<const LightDesc> lights() const;
     [[nodiscard]] std::span<const LightData> rasterLights() const;   // <= MAX_LIGHTS, host copy for the light UBO
+    // The lights RT shadows trace (<= kMaxShadowLights, element i = shadow-mask channel i).
+    [[nodiscard]] std::span<const LightDesc> shadowLights() const;
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;
 

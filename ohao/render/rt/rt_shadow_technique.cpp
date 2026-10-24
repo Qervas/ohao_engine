@@ -1,4 +1,5 @@
 #include "rt_shadow_technique.hpp"
+#include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
 #include <fstream>
 #include <cstring>
@@ -97,11 +98,11 @@ bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
 }
 
 bool RTShadowTechnique::createOutputImage() {
-    // Shadow mask: R8_UNORM — 0=shadowed, 1=lit
+    // Shadow mask: RGBA8_UNORM, one channel per shadow light — 0=shadowed, 1=lit
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8_UNORM;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     imageInfo.extent = {m_width, m_height, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
@@ -128,7 +129,7 @@ bool RTShadowTechnique::createOutputImage() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_shadowMask;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8_UNORM;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -420,6 +421,7 @@ bool RTShadowTechnique::createShaderBindingTable() {
 void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     m_rendered = false;
     if (!m_rtPipeline || input.tlas == VK_NULL_HANDLE) return;
+    if (input.lights.empty()) return;   // no light casts shadows: nothing reads the mask
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
 
@@ -507,13 +509,33 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                             m_pipelineLayout, 0, 1, &set, 0, nullptr);
 
-    // Push constants
+    // Push constants: the shadow lights, in channel order
     ShadowPushConstants pc{};
-    pc.invView = glm::inverse(input.view);
-    pc.invProj = glm::inverse(input.proj);
-    pc.lightDirAndRadius = glm::vec4(input.lightDirection, m_lightRadius);
-    pc.lightPosAndRange = glm::vec4(input.lightPosition, input.lightRange);
-    pc.params = glm::uvec4(input.width, input.height, input.lightType, m_sampleCount);
+    const uint32_t lightCount = static_cast<uint32_t>(std::min<std::size_t>(input.lights.size(), render::kMaxShadowLights));
+    for (uint32_t i = 0; i < lightCount; ++i) {
+        const render::LightDesc& d = input.lights[i];
+        ShadowLightGpu& g = pc.lights[i];
+        switch (d.kind) {
+        case render::LightKind::Directional:
+            // radius is the angular radius in radians for a directional light
+            g.positionAndType = glm::vec4(d.direction, 0.0f);
+            g.edge1AndRadius = glm::vec4(0.0f, 0.0f, 0.0f, d.radius);
+            g.edge2AndRange = glm::vec4(0.0f);
+            break;
+        case render::LightKind::AreaRect:   // position is a corner, as the path tracer samples it
+            g.positionAndType = glm::vec4(d.position, 2.0f);
+            g.edge1AndRadius = glm::vec4(d.areaEdge1, 0.0f);
+            g.edge2AndRange = glm::vec4(d.areaEdge2, 0.0f);
+            break;
+        default:                            // Point, Spot: a sphere of `radius`
+            g.positionAndType = glm::vec4(d.position, 1.0f);
+            g.edge1AndRadius = glm::vec4(0.0f, 0.0f, 0.0f, d.radius);
+            g.edge2AndRange = glm::vec4(0.0f, 0.0f, 0.0f, d.range);
+            break;
+        }
+    }
+    pc.params = glm::uvec4(input.width, input.height, lightCount, raysPerLight(m_raysPerPixel, lightCount));
+    pc.seed = glm::uvec4(input.renderSeed, input.frameIndex, 0u, 0u);
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
                        0, sizeof(ShadowPushConstants), &pc);

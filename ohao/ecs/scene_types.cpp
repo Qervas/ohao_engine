@@ -57,7 +57,12 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("innerConeDeg", &Light::innerConeDeg).doc("Spot: full-intensity cone angle").unit("deg").angle().min(0.0).max(180.0)
         .field("outerConeDeg", &Light::outerConeDeg).doc("Spot: cone angle where intensity reaches zero").unit("deg").angle().min(0.0).max(180.0)
         .field("areaEdge1", &Light::areaEdge1).doc("AreaRect: first edge vector, local space").unit("m")
-        .field("areaEdge2", &Light::areaEdge2).doc("AreaRect: second edge vector, local space").unit("m");
+        .field("areaEdge2", &Light::areaEdge2).doc("AreaRect: second edge vector, local space").unit("m")
+        .field("castShadows", &Light::castShadows)
+            .doc("Whether geometry blocks this light in the raster frame: RT shadows (one shadow-mask channel "
+                 "each, for the first 4 lights that cast them), or the cascaded shadow map for a directional "
+                 "light when RT shadows are off. False lights through everything. The path tracer always "
+                 "traces visibility");
 
     // Mesh sources: an asset or a parametric primitive.
     r.type<ModelAsset>("ModelAsset")

@@ -24,10 +24,8 @@ public:
     virtual void destroy() = 0;
     virtual void resize(uint32_t width, uint32_t height) = 0;
 
-    virtual void render(VkCommandBuffer cmd, uint32_t frameSlot,
-                        const glm::mat4& view, const glm::mat4& proj,
-                        const glm::vec3& lightPos, float lightIntensity,
-                        const glm::vec3& lightColor, float lightRadius) = 0;
+    // Lit by the scene's light table (setSceneBuffers), never by a light passed in.
+    virtual void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) = 0;
 
     virtual VkImage getOutputImage() const = 0;
     virtual VkImage getAccumImage() const = 0;
@@ -106,11 +104,8 @@ public:
     void destroy() override { m_pathTracer.destroy(); }
     void resize(uint32_t width, uint32_t height) override { m_pathTracer.resize(width, height); }
 
-    void render(VkCommandBuffer cmd, uint32_t frameSlot,
-                const glm::mat4& view, const glm::mat4& proj,
-                const glm::vec3& lightPos, float lightIntensity,
-                const glm::vec3& lightColor, float lightRadius) override {
-        m_pathTracer.render(cmd, frameSlot, view, proj, lightPos, lightIntensity, lightColor, lightRadius);
+    void render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) override {
+        m_pathTracer.render(cmd, frameSlot, view, proj);
     }
 
     VkImage getOutputImage() const override { return m_pathTracer.getOutputImage(); }

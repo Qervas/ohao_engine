@@ -82,7 +82,9 @@ LightUniformBuffer* VulkanRenderer::updateLightBuffer(uint32_t slot) {
         defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
         // Intensity = PI compensates for PBR energy-conserving divide-by-PI in diffuse BRDF
         defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
-        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f, 0.0f);
+        // Shadowed through RT shadow channel 0 (render_dispatch traces the sun into it).
+        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f,
+                                        m_shadowsEnabled ? 0.0f : render::kShadowNever);
 
         if (m_shadowsEnabled) {
             defaultLight.lightSpaceMatrix = calculateLightSpaceMatrix(defaultLight);

@@ -13,12 +13,15 @@
 #include "render/rt/rt_shadow_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
 #include "render/graph/render_graph.hpp"
+#include "render/scene/render_scene_types.hpp"
 #include "core/common_types.hpp"
 #include <nlohmann/json.hpp>
 #include <memory>
 #include <unordered_map>
 #include <queue>
+#include <span>
 #include <string>
+#include <vector>
 #include <string_view>
 #include <array>
 
@@ -60,6 +63,9 @@ public:
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
     [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lightBuffer; }
+    // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into shadow-mask
+    // channel i (the light UBO's params.w points each raster light at its channel).
+    void setShadowLights(std::span<const render::LightDesc> lights) { m_shadowLights.assign(lights.begin(), lights.end()); }
     [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
     [[nodiscard]] float getNightFactor() const { return m_nightFactor; }
     [[nodiscard]] glm::vec3 getMoonDirection() const { return m_moonDirection; }
@@ -178,6 +184,7 @@ private:
     glm::vec3 m_lightDirection{0.0f, -1.0f, 0.0f};
     VkBuffer m_lightBuffer{VK_NULL_HANDLE};
     uint32_t m_lightCount{0};
+    std::vector<render::LightDesc> m_shadowLights;
 
     // Debug modes
     bool m_wireframeEnabled{false};

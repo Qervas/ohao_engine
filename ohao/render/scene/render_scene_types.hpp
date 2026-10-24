@@ -23,7 +23,7 @@ struct LightData {
     alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     alignas(16) glm::vec4 direction;     // xyz = direction, w = range
     alignas(16) glm::vec4 color;         // xyz = color, w = intensity
-    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused
+    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = shadow slot (kShadowNever, 0..3, kShadowNoSlot)
     alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)
 };
 OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);
@@ -91,8 +91,18 @@ struct LightDesc {
     float outerConeDeg{45.0f};
     glm::vec3 areaEdge1{1, 0, 0};
     glm::vec3 areaEdge2{0, 0, 1};
+    bool castShadows{true};   // emissive proxies never do
     uint64_t order{0};
 };
+
+// RT shadows trace at most this many lights, one RGBA8 shadow-mask channel each
+// (LightData::params.w names a raster light's channel).
+inline constexpr uint32_t kMaxShadowLights = 4;
+// LightData::params.w: -1 never shadowed (castShadows false, emissive proxies);
+// 0..kMaxShadowLights-1 its RT shadow-mask channel; kShadowNoSlot casts shadows but
+// had no channel left (unshadowed under RT shadows, CSM still for a directional light).
+inline constexpr float kShadowNever = -1.0f;
+inline constexpr float kShadowNoSlot = static_cast<float>(kMaxShadowLights);
 
 // A point light approximating a mesh's emissive texture (ported from the renderer's
 // emissive auto-light). localCenter/radius are in the mesh's model space; the light

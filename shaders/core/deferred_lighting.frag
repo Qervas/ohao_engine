@@ -22,7 +22,7 @@ struct Light {
     vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     vec4 direction;     // xyz = direction, w = range
     vec4 color;         // xyz = color, w = intensity
-    vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex, w = unused
+    vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex, w = shadow slot (-1 never, 0..3 RT mask channel, 4 casts but no channel)
     mat4 lightSpaceMatrix;
 };
 
@@ -55,7 +55,8 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
+// RT shadow mask (binding 14) — RGBA8, one channel per shadow light (a light's params.w),
+// 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR (rt_shadow.rgen).
 layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
 
 // HDR environment map (binding 15) — kept for descriptor layout compatibility
@@ -215,6 +216,8 @@ void main() {
 
     // Use light count from push constants (avoids SSBO layout issues with numLights offset)
     int lightCount = int(min(pc.lightCount, uint(MAX_LIGHTS)));
+    const bool rtShadows = (pc.flags & 32u) != 0u;
+    vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);
     for (int i = 0; i < lightCount; ++i) {
         Light light = lighting.lights[i];
         int lightType = int(light.position.w);
@@ -238,12 +241,17 @@ void main() {
 
         vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
-        // Shadow determination — RT shadows (bit 5) override CSM (bit 2)
+        // Shadow determination — RT shadows (bit 5) override CSM (bit 2). A light that
+        // casts no shadows (slot -1) is never occluded; one beyond the RT channels (slot
+        // 4) is unshadowed under RT shadows and gets CSM (directional) without them.
         float shadow = 1.0;
-        if ((pc.flags & 32u) != 0u) {
-            shadow = texture(rtShadowMask, inTexCoord).r;
-        } else if ((pc.flags & 4u) != 0u && lightType == 0) {
-            shadow = calculateShadowCSM(fragPos, viewDepth);
+        int slot = int(round(light.params.w));
+        if (slot >= 0) {
+            if (rtShadows) {
+                if (slot < 4) shadow = rtShadow[slot];
+            } else if ((pc.flags & 4u) != 0u && lightType == 0) {
+                shadow = calculateShadowCSM(fragPos, viewDepth);
+            }
         }
 
         // Cook-Torrance BRDF via include (height-correlated Smith-GGX)

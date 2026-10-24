@@ -35,10 +35,7 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 }  // namespace
 
-void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot,
-                         const glm::mat4& view, const glm::mat4& proj,
-                         const glm::vec3& lightPos, float lightIntensity,
-                         const glm::vec3& lightColor, float lightRadius) {
+void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4& view, const glm::mat4& proj) {
     if (!m_rtPipeline || m_tlas == VK_NULL_HANDLE) return;
     if (frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     // This frame slot's fence was waited: its set is no longer read by the GPU.

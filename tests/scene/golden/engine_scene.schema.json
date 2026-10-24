@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 271d9962e1b21db0. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 164f3e4493e49cca. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -244,6 +244,11 @@
           "allOf": [
             { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
           ]
+        },
+        "castShadows": {
+          "description": "Whether geometry blocks this light in the raster frame: RT shadows (one shadow-mask channel each, for the first 4 lights that cast them), or the cascaded shadow map for a directional light when RT shadows are off. False lights through everything. The path tracer always traces visibility",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false
