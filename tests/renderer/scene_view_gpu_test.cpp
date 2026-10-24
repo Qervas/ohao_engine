@@ -1,8 +1,8 @@
 // scene_view_gpu_test (sub-project 3, step 8; test 20's GPU half).
 //
 // Each render uses a fresh renderer at 960x540. Two scenes, three renders each:
-//   cornell_box (deferred, 10 frames, validation on) and model_viewer's DamagedHelmet
-//   room (RT offline, 4 spp + 3 frames, denoiser off; validation off, see below):
+//   cornell_box (deferred, 10 frames) and model_viewer's DamagedHelmet room (RT offline,
+//   4 spp + 3 frames, denoiser off), every run under validation:
 //   1. the example's world, the camera and environment set by hand exactly as the
 //      examples did before step 8;
 //   2. the same world, its Camera and Environment applied by the scene host;
@@ -11,9 +11,8 @@
 // and for the RT helmet room within the RT path's own rare 1-LSB flips (see rtSame). The
 // Camera reproduces the hand-set pitch/yaw exactly; the file carries everything needed.
 //
-// The RT runs leave validation off: RT validation has known open findings (VUID 03004 /
-// the NRI push-descriptor exit) that are not this test's subject. The deferred runs must
-// report nothing. Exit code 0 = pass; the last line is a JSON summary.
+// No run may report a validation message (the RT path is clean since sub-project 2b
+// step 5). Exit code 0 = pass; the last line is a JSON summary.
 #include "ecs/asset_resolver.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
@@ -123,10 +122,12 @@ Diff compare(const Shot& a, const Shot& b) {
     return d;
 }
 
-// RT offline is not perfectly deterministic: about one run in seven flips a single byte
-// by 1 (measured while writing this test, renderer unchanged). A scene difference moves
-// thousands of pixels on every run, so a handful of 1-LSB bytes is the renderer, not the
-// scene view. Deferred comparisons stay exact.
+// RT offline on a loaded mesh is not perfectly deterministic: now and then a few bytes flip
+// by 1. The driver's BLAS builder lays out the BVH differently run to run (identical input,
+// different serialized bytes, measured in 2b step 5), and a ray that hits exactly on an edge
+// two triangles share takes whichever the traversal reaches first. A scene difference moves
+// thousands of pixels on every run, so a handful of 1-LSB bytes is the BVH, not the scene
+// view. Deferred comparisons stay exact.
 bool rtSame(const Diff& d) { return d.bytes <= 16 && d.maxAbs <= 1; }
 
 } // namespace
@@ -179,9 +180,9 @@ int main() {
             r.setEnvironmentMap(hdri);
             SceneFramer::applyCamera(r.getCamera(), frame);
         };
-        v1 = shoot({RenderMode::RTOffline, 7, false, buildViewer, viewerByHand}, assets);
-        v2 = shoot({RenderMode::RTOffline, 7, false, buildViewer, nullptr}, assets);
-        v3 = shoot({RenderMode::RTOffline, 7, false, loadViewer, nullptr}, assets);
+        v1 = shoot({RenderMode::RTOffline, 7, true, buildViewer, viewerByHand}, assets);
+        v2 = shoot({RenderMode::RTOffline, 7, true, buildViewer, nullptr}, assets);
+        v3 = shoot({RenderMode::RTOffline, 7, true, loadViewer, nullptr}, assets);
     }
 
     const Diff c12 = compare(c1, c2), c13 = compare(c1, c3);
@@ -197,8 +198,9 @@ int main() {
         {"cornell: the saved and loaded scene renders identically", c13.bytes == 0},
         {"helmet room (RT): the Camera and Environment render as set by hand", rtSame(v12)},
         {"helmet room (RT): the saved and loaded scene renders identically", rtSame(v13)},
-        {"validation reported nothing (the three deferred runs)",
-         c1.validation == 0 && c2.validation == 0 && c3.validation == 0},
+        {"validation reported nothing (all six runs)",
+         c1.validation == 0 && c2.validation == 0 && c3.validation == 0 && v1.validation == 0 &&
+             v2.validation == 0 && v3.validation == 0},
     };
     int passed = 0, failed = 0;
     std::string failures;
@@ -214,8 +216,10 @@ int main() {
         if (!s->note.empty()) std::printf("  note: %s\n", s->note.c_str());
     std::printf("  differing bytes (max abs): cornell %zu (%d) / %zu (%d), helmet %zu (%d) / %zu (%d)\n", c12.bytes,
                 c12.maxAbs, c13.bytes, c13.maxAbs, v12.bytes, v12.maxAbs, v13.bytes, v13.maxAbs);
-    std::printf("  validation messages (deferred): %llu + %llu + %llu\n", static_cast<unsigned long long>(c1.validation),
-                static_cast<unsigned long long>(c2.validation), static_cast<unsigned long long>(c3.validation));
+    std::printf("  validation messages: deferred %llu + %llu + %llu, RT %llu + %llu + %llu\n",
+                static_cast<unsigned long long>(c1.validation), static_cast<unsigned long long>(c2.validation),
+                static_cast<unsigned long long>(c3.validation), static_cast<unsigned long long>(v1.validation),
+                static_cast<unsigned long long>(v2.validation), static_cast<unsigned long long>(v3.validation));
     std::printf("{\"suite\":\"scene_view_gpu_test\",\"passed\":%d,\"failed\":%d,\"failures\":[%s]}\n", passed, failed,
                 failures.c_str());
     return failed == 0 ? 0 : 1;

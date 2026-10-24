@@ -102,6 +102,10 @@ public:
 
     void shutdown();
 
+    /// The frame-in-flight slot whose fence was just waited: the dispatches that follow
+    /// write that slot's descriptor sets (an earlier frame may still read its own).
+    void setFrameSlot(uint32_t slot);
+
     /// Dispatch the bloom extract pass.
     ///   composedHDR — full-res HDR (GENERAL)
     ///   bloomMip0   — half-res RGBA16F output (GENERAL)

@@ -9,8 +9,11 @@
 // and stronger in-shader stabilization than the offline/reference path.
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
-layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D accumBuffer;   // this frame's
 layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;
+// The previous frame's accumulation (ping-pong): history is read here, never from
+// binding 1, which other invocations of this dispatch are writing.
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumHistory;
 layout(set = 0, binding = 6, rgba32f) uniform image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform image2D normalAOV;
 layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
@@ -1765,10 +1768,10 @@ void main() {
     imageStore(currShadingHistory, pixel,
                firstHitDist > 0.0 ? vec4(firstHitNormal, firstHitRoughness) : vec4(0.0, 0.0, 1.0, -1.0));
 
-    vec4 prev = imageLoad(accumBuffer, pixel);
     vec3 acc = radiance;
     float count = 1.0;
     if (historyFrameCount > 0u) {
+        vec4 prev = imageLoad(accumHistory, pixel);
         bool useReprojection = false;
         vec2 prevUV = vec2(pixel) / vec2(pc.params.xy);
 
@@ -1788,7 +1791,7 @@ void main() {
         if (useReprojection) {
             ivec2 prevPixel = ivec2(prevUV * vec2(pc.params.xy));
             prevPixel = clamp(prevPixel, ivec2(0), ivec2(pc.params.xy) - 1);
-            history = imageLoad(accumBuffer, prevPixel);
+            history = imageLoad(accumHistory, prevPixel);
             vec4 prevSurface = imageLoad(prevSurfaceHistory, prevPixel);
             vec4 prevShading = imageLoad(prevShadingHistory, prevPixel);
             if (prevSurface.w > 0.0 && firstHitDist > 0.0) {
@@ -1842,64 +1845,11 @@ void main() {
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    vec3 denoised = acc;
-    if (enableInternalDenoise && enableAOVs) {
-        vec3 centerNormal = imageLoad(normalAOV, pixel).rgb;
-        vec3 mean = vec3(0.0);
-        vec3 meanSq = vec3(0.0);
-        int varSamples = 0;
-        for (int vy = -1; vy <= 1; vy++) {
-            for (int vx = -1; vx <= 1; vx++) {
-                ivec2 vp = pixel + ivec2(vx, vy);
-                if (vp.x >= 0 && vp.y >= 0 && vp.x < int(pc.params.x) && vp.y < int(pc.params.y)) {
-                    vec3 s = imageLoad(accumBuffer, vp).rgb;
-                    mean += s;
-                    meanSq += s * s;
-                    varSamples++;
-                }
-            }
-        }
-        mean /= float(varSamples);
-        vec3 variance = max(meanSq / float(varSamples) - mean * mean, vec3(0.0));
-        float noiseLevel = dot(variance, vec3(0.333));
-
-        if (noiseLevel > 0.00005) {
-            for (int pass = 0; pass < 3; pass++) {
-                int step = (pass == 0) ? 1 : (pass == 1 ? 2 : 4);
-                vec3 sum = vec3(0.0);
-                float wSum = 0.0;
-
-                for (int dy = -2; dy <= 2; dy++) {
-                    for (int dx = -2; dx <= 2; dx++) {
-                        ivec2 sp = pixel + ivec2(dx, dy) * step;
-                        if (sp.x < 0 || sp.y < 0 || sp.x >= int(pc.params.x) || sp.y >= int(pc.params.y)) continue;
-
-                        vec3 sampleColor = (pass == 0) ? imageLoad(accumBuffer, sp).rgb : denoised;
-                        vec3 sampleNormal = imageLoad(normalAOV, sp).rgb;
-                        float dist2 = float(dx*dx + dy*dy);
-                        float ws = exp(-dist2 / 4.0);
-                        float normalSim = max(dot(centerNormal, sampleNormal), 0.0);
-                        float wn = pow(normalSim, 48.0);
-                        vec3 colorDiff = denoised - sampleColor;
-                        float sigmaC = max(noiseLevel * 3.0, 0.001);
-                        float wc = exp(-dot(colorDiff, colorDiff) / (sigmaC + 0.0001));
-                        float w = ws * wn * wc;
-                        sum += sampleColor * w;
-                        wSum += w;
-                    }
-                }
-                if (wSum > 0.001) denoised = sum / wSum;
-            }
-        }
-
-        float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
-        float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
-        if (denLum > 0.001 && accLum > 0.001) {
-            denoised *= accLum / denLum;
-        }
-    }
-
-    vec3 ldr = ACES(denoised * 0.5);
+    // The internal spatial denoise filters the finished accumulation in a compute pass
+    // after this dispatch (shaders/rt/pt_spatial_denoise.comp) and writes the beauty;
+    // read here, its neighbours were still being written by other invocations.
+    const bool spatialDenoise = enableInternalDenoise && enableAOVs;
+    vec3 ldr = ACES(acc * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     // Sub-plan 3.C.6 + 3.D + NRD front-end: demodulate diffuse, pack YCoCg +
     // normalized hit-distance (see NRD.hlsli REBLUR_FrontEnd_PackRadianceAndNormHitDist).
@@ -1916,5 +1866,5 @@ void main() {
     // DLSS Ray Reconstruction can reproject the glossy reflection (kills the flicker
     // on metal). specHitDist is already the N-spp average (see specHitDistTotal).
     imageStore(specHitDistAOV, pixel, vec4(specHitDist, 0.0, 0.0, 0.0));
-    imageStore(outputImage, pixel, vec4(ldr, 1.0));
+    if (!spatialDenoise) imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

@@ -43,6 +43,16 @@ SCENES = [
     ("damaged_helmet deferred",
      ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "deferred", "--denoise=none"]),
+    # The path tracer: offline, realtime, and realtime through NRD (its push-descriptor path).
+    ("cornell_box rt_offline",
+     ["build/Release/cornell_box.exe", "{out}", "4", "rt_offline", "--denoise=none"]),
+    ("cornell_box rt_realtime",
+     ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=none"]),
+    ("cornell_box rt_realtime nrd",
+     ["build/Release/cornell_box.exe", "{out}", "4", "rt_realtime", "--denoise=nrd"]),
+    ("damaged_helmet rt_offline",
+     ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
+      "rt_offline", "--denoise=none"]),
 ]
 
 LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)

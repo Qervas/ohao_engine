@@ -21,6 +21,7 @@
 #include <string>
 
 #include "core/log.hpp"
+#include "render/frame/frame_resources.hpp"   // MAX_FRAMES_IN_FLIGHT
 
 namespace ohao {
 
@@ -185,26 +186,28 @@ struct NrdCinematicPost::Impl {
     VkDescriptorSetLayout extractLayout    = VK_NULL_HANDLE;
     VkPipelineLayout      extractPipeLayout= VK_NULL_HANDLE;
     VkPipeline            extractPipeline  = VK_NULL_HANDLE;
-    VkDescriptorSet       extractSet       = VK_NULL_HANDLE;
+    // One set of each per frame in flight (slot): a pending frame still reads its own.
+    uint32_t              slot             = 0;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> extractSet{};
 
     // Bloom blur pipeline (shared across mip levels)
     VkDescriptorSetLayout blurLayout       = VK_NULL_HANDLE;
     VkPipelineLayout      blurPipeLayout   = VK_NULL_HANDLE;
     VkPipeline            blurPipeline     = VK_NULL_HANDLE;
-    // Two pre-allocated sets: slot 0 (mip0 → mip1), slot 1 (mip1 → mip2).
-    VkDescriptorSet       blurSets[2]      = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    // Two sets a frame: blur 0 (mip0 → mip1), blur 1 (mip1 → mip2).
+    std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> blurSets{};
 
     // Composite pipeline
     VkDescriptorSetLayout compositeLayout    = VK_NULL_HANDLE;
     VkPipelineLayout      compositePipeLayout= VK_NULL_HANDLE;
     VkPipeline            compositePipeline  = VK_NULL_HANDLE;
-    VkDescriptorSet       compositeSet       = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> compositeSet{};
 
     // 4.J: depth-of-field gather pipeline
     VkDescriptorSetLayout dofLayout          = VK_NULL_HANDLE;
     VkPipelineLayout      dofPipeLayout      = VK_NULL_HANDLE;
     VkPipeline            dofPipeline        = VK_NULL_HANDLE;
-    VkDescriptorSet       dofSet             = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> dofSet{};
 
     // Single descriptor pool shared by all 3 pipelines
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -463,44 +466,46 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     //   blur:       2 storage images per set × 2 sets = 4
     //   composite:  3 storage images + 4 combined image samplers, 1 set
     //   dof:        3 storage images, 1 set  (4.J)
-    // total storage images = 2 + 4 + 3 + 3 = 12
-    // total combined image samplers = 4
-    // total sets = 1 + 2 + 1 + 1 = 5
+    // a frame: 12 storage images, 4 combined image samplers, 5 sets; one of each per
+    // frame in flight
+    constexpr uint32_t kFrames = MAX_FRAMES_IN_FLIGHT;
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[0].descriptorCount = 12;
+    poolSizes[0].descriptorCount = 12 * kFrames;
     poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 4;
+    poolSizes[1].descriptorCount = 4 * kFrames;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes    = poolSizes.data();
-    poolInfo.maxSets       = 5;
+    poolInfo.maxSets       = 5 * kFrames;
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &I.descriptorPool) != VK_SUCCESS) {
         OHAO_LOG(Error, render, "NRD cinematic: vkCreateDescriptorPool failed");
         return false;
     }
 
-    // Allocate the 5 sets.
-    VkDescriptorSet sets[5] = {};
-    VkDescriptorSetLayout layouts[5] = {
-        I.extractLayout, I.blurLayout, I.blurLayout, I.compositeLayout, I.dofLayout
-    };
-    VkDescriptorSetAllocateInfo ai{};
-    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    ai.descriptorPool     = I.descriptorPool;
-    ai.descriptorSetCount = 5;
-    ai.pSetLayouts        = layouts;
-    if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "NRD cinematic: vkAllocateDescriptorSets failed");
-        return false;
+    // Allocate the 5 sets of every frame slot.
+    for (uint32_t f = 0; f < kFrames; ++f) {
+        VkDescriptorSet sets[5] = {};
+        VkDescriptorSetLayout layouts[5] = {
+            I.extractLayout, I.blurLayout, I.blurLayout, I.compositeLayout, I.dofLayout
+        };
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool     = I.descriptorPool;
+        ai.descriptorSetCount = 5;
+        ai.pSetLayouts        = layouts;
+        if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS) {
+            OHAO_LOG(Error, render, "NRD cinematic: vkAllocateDescriptorSets failed");
+            return false;
+        }
+        I.extractSet[f]   = sets[0];
+        I.blurSets[f][0]  = sets[1];
+        I.blurSets[f][1]  = sets[2];
+        I.compositeSet[f] = sets[3];
+        I.dofSet[f]       = sets[4];
     }
-    I.extractSet   = sets[0];
-    I.blurSets[0]  = sets[1];
-    I.blurSets[1]  = sets[2];
-    I.compositeSet = sets[3];
-    I.dofSet       = sets[4];
 
     // Fallback env (descriptor must be valid when no env loaded).
     if (!createFallbackEnv(device, physicalDevice,
@@ -537,12 +542,15 @@ void NrdCinematicPost::shutdown() {
     if (I.extractPipeline)       { vkDestroyPipeline(d, I.extractPipeline, nullptr); I.extractPipeline = VK_NULL_HANDLE; }
     if (I.extractPipeLayout)     { vkDestroyPipelineLayout(d, I.extractPipeLayout, nullptr); I.extractPipeLayout = VK_NULL_HANDLE; }
     if (I.extractLayout)         { vkDestroyDescriptorSetLayout(d, I.extractLayout, nullptr); I.extractLayout = VK_NULL_HANDLE; }
-    I.extractSet = VK_NULL_HANDLE;
-    I.blurSets[0] = VK_NULL_HANDLE;
-    I.blurSets[1] = VK_NULL_HANDLE;
-    I.compositeSet = VK_NULL_HANDLE;
-    I.dofSet = VK_NULL_HANDLE;
+    I.extractSet = {};
+    I.blurSets = {};
+    I.compositeSet = {};
+    I.dofSet = {};
     I.device = VK_NULL_HANDLE;
+}
+
+void NrdCinematicPost::setFrameSlot(uint32_t slot) {
+    if (m_impl && slot < MAX_FRAMES_IN_FLIGHT) m_impl->slot = slot;
 }
 
 void NrdCinematicPost::dispatchBloomExtract(VkCommandBuffer cmd,
@@ -563,7 +571,7 @@ void NrdCinematicPost::dispatchBloomExtract(VkCommandBuffer cmd,
     std::array<VkWriteDescriptorSet, 2> writes{};
     for (uint32_t i = 0; i < 2; ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = I.extractSet;
+        writes[i].dstSet          = I.extractSet[I.slot];
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -574,7 +582,7 @@ void NrdCinematicPost::dispatchBloomExtract(VkCommandBuffer cmd,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.extractPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.extractPipeLayout, 0, 1,
-                             &I.extractSet, 0, nullptr);
+                             &I.extractSet[I.slot], 0, nullptr);
 
     BloomExtractPC pc{};
     pc.srcExtent[0] = static_cast<float>(srcW);
@@ -610,7 +618,7 @@ void NrdCinematicPost::dispatchBloomBlur(VkCommandBuffer cmd,
     std::array<VkWriteDescriptorSet, 2> writes{};
     for (uint32_t i = 0; i < 2; ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = I.blurSets[slot];
+        writes[i].dstSet          = I.blurSets[I.slot][slot];
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -621,7 +629,7 @@ void NrdCinematicPost::dispatchBloomBlur(VkCommandBuffer cmd,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.blurPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.blurPipeLayout, 0, 1,
-                             &I.blurSets[slot], 0, nullptr);
+                             &I.blurSets[I.slot][slot], 0, nullptr);
 
     BloomBlurPC pc{};
     pc.srcExtent[0] = static_cast<float>(srcW);
@@ -684,21 +692,21 @@ void NrdCinematicPost::dispatchComposite(VkCommandBuffer cmd, const NrdCinematic
     std::array<VkWriteDescriptorSet, 7> writes{};
     for (uint32_t i = 0; i < 3; ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = I.compositeSet;
+        writes[i].dstSet          = I.compositeSet[I.slot];
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[i].pImageInfo      = &siInfos[i];
     }
     writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet          = I.compositeSet;
+    writes[3].dstSet          = I.compositeSet[I.slot];
     writes[3].dstBinding      = 3;
     writes[3].descriptorCount = 1;
     writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[3].pImageInfo      = &envInfo;
     for (uint32_t i = 0; i < 3; ++i) {
         writes[4 + i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[4 + i].dstSet          = I.compositeSet;
+        writes[4 + i].dstSet          = I.compositeSet[I.slot];
         writes[4 + i].dstBinding      = 4 + i;
         writes[4 + i].descriptorCount = 1;
         writes[4 + i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -708,7 +716,7 @@ void NrdCinematicPost::dispatchComposite(VkCommandBuffer cmd, const NrdCinematic
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.compositePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.compositePipeLayout, 0, 1,
-                             &I.compositeSet, 0, nullptr);
+                             &I.compositeSet[I.slot], 0, nullptr);
 
     CompositePC pc{};
     std::memcpy(pc.invView, inputs.invView.data(), sizeof(float) * 16);
@@ -749,7 +757,7 @@ void NrdCinematicPost::dispatchDoF(VkCommandBuffer cmd, const NrdDoFInputs& inpu
     std::array<VkWriteDescriptorSet, 3> writes{};
     for (uint32_t i = 0; i < 3; ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = I.dofSet;
+        writes[i].dstSet          = I.dofSet[I.slot];
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -760,7 +768,7 @@ void NrdCinematicPost::dispatchDoF(VkCommandBuffer cmd, const NrdDoFInputs& inpu
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.dofPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.dofPipeLayout,
-                             0, 1, &I.dofSet, 0, nullptr);
+                             0, 1, &I.dofSet[I.slot], 0, nullptr);
 
     DoFPC pc{};
     pc.focusDistance = inputs.focusDistance;
@@ -787,6 +795,7 @@ NrdCinematicPost::~NrdCinematicPost() = default;
 
 bool NrdCinematicPost::initialize(VkDevice, VkPhysicalDevice, uint32_t, uint32_t) { return false; }
 void NrdCinematicPost::shutdown() {}
+void NrdCinematicPost::setFrameSlot(uint32_t) {}
 void NrdCinematicPost::dispatchBloomExtract(VkCommandBuffer, VkImageView, VkImageView,
                                              uint32_t, uint32_t, uint32_t, uint32_t) {}
 void NrdCinematicPost::dispatchBloomBlur(VkCommandBuffer, uint32_t, VkImageView, VkImageView,

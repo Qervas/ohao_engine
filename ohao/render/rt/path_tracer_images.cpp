@@ -10,8 +10,8 @@
 namespace ohao {
 
 bool PathTracer::createImages() {
-    // --- Accumulation buffer: RGBA32F for HDR accumulation across frames ---
-    {
+    // --- Accumulation: two RGBA32F images ping-ponged per frame (binding 1 write, 3 read) ---
+    for (uint32_t i = 0; i < 2; ++i) {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -26,10 +26,10 @@ bool PathTracer::createImages() {
         imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_accumBuffer) != VK_SUCCESS) return false;
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_accumImages[i]) != VK_SUCCESS) return false;
 
         VkMemoryRequirements memReqs;
-        vkGetImageMemoryRequirements(m_device, m_accumBuffer, &memReqs);
+        vkGetImageMemoryRequirements(m_device, m_accumImages[i], &memReqs);
 
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -37,20 +37,24 @@ bool PathTracer::createImages() {
         allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
 
-        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_accumMemory) != VK_SUCCESS) return false;
-        vkBindImageMemory(m_device, m_accumBuffer, m_accumMemory, 0);
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_accumMemory[i]) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_accumImages[i], m_accumMemory[i], 0);
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = m_accumBuffer;
+        viewInfo.image = m_accumImages[i];
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
 
-        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_accumView) != VK_SUCCESS) return false;
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_accumViews[i]) != VK_SUCCESS) return false;
+        m_accumInitialized[i] = false;
     }
+    m_accumWriteIndex = 0;
+    m_accumBuffer = m_accumImages[0];
+    m_accumView = m_accumViews[0];
 
     // --- Output image: RGBA8 for tonemapped final output ---
     // Sized to the OUTPUT/display resolution (m_outW/m_outH), NOT the render res:
@@ -107,7 +111,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_albedoAOV) != VK_SUCCESS) return false;
@@ -398,7 +402,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_roughnessAOVImage) != VK_SUCCESS) return false;
@@ -686,7 +690,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_outDiffRadianceImage) != VK_SUCCESS) return false;
@@ -726,7 +730,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_outSpecRadianceImage) != VK_SUCCESS) return false;
@@ -766,7 +770,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers   = 1;
         imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_nrdComposedImage) != VK_SUCCESS) return false;
@@ -813,7 +817,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers   = 1;
         imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_nrdTonemappedImage) != VK_SUCCESS) return false;
@@ -863,7 +867,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers   = 1;
         imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;  // NRD samples it
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_preDofLdrImage) != VK_SUCCESS) return false;
@@ -1013,9 +1017,14 @@ void PathTracer::destroyImages() {
     if (m_dlssColorOutMemory) { vkFreeMemory(m_device, m_dlssColorOutMemory, nullptr);       m_dlssColorOutMemory = VK_NULL_HANDLE; }
     m_dlssColorOutFirstFrame = true;
 #endif
-    if (m_accumView) { vkDestroyImageView(m_device, m_accumView, nullptr); m_accumView = VK_NULL_HANDLE; }
-    if (m_accumBuffer) { vkDestroyImage(m_device, m_accumBuffer, nullptr); m_accumBuffer = VK_NULL_HANDLE; }
-    if (m_accumMemory) { vkFreeMemory(m_device, m_accumMemory, nullptr); m_accumMemory = VK_NULL_HANDLE; }
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (m_accumViews[i]) { vkDestroyImageView(m_device, m_accumViews[i], nullptr); m_accumViews[i] = VK_NULL_HANDLE; }
+        if (m_accumImages[i]) { vkDestroyImage(m_device, m_accumImages[i], nullptr); m_accumImages[i] = VK_NULL_HANDLE; }
+        if (m_accumMemory[i]) { vkFreeMemory(m_device, m_accumMemory[i], nullptr); m_accumMemory[i] = VK_NULL_HANDLE; }
+        m_accumInitialized[i] = false;
+    }
+    m_accumBuffer = VK_NULL_HANDLE;
+    m_accumView = VK_NULL_HANDLE;
 
     if (m_outputView) { vkDestroyImageView(m_device, m_outputView, nullptr); m_outputView = VK_NULL_HANDLE; }
     if (m_outputImage) { vkDestroyImage(m_device, m_outputImage, nullptr); m_outputImage = VK_NULL_HANDLE; }

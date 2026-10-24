@@ -50,8 +50,9 @@ bool PathTracer::createDescriptorResources() {
     constexpr VkDescriptorType BUFFER = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 
     add(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, RGEN);  // TLAS (RenderScene)
-    add(1, IMAGE, RGEN);                                           // accumulation (RGBA32F)
+    add(1, IMAGE, RGEN);                                           // accumulation, this frame's (RGBA32F)
     add(2, IMAGE, RGEN);                                           // output (RGBA8)
+    add(3, IMAGE, RGEN);                                           // accumulation, the previous frame's (read)
     // RenderScene scene data, read by the hit shaders (pt_closesthit / pt_anyhit):
     add(4, BUFFER, HIT);    // vertex arena (Vertex = 25 floats)
     add(5, BUFFER, HIT);    // index arena (mesh-local indices)
@@ -61,10 +62,11 @@ bool PathTracer::createDescriptorResources() {
     add(9, BUFFER, HIT);    // triangle material slots
     add(10, BUFFER, HIT);   // material table (3 vec4s per material)
     add(11, BUFFER, RGEN | MISS);   // RT lights: header {count, envTexIdx, envIntensity} + GPULight[]
-    // Bindless textures (closest-hit, any-hit, miss for the env map). Variable count.
+    // Bindless textures (closest-hit, any-hit, miss for the env map), the table's whole
+    // capacity. Not a variable count: that flag is only legal on a layout's highest binding
+    // (VUID 03004), and every set is allocated at the full capacity anyway.
     add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,
-        VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
     add(13, IMAGE, RGEN);   // previous-frame surface history
     add(14, IMAGE, RGEN);   // current-frame surface history
     add(15, IMAGE, RGEN);   // previous-frame shading history
@@ -106,7 +108,7 @@ bool PathTracer::createDescriptorResources() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25 * kSets},  // 1,2,6,7,13-16,19-35
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},  // 1-3,6,7,13-16,19-35
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
@@ -121,19 +123,10 @@ bool PathTracer::createDescriptorResources() {
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
         return false;
 
-    // Variable descriptor count for the bindless textures, in every set.
-    std::array<uint32_t, kSets> variableCounts;
-    variableCounts.fill(m_bindlessCapacity);
     std::array<VkDescriptorSetLayout, kSets> layouts;
     layouts.fill(m_descriptorSetLayout);
-    VkDescriptorSetVariableDescriptorCountAllocateInfo variableInfo{};
-    variableInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
-    variableInfo.descriptorSetCount = kSets;
-    variableInfo.pDescriptorCounts = variableCounts.data();
-
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    setInfo.pNext = &variableInfo;
     setInfo.descriptorPool = m_descriptorPool;
     setInfo.descriptorSetCount = kSets;
     setInfo.pSetLayouts = layouts.data();

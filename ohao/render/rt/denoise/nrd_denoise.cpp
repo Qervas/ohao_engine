@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include "core/log.hpp"
+#include "render/frame/frame_resources.hpp"   // MAX_FRAMES_IN_FLIGHT
 
 // NRDIntegration + NRI are linked into ohao_renderer only when
 // OHAO_NRD_INTEGRATION_AVAILABLE is defined (see ohao/render/CMakeLists.txt).
@@ -123,7 +124,10 @@ bool NrdDenoiser::initialize(VkInstance                      instance,
     std::snprintf(integrationDesc.name, sizeof(integrationDesc.name), "OHAO_REBLUR");
     integrationDesc.resourceWidth   = static_cast<uint16_t>(width);
     integrationDesc.resourceHeight  = static_cast<uint16_t>(height);
-    integrationDesc.queuedFrameNum  = 1;      // single-shot T3b — no multi-frame overlap
+    // One descriptor pool and set ring per frame in flight: NRD resets frame k's pool when
+    // frame k + queuedFrameNum begins, and the renderer keeps MAX_FRAMES_IN_FLIGHT frames
+    // pending (1 here reset pools a pending frame still read: VUIDs 00313, 03047).
+    integrationDesc.queuedFrameNum  = MAX_FRAMES_IN_FLIGHT;
     integrationDesc.enableWholeLifetimeDescriptorCaching = false;
     integrationDesc.autoWaitForIdle = true;
 

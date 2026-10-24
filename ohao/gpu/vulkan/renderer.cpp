@@ -371,15 +371,14 @@ void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
 }
 
 void VulkanRenderer::applyRTRenderSettings() {
-    // Atrous is a GPU-side, in-place beauty denoiser dispatched by the RT
-    // pipeline itself, so the PathTracer must see denoiseMode==Atrous to run
-    // it. The profile default (reset each frame) doesn't carry the user's
-    // --denoise override, so inject it here. Scoped to Atrous ONLY — None,
-    // OIDN, and NRD keep their profile-default denoiseMode untouched.
+    // Atrous, DLSS-RR and NRD are GPU-side denoisers the PathTracer dispatches
+    // itself, so it must see their mode to run them (NRD: the chain that writes
+    // the binding-30 image the NRD readback copies). The profile default (reset
+    // each frame) doesn't carry the user's --denoise override, so inject it here.
+    // None and OIDN (CPU, in readback) keep the profile default.
     if (m_denoiseModeOverridden &&
-        (m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR)) {
-        // DLSSRR (Phase 5) is dispatched GPU-side by the PathTracer, same as Atrous,
-        // so the tracer must see denoiseMode==DLSSRR to run its NGX init/feature path.
+        (m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR ||
+         m_denoiseMode == DenoiseMode::NRD)) {
         m_rtSettings.denoiseMode = m_denoiseMode;
     }
     // Re-inject the realtime per-frame sample count: prepareRTSceneForFrame

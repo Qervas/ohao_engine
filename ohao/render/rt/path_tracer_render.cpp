@@ -103,10 +103,15 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     VkAccelerationStructureKHR tlas = m_tlas;
     asWrite.pAccelerationStructures = &tlas;
 
-    // Binding 1: Accumulation buffer (storage image, RGBA32F)
-    VkDescriptorImageInfo accumInfo{};
-    accumInfo.imageView = m_accumView;
-    accumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    // Bindings 1 and 3: this frame's accumulation (written) and the previous frame's
+    // (read: temporal history). Ping-ponged, so no invocation reads a pixel that another
+    // invocation of this dispatch writes.
+    const uint32_t accumWrite = m_accumWriteIndex;
+    const uint32_t accumPrev = 1u - accumWrite;
+    m_accumBuffer = m_accumImages[accumWrite];
+    m_accumView = m_accumViews[accumWrite];
+    const VkDescriptorImageInfo accumInfo{VK_NULL_HANDLE, m_accumView, VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo accumHistoryInfo{VK_NULL_HANDLE, m_accumViews[accumPrev], VK_IMAGE_LAYOUT_GENERAL};
 
     // Binding 2: Output image (storage image, RGBA8)
     VkDescriptorImageInfo outputInfo{};
@@ -163,6 +168,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     addImage(1, &accumInfo);
     addImage(2, &outputInfo);
+    addImage(3, &accumHistoryInfo);
     addImage(6, &albedoAOVInfo);
     addImage(7, &normalAOVInfo);
 
@@ -404,22 +410,32 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
 
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
-    // --- Transition accumulation buffer to GENERAL ---
-    // On first accumulated frame, transition from UNDEFINED to clear it;
-    // on subsequent frames, keep GENERAL (already there from last trace).
+    // --- The accumulation pair to GENERAL ---
+    // This frame's image is fully rewritten: its old contents are discarded (UNDEFINED),
+    // after the reads of it as last frame's history. The history image keeps the
+    // previous frame's write, made visible here; never written yet, nothing reads it
+    // (history is read only once a frame has accumulated).
     {
-        VkImageMemoryBarrier accumBarrier{};
-        accumBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        accumBarrier.srcAccessMask = (m_historyFrameCount == 0) ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarrier.oldLayout = (m_historyFrameCount == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-        accumBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        accumBarrier.image = m_accumBuffer;
-        accumBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier accumBarriers[2]{};
+        for (auto& b : accumBarriers) {
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        accumBarriers[0].srcAccessMask = 0;
+        accumBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        accumBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        accumBarriers[0].image = m_accumImages[accumWrite];
+        const bool historyWritten = m_accumInitialized[accumPrev];
+        accumBarriers[1].srcAccessMask = historyWritten ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+        accumBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        accumBarriers[1].oldLayout = historyWritten ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        accumBarriers[1].image = m_accumImages[accumPrev];
         vkCmdPipelineBarrier(cmd,
-            (m_historyFrameCount == 0) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 1, &accumBarrier);
+            0, 0, nullptr, 0, nullptr, 2, accumBarriers);
     }
 
     // --- Transition output image to GENERAL for storage write ---
@@ -699,6 +715,25 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
 
+    // --- Internal spatial denoise: reads the finished accumulation + normals, writes the
+    //     beauty (the raygen leaves the beauty to it when the flag is set). ---
+    bool spatialRan = false;
+    if (m_renderSettings.enableInternalDenoise && m_renderSettings.enableAuxiliaryAOVs) {
+        VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        toCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &toCompute, 0, nullptr, 0, nullptr);
+        m_spatialDenoise.dispatch(cmd, frameSlot, m_accumView, m_normalAOVView, m_outputView, m_width, m_height);
+        // The beauty's write before any later compute pass (à-trous, DLSS-RR) touches it.
+        VkMemoryBarrier fromCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        fromCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        fromCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &fromCompute, 0, nullptr, 0, nullptr);
+        spatialRan = true;
+    }
+
     // --- À-trous beauty denoise (DenoiseMode::Atrous) ---
     // Runs edge-aware spatial filtering on the final beauty (binding 2) in
     // place, using the normal AOV (binding 7, N*0.5+0.5) and linear depth AOV
@@ -834,8 +869,11 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     // raygen writes before compute reads. We also need `restoreInitialState=true`
     // in the snapshot so after denoise, inputs come back to GENERAL for
     // downstream readback.
-    if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {
-        // Publish raygen stores before NRD's compute pipelines read them.
+    // Only in NRD mode: the chain (NRD, compose, cinematic post) writes binding 30, which
+    // only an NRD readback reads. Under any other mode it was whole frames of unread work.
+    if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {
+        if (m_nrdCompositor) m_nrdCompositor->setFrameSlot(frameSlot);
+        if (m_cinematicPost) m_cinematicPost->setFrameSlot(frameSlot);        // Publish raygen stores before NRD's compute pipelines read them.
         VkMemoryBarrier rayToCompute {};
         rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1150,16 +1188,20 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
                 dofBarriers[0].image            = m_preDofLdrImage;
                 dofBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+                // Binding 30 was last written by the previous frame's DoF (and maybe
+                // copied by a readback): the write needs making available, the copy
+                // only an execution dependency (the TRANSFER stage below).
                 dofBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                dofBarriers[1].srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_TRANSFER_READ_BIT;
+                dofBarriers[1].srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
                 dofBarriers[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
                 dofBarriers[1].oldLayout        = m_nrdTonemapFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
                 dofBarriers[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
                 dofBarriers[1].image            = m_nrdTonemappedImage;
                 dofBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+                // COMPUTE always: barrier [0] publishes the composite's write.
                 vkCmdPipelineBarrier(cmd,
-                    m_nrdTonemapFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, 0, nullptr, 0, nullptr, 2, dofBarriers);
                 m_nrdTonemapFirstFrame = false;
@@ -1198,8 +1240,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
         // COMPUTE to the wait is harmless for other modes (nothing wrote the
         // output via compute there).
         const VkPipelineStageFlags outSrcStage =
-            (atrousRan || dlssRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                                   : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+            (atrousRan || dlssRan || spatialRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                                 : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         toTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1248,6 +1290,8 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
     m_giReservoirInitialized[m_giReservoirWriteIndex] = true;
     m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;
+    m_accumInitialized[accumWrite] = true;   // m_accumBuffer stays the image just written
+    m_accumWriteIndex = accumPrev;
 }
 
 } // namespace ohao

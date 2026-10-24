@@ -7,7 +7,7 @@
 // Accumulates samples across frames for progressive refinement (reset on camera move).
 //
 // Two output images:
-//   m_accumBuffer  — RGBA32F HDR accumulation across frames
+//   m_accumBuffer  — RGBA32F HDR accumulation across frames (the latest of a ping-pong pair)
 //   m_outputImage  — RGBA8 tonemapped final output (ready for display)
 //
 // Usage:
@@ -27,6 +27,7 @@
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/sampler_types.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "render/rt/denoise/spatial_denoise.hpp"
 #include "core/concepts.hpp"
 #include "gpu/layout_meta.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -298,10 +299,20 @@ private:
     uint32_t m_historyFrameCount = 0;
     bool m_viewChangedThisFrame = false;
 
-    // Accumulation buffer — RGBA32F HDR
+    // Accumulation — RGBA32F HDR, two images ping-ponged per frame: the trace writes
+    // this frame's (binding 1) and reads the previous frame's (binding 3, read-only), so
+    // no invocation reads a pixel another one is writing (temporal reprojection reads a
+    // neighbour). m_accumBuffer / m_accumView name the image the latest render() wrote.
+    VkImage m_accumImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory m_accumMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView m_accumViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    bool m_accumInitialized[2] = {false, false};
+    uint32_t m_accumWriteIndex = 0;
     VkImage m_accumBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_accumMemory = VK_NULL_HANDLE;
     VkImageView m_accumView = VK_NULL_HANDLE;
+
+    // The internal spatial denoise (enableInternalDenoise), a compute pass after the trace.
+    SpatialDenoise m_spatialDenoise;
 
     // Output image — RGBA8 tonemapped
     VkImage m_outputImage = VK_NULL_HANDLE;

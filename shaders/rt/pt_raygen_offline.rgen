@@ -4,14 +4,14 @@
 
 #include "includes/pbr_unpack.glsl"
 
-// Offline / reference raygen shader.
-// Currently a verbatim copy of pt_raygen.rgen (kept as a separate entry point so
-// offline and realtime can diverge). If you change pt_raygen.rgen, update this too
-// until the MIS / denoise work forks the two files for real.
+// Offline / reference raygen shader: progressive accumulation for a still camera.
+// Forked from pt_raygen.rgen (the default shader set's raygen); it differs in the
+// accumulation, which reads only this pixel's history.
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
-layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D accumBuffer;   // this frame's
 layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumHistory;   // the previous frame's
 layout(set = 0, binding = 6, rgba32f) uniform image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform image2D normalAOV;
 
@@ -1186,135 +1186,23 @@ void main() {
         if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;
     }
 
-    // Temporal accumulation with reprojection
-    vec3 acc;
-    float count;
-    if (historyFrameCount == 0u) {
-        // First frame after reset — no history
-        acc = radiance;
-        count = 1.0;
-    } else {
-        vec4 prev = imageLoad(accumBuffer, pixel);
-
-        // Check if camera is static (prevViewProj == current viewProj approximately)
-        // by comparing the reprojected pixel position
-        bool useReprojection = false;
-        vec2 prevUV = vec2(pixel) / vec2(pc.params.xy);  // default: same pixel
-
-        if (firstHitDist > 0.0) {
-            // Reproject first hit to previous frame's screen space
-            vec4 clipPos = pc.prevViewProj * vec4(firstHitPos, 1.0);
-            if (clipPos.w > 0.0) {
-                vec3 ndc = clipPos.xyz / clipPos.w;
-                prevUV = ndc.xy * 0.5 + 0.5;
-                // Vulkan Y is flipped
-                prevUV.y = 1.0 - prevUV.y;
-                useReprojection = (prevUV.x >= 0.0 && prevUV.x < 1.0 &&
-                                   prevUV.y >= 0.0 && prevUV.y < 1.0);
-            }
-        }
-
-        // Phase 0 determinism contract: temporal reprojection reads accumBuffer at a
-        // reprojected NEIGHBOR pixel that sibling invocations concurrently write below
-        // (imageStore at the end of this shader) — a cross-invocation read-after-write
-        // race with no defined ordering, so output differs run-to-run. The offline
-        // camera is static, so reprojection is unnecessary here. Force the deterministic
-        // own-pixel progressive-accumulation branch.
-        useReprojection = false;
-
-        if (useReprojection) {
-            // Sample history at reprojected position
-            ivec2 prevPixel = ivec2(prevUV * vec2(pc.params.xy));
-            prevPixel = clamp(prevPixel, ivec2(0), ivec2(pc.params.xy) - 1);
-            vec4 history = imageLoad(accumBuffer, prevPixel);
-
-            // Progressive accumulation — proper running average, never overexposes
-            count = history.w + 1.0;
-            acc = (history.rgb * history.w + radiance) / count;
-        } else {
-            // Disoccluded or first frame — start fresh accumulation
-            count = prev.w + 1.0;
-            acc = (prev.rgb * prev.w + radiance) / count;
-        }
+    // Progressive accumulation: the running mean of every sample since the last reset.
+    // The offline camera is still (a view change resets), so the history is this pixel's.
+    vec3 acc = radiance;
+    float count = 1.0;
+    if (historyFrameCount > 0u) {
+        const vec4 prev = imageLoad(accumHistory, pixel);
+        count = prev.w + 1.0;
+        acc = (prev.rgb * prev.w + radiance) / count;
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    vec3 denoised = acc;
-    if (enableInternalDenoise && enableAOVs) {
-        // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
-        // Intended for the real-time profile, not the offline/reference path.
-        vec3 centerNormal = imageLoad(normalAOV, pixel).rgb;
-
-        // Estimate local variance from 3x3 neighborhood
-        vec3 mean = vec3(0.0);
-        vec3 meanSq = vec3(0.0);
-        int varSamples = 0;
-        for (int vy = -1; vy <= 1; vy++) {
-            for (int vx = -1; vx <= 1; vx++) {
-                ivec2 vp = pixel + ivec2(vx, vy);
-                if (vp.x >= 0 && vp.y >= 0 && vp.x < int(pc.params.x) && vp.y < int(pc.params.y)) {
-                    vec3 s = imageLoad(accumBuffer, vp).rgb;
-                    mean += s;
-                    meanSq += s * s;
-                    varSamples++;
-                }
-            }
-        }
-        mean /= float(varSamples);
-        vec3 variance = max(meanSq / float(varSamples) - mean * mean, vec3(0.0));
-        float noiseLevel = dot(variance, vec3(0.333));
-
-        // Skip denoising if noise is negligible
-        if (noiseLevel > 0.0001) {
-            // Two-pass A-Trous: step sizes 1 and 3
-            for (int pass = 0; pass < 2; pass++) {
-                int step = (pass == 0) ? 1 : 3;
-                vec3 sum = vec3(0.0);
-                float wSum = 0.0;
-
-                for (int dy = -2; dy <= 2; dy++) {
-                    for (int dx = -2; dx <= 2; dx++) {
-                        ivec2 sp = pixel + ivec2(dx, dy) * step;
-                        if (sp.x < 0 || sp.y < 0 || sp.x >= int(pc.params.x) || sp.y >= int(pc.params.y)) continue;
-
-                        vec3 sampleColor = (pass == 0) ? imageLoad(accumBuffer, sp).rgb : denoised;
-                        vec3 sampleNormal = imageLoad(normalAOV, sp).rgb;
-
-                        // Spatial weight
-                        float dist2 = float(dx*dx + dy*dy);
-                        float ws = exp(-dist2 / 3.0);
-
-                        // Normal weight — preserve edges sharply
-                        float normalSim = max(dot(centerNormal, sampleNormal), 0.0);
-                        float wn = pow(normalSim, 64.0);
-
-                        // Color weight — adaptive to noise level
-                        vec3 colorDiff = denoised - sampleColor;
-                        float sigmaC = max(noiseLevel * 2.0, 0.001);
-                        float wc = exp(-dot(colorDiff, colorDiff) / (sigmaC + 0.0001));
-
-                        float w = ws * wn * wc;
-                        sum += sampleColor * w;
-                        wSum += w;
-                    }
-                }
-                if (wSum > 0.001) denoised = sum / wSum;
-            }
-        }
-    }
-
-    if (enableInternalDenoise) {
-        // Luminance-preserving denoise: rescale denoised to match accumulated luminance
-        // This prevents the denoiser from changing brightness between moving/static states
-        float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
-        float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
-        if (denLum > 0.001 && accLum > 0.001) {
-            denoised *= accLum / denLum;
-        }
-    }
+    // The internal spatial denoise (off in the offline profile) filters the finished
+    // accumulation in a compute pass after this dispatch and writes the beauty.
+    const bool spatialDenoise = enableInternalDenoise && enableAOVs;
 
     // Tonemap + gamma (same exposure as deferred pipeline)
-    vec3 ldr = ACES(denoised * 0.5);
+    vec3 ldr = ACES(acc * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     // DEMODULATE the diffuse for NRD: feed near-white irradiance (radiance / albedo),
     // NOT the albedo-colored radiance. NRD REBLUR is tuned for demodulated input; the
@@ -1329,5 +1217,5 @@ void main() {
     // Sub-plan 4.F T3: running-average across N samples when NRD mode is active.
     AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, diffPacked);
     AOV_ACCUMULATE_WRITE(specularRadiance, pixel, specPacked);
-    imageStore(outputImage, pixel, vec4(ldr, 1.0));
+    if (!spatialDenoise) imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

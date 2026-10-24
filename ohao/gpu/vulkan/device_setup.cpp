@@ -35,10 +35,17 @@ bool VulkanRenderer::createInstance() {
     }
 
     // Validation layers — enable with OHAO_VALIDATION=1 env var. Unset, empty or "0" is
-    // off (a test can turn it off for one renderer by setting "0").
+    // off (a test can turn it off for one renderer by setting "0"). "sync" adds the
+    // layer's synchronization validation (hazards between commands: missing barriers).
     const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
     const char* validationVar = std::getenv("OHAO_VALIDATION");
     bool wantValidation = validationVar && *validationVar && std::strcmp(validationVar, "0") != 0;
+    const bool wantSyncValidation = wantValidation && std::strcmp(validationVar, "sync") == 0;
+    const VkValidationFeatureEnableEXT syncFeature = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+    VkValidationFeaturesEXT validationFeatures{};
+    validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+    validationFeatures.enabledValidationFeatureCount = 1;
+    validationFeatures.pEnabledValidationFeatures = &syncFeature;
     if (wantValidation) {
         uint32_t ln = 0;
         vkEnumerateInstanceLayerProperties(&ln, nullptr);
@@ -57,9 +64,14 @@ bool VulkanRenderer::createInstance() {
         createInfo.enabledLayerCount = 1;
         createInfo.ppEnabledLayerNames = validationLayers;
         m_enabledInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        if (wantSyncValidation) {
+            m_enabledInstanceExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+            validationFeatures.pNext = createInfo.pNext;
+            createInfo.pNext = &validationFeatures;
+        }
         createInfo.enabledExtensionCount = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
         createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
-        OHAO_LOG(Info, validation, "Validation layers ENABLED");
+        OHAO_LOG(Info, validation, "Validation layers ENABLED{}", wantSyncValidation ? " (+ synchronization)" : "");
     }
 
 #ifdef OHAO_DLSS_ENABLED
@@ -302,6 +314,17 @@ bool VulkanRenderer::createLogicalDevice() {
             OHAO_LOG(Warn, gpu, "caps: optional device ext NOT supported by selected GPU: {}",
                      VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
+
+        // Push descriptors: NRD's NRI wrapper records vkCmdPushDescriptorSet (core only in
+        // Vulkan 1.4; this device is 1.3) and resolves it as the KHR entry point. Without
+        // the extension enabled the validation layer hides both names and NRI aborts the
+        // process at path tracer creation; the bare driver happened to hand them out.
+        const auto enabled = [&](const char* n) {
+            for (const char* e : m_enabledDeviceExtensions) if (std::strcmp(e, n) == 0) return true;
+            return false;
+        };
+        if (extSupported(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) && !enabled(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME))
+            m_enabledDeviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     }
 
     if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -326,6 +349,7 @@ bool VulkanRenderer::createLogicalDevice() {
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.pNext = &features12;
     features13.shaderDemoteToHelperInvocation = VK_TRUE;
+    features13.synchronization2 = VK_TRUE;   // NRD's NRI records vkCmdPipelineBarrier2 (core in 1.3)
 
     // Acceleration structure features
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};

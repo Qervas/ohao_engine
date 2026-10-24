@@ -168,6 +168,12 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         m_atrousDenoiser.reset();
     }
 
+    // The internal spatial denoise (realtime profile): a compute pass after the trace.
+    if (!m_spatialDenoise.initialize(m_device)) {
+        OHAO_LOG(Error, render, "PathTracer: spatial denoise init failed");
+        return false;
+    }
+
 #ifdef OHAO_DLSS_ENABLED
     // DLSS-RR NGX init is deferred to the first DLSSRR-mode frame (render()), since
     // the active denoiseMode is not yet known here (settings apply per-frame). Just
@@ -377,6 +383,7 @@ void PathTracer::destroy() {
         m_atrousDenoiser->shutdown();
         m_atrousDenoiser.reset();
     }
+    m_spatialDenoise.shutdown();
 
 #ifdef OHAO_DLSS_ENABLED
     if (m_dlssRR) {

@@ -42,6 +42,10 @@ public:
     /// Destroy all Vulkan objects. Safe to call multiple times.
     void shutdown();
 
+    /// The frame-in-flight slot whose fence was just waited: dispatch() writes that
+    /// slot's descriptor set (an earlier frame may still read its own).
+    void setFrameSlot(uint32_t slot);
+
     /// Record a compose dispatch onto `cmd`. Preconditions:
     ///   - initialize() succeeded
     ///   - All 5 image views in `inputs` are valid

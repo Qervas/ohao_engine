@@ -13,7 +13,10 @@
 // (RenderHost restarts temporal state between captures; live capture in sub-project 4
 // relies on it). Configurations: Cornell with post effects off, each effect alone and all
 // three (TAA, SSAO, bloom), and the helmet room off and on (as its golden renders it: 30
-// frames, exposure 1).
+// frames, exposure 1). Test 12's RT part (sub-project 2b, step 5): Cornell path traced,
+// offline and realtime (16 samples, no denoiser), under the same three comparisons, held to
+// the path tracer's BVH floor (at most 16 bytes, each off by 1) instead of bit identity; the
+// validation layer must report nothing for them either.
 //
 // The SSAO noise is a function of the render seed alone (pinned for seed 0), and
 // setRenderSeed reaches the SSAO pass; reseeding renders validation clean. Test 12's seed
@@ -31,6 +34,7 @@
 #include "render/deferred/post_processing_pipeline.hpp"
 #include "render/deferred/ssao_pass.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -39,6 +43,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -56,19 +61,53 @@ namespace {
 struct Config {
     const char* name;
     const char* scene;
+    const char* mode;
     const char* extra;   // render.capture params after mode/size
 };
 
 constexpr Config kConfigs[] = {
-    {"cornell_plain", "assets/scenes/cornell_box.scene.json", R"("post":[])"},
-    {"cornell_taa", "assets/scenes/cornell_box.scene.json", R"("post":["taa"])"},
-    {"cornell_ssao", "assets/scenes/cornell_box.scene.json", R"("post":["ssao"])"},
-    {"cornell_bloom", "assets/scenes/cornell_box.scene.json", R"("post":["bloom"])"},
-    {"cornell_post", "assets/scenes/cornell_box.scene.json", R"("post":["taa","ssao","bloom"])"},
-    {"helmet_plain", "assets/scenes/damaged_helmet.scene.json", R"("post":[])"},
-    {"helmet_post", "assets/scenes/damaged_helmet.scene.json",
+    {"cornell_plain", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[])"},
+    {"cornell_taa", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa"])"},
+    {"cornell_ssao", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["ssao"])"},
+    {"cornell_bloom", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["bloom"])"},
+    {"cornell_post", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa","ssao","bloom"])"},
+    {"helmet_plain", "assets/scenes/damaged_helmet.scene.json", "deferred", R"("post":[])"},
+    {"helmet_post", "assets/scenes/damaged_helmet.scene.json", "deferred",
      R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},
+    // Test 12, RT part (sub-project 2b, step 5): the path tracer, offline and realtime, as the
+    // RT goldens render it. Compared within the BVH floor (see rtWithinFloor), not exactly.
+    {"cornell_rt_offline", "assets/scenes/cornell_box.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
+    {"cornell_rt_realtime", "assets/scenes/cornell_box.scene.json", "rt_realtime", R"("spp":16,"denoise":"none")"},
 };
+
+bool isRT(const Config& c) { return std::strcmp(c.mode, "deferred") != 0; }
+
+// The path tracer's floor: the driver builds a mesh's BVH differently run to run, and a ray
+// that hits exactly on an edge two triangles share takes whichever triangle the traversal
+// reaches first. Now and then a few bytes differ by 1 (measured in 2b step 5: 5 helmet renders
+// in 83; Cornell none run to run, but 10 pixels between the example's scene and the same scene
+// loaded from its file). A race or a scene difference moves thousands.
+struct ByteDiff {
+    std::size_t bytes{SIZE_MAX};
+    int maxAbs{0};
+};
+ByteDiff byteDiff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+    ByteDiff d;
+    if (a.empty() || a.size() != b.size()) return d;
+    d.bytes = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const int delta = std::abs(int(a[i]) - int(b[i]));
+        d.bytes += delta != 0;
+        d.maxAbs = (std::max)(d.maxAbs, delta);   // parenthesized: windows.h defines max
+    }
+    return d;
+}
+bool rtWithinFloor(const ByteDiff& d) { return d.bytes <= 16 && d.maxAbs <= 1; }
+
+std::vector<uint8_t> readBytes(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
 
 // FNV-1a 64 of SSAOPass::noise(0)'s bytes. The generator is integer hashing and exact float
 // arithmetic, so this holds on every compiler and machine; a change to it shows here.
@@ -96,7 +135,8 @@ struct Image {
 };
 
 std::string captureParams(const fs::path& png, const Config& c) {
-    return "{\"path\":\"" + png.generic_string() + "\",\"mode\":\"deferred\",\"width\":960,\"height\":540," + c.extra + "}";
+    return "{\"path\":\"" + png.generic_string() + "\",\"mode\":\"" + c.mode + "\",\"width\":960,\"height\":540," +
+           c.extra + "}";
 }
 
 // The frame the last capture read back.
@@ -145,6 +185,10 @@ int runChild(const char* outFile, const reflect::TypeRegistry& types, ecs::Asset
         const Image img = renderFresh(types, assets, dir / (std::string("child_") + c.name + ".png"), c);
         out << c.name << ' ' << (img.pixels.empty() ? std::string("none") : hex(fnv1a(img.pixels))) << ' '
             << img.validation << '\n';
+        if (isRT(c)) {   // the parent compares these within the BVH floor, not by hash
+            std::ofstream raw(dir / (std::string("child_") + c.name + ".rgba"), std::ios::binary | std::ios::trunc);
+            raw.write(reinterpret_cast<const char*>(img.pixels.data()), static_cast<std::streamsize>(img.pixels.size()));
+        }
     }
     return out ? 0 : 1;
 }
@@ -202,7 +246,7 @@ int main(int argc, char** argv) {
 
     if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return runChild(argv[2], types, assets, dir);
 
-    std::printf("deferred_determinism_gpu_test (960x540, deferred)\n");
+    std::printf("deferred_determinism_gpu_test (960x540, deferred and path traced)\n");
     std::vector<Check> checks;
 
     // t1: two fresh renderers in this process, then one in a child process.
@@ -220,11 +264,23 @@ int main(int argc, char** argv) {
         const std::string ha = a.pixels.empty() ? "none" : hex(fnv1a(a.pixels));
         const auto it = child.find(c.name);
         const std::string hc = it == child.end() ? "missing" : it->second.first;
-        const std::string p = std::string("t1 ") + c.name + ": ";
+        const std::string p = std::string(isRT(c) ? "t12 " : "t1 ") + c.name + ": ";
         checks.push_back({p + "renders", !a.pixels.empty() && !b.pixels.empty()});
-        checks.push_back({p + "two fresh renderers in one process are bit-identical", ab == 0});
-        checks.push_back({p + "a fresh renderer in another process is bit-identical", hc == ha});
-        checks.push_back({p + "a second capture by the same renderer is bit-identical", bb == 0});
+        if (isRT(c)) {
+            const ByteDiff dab = byteDiff(a.pixels, b.pixels), dbb = byteDiff(b.pixels, b.again);
+            const ByteDiff dac = byteDiff(a.pixels, readBytes(dir / (std::string("child_") + c.name + ".rgba")));
+            checks.push_back({p + "two fresh renderers in one process match within the BVH floor", rtWithinFloor(dab)});
+            checks.push_back({p + "a fresh renderer in another process matches within the BVH floor", rtWithinFloor(dac)});
+            checks.push_back({p + "a second capture by the same renderer matches within the BVH floor", rtWithinFloor(dbb)});
+            std::printf("  [%s] differing bytes (max abs): fresh vs fresh %zu (%d), vs child %zu (%d), second capture %zu (%d)\n",
+                        c.name, dab.bytes == SIZE_MAX ? std::size_t(0) : dab.bytes, dab.maxAbs,
+                        dac.bytes == SIZE_MAX ? std::size_t(0) : dac.bytes, dac.maxAbs,
+                        dbb.bytes == SIZE_MAX ? std::size_t(0) : dbb.bytes, dbb.maxAbs);
+        } else {
+            checks.push_back({p + "two fresh renderers in one process are bit-identical", ab == 0});
+            checks.push_back({p + "a fresh renderer in another process is bit-identical", hc == ha});
+            checks.push_back({p + "a second capture by the same renderer is bit-identical", bb == 0});
+        }
         checks.push_back({p + "validation is on and reported nothing",
                           a.validation == 0 && b.validation == 0 && it != child.end() && it->second.second == "0"});
         std::printf("  [%s] differing bytes: fresh vs fresh %zu, first vs second capture %zu; hashes %s (here) %s (child)\n",

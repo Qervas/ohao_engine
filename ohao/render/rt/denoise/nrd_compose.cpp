@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/log.hpp"
+#include "render/frame/frame_resources.hpp"   // MAX_FRAMES_IN_FLIGHT
 
 namespace ohao {
 
@@ -48,7 +49,10 @@ struct NrdCompositor::Impl {
     VkPipelineLayout      pipelineLayout = VK_NULL_HANDLE;
     VkPipeline            pipeline       = VK_NULL_HANDLE;
     VkDescriptorPool      descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet       descriptorSet  = VK_NULL_HANDLE;
+    // One set per frame in flight: dispatch() writes its slot's set at record time,
+    // while an earlier frame may still read its own (VUID 03047).
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> descriptorSets{};
+    uint32_t              slot           = 0;
 };
 
 NrdCompositor::NrdCompositor()  : m_impl(std::make_unique<Impl>()) {}
@@ -126,27 +130,29 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
-    // 5. Descriptor pool (one set, 5 storage images).
+    // 5. Descriptor pool (one set of 5 storage images per frame in flight).
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSize.descriptorCount = 5;
+    poolSize.descriptorCount = 5 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes    = &poolSize;
-    poolInfo.maxSets       = 1;
+    poolInfo.maxSets       = MAX_FRAMES_IN_FLIGHT;
     if (VkResult r = vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_impl->descriptorPool); r != VK_SUCCESS) {
         OHAO_LOG(Error, render, "NRD compose: vkCreateDescriptorPool failed: {}", static_cast<int>(r));
         return false;
     }
 
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts{};
+    layouts.fill(m_impl->setLayout);
     VkDescriptorSetAllocateInfo dsai{};
     dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     dsai.descriptorPool     = m_impl->descriptorPool;
-    dsai.descriptorSetCount = 1;
-    dsai.pSetLayouts        = &m_impl->setLayout;
-    if (VkResult r = vkAllocateDescriptorSets(device, &dsai, &m_impl->descriptorSet); r != VK_SUCCESS) {
+    dsai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    dsai.pSetLayouts        = layouts.data();
+    if (VkResult r = vkAllocateDescriptorSets(device, &dsai, m_impl->descriptorSets.data()); r != VK_SUCCESS) {
         OHAO_LOG(Error, render, "NRD compose: vkAllocateDescriptorSets failed: {}", static_cast<int>(r));
         return false;
     }
@@ -162,8 +168,12 @@ void NrdCompositor::shutdown() {
     if (m_impl->pipeline)       { vkDestroyPipeline(d, m_impl->pipeline, nullptr);              m_impl->pipeline       = VK_NULL_HANDLE; }
     if (m_impl->pipelineLayout) { vkDestroyPipelineLayout(d, m_impl->pipelineLayout, nullptr);  m_impl->pipelineLayout = VK_NULL_HANDLE; }
     if (m_impl->setLayout)      { vkDestroyDescriptorSetLayout(d, m_impl->setLayout, nullptr);  m_impl->setLayout      = VK_NULL_HANDLE; }
-    m_impl->descriptorSet = VK_NULL_HANDLE;
-    m_impl->device        = VK_NULL_HANDLE;
+    m_impl->descriptorSets = {};
+    m_impl->device         = VK_NULL_HANDLE;
+}
+
+void NrdCompositor::setFrameSlot(uint32_t slot) {
+    if (slot < MAX_FRAMES_IN_FLIGHT) m_impl->slot = slot;
 }
 
 void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs) {
@@ -181,7 +191,7 @@ void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs
     std::array<VkWriteDescriptorSet, 5> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet          = m_impl->descriptorSet;
+        writes[i].dstSet          = m_impl->descriptorSets[m_impl->slot];
         writes[i].dstBinding      = i;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -192,7 +202,7 @@ void NrdCompositor::dispatch(VkCommandBuffer cmd, const NrdComposeInputs& inputs
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_impl->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_impl->pipelineLayout, 0, 1,
-                             &m_impl->descriptorSet, 0, nullptr);
+                             &m_impl->descriptorSets[m_impl->slot], 0, nullptr);
 
     const uint32_t gx = (m_impl->width  + 7u) / 8u;
     const uint32_t gy = (m_impl->height + 7u) / 8u;
@@ -211,6 +221,7 @@ NrdCompositor::~NrdCompositor() = default;
 
 bool NrdCompositor::initialize(VkDevice, VkPhysicalDevice, uint32_t, uint32_t) { return false; }
 void NrdCompositor::shutdown() {}
+void NrdCompositor::setFrameSlot(uint32_t) {}
 void NrdCompositor::dispatch(VkCommandBuffer, const NrdComposeInputs&) {}
 
 }  // namespace ohao
