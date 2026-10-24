@@ -1,6 +1,6 @@
 """Runs every command the agent-facing docs show, and checks what they say it prints.
 
-The docs (AGENTS.md, docs/ARCHITECTURE.md, docs/agents/ohao-cli.md and the skills under
+The docs (AGENTS.md, docs/ARCHITECTURE.md, docs/agents/ohao-cli.md, docs/agents/ohao-serve.md and the skills under
 .claude/skills/ or docs/agents/skills/) write runnable commands in ```console blocks:
 
     $ build/Release/ohao validate assets/scenes/cornell_box.scene.json
@@ -31,7 +31,7 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TMP = os.path.join(ROOT, "build", "doc_tmp")
-DEFAULT_FILES = ["AGENTS.md", "docs/ARCHITECTURE.md", "docs/agents/ohao-cli.md"]
+DEFAULT_FILES = ["AGENTS.md", "docs/ARCHITECTURE.md", "docs/agents/ohao-cli.md", "docs/agents/ohao-serve.md"]
 MARKER = re.compile(r"\s+#\s*(exit\s+\d+|slow|gpu)\s*$")
 
 

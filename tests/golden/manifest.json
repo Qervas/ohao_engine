@@ -118,6 +118,14 @@
       "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6) and, its readback lagging by MAX_FRAMES_IN_FLIGHT (3), writes frame 27; a capture keeps the last frame it renders, hence --frames 27. The scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
     },
     {
+      "name": "cli_helmet_game_deferred",
+      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/helmet_game_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The scene ohao_game plays (helmet room, fly camera, spinning cube), at frame 0, with ohao_game's host settings: TAA, SSAO and bloom on, exposure 1. 30 deferred frames from a reset, the last kept. Exact: deferred rendering is deterministic. Added in sub-project 4 step 11, following the 'add a golden scene' recipe."
+    },
+    {
       "name": "cli_cornell_box_rt_realtime",
       "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode rt_realtime --spp 16 --denoise none",
       "golden": "tests/golden/cornell_box_rt_realtime.png",

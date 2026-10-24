@@ -106,6 +106,8 @@ function(ohao_register_harness_tests)
     endif()
     # The live host (sub-project 4, tests 16 and 17): ohao serve --window driven end to end.
     ohao_add_python_test(check_live LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/check_live.py)
+    # The end-to-end MCP acceptance session (sub-project 4, test 19).
+    ohao_add_python_test(e2e_mcp LABEL gpu GPU TIMEOUT 600 SCRIPT tests/serve/e2e_mcp.py)
 
     # Long gates
     # Diff images for failing scenes and the per-scene JSON go to build/golden_diff/.
