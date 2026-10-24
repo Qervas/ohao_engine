@@ -34,7 +34,7 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
     return Pack{
         d.baseColor.r, d.baseColor.g, d.baseColor.b, bits(d.albedoTex),
         d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),
-        bits(d.roughMetalTex), d.emissiveStrength, bits(d.legacyRtTintTex), 0.0f,
+        bits(d.roughMetalTex), d.emissiveStrength, 0.0f, 0.0f,
     };
 }
 

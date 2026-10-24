@@ -1958,18 +1958,16 @@ static void runRenderSceneTests() {
         d.metallic = 1.0f;
         d.albedoTex = 7; d.normalTex = 8; d.roughMetalTex = 9; d.emissiveTex = 10;
         d.emissiveStrength = 2.0f;
-        d.legacyRtTintTex = 11;
         const auto bits = [](float f) { return std::bit_cast<uint32_t>(f); };
         const MaterialTable::Pack p = MaterialTable::pack(d);
         EXPECT(p[0] == 0.25f && p[1] == 0.5f && p[2] == 0.75f && bits(p[3]) == 7u, "row 0: base color, albedo texture");
         EXPECT(p[4] == 0.3f && p[5] == 1.0f && bits(p[6]) == 8u && bits(p[7]) == 10u,
                "row 1: roughness, metallic, normal and emissive textures");
-        EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && bits(p[10]) == 11u,
-               "row 2: rough/metal texture, emissive strength, legacy RT tint");
+        EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && p[10] == 0.0f && p[11] == 0.0f,
+               "row 2: rough/metal texture, emissive strength, then unused");
         // An edit is a new registration: the table never rewrites a live material.
         d.baseColor = {1, 0, 0};
         EXPECT(MaterialTable::pack(d)[0] == 1.0f, "the edited color is what gets packed");
-        EXPECT(bits(MaterialTable::pack(MaterialDesc{})[10]) == kNoTexture, "no tint by default");
 
         ohao::VulkanRenderer r(64, 64);
         if (!r.initialize()) { std::cout << "(no Vulkan device -- partial) "; TEST_PASS(); return; }
@@ -1980,24 +1978,6 @@ static void runRenderSceneTests() {
         const MaterialHandle hb = rs.registerMaterial(b);
         EXPECT(ha.valid() && hb.valid() && ha.index != hb.index && ha.index != 0u,
                "re-registering an edited material gets its own table entry");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("legacy RT tint textures are 1x1 UNORM and shared per encoded color");
-    {
-        ohao::VulkanRenderer r(64, 64);
-        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
-        ohao::BindlessTextureManager* tm = r.getTextureManager();
-        if (!tm) { std::cout << "(no texture manager -- skipped) "; TEST_PASS(); return; }
-        EXPECT_EQ(legacyRtTintTexture(nullptr, glm::vec3(0.5f)), kNoTexture, "no manager, no texture");
-        const uint32_t a = legacyRtTintTexture(tm, glm::vec3(0.73f));
-        const uint32_t b = legacyRtTintTexture(tm, glm::vec3(0.73f));
-        const uint32_t c = legacyRtTintTexture(tm, glm::vec3(0.65f, 0.05f, 0.05f));
-        EXPECT(a != kNoTexture && a == b, "one texture per color");
-        EXPECT(c != kNoTexture && c != a, "another color, another texture");
-        const auto* info = tm->getTextureInfo(ohao::BindlessTextureHandle{a});
-        EXPECT(info && info->width == 1 && info->height == 1 && info->format == VK_FORMAT_R8G8B8A8_UNORM,
-               "the old texture array's layer format: 1x1 R8G8B8A8_UNORM");
         TEST_PASS();
     }
 

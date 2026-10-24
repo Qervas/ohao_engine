@@ -58,12 +58,6 @@ struct MaterialDesc {
     uint32_t roughMetalTex{kNoTexture};
     uint32_t emissiveTex{kNoTexture};
     float emissiveStrength{0.0f};
-    // LEGACY, read only by the path tracer's closest-hit: a 1x1 UNORM texture of the
-    // sRGB-encoded base color, multiplied in as pow(texel, 2.2) when the material has
-    // no albedo texture. Reproduces the old RT texture array, which gave every
-    // untextured material such a texture (so the RT goldens hold). Set by
-    // uploadModel through legacyRtTintTexture; the raster passes ignore it.
-    uint32_t legacyRtTintTex{kNoTexture};
 };
 
 struct InstanceDesc {

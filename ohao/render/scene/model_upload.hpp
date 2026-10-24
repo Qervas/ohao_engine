@@ -43,12 +43,6 @@ MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_v
 // with an emissive texture index decides; nullopt unless its bright-pixel power > 0.1.
 [[nodiscard]] std::optional<EmissiveProxy> emissiveProxy(const Model& model);
 
-// LEGACY (see MaterialDesc::legacyRtTintTex): the bindless index of a 1x1
-// R8G8B8A8_UNORM texture holding `baseColor` encoded to sRGB, exactly as the old RT
-// texture array built it. One texture per distinct encoded color, shared by name.
-// kNoTexture without a texture manager or when the upload fails.
-[[nodiscard]] uint32_t legacyRtTintTexture(BindlessTextureManager* textures, const glm::vec3& baseColor);
-
 // LEGACY RT GI material word (InstanceGpu::giAlbedoPacked), ported from
 // VulkanRenderer::buildBLASTLAS. `overrideMaterial` is the entity's override material, if any.
 [[nodiscard]] glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial);

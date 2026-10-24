@@ -90,27 +90,6 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
 
 } // namespace
 
-uint32_t legacyRtTintTexture(BindlessTextureManager* textures, const glm::vec3& baseColor) {
-    if (!textures) return kNoTexture;
-    // Ported from VulkanRenderer::uploadRTTextureArray's solid-color layers.
-    const auto linearToSRGB = [](float v) -> uint8_t {
-        const float s = (v <= 0.0031308f) ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
-        return static_cast<uint8_t>(std::clamp(s, 0.0f, 1.0f) * 255.0f + 0.5f);
-    };
-    const std::array<uint8_t, 4> texel{linearToSRGB(baseColor.r), linearToSRGB(baseColor.g),
-                                       linearToSRGB(baseColor.b), 255};
-    char name[48];
-    std::snprintf(name, sizeof(name), "ohao_legacy_rt_tint_%02x%02x%02x", texel[0], texel[1], texel[2]);
-    if (const BindlessTextureHandle existing = textures->findTexture(name); existing.valid())
-        return existing.index;
-    const BindlessTextureHandle h = textures->loadTextureFromMemory(
-        std::span<const uint8_t>(texel), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Albedo,
-        /*generateMips=*/false);
-    if (!h.valid()) return kNoTexture;
-    textures->registerName(h, name);
-    textures->updateDescriptorSet();
-    return h.index;
-}
 
 std::optional<EmissiveProxy> emissiveProxy(const Model& model) {
     for (std::size_t mi = 0; mi < model.materialEmissiveTexIndex.size(); ++mi) {
@@ -233,11 +212,6 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
     } else {
         mats.push_back(overrideMaterial ? *overrideMaterial : MaterialDesc{});
     }
-    // The old RT texture array's solid-color layer for every material without an
-    // albedo texture (LEGACY, MaterialDesc::legacyRtTintTex).
-    for (auto& m : mats)
-        if (m.albedoTex == kNoTexture && m.legacyRtTintTex == kNoTexture)
-            m.legacyRtTintTex = legacyRtTintTexture(textures, m.baseColor);
     return mats;
 }
 

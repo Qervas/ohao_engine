@@ -101,10 +101,7 @@ public:
         return out;
     }
     render::MaterialHandle material(const render::MaterialDesc& desc) override {
-        render::MaterialDesc d = desc;
-        if (d.albedoTex == render::kNoTexture && d.legacyRtTintTex == render::kNoTexture)
-            d.legacyRtTintTex = render::legacyRtTintTexture(m_textures, d.baseColor);
-        return m_scene.registerMaterial(d);
+        return m_scene.registerMaterial(desc);
     }
 
 private:

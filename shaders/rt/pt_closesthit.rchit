@@ -31,7 +31,7 @@ layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSl
 // Material table: 3 vec4s per material (layout::MaterialGpuPack)
 //   [matID*3+0] = (baseColor.rgb, albedoTexIdx as float bits)
 //   [matID*3+1] = (roughness, metallic, normalTexIdx bits, emissiveTexIdx bits)
-//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, legacyRtTintTexIdx bits, unused)
+//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, unused, unused)
 layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
 layout(set = 0, binding = 36, std430) readonly buffer Instances { InstanceGpu instances[]; };
 layout(set = 0, binding = 37, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
@@ -107,27 +107,20 @@ void main() {
     uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
     vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
     vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
-    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, legacyRtTintTexIdx, unused)
+    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, unused, unused)
 
     // Decode texture indices (stored as uint bits in float)
     uint diffuseTexIdx    = boundTexture(floatBitsToUint(matColor.a));
     uint normalTexIdx     = boundTexture(floatBitsToUint(matParams.z));
     uint emissiveTexIdx   = boundTexture(floatBitsToUint(matParams.w));
     uint roughMetalTexIdx = boundTexture(floatBitsToUint(matParams2.x));
-    uint legacyTintTexIdx = boundTexture(floatBitsToUint(matParams2.z));
 
-    // === Albedo: sample diffuse texture or use base color ===
+    // === Albedo: the base color, times the albedo texture when there is one ===
     // Albedo textures are R8G8B8A8_SRGB in the shared bindless table: the sampler
-    // decodes to linear.
+    // decodes to linear. An untextured material is its base color, once.
     vec3 albedo = matColor.rgb;
     if (diffuseTexIdx != 0xFFFFFFFFu) {
         albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;
-    } else if (legacyTintTexIdx != 0xFFFFFFFFu) {
-        // LEGACY: the old RT texture array gave every untextured material a 1x1
-        // UNORM texture of its sRGB-encoded base color and decoded it with pow 2.2,
-        // so the base color was applied twice. Kept so the RT goldens hold; see
-        // render::legacyRtTintTexture.
-        albedo *= pow(textureLod(textures[nonuniformEXT(legacyTintTexIdx)], texUV, 0.0).rgb, vec3(2.2));
     }
 
     // === Normal mapping via Frisvad basis (constructs TBN from normal alone) ===
