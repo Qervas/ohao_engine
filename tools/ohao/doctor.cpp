@@ -233,17 +233,19 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
     }
     const auto sources = shaderSources(o.shaderDir);
     std::vector<std::string> missing, stale, unresolvedAll;
+    std::size_t spirvCount = 0;
     for (const fs::path& src : sources) {
-        const std::string name = spirvName(o.shaderDir, src);
-        const fs::path spv = o.spirvDir / name;
-        if (!fs::is_regular_file(spv, ec)) {
-            missing.push_back(name);
-            continue;
-        }
         std::vector<std::string> unresolved;
         const auto newest = newestInput(o.shaderDir, src, &unresolved);
         for (auto& u : unresolved) unresolvedAll.push_back(fs::relative(src, o.shaderDir).generic_string() + ": " + u);
-        if (fs::last_write_time(spv, ec) < newest) stale.push_back(name);
+        for (const std::string& name : spirvNames(o.shaderDir, src)) {
+            ++spirvCount;
+            const fs::path spv = o.spirvDir / name;
+            if (!fs::is_regular_file(spv, ec))
+                missing.push_back(name);
+            else if (fs::last_write_time(spv, ec) < newest)
+                stale.push_back(name);
+        }
     }
     const std::string where = " in " + o.spirvDir.generic_string();
     const std::string rebuild = "build the shaders target: cmake --build build --config Release --target shaders";
@@ -251,11 +253,11 @@ void shaderChecks(const Options& o, std::vector<Check>& out) {
         out.push_back(pass("shaders.complete", "error", std::to_string(sources.size()) + " sources, every SPIR-V" + where));
     else
         out.push_back(fail("shaders.complete", "error",
-                           std::to_string(missing.size()) + " of " + std::to_string(sources.size()) +
+                           std::to_string(missing.size()) + " of " + std::to_string(spirvCount) +
                                " SPIR-V missing" + where + ": " + listCapped(missing),
                            rebuild));
     if (stale.empty()) {
-        std::string d = "no SPIR-V older than its source or includes";
+        std::string d = "no SPIR-V older than its source, includes or imports";
         if (!unresolvedAll.empty()) d += "; unresolved includes: " + listCapped(unresolvedAll);
         out.push_back(pass("shaders.fresh", "error", d));
     } else {
@@ -317,7 +319,73 @@ void assetCheck(const Options& o, std::vector<Check>& out) {
                            "restore the files (git checkout, or git lfs pull for large assets)"));
 }
 
-void toolChecks(std::vector<Check>& out) {
+// slangc where shaders/CMakeLists.txt looks: $VULKAN_SDK/Bin, the newest C:/VulkanSDK/*/Bin,
+// then PATH. Its version against shaders/slangc.version: the pin the SPIR-V was made with.
+fs::path findSlangc() {
+    std::error_code ec;
+#ifdef _WIN32
+    const char* exe = "slangc.exe";
+#else
+    const char* exe = "slangc";
+#endif
+    if (const char* sdk = std::getenv("VULKAN_SDK"))
+        for (const char* bin : {"Bin", "bin"})
+            if (fs::is_regular_file(fs::path(sdk) / bin / exe, ec)) return fs::path(sdk) / bin / exe;
+#ifdef _WIN32
+    std::vector<fs::path> sdks;
+    for (const auto& e : fs::directory_iterator("C:/VulkanSDK", ec))
+        if (fs::is_regular_file(e.path() / "Bin" / exe, ec)) sdks.push_back(e.path() / "Bin" / exe);
+    std::sort(sdks.begin(), sdks.end());
+    if (!sdks.empty()) return sdks.back();
+#endif
+    return findOnPath("slangc");
+}
+
+std::string commandOutput(const std::string& command) {
+#ifdef _WIN32
+    FILE* p = _popen(command.c_str(), "r");
+#else
+    FILE* p = popen(command.c_str(), "r");
+#endif
+    if (!p) return {};
+    std::string text;
+    char buf[256];
+    while (std::fgets(buf, sizeof buf, p)) text += buf;
+#ifdef _WIN32
+    _pclose(p);
+#else
+    pclose(p);
+#endif
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.pop_back();
+    return text;
+}
+
+void slangcCheck(const Options& o, std::vector<Check>& out) {
+    const fs::path slangc = findSlangc();
+    if (slangc.empty()) {
+        out.push_back(fail("tools.slangc", "error", "slangc not in $VULKAN_SDK, C:/VulkanSDK nor on PATH",
+                           "install the Vulkan SDK (it ships slangc)"));
+        return;
+    }
+#ifdef _WIN32   // cmd /c strips one outer pair of quotes
+    const std::string version = commandOutput("\"\"" + slangc.string() + "\" -v 2>&1\"");
+#else
+    const std::string version = commandOutput("\"" + slangc.string() + "\" -v 2>&1");
+#endif
+    std::string pinned;
+    std::ifstream pin(o.shaderDir / "slangc.version");
+    std::getline(pin, pinned);
+    while (!pinned.empty() && std::isspace(static_cast<unsigned char>(pinned.back()))) pinned.pop_back();
+    const std::string detail = slangc.generic_string() + " (" + (version.empty() ? "no version" : version) + ")";
+    if (!pinned.empty() && version.rfind(pinned, 0) != 0)
+        out.push_back(fail("tools.slangc", "warn",
+                           detail + ", not the pinned " + pinned + ": the SPIR-V may differ from the goldens' build",
+                           "install the Vulkan SDK whose slangc is " + pinned + " (shaders/slangc.version)"));
+    else
+        out.push_back(pass("tools.slangc", "error", detail));
+}
+
+void toolChecks(const Options& o, std::vector<Check>& out) {
     fs::path glslc = findOnPath("glslc");
     if (glslc.empty()) {
         if (const char* sdk = std::getenv("VULKAN_SDK")) {
@@ -335,6 +403,8 @@ void toolChecks(std::vector<Check>& out) {
                            "install the Vulkan SDK (it ships glslc)"));
     else
         out.push_back(pass("tools.glslc", "error", glslc.generic_string()));
+
+    slangcCheck(o, out);
 
     const fs::path cmake = findOnPath("cmake");
     if (cmake.empty())
@@ -363,24 +433,72 @@ void toolChecks(std::vector<Check>& out) {
 
 } // namespace
 
+namespace {
+
+std::string readAll(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+bool isIdent(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+} // namespace
+
+std::vector<std::string> slangEntries(const std::string& text) {
+    std::vector<std::string> entries;
+    std::size_t at = 0;
+    while ((at = text.find("[shader(\"", at)) != std::string::npos) {
+        std::size_t p = text.find(")]", at);
+        if (p == std::string::npos) break;
+        p += 2;
+        // Further attribute lines: [numthreads(...)], [outputtopology(...)], ...
+        for (;;) {
+            while (p < text.size() && std::isspace(static_cast<unsigned char>(text[p]))) ++p;
+            if (p >= text.size() || text[p] != '[') break;
+            const std::size_t eol = text.find('\n', p);
+            p = eol == std::string::npos ? text.size() : eol;
+        }
+        // The identifier before the first '(': the function's name.
+        const std::size_t paren = text.find('(', p);
+        if (paren == std::string::npos) break;
+        std::size_t end = paren;
+        while (end > p && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
+        std::size_t begin = end;
+        while (begin > p && isIdent(text[begin - 1])) --begin;
+        if (begin < end) entries.push_back(text.substr(begin, end - begin));
+        at = paren;
+    }
+    return entries;
+}
+
 std::vector<fs::path> shaderSources(const fs::path& shaderDir) {
     std::vector<fs::path> out;
     std::error_code ec;
     for (const auto& e : fs::recursive_directory_iterator(shaderDir, ec)) {
         if (!e.is_regular_file()) continue;
         const std::string ext = e.path().extension().string();
-        if (std::find_if(std::begin(kStageExtensions), std::end(kStageExtensions),
-                         [&](const char* s) { return ext == s; }) != std::end(kStageExtensions))
+        if (ext == ".slang") {
+            if (!slangEntries(readAll(e.path())).empty()) out.push_back(e.path());   // else a module
+        } else if (std::find_if(std::begin(kStageExtensions), std::end(kStageExtensions),
+                                [&](const char* s) { return ext == s; }) != std::end(kStageExtensions)) {
             out.push_back(e.path());
+        }
     }
     std::sort(out.begin(), out.end());
     return out;
 }
 
-std::string spirvName(const fs::path& shaderDir, const fs::path& source) {
+std::vector<std::string> spirvNames(const fs::path& shaderDir, const fs::path& source) {
     std::string rel = fs::relative(source, shaderDir).generic_string();
     std::replace(rel.begin(), rel.end(), '/', '_');
-    return rel + ".spv";
+    if (source.extension() != ".slang") return {rel + ".spv"};
+    const auto entries = slangEntries(readAll(source));
+    if (entries.size() == 1) return {rel + ".spv"};
+    std::vector<std::string> names;
+    for (const auto& e : entries) names.push_back(rel + "." + e + ".spv");
+    return names;
 }
 
 fs::file_time_type newestInput(const fs::path& shaderDir, const fs::path& source, std::vector<std::string>* unresolved) {
@@ -397,7 +515,27 @@ fs::file_time_type newestInput(const fs::path& shaderDir, const fs::path& source
         std::string line;
         while (std::getline(in, line)) {
             const std::size_t hash = line.find_first_not_of(" \t");
-            if (hash == std::string::npos || line.compare(hash, 8, "#include") != 0) continue;
+            if (hash == std::string::npos) continue;
+            if (line.compare(hash, 7, "import ") == 0) {   // Slang: import a.b;  ->  a/b.slang
+                const std::size_t semi = line.find(';', hash);
+                if (semi == std::string::npos) continue;
+                std::string mod = line.substr(hash + 7, semi - hash - 7);
+                mod.erase(std::remove_if(mod.begin(), mod.end(), [](unsigned char c) { return std::isspace(c); }),
+                          mod.end());
+                std::replace(mod.begin(), mod.end(), '.', '/');
+                const std::string name = mod + ".slang";
+                bool found = false;
+                for (const fs::path& c : {file.parent_path() / name, shaderDir / name}) {
+                    if (fs::is_regular_file(c, ec)) {
+                        work.push_back(fs::weakly_canonical(c, ec));
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found && unresolved) unresolved->push_back(name);
+                continue;
+            }
+            if (line.compare(hash, 8, "#include") != 0) continue;
             const std::size_t open = line.find_first_of("\"<", hash + 8);
             if (open == std::string::npos) continue;
             const char close = line[open] == '"' ? '"' : '>';
@@ -431,7 +569,7 @@ std::vector<Check> run(const Options& options) {
     if (!o.cpuOnly) vulkanChecks(out);
     shaderChecks(o, out);
     assetCheck(o, out);
-    toolChecks(out);
+    toolChecks(o, out);
     if (!o.cpuOnly) gpuCheck(out);
     return out;
 }

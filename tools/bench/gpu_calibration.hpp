@@ -1,6 +1,6 @@
 #pragma once
 // The GPU side of a bench's machine record (sub-project 2b spec, "Profiling first"): a fixed
-// compute dispatch (shaders/bench/gpu_calibrate.comp, an integer hash over a 1 MiB buffer)
+// compute dispatch (shaders/bench/gpu_calibrate.slang, an integer hash over a 1 MiB buffer)
 // timed by timestamps. Run before and after the timed frames and compared with the
 // reference `--calibrate` wrote, it tells a GPU that something else was using from a slow
 // renderer, as calibrationMs() does for the CPU.
@@ -9,6 +9,8 @@
 // only between frames, never while a frame is being recorded.
 #include <vulkan/vulkan.h>
 
+#include "gpu/shared_layout.hpp"   // the kernel's sizes and push constants, shared with the shader
+
 #include <algorithm>
 #include <cstdint>
 
@@ -16,8 +18,9 @@ namespace ohao::bench {
 
 class GpuCalibration {
 public:
-    static constexpr uint32_t kElements = (1u << 20) / 4;   // 1 MiB of uint
-    static constexpr uint32_t kGroupSize = 256;            // the shader's local_size_x
+    static constexpr uint32_t kElements = gpu::shared::kCalibrateElements;   // 1 MiB of uint
+    static constexpr uint32_t kGroupSize = gpu::shared::kCalibrateGroupSize;
+    static_assert(kElements % kGroupSize == 0, "whole workgroups");
 
     ~GpuCalibration() { destroy(); }
 
@@ -55,7 +58,7 @@ public:
         dl.bindingCount = 1;
         dl.pBindings = &b;
         if (vkCreateDescriptorSetLayout(device, &dl, nullptr, &m_setLayout) != VK_SUCCESS) return false;
-        VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t)};
+        VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(gpu::shared::CalibratePush)};
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &m_setLayout;
@@ -66,7 +69,7 @@ public:
         cp.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         cp.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         cp.stage.module = module;
-        cp.stage.pName = "main";
+        cp.stage.pName = "calibrate";   // the Slang entry point's name
         cp.layout = m_layout;
         if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cp, nullptr, &m_pipeline) != VK_SUCCESS) return false;
 
@@ -118,7 +121,9 @@ public:
         vkCmdResetQueryPool(m_cmd, m_queries, 0, 2);
         vkCmdBindPipeline(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
         vkCmdBindDescriptorSets(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &m_set, 0, nullptr);
-        vkCmdPushConstants(m_cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof iterations, &iterations);
+        gpu::shared::CalibratePush push{};
+        push.iterations = iterations;
+        vkCmdPushConstants(m_cmd, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
         vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queries, 0);
         vkCmdDispatch(m_cmd, kElements / kGroupSize, 1, 1);
         vkCmdWriteTimestamp(m_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queries, 1);

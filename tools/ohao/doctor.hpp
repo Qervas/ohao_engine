@@ -7,10 +7,13 @@
 //   vulkan.device      a physical device with Vulkan 1.3 (name, driver, API version)
 //   vulkan.rt          ray tracing pipeline + acceleration structures (warn: RT modes need them)
 //   vulkan.validation  VK_LAYER_KHRONOS_validation available (warn: the validation gates need it)
-//   shaders.complete   every stage source under shaders/ has its SPIR-V
-//   shaders.fresh      no SPIR-V older than its source or any file it #includes
+//   shaders.complete   every stage source under shaders/ has its SPIR-V (a .slang file one
+//                      per [shader(...)] entry point)
+//   shaders.fresh      no SPIR-V older than its source or any file it #includes or imports
 //   assets.present     every asset the checked-in scenes (assets/scenes) reference exists
 //   tools.glslc        glslc on PATH or in the Vulkan SDK
+//   tools.slangc       slangc in the Vulkan SDK or on PATH (error when missing); a version other
+//                      than shaders/slangc.version's fails as a warning (other SPIR-V)
 //   tools.cmake        the cmake on PATH is not conda's (warn)
 //   python.deps        python with numpy, Pillow and jsonschema (warn: the harnesses need them)
 //   gpu.wedged         a 64x64 deferred frame renders within 2 s (after a crash the GPU can
@@ -45,13 +48,22 @@ struct Check {
 [[nodiscard]] bool passed(const std::vector<Check>& checks);
 
 // ---- the shader checks, exposed for tests ---------------------------------------------
-// Stage sources under `shaderDir` (the extensions the shaders target compiles), sorted.
+// Stage sources under `shaderDir` (the extensions the shaders target compiles, and .slang
+// files with an entry point; a .slang without one is a module), sorted.
 [[nodiscard]] std::vector<std::filesystem::path> shaderSources(const std::filesystem::path& shaderDir);
-// The SPIR-V name of a source: its path relative to `shaderDir` with '/' -> '_', + ".spv".
-[[nodiscard]] std::string spirvName(const std::filesystem::path& shaderDir, const std::filesystem::path& source);
-// The newest modification time of `source` and every file it #includes, transitively,
-// resolved as glslc does with -I<shaderDir> -I<shaderDir>/includes ("x": the including
-// file's directory first). Includes that resolve nowhere are listed in `unresolved`.
+// The entry points of a Slang source, in order, found as shaders/CMakeLists.txt finds them:
+// the identifier before the first '(' after a [shader("stage")] attribute line and any
+// further [...] attribute lines.
+[[nodiscard]] std::vector<std::string> slangEntries(const std::string& text);
+// The SPIR-V names of a source: its path relative to `shaderDir` with '/' -> '_', + ".spv";
+// a .slang with several entry points gives one "<flattened>.<entry>.spv" per entry.
+[[nodiscard]] std::vector<std::string> spirvNames(const std::filesystem::path& shaderDir,
+                                                  const std::filesystem::path& source);
+// The newest modification time of `source` and every file it #includes or (Slang) imports,
+// transitively. #include resolves as glslc does with -I<shaderDir> -I<shaderDir>/includes
+// ("x": the including file's directory first); `import a.b;` as slangc does with
+// -I<shaderDir>: a/b.slang beside the importing file, then under shaderDir. Dependencies
+// that resolve nowhere are listed in `unresolved`.
 [[nodiscard]] std::filesystem::file_time_type newestInput(const std::filesystem::path& shaderDir,
                                                           const std::filesystem::path& source,
                                                           std::vector<std::string>* unresolved = nullptr);

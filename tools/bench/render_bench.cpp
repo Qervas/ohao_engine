@@ -24,7 +24,7 @@
 // pass named x.<something>).
 //
 // Noise (spec 4's measurement rules, plus the GPU): a CPU calibration loop and a GPU
-// calibration kernel (shaders/bench/gpu_calibrate.comp) run before and after the frames;
+// calibration kernel (shaders/bench/gpu_calibrate.slang) run before and after the frames;
 // either more than 25% slower than its reference, or other processes using more than half a
 // core in total, makes the run `noisy`: exit 2, neither a pass nor a failure (tools/check.py
 // reruns it). Exit 1 when a gated budget is missed or a scene could not be rendered.
@@ -614,7 +614,7 @@ VkShaderModule loadKernel(VkDevice device) {
     wchar_t self[MAX_PATH];
     if (GetModuleFileNameW(nullptr, self, MAX_PATH)) dir = fs::path(self).parent_path();
 #endif
-    const std::string code = readText(dir / "bin" / "shaders" / "bench_gpu_calibrate.comp.spv");
+    const std::string code = readText(dir / "bin" / "shaders" / "bench_gpu_calibrate.slang.spv");
     if (code.empty() || code.size() % 4) return VK_NULL_HANDLE;
     std::vector<uint32_t> words(code.size() / 4);
     std::memcpy(words.data(), code.data(), code.size());

@@ -15,3 +15,8 @@ tests/cli/** text eol=lf
 # `ohao serve`'s scripted sessions and their expected stdout (sub-project 4, step 5).
 tests/serve/sessions/** text eol=lf
 tests/serve/expected/** text eol=lf
+# The shared layout and what tools/gen_layout.py writes from it; `--check` compares
+# bytes (sub-project 2b, step 6).
+shaders/shared/** text eol=lf
+ohao/gpu/shared_layout.hpp text eol=lf
+shaders/slangc.version text eol=lf

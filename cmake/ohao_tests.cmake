@@ -93,6 +93,8 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(test_golden_diff LABEL quick SCRIPT tests/golden/test_golden_diff.py)
     ohao_add_python_test(check_doctor LABEL quick SCRIPT tests/doctor/check_doctor.py)
     ohao_add_python_test(check_doctor_gpu LABEL gpu GPU SCRIPT tests/doctor/check_doctor.py ARGS --gpu)
+    # The shared shader/C++ layout (sub-project 2b, step 6): generated files current, std430.
+    ohao_add_python_test(check_layout LABEL quick SCRIPT tests/layout/check_layout.py)
     # `ohao serve` as a process (tests 8-10, 15): its goldens write build/serve_tmp/<session>.
     ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
 

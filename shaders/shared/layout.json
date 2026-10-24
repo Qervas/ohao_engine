@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Constants and structs shared by C++ and shaders, one source for both (sub-project 2b",
+    "spec, \"Slang\"). python tools/gen_layout.py writes shaders/shared/layout.slang,",
+    "shaders/shared/layout.glsl and ohao/gpu/shared_layout.hpp from this file; never edit",
+    "those by hand. Struct layouts are std430 (push constants and storage buffers): the",
+    "header carries alignas and a static_assert per field offset, so a C++ struct cannot",
+    "drift from the shader's. Types: uint, int, float, uint2/int2/float2, uint4/int4/float4,",
+    "float4x4. A 3-vector has no portable layout in a struct; use a 4-vector."
+  ],
+  "constants": [
+    {"name": "kCalibrateGroupSize", "type": "uint", "value": 256,
+     "doc": "render_bench's GPU calibration kernel: threads per workgroup"},
+    {"name": "kCalibrateElements", "type": "uint", "value": 262144,
+     "doc": "the calibration buffer's uint count (1 MiB)"}
+  ],
+  "structs": [
+    {"name": "CalibratePush", "doc": "the calibration kernel's push constants",
+     "fields": [
+       {"name": "iterations", "type": "uint", "doc": "hash rounds per element"}
+     ]}
+  ]
+}

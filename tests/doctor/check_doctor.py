@@ -10,6 +10,10 @@ Last line is a JSON summary; exit 0 = pass.
   the including file, or <...> from the include roots), transitively, is newer; an
   unresolved include is named; --cpu-only creates no device and lists no device check;
   every check has the documented shape; the real tree passes.
+  s6_* (sub-project 2b, step 6) Slang: a .slang file with [shader(...)] entry points is a
+  source, one SPIR-V per entry (<file>.spv for one, <file>.<entry>.spv for several), a file
+  without one is a module; an imported module newer than the SPIR-V makes it stale; an
+  unresolved import is named; tools.slangc finds slangc at shaders/slangc.version's version.
 """
 import json
 import os
@@ -20,7 +24,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OHAO = os.path.join(ROOT, "build", "Release", "ohao.exe" if os.name == "nt" else "ohao")
 DEVICE_CHECKS = {"vulkan.instance", "vulkan.device", "vulkan.rt", "vulkan.validation", "gpu.wedged"}
-CPU_CHECKS = ["shaders.complete", "shaders.fresh", "assets.present", "tools.glslc", "tools.cmake", "python.deps"]
+CPU_CHECKS = ["shaders.complete", "shaders.fresh", "assets.present", "tools.glslc", "tools.slangc", "tools.cmake",
+              "python.deps"]
 
 passed, failed, failures = 0, 0, []
 
@@ -152,6 +157,65 @@ def t5_the_real_tree_passes_cpu_only():
     assert rc == 0 and res["ok"] is True, f"exit 0, ok (got {rc}): {[c for c in res['checks'] if not c['ok']]}"
 
 
+SLANG_ONE = ('import shared.layout;\n[[vk::binding(0, 0)]] RWStructuredBuffer<uint> data;\n'
+             '[shader("compute")]\n[numthreads(64, 1, 1)]\nvoid kernel(uint3 id : SV_DispatchThreadID)\n{ data[id.x] = 1; }\n')
+SLANG_TWO = ('[shader("compute")]\n[numthreads(64, 1, 1)]\nvoid first(uint3 id : SV_DispatchThreadID) {}\n\n'
+             '[shader("compute")]\n[numthreads(64, 1, 1)]\nvoid second(uint3 id : SV_DispatchThreadID) {}\n')
+
+
+def slang_tree(tmp):
+    """bench/k.slang (one entry, imports shared.layout), cull/two.slang (two entries),
+    shared/layout.slang (a module: no entry point). SPIR-V for k and for two's first entry."""
+    sh, spv = os.path.join(tmp, "shaders"), os.path.join(tmp, "spv")
+    write(os.path.join(sh, "bench", "k.slang"), SLANG_ONE, T0)
+    write(os.path.join(sh, "cull", "two.slang"), SLANG_TWO, T0)
+    write(os.path.join(sh, "shared", "layout.slang"), "static const uint kX = 1u;\n", T0)
+    write(os.path.join(spv, "bench_k.slang.spv"), "spv", T0 + 100)
+    write(os.path.join(spv, "cull_two.slang.first.spv"), "spv", T0 + 100)
+    return sh, spv
+
+
+def s6_slang_sources_are_files_with_entry_points_named_per_entry():
+    with tempfile.TemporaryDirectory() as tmp:
+        sh, spv = slang_tree(tmp)
+        _, _, checks = tree_doctor(tmp, sh, spv)
+        c = checks["shaders.complete"]
+        assert c["ok"] is False and "1 of 3 SPIR-V missing" in c["detail"], f"3 SPIR-V expected, 1 missing: {c}"
+        assert "cull_two.slang.second.spv" in c["detail"], f"a second entry point is <file>.<entry>.spv: {c['detail']}"
+        assert "bench_k" not in c["detail"] and "layout" not in c["detail"], \
+            f"a single entry is <file>.spv; a module is no source: {c['detail']}"
+
+
+def s6_an_imported_module_newer_than_the_spirv_makes_it_stale():
+    with tempfile.TemporaryDirectory() as tmp:
+        sh, spv = slang_tree(tmp)
+        _, _, checks = tree_doctor(tmp, sh, spv)
+        assert checks["shaders.fresh"]["ok"] is True, f"fresh at first: {checks['shaders.fresh']}"
+        os.utime(os.path.join(sh, "shared", "layout.slang"), (T0 + 200, T0 + 200))
+        _, _, checks = tree_doctor(tmp, sh, spv)
+        f = checks["shaders.fresh"]
+        assert f["ok"] is False and "bench_k.slang.spv" in f["detail"] and "cull_two" not in f["detail"], \
+            f"exactly the importer is stale: {f['detail']}"
+
+
+def s6_an_unresolved_import_is_named():
+    with tempfile.TemporaryDirectory() as tmp:
+        sh, spv = slang_tree(tmp)
+        write(os.path.join(sh, "bench", "k.slang"), "import shared.gone;\n" + SLANG_ONE, T0)
+        _, _, checks = tree_doctor(tmp, sh, spv)
+        f = checks["shaders.fresh"]
+        assert "shared/gone.slang" in f["detail"] and "bench/k.slang" in f["detail"], f"names it: {f['detail']}"
+
+
+def s6_tools_slangc_is_found_at_the_pinned_version():
+    with open(os.path.join(ROOT, "shaders", "slangc.version")) as f:
+        pinned = f.readline().strip()
+    _, _, checks = doctor("--cpu-only")
+    c = checks["tools.slangc"]
+    assert c["ok"] is True and c["level"] == "error", f"tools.slangc passes: {c}"
+    assert f"({pinned}" in c["detail"], f"reports the pinned version {pinned}: {c['detail']}"
+
+
 def t5_device_checks_pass_on_this_machine():
     rc, res, checks = doctor()
     assert res["cpuOnly"] is False, "not --cpu-only"
@@ -177,7 +241,9 @@ def main():
         tests = [t5_a_missing_spirv_is_named, t5_fresh_spirv_passes_and_a_newer_include_makes_it_stale,
                  t5_staleness_follows_includes_transitively, t5_a_newer_source_is_stale,
                  t5_an_unresolved_include_is_named, t5_cpu_only_lists_no_device_check_and_every_check_has_its_shape,
-                 t5_the_real_tree_passes_cpu_only]
+                 t5_the_real_tree_passes_cpu_only, s6_slang_sources_are_files_with_entry_points_named_per_entry,
+                 s6_an_imported_module_newer_than_the_spirv_makes_it_stale, s6_an_unresolved_import_is_named,
+                 s6_tools_slangc_is_found_at_the_pinned_version]
     for fn in tests:
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed")
