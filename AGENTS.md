@@ -107,7 +107,7 @@ $ python tests/serve/check_serve.py > /dev/null
 |---|---|
 | `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
-| `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
+| `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
 | `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats` |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
@@ -148,7 +148,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
-  captures. `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  captures, and path-traced Cornell (offline and realtime) the same within the BVH floor
+  (below). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size and a path-traced mode refused), log.read; a lockstep
   window capture equals a headless capture of the same world bit for bit (post off and
@@ -162,9 +163,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
-  `... repeated N more times`). `check_validation.py` renders deferred Cornell and the
-  helmet under the layers;
+  `... repeated N more times`). `check_validation.py` renders Cornell and the helmet,
+  deferred and path traced (offline, realtime, realtime through NRD), under the layers;
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
+  `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
+  commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
 - **Render goldens** (`tests/golden/manifest.json`, 11 scenes: 5 examples, 6 through
   `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
@@ -173,10 +176,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (expected | actual | heat of the worst region), `--heatmaps all` for every scene.
   `--selftest --json` records the run-to-run floor. They are a hash of an unchanged sampler, not an image-quality gate: anything
   that perturbs the sample sequence moves every pixel by the noise. Never widen a
-  tolerance to make one pass. The five deferred scenes are exact (max_abs 0): deferred
-  rendering is deterministic, so any difference there is a change. Path-traced renders
-  drift by 1 LSB on a few pixels across sessions with identical SPIR-V; never compare
-  their md5s across days.
+  tolerance to make one pass. The deferred scenes are exact (max_abs 0): any difference
+  there is a change. Path-traced scenes hold to a floor of 1 LSB on a few pixels in a
+  minority of runs (tolerance 1 / 0.0005): the driver builds a mesh's BVH differently run
+  to run, and a ray that hits exactly on a shared triangle edge takes whichever triangle
+  the traversal reaches first.
 - **Benchmarks** (`scene_bench --check`): budgets in `tests/bench/scene_budgets.json`;
   results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
   `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:

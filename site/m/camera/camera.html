@@ -62,7 +62,7 @@ $$</div>
 <p>No renderer reads the basis through these accessors either — it round-trips through the view matrix. `glm::lookAt` packs the three axes into the rotation block:</p>
 <div class="citation-chip"><code class="citation-code">viewMatrix = glm::lookAt(position, position + front, up);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:41</a></div>
 <p>and the path tracer&#x27;s raygen pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>
-<div class="citation-chip"><code class="citation-code">vec3 fwd = -vec3(pc.invView[2]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L153" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:153</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 fwd = -vec3(pc.invView[2]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L154" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:154</a></div>
 <p>So the accessors are a gameplay convenience; the vectors they expose are what the renderer actually consumes.</p>
 </div>
 <div class="section-rule"><h2 id="two-projections-from-one-camera">Two projections from one camera</h2></div>
@@ -88,7 +88,7 @@ $$</div>
 P_{22} = \frac{1}{\tan(\phi/2)} \quad\Longrightarrow\quad \left(P^{-1}\right)_{22} = \tan(\phi/2)
 $$</div>
 <p>GLSL addresses that same element as the 0-indexed `[1][1]` of a column-major `mat4`, and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never touched:</p>
-<div class="citation-chip"><code class="citation-code">float tanFovY = abs(pc.invProj[1][1]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L158" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:158</a></div>
+<div class="citation-chip"><code class="citation-code">float tanFovY = abs(pc.invProj[1][1]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L159" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:159</a></div>
 </div>
 <div class="section-rule"><h2 id="the-near-plane-is-twice-what-it-says">The near plane is twice what it says</h2></div>
 <div class="prose reveal">

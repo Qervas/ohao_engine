@@ -118,8 +118,10 @@ the write visible:
 The other was TAA's history on its first frame, which read a matrix nobody had set yet.
 `deferred_determinism_gpu_test` holds the result: deferred frames, post effects included,
 bit-identical across fresh renderers, processes and repeated captures, and the deferred
-goldens are exact (`max_abs_diff` 0). The path tracer is not in this contract: it drifts
-by 1 LSB on a few pixels across sessions, and that is sub-project 2b's to fix.
+goldens are exact (`max_abs_diff` 0). Since sub-project 2b step 5 the path tracer has no
+race left either; its output can still differ by 1 LSB on a few pixels in a minority of
+runs, because the driver builds a mesh's BVH differently run to run and an exact edge hit
+takes either triangle.
 
 :::why
 A hash and a diff instead of reading state back keeps an agent's play loop cheap. An

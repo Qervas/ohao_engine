@@ -29,11 +29,12 @@ never touch the denoised image at all:
 
 {{cite shaders/rt/cinematic_composite.comp "hdr = sampleEnv(normalize(world.xyz));"}}
 
-The gating repays a second reading. The outer condition is not the denoiser the
-user asked for, but whether an NRD instance came up and the auxiliary AOVs are
-being written:
+The gating repays a second reading. The outer condition is that an NRD instance
+came up, the auxiliary AOVs are being written and NRD is the active mode (since
+sub-project 2b step 5; before, the chain ran on every RT frame with AOVs, whatever
+denoiser the user asked for):
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
 That block gates REBLUR. Two sibling blocks sit inside it: `if (m_nrdCompositor)`
 runs the remodulation pass that produces binding 29 in the first place, and a

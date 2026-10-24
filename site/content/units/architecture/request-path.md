@@ -252,12 +252,11 @@ library is present.
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
 
 OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback.
-NRD is dispatched inside the RT pipeline like `Atrous`, but off a different gate:
-the tracer runs it whenever the denoiser initialized and the profile enables
-auxiliary AOVs, and never reads `denoiseMode` to decide, so pushing the override
-down would buy it nothing.
+NRD is dispatched inside the RT pipeline like `Atrous`, off the same gate since
+sub-project 2b step 5: the override is pushed down to the tracer, which runs
+REBLUR, compose and the cinematic chain only in NRD mode.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
 :::key
 Scene data reaches the GPU along one chain — spin, game hooks, instantiate,

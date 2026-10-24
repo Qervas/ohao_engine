@@ -91,15 +91,15 @@ A fourth, the realtime per-frame sample count set through `setRealtimeSamplesPer
 
 ## Who wins the argument about the denoiser
 
-`setDenoiseMode` latches a `m_denoiseModeOverridden` bit that does two things. It stops the per-frame settings sync from overwriting the user's choice with the profile default, and it gates a narrow injection back into the tracer's own settings — scoped to Atrous and DLSS-RR, and not to NRD or OIDN.
+`setDenoiseMode` latches a `m_denoiseModeOverridden` bit that does two things. It stops the per-frame settings sync from overwriting the user's choice with the profile default, and it gates an injection back into the tracer's own settings — scoped to the three denoisers the tracer dispatches itself, Atrous, DLSS-RR and NRD, and not to OIDN.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseModeOverridden &&"}}
 
-The comment above that condition explains the scoping as GPU-side dispatch versus everything else. That is not the real distinction — NRD is dispatched GPU-side from inside the same `PathTracer` frame. Its block is gated on `enableAuxiliaryAOVs`, a profile flag, not on `denoiseMode`, so REBLUR runs on every RT frame of a profile that produces AOVs and nothing needs injecting for it to fire.
+NRD joined in sub-project 2b step 5. Its block used to be gated on `enableAuxiliaryAOVs` alone, a profile flag, so REBLUR ran on every RT frame of a profile that produces AOVs and nothing needed injecting for it to fire; gated on the mode too, it needs the injection like the other two.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs)"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD)"}}
 
-The Atrous and DLSS-RR blocks branch on `m_renderSettings.denoiseMode` directly, and the per-frame reload sets that field to `None` (realtime) or `OIDN` (offline) — never Atrous, never DLSS-RR. Without the injection those two branches are unreachable from the command line. OIDN needs nothing either: it never enters the tracer at all.
+All three blocks branch on `m_renderSettings.denoiseMode`, and the per-frame reload sets that field to `None` (realtime) or `OIDN` (offline) — never one of the three. Without the injection those branches are unreachable from the command line. OIDN needs nothing: it never enters the tracer at all.
 
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser)"}}
 

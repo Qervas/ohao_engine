@@ -80,26 +80,28 @@ variable set exits nonzero on any report.
 
 {{cite tests/engine/engine_tests.cpp "the validation layer reports nothing across the resize"}}
 
-Both read the deferred pipeline, and on it they pass: the checker's two scenes,
-`cornell_box` and the damaged helmet, both report clean. Their reach ends at the
-raster path. The checker's scene list is those two runs, each passed the
-`deferred` token,
+Both report clean. Since sub-project 2b step 5 the checker reaches past the raster
+path: its scene list is Cornell and the damaged helmet deferred, then the path
+tracer — Cornell offline, realtime, and realtime through NRD, and the helmet
+offline — each run through teardown.
 
 {{cite tests/validation/check_validation.py "SCENES = ["}}
 
-and the path tracer runs under validation only when a person types the command.
-Do so — `OHAO_VALIDATION=1 cornell_box out.png 1 --denoise=none`, the default
-offline mode — and the layer reports exactly one VUID, and it is the failure class
-this page is about. The path tracer's layout flags binding 12 — the bindless texture table — as the
-variable-count binding,
-
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |"}}
-
-while bindings up to 37 are declared behind it, and Vulkan permits the flag only
-on the highest-numbered binding
+Until then the path tracer ran under validation only when a person typed the
+command, and the layer reported the failure class this page is about. The path
+tracer's layout flagged binding 12 — the bindless texture table — as the
+variable-count binding while bindings up to 37 were declared behind it, and Vulkan
+permits the flag only on the highest-numbered binding
 (`VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-pBindingFlags-03004`). The
-layer names binding 37 as the one that should carry it. The error has survived
-because the one automated validation run never builds this layout.
+binding is now partially bound and update-after-bind only:
+
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "(VUID 03004), and every set is allocated at the full capacity anyway."}}
+
+The error survived as long as it did because no automated run built this layout.
+Behind it stood five more the layer had never been allowed to see, all on the NRD
+path: a device extension NRI needed but nobody enabled, `synchronization2`, a
+descriptor pool reset while in use, images NRD samples created without `SAMPLED`,
+and single descriptor sets rewritten while an earlier frame read them.
 
 ## The pixel tier is real and coarse
 
@@ -117,9 +119,11 @@ Each is compared after downscaling to 640 px wide,
 {{cite tests/golden/render_golden.py "DOWNSCALE_WIDTH = 640"}}
 
 against two thresholds that must **both** hold: a per-channel maximum and an
-allowance of differing pixels. The defaults are 4 LSB and 1 %; the deferred scenes
-are held to 0 and 0, because deferred rendering is bit-exact from run to run (since
-sub-project 4 step 1; the helmet used to carry a looser 6 LSB and 5 %).
+allowance of differing pixels. The defaults are 4 LSB and 1 %, but no scene uses
+them any more: the deferred scenes are held to 0 and 0 (bit-exact run to run since
+sub-project 4 step 1), and the path-traced ones to 1 LSB and 0.05 % (since 2b step
+5), their measured floor — the driver builds a mesh's BVH differently run to run, and
+an exact edge hit takes either triangle.
 
 {{cite tests/golden/render_golden.py "return s is not None and s["}}
 
@@ -142,12 +146,10 @@ floor from non-associative GPU reduction order,
 
 {{cite tests/golden/render_golden.py "DEFAULT_MAX_ABS_DIFF = 4"}}
 
-which is the standard argument. `--selftest` renders each scene twice and diffs
-the two renders against each other: both path-traced scenes and the deferred
-Cornell box come back at `max_abs=0 diff_px=0`, bit-identical. The deferred helmet
-does not — it reports `max_abs=2` over about three percent of compare-resolution
-pixels against itself, which is why its limits are wider. Against the stored
-goldens all four pass.
+which is the standard argument, and the corpus no longer leans on it: where a floor
+was found, it was traced to its cause and either removed (the deferred races, the
+realtime path tracer's) or measured and named (the BVH), and the tolerance set to
+exactly that.
 
 The two path-traced goldens are a hash of an unchanged sampler rather than a
 tolerance the image has slack inside — the manifest says so at length, and says why
@@ -168,7 +170,7 @@ only tier that fires by itself, on every compile, and they stop at the language
 boundary. `engine_tests` inherits that same ceiling *and* has to be launched. The
 validation layers are the only thing in the stack that reads both sides; they
 are off unless an environment variable is set, and the script that sets it renders
-only the raster path. The golden corpus is the only tier
+the raster path and the path tracer. The golden corpus is the only tier
 that judges a finished image, and it is coarse and manual.
 
 {{figure architecture-invariants-enforcement-reach "Conceptual: how far each of the four mechanisms reaches across the C++/SPIR-V boundary. Bar lengths are schematic; the tolerances and the opt-in flag are read from render_golden.py and device_setup.cpp, not measured."}}

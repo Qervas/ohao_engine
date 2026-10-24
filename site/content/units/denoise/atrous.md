@@ -10,22 +10,24 @@ figures: [denoise-atrous-pingpong]
 
 Every other denoiser here wants linear radiance: NRD demodulated by albedo and
 split diffuse/specular, OIDN as HDR colour with albedo and normal AOVs.
-OHAO's own SVGF takes the opposite input — the RGBA8 image the realtime raygen
-has already run through ACES and a 1/2.2 gamma curve:
+OHAO's own SVGF takes the opposite input — the RGBA8 beauty, already run through
+ACES and a 1/2.2 gamma curve by the realtime raygen or, with the realtime
+profile's internal denoise on, by the spatial-denoise pass after it:
 
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 ldr = ACES(denoised * 0.5);"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 ldr = ACES(acc * 0.5);"}}
 
 It is also the last pass's destination — overwritten in place, so nothing
 downstream changes.
 
 {{cite ohao/render/rt/denoise/atrous_denoise.hpp "beautyImage  = VK_NULL_HANDLE; // m_outputImage (RGBA8)"}}
 
-Nor is that input raw. `kRealtimeRTSettings` turns the in-raygen denoise on and
-nothing on the Atrous path clears it, so before the tonemap the raygen has
-already run a 5×5 edge-aware bilateral over every pixel whose local variance
-clears a threshold, then rescaled to preserve luminance. Its two wider passes
-re-read the centre's own running value and are algebraically identity, so SVGF
-gets a step-1 bilateral's output.
+Nor is that input raw. `kRealtimeRTSettings` turns the internal spatial denoise
+on and nothing on the Atrous path clears it, so before SVGF runs a compute pass
+has already applied a 5×5 edge-aware bilateral to every pixel whose local
+variance clears a threshold, then rescaled to preserve luminance, and tonemapped.
+(Inside the raygen, until sub-project 2b step 5, the same filter read neighbours
+other invocations were still writing; its two wider passes, algebraically
+identity, are gone.)
 
 {{cite ohao/render/rt/rt_settings.hpp ".enableInternalDenoise = true,"}}
 

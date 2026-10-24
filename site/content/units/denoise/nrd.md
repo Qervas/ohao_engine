@@ -169,15 +169,16 @@ set naming its own raygen — but anyone reusing `PathTracer` directly will.
 
 {{cite ohao/render/rt/rt_profile_renderer.hpp "bin/shaders/rt_pt_raygen_offline.rgen.spv"}}
 
-A second gate matters before profiling: the REBLUR dispatch is not conditioned on
-the active denoise mode, only on the denoiser existing and auxiliary AOVs being
-on, which both shipped profiles enable unconditionally:
+A second gate matters before profiling: REBLUR, compose and the cinematic chain run
+only in NRD mode, on top of the denoiser existing and auxiliary AOVs being on:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
-So REBLUR, compose and the cinematic chain execute on every RT frame even under
-`--denoise=oidn` or `none`; only `readback()` of a requested frame in
-`DenoiseMode::NRD` reads the result back.
+Until sub-project 2b step 5 the mode was not part of it, so the whole chain ran on
+every RT frame under `--denoise=oidn` or `none` too, writing an image only an NRD
+readback reads. Each piece of the chain writes its descriptor sets at record time,
+so each keeps one set per frame in flight, selected by the frame slot the tracer
+passes in.
 
 ## Lending NRD a device it did not create
 

@@ -211,11 +211,10 @@ along with a light-count factor that undoes the uniform light pick:
 {{cite shaders/rt/pt_raygen_offline.rgen "directContribution = Le * (diff * nlDiff + spec * NdotL)"}}
 
 The diffuse half of that line is scaled by `nlDiff` — a per-channel,
-subsurface-wrapped replacement for the scalar `NdotL` the specular half still uses.
-The header comment claiming this file is a verbatim copy of `pt_raygen.rgen` is
-stale; the two have diverged at exactly this line.
+subsurface-wrapped replacement for the scalar `NdotL` the specular half still uses —
+one of the places the offline file has forked from `pt_raygen.rgen`.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "verbatim copy of pt_raygen.rgen"}}
+{{cite shaders/rt/pt_raygen_offline.rgen "// Forked from pt_raygen.rgen (the default shader set's raygen); it differs in the"}}
 
 If a light sphere pokes through a wall, the wall texels inside it draw samples at
 $d \to 0$ and the contribution diverges. The offline profile has no clamp to catch

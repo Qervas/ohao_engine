@@ -131,42 +131,39 @@ pipeline's defaults at the top of every frame:
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings = pipeline.getDefaultSettings();"}}
 
 Immediately afterwards the user's choice is re-seeded into it — but only when
-`--denoise` latched the override, and then only for two of the five modes:
+`--denoise` latched the override, and then only for the three modes the tracer
+dispatches itself:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "(m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR)) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "(m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR ||"}}
 
 So the set of values that can actually appear in
 `PathTracer::m_renderSettings.denoiseMode` during a frame is: `None` (the
-realtime profile default), `OIDN` (the offline profile default), `Atrous`, and
-`DLSSRR`. `NRD` is not in that set and cannot get there through any shipped
-entry point: the re-seed is scoped to the two modes the tracer dispatches
-GPU-side, so `None`, `OIDN` and `NRD` keep the profile-default `denoiseMode`
-untouched. The aniso, SSS, and samples-per-frame fields, by contrast, survive the
-same reset for every mode.
+realtime profile default), `OIDN` (the offline profile default), `Atrous`,
+`DLSSRR` and `NRD`. `None` and `OIDN` keep the profile default untouched: OIDN
+runs on the CPU inside `readback()` and never enters the tracer. The aniso, SSS,
+and samples-per-frame fields survive the same reset for every mode.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
 {{figure denoise-types-modeflow "Conceptual data flow, not measured: how the parsed mode reaches its two independent storage sites and which readers consult each. Box contents are read from renderer.cpp, rt_settings.hpp and path_tracer_render.cpp."}}
 
-This is coherent rather than broken, because the NRD dispatch does not consult
-the mode at all. It runs whenever the NRD instance was created and auxiliary
-AOVs are enabled — which both stock profiles do:
+NRD joined the re-seed in sub-project 2b step 5. Until then its dispatch did not
+consult the mode at all: REBLUR, compose and the cinematic chain ran on every RT
+frame of a profile with auxiliary AOVs, whatever the user asked for, and the
+override never needed to reach the tracer — so it never did. The chain is now
+gated on the mode as well:
 
-{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs && m_renderSettings.denoiseMode == DenoiseMode::NRD) {"}}
 
-The consequence: under `--denoise=nrd`, `denoiseNeedsPixelJitter` and
-`denoiseNeedsAovAccumulation` — the two traits whose definitions name NRD first —
-both evaluate `false`, because they are asked about the profile default, not the
-CLI mode. Halton jitter and multi-sample AOV averaging are reachable only by
-getting `NRD` past the per-frame reset, which today means adding it to the
-re-seed condition above.
+and under `--denoise=nrd` the two traits whose definitions name NRD first,
+`denoiseNeedsPixelJitter` and `denoiseNeedsAovAccumulation`, finally evaluate
+`true`: Halton jitter and multi-sample AOV averaging reach the frames NRD
+denoises.
 
 :::key
-`DenoiseMode` is not a switch that turns denoising on. GPU denoise work is
-scheduled by resource existence (`m_nrdDenoiser`, `enableAuxiliaryAOVs`); the
-mode is a tag on the *output tap*, deciding which image `readback()` hands
-back. Reading it as an on/off switch is how the two-copy behaviour above becomes
-surprising.
+`DenoiseMode` decides two things: which GPU denoiser the tracer dispatches
+(Atrous, DLSS-RR, NRD — none of them run unasked) and which image `readback()`
+hands back. The profile default fills it when the user names no mode.
 :::
 
 ## applyDenoisePolicy widens; it never refuses

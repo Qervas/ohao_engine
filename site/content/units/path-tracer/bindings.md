@@ -93,10 +93,9 @@ specialization constant, so an index at or past it reads as "no texture":
 
 {{cite shaders/rt/pt_closesthit.rchit "layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;"}}
 
-Three descriptor binding flags apply to binding 12. Two still do work; the third
-is a leftover.
+Two descriptor binding flags apply to binding 12.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);"}}
 
 `PARTIALLY_BOUND` is what makes an unwritten table legal. The per-frame update
 writes the *whole* capacity once any texture exists — entries past the table's
@@ -115,32 +114,19 @@ every other binding written in the same `vkUpdateDescriptorSets` call has no suc
 cover, which is safe only because each frame slot's set is not in use when it is
 rewritten.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);"}}
-
-The variable-count flag is the leftover. It currently buys nothing — the
-allocation asks for exactly `m_bindlessCapacity` descriptors in every set, the same
-number the layout already declares, so nothing is elided:
-
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "variableCounts.fill(m_bindlessCapacity);"}}
-
-It is also in the wrong place. Vulkan requires the binding carrying
-`VARIABLE_DESCRIPTOR_COUNT` to have the highest binding number in the set; here it
-sits on 12, and the set now runs to 37. Bindings 13–35 arrived in at least ten
-separate additions: the unlabelled surface/shading history quad at 13–16 and the
-env CDF pair at 17–18, then eight that still carry their sub-plan label in the
-layout file — 3.A, 3.B, 3.C, 3.C.6, 4.B, 4.C, ReSTIR GI Phase 1, and DLSS-RR at
-the end:
+A third flag sat here until sub-project 2b step 5: `VARIABLE_DESCRIPTOR_COUNT`.
+It bought nothing — every set was allocated at exactly `m_bindlessCapacity`, the
+count the layout declares — and it was illegal where it stood: Vulkan allows it
+only on the set's highest-numbered binding, and bindings 13–37 had arrived above
+12 in at least ten separate additions, the last of them the DLSS-RR guide and the
+`RenderScene` tables:
 
 {{cite ohao/render/rt/path_tracer_descriptors.cpp "add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)"}}
 
-The `RenderScene` tables took 36 and 37 after that, and the flag stayed put
-through all of them. Two fixes exist and neither has been applied. Deleting
-`VARIABLE_DESCRIPTOR_COUNT` from binding 12's flags is free: the allocation
-already requests the full capacity, so the binding's descriptor count is
-unchanged, no shader line moves, and nothing observable differs. Renumbering the
-bindless array above 37 keeps the flag and puts it where Vulkan wants it, at the
-cost of editing the `layout(set = 0, binding = ...)` line in every RT shader that
-samples a texture. Only the second has an excuse.
+Deleting it was free — no descriptor count changed, no shader line moved — and it
+was the layer's VUID 03004 on every path-traced run under validation:
+
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "(VUID 03004), and every set is allocated at the full capacity anyway."}}
 
 ## Nothing is allowed to be unbound — almost
 
@@ -240,12 +226,12 @@ unsafe is adding binding 38 and trusting a qualifier copied from a neighbour.
 
 ## The pool has no slack either
 
-The pool reserves, per frame-slot set, 25 storage images and 10 storage buffers,
-which is exactly what the layout consumes: 18 output, AOV and history images, the
-six reservoir planes and the hit-distance guide; and the seven scene tables, the
-light buffer and the two CDFs.
+The pool reserves, per frame-slot set, 26 storage images and 10 storage buffers,
+which is exactly what the layout consumes: 19 output, AOV and history images (the
+accumulation pair among them), the six reservoir planes and the hit-distance guide;
+and the seven scene tables, the light buffer and the two CDFs.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25 * kSets},"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},"}}
 
 Adding a storage-image or storage-buffer binding without bumping that count makes
 `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and

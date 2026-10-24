@@ -31,12 +31,11 @@ pixel's own history.
 {{cite shaders/rt/pt_raygen_offline.rgen "acc = (prev.rgb * prev.w + radiance) / count;"}}
 {{cite shaders/rt/pt_raygen_offline.rgen "imageStore(accumBuffer, pixel, vec4(acc, count));"}}
 
-The reprojected-history branch sitting beside it is dead in this shader — it is
-forced off, because reading a neighbour pixel that sibling invocations are
-concurrently writing is a race with no defined ordering, and the offline camera
-is static anyway.
+The history is this pixel's alone, read from the previous frame's image of a
+ping-pong pair: the offline camera is still, and any view change resets the
+accumulation.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// own-pixel progressive-accumulation branch."}}
+{{cite shaders/rt/pt_raygen_offline.rgen "// The offline camera is still (a view change resets), so the history is this pixel's."}}
 
 So OIDN receives the Monte-Carlo mean at whatever spp has accrued, in linear HDR,
 pre-tonemap — which is precisely the input its `RT` filter is trained on. The
@@ -163,20 +162,20 @@ to exposure-scaled linear radiance $x = 0.5\,L$, then encode with $\gamma = 2.2$
 The coefficients live once in C++ and once in GLSL:
 
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;"}}
-{{cite shaders/rt/pt_raygen_offline.rgen "vec3 ldr = ACES(denoised * 0.5);"}}
+{{cite shaders/rt/pt_raygen_offline.rgen "vec3 ldr = ACES(acc * 0.5);"}}
 
 and the exposure the denoised path passes is the same 0.5 the shader hard-codes.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);"}}
 
 The mirror only holds where the GPU does nothing but tonemap, which is a property
-of the profile rather than of the tonemap. `kRealtimeRTSettings` turns the
-raygen's own à-trous filter and luminance rescale on, so the realtime GPU frame
-is tonemapped *after* filtering while the OIDN path tonemaps the raw
-accumulation — same ACES fit, different input.
+of the profile rather than of the tonemap. `kRealtimeRTSettings` turns the internal
+spatial denoise on — an edge-aware filter and luminance rescale, a compute pass
+after the trace — so the realtime GPU frame is tonemapped *after* filtering while
+the OIDN path tonemaps the raw accumulation — same ACES fit, different input.
 
 {{cite ohao/render/rt/rt_settings.hpp ".enableInternalDenoise = true,"}}
-{{cite shaders/rt/pt_raygen_realtime.rgen "vec3 ldr = ACES(denoised * 0.5);"}}
+{{cite shaders/rt/pt_spatial_denoise.comp "const vec3 ldr = pow(ACES(denoised * 0.5), vec3(1.0 / 2.2));"}}
 
 That pairing is reachable: the shared example parser takes `rt_realtime` and
 `--denoise=` as independent tokens, the override is applied on top of the preset,

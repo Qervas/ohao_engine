@@ -16,28 +16,31 @@ committed one, and every decision here lives inside *diffed*.
 ## Determinism had to be bought before it could be tested
 
 You cannot diff renders that are not reproducible, and OHAO's were not. The
-offline reference raygen's temporal reprojection sampled the accumulation buffer
-at a *reprojected neighbour* pixel — a texel that sibling invocations of the same
-dispatch write at the end of the very same shader. That is a cross-invocation
-read-after-write with no defined ordering, so a static scene did not render the
-same way twice.
+raygens' temporal reprojection sampled the accumulation buffer at a *reprojected
+neighbour* pixel, and the realtime profile's in-shader spatial denoise read its
+neighbours too — texels that sibling invocations of the same dispatch write at the
+end of the very same shader. That is a cross-invocation read-after-write with no
+defined ordering, so a static scene did not render the same way twice. The cure is
+structural: the accumulation is a ping-pong pair, the trace writes this frame's and
+reads only the previous frame's, and the spatial denoise is a compute pass after
+the trace, when every texel it reads is finished.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// Phase 0 determinism contract: temporal reprojection reads accumBuffer at a"}}
+{{cite shaders/rt/pt_raygen_realtime.rgen "layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumHistory;"}}
 
-The fix is one assignment forcing the own-pixel accumulation branch; the offline
-camera never moves, so reprojection bought nothing. The block below it was left
-in place, merely unreachable. With it off, repeat renders of one frame differ by
-at most ~6 pixels at 1 LSB on a 1920×1080 frame: the irreducible floor from
-non-associative reduction order in the multi-light NEE sum.
+What remains is not the engine's. The driver's BVH builder lays out a mesh's nodes
+differently run to run, and a ray that hits exactly on an edge two triangles share
+takes whichever triangle the traversal reaches first: 1 LSB on a few pixels. The
+helmet flipped in five renders of eighty-three; the Cornell box never did run to
+run, but the same scene loaded from its file builds a different BVH than the
+example's code does, and the two renders differ on ten pixels.
 
-{{cite tests/golden/manifest.json "6.2M by 1 LSB between sessions; 4 covers that with margin."}}
+{{cite tests/golden/manifest.json "driver's BLAS builder lays out the BVH differently run to run (identical"}}
 
 :::why
-Bit-exact hashing was rejected because it would flag that six-pixel ghost forever.
-True bit-exactness means forcing reduction order and disabling fast-math — real
-effort and real performance cost to close a six-pixel gap. A tolerance compare
-absorbs the floor while still catching anything real, the same call PBRT and
-Mitsuba's suites make.
+Bit-exact comparison holds wherever it is achievable — every deferred scene —
+because any tolerance there hides a change. Where a floor exists outside the
+engine's control, the tolerance is that measured floor and nothing more, the same
+call PBRT and Mitsuba's suites make.
 :::
 
 ## Two predicates, because one is not enough
@@ -263,16 +266,17 @@ entities through the instantiate system, and requires the two to be bit-identica
 `scene_view_gpu_test` renders the Cornell box and `model_viewer`'s helmet room three
 ways — camera and environment set by hand, applied from the world's `Camera` and
 `Environment` entities, and after a round trip through scene text — and requires
-them to match: exactly for deferred, within the RT path's rare 1-LSB flips for the
-helmet. `restore_render_gpu_test` drives the CLI's own session and render host on
+them to match: exactly for deferred, within the BVH floor (a few bytes off by 1) for
+the path-traced helmet. `restore_render_gpu_test` drives the CLI's own session and render host on
 the checked-in Cornell scene with one renderer per sequence: a capture, a move that
 must change the image, a `world.restore` after which the capture must equal the
 first, bit-identical with post effects off and on. `deferred_determinism_gpu_test`
-renders each deferred configuration (Cornell with no post effects, each of TAA, SSAO
-and bloom alone, all three; the helmet room without and with them) in two fresh
-renderers, in a fresh renderer in a child process of itself, and twice in one
-renderer, and requires the same bytes every time. Validation is on for every deferred
-run and must report nothing.
+renders each configuration (Cornell with no post effects, each of TAA, SSAO and bloom
+alone, all three; the helmet room without and with them; Cornell path traced, offline
+and realtime) in two fresh renderers, in a fresh renderer in a child process of
+itself, and twice in one renderer, and requires the same bytes every time — for the
+path-traced ones, the same up to the BVH floor (at most 16 bytes, each off by 1).
+Validation is on for every run, path-traced ones included, and must report nothing.
 
 {{cite tests/renderer/deferred_determinism_gpu_test.cpp "checks.push_back({p + "a fresh renderer in another process is bit-identical", hc == ha});"}}
 

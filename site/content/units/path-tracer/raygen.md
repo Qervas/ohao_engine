@@ -158,10 +158,10 @@ comparable density, and dividing by a fabricated one darkens chrome.
 
 ## Where the three files stop agreeing
 
-`pt_raygen_offline.rgen` still tells you it is a verbatim copy that must be kept
-in sync by hand. It has not been one for a long time.
+`pt_raygen_offline.rgen` began as a copy of `pt_raygen.rgen`, and its header now
+says it is a fork. It has not been a copy for a long time.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "// Currently a verbatim copy of pt_raygen.rgen"}}
+{{cite shaders/rt/pt_raygen_offline.rgen "// Forked from pt_raygen.rgen (the default shader set's raygen); it differs in the"}}
 
 Four divergences matter when reading a render:
 
@@ -214,13 +214,13 @@ every NRD frame.
 
 {{cite shaders/rt/nrd_compose.comp "vec3 composed = diffRad * diffAlbedo + specRad * specColor;"}}
 
-One more offline-only line is worth knowing about: temporal reprojection reads
-`accumBuffer` at a *neighbour* pixel that sibling invocations are concurrently
-writing, which is an unordered cross-invocation read-after-write. The offline
-camera is static, so the file simply forces the own-pixel branch and buys
-run-to-run determinism.
+One more thing about the accumulation: it is two images. Every raygen writes this
+frame's at binding 1 and reads history only from the previous frame's at binding 3,
+so the realtime profile's reprojection, which reads a *neighbour* pixel, never reads
+a texel a sibling invocation is writing. The offline profile reads only its own
+pixel: its camera is still, and any view change resets the accumulation.
 
-{{cite shaders/rt/pt_raygen_offline.rgen "        useReprojection = false;"}}
+{{cite shaders/rt/pt_raygen_offline.rgen "const vec4 prev = imageLoad(accumHistory, pixel);"}}
 
 ## Two fields in one word, because the push constant is full
 

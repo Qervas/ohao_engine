@@ -198,12 +198,14 @@ the very next frame rather than only after the next reset:
 
 {{cite ohao/render/rt/path_tracer.hpp "if (m_sampleIndex == m_renderSeed) m_sampleIndex = seed;"}}
 
-The accumulation buffer is never cleared. On the frame where the history counter is
-zero its barrier declares the old layout `UNDEFINED`, licensing the driver to discard
-the contents; on every later frame the same barrier is a `GENERAL → GENERAL`
-read-modify-write acquire.
+The accumulation is never cleared. It is a ping-pong pair: each frame writes one
+image whole, so its barrier declares the old layout `UNDEFINED` every frame,
+licensing the driver to discard the contents, and reads the other — the previous
+frame's — through a `GENERAL → GENERAL` acquire of that write. Before the pair is
+written once, the history image is `UNDEFINED` too, and the raygens read history
+only once a frame has accumulated.
 
-{{cite ohao/render/rt/path_tracer_render.cpp "accumBarrier.oldLayout = (m_historyFrameCount == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "accumBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;"}}
 
 The post-processing images use the same idiom with per-instance latch booleans instead
 of a shared counter — and `createImages()` re-arms them, so a resize re-fires the

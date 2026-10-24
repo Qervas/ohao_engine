@@ -208,30 +208,26 @@ What the host still does not drive are the shader's four `PT_FLAG_RESTIRGI_*` bi
 5–8 of `pc.control.x`: nothing in the tree sets them, so the off, GI-only, legacy
 and no-spatial modes are reachable only by editing the push constants.
 
-## Two sharp edges in the layout
+## A sharp edge in the layout
 
-The storage-image pool is sized to exactly the 25 storage-image bindings, six of
+The storage-image pool is sized to exactly the 26 storage-image bindings, six of
 them reservoir planes:
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25 * kSets},"}}
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},"}}
 
-No slack: a 26th storage image added without editing that literal fails
+No slack: a 27th storage image added without editing that literal fails
 `vkAllocateDescriptorSets` with `VK_ERROR_OUT_OF_POOL_MEMORY` at startup, nowhere
 near the cause.
 
-The second edge predates ReSTIR but the reservoir block widened it. Vulkan
-requires `VARIABLE_DESCRIPTOR_COUNT` on the set's highest-numbered binding; here
-it sits on the bindless texture array at 12, with 25 higher-numbered bindings
-above (13–37):
+A second edge, which the reservoir block widened, is gone since sub-project 2b
+step 5: the bindless array at 12 carried `VARIABLE_DESCRIPTOR_COUNT`, which Vulkan
+allows only on the set's highest-numbered binding, with 25 bindings above it.
 
-{{cite ohao/render/rt/path_tracer_descriptors.cpp "VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |"}}
-
-The allocation requests the full declared count for it, so the flag elides
-nothing.
+{{cite ohao/render/rt/path_tracer_descriptors.cpp "(VUID 03004), and every set is allocated at the full capacity anyway."}}
 
 ## Contracts
 
 - $\hat p$ must be re-evaluated at the current primary hit before the held sample is shaded. Reusing the stored $\hat p$, or a stale `W`, distorts the GI while still looking smooth.
 - The spatial pass must not write back into the ping-pong planes; persisting it compounds sample correlation until the GI bakes.
 - Bindings 29–34 must be written in every frame-slot set with prev/curr swapped and the images in `VK_IMAGE_LAYOUT_GENERAL` before the raygen runs; the raygen touches them unconditionally, so dropping the write loses the device and dropping the barrier hands it images in an undefined layout.
-- The `{STORAGE_IMAGE, 25 * kSets}` entry is exact: bump it whenever a storage-image `add(...)` is added to the layout. The `29..34` loop adds the six planes in binding order, so the plane index equals the binding number minus 29.
+- The `{STORAGE_IMAGE, 26 * kSets}` entry is exact: bump it whenever a storage-image `add(...)` is added to the layout. The `29..34` loop adds the six planes in binding order, so the plane index equals the binding number minus 29.

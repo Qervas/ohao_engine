@@ -664,6 +664,17 @@ Spec 4's contract holds and extends to everything 2b adds.
   fresh renderers, processes and repeated captures.
 - The `rt_realtime` race and RT offline's 1-LSB flips are fixed. Their goldens then become
   exact: tolerances are only ever tightened.
+- *As built (step 5), corrected:* the race is fixed. RT offline's flips are not an engine
+  defect: the driver's BLAS builder lays out a mesh's BVH differently run to run (identical
+  input, different serialized bytes), and a ray that hits exactly on an edge two triangles
+  share takes whichever the traversal reaches first. Every mesh has such edges (Cornell's
+  walls are two-triangle quads). Vulkan has no deterministic-build flag, so path-traced
+  output keeps that floor — 1 LSB on a few pixels: the helmet flipped in 5 of 83 renders;
+  Cornell never flipped run to run (78 renders), but its scene loaded from the file by
+  `ohao run` builds another BVH than the example's and renders 10 pixels 1 off — and the
+  RT goldens are tightened to it (max_abs 1, diff_frac 0.0005), not to exact.
+  Cross-process and cross-host comparisons of path-traced output (test 11's
+  window-vs-headless capture included) hold to that floor.
 
 **Intentional image changes.**
 - Each is its own commit (`golden(render): <what changed and why>`), with the old→new
@@ -865,7 +876,8 @@ Numbered as the build steps reference them.
 12. **Determinism gates:**
     - the five deferred and the hybrid-RT goldens are exact, and so are the reference
       goldens (`cornell_box_reference`, `helmet_game_reference`);
-    - RT offline and `rt_realtime` are exact after step 5;
+    - RT offline and `rt_realtime` are exact after step 5 (*as built:* to the BVH floor,
+      see "Determinism");
     - the float-atomics shader lint.
 13. **Validation:** `check_validation.py` adds the hybrid-RT and path-traced scenes, zero
     messages through teardown (VUID 03004 and the NRD push-descriptor path fixed).
@@ -972,6 +984,25 @@ improvising. Intentional image changes are separate commits inside their step.
    - The float-atomics lint.
    - RT goldens tightened to exact where achieved.
    - Tests 12, 13.
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step5.md`):* VUID 03004 was
+     binding 12's variable count (not the layout's highest binding; every set was allocated
+     at full capacity anyway); the NRD abort was `VK_KHR_push_descriptor` never enabled
+     (NRI resolves `vkCmdPushDescriptorSet` as KHR), then `synchronization2`, NRD's
+     `queuedFrameNum` of 1 against 3 frames in flight, NRD's images lacking `SAMPLED`, and
+     the compose/cinematic chain's single descriptor sets (now one per frame in flight). The
+     chain now runs only in NRD mode, and an `--denoise=nrd` override now reaches the path
+     tracer (it never did: the chain ran ungated and the readback copied what it wrote).
+     The `rt_realtime` race was the raygen reading `accumBuffer` and `normalAOV` at
+     neighbour pixels in the dispatch writing them (temporal reprojection and the in-shader
+     spatial denoise): the accumulation is now a ping-pong pair (binding 1 written, binding
+     3 the previous frame's, read-only) and the spatial denoise a compute pass after the
+     trace (`shaders/rt/pt_spatial_denoise.comp`). RT offline's flips are the BVH floor
+     above. `OHAO_VALIDATION=sync` adds the layer's synchronization validation (zero hazards
+     on the path tracer). Test 12: `reflect_tests` `sp2b_t12_*` (the lint) and
+     `deferred_determinism_gpu_test` `t12 cornell_rt_offline` / `cornell_rt_realtime`
+     (within the BVH floor: at most 16 bytes, each off by 1);
+     test 13: `check_validation.py`'s four path-traced scenes (offline, realtime, realtime
+     with NRD, the helmet) and `scene_view_gpu_test`'s RT runs under validation.
 6. **Slang.**
    - `slangc` in `shaders/CMakeLists.txt`; the doctor's `.slang` freshness and
      `tools.slangc`; `shaders/shared/layout.json`.
