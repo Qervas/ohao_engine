@@ -177,7 +177,12 @@ public:
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
     /// Base sample index after reset (inverse/FD stability). samplerInit uses m_sampleIndex.
-    void setRenderSeed(uint32_t seed) noexcept { m_renderSeed = seed; }
+    // Takes effect at the next resetAccumulation, or now when nothing has accumulated since
+    // the last one (a fresh tracer starts its sample index at the seed).
+    void setRenderSeed(uint32_t seed) noexcept {
+        if (m_sampleIndex == m_renderSeed) m_sampleIndex = seed;
+        m_renderSeed = seed;
+    }
     [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
 
     void destroy();

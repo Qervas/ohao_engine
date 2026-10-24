@@ -32,12 +32,10 @@ public:
     void destroy() override;
 
     void setSampleCount(int samples) { m_sampleCount = samples; }
-    // Forget the temporal history and restart the frame index, as on a fresh technique.
-    // The device must be idle (the next render() clears the history from UNDEFINED).
-    void resetHistory() noexcept {
-        m_historyValid = false;
-        m_frameIndex = 0;
-    }
+    // Forget the temporal history, as on a fresh technique (the frame index is the
+    // renderer's, GIInput::frameIndex). The device must be idle (the next render() clears
+    // the history from UNDEFINED).
+    void resetHistory() noexcept { m_historyValid = false; }
 
 private:
     // G-buffer sampler. Lives as long as the technique: it is written into a
@@ -85,10 +83,10 @@ private:
         glm::mat4 invView;
         glm::mat4 invProj;
         glm::vec4 lightPosAndIntensity;
-        glm::uvec4 params;  // x=width, y=height, z=sampleCount, w=frameIndex
+        glm::uvec4 params;  // x=width, y=height, z=sampleCount, w=frame index since the last temporal reset
+        glm::uvec4 seed;    // x=render seed
     };
 
-    uint32_t m_frameIndex = 0;
     bool m_rendered = false;
     bool m_historyValid = false;   // false until history holds a written frame (new or resized image)
 

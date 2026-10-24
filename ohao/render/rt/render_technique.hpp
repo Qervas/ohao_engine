@@ -78,7 +78,8 @@ struct GIInput {
     glm::vec3 cameraPos;
     uint32_t width;
     uint32_t height;
-    uint32_t frameIndex;           // for temporal accumulation
+    uint32_t frameIndex = 0;       // since the last temporal reset: seeds samples; 0 takes no history
+    uint32_t renderSeed = 0;       // the render seed: with frameIndex, pixel and sample, seeds each ray
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
 
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;   // RenderScene TLAS (custom index = slot)

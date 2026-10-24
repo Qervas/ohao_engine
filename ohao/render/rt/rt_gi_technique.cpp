@@ -629,7 +629,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     pc.invView = glm::inverse(input.view);
     pc.invProj = glm::inverse(input.proj);
     pc.lightPosAndIntensity = glm::vec4(input.lightPos, input.lightIntensity);
-    pc.params = glm::uvec4(input.width, input.height, m_sampleCount, m_frameIndex);
+    pc.params = glm::uvec4(input.width, input.height, m_sampleCount, input.frameIndex);
+    pc.seed = glm::uvec4(input.renderSeed, 0u, 0u, 0u);
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
                        0, sizeof(GIPushConstants), &pc);
@@ -682,8 +683,6 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &toRead);
 
-
-    m_frameIndex++;
 }
 
 void RTGITechnique::resize(uint32_t width, uint32_t height) {

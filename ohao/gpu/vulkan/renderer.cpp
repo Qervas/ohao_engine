@@ -489,8 +489,10 @@ void VulkanRenderer::resetAccumulation() {
 void VulkanRenderer::setRenderSeed(uint32_t seed) {
     m_renderSeed = seed;
     forEachRTRenderer([&](IRTRendererProfile& r) { r.setRenderSeed(seed); });
-    if (m_deferredRenderer)
+    if (m_deferredRenderer) {
+        m_deferredRenderer->setRenderSeed(seed);   // RT shadows and GI
         if (auto* pp = m_deferredRenderer->getPostProcessing()) pp->setNoiseSeed(seed);
+    }
 }
 
 void VulkanRenderer::notifyCameraChanged() {
@@ -630,6 +632,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     }
     OHAO_LOG(Info, gpu, "VulkanRenderer: DeferredRenderer initialized, resizing to {}x{}", m_width, m_height);
     m_deferredRenderer->setPassTimer(&m_passTimer);
+    m_deferredRenderer->setRenderSeed(m_renderSeed);
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setExposure(0.6f);

@@ -303,6 +303,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     }
 
+    // This frame's index since the last temporal reset: with the render seed, it seeds
+    // every RT sample (and RT GI's first frame takes no history).
+    const uint32_t rtFrame = m_framesSinceReset++;
+
     // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
     // buffer. Null without RT or before anything was built.
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
@@ -324,6 +328,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 si.height = m_height;
                 si.frameSlot = frameIndex;
                 si.lights = m_shadowLights;
+                si.renderSeed = m_renderSeed;
+                si.frameIndex = rtFrame;
                 si.tlas = sceneTlas;
                 m_rtShadow->render(c, si);
                 // Lighting records after this pass and writes its descriptors then.
@@ -352,7 +358,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.cameraPos = m_cameraPos;
                 gi.width = m_width;
                 gi.height = m_height;
-                gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
+                gi.frameIndex = rtFrame;
+                gi.renderSeed = m_renderSeed;
                 gi.frameSlot = frameIndex;
                 gi.tlas = sceneTlas;
                 gi.instances = m_renderScene->instanceBuffer();
@@ -629,6 +636,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 void DeferredRenderer::resetTemporalState() {
     m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock
     m_totalTime = 0.0f;
+    m_framesSinceReset = 0;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
     if (m_rtGI) m_rtGI->resetHistory();
     if (m_postProcessing) m_postProcessing->resetHistory();

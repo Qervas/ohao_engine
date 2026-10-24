@@ -18,7 +18,8 @@ layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
     vec4 lightPosAndIntensity;  // xyz=light pos, w=intensity
-    uvec4 params;               // x=width, y=height, z=sampleCount, w=frameIndex
+    uvec4 params;               // x=width, y=height, z=sampleCount, w=frame index since the last temporal reset
+    uvec4 seed;                 // x=render seed
 } pc;
 
 // GI ray payload: hit color + distance
@@ -26,15 +27,17 @@ layout(location = 0) rayPayloadEXT vec4 giPayload;  // rgb=color, a=hitDist (-1 
 
 #include "includes/common/encoding.glsl"
 
-// Hash functions for random ray directions
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+// PCG hash (Jarzynski & Olano 2020): integer in, integer out, no float state.
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
 }
 
-vec2 hash2(vec2 p) {
-    return vec2(hash(p), hash(p + vec2(127.1, 311.7)));
+// A uniform number in [0, 1) from (render seed, frame index, pixel, sample, dimension).
+float rand01(uvec2 pixel, uint s, uint dim) {
+    uint h = pcg(pc.seed.x ^ pcg(pc.params.w ^ pcg(pixel.x ^ pcg(pixel.y ^ pcg((s << 4u) ^ dim)))));
+    return float(h >> 8u) * (1.0 / 16777216.0);
 }
 
 // Cosine-weighted hemisphere sampling
@@ -85,7 +88,7 @@ void main() {
 
     for (uint s = 0u; s < sampleCount; s++) {
         // Per-sample random direction (cosine-weighted around normal)
-        vec2 rng = hash2(vec2(pixel) + vec2(float(s) * 7.13 + float(frameIndex) * 1.618, float(s) * 13.37));
+        vec2 rng = vec2(rand01(uvec2(pixel), s, 0u), rand01(uvec2(pixel), s, 1u));
         vec3 dir = cosineSampleHemisphere(rng, N);
 
         // Trace indirect ray against static geometry only

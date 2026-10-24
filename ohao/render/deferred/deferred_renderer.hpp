@@ -51,6 +51,11 @@ public:
     // frames that follow render as a fresh renderer's would. The device must be idle.
     void resetTemporalState();
 
+    // RT shadows and RT GI seed every sample from (render seed, frame index since the last
+    // resetTemporalState, pixel, sample): frame k after a reset is the same in every run.
+    void setRenderSeed(uint32_t seed) noexcept { m_renderSeed = seed; }
+    [[nodiscard]] uint32_t framesSinceReset() const noexcept { return m_framesSinceReset; }
+
     // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
     // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
     void setRenderScene(const render::RenderScene* scene);
@@ -212,6 +217,8 @@ private:
     // m_totalTime until which an emitted particle can still be alive (the particles pass
     // runs only until then); below zero: nothing was ever emitted.
     float m_particlesLiveUntil{-1.0f};
+    uint32_t m_renderSeed{0};
+    uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
 
     [[nodiscard]] bool createParticleRenderPass();
     [[nodiscard]] bool createParticleFramebuffer();

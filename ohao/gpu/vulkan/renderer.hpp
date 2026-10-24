@@ -190,7 +190,8 @@ public:
     void notifyCameraChanged();
     void resetAccumulation();
     /// The render's one seed: the path tracers' base sample index after an accumulation
-    /// reset, and the deferred path's SSAO noise. Kept, so renderers created later get it.
+    /// reset, the deferred path's RT shadow and GI sample seed (with the frame index since
+    /// the reset) and its SSAO noise. Kept, so renderers created later get it.
     void setRenderSeed(uint32_t seed);
     [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;

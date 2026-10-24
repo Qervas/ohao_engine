@@ -16,7 +16,9 @@
 // frames, exposure 1).
 //
 // The SSAO noise is a function of the render seed alone (pinned for seed 0), and
-// setRenderSeed reaches the SSAO pass; reseeding renders validation clean.
+// setRenderSeed reaches the SSAO pass; reseeding renders validation clean. Test 12's seed
+// part (sub-project 2b, step 4): the render seed moves the RT shadow and GI noise, and the
+// same seed renders the same image again.
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
@@ -260,15 +262,19 @@ int main(int argc, char** argv) {
         const bool loaded = ok(s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}"));
         uint32_t initial = UINT32_MAX, after7 = UINT32_MAX, after0 = UINT32_MAX;
         bool rendered = false;
+        std::vector<uint8_t> seed0, seed7, seed0Again;
         if (loaded && ok(s.call("render.capture", captureParams(dir / "seed0.png", c))) && h.renderer()) {
+            seed0 = pixelsOf(h);
             const auto* pp = h.renderer()->getDeferredRenderer()->getPostProcessing();
             initial = pp->noiseSeed();
             h.renderer()->setRenderSeed(7);
             after7 = pp->noiseSeed();
             rendered = ok(s.call("render.capture", captureParams(dir / "seed7.png", c)));
+            seed7 = pixelsOf(h);
             h.renderer()->setRenderSeed(0);
             after0 = pp->noiseSeed();
             rendered = rendered && ok(s.call("render.capture", captureParams(dir / "seed0_again.png", c)));
+            seed0Again = pixelsOf(h);
         }
         checks.push_back({"t1 a fresh renderer's SSAO noise uses seed 0", initial == 0});
         checks.push_back({"t1 setRenderSeed reaches the SSAO pass (7, then 0)", after7 == 7 && after0 == 0});
@@ -276,6 +282,17 @@ int main(int argc, char** argv) {
                           rendered && h.renderer()->validationEnabled() && h.renderer()->validationMessageCount() == 0});
         std::printf("  [seed] noise(0) hash %s; SSAO seed initially %u, after setRenderSeed(7) %u, after (0) %u\n",
                     h0.c_str(), initial, after7, after0);
+
+        // Test 12, seed part (sub-project 2b, step 4): RT shadow and GI rays are seeded by
+        // (render seed, frame index since the capture's reset, pixel, sample). Another seed
+        // moves the RT noise (SSAO does not reach the image, so only RT can); the same seed
+        // after it gives the first image back bit for bit.
+        const bool rt = h.renderer() && h.renderer()->isRTSupported();
+        const std::size_t d07 = differing(seed0, seed7), d00 = differing(seed0, seed0Again);
+        std::printf("  [seed] RT %s; differing bytes seed 0 vs 7: %zu, seed 0 vs 0 again: %zu\n", rt ? "on" : "off",
+                    d07 == SIZE_MAX ? std::size_t(0) : d07, d00 == SIZE_MAX ? std::size_t(0) : d00);
+        checks.push_back({"t12 another render seed moves the RT shadow and GI noise", !rt || (d07 != SIZE_MAX && d07 > 0)});
+        checks.push_back({"t12 the same seed again renders bit-identically", d00 == 0});
     }
 
     int passed = 0, failed = 0;
