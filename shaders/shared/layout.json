@@ -34,8 +34,8 @@
     {"name": "ShadowLight", "doc": "one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)",
      "fields": [
        {"name": "positionAndType", "type": "float4", "doc": "xyz position (directional: its travel direction; rect: a corner); w type: 0 directional, 1 sphere, 2 rect"},
-       {"name": "edge1AndRadius", "type": "float4", "doc": "xyz the rect's first edge; w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)"},
-       {"name": "edge2AndRange", "type": "float4", "doc": "xyz the rect's second edge; w the range (0: unlimited)"},
+       {"name": "edge1AndRadius", "type": "float4", "doc": "xyz the rect's first edge (a spot: its unit direction); w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)"},
+       {"name": "edge2AndRange", "type": "float4", "doc": "xyz the rect's second edge (a sphere: x the spot's outer-cone cosine, -2 a point light); w the range (0: unlimited)"},
        {"name": "centreAndIntensity", "type": "float4", "doc": "xyz the light's centre (directional: the unit vector toward it), w its intensity: the per-pixel importance"}
      ]},
     {"name": "ShadowTracePush", "doc": "RT shadows' trace (rt/shadow_trace.slang) push constants",

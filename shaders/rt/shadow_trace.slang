@@ -92,6 +92,13 @@ float importance(ShadowLight light, float3 p, float3 n)
     if (type == 1u && range > radius && d2 > range * range) return 0.0;
     const float nd = dot(n, d);
     if (nd < 0.0 && nd * nd > radius * radius * d2 && d2 > radius * radius) return 0.0;   // behind the surface, the whole light
+    const float cosOuter = light.edge2AndRange.x;   // a spot's outer cone; -2: a point light
+    if (type == 1u && cosOuter > -1.5 && d2 > radius * radius)
+    {
+        // Outside the cone (widened by the light's angular radius) the spot lights nothing.
+        const float invDist = rsqrt(d2);
+        if (dot(-d * invDist, light.edge1AndRadius.xyz) < cosOuter - radius * invDist) return 0.0;
+    }
     return intensity / max(d2, 1e-4);
 }
 

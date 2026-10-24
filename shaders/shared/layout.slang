@@ -28,8 +28,8 @@ struct CalibratePush
 struct ShadowLight
 {
     float4 positionAndType;   // xyz position (directional: its travel direction; rect: a corner); w type: 0 directional, 1 sphere, 2 rect
-    float4 edge1AndRadius;   // xyz the rect's first edge; w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)
-    float4 edge2AndRange;   // xyz the rect's second edge; w the range (0: unlimited)
+    float4 edge1AndRadius;   // xyz the rect's first edge (a spot: its unit direction); w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)
+    float4 edge2AndRange;   // xyz the rect's second edge (a sphere: x the spot's outer-cone cosine, -2 a point light); w the range (0: unlimited)
     float4 centreAndIntensity;   // xyz the light's centre (directional: the unit vector toward it), w its intensity: the per-pixel importance
 };
 

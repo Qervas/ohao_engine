@@ -82,12 +82,16 @@ shared::ShadowLight toGpu(const render::LightDesc& d) {
         g.centreAndIntensity = f4(d.position + half, d.intensity);
         break;
     }
-    default:                                 // Point, Spot: a sphere of `radius`
+    default: {                               // Point, Spot: a sphere of `radius`
+        // A spot's direction (edge1 xyz) and outer-cone cosine (edge2 x): its importance is 0
+        // outside the cone. A point light's edge2 x is -2: no cone.
+        const bool spot = d.kind == render::LightKind::Spot;
         g.positionAndType = f4(d.position, 1.0f);
-        g.edge1AndRadius = f4(0.0f, 0.0f, 0.0f, d.radius);
-        g.edge2AndRange = f4(0.0f, 0.0f, 0.0f, d.range);
+        g.edge1AndRadius = f4(spot ? glm::normalize(d.direction) : glm::vec3(0.0f), d.radius);
+        g.edge2AndRange = f4(spot ? std::cos(glm::radians(d.outerConeDeg)) : -2.0f, 0.0f, 0.0f, d.range);
         g.centreAndIntensity = f4(d.position, d.intensity);
         break;
+    }
     }
     return g;
 }

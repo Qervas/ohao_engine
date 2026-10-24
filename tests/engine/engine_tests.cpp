@@ -1952,6 +1952,34 @@ static void sp2b_t09_reference_shadows_every_light_past_the_realtime_cap() {
     TEST_PASS();
 }
 
+// Test 9: a spot light outside its cone is worth nothing to a pixel, so it takes none of the
+// pixel's 4 traced lights: four point lights and a bright spot pointing straight up from
+// near the floor leave no pixel over the cap.
+static void sp2b_t09_a_spot_outside_its_cone_takes_no_slot() {
+    TEST_BEGIN("sp2b_t09: a spot light outside its cone takes none of a pixel's 4 traced lights");
+    std::vector<SceneLight> lights;
+    for (int k = 0; k < 4; ++k) {
+        const float a = glm::radians(90.0f * float(k) + 45.0f);
+        lights.push_back({shadowLight(25.0f, 0.05f), {3.0f * std::cos(a), 4.0f, 3.0f * std::sin(a)}});
+    }
+    ohao::ecs::Light spot = shadowLight(500.0f, 0.05f);
+    spot.type = ohao::ecs::LightType::Spot;
+    spot.outerConeDeg = 20.0f;
+    spot.innerConeDeg = 15.0f;
+    lights.push_back({spot, {3.0f, 0.5f, 0.0f}});
+    // -Z turned to +Y: the spot points straight up, away from the floor and the box.
+    const glm::quat up = glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0));
+    const ShadowRun r = shadowRun(lights, ohao::RenderQuality::Realtime, 1, true, up);
+    if (r.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    std::cout << "(dropped " << (r.dropped ? std::to_string(*r.dropped) : std::string("none")) << ") ";
+    EXPECT(r.dropped && *r.dropped == 0, "no pixel had more than 4 lights worth tracing: the spot lights none of them");
+    TEST_PASS();
+}
+
 // Test 9: the realtime shadows converge toward the reference: frame 16 after a reset is
 // closer to a 16-frame reference capture than frame 1 is.
 static void sp2b_t09_realtime_converges_toward_the_reference() {
@@ -1977,6 +2005,7 @@ static void runRTShadowTests() {
     sp2b_t09_the_capture_after_a_reset_is_exact_run_to_run();
     sp2b_t09_csm_is_the_fallback_when_rt_shadows_are_off();
     sp2b_t09_reference_shadows_every_light_past_the_realtime_cap();
+    sp2b_t09_a_spot_outside_its_cone_takes_no_slot();
     sp2b_t09_realtime_converges_toward_the_reference();
     sp2b_s4_the_sky_reaches_the_final_image_through_sss();
 }
