@@ -3,7 +3,8 @@
 A map of the code: the libraries and which way they depend, how one frame flows from
 game state to pixels, and recipes for the changes people make most often. Each recipe
 was followed once, end to end, when it was written (sub-project 3, step 10: the `Spin`
-component, the spin system, `entity.duplicate` and `systems_tests` are the result).
+component, the spin system, `entity.duplicate` and `systems_tests`; sub-project 4, step
+11: an API method, a render pass and its shader, a golden scene).
 `python tests/docs/check_docs.py` runs every `console` command here.
 
 ## Libraries
@@ -195,26 +196,126 @@ Followed for `entity.duplicate`. A command is one op in a `world.apply` batch; a
 4. **Docs:** the command table in `docs/agents/ohao-cli.md`; a CLI case in
    `tests/cli/cases.json` if the CLI exposes something new.
 
-A new **method** instead:
+```console
+$ build/Release/api_tests.exe > /dev/null
+```
+
+## Recipe: add an API method
+
+Followed for `world.hash` and `world.diff` (sub-project 4, step 7) and the four `input.*`
+methods (step 8). One definition makes a method everywhere at once: the native JSON-RPC
+method, the MCP tool (`.` becomes `_`), the catalogue entry and its JSON Schema, the CLI's
+`run --script` line.
+
 1. **Its params struct** in `ohao/api/params.hpp`, registered in `params.cpp` with a doc
-   on every field, limits, units and `.required()` where a member must be given. Free
-   JSON that another decoder checks is a `reflect::JsonRef`. This one definition is the
-   validation (`decodeParams`), the catalogue's JSON Schema and the MCP tool's input
-   schema.
+   on every field, limits, units and `.required()` where a member must be given;
+   `.maxItems(n)` on an array a client could make unbounded. Free JSON that another
+   decoder checks is a `reflect::JsonRef`. This one definition is the validation
+   (`decodeParams`), the catalogue's JSON Schema and the MCP tool's input schema.
 2. **The handler** `bool name(Session::Impl&, const JsonDocument&, const JsonNode& params,
-   DecodeContext&, JsonWriter& out)` in `ohao/api/session.cpp`: first
-   `decodeParams(s, params, ctx, p)`; a rule on the params alone fails with
-   `badParams(s)` (JSON-RPC -32602), anything else is a domain error. A path in params
-   goes through `usePath` (the server's sandbox). A long loop checks
-   `s.cancelRequested()` between whole steps and reports `s.control->progress`.
-3. **Register it:** a `MethodDoc` in `buildMethods` and the handler in `kDispatch`.
-4. Then update the method count in `t09_method_table_dispatch_and_errors`, the CLI and
-   serve goldens (the catalogue and `tools/list` list methods; `schemaHash` changes), an
-   example in `EXAMPLES` of `tests/serve/check_serve.py`, and the method table in the
-   CLI guide. `rpc_tests` keeps `tools/list` under 24 KB.
+   DecodeContext&, JsonWriter& out)` in `ohao/api/session.cpp` (or a file of its own under
+   `ohao/api/`, declared in `internal.hpp`): first `decodeParams(s, params, ctx, p)`; a
+   rule on the params alone fails with `badParams(s)` (JSON-RPC -32602), anything else is
+   a domain error (`ctx.error(code, node, message, expected)`, then `return false`). A path
+   in params goes through `usePath` (the server's sandbox). A long loop checks
+   `s.cancelRequested()` between whole steps and reports `s.control->progress`. Anything
+   that needs a GPU goes through `s.render` (the session's `api::Host`), never the
+   renderer: the API stays GPU-free.
+3. **Register it:** a `MethodDoc` in `buildMethods` (name, params struct, a compact result
+   shape, one doc line: the MCP description agents read) and the handler in `kDispatch`,
+   with `mutates = true` if it changes the world (a window host in lockstep redraws only
+   after such calls).
+4. **Tests and goldens:** its behaviour in `tests/api/api_tests.cpp`; the method count in
+   `t09_method_table_dispatch_and_errors`; an example in `EXAMPLES` of
+   `tests/serve/check_serve.py` (its schema through `jsonschema`, the server accepting it);
+   then the goldens, after reading the diff: `python tests/cli/check_cli.py --update` and
+   `python tests/serve/check_serve.py --update` (`schemaHash`, `tools/list`). `rpc_tests`
+   keeps `tools/list` under 24 KB, so keep the doc line to one sentence.
+5. **Docs:** the method table in `docs/agents/ohao-cli.md`, and `docs/agents/ohao-serve.md`
+   if it changes how a session goes.
 
 ```console
 $ build/Release/api_tests.exe > /dev/null
+$ build/Release/rpc_tests.exe > /dev/null
+```
+
+## Recipe: add a render pass (and its shader)
+
+Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
+luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
+a resize and teardown, left every golden exact, and was then removed, since nothing read
+its output. Deferred passes live in `ohao/render/deferred/`; `SSRPass` is the compute
+model to copy, `SkyPass` the fullscreen raster one.
+
+1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
+   `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
+   compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
+   SPIR-V is named by flattening the path: `postprocess/ssr.comp` →
+   `postprocess_ssr.comp.spv`. Include shared code by its path under `shaders/`
+   (`#include "includes/common/color.glsl"`); every `.spv` is rebuilt when any file under
+   `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
+   transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
+   input, `vkCmdDraw(cmd, 3, 1, 0, 0)`).
+2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
+   (set `m_device`/`m_physicalDevice`, then create everything; return false on any
+   failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
+   helpers: `createRenderTarget`, `createSampler`, `createComputePipeline(spvName, layout,
+   pushSize, …)` (it loads the SPIR-V by its flattened name through `loadShaderModule`),
+   `transitionImage`, `safeDestroy`. The destructor calls `cleanup()`.
+3. **Descriptors written at record time need one set per frame in flight**: a
+   `std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>`, a pool sized ×
+   `MAX_FRAMES_IN_FLIGHT`, and `execute` writing only `m_descriptorSets[frameIndex]`
+   (`if (frameIndex >= MAX_FRAMES_IN_FLIGHT) return;`). A single set rewritten every frame
+   races the frame still reading it (VUID 03047).
+4. **Barriers are the pass's own** unless it joins the render graph: transition its output
+   before writing (`UNDEFINED` → `GENERAL` for a storage image it rewrites whole) and to
+   `SHADER_READ_ONLY_OPTIMAL` after, with the stages of its readers. Inputs keep the
+   layouts their producers leave: the lit HDR image in `SHADER_READ_ONLY_OPTIMAL`, the
+   G-buffer depth in `DEPTH_STENCIL_READ_ONLY_OPTIMAL`. (Passes that run before lighting
+   go through `RenderGraph` instead: `addComputePass`, `readComputeTexture`, imports
+   refreshed in `importGraphTextures`.)
+5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
+   `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
+   and `reset()` on failure, as SSR does); record it in `render()` at its place in the
+   frame (after lighting: SSS, SSR, sky, particles, post, gizmo) inside
+   `timerBegin("Name") … timerEnd()` (a string literal: it is the GPU timing label in
+   `getPerfStats()["gpu_timings_ms"]`); resize it in `onResize`, and hand it again any
+   view of another pass that a resize recreates. A pass left at its creation size is
+   invisible to validation and wrong on screen.
+6. **Check it:** build (the shader comes with any target that renders); run validation
+   with a resize; run the goldens — a pass that changes pixels changes the deferred goldens
+   on purpose, so look at the diff (`build/golden_diff/`), then `--update`; and
+   `deferred_determinism_gpu_test` (deferred frames must stay bit-identical run to run).
+   A post effect that agents switch on also needs its name in `PostEffect`
+   (`ohao/api/params.{hpp,cpp}`) and `kEffects` (`session.cpp`), and its toggles in
+   `runtime/frame_capture.cpp` and `runtime/live_host.cpp`.
+
+```console
+$ python tests/validation/check_validation.py > /dev/null
+$ build/Release/deferred_determinism_gpu_test.exe > /dev/null
+```
+
+## Recipe: add a golden scene
+
+Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).
+
+1. **The scene** is a checked-in `.scene.json` (`assets/scenes/`); a golden renders it
+   through `ohao run`, so everything about the render is on the command line: `--mode`,
+   `--frames` (deferred: from a reset, the last kept; with TAA give enough frames to
+   converge), `--post`, `--exposure`, `--spp`/`--denoise` for the path tracer.
+2. **The entry** in `tests/golden/manifest.json`: `name`, `command` (`{out}` is the
+   image the harness compares), `golden` (`tests/golden/<name>.png`), the tolerance and a
+   `_note` saying what the image is and why its tolerance is what it is. **Deferred
+   scenes are exact** (`max_abs_diff` 0, `max_diff_frac` 0): deferred rendering is
+   deterministic. Path-traced ones get the noise floor `--selftest --json` measures, never
+   more.
+3. **Generate, then look:** `--only <name> --update` writes the golden; open the PNG and
+   check it shows what the note says before keeping it. Then run `--only <name>` twice
+   more: an exact scene must pass both.
+4. The scene count in `AGENTS.md` ("Render goldens").
+
+```console
+$ python tests/golden/render_golden.py tests/golden/manifest.json --only cli_helmet_game_deferred > /dev/null   # gpu
 ```
 
 ## Recipe: add a test suite

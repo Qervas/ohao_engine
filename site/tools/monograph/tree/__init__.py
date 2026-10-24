@@ -19,6 +19,7 @@ from . import (
     audio,
     systems,
     reflection,
+    agent,
 )
 
 MODULES = [
@@ -26,6 +27,7 @@ MODULES = [
     core.MODULE,
     scene.MODULE,
     reflection.MODULE,
+    agent.MODULE,
     gpu.MODULE,
     materials.MODULE,
     deferred.MODULE,

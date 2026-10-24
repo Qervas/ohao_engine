@@ -124,6 +124,43 @@ window.OHAO_NAV_TREE = [
     ]
   },
   {
+    "id": "agent",
+    "title": "13 \u00b7 Agent control surface",
+    "href": "m/agent/index.html",
+    "children": [
+      {
+        "id": "agent/protocol",
+        "title": "The protocol server",
+        "href": "m/agent/protocol.html"
+      },
+      {
+        "id": "agent/transports",
+        "title": "Transports: stdio and the named pipe",
+        "href": "m/agent/transports.html"
+      },
+      {
+        "id": "agent/live-host",
+        "title": "The live host",
+        "href": "m/agent/live-host.html"
+      },
+      {
+        "id": "agent/time-input",
+        "title": "Time and input as data",
+        "href": "m/agent/time-input.html"
+      },
+      {
+        "id": "agent/capture",
+        "title": "Frame capture",
+        "href": "m/agent/capture.html"
+      },
+      {
+        "id": "agent/hash-diff",
+        "title": "World hash, diff and determinism",
+        "href": "m/agent/hash-diff.html"
+      }
+    ]
+  },
+  {
     "id": "gpu",
     "title": "03 \u00b7 GPU / Vulkan",
     "href": "m/gpu.html",

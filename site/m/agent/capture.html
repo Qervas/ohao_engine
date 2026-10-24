@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>13 · Agent control surface · Frame capture — OHAO Monograph</title>
+  <meta name="description" content="One capture procedure for both hosts, readback on request, previews beside the result, and a fast lossless PNG writer." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="agent/capture" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Frame capture</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">agent</p>
+          <h1>Frame capture</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>One capture procedure for both hosts, readback on request, previews beside the result, and a fast lossless PNG writer.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what-an-agent-looks-at">What an agent looks at</a></li><li><a href="#readback-on-request">Readback on request</a></li><li><a href="#what-a-window-may-capture">What a window may capture</a></li><li><a href="#region-preview-and-the-image-beside-the-result">Region, preview and the image beside the result</a></li><li><a href="#a-png-writer-of-its-own">A PNG writer of its own</a></li><li><a href="#where-the-time-goes">Where the time goes</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what-an-agent-looks-at">What an agent looks at</h2></div>
+<div class="prose reveal">
+<p>`render.capture` is how an agent sees the world: a PNG file, an inline preview image, or both. The session checks the whole request (path, mode, sizes, post effects, exposure, region) and then hands it to its `api::Host`. Two hosts implement it. One is the CLI&#x27;s headless `host::RenderHost`, used by `ohao run --render` and headless `ohao serve`, which starts a renderer on first capture. The other is the window&#x27;s `runtime::LiveHost`. Both end in one procedure, `runtime::captureFrame`. It applies the world&#x27;s camera and environment, sets the mode, denoiser, post effects and exposure, does a temporal reset, renders `frames` frames each after `World::sync()`, and reads back the last one. The CLI unit describes the frame defaults and the reset. This unit covers the parts sub-project 4 added: readback on request, what a window may capture, and the image encoders.</p>
+<p>Because the procedure is shared, a lockstep window capture and a headless capture of the same world at the same size are the same pixels by construction, not by a tolerance. `check_live.py` compares them byte for byte, with post effects off and on.</p>
+</div>
+<div class="section-rule"><h2 id="readback-on-request">Readback on request</h2></div>
+<div class="prose reveal">
+<p>Before sub-project 4, every headless frame copied its final image into its frame slot&#x27;s staging buffer, and `getPixelSpan()` returned the copy from `MAX_FRAMES_IN_FLIGHT` (3) frames earlier. The examples compensated by rendering `spp + 3` frames, and a capture of three frames or fewer came back black. A window frame copied nothing at all. Both behaviours were wrong for an agent. The ring delivers the wrong frame, and copying every window frame would cost every presented frame a GPU-to-CPU transfer nobody asked for.</p>
+<p>The renderer now copies a frame only when asked. `requestReadback()` marks the next frame:</p>
+<div class="citation-chip"><code class="citation-code">void requestReadback() noexcept { m_readbackRequested = true; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L117" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:117</a></div>
+<p>The flag is consumed by the next frame that starts, whether or not that frame is actually rendered:</p>
+<div class="citation-chip"><code class="citation-code">// A request belongs to this frame; a frame that is not rendered leaves no readback.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L47" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:47</a></div>
+<p>A frame skipped because the window is minimized or the swapchain is out of date leaves nothing to read, and `readback()` returns an empty span instead of an old frame. When the frame did copy, `readback()` waits on that frame&#x27;s fence only, never on the queue or the device, and returns a view of the slot&#x27;s persistently mapped buffer:</p>
+<div class="citation-chip"><code class="citation-code">if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L40" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:40</a></div>
+<p>In a window the copy is recorded inside the swapchain blit, where the final image is already in `TRANSFER_SRC` layout, so it costs one extra copy command and no layout transitions:</p>
+<div class="citation-chip"><code class="citation-code">// A requested readback: the same image, already a transfer source, into the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L232" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:232</a></div>
+<p>The renderer counts two things. `readbackCopyCount()` counts the headless ring&#x27;s copies, which is always 0 in a window. `requestedReadbackCount()` counts the copies that were asked for. The presentation gate (`ohao_game --frames N`) and `check_live.py` both require the unrequested count to stay 0 through teardown.</p>
+<p>The staging buffers also changed memory type. The CPU reads them, so they are now allocated host-cached where the device offers cached memory that is also coherent:</p>
+<div class="citation-chip"><code class="citation-code">// Readback buffers: the CPU reads them, so host-cached memory where the device offers it</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.cpp#L174" target="_blank" rel="noopener">ohao/render/frame/frame_resources.cpp:174</a></div>
+<p>Reading one 1280x720 frame (3.7 MB) from uncached host-visible memory took about 20 ms, and every headless frame paid that cost while copying its ring slot. The spec&#x27;s step-9 note records a one-frame headless capture dropping from about 45 ms of CPU time to about 1 ms.</p>
+<p>The path tracer&#x27;s CPU denoisers (OIDN, NRD) are the one exception. They read the live images back themselves, so a capture with one of them takes its pixels from the ring buffer they filled:</p>
+<div class="citation-chip"><code class="citation-code">const bool cpuDenoise = isRTRenderMode(mode) &amp;&amp; (denoise == DenoiseMode::OIDN || denoise == DenoiseMode::NRD);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/frame_capture.cpp#L156" target="_blank" rel="noopener">ohao/runtime/frame_capture.cpp:156</a></div>
+</div>
+<div class="section-rule"><h2 id="what-a-window-may-capture">What a window may capture</h2></div>
+<div class="prose reveal">
+<p>`LiveHost::capture` refuses three requests before rendering anything. A minimized window has no frame (`E_STATE`). Another size is `E_COMMAND`: the window captures at its own size, and the agent leaves `width` and `height` out. Path tracing is `E_COMMAND` too, because the path tracer&#x27;s frames have no swapchain path, so a window cannot present them:</p>
+<div class="citation-chip"><code class="citation-code">out.errors.push_back(error(&quot;E_COMMAND&quot;, &quot;a window host captures deferred frames; path tracing needs a headless &quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L142" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:142</a></div>
+<p>Otherwise the result depends on the time mode. In lockstep (or paused), the host first renders once if a resize is still pending, so the capture is at the window&#x27;s current size. It then saves the window&#x27;s post settings, runs `captureFrame` with a reset every time, and restores the settings, leaving the capture&#x27;s last frame on screen. In realtime the world is moving, and a reset or extra frames would show the agent something the player never saw. So the capture is the next frame the window presents, with the live settings:</p>
+<div class="citation-chip"><code class="citation-code">// Realtime: the next frame the window presents, as is (no reset, the live settings).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L152" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:152</a></div>
+<p>That result is marked `deterministic: false`. A lockstep capture of the same world always gives the same pixels. That holds after step 1 of the sub-project, which made every deferred configuration bit-identical run to run (see the hash and determinism unit).</p>
+</div>
+<div class="section-rule"><h2 id="region-preview-and-the-image-beside-the-result">Region, preview and the image beside the result</h2></div>
+<div class="prose reveal">
+<p>`region: [x, y, w, h]` crops the frame before anything else, so an agent can zoom into a detail at full resolution without paying for the whole frame. A region outside the frame is `E_COMMAND` at `/region`. The crop then goes to the PNG file (`path`) if one was asked for, and to the preview (`inline: true`). The preview is scaled so its long side is at most `maxSize`, 768 px by default; the spec puts a 768x432 preview at about 440 tokens. The scale is an area average: each output pixel is the mean of the source pixels it covers, each weighted by how much of it falls inside:</p>
+<div class="citation-chip"><code class="citation-code">const double cover = std::min&lt;double&gt;(b, k + 1) - std::max&lt;double&gt;(a, k);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L43" target="_blank" rel="noopener">ohao/runtime/image.cpp:43</a></div>
+<p>`fitWithin` resamples vertically first, so each output row is a weighted sum of whole source rows, a run of contiguous multiply-adds per tap, and then horizontally over only the rows that are left. The spec measures 3 ms for 1280x720 to 768x432. The preview is a JPEG at quality 85 through `stb_image_write` (about 3.5 ms for 768x432), or a PNG when `format: &quot;png&quot;` asks for exact pixels.</p>
+<p>The encoded preview does not go into the result JSON. It travels beside it, as `api::CallOutcome::image`. Over MCP it becomes an `image` content block after the text block, which is the form a model can look at:</p>
+<div class="citation-chip"><code class="citation-code">if (!failed &amp;&amp; o.image) {   // render.capture inline: the image a model looks at</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L583" target="_blank" rel="noopener">ohao/rpc/server.cpp:583</a></div>
+<p>Over native JSON-RPC, and through `Session::call(string)`, it is appended to the result as `&quot;image&quot;` (base64) and `&quot;mimeType&quot;`. The result itself reports `width`, `height`, `imageSize`, `frames`, the total `ms`, `readbackMs` (the fence wait and the copy) and `encodeMs` (crop, scale, file and preview), plus the validation message count when the layers are on.</p>
+</div>
+<div class="section-rule"><h2 id="a-png-writer-of-its-own">A PNG writer of its own</h2></div>
+<div class="prose reveal">
+<p>The spec planned `stb_image_write` for PNG files and named `fpng` as the fallback if the encode was over budget. It was over by two orders of magnitude:</p>
+<div class="citation-chip"><code class="citation-code">// stb_image_write&#x27;s PNG took 7.3 s for one 1280x720 Cornell frame (its deflate tries up to</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L56" target="_blank" rel="noopener">ohao/runtime/image.cpp:56</a></div>
+<p>The budget for a whole PNG capture is 30 ms. `fpng` would have needed the network and a new dependency, so the ruling (ledgered in the spec) was a writer in `ohao/runtime/image.cpp`, designed around what rendered frames look like. Each row is filtered `Up`, meaning minus the row above it (the first row uses `Sub`). Flat and slowly varying regions, which a rendered frame has a lot of, filter to long runs of equal bytes. The filtered bytes are then deflated with the fixed Huffman codes and one kind of match only, a repeat of the previous byte:</p>
+<div class="citation-chip"><code class="citation-code">if (run &gt;= 3) {   // a match at distance 1: the byte again, `run` times</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L236" target="_blank" rel="noopener">ohao/runtime/image.cpp:236</a></div>
+<p>There is no hash chain, no search and no lazy matching: one pass, a byte compare per byte, and table lookups. The image is cut into bands of rows, each deflated on its own thread. The band count depends on the image height and never on the machine, so the file&#x27;s bytes depend on the image alone:</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t bands = std::max&lt;uint32_t&gt;(1, std::min&lt;uint32_t&gt;(4, height / 64));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L276" target="_blank" rel="noopener">ohao/runtime/image.cpp:276</a></div>
+<p>The bands are joined the way pigz joins its blocks. Every band but the last ends with an empty stored block, which pads it to a byte boundary, so the bands&#x27; bytes can be concatenated:</p>
+<div class="citation-chip"><code class="citation-code">if (!last) put(0, 3);              // an empty stored block (BFINAL 0, BTYPE 00): aligns the band</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L242" target="_blank" rel="noopener">ohao/runtime/image.cpp:242</a></div>
+<p>The zlib trailer&#x27;s Adler-32 is combined from the bands&#x27; checksums with zlib&#x27;s `adler32_combine` formula, so no thread has to read another band&#x27;s data. One case defeats run-length coding: a one-frame RT GI render is mostly noise, which codes at about 8.5 bits a byte. For such a band, the writer falls back to stored blocks of raw bytes whenever they are smaller:</p>
+<div class="citation-chip"><code class="citation-code">if (band.zn &gt; n + blocks * 5) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/image.cpp#L257" target="_blank" rel="noopener">ohao/runtime/image.cpp:257</a></div>
+<p>On synthetic 1280x720 frames the spec measures 4.1 ms for a mixed image and 6.1 ms for pure noise. The files are larger than a full deflate would write. That is the trade: a capture file exists to be read back exactly, not archived. `sp4_t16_capture_png_round_trips_losslessly` decodes the output with `stb_image` and requires every byte back.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-time-goes">Where the time goes</h2></div>
+<div class="prose reveal">
+<p>A clean `serve_bench` run (step 11) puts a 1280x720 PNG capture at 22.7 ms against its 30 ms budget, a window readback at 5.34 ms against 2 ms, and an inline capture at 34.3 ms against 20 ms. The record attributes both misses to the deferred frame&#x27;s own GPU cost: one Cornell deferred 1280x720 frame takes 5.0 to 5.6 ms of GPU time, which a capture waits for. Frank ruled that both budgets stay exactly as they are and that the misses belong to sub-project 2b, which makes the frame cheaper. They are not to be closed by changing the budgets.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Readback on request, rather than a ring that is always copying, makes &quot;the frame I just rendered&quot; a direct question. The capture marks its last frame, waits for that frame&#x27;s fence, and reads the copy, with no lag to compensate for and no guessing at `+3`. It also keeps a presenting window free of transfers: a frame that nobody captures never touches the staging buffer, and the gates check exactly that.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>One capture procedure serves both hosts, so a lockstep window capture equals a headless one bit for bit in deferred. The renderer copies a frame only on request, and the capture waits for that frame&#x27;s fence alone, reading host-cached staging memory. A window host captures deferred frames only, at its own size. Previews are area-downscaled JPEGs that travel beside the result. PNG files use a one-pass, four-band, run-length deflate.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Call `requestReadback()` before the `render()` whose pixels you want, and `readback()` after it. The span is valid until the next `render()` or `resize()`.</li>
+<li>`readback()` returns an empty span for a frame that was not rendered. Callers check the size before using it.</li>
+<li>The PNG writer&#x27;s output depends only on the image. Its band count must never follow the core count.</li>
+<li>A window host restores its live post settings after a lockstep capture. A capture never changes what the player sees afterwards.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_capture.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/live_host.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/image.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/rpc/server.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_capture.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/image.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/ohao/render_host.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="time-input.html"><div class="label">← Prev</div><div class="title">Time and input as data</div></a><a class="next" href="hash-diff.html"><div class="label">Next →</div><div class="title">World hash, diff and determinism</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>13 · Agent control surface · The protocol server — OHAO Monograph</title>
+  <meta name="description" content="JSON-RPC 2.0 and MCP on one server: a reader thread and an engine thread, cancellation, progress, the error table, tools from params structs, a bounded queue." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="agent/protocol" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · The protocol server</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">agent</p>
+          <h1>The protocol server</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>JSON-RPC 2.0 and MCP on one server: a reader thread and an engine thread, cancellation, progress, the error table, tools from params structs, a bounded queue.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-server-two-kinds-of-client">One server, two kinds of client</a></li><li><a href="#a-reader-thread-and-an-engine-thread">A reader thread and an engine thread</a></li><li><a href="#cancellation-stops-at-a-whole-step">Cancellation stops at a whole step</a></li><li><a href="#progress-throttled">Progress, throttled</a></li><li><a href="#the-error-table">The error table</a></li><li><a href="#mcp-on-the-same-server">MCP on the same server</a></li><li><a href="#a-queue-with-a-ceiling">A queue with a ceiling</a></li><li><a href="#two-ways-to-drive-it">Two ways to drive it</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-server-two-kinds-of-client">One server, two kinds of client</h2></div>
+<div class="prose reveal">
+<p>`ohao serve` turns the session API into a long-lived process. Its protocol is JSON-RPC 2.0, one compact message per line, and `rpc::Server` answers two kinds of client on the same stream. A native client calls catalogue method names directly (`world.query`). An MCP client sends `initialize`, `tools/list` and `tools/call`, naming tools such as `world_query`. Both reach the `Session::call` overload that takes an already parsed request and returns a status (`Ok`, `UnknownMethod`, `BadParams`, `Failed` or `Cancelled`) instead of a JSON envelope. Nothing in `ohao/rpc` knows about Vulkan, windows or the renderer; a `reflect_tests` lint checks its includes.</p>
+</div>
+<div class="section-rule"><h2 id="a-reader-thread-and-an-engine-thread">A reader thread and an engine thread</h2></div>
+<div class="prose reveal">
+<p>The server runs on two threads. The reader thread splits the input into lines, parses each one and queues it. The engine thread (the one that calls `run()`, or `poll()` in the window host) takes the queue one item at a time, in arrival order, and runs each item to completion. The `Session` is not thread-safe and does not need to be: only one thread ever touches it. The spec states the cost of this choice. A long request (`world.step` with 10,000 frames) delays every request behind it, and that is the price of a deterministic order. An agent that does not want to wait can cancel.</p>
+<p>The reader does very little work itself. Even the reply to a line that does not parse is queued (`enqueueReply`) rather than written from the reader thread, so error replies come out in the same order as everything else, and a scripted session&#x27;s stdout is byte-for-byte reproducible. Request ids are kept as their raw JSON text and echoed back byte for byte: a string with its escapes, or a number with more digits than fits in 64 bits, comes back exactly as it was sent.</p>
+<p>Two messages are handled by the reader itself, because their purpose would be lost if they waited behind a busy engine. The first is `ping`:</p>
+<div class="citation-chip"><code class="citation-code">if (method-&gt;text == &quot;ping&quot;) {   // answered here, even while the engine is busy</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L339" target="_blank" rel="noopener">ohao/rpc/server.cpp:339</a></div>
+<p>The second is `notifications/cancelled`. The reader looks up the request id. If that request is running, the reader raises the flag the engine thread is polling. If it is still queued, the reader marks the queued item, and the engine thread later drops it without running it:</p>
+<div class="citation-chip"><code class="citation-code">if (!runningId.empty() &amp;&amp; runningId == id) cancelRunning = true;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L362" target="_blank" rel="noopener">ohao/rpc/server.cpp:362</a></div>
+<div class="citation-chip"><code class="citation-code">if (item-&gt;cancelled) continue;   // MCP: a cancelled request gets no response</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L392" target="_blank" rel="noopener">ohao/rpc/server.cpp:392</a></div>
+</div>
+<div class="section-rule"><h2 id="cancellation-stops-at-a-whole-step">Cancellation stops at a whole step</h2></div>
+<div class="prose reveal">
+<p>A running request sees the flag through `api::CallControl`, a pointer to the atomic plus an optional progress callback. Long methods check it between whole units of work and never in the middle of one. `world.step` and `input.replay` check before each simulation step, and a multi-frame capture checks between frames. A cancelled step loop runs `World::sync()` once, so the derived state matches the last whole step, marks the call cancelled and returns. By MCP&#x27;s rule a cancelled request gets no response. The agent learns where the world stopped from its next `time.get` or `world.info`. `sp4_t07_cancellation_and_ping_while_busy` runs this sequence: a million-frame step, a queued 5-frame step behind it, a ping answered mid-step, both requests cancelled, then a `world.info` reporting a frame strictly between 0 and 1,000,000.</p>
+<p>End of input is handled the same way. When the reader&#x27;s `LineReader` reports the end of the stream, it clears the queue (nobody is left to read the answers) and cancels the running request:</p>
+<div class="citation-chip"><code class="citation-code">cancelRunning = true;        // the running request stops at its next whole step</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L284" target="_blank" rel="noopener">ohao/rpc/server.cpp:284</a></div>
+<p>`poll()` then returns false, `run()` returns, and `ohao serve` exits 0. A client must therefore wait for its last reply before closing its end.</p>
+</div>
+<div class="section-rule"><h2 id="progress-throttled">Progress, throttled</h2></div>
+<div class="prose reveal">
+<p>A request whose params carry MCP&#x27;s `_meta.progressToken` gets `notifications/progress {progressToken, progress, total}` while it runs. The session calls the progress callback after every step, and the server drops calls that come less than 250 ms after the last one it sent:</p>
+<div class="citation-chip"><code class="citation-code">if (now - last &lt; std::chrono::milliseconds(250)) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L449" target="_blank" rel="noopener">ohao/rpc/server.cpp:449</a></div>
+<p>The timer starts with the request, so a request shorter than 250 ms sends no progress. The params decoder skips `_meta`, so it is never an unknown field.</p>
+</div>
+<div class="section-rule"><h2 id="the-error-table">The error table</h2></div>
+<div class="prose reveal">
+<p>Domain errors keep the session&#x27;s error object. The JSON-RPC envelope adds an integer code, and the code says what kind of error it was:</p>
+<p>| Situation | `error.code` | `error.data` | |---|---|---| | A line that is not JSON | -32700 (with the column) | none | | A batch array, a non-object, a bad `id`, `jsonrpc` other than `&quot;2.0&quot;`, a request without a string `method`, a line over `maxMessage` | -32600 | none | | An unknown method | -32601 | `{code: &quot;E_METHOD&quot;, suggestion?}` | | Params that fail their params struct | -32602 | the diagnostics | | Any other error | 1, 2 or 3 | `{code: &quot;E_…&quot;, diagnostics}` |</p>
+<p>Batches are refused on purpose. MCP dropped them in 2025-06-18, and `world.apply` already gives an atomic batch of commands:</p>
+<div class="citation-chip"><code class="citation-code">enqueueReply(errorLine(&quot;null&quot;, -32600, &quot;batches are not supported; send one message per line&quot;));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L300" target="_blank" rel="noopener">ohao/rpc/server.cpp:300</a></div>
+<p>A domain error&#x27;s integer is the CLI&#x27;s exit class, from the same function, so a script that switches from `ohao run` to `ohao serve` reads the same classes:</p>
+<div class="citation-chip"><code class="citation-code">reply(errorLine(item.id, api::exitClass(o.errors.front().code), messageOf(o.errors), w.str()));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L500" target="_blank" rel="noopener">ohao/rpc/server.cpp:500</a></div>
+<p>`E_RENDER` and `E_INTERNAL` are class 3, asset and mesh errors class 2, everything else 1. An exception that escapes a method becomes class 3, `E_INTERNAL`, and the server keeps serving. `data` carries at most 20 diagnostics, and `message` is the first one&#x27;s message with ` (+N more)` appended, as in the CLI. A message that has an id but no `method`, and carries a `result` or an `error`, is a response to a request the server never sent, so it is ignored rather than answered with an error.</p>
+</div>
+<div class="section-rule"><h2 id="mcp-on-the-same-server">MCP on the same server</h2></div>
+<div class="prose reveal">
+<p>`initialize` answers with the client&#x27;s protocol version if the server supports it, and otherwise with the newest one it supports:</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr std::string_view kMcpVersions[] = {&quot;2025-06-18&quot;, &quot;2025-11-25&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.hpp#L25" target="_blank" rel="noopener">ohao/rpc/server.hpp:25</a></div>
+<p>The reply declares two capabilities, `tools` and `logging`, plus `serverInfo` and an `instructions` string. The instructions tell the agent how to orient (`world_summary`), how to read with a projection, edit atomically, step, save under `agent_out/`, look and read logs. The spec caps them at 600 characters, and the build enforces the cap:</p>
+<div class="citation-chip"><code class="citation-code">static_assert(kInstructions.size() &lt;= 600, &quot;the spec caps the instructions at 600 characters&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L42" target="_blank" rel="noopener">ohao/rpc/server.cpp:42</a></div>
+<p>`tools/list` has one tool per method in catalogue order. The tool name is the method name with `.` replaced by `_`, because Claude&#x27;s tool-name pattern rejects dots; the server keeps a map back from tool to method. The description is the method&#x27;s doc line. The input schema is the method&#x27;s params struct, written by the same reflection that validates the params, so the schema an agent reads and the check its call goes through cannot disagree:</p>
+<div class="citation-chip"><code class="citation-code">w.key(&quot;inputSchema&quot;); reflect::writeParamsSchema(w, *m.params);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L540" target="_blank" rel="noopener">ohao/rpc/server.cpp:540</a></div>
+<p>The list is built once and cached. The step-10 record measures it at 14,543 bytes for 22 tools, and `rpc_tests` holds it to the spec&#x27;s 24 KB budget, so an agent knows in advance how much connecting costs.</p>
+<p>`tools/call` maps outcomes onto MCP&#x27;s two kinds of failure. Params that fail their struct are a protocol error (-32602), as for a native call. An unknown tool is -32601 with an edit-distance suggestion. MCP itself uses -32602 for that case, but OHAO keeps one code for &quot;no such method&quot;. A domain error is not a JSON-RPC error at all: it is a tool result whose text block is the error object, flagged so the model reads it:</p>
+<div class="citation-chip"><code class="citation-code">if (failed) { w.key(&quot;isError&quot;); w.boolean(true); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L591" target="_blank" rel="noopener">ohao/rpc/server.cpp:591</a></div>
+<p>A successful result is a single `text` block holding the compact result JSON. There is no `structuredContent`: MCP asks a server that sends structured content to send the same JSON as text as well, and that would double the tokens of every reply. An inline capture adds an `image` block next to the text block (see the capture unit).</p>
+<p>`logging/setLevel` installs a log sink that turns engine records into `notifications/message {level, logger: channel, data}`. RFC 5424&#x27;s eight level names map onto the engine&#x27;s five (`notice` to warn; `critical`, `alert` and `emergency` to error). If the client asks for more detail than the logger currently captures, the capture threshold is lowered to match:</p>
+<div class="citation-chip"><code class="citation-code">if (log::level() &gt; *l) log::setLevel(*l);   // capture what the client asked for</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L608" target="_blank" rel="noopener">ohao/rpc/server.cpp:608</a></div>
+<p>Without that call, no notifications are sent, so a client that never asks for logs pays nothing for them. Other `notifications/…` methods (`initialized`, `roots/list_changed`) are accepted and ignored. A notification that names a session method runs, and gets no reply.</p>
+</div>
+<div class="section-rule"><h2 id="a-queue-with-a-ceiling">A queue with a ceiling</h2></div>
+<div class="prose reveal">
+<p>Messages that have been read but not yet run count against `ServerOptions::maxQueued`, 256 MiB. At the ceiling, the reader stops reading:</p>
+<div class="citation-chip"><code class="citation-code">queueSpace.wait(lock, [&amp;] { return queuedBytes &lt; options.maxQueued || stopping; });</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L242" target="_blank" rel="noopener">ohao/rpc/server.cpp:242</a></div>
+<p>The bytes then back up in the pipe, and a client that floods a busy engine blocks on its own writes instead of growing the server&#x27;s memory. A single message is capped separately, at 64 MiB by default (`--max-message`). So the most memory a flood can cost is the queue ceiling plus one message. While the queue is full, `ping` waits too, because the reader is not reading. `stop()` sets `stopping`, which releases a reader waiting for space.</p>
+</div>
+<div class="section-rule"><h2 id="two-ways-to-drive-it">Two ways to drive it</h2></div>
+<div class="prose reveal">
+<p>A headless server is `run()`: start the reader, then `poll()` with no timeout until the input ends, flushing after each batch of work:</p>
+<div class="citation-chip"><code class="citation-code">while (poll(std::chrono::milliseconds(-1))) flush();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L423" target="_blank" rel="noopener">ohao/rpc/server.cpp:423</a></div>
+<p>The window host owns its own loop, so it calls the four parts itself. `start()` once. `poll(wait)` once per frame, which runs whatever is queued on the calling thread. `flush()` after the frame is presented. `stop()` when the window closes. With `holdReplies` set, the engine thread&#x27;s replies are kept until `flush()`:</p>
+<div class="citation-chip"><code class="citation-code">if (options.holdReplies) held.push_back(std::move(line));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/server.cpp#L234" target="_blank" rel="noopener">ohao/rpc/server.cpp:234</a></div>
+<p>As a result, a reply to a request that changed the world goes out only after the frame showing that change has been presented. Progress notifications, log notifications and `ping` are sent straight to the transport, never held, since holding them would defeat their purpose. `stop()` also has to end a read that the client has left open; how it does that depends on the transport (see the transports unit).</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Answering malformed lines from the engine thread costs a queue round trip for something the reader could reply to at once. The trade buys determinism: with every reply produced on one thread in arrival order, the serve goldens (`tests/serve/sessions` against `expected`) compare stdout byte for byte, including the error cases. Only `ping` and cancellation jump the queue, and both exist to say something about the queue itself.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Two threads. The reader parses, queues, answers `ping` and handles cancellation. The engine thread runs one request at a time, in arrival order. The protocol&#x27;s error codes are fixed (-32700, -32600, -32601, -32602), and domain errors carry the CLI&#x27;s exit classes 1, 2 and 3. MCP is the same server: tools are named after methods, schemas come from params structs, and domain errors come back as `isError` results.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Only the engine thread calls the `Session`. A host that drives `poll()` must call it from the thread that owns the world.</li>
+<li>A cancelled request gets no response. Callers read the world&#x27;s frame afterwards to learn where it stopped.</li>
+<li>End of input drops the queued requests unanswered: a client waits for its last reply before it closes.</li>
+<li>`holdReplies` holds replies only. A host that sets it must call `flush()`, or replies are never sent.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/rpc/server.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/rpc/server.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="index.html"><div class="label">← Hub</div><div class="title">13 · Agent control surface</div></a><a class="next" href="transports.html"><div class="label">Next →</div><div class="title">Transports: stdio and the named pipe</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

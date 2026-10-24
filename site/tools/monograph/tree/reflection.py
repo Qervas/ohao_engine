@@ -47,7 +47,7 @@ MODULE = {
             'Instantiate & the scene view',
             'MeshSource to MeshRenderer through a backend seam, shared meshes, the asset resolver, Camera and Environment.',
             files=['ohao/ecs/instantiate.hpp', 'ohao/ecs/instantiate.cpp', 'ohao/ecs/asset_resolver.hpp',
-                   'ohao/ecs/scene_view.hpp', 'ohao/ecs/scene_view.cpp', 'tools/ohao/scene_host.hpp'],
+                   'ohao/ecs/scene_view.hpp', 'ohao/ecs/scene_view.cpp', 'ohao/runtime/scene_view_apply.hpp'],
         ),
         page(
             'cli',

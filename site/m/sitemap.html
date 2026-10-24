@@ -53,6 +53,15 @@
 <li><a href="reflection/instantiate.html">Instantiate &amp; the scene view</a> — MeshSource to MeshRenderer through a backend seam, shared meshes, the asset resolver, Camera and Environment.</li>
 <li><a href="reflection/cli.html">The ohao CLI &amp; render host</a> — One JSON document on stdout, exit classes, scripts as RPC requests, render.capture through a host.</li>
 </ul>
+<h2 class="gloss-group">13 · Agent control surface</h2><ul class="prose">
+<li><a href="agent/index.html"><strong>Hub</strong></a></li>
+<li><a href="agent/protocol.html">The protocol server</a> — JSON-RPC 2.0 and MCP on one server: a reader thread and an engine thread, cancellation, progress, the error table, tools from params structs, a bounded queue.</li>
+<li><a href="agent/transports.html">Transports: stdio and the named pipe</a> — Newline framing without holding oversize lines, stdout kept for the protocol, interruptible reads, and a pipe only the current user on this machine can open.</li>
+<li><a href="agent/live-host.html">The live host</a> — One window loop for ohao_game and ohao serve --window: requests at a fixed point of the frame, render on change, replies after present.</li>
+<li><a href="agent/time-input.html">Time and input as data</a> — Lockstep and realtime on one step axis, an input map stepped per simulation step, injection, and recordings that check themselves.</li>
+<li><a href="agent/capture.html">Frame capture</a> — One capture procedure for both hosts, readback on request, previews beside the result, and a fast lossless PNG writer.</li>
+<li><a href="agent/hash-diff.html">World hash, diff and determinism</a> — A 64-bit fingerprint of the authoring state, changed fields against a snapshot, and bit-identical lockstep worlds and deferred captures.</li>
+</ul>
 <h2 class="gloss-group">03 · GPU / Vulkan</h2><ul class="prose">
 <li><a href="gpu.html"><strong>Hub</strong> — gpu.html</a></li>
 <li><a href="gpu/renderer-facade.html">VulkanRenderer facade</a> — Public API: modes, setScene, ensureRT, denoise, pixels, present.</li>
@@ -165,7 +174,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">92 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">98 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

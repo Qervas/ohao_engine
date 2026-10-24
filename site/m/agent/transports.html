@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>13 · Agent control surface · Transports: stdio and the named pipe — OHAO Monograph</title>
+  <meta name="description" content="Newline framing without holding oversize lines, stdout kept for the protocol, interruptible reads, and a pipe only the current user on this machine can open." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="agent/transports" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Transports: stdio and the named pipe</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">agent</p>
+          <h1>Transports: stdio and the named pipe</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Newline framing without holding oversize lines, stdout kept for the protocol, interruptible reads, and a pipe only the current user on this machine can open.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#a-byte-stream-and-nothing-else">A byte stream and nothing else</a></li><li><a href="#framing-newline-delimited-json">Framing: newline-delimited JSON</a></li><li><a href="#stdout-belongs-to-the-protocol">stdout belongs to the protocol</a></li><li><a href="#stopping-a-read-nobody-will-finish">Stopping a read nobody will finish</a></li><li><a href="#the-named-pipe">The named pipe</a></li><li><a href="#overlapped-i-o-and-the-stop-event">Overlapped I/O and the stop event</a></li><li><a href="#one-client-per-process">One client per process</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="a-byte-stream-and-nothing-else">A byte stream and nothing else</h2></div>
+<div class="prose reveal">
+<p>The server reads and writes through a four-member interface: `read` blocks until at least one byte arrives and returns 0 at the end of input; `write` sends one whole line and flushes it; and `interruptRead` makes a blocked `read` on a given thread return 0. Framing, parsing and threading are the server&#x27;s. A transport only moves bytes, so the same server runs over stdin and stdout, over a named pipe, and over the in-memory streams `rpc_tests` feeds.</p>
+<div class="citation-chip"><code class="citation-code">virtual void interruptRead(void* readerThread) { (void)readerThread; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.hpp#L26" target="_blank" rel="noopener">ohao/rpc/transport.hpp:26</a></div>
+<p>The default does nothing. The server calls it in a loop until its reader has returned, so a transport that cannot interrupt only delays a shutdown; it never hangs one that the client ends.</p>
+</div>
+<div class="section-rule"><h2 id="framing-newline-delimited-json">Framing: newline-delimited JSON</h2></div>
+<div class="prose reveal">
+<p>Spec 3 had planned LSP-style `Content-Length` headers for a future transport. Sub-project 4 corrected that: MCP&#x27;s stdio transport is newline-delimited, and compact JSON never contains a raw newline, so a newline is a complete frame. `LineReader` splits the stream at each `\n` and drops one `\r` before it, so a client that writes `\r\n` is understood:</p>
+<div class="citation-chip"><code class="citation-code">if (len &amp;&amp; data[m_begin + len - 1] == &#x27;\r&#x27;) --len;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L246" target="_blank" rel="noopener">ohao/rpc/transport.cpp:246</a></div>
+<p>It reads in 64 KB chunks into a buffer it reuses. It remembers how far it has already searched, so a long line arriving in many small reads is scanned once rather than once per read; `sp4_t07_crlf_and_reads_split_anywhere` feeds one request a byte per read and two more split at arbitrary points. A last line without a newline still counts as a line.</p>
+<p>The limit on a message (`--max-message`, 64 MiB by default) is enforced without ever holding the oversize message. Once the pending bytes exceed the limit with no newline in sight, the reader discards them and enters a skipping state until the next newline:</p>
+<div class="citation-chip"><code class="citation-code">if (m_scanned &gt; m_max) {   // too long already: keep nothing more of it</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L256" target="_blank" rel="noopener">ohao/rpc/transport.cpp:256</a></div>
+<p>The skipped line is reported once as `Oversize`, which the server answers with -32600, and the next line is read normally. A client that sends a gigabyte without a newline therefore costs the server at most the limit plus one chunk of memory.</p>
+</div>
+<div class="section-rule"><h2 id="stdout-belongs-to-the-protocol">stdout belongs to the protocol</h2></div>
+<div class="prose reveal">
+<p>On stdio, any byte on stdout that is not a protocol message breaks the stream. Engine code never prints, because it logs through `OHAO_LOG` to stderr, and a lint keeps it that way; but Jolt, NRD, assimp and the Vulkan driver can all print. So `ohao` separates the two streams at the descriptor level before anything else runs:</p>
+<div class="citation-chip"><code class="citation-code">if (FILE* f = rpc::separateStdout()) g_json = f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L119" target="_blank" rel="noopener">tools/ohao/main.cpp:119</a></div>
+<p>`separateStdout` duplicates descriptor 1 into a private copy and then points descriptor 1 at stderr, so every later `printf`, `std::cout` or library print lands on stderr. On Windows `_dup2` redirects the console handle too. Only writes through the private copy reach the client. The copy is switched to binary first:</p>
+<div class="citation-chip"><code class="citation-code">_setmode(copy, _O_BINARY);   // a dup keeps the text mode, which would write \r\n</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L26" target="_blank" rel="noopener">ohao/rpc/transport.cpp:26</a></div>
+<p>In text mode every `\n` the server wrote would reach the client as `\r\n`. `StdioTransport` sets stdin to binary for the same reason, so `\r\n` reaches the line reader exactly as the client sent it, and it reads descriptor 0 with `_read` rather than through `stdin`&#x27;s buffer.</p>
+</div>
+<div class="section-rule"><h2 id="stopping-a-read-nobody-will-finish">Stopping a read nobody will finish</h2></div>
+<div class="prose reveal">
+<p>A window host can end while the client still holds stdin open: the user closes the window. The reader thread is then blocked in `_read`, and joining it would hang. `Server::stop()` calls `interruptRead` with the reader&#x27;s native thread handle until the reader has returned, and on Windows that cancels the pending synchronous read:</p>
+<div class="citation-chip"><code class="citation-code">CancelSynchronousIo(static_cast&lt;HANDLE&gt;(readerThread));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L58" target="_blank" rel="noopener">ohao/rpc/transport.cpp:58</a></div>
+<p>The cancelled `_read` returns an error, which the transport reports as the end of input, and the reader exits the way it does at EOF. `serveWindow` relies on this after the live host&#x27;s loop returns:</p>
+<div class="citation-chip"><code class="citation-code">server.stop();   // the window closed while the client still holds stdin: stop reading</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L687" target="_blank" rel="noopener">tools/ohao/main.cpp:687</a></div>
+<p>On POSIX there is no equivalent, and the comment says a host closes stdin instead. `sp4_t16_stop_interrupts_a_read_left_open` covers the Windows path.</p>
+</div>
+<div class="section-rule"><h2 id="the-named-pipe">The named pipe</h2></div>
+<div class="prose reveal">
+<p>stdio serves exactly one client: the parent process. A client that is not the server&#x27;s parent (a second tool, a debugger, an editor attached to an engine a human started) needs a name to connect to. `--pipe NAME` serves `\\.\pipe\ohao-NAME` instead of stdio, on Windows only; elsewhere the option is a usage error. The name is 1 to 64 characters of `[A-Za-z0-9._-]`, checked before anything is created. There is no TCP or WebSocket listener, not even behind a flag: a local pipe with an access check is the only way into the engine besides inheriting its stdio.</p>
+<p>The pipe&#x27;s security descriptor is built from the current user&#x27;s SID as a protected DACL with a single entry:</p>
+<div class="citation-chip"><code class="citation-code">std::wstring sddl = L&quot;D:P(A;;GA;;;&quot; + std::wstring(sid) + L&quot;)&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L95" target="_blank" rel="noopener">ohao/rpc/transport.cpp:95</a></div>
+<p>`P` marks the DACL protected, so no entry is inherited, and the one `A` entry grants generic access to the current user. Without an explicit DACL, a pipe gets the default one, which gives Everyone read access. The pipe is created with three more restrictions:</p>
+<div class="citation-chip"><code class="citation-code">HANDLE pipe = CreateNamedPipeW(wpath.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L118" target="_blank" rel="noopener">ohao/rpc/transport.cpp:118</a></div>
+<div class="citation-chip"><code class="citation-code">PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L119" target="_blank" rel="noopener">ohao/rpc/transport.cpp:119</a></div>
+<p>The instance count is 1, so a second client gets `ERROR_PIPE_BUSY`. `FILE_FLAG_FIRST_PIPE_INSTANCE` turns a name that another process already serves into an error. Without the flag, the server would quietly become a second instance next to a squatter that could take its clients. `PIPE_REJECT_REMOTE_CLIENTS` refuses clients that come through the SMB redirector. The step-10 record measured this: `\\localhost\pipe\…`, `\\127.0.0.1\pipe\…` and `\\&lt;hostname&gt;\pipe\…` each failed with `ERROR_ACCESS_DENIED`. A control pipe with the same DACL but without the flag admitted the `\\localhost` client, so the refusal comes from the flag, not the DACL.</p>
+<p>`cmdServe` creates the pipe before the window, the renderer or the scene. A bad name or a taken one therefore fails at once, with exit 1 and `E_COMMAND` on stdout, instead of after a GPU start-up:</p>
+<div class="citation-chip"><code class="citation-code">auto pipe = rpc::PipeTransport::create(opt(a, &quot;--pipe&quot;), pipeError);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L713" target="_blank" rel="noopener">tools/ohao/main.cpp:713</a></div>
+</div>
+<div class="section-rule"><h2 id="overlapped-i-o-and-the-stop-event">Overlapped I/O and the stop event</h2></div>
+<div class="prose reveal">
+<p>The pipe is opened for overlapped I/O, so every wait can be ended from another thread. The first `read` waits for a client in `ConnectNamedPipe`, and every later `read` waits in `ReadFile`. Each wait covers two events, the operation&#x27;s own and the transport&#x27;s manual-reset stop event:</p>
+<div class="citation-chip"><code class="citation-code">HANDLE events[2] = {ov-&gt;hEvent, m_stop};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L157" target="_blank" rel="noopener">ohao/rpc/transport.cpp:157</a></div>
+<p>`interruptRead` sets the stop event. The waiting call cancels its operation with `CancelIoEx` and waits for the cancellation to complete before its `OVERLAPPED` goes out of scope. The read then returns 0. This is what lets a window that nobody ever connected to close cleanly: the reader is still blocked in `ConnectNamedPipe` when the user closes it (`sp4_t15_stop_ends_a_wait_for_a_client`).</p>
+<p>A read that completes with zero bytes is not treated as the end of input: a client may write zero bytes. The end is a failed read, usually `ERROR_BROKEN_PIPE` when the client closes its handle:</p>
+<div class="citation-chip"><code class="citation-code">if (n &gt; 0) return n;   // a zero-byte write by the client is not the end</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L197" target="_blank" rel="noopener">ohao/rpc/transport.cpp:197</a></div>
+</div>
+<div class="section-rule"><h2 id="one-client-per-process">One client per process</h2></div>
+<div class="prose reveal">
+<p>The spec first said &quot;one client at a time&quot;. As built, the server takes one client per process. The client&#x27;s disconnect is the end of input, exactly as EOF on stdin is: the running request is cancelled, the session ends, and the process exits 0. stdin is not read while serving a pipe. A failed write also marks the pipe closed, so the reader sees the end of input on its next read instead of the server writing into a dead handle. If the process exits while the client is still connected, the transport flushes before it disconnects, so the client reads the last replies before it sees the end:</p>
+<div class="citation-chip"><code class="citation-code">FlushFileBuffers(m_pipe);   // the client reads the last replies before it sees the end</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/rpc/transport.cpp#L143" target="_blank" rel="noopener">ohao/rpc/transport.cpp:143</a></div>
+<p>stderr carries `serving on &lt;path&gt;` and, once a client arrives, `a client connected to &lt;path&gt;`. `rpc_tests` covers the pipe in-process: one local client served, a second refused, a second server on the same name refused, the DACL read back with `GetSecurityInfo`, remote clients refused, and a stopped wait. `check_serve.py` covers it as a process with stdin left open throughout, and `check_live.py` drives the window host over the pipe.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The spec&#x27;s security section starts from &quot;no listener by default&quot;: stdio serves exactly the parent process, and sub-project 4 has no port at all. When a second way in was needed, a named pipe was chosen because the operating system enforces who may open it. The pipe carries a security descriptor, and a flag rejects network clients. With a protected one-entry DACL, a single instance and the first-instance flag, the only process that can open it is one running as the same user on the same machine.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Lines end with `\n` (a `\r` before it is dropped), and a line over the limit is skipped without being kept. stdout belongs to the protocol: descriptor 1 points at stderr and the protocol writes through a private binary copy. `--pipe NAME` gives one local client of the current user (protected DACL, one instance, first-instance flag, remote clients rejected), whose disconnect ends the session. Every blocking read can be interrupted, so closing the window always ends the process.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`separateStdout()` must run before anything can print, which means first thing in `main`. If the duplication fails, nothing is redirected, and logs share stdout with the protocol.</li>
+<li>`Transport::write` is never called from two threads at once: the server serializes writes under its own mutex.</li>
+<li>A `PipeTransport` serves one client and is not reused; the process exits when that client leaves.</li>
+<li>`--pipe` changes only the transport. Paths, caps, time modes and both hosts behave exactly as over stdio.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/rpc/transport.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/rpc/transport.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/ohao/main.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="protocol.html"><div class="label">← Prev</div><div class="title">The protocol server</div></a><a class="next" href="live-host.html"><div class="label">Next →</div><div class="title">The live host</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

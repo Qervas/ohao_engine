@@ -60,6 +60,8 @@ $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
+$ python tests/serve/check_live.py > /dev/null   # gpu
+$ python tests/serve/e2e_mcp.py > /dev/null   # gpu
 ```
 
 ## 3. Long gates (minutes; before committing rendering-adjacent or codec changes)

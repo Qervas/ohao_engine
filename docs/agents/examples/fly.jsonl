@@ -1,0 +1,11 @@
+{"method":"world.query","params":{"names":["MainCamera"],"fields":["/Transform/position","/FlyController/moveSpeed"]}}
+{"method":"world.snapshot","params":{"name":"start"}}
+{"method":"input.record","params":{"path":"build/doc_tmp/fly.input.jsonl"}}
+{"method":"input.inject","params":{"events":[{"step":0,"axis":"move_forward","value":1},{"step":60,"axis":"move_forward","value":null}]}}
+{"method":"world.step","params":{"frames":61,"watch":{"names":["MainCamera"],"fields":["/Transform/position"]}}}
+{"method":"input.record","params":{"stop":true}}
+{"method":"world.hash","params":{}}
+{"method":"world.diff","params":{"snapshot":"start","fields":["/Transform/position"],"limit":3}}
+{"method":"world.restore","params":{"name":"start"}}
+{"method":"input.replay","params":{"path":"build/doc_tmp/fly.input.jsonl"}}
+{"method":"world.hash","params":{}}

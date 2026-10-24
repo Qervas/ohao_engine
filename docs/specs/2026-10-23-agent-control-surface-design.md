@@ -1164,6 +1164,14 @@ Each written and then followed once, as in 3: add a render pass; add a shader (a
 SPIR-V name); add a golden scene; add an API method (now: params struct, method, catalogue,
 MCP tool, all from one place). Plus the agent guide `docs/agents/ohao-serve.md` (connect,
 orient, edit, play, capture, replay, read logs), checked by `check_docs.py`.
+*As built (step 11):* "add a render pass" and "add a shader" are one recipe (a pass and its
+shader are written together). It was followed with a throwaway compute pass (tile
+luminance of the lit image): built, validation-clean through a resize and teardown, every
+golden exact, then taken out of the renderer since nothing read it (its three files wait
+for deletion by Frank: the harness denies `rm`, `mv` and `git clean`, and they are not
+committed). "Add a golden scene" was followed for real: `cli_helmet_game_deferred`, the
+scene `ohao_game` plays, exact. "Add an API method" became its own recipe, the path
+`world.hash`/`world.diff` (step 7) and the `input.*` methods (step 8) took.
 
 ### Lessons from sub-project 3, and the rule each became
 
@@ -1202,6 +1210,9 @@ orient, edit, play, capture, replay, read logs), checked by `check_docs.py`.
 - **`.mcp.json`** at the repo root: the project MCP server
   (`build/Release/ohao.exe serve --window assets/scenes/helmet_game.scene.json`), so Claude
   Code offers it in this repo after Frank approves it once.
+  *Step 11:* the content, for Frank to create (see "Frank actions"):
+  `{"mcpServers": {"ohao": {"command": "build/Release/ohao.exe", "args": ["serve",
+  "--window", "assets/scenes/helmet_game.scene.json"]}}}`.
 
 ## Test plan
 
@@ -1366,6 +1377,16 @@ GPU:
     first). The manual run with Claude Code is recorded in the step 11 change record.
 20. **Docs:** `check_docs.py` runs every command in `docs/agents/ohao-serve.md` and the new
     recipes.
+   - *As built (step 11):* test 19 is `tests/serve/e2e_mcp.py` (CTest `e2e_mcp`, label
+     `gpu`, 19 checks) against `ohao serve --window --hidden` with validation on; the flight
+     is 61 steps (forward for 60, up from step 30, both released at step 60) and the
+     camera's travel is checked against the scene's `moveSpeed`; the replay is checked by
+     its checkpoints and the final `world.hash`, the recapture by the PNG files byte for
+     byte and the inline JPEGs. Test 20: `check_docs.py` gains `docs/agents/ohao-serve.md`
+     (its commands: an MCP `initialize` over pipes, a headless record → restore → replay
+     through `ohao run --script` with its exact output, and `e2e_mcp.py`) and the
+     recipes' commands in `docs/ARCHITECTURE.md`. The manual Claude Code run waits on
+     Frank (see "Frank actions").
 
 All existing suites, goldens, validation runs and `scene_bench` stay green throughout.
 
@@ -1490,6 +1511,15 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
 11. **Acceptance and docs.** `tests/serve/e2e_mcp.py`, `.mcp.json`, the manual Claude Code
     run, `docs/agents/ohao-serve.md`, the recipes, `AGENTS.md`, the monograph module, the
     roadmap row, the final change record. Tests 19, 20; the full done criteria.
+    - *Done 2026-10-24,* except what only Frank can do: `.mcp.json` and the manual Claude
+      Code run (see "Frank actions"). See the as-built notes under tests 19 and 20 and
+      "Recipes added to `docs/ARCHITECTURE.md`". Done criteria not met, and why: the two
+      window GPU budgets (open for 2b by Frank's ruling), so `serve_bench --check` and with
+      it `check.py --all` cannot exit 0 until 2b; and no budget has five consecutive passes
+      in steps 9-11, the gate's bench runs being noisy from outside load (the step change
+      records give the load and the medians). One clean `serve_bench` run (step 11) met
+      every budget but those two; `scene_bench` stayed noisy by its memory probe while
+      Unreal Editor ran, with every median within budget.
 
 ## Risks
 
@@ -1566,6 +1596,11 @@ Only Frank can do these; each step that needs one says so and continues without 
 it can:
 1. Approve the project MCP server in Claude Code once (`.mcp.json`, step 11) for the
    manual acceptance run.
+   *Step 11:* this session's harness refuses to write `.mcp.json` (an MCP server
+   configuration) and to launch the `claude` CLI, so both are Frank's: create
+   `.mcp.json` at the repo root with the content under "Programs", approve it once, and
+   run the manual session (the step 11 change record gives the steps). The scripted MCP
+   acceptance (test 19) passes without it.
 2. Apply skill text changes under `.claude/skills/` (the `verify` skill gains
    `python tools/check.py`; step 2 writes the new text into its change record).
 3. Rule on any budget a step measures and misses (none expected; the process is spec 3's).

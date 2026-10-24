@@ -12,7 +12,8 @@ Waiting:
   format and the `noisy` bench verdict (step 4), `test_golden_diff.py`, `check_doctor.py` (step 3) and
   `check_tests.py` (step 2) to the CPU gates and
   `deferred_determinism_gpu_test` to the GPU gates (step 1); says the deferred goldens are
-  exact (step 1).
+  exact (step 1); adds the live host's `check_live.py` (step 9) and the end-to-end MCP
+  session `e2e_mcp.py` (step 11) to the GPU gates.
 - `build/SKILL.md` (sub-project 4, step 2): new files need no re-configure
   (`CONFIGURE_DEPENDS`), every SPIR-V consumer builds the shaders, and `tools/check.py` is
   the shortest path.

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>13 · Agent control surface — OHAO Monograph</title>
+  <meta name="description" content="13 · Agent control surface hub" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="agent/index" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> · 13 · Agent control surface</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">▸</div>
+        <div>
+          <p class="chapter-kicker">Module hub</p>
+          <h1>13 · Agent control surface</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Module</div>
+        <p>Design units under <strong>agent</strong> — what it is, how it is implemented, why the design exists.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page. Full tree: <a href="../sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="protocol.html">
+          <div class="num">protocol</div>
+          <h3>The protocol server</h3>
+          <p>JSON-RPC 2.0 and MCP on one server: a reader thread and an engine thread, cancellation, progress, the error table, tools from params structs, a bounded queue.</p>
+        </a>
+        <a class="tree-card" href="transports.html">
+          <div class="num">transports</div>
+          <h3>Transports: stdio and the named pipe</h3>
+          <p>Newline framing without holding oversize lines, stdout kept for the protocol, interruptible reads, and a pipe only the current user on this machine can open.</p>
+        </a>
+        <a class="tree-card" href="live-host.html">
+          <div class="num">live-host</div>
+          <h3>The live host</h3>
+          <p>One window loop for ohao_game and ohao serve --window: requests at a fixed point of the frame, render on change, replies after present.</p>
+        </a>
+        <a class="tree-card" href="time-input.html">
+          <div class="num">time-input</div>
+          <h3>Time and input as data</h3>
+          <p>Lockstep and realtime on one step axis, an input map stepped per simulation step, injection, and recordings that check themselves.</p>
+        </a>
+        <a class="tree-card" href="capture.html">
+          <div class="num">capture</div>
+          <h3>Frame capture</h3>
+          <p>One capture procedure for both hosts, readback on request, previews beside the result, and a fast lossless PNG writer.</p>
+        </a>
+        <a class="tree-card" href="hash-diff.html">
+          <div class="num">hash-diff</div>
+          <h3>World hash, diff and determinism</h3>
+          <p>A 64-bit fingerprint of the authoring state, changed fields against a snapshot, and bit-identical lockstep worlds and deferred captures.</p>
+        </a>
+      </div>
+
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

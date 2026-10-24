@@ -59,14 +59,14 @@ measurable.
 | 1 | **Runtime shell** — window, swapchain presentation, fixed-step loop, input actions, Forward path removed | deferred renders straight to a window at ≥ 60 fps, zero validation errors, no per-frame readback | [spec](specs/2026-10-02-runtime-shell-design.md) · **done** |
 | 2a | **ECS world + persistent GPU scene** — EnTT registry replaces Scene/Actor/Component; render-world extraction into persistent GPU mesh/material/instance/light tables; one BLAS per mesh; per-frame TLAS refit; one bindless texture table | golden scenes rebuilt as ECS entities render identically; moving objects correct in RT; upload cost proportional to change | [spec](specs/2026-10-03-ecs-gpu-scene-design.md) · **done** |
 | 3 | **Reflection, scene serialization + agent API** — type registry with docs/units/limits, schema catalogue + JSON Schema, stable entity IDs, canonical `.scene.json` (defaults omitted), structured validation errors, versioning, command layer with inverses, filtered/projected queries and scene summaries (token budget for agents), columnar snapshot/restore, headless `ohao` CLI; `AGENTS.md`, `docs/ARCHITECTURE.md`, refreshed `.claude/skills` | the example scenes ship as `.scene.json` files and the goldens render from them via `ohao run`; save → load → save is byte-identical; `scene_bench` budgets met | [spec](specs/2026-10-22-reflection-scene-serialization-design.md) · **done** (2026-10-23; skills installed the same day; every `scene_bench` budget and scaling ratio passes, `restore_empty` at ×10.1–11.4 over twelve consecutive runs after the restore follow-up) |
-| 4 | **Agent control surface + agent dev ergonomics** — `ohao serve` (JSON-RPC 2.0 / MCP over stdio), live window host, lockstep/realtime time control, input as data with injection and record/replay, live frame capture, log streaming; deterministic deferred rendering; one `check` entry point (CTest labels, shaders first, JUnit/JSON results), golden diff JSON + heatmaps, `ohao doctor` | an MCP agent loads, edits, plays and captures a scene in a live engine; an agent builds and verifies OHAO from one command with machine-readable pass/fail; `serve_bench` budgets met | [spec](specs/2026-10-23-agent-control-surface-design.md) · **next** |
+| 4 | **Agent control surface + agent dev ergonomics** — `ohao serve` (JSON-RPC 2.0 / MCP over stdio), live window host, lockstep/realtime time control, input as data with injection and record/replay, live frame capture, log streaming; deterministic deferred rendering; one `check` entry point (CTest labels, shaders first, JUnit/JSON results), golden diff JSON + heatmaps, `ohao doctor` | an MCP agent loads, edits, plays and captures a scene in a live engine; an agent builds and verifies OHAO from one command with machine-readable pass/fail; `serve_bench` budgets met | [spec](specs/2026-10-23-agent-control-surface-design.md) · **done** (2026-10-24; tests 1–20 pass; an MCP client loads, edits, plays, records, replays and captures `helmet_game` in a live window, bit-identical on replay. Open, owned by 2b by Frank's ruling: the window readback (2 ms) and inline capture (20 ms) budgets, which miss on the deferred frame's own GPU cost. Waiting on Frank: the repo's `.mcp.json` and the manual Claude Code run) |
 | 2b | **GPU-driven rendering + renderer upgrade** — indirect G-buffer/shadow draws, GPU frustum + two-pass Hi-Z occlusion culling, meshlets with cluster culling (mesh shaders where supported), clustered lighting, Slang toolchain for new shaders, RT determinism and the open renderer findings (see "2b scope") | CPU draw-submission cost flat as instance count grows; a 100k-instance, 1,000-light scene within a GPU frame budget on the reference machine; the goldens hold; validation clean in raster and RT | — (spec after 4) |
 | 5 | **Level pipeline** — glTF-from-Blender loader, `extras` → components, collision generation, spawn points | a Blender blockout level loads, renders and collides | — |
 | 6 | **Player** — Jolt at fixed step in the ECS, physics ↔ transform sync, first-person controller, camera, footsteps | you can walk the level | — |
 | 7 | **Combat** — hitscan weapon (recoil, spread, muzzle flash, impact decals), health/damage, enemy AI, death/restart, HUD | the slice is playable | — |
 | 8 | **OpenUSD interop** — USDA/USDC import and export for robotics and world-model pipelines (Omniverse, Isaac Sim): UsdGeom transforms and meshes, UsdLux lights, UsdPhysics where it maps, and every other OHAO component as namespaced custom attributes generated from the type registry | a scene goes OHAO → USD → OHAO with every mapped component identical, and the exported stage opens in usdview / Omniverse | — |
 
-**Order:** 4 next, then 2b, then 5–7. 8 is scheduled by need, when a robotics or
+**Order:** 2b next, then 5–7. 8 is scheduled by need, when a robotics or
 world-model pipeline asks for it; it builds on 5's import path and the asset database.
 `.scene.json` stays the native authoring format; USD is the interchange format.
 
@@ -105,6 +105,12 @@ the slice needs it)?
   decode are wrong too; see the monograph's SSAO unit). 2b rebuilds the frame flow these live in; fixing them there is
   cheaper than around it, and validation-clean RT is a precondition for trusting a
   rebuilt renderer.
+- **The deferred frame's GPU cost, for 4's two open budgets** (Frank's ruling,
+  2026-10-24): `serve_bench`'s `window_readback_ms` (2 ms) and `window_capture_inline_ms`
+  (20 ms) stay as they are and miss because one Cornell deferred 1280x720 frame takes
+  5.0–5.6 ms of GPU time (RT shadows at 8 rays and RT GI at 32 samples a pixel); a capture
+  waits on its frame's fence. 2b makes the frame cheaper (RT GI samples, RT shadows),
+  which may change the deferred goldens.
 - **A render benchmark with budgets:** the `scene_bench` 10k/100k scenes rendered, with
   CPU submission and GPU pass times gated, as `scene_bench` gates the codec.
 

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>13 · Agent control surface · World hash, diff and determinism — OHAO Monograph</title>
+  <meta name="description" content="A 64-bit fingerprint of the authoring state, changed fields against a snapshot, and bit-identical lockstep worlds and deferred captures." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="agent/hash-diff" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · World hash, diff and determinism</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">agent</p>
+          <h1>World hash, diff and determinism</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>A 64-bit fingerprint of the authoring state, changed fields against a snapshot, and bit-identical lockstep worlds and deferred captures.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#two-questions-an-agent-asks-after-every-step">Two questions an agent asks after every step</a></li><li><a href="#what-the-hash-covers">What the hash covers</a></li><li><a href="#hashing-values-not-bytes">Hashing values, not bytes</a></li><li><a href="#where-the-hash-is-used">Where the hash is used</a></li><li><a href="#what-changed-since-a-snapshot">What changed since a snapshot</a></li><li><a href="#deterministic-deferred-pixels">Deterministic deferred pixels</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="two-questions-an-agent-asks-after-every-step">Two questions an agent asks after every step</h2></div>
+<div class="prose reveal">
+<p>An agent playing a world needs two cheap answers: *is this the same world as before?* and *what changed?* Reading the whole world back to compare it would cost hundreds of kilobytes of JSON per question. `world.hash` answers the first with 16 hex digits, and `world.diff` answers the second with only the changed fields of only the changed entities. Both rest on a stronger guarantee: in lockstep the same scene, seed, method sequence and injected input give bit-identical world state, and deferred captures of that state give bit-identical pixels.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-hash-covers">What the hash covers</h2></div>
+<div class="prose reveal">
+<p>`world.hash` covers the authoring state, exactly what a snapshot captures, read straight from the live storages without copying values:</p>
+<div class="citation-chip"><code class="citation-code">// It hashes what a snapshot (ecs/snapshot.hpp) captures, read straight from the live</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.hpp#L5" target="_blank" rel="noopener">ohao/ecs/world_hash.hpp:5</a></div>
+<p>In order, it hashes the entity table (ids, creation sequence, parent rows, child rows), then every saved component type in the snapshot&#x27;s column order, and last the id generator and the next creation sequence:</p>
+<div class="citation-chip"><code class="citation-code">for (const reflect::TypeInfo* t : snapshotTypes(types)) componentOps(*t)-&gt;hash(reg, rowOf, *t, h);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.cpp#L32" target="_blank" rel="noopener">ohao/ecs/world_hash.cpp:32</a></div>
+<div class="citation-chip"><code class="citation-code">h.u64(table.idGen.counter);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.cpp#L34" target="_blank" rel="noopener">ohao/ecs/world_hash.cpp:34</a></div>
+<p>The order is the snapshot&#x27;s row order, which is creation order, not the order of EnTT&#x27;s packed storage. Packed order depends on the pools&#x27; history (a destroy swaps the last element into the hole), so two worlds in the same state could store their components differently; the hash must not see that. The id generator is in the hash because it decides the ids of entities created later: two worlds that look the same but would hand out different ids are not the same world.</p>
+<p>Runtime state is left out: `WorldTransform`, render slots and dirty tags are derived from the authoring state, so hashing them would add nothing but cost. The frame number is left out too, and `world.hash` reports it beside the hash, so &quot;the same world at another frame&quot; stays a meaningful answer.</p>
+</div>
+<div class="section-rule"><h2 id="hashing-values-not-bytes">Hashing values, not bytes</h2></div>
+<div class="prose reveal">
+<p>Components are fed field by field through their registered types, never as raw object bytes:</p>
+<div class="citation-chip"><code class="citation-code">// are fed field by field through their registered types, never as raw object bytes, so</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/hash.hpp#L3" target="_blank" rel="noopener">ohao/reflect/hash.hpp:3</a></div>
+<p>Padding bytes are whatever the allocator left there, and a heap pointer differs run to run, so hashing an object&#x27;s bytes would make equal worlds hash differently. Floats count by their bits, the same rule equality uses, so `-0` and `+0` differ. An entity reference counts as the target&#x27;s `EntityId`, not its handle, because handles are recycled and are not part of a world&#x27;s identity. A type whose bytes are exactly its fields, such as `Transform`, is hashed as its bytes, the fast path. `sp4_t12_value_hash_ignores_padding_and_counts_bits` pins all of this.</p>
+<p>The function is FNV-1a over 8-byte words with a fold after each multiply:</p>
+<div class="citation-chip"><code class="citation-code">// word per step makes it eight times faster than byte-wise FNV over the same data. A final</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/hash.hpp#L10" target="_blank" rel="noopener">ohao/reflect/hash.hpp:10</a></div>
+<p>Each word&#x27;s step is a bijection of the running state, so two inputs that differ in a single word always hash differently, and taking a word per step instead of a byte is what keeps the bench10k hash (10,002 entities) under its 1 ms budget. It is a fingerprint for comparing runs of one engine build, not a cryptographic hash.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-hash-is-used">Where the hash is used</h2></div>
+<div class="prose reveal">
+<p>`world.hash` reports it as `{hash, frame}`. Recordings use it twice: a recording starts with the world&#x27;s hash, so a replay can refuse a world it was not recorded on, and every 60 steps it writes a checkpoint, so a replay that drifts fails at the step where it drifted (see the time and input unit). The same function backs both, so a hash an agent reads with `world.hash` can be compared with one a recording wrote.</p>
+<p>`sp4_t12_hash_is_stable_across_save_and_load` saves a world, loads the file with the same seed, and requires the same hash; it also requires that runtime state does not move it and that another id seed does. `sp4_t12_hash_changes_on_any_authoring_change` makes one edit at a time (a position by one ulp, a sign bit, a name, a component added and one removed, a reparent, an entity created and one destroyed) and requires a different hash for each.</p>
+</div>
+<div class="section-rule"><h2 id="what-changed-since-a-snapshot">What changed since a snapshot</h2></div>
+<div class="prose reveal">
+<p>`world.diff {snapshot, fields?, limit}` compares the live world with a named snapshot and writes nothing. `ecs::diffWorld` finds each snapshot row&#x27;s live entity first. For an unchanged world, row `r` is at packed position `r`, so most rows need no lookup:</p>
+<div class="citation-chip"><code class="citation-code">if (ids &amp;&amp; r &lt; ids-&gt;size() &amp;&amp; at&lt;EntityId&gt;(*ids, r).value == s.ids[r]) e = ids-&gt;data()[r];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_diff.cpp#L44" target="_blank" rel="noopener">ohao/ecs/world_diff.cpp:44</a></div>
+<p>Rows with no live entity are `destroyed`. Live entities that no row claims are `created`, listed in creation order. Then each saved component&#x27;s column is compared against the live storage, column by column, and the parents are compared. The result groups the changes by entity, in the snapshot&#x27;s row order:</p>
+<div class="citation-chip"><code class="citation-code">std::vector&lt;EntityDiff&gt; changed;    // entities in both, in the snapshot&#x27;s row (creation) order</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_diff.hpp#L29" target="_blank" rel="noopener">ohao/ecs/world_diff.hpp:29</a></div>
+<p>The API turns each change into file-form paths with the old and new values, `{&quot;/Transform/position&quot;: [old, new]}`, or `&quot;/Type&quot;` for a component added or removed. `fields` keeps only the listed types and fields, and `limit` caps each list with a `more` count, so &quot;what did my 600-step play do?&quot; costs a few hundred bytes for a few moved entities. `sp4_t12_diff_equals_a_diff_of_the_two_saves` checks it against the ground truth: the diff must list exactly what differs between the two scene files saved before and after.</p>
+</div>
+<div class="section-rule"><h2 id="deterministic-deferred-pixels">Deterministic deferred pixels</h2></div>
+<div class="prose reveal">
+<p>Bit-identical world state is half the contract. The other half is that a deferred capture of that state gives the same pixels every time, which the capture tests and the replay check (`e2e_mcp.py` captures before and after a replay and compares the PNG files byte for byte) depend on. Step 1 of sub-project 4 made this hold. It seeded the SSAO kernel from the renderer seed. It also fixed two real races. One was a post pass that sampled the image the previous render pass had just written without a dependency to make the write visible:</p>
+<div class="citation-chip"><code class="citation-code">// gave a different image run to run).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/render_pass_base.hpp#L113" target="_blank" rel="noopener">ohao/render/deferred/render_pass_base.hpp:113</a></div>
+<p>The other was TAA&#x27;s history on its first frame, which read a matrix nobody had set yet. `deferred_determinism_gpu_test` holds the result: deferred frames, post effects included, bit-identical across fresh renderers, processes and repeated captures, and the deferred goldens are exact (`max_abs_diff` 0). The path tracer is not in this contract: it drifts by 1 LSB on a few pixels across sessions, and that is sub-project 2b&#x27;s to fix.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>A hash and a diff instead of reading state back keeps an agent&#x27;s play loop cheap. An agent that steps, hashes and compares pays 60 bytes per check rather than a world&#x27;s worth of JSON, and it learns *where* two runs part, not just *that* they do. Hashing reflected values rather than memory makes the hash mean what the scene file means: two worlds with the same hash save to the same file.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`world.hash` is a 64-bit fingerprint of the authoring state: entity table, saved components in creation order, id generator; field by field through reflection, so padding, pointers and storage order never count. `world.diff` lists changed fields of changed entities against a snapshot, with created and destroyed ids. Lockstep worlds and deferred captures are bit-identical run to run.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Compare hashes only within one engine build. Adding a saved component type changes the</li>
+</ul>
+<p>hash of unchanged scenes.</p>
+<ul>
+<li>A diff&#x27;s snapshot must come from a world with the same registrations.</li>
+<li>Runtime components and the frame number are not part of the hash. Read the frame from</li>
+</ul>
+<p>`world.hash`&#x27;s `frame`.</p>
+<ul>
+<li>Deferred determinism holds for deferred captures in lockstep. A realtime capture is the</li>
+</ul>
+<p>presented frame (`deterministic: false`), and path-traced frames have their own tolerance.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/ecs/world_hash.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/world_hash.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/reflect/hash.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/world_diff.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/world_diff.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/render_pass_base.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="capture.html"><div class="label">← Prev</div><div class="title">Frame capture</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

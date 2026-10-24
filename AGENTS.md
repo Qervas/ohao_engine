@@ -11,6 +11,8 @@ JSON-RPC/MCP server on stdio (`ohao/rpc`). Windows/MSVC is the platform in daily
 
 - **Code map, data flow, recipes:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Driving the engine from an agent:** [docs/agents/ohao-cli.md](docs/agents/ohao-cli.md)
+  (the CLI, every method and error code) and [docs/agents/ohao-serve.md](docs/agents/ohao-serve.md)
+  (a live session over MCP: connect, orient, edit, play, look, record and replay, logs)
 - **Designs and plans:** `docs/specs/`, `docs/plans/`; **what changed:** `docs/changes/`;
   **where it is going:** [docs/ROADMAP.md](docs/ROADMAP.md)
 - **Monograph** (design units with code citations): `site/`
@@ -132,6 +134,7 @@ $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/serve/check_live.py > /dev/null   # gpu
+$ python tests/serve/e2e_mcp.py > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
 $ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
@@ -150,14 +153,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   on); minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
   readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
   camera moves 3 m in 60 injected steps; the window host over `--pipe` (a step, a capture,
-  the client's disconnect ends it cleanly).
+  the client's disconnect ends it cleanly). `e2e_mcp.py`: a stdlib-only MCP client runs a
+  whole session against a hidden window (load, edit, snapshot, record, a flight, step with
+  watch, captures, logs, restore, replay to the same hash, a capture bit-identical to the
+  first), validation clean through teardown.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
   `... repeated N more times`). `check_validation.py` renders deferred Cornell and the
   helmet under the layers;
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
-- **Render goldens** (`tests/golden/manifest.json`, 10 scenes: 5 examples, 5 through
+- **Render goldens** (`tests/golden/manifest.json`, 11 scenes: 5 examples, 6 through
   `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
@@ -165,7 +171,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (expected | actual | heat of the worst region), `--heatmaps all` for every scene.
   `--selftest --json` records the run-to-run floor. They are a hash of an unchanged sampler, not an image-quality gate: anything
   that perturbs the sample sequence moves every pixel by the noise. Never widen a
-  tolerance to make one pass. The four deferred scenes are exact (max_abs 0): deferred
+  tolerance to make one pass. The five deferred scenes are exact (max_abs 0): deferred
   rendering is deterministic, so any difference there is a change. Path-traced renders
   drift by 1 LSB on a few pixels across sessions with identical SPIR-V; never compare
   their md5s across days.
@@ -189,7 +195,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   running. A budget is met after five consecutive passes and changes only by Frank's
   ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
-  guide and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
+  and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
   `docs/agents/skills/` until they are installed there; see its README).
 
 ## Gotchas that have cost this project time
