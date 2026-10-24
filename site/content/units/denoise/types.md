@@ -35,7 +35,7 @@ resolves to `None` rather than to a mode whose implementation is absent.
 
 :::why
 What the fallback buys is mechanical, and only the mechanism is recorded — no
-comment or commit message weighs an alternative. The frame-final `getPixels()`
+comment or commit message weighs an alternative. The frame-final `readback()`
 dispatches on the mode, and the NRD arm reads back the binding-30 tonemapped
 image:
 
@@ -164,7 +164,7 @@ re-seed condition above.
 :::key
 `DenoiseMode` is not a switch that turns denoising on. GPU denoise work is
 scheduled by resource existence (`m_nrdDenoiser`, `enableAuxiliaryAOVs`); the
-mode is a tag on the *output tap*, deciding which image `getPixels()` hands
+mode is a tag on the *output tap*, deciding which image `readback()` hands
 back. Reading it as an on/off switch is how the two-copy behaviour above becomes
 surprising.
 :::
@@ -227,4 +227,4 @@ dead halves survived this long next to a live implementation sharing their name.
 - Adding a `DenoiseMode` means touching `denoiseModeName`, `isValidDenoiseMode`, the traits class, and every `default:`-carrying runtime mirror. Nothing in the build will tell you if you miss one.
 - `denoiseNeedsAovAccumulation` bypasses `DenoiseModeTraits`. Change the trait and the free function together or they disagree silently.
 - A mode that must influence the raygen has to survive the per-frame reset in `prepareRTSceneForFrame`, i.e. be listed in the re-seed condition in `applyRTRenderSettings`. Setting it once through `setRTRenderSettings` does not stick.
-- `parseDenoiseMode` must never return a mode whose backend was compiled out; the readback switch in `getPixels()` assumes the mode implies its resources were written.
+- `parseDenoiseMode` must never return a mode whose backend was compiled out; the denoise switch in `readback()` assumes the mode implies its resources were written.

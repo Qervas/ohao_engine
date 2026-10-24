@@ -78,9 +78,9 @@ World::sync()
 host: applySceneView (Camera, Environment -> renderer camera, HDRI)   runtime/scene_view_apply.hpp
 VulkanRenderer::render()
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit
-  deferred passes or a path tracer, then present (window) or readback (headless); a
-  window frame reads back only when asked (requestReadback, then readback(): that frame's
-  fence, never the queue)
+  deferred passes or a path tracer, then present (window); any frame, headless or
+  windowed, copies to the CPU only when asked (requestReadback, then readback(): that
+  frame's fence, never the queue)
   every pass between two GPU timestamps (render/frame/gpu_pass_timer.hpp), named in the
   pass registry; a frame slot's times are read when the slot comes round, after its fence:
   render.stats, render_bench, never a stall

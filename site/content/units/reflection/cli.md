@@ -73,7 +73,7 @@ Without `frames`, the frame count is one per path-tracer sample, and for deferre
 {{cite ohao/runtime/frame_capture.cpp "if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame"}}
 {{cite ohao/runtime/frame_capture.cpp "return std::find(r.post.begin(), r.post.end(), "taa") != r.post.end() ? 10 : 1;"}}
 
-There is no `+ 3`. The examples need it because `getPixels()` delivers the frame from `MAX_FRAMES_IN_FLIGHT` calls earlier; a capture asks for its last frame with `requestReadback()` and takes exactly that frame from `readback()`. The CPU denoisers (OIDN, NRD) read the live images back themselves through `getPixelSpan()`.
+A capture asks for its last frame with `requestReadback()` and takes exactly that frame from `readback()`, as every reader of pixels does. Under the CPU denoisers (OIDN, NRD), `readback()` denoises that frame's images itself.
 
 {{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
@@ -90,9 +90,9 @@ For the path tracers this restarts accumulation. For deferred, `resetAccumulatio
 
 Five `cli_*` entries in the golden manifest render the checked-in scene files through `ohao run` and compare them with the *examples'* goldens, using the same tolerances. Sharing the golden means the scene file and the code-built scene cannot drift apart unnoticed. A scene file holds no render settings, so a capture that has to match `model_viewer` states them on the command line:
 
-{{cite tests/golden/manifest.json "run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 27"}}
+{{cite tests/golden/manifest.json "run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30"}}
 
-That entry adds `--post taa,ssao,bloom --exposure 1`, which are the settings `model_viewer` turns on in code. The frame counts are the examples' minus the ring depth: `model_viewer` renders 30 deferred frames and its lagging readback writes frame 27, `cornell_box` renders 10 and writes frame 7, so the deferred entries pass `--frames 27` and `--frames 7`. The RT entry passes `--spp 16`, which renders the 16 frames that `cornell_box`'s `16 + 3` loop delivers. The step-9 record reports the largest per-channel difference against the examples' goldens as 0 or 1 for four of the entries, and 4 for `cli_cornell_box_rt_realtime`.
+That entry adds `--post taa,ssao,bloom --exposure 1`, which are the settings `model_viewer` turns on in code. The frame counts are the examples' own: `model_viewer` renders 30 deferred frames and writes the last, `cornell_box` renders 10 and writes the last, so the deferred entries pass `--frames 30` and `--frames 10`, and match bit for bit. The RT entries pass `--spp 16`, the 16 frames `cornell_box` renders for 16 samples. The path-traced entries match within their tolerance; `cli_cornell_box_rt_realtime` has measured up to 3 levels, from the realtime tracer's run-to-run race.
 
 ## Git Bash and `--seed`
 

@@ -70,7 +70,7 @@
   <rect x="20" y="368" width="680" height="48" fill="#1a222c" stroke="#3d4a58" rx="4"/>
   <text x="32" y="386" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">NrdCinematicPost</text>
   <text x="150" y="386" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">bloom extract &#8594; 2&#215; blur &#8594; composite &#8594; 32 &#8594; DoF gather &#8594; 30 (RGBA8 LDR)</text>
-  <text x="32" y="404" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">binding 30 is what VulkanRenderer::getPixels() reads back in DenoiseMode::NRD</text>
+  <text x="32" y="404" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">binding 30 is what VulkanRenderer::readback() reads back in DenoiseMode::NRD</text>
 
   <defs>
     <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">

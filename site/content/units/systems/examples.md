@@ -59,24 +59,25 @@ read back to the CPU unasked, and its `--frames N` mode fails the run if anythin
 {{cite examples/ohao_game.cpp "const std::string loaded = host.session().call("scene.load", params);"}}
 {{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
 
-Everything below — the `+ 3` loop, the shared argv parser, the destruction
-order — describes these four inline drivers.
+Everything below (the render loop, the shared argv parser, the destruction
+order) describes these four inline drivers.
 
-## The `+ 3` in every render loop
+## The last frame is the one saved
 
-Every inline driver's RT path renders `samples + 3` frames, never `samples`. It
-looks like superstition. It is exact — in one denoise mode out of five.
+Every inline driver's RT path renders `samples` frames and saves the last; the
+deferred path renders a fixed count and saves the last of those.
 
-{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
+{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : samples;"}}
 
-The reason is the frame ring. `renderRTPipeline` opens by waiting on the fence
-of the slot it is about to reuse and `memcpy`-ing that slot's mapped staging
-buffer into the host pixel buffer — so what lands on the CPU is the image
-submitted three `render()` calls ago, not the one about to be recorded.
+The loop asks for its last frame before rendering it, and reads it back after:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Read back previous frame's pixels"}}
+{{cite examples/cornell_box.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
-{{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
+Only that frame copies its image into its ring slot's staging buffer, and
+`readback()` waits for that frame's fence alone, so the PNG is the frame just
+rendered. Until sub-project 2b step 2 every headless frame copied, a frame's
+copy reached the CPU three `render()` calls later, and these loops ran
+`samples + 3` frames to land on the right one.
 
 What accumulates is not the push-constant sample index. `pc.params.z` carries
 `m_sampleIndex`, which seeds the sampler and nothing else. The accumulation
@@ -89,44 +90,36 @@ one of them.
 {{cite shaders/rt/pt_raygen.rgen "imageStore(accumBuffer, pixel, vec4(acc, count));"}}
 
 Take `DenoiseMode::None` for the moment. Call $k$ (zero-based) leaves an image
-carrying $k+1$ accumulated samples; the copy performed at the top of call $k$
-carries call $k-3$'s. Let $N$ be the number of `render()` calls, $F$ the ring
-depth, and $s_{\text{host}}$ the sample count of the image sitting in the host
-buffer when the loop exits:
+carrying $k+1$ accumulated samples. With $N$ `render()` calls and the last one
+read back, the saved image's sample count $s$ is that of call $N-1$:
 
-$$s_{\text{host}}(N) \;=\; \big((N-1)-F\big) + 1 \;=\; N - F, \qquad F = 3$$
+$$s(N) \;=\; (N-1) + 1 \;=\; N$$
 
-Set $N = \text{spp} + 3$ and $s_{\text{host}}$ is exactly the spp the user asked
-for. The deferred branch takes the same readback path — it accumulates nothing,
-but it lags identically — so `cornell_box`'s ten deferred frames save the
-seventh and `model_viewer`'s thirty save the twenty-seventh. Both ignore the spp
-argument entirely.
+So $N = \text{spp}$ saves exactly the spp the user asked for. The deferred branch
+accumulates nothing, and its counts are about history instead: `cornell_box`
+saves the tenth deferred frame and `model_viewer` the thirtieth, long enough for
+RT GI's and TAA's histories. Both ignore the spp argument entirely.
 
-{{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
+{{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : samples;"}}
 
-The `ohao` CLI does not copy the rule, because it has no lag to drain: its capture
-asks for the last frame it renders (`requestReadback()`) and reads exactly that
-frame back. It renders `spp` RT frames, and one deferred frame (ten with TAA) unless
-`--frames` says otherwise. To land on the frame an example saved, a scene rendered by
-`ohao run` asks for the example's count minus three — the golden manifest passes
-`--frames 7` for the Cornell box and `--frames 27` for the helmet.
+The `ohao` CLI follows the same rule through the shared capture: it renders `spp`
+RT frames, and one deferred frame (ten with TAA) unless `--frames` says otherwise,
+and keeps the last. So a scene rendered by `ohao run` with the example's count
+gives the example's pixels: the golden manifest passes `--frames 10` for the
+Cornell box and `--frames 30` for the helmet.
 
 {{cite ohao/runtime/frame_capture.cpp "if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame"}}
 
-## Where the formula actually holds
+## What each denoiser makes of it
 
-`DenoiseMode` has five values — `None`, `OIDN`, `NRD`, `Atrous`, `DLSSRR` — and
-$s_{\text{host}} = N - 3$ needs two things at once: the host image must come
-from the lagged staging ring, *and* the raygen must be accumulating. Only
-`None` gives you both.
+`DenoiseMode` has five values: `None`, `OIDN`, `NRD`, `Atrous` and `DLSSRR`.
+`readback()` returns the requested frame's staging copy for `None`, `Atrous` and
+`DLSSRR`. For `OIDN` and `NRD` it does its own readback of that frame's images,
+a command buffer submitted and waited on once the frame's fence has signalled.
+OIDN's readback takes the accumulation image itself, whose RGB is the running
+mean of every sample so far.
 
-`getPixels()` returns the lagged buffer for `None`, `Atrous` and `DLSSRR`.
-`OIDN` and `NRD` abandon it and issue their own readback — a command buffer
-submitted and waited on inside the getter, which therefore observes every queued
-frame. OIDN's readback takes the accumulation image itself, whose RGB is the
-running mean of every sample so far.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (!readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {"}}
 
 Accumulation splits the set along a different seam. `Atrous` and `DLSSRR` are
 flagged `wants_fresh_sample`: the host forces `pc.control.y = 0` every frame,
@@ -140,22 +133,12 @@ themselves, so handing them a converged image would double-filter it.
 
 {{cite shaders/rt/pt_raygen.rgen "if (historyFrameCount == 0u) {"}}
 
-The four non-`None` modes therefore miss in two directions. Under `Atrous` or
-`DLSSRR` the saved PNG is 1 spp no matter what number you typed. Under `OIDN`
-the fresh readback sees all $N$ submissions, so a `samples + 3` loop hands OIDN
-a `samples + 3`-sample beauty — three more than requested, not fewer. `NRD`
-returns its own GPU-tonemapped composite, for which the ring lag is irrelevant
-in either direction.
-
-The overshoot is the shipped default, not a corner case: the offline RT profile
-sets `DenoiseMode::OIDN`, and no driver overrides it without `--denoise=`.
+So under `None` and under `OIDN`, the shipped offline default, the saved frame
+holds exactly `samples` samples. Under `Atrous` or `DLSSRR` the saved PNG is
+1 spp no matter what number you typed: those denoisers carry the history
+themselves. `NRD` returns its own GPU-tonemapped composite of the last frame.
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
-
-So the `+ 3` is load-bearing in exactly one configuration and merely wasteful in
-the rest. A driver that looped `samples` times would still be correct-looking
-under the default and three samples short under `--denoise=none` — a bug that
-surfaces only when you switch the denoiser off to check something.
 
 ## What the shared flag parser will not tell you
 
@@ -239,24 +222,21 @@ included — used by nothing but the motion-vector PNG.
 ## The orbit reset, and what breaks if you tighten the loop
 
 `turntable` moves the camera to the next orbit position, resets accumulation,
-renders `spp + 3` frames, writes the PNG, repeats.
+renders `spp` frames, writes the last, repeats.
 
 {{cite examples/turntable.cpp "renderer.resetAccumulation();"}}
 
 The reset must sit after the camera move and before the inner loop, or the
-accumulation buffer keeps radiance from the previous viewpoint. But the reset
-clears the path tracer's sample index and history — it does not touch the
-staging ring. The first three copies of orbit position $f$ still deliver the
-tail of position $f-1$. That is why the `+ 3` cannot be trimmed here either: at
-`spp` iterations the written PNG would be three samples short under
-`--denoise=none`, and for `spp` of 3 or less it would be the *previous* camera
-position's image — a turntable visibly lagging its own orbit, produced entirely
-by the driver.
+accumulation buffer keeps radiance from the previous viewpoint. Each position's
+PNG is that position's last frame, read back on request, so nothing of the
+previous position can reach it.
+
+{{cite examples/turntable.cpp "if (s == spp - 1) renderer.requestReadback();"}}
 
 Of the three drivers that can resolve to `Deferred`, `turntable` is the only one
-whose loop does not special-case it. It renders `spp + 3` frames per position
+whose loop does not special-case it. It renders `spp` frames per position
 whatever `resolveMode` returned, and its banner prints `RTOffline` for any mode
-that is not `RTRealtime` — including `Deferred`.
+that is not `RTRealtime`, including `Deferred`.
 
 {{cite examples/turntable.cpp "(rtMode == RenderMode::RTRealtime ? "}}
 
@@ -292,18 +272,16 @@ between materials produces one submesh per alternation, and each is a draw call 
 raster passes.
 
 :::key
-The frame you last rendered is not the frame you saved. Both the RT and the
-deferred readback copy the staging buffer of the slot they are about to reuse,
-so the host image trails by `MAX_FRAMES_IN_FLIGHT` calls. Every `+ 3` in the
-inline drivers is that constant — and it converts spp into an exact sample count
-only under `--denoise=none`, because every other mode either bypasses the lagged
-buffer or refuses to accumulate into it.
+The frame you last rendered is the frame you saved. Every inline driver asks for
+its last frame before rendering it and reads it back after, so `spp` frames give
+an `spp`-sample image under `None` and `OIDN`, and a deferred run's PNG equals
+`ohao run --frames` with the same count, bit for bit.
 :::
 
 ## Contracts
 
-- Under `--denoise=none`, `render()` must be called `spp + MAX_FRAMES_IN_FLIGHT` times to land `spp` accumulated samples in the host buffer. The same loop hands OIDN `spp + 3` samples and `Atrous`/`DLSSRR` exactly 1. If the ring depth ever changes, every driver's `+ 3` is wrong and only `--denoise=none` output will show it.
+- A driver calls `requestReadback()` before the `render()` it saves and `readback()` after; `spp` calls then land `spp` accumulated samples under `None` and `OIDN`, and 1 under `Atrous`/`DLSSRR`.
 - Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.
 - The `ecs::World` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the world second, so reverse-order destruction of locals gets it right; the render extract releases its instances and lights from the `RenderScene` as the world goes, and in `cornell_box` and `model_viewer` the instantiate system releases its meshes. Swapping those two declarations would make the extract release into a render world that has already been shut down.
-- `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.
+- `deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp` per orbit position, and `env_demo` has no `deferred` token at all.
 - An unknown trailing flag is silently ignored by `parseRenderFlags` and by `env_demo`'s own parser — typos degrade to defaults rather than failing the run.

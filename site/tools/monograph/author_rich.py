@@ -24,7 +24,7 @@ KNOWLEDGE: dict[str, dict] = {
             "VulkanRenderer(w,h).initialize() creates instance, device, queues, frame ring, bindless pool.",
             "setScene uploads geometry and materials, then buildBLASTLAS when RT is needed.",
             "setRenderMode selects Forward, Deferred, RTRealtime, or RTOffline; ensureRTRenderer lazily constructs PathTracer.",
-            "render() records and submits; getPixels copies staging after fence wait for offline/goldens.",
+            "render() records and submits; a requested frame (requestReadback) copies to staging, and readback() waits on that frame's fence only.",
         ],
         "why": "One API surface means tests, demos, and tools never fork renderer semantics. Lazy RT avoids dual 4K path-tracer OOM when you only needed deferred.",
         "contracts": [
@@ -182,7 +182,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "gpu/renderer-facade": {
         "what": [
-            "VulkanRenderer is the public facade: initialize, setScene, setRenderMode, ensureRTRenderer, setDenoiseMode, render, getPixels/present.",
+            "VulkanRenderer is the public facade: initialize, setScene, setRenderMode, ensureRTRenderer, setDenoiseMode, render, requestReadback/readback, present.",
             "RenderMode: Forward | Deferred | RTRealtime | RTOffline with isRTRenderMode helpers.",
         ],
         "how": [
@@ -257,7 +257,7 @@ KNOWLEDGE: dict[str, dict] = {
         ],
         "how": [
             "Wait fence on ring slot → record → submit → advance frame.",
-            "getPixels memcpy only after wait — never overwrite in-flight staging.",
+            "Only a requested frame copies to its slot's staging buffer; readback() reads it after that frame's fence.",
         ],
         "why": "MAX_FRAMES_IN_FLIGHT=3 hides latency; violating fence order races readback.",
     },

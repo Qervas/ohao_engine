@@ -7,11 +7,11 @@ standard: v2
 
 ## Two bodies that share a skeleton
 
-`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines nine functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other seven are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToPixelBuffer` (the two ends a deferred frame can reach, next section), `readback` and `finishReadbackRequest` (readback on request, same section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
+`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines nine functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other seven are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToStaging` (the window's end of a deferred frame, and a requested headless frame's copy; next section), `readback` and `finishReadbackRequest` (readback on request, same section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "rtPipeline && getRTRenderer(m_renderMode) && isRTSupported()) {"}}
 
-Both bodies open with the same steps in the same order: take the current ring slot, wait on its fence, memcpy its staging buffer into the CPU pixel vector, tick the render world's retire queue, reset the fence, then reset and re-record that slot's command buffer. Reading before recording is what makes slot reuse safe: the staging buffer is both the destination of the copy this frame records and the source of the readback this frame performs, and the fence guarantees the older copy has landed. The tick sits after every early return, so each tick matches a frame that is actually submitted on the slot, and `MAX_FRAMES_IN_FLIGHT` ticks cover every slot's fence:
+Both bodies open with the same steps in the same order: take the current ring slot, wait on its fence, tick the render world's retire queue, reset the fence, then reset and re-record that slot's command buffer. The fence wait is what makes slot reuse safe: the frame that last ran on the slot, and any copy it made into the slot's staging buffer, has finished. The tick sits after every early return, so each tick matches a frame that is actually submitted on the slot, and `MAX_FRAMES_IN_FLIGHT` ticks cover every slot's fence:
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "// Retire-queue tick. After the early returns above: every tick then matches a"}}
 
@@ -23,11 +23,11 @@ The first command each body records is `RenderScene::recordUpdates` for the slot
 
 ## Two ends for a deferred frame
 
-A deferred frame ends in one of two places, decided by whether `initialize(const PresentTarget&)` built a swapchain. Headless, it is copied into the slot's staging buffer and read back `MAX_FRAMES_IN_FLIGHT` frames later; windowed, it is blitted into an acquired swapchain image and presented, and nothing is read back unless asked for.
+A deferred frame ends in one of two places, decided by whether `initialize(const PresentTarget&)` built a swapchain. Windowed, it is blitted into an acquired swapchain image and presented. Headless, it ends with its final image and does nothing more. In both, nothing is copied to the CPU unless the frame was asked for.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp ": copyDeferredOutputToPixelBuffer(cmd);   // headless readback"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// A window frame presents (and copies too when asked); a headless frame copies only"}}
 
-Asking is `requestReadback()` before the `render()` call. The request belongs to that one frame: `renderDeferred` takes it with `std::exchange`; a headless frame's own copy serves it, a windowed frame also copies its final image (already a transfer source for the blit) into the slot's staging buffer, and `readback()` waits on that slot's fence and returns the bytes — the frame just rendered, with no ring lag. The RT body marks its staging copy as the requested one the same way. `readbackCopyCount()` still counts only the headless copies, so it stays 0 in a window; copies made for a request are counted in `requestedReadbackCount()`.
+Asking is `requestReadback()` before the `render()` call. The request belongs to that one frame: `renderDeferred` takes it with `std::exchange`. A headless frame then copies its final image into the slot's staging buffer (`copyDeferredOutputToStaging`). A windowed frame copies the same image, already a transfer source for the blit, inside `blitDeferredOutputToSwapchain`. `readback()` waits on that slot's fence and returns the bytes: the frame just rendered. The RT body copies its output only for a requested frame too. Every copy is a requested one, which `requestedReadbackCount()` counts.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "// A request belongs to this frame; a frame that is not rendered leaves no readback."}}
 
@@ -41,13 +41,13 @@ Image acquisition then sits between the fence wait and the fence reset, so every
 
 `vkQueuePresentKHR` returning `OUT_OF_DATE` or `SUBOPTIMAL` only marks the swapchain dirty; the rebuild happens at the top of the next frame, as does one requested by `setPresentExtent` when the window's drawable size changes.
 
-The RT body has no present path. It always records the staging copy and never acquires, so a windowed renderer switched to `RTRealtime` or `RTOffline` renders frames nobody sees. The windowed host does not offer the choice: `LiveHost::initialize` pins the mode to Deferred, and its `capture` refuses any other mode.
+The RT body has no present path. It never acquires, so a windowed renderer switched to `RTRealtime` or `RTOffline` renders frames nobody sees. The windowed host does not offer the choice: `LiveHost::initialize` pins the mode to Deferred, and its `capture` refuses any other mode.
 
 {{cite ohao/runtime/live_host.cpp "m_renderer->setRenderMode(RenderMode::Deferred);"}}
 
 ## Three ways to reach a transfer layout
 
-Every frame's last command reads the final image as a transfer source — `vkCmdCopyImageToBuffer` into the ring slot's staging buffer, or `vkCmdBlitImage` into the swapchain. The RT path delegates the layout: `PathTracer::render` ends with its own barrier on the output image, and the dispatch code records the assumption in a comment instead of re-checking it.
+A presented or requested frame's last command reads the final image as a transfer source: `vkCmdBlitImage` into the swapchain, or `vkCmdCopyImageToBuffer` into the ring slot's staging buffer. The RT path delegates the layout: `PathTracer::render` ends with its own barrier on the output image, and the dispatch code records the assumption in a comment instead of re-checking it.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "// Output is already in TRANSFER_SRC_OPTIMAL from render()"}}
 
@@ -55,9 +55,11 @@ The deferred path pays for the transition itself, once in each of its two ends, 
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;"}}
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "b[0].image = src;    // same layout assumption copyDeferredOutputToPixelBuffer makes"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "b[0].image = src;    // same layout assumption copyDeferredOutputToStaging makes"}}
 
-That constant is a cross-module contract compiled into a barrier. It holds today because both render passes that can produce the final image — tonemap and lighting — end in `SHADER_READ_ONLY_OPTIMAL`. Any post-process step appended after tonemapping that leaves the final image in `GENERAL` turns both barriers into invalid transitions with no compile-time warning. The two ends also disagree about where they leave the image: the blit transitions it back to `SHADER_READ_ONLY_OPTIMAL`, the headless copy leaves it in `TRANSFER_SRC_OPTIMAL`. That is harmless only because both render passes declare `initialLayout = UNDEFINED` and discard whatever layout they find.
+That constant is a cross-module contract compiled into a barrier. It holds today because both render passes that can produce the final image, tonemap and lighting, end in `SHADER_READ_ONLY_OPTIMAL`. Any post-process step appended after tonemapping that leaves the final image in `GENERAL` turns both barriers into invalid transitions with no compile-time warning. Both ends put the image back in `SHADER_READ_ONLY_OPTIMAL` after reading it, so every deferred frame ends in the same state whether it was presented, read, or neither.
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Back to where the frame left it, as the window's blit does: a frame ends in the same"}}
 
 The third mechanism is the swapchain image, which is taken from `UNDEFINED` — its old contents discarded — to `TRANSFER_DST_OPTIMAL` for the blit and to `PRESENT_SRC_KHR` after it. When there is no final image at all, the same branch clears the swapchain image to black instead of presenting whatever it last held.
 
@@ -81,7 +83,7 @@ Every staging buffer in the ring is sized for four bytes per pixel.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "const size_t stagingBufferSize = static_cast<size_t>(m_width) * m_height * 4;   // RGBA8"}}
 
-`vkCmdCopyImageToBuffer` derives its byte count from the source format and extent, not from the destination buffer, so on the fallback branch a headless copy would read eight bytes per pixel out of the image and write them into an allocation sized for four — an overrun of the destination, not a benign truncation. `copyDeferredOutputToPixelBuffer` therefore asks which image it got before recording anything, and refuses the HDR one with a single warning; the pixel buffer keeps its previous contents.
+`vkCmdCopyImageToBuffer` derives its byte count from the source format and extent, not from the destination buffer, so on the fallback branch a headless copy would read eight bytes per pixel out of the image and write them into an allocation sized for four: an overrun of the destination, not a benign truncation. `copyDeferredOutputToStaging` therefore asks which image it got before recording anything, and refuses the HDR one with a single warning; the request then goes unserved, and `readback()` returns an empty span.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!m_deferredRenderer->finalOutputIsRGBA8()) {"}}
 
@@ -160,7 +162,7 @@ The intent is stated where the buffer is filled: a scene with no lights gets one
 But `numLights == 1` cannot tell a fabricated light from an authored one. A scene with a single directional light — the ordinary outdoor case — has its authored direction silently overwritten by the sky's sun on every deferred frame. The fix is a flag on the fallback light, not a count; the count is genuinely ambiguous.
 
 :::why
-Both bodies pipeline instead of blocking. Neither waits for its own submission: the headless readback hands back the frame finished `MAX_FRAMES_IN_FLIGHT` submissions ago, and the windowed path never reads back at all. A blocking design — submit, wait on the fence, map and copy in the same call — would make the pixels correct on the very first call, and would cost a full CPU-GPU round trip per frame with the CPU idle for the whole GPU pass. The ring trades correct-on-first-call for throughput and accepts a readback that lags by the ring depth; a headless caller that wants the frame it just recorded has to call `render()` until the ring has turned over. Presentation removes the lag rather than hiding it, because the image the swapchain shows is written by the same submission that recorded it.
+Both bodies pipeline instead of blocking: `render()` never waits for its own submission, only for the frame that last used its slot, three submissions back. Pixels reach the CPU only through a request, and the wait for them is the caller's choice: `readback()` blocks on that one frame's fence. A loop that never reads pays for no copy and no wait. A capture pays exactly one wait, for the frame it keeps. The ring this replaced copied every headless frame and handed back the one three calls earlier: correct pixels only after the ring had turned over, and a copy paid on every frame nobody read.
 :::
 
 :::key
@@ -169,8 +171,8 @@ Nothing in this file checks that the modes agree with each other. Dispatch is th
 
 ## Contracts
 
-- The image returned by `getFinalOutputImage()` must already be in `SHADER_READ_ONLY_OPTIMAL`, and for the headless copy it must also be four bytes per pixel. The layout half holds on both branches — the lighting pass's own render pass also ends in `SHADER_READ_ONLY_OPTIMAL` — but the format half holds only when post-processing's tonemap step ran, and nothing checks it.
-- `resize()` must call `resizeStagingBuffers` and reset `m_currentFrame` to 0 before the next `render()`. `resizeStagingBuffers` destroys, re-creates and re-maps all three slot buffers at the new size; skip it and the per-frame `memcpy` reads `width * height * 4` bytes from an allocation still sized for the old dimensions.
+- The image returned by `getFinalOutputImage()` must already be in `SHADER_READ_ONLY_OPTIMAL`, and for a requested copy it must also be four bytes per pixel. The layout half holds on both branches: the lighting pass's own render pass also ends in `SHADER_READ_ONLY_OPTIMAL`. The format half holds only when post-processing's tonemap step ran, and the copy checks it (`finalOutputIsRGBA8`).
+- `resize()` must call `resizeStagingBuffers` and reset `m_currentFrame` to 0 before the next `render()`. `resizeStagingBuffers` destroys, re-creates and re-maps all three slot buffers at the new size; skip it and `readback()` returns `width * height * 4` bytes of an allocation still sized for the old dimensions.
 - Swapchain recreation must stay ahead of `getFrame(m_currentFrame)` in `renderDeferred`. `recreatePresentation` calls `resize()`, and `resize()` resets `m_currentFrame`; any recreation point after the slot is taken waits on one slot's fence and resets another's.
 - Every early return between `waitForFrame` and `resetFrame` leaves the fence signalled; every return after `resetFrame` must submit with that fence, or the next frame on the slot waits forever.
 - The ring permits up to three overlapping submissions, and `PathTracer` keeps one descriptor set per slot: `render()` rewrites only `m_descriptorSets[frameSlot]`, after that slot's fence wait, so a set is never rewritten while a frame that read it is in flight. That discipline carries the ping-ponged history bindings (13-16) as well as the idempotent ones. A new binding written into a shared object instead of the slot's set would reintroduce the hazard.

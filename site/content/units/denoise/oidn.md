@@ -62,11 +62,12 @@ device, engine or filter state survives to the next invocation.
 Add the three full-resolution readbacks — each
 allocating its own staging buffer, submitting a command buffer and blocking on
 `vkQueueWaitIdle`, preceded by a `vkDeviceWaitIdle` — and the per-invocation cost
-is structural, not tunable. The only thing that bounds it to once per frame is a
-one-shot cache: `render()` invalidates it, the first `getPixels()`
-after that pays for the whole chain, and repeat calls in the same frame are free.
+is structural, not tunable. It runs only for a frame someone asked for (a
+`requestReadback()` before its `render()`), inside that frame's `readback()`, and a
+one-shot cache bounds it to once per frame: `render()` invalidates it, the first
+`readback()` after that pays for the whole chain, and repeat calls are free.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseCacheValid) {"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseCacheValid) return true;"}}
 
 :::why
 OIDN can run on a CUDA/SYCL/HIP device and import Vulkan allocations as external
@@ -87,21 +88,20 @@ of which stay GPU-side. OIDN is the reference backend; latency is explicitly not
 its job.
 :::
 
-The dispatch reflects that: `getPixels()` early-returns for `None`, `Atrous` and
-`DLSSRR` — all three already have their result in `m_pixelBuffer`, the last two
-because they filter on the GPU into the output image — and `NRD` takes its own
-GPU readback branch. OIDN is never tested for; it is the fall-through.
+The dispatch reflects that. `readback()` returns the requested frame's staging
+copy for `None`, `Atrous` and `DLSSRR`, whose result is already in the output
+image the frame copied (the last two filter on the GPU), and hands only `OIDN` and
+`NRD` to the denoising path, by name.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&"}}
 
-The `bool denoised = false;` guard immediately above the call is a fossil of the
-era when OptiX was tried first and OIDN was the fallback; `--denoise=optix` now
-parses straight to OIDN with a warning.
+`--denoise=optix`, from the era when OptiX was tried first and OIDN was the
+fallback, now parses straight to OIDN with a warning.
 
 {{cite ohao/render/rt/denoise/denoise_types.cpp "--denoise=optix is no longer supported"}}
 
-The practical consequence: any `DenoiseMode` added later without an entry in that
-early-return will silently be routed through OIDN's readback path.
+A `DenoiseMode` added later reads back its frame's staging copy unless it is named
+there.
 
 ## The guides, and the one that is encoded wrong
 
@@ -199,7 +199,7 @@ using such diffs as a regression signal.
 ## Contracts
 
 - `oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN's HDR filter would see radiance scaled by the sample count.
-- `getPixels()` must run after `render()` and before the next one; `render()` clears the denoise cache and the readback re-submits on the graphics queue with a device-wide wait.
+- The frame to denoise is requested (`requestReadback()` before its `render()`) and read with `readback()` before the next `render()`, which clears the denoise cache. The readback re-submits on the graphics queue with a device-wide wait.
 - The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, renders both its scenes with `--denoise=none`, so no golden image in the tree has ever passed through OIDN.
 - Three tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++, plus the one in each live raygen, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen`. Editing `pt_raygen.rgen` changes nothing at runtime — no renderer binds it.
 - The build takes whatever OIDN the host provides — `find_package(OpenImageDenoise REQUIRED)` pins no version — so a host-side OIDN upgrade changes the filter under unchanged source.

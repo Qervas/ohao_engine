@@ -3,7 +3,7 @@ module: architecture
 id: request-path
 title: Request path
 standard: v2
-figures: [architecture-request-path-frame-ring]
+figures: []
 ---
 
 ## One sequence, in an order that matters
@@ -159,48 +159,40 @@ So an RT request on a device without ray tracing renders deferred instead, and t
 examples print the mode they *requested*, not the one the renderer accepted, so a
 silent downgrade reads as success on stdout.
 
-## Three deep, and the +3 in every driver
+## One frame per sample, and the last one read
 
-The offline drivers all render more frames than the user asked for, by exactly
-three:
+The offline drivers render exactly the frames they were asked for and read the
+last:
 
-{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
+{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : samples;"}}
+{{cite examples/cornell_box.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
-That constant is not a fudge factor. Frame resources are a ring of three, and the
-RT dispatch path reads pixels out of the same slot it is about to overwrite —
-after waiting on that slot's fence, which is the fence signalled three calls ago.
+With `samplesPerFrame` at its default of 1, one `render()` call adds one sample to
+the accumulator, so the last of `samples` frames has integrated exactly `samples`
+samples. The request makes that frame, and no other, copy its image into its ring
+slot's staging buffer, and `readback()` waits on that frame's fence alone.
 
 {{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Read back previous frame's pixels"}}
-
-So the CPU-visible pixel buffer always lags the GPU by the ring depth. With
-`samplesPerFrame` at its default of 1, one `render()` call adds one sample to the
-accumulator, and the last copy of a loop of `samples + 3` calls happens at
-`k = samples + 2`, delivering the image produced at `k = samples - 1` — the frame
-after which exactly `samples` samples have been integrated. The overshoot drains
-the pipeline and lands on the requested budget with nothing wasted.
-
-{{figure architecture-request-path-frame-ring "Conceptual timing of the three-slot staging ring and the resulting three-call readback lag; slot indices and the N+3 arithmetic follow from MAX_FRAMES_IN_FLIGHT and the copy-then-submit order in renderRTPipeline. Not a captured trace."}}
 
 Deferred takes the other branch of that ternary and renders a fixed count that
-ignores the sample argument entirely — in raster mode the spp number on the
-command line does nothing. The headless deferred path reads back through the same
-ring, so its fixed count only has to exceed the ring depth. The constant is per-driver, not engine-wide: ten in
-`cornell_box`, thirty in `model_viewer`.
+ignores the sample argument entirely: in raster mode the spp number on the
+command line does nothing. The count is per driver, not engine-wide (ten in
+`cornell_box`, thirty in `model_viewer`), long enough for RT GI's and TAA's
+histories, and the PNG is the last of them, as `ohao run --frames` writes it.
 
-{{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
+{{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : samples;"}}
 
 ## Three different exits from the GPU
 
-`getPixels()` has three exits behind one signature, and which one runs depends on
-the denoiser. `None`, `Atrous` and `DLSSRR` share the first: return the ring buffer
-described above. `None` does nothing to it; `Atrous` denoises the beauty image
-(`m_outputImage`) in place on the GPU, and the DLSSRR path, when it runs at all,
-tonemaps into that same image — so neither needs a readback of its own.
+`readback()` has three exits behind one signature, and which one runs depends on
+the denoiser. `None`, `Atrous` and `DLSSRR` share the first: return the requested
+frame's staging buffer. `None` does nothing to it; `Atrous` denoises the beauty
+image (`m_outputImage`) in place on the GPU, and the DLSSRR path, when it runs at
+all, tonemaps into that same image, so neither needs a readback of its own.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (isRTRenderMode(m_renderMode) && (m_denoiseMode == DenoiseMode::OIDN || m_denoiseMode == DenoiseMode::NRD) &&"}}
 
-NRD takes the second, and it touches neither the ring nor the accumulator: it
+NRD takes the second, and it touches neither the staging buffer nor the accumulator: it
 copies the tracer's RGBA8 tonemapped image — already denoised and tonemapped on
 the GPU — straight into host memory behind a
 `vkQueueWaitIdle` on the graphics queue.
@@ -217,16 +209,12 @@ That third path matters because the offline profile denoises by default:
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
-so a plain `cornell_box out.png 1024` writes a PNG denoised from an accumulator
-holding 1027 samples, not 1024 — the three drain frames are still real samples,
-and a readback that reads the accumulator directly sees them. The `+3` padding is
-what makes `--denoise=none` land on the exact budget; under the default it is three
-free samples on top of it. The result of either non-ring path is cached in a
-`mutable` buffer and invalidated at the end of every `render()`, so calling
-`getPixels()` twice per frame costs one denoise, not two. The call is declared
-`const` and is not: both non-ring branches `const_cast` away constness to allocate
-a command buffer, submit it, and block. The comment in the source is honest that
-this is only safe after `render()` returns on a single thread.
+so a plain `cornell_box out.png 1024` writes a PNG denoised from the accumulator
+of its last frame, holding 1024 samples: the same budget `--denoise=none` lands
+on. The result of either denoising path is cached and invalidated by every
+`render()`, so calling `readback()` twice for one frame costs one denoise, not
+two. Both allocate a command buffer, submit it and block, which is safe only
+after `render()` returns, on the thread that called it.
 
 ## The settings reset that eats your overrides
 
@@ -257,13 +245,11 @@ pushed down into the tracer's own settings for exactly two modes, `Atrous` and
 {{cite ohao/gpu/vulkan/renderer.cpp "m_rtSettings.denoiseMode = m_denoiseMode;"}}
 
 `Atrous` needs it because the RT pipeline dispatches that denoiser itself, in place
-on the beauty image. `DLSSRR` rides the same branch, but the tree disagrees with
-itself about what it does: `path_tracer_render.cpp` holds a real NGX
-evaluate-and-tonemap block, compiled out unless the vendored NGX static library is
-present, while `getPixels` still carries a Phase-1 comment saying DLSSRR does not
-dispatch denoising at all.
+on the beauty image. `DLSSRR` rides the same branch: `path_tracer_render.cpp` holds
+a real NGX evaluate-and-tonemap block, compiled out unless the vendored NGX static
+library is present.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "// Phase 1: DLSSRR does not yet dispatch denoising (foundation only)"}}
+{{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
 
 OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback.
 NRD is dispatched inside the RT pipeline like `Atrous`, but off a different gate:
@@ -288,5 +274,5 @@ empty frame or ignores a flag, suspect call order before suspecting the shaders.
 - Install the render extract (`ecs::installRenderExtract`, or let `LiveHost` do it) before expecting entities on screen, and run `world.sync()` before every `render()` (never `update`, which would also step the simulation). Spawning uploads a mesh and its materials; only the extract makes an instance of it.
 - The `RenderScene` must outlive the `ecs::World`. `LiveHost::shutdown` resets the session and then the world before the renderer; in `cornell_box` the `VulkanRenderer` is declared above the `ecs::World`, so reverse declaration order destroys the world first.
 - `setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.
-- In the modes that return the ring buffer (None, Atrous, DLSSRR) the pixels trail the GPU by `MAX_FRAMES_IN_FLIGHT` calls. Reading them after fewer than four `render()` calls returns a staging slot that was never written.
+- Pixels come from one place: `requestReadback()` before the `render()` you want, `readback()` after it. A frame that was not requested copies nothing, and `readback()` after it returns an empty span.
 - Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the `getDefaultSettings()` reset inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.

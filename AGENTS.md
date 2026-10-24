@@ -246,11 +246,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   one without keeps the bindings made in code.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
-- Readback: `getPixelSpan()` is the headless ring, which lags the last `render()` by
-  `MAX_FRAMES_IN_FLIGHT` frames (10 frames rendered: frame 7's pixels; 3 or fewer: black).
-  To read the frame you just rendered, `requestReadback()` before its `render()` and
-  `readback()` after (that frame's fence only). Buffers the CPU reads must be host-cached
-  memory: uncached host-visible memory read one 1280x720 frame in ~20 ms.
+- Readback has one form: `requestReadback()` before the `render()` you want,
+  `readback()` after (that frame's fence only; a path-traced frame under OIDN or NRD is
+  denoised there). No other frame copies anything, so `readback()` after an unrequested
+  frame is empty. Buffers the CPU reads must be host-cached memory: uncached
+  host-visible memory read one 1280x720 frame in ~20 ms.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: frame 1 and frame 10 of Cornell differ (max_abs 29). Pass `frames` for
   a converged image; the deferred goldens state theirs (`--frames 7`, `--frames 27`).

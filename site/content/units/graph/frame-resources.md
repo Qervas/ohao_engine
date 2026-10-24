@@ -35,23 +35,19 @@ A per-slot render-finished semaphore would be wrong even though per-slot acquire
 
 The ordering matters because `vkResetFences` is a promise to submit. A frame that resets the fence and then bails — an out-of-date acquire, a minimised window — leaves it unsignalled with nothing queued to signal it, and the next `waitForFrame` on that slot blocks forever. Every exit before `resetFrame` leaves the fence as it found it.
 
-From there the body records into the slot's command buffer and ends at one of two consumers. Windowed, it blits the deferred output into the acquired swapchain image, submits waiting on `m_imageAcquired[slot]` at the transfer stage and signalling that image's render-finished semaphore, and presents. Headless, it copies the output into the slot's staging buffer instead, and the host reads that buffer back with a `memcpy` the next time the slot comes round — after its fence has proved the copy finished:
+From there the body records into the slot's command buffer and ends. Windowed, it blits the deferred output into the acquired swapchain image, submits waiting on `m_imageAcquired[slot]` at the transfer stage and signalling that image's render-finished semaphore, and presents. Headless, it ends with the image. Either way, only a requested frame also copies the output into the slot's staging buffer, and `readback()` reads it once the slot's fence has proved the copy finished:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Headless: this slot's staging buffer holds the frame finished"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};"}}
 
-## One constant, and the drivers that hardcode it anyway
+## One constant, read everywhere
 
-Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a literal: the command-buffer count, the fence loop, the `std::array` of slots, the acquire semaphores, and every per-slot descriptor-set array in the deferred passes.
+Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a literal: the command-buffer count, the fence loop, the `std::array` of slots, the acquire semaphores, and every per-slot descriptor-set array in the deferred passes. No driver depends on the depth any more. Each reads back the frame it asked for, so a loop renders the frames it needs and requests the last.
 
-The headless readback lag leaks back out as a bare `3` wherever a driver flushes it before saving an image — four sites, none of which reads the constant. All four are the offline examples on the RT path, which reads back through the same slot ring.
-
-{{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
-
-`cornell_box` and `model_viewer` write `samples + 3`, `turntable` writes `spp + 3`, and `env_demo` splits its three across the `--pan-x` branch — `samples + 2`, then one more `render()` after the camera moves. Raise the constant to 4 and all four capture an image one accumulation pass earlier than they meant to.
+{{cite examples/model_viewer.cpp "for (int i = 0; i < frames; i++) renderFrame(i == frames - 1);"}}
 
 ## Three allocations the engine's own allocator never sees
 
-Each slot's staging buffer is built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly: three buffers backed by three separate `VkDeviceMemory` allocations, each `width * height * 4` bytes, persistently mapped at creation and unmapped only on resize. They exist in windowed mode too — `initializeFrameResources` always asks for them — where nothing copies into them. The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
+Each slot's staging buffer is built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly: three buffers backed by three separate `VkDeviceMemory` allocations, each `width * height * 4` bytes, persistently mapped at creation and unmapped only on resize. They exist in both modes (`initializeFrameResources` always asks for them), and only a requested frame copies into one. The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
 
 {{cite ohao/render/frame/frame_resources.cpp "if ((typeFilter & (1 << i)) &&"}}
 
@@ -59,9 +55,11 @@ Failing to find one is the subsystem's only `throw`, in a file where every other
 
 {{cite ohao/render/frame/frame_resources.cpp "throw std::runtime_error("}}
 
-All three ask for `HOST_VISIBLE | HOST_COHERENT`. The traffic is CPU *reads* of a whole frame, yet the mask never requests `HOST_CACHED`, the property that would let those reads go through the CPU cache. Each buffer is zeroed at creation rather than left as whatever the driver returned, so the first pass around the ring reads black instead of garbage.
+The traffic is CPU *reads* of a whole frame, so all three ask for `HOST_VISIBLE | HOST_COHERENT | HOST_CACHED` and fall back to coherent memory only where the device offers no cached type. Uncached host-visible memory read one 1280x720 frame in about 20 ms; cached memory reads at memory speed.
 
-{{cite ohao/render/frame/frame_resources.cpp "// Initialize staging buffer to black (prevents garbage on first few frames)"}}
+{{cite ohao/render/frame/frame_resources.cpp "// Readback buffers: the CPU reads them, so host-cached memory where the device offers it"}}
+
+Each buffer is also zeroed at creation rather than left as whatever the driver returned.
 
 :::why
 The engine ships a VMA-backed `GpuAllocator` whose usage enum includes a dedicated readback mode, and the ring uses none of it.
@@ -74,7 +72,7 @@ The engine ships a VMA-backed `GpuAllocator` whose usage enum includes a dedicat
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_renderGraph.initialize(m_device, m_physicalDevice);"}}
 
-The hand-rolled path keeps this file self-contained and VMA-free, which makes it cheap to read and cheap to move. The cost is that the one allocation whose access pattern is a readback gets no readback-friendly memory.
+The hand-rolled path keeps this file self-contained and VMA-free, which makes it cheap to read and cheap to move. The cost is that it chooses the readback memory type itself, the cached-then-coherent preference above, rather than letting an allocator choose it.
 :::
 
 ## The fence starts signalled, and nobody checks it afterwards
@@ -87,7 +85,7 @@ Every slot's fence is created already signalled, so the first pass around the ri
 
 {{cite ohao/render/frame/frame_resources.hpp "bool waitForFrame(uint32_t frameIndex, uint64_t timeoutNs = UINT64_MAX);"}}
 
-Both call sites in `render_dispatch.cpp` — the deferred and RT frame bodies — take that default and discard the result. With an infinite timeout a `false` return cannot mean "timed out": it means `vkWaitForFences` returned something other than `VK_SUCCESS` — device loss, out of memory. The caller does not change course: headless, the readback `memcpy` runs against a staging buffer the GPU may still be writing; windowed, the frame goes on to acquire and record. An uninitialised manager is not a live case: `initializeFrameResources()` failing fails `VulkanRenderer::initialize()`.
+The two frame bodies in `render_dispatch.cpp`, deferred and RT, take that default and discard the result. With an infinite timeout a `false` return cannot mean "timed out": it means `vkWaitForFences` returned something other than `VK_SUCCESS`, such as device loss or running out of memory. The frame bodies do not change course; they go on to record into the slot. `readback()` is the one caller that checks, and returns an empty span instead of a buffer the GPU may still be writing. An uninitialised manager is not a live case: `initializeFrameResources()` failing fails `VulkanRenderer::initialize()`.
 
 {{cite ohao/render/frame/frame_resources.cpp "VkResult result = vkWaitForFences"}}
 

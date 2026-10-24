@@ -13,9 +13,7 @@ Because the procedure is shared, a lockstep window capture and a headless captur
 
 ## Readback on request
 
-Before sub-project 4, every headless frame copied its final image into its frame slot's staging buffer, and `getPixelSpan()` returned the copy from `MAX_FRAMES_IN_FLIGHT` (3) frames earlier. The examples compensated by rendering `spp + 3` frames, and a capture of three frames or fewer came back black. A window frame copied nothing at all. Both behaviours were wrong for an agent. The ring delivers the wrong frame, and copying every window frame would cost every presented frame a GPU-to-CPU transfer nobody asked for.
-
-The renderer now copies a frame only when asked. `requestReadback()` marks the next frame:
+A capture asks for its last frame and gets that frame. Every reader of pixels works this way (captures, the examples, the tests, `ohao doctor`), and no frame copies anything to the CPU unless it was asked for, headless or windowed. `requestReadback()` marks the next frame:
 
 {{cite ohao/gpu/vulkan/renderer.hpp "void requestReadback() noexcept { m_readbackRequested = true; }"}}
 
@@ -31,17 +29,19 @@ In a window the copy is recorded inside the swapchain blit, where the final imag
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "// A requested readback: the same image, already a transfer source, into the"}}
 
-The renderer counts two things. `readbackCopyCount()` counts the headless ring's copies, which is always 0 in a window. `requestedReadbackCount()` counts the copies that were asked for. The presentation gate (`ohao_game --frames N`) and `check_live.py` both require the unrequested count to stay 0 through teardown.
+A headless frame copies the same way, only when asked (`copyDeferredOutputToStaging`). The renderer counts the copies (`requestedReadbackCount()`); the window host counts its own requests beside them. The presentation gate (`ohao_game --frames N`), `check_live.py` and `e2e_mcp.py` all require the difference, the unrequested copies, to stay 0 through teardown.
 
-The staging buffers also changed memory type. The CPU reads them, so they are now allocated host-cached where the device offers cached memory that is also coherent:
+{{cite ohao/runtime/live_host.cpp "return copies > m_readbackRequests ? copies - m_readbackRequests : 0;"}}
+
+The CPU reads the staging buffers, so they are allocated host-cached where the device offers cached memory that is also coherent:
 
 {{cite ohao/render/frame/frame_resources.cpp "// Readback buffers: the CPU reads them, so host-cached memory where the device offers it"}}
 
-Reading one 1280x720 frame (3.7 MB) from uncached host-visible memory took about 20 ms, and every headless frame paid that cost while copying its ring slot. The spec's step-9 note records a one-frame headless capture dropping from about 45 ms of CPU time to about 1 ms.
+Reading one 1280x720 frame (3.7 MB) from uncached host-visible memory took about 20 ms. The spec's sub-project 4 step-9 note records a one-frame headless capture dropping from about 45 ms of CPU time to about 1 ms.
 
-The path tracer's CPU denoisers (OIDN, NRD) are the one exception. They read the live images back themselves, so a capture with one of them takes its pixels from the ring buffer they filled:
+A path-traced capture under a CPU-side denoiser (OIDN, NRD) reads the same way. `readback()` denoises the requested frame's images itself, once its fence has signalled:
 
-{{cite ohao/runtime/frame_capture.cpp "const bool cpuDenoise = isRTRenderMode(mode) && (denoise == DenoiseMode::OIDN || denoise == DenoiseMode::NRD);"}}
+{{cite ohao/runtime/frame_capture.cpp "const std::span<const uint8_t> pixels = renderer.readback();"}}
 
 ## What a window may capture
 

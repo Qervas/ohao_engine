@@ -176,8 +176,8 @@ on, which both shipped profiles enable unconditionally:
 {{cite ohao/render/rt/path_tracer_render.cpp "if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {"}}
 
 So REBLUR, compose and the cinematic chain execute on every RT frame even under
-`--denoise=oidn` or `none`; only `getPixels()` in `DenoiseMode::NRD` reads the
-result back.
+`--denoise=oidn` or `none`; only `readback()` of a requested frame in
+`DenoiseMode::NRD` reads the result back.
 
 ## Lending NRD a device it did not create
 

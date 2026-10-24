@@ -523,18 +523,20 @@ The headless ring (every frame copied into its slot's staging buffer, read
 and `readback()` after, which waits on that frame's fence only:
 - the examples (`cornell_box`, `model_viewer`, `turntable`, `env_demo`);
 - `ohao doctor`'s frame check;
-- the CPU-denoiser capture path.
+- the CPU-denoiser capture path: OIDN and NRD run inside `readback()`, on the requested
+  frame.
 
-`getPixelSpan()` and `getPixels()` are removed.
+`getPixelSpan()`, `getPixels()` and `readbackCopyCount()` are removed.
 
 **Cost.** Headless frames stop paying for an unread copy every frame.
 
 **Goldens.** The examples then write their last frame instead of frame N-3:
 - `cornell_box` deferred: frame 10, not 7;
 - `model_viewer` deferred: frame 30, not 27;
-- the RT examples' last sample pass.
+- the RT examples' last sample pass: `spp` frames, the last read, which is the frame the
+  ring delivered after `spp + 3` (so the path-traced goldens do not move).
 
-Their goldens are re-baselined in one commit. The `cli_*_deferred` manifest entries move
+The deferred goldens are re-baselined in one commit. The `cli_*_deferred` manifest entries move
 to `--frames 10` and `--frames 30`, so the CLI and the examples keep sharing one golden
 each.
 
@@ -839,6 +841,16 @@ improvising. Intentional image changes are separate commits inside their step.
    - Example goldens re-baselined (own commit); the CLI deferred entries move to
      `--frames 10`/`30`.
    - Test 3.
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step2.md`):* the CPU
+     denoisers run inside `readback()`, on the requested frame, so there is no separate
+     path for them. `readbackCopyCount` is deleted; the window host counts its own
+     requests and reports copies beyond them as unrequested (the gates' 0). The RT
+     examples render `spp` frames and read the last, the same sample count as before
+     under `--denoise=none`, so the path-traced goldens did not move; only the two
+     deferred example goldens were re-baselined. Test 3 resets the temporal history
+     before frame N, since RT GI's history otherwise makes frame N of a run differ from
+     a fresh renderer's first frame, and checks that step N−3 differs, so a lagged
+     readback cannot pass.
 3. **glTF node transforms.**
    - The Assimp loader walks nodes; the tinygltf loader deleted, with `env_demo` and
      `turntable` moved to `ModelLoader`.

@@ -3,12 +3,12 @@ module: gpu
 id: renderer-facade
 title: VulkanRenderer facade
 standard: v2
-figures: [gpu-renderer-facade-ring-lag]
+figures: []
 ---
 
 ## A renderer that does not own its window
 
-`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What it delivers depends on which `initialize` overload ran. The headless one delivers a `std::vector<uint8_t>` of RGBA8 pixels through `getPixels()`; the PNG writers, the golden smoke test and every example except `ohao_game` drive that `render()` → `getPixels()` pair. The windowed overload takes a `PresentTarget` and ends each frame by presenting into a swapchain, reading nothing back unless the caller asked for that frame with `requestReadback()`. That request works in both modes and is what the shared capture procedure (`runtime::captureFrame`, behind `ohao run --render` and `render.capture`) uses: it asks for its last frame and takes it from `readback()`, which returns that frame and not one from three calls earlier.
+`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What a frame ends with depends on which `initialize` overload ran: the headless one ends it with the final image, the windowed one, which takes a `PresentTarget`, by presenting into a swapchain. In both modes the CPU reads a frame one way only. `requestReadback()` before the `render()` whose pixels are wanted, `readback()` after it. The shared capture procedure (`runtime::captureFrame`, behind `ohao run --render` and `render.capture`), the examples, the PNG-writing tests and `ohao doctor`'s frame check all do exactly that.
 
 {{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
 
@@ -18,11 +18,9 @@ Neither overload makes the renderer a windowing client. The window belongs to `o
 
 {{cite ohao/runtime/live_host.cpp "m_renderer->setPresentExtent(m_window.framebufferExtent());"}}
 
-The two modes are distinguishable from outside. `isPresenting()` reports whether a swapchain exists, and `readbackCopyCount()` counts the headless deferred staging copies recorded since initialisation — zero in a windowed deferred renderer, by construction; copies a window makes because a frame was requested are counted apart, by `requestedReadbackCount()`. `ohao_game` turns the first into an exit code: a windowed run that recorded any unrequested readback copy fails.
+The two modes are distinguishable from outside: `isPresenting()` reports whether a swapchain exists. No frame in either mode copies anything to the CPU unless it was requested, so the one counter, `requestedReadbackCount()`, counts copies that were all asked for. The window host checks that against its own count of requests, and `ohao_game` turns any excess into an exit code.
 
 {{cite examples/ohao_game.cpp "if (r.readbackCopies != 0) return 3;"}}
-
-The counter is incremented only in `copyDeferredOutputToPixelBuffer`; the RT body's staging copy is not counted, so it proves nothing about an RT frame.
 
 ## Three modes, two of which can be refused
 
@@ -109,62 +107,45 @@ Widening that condition to "always inject" would look like a cleanup and would c
 
 {{cite ohao/render/rt/rt_settings.hpp ".denoiseMode = DenoiseMode::OIDN,"}}
 
-## The pixel buffer is three frames behind
+## The frame you asked for, and no other
 
-Headless rendering uses a ring of three frame slots.
+Frames go round a ring of three slots, each with its fence, command buffer and persistently mapped staging buffer.
 
 {{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
 
-Each `render()` waits on its slot's fence, copies that slot's staging buffer into `m_pixelBuffer`, and only *then* records and submits this frame's work into the same slot. The copy therefore delivers the image submitted three calls ago, not the one just issued.
+A request marks the next frame `render()` records. Only that frame copies its final image into its slot's staging buffer; a headless frame nobody asked for ends with its image and copies nothing.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Read back previous frame"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// A window frame presents (and copies too when asked); a headless frame copies only"}}
 
-{{figure gpu-renderer-facade-ring-lag "Conceptual timing of the read-before-record ordering in render(); slot assignment and the depth of three are read from the code, not measured. The first three calls leave m_pixelBuffer unwritten."}}
+`readback()` then waits on that frame's fence alone, never the queue, and returns a view of its slot's buffer. So an example that renders ten frames and asks for the tenth writes the tenth, as a capture does. Path-traced loops render `spp` frames and read the last, which has accumulated `spp` samples. Until sub-project 2b step 2 every headless frame copied, a frame's copy was read three calls later, and the examples rendered `spp + 3` frames to land on the right one. `engine_tests`' `sp2b_t03` holds the line: a spinning cube's frame N read back equals a fresh renderer's single capture of step N, max_abs 0, where step N−3 differs by 243.
 
-Offline loops in this repo render `spp + 3` frames rather than `spp` — cornell_box, model_viewer and turntable; env_demo drops to `samples + 2` only when `--pan-x` makes it add one final frame after moving the camera.
+## readback() and the CPU denoisers
 
-{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
+Most denoise modes need nothing from `readback()`. None, Atrous and DLSS-RR all end with the RGBA8 beauty in `m_outputImage`, which is the image the requested frame copies. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then tonemaps that target into the same beauty image, so the standard copy picks it up unchanged. The tonemap runs only when NGX feature creation succeeded; where that fails, the copy is raw beauty.
 
-Under `--denoise=none` that arithmetic lands exactly: after `spp + 3` calls the last copy delivered call `spp - 1`, the frame that had accumulated `spp` samples. No comment at any of those sites ties the `+ 3` to the ring depth, though, and it cannot be the whole story — the default offline configuration is `DenoiseMode::OIDN`, whose `getPixels()` branch never reads `m_pixelBuffer`. There the three extra frames buy three extra samples and compensate no lag.
-
-A windowed deferred renderer has no lag to account for: the swapchain image is written by the same submission that recorded the frame, and `m_pixelBuffer` is never filled at all. `getPixels()` on a presenting renderer returns a buffer of the right size that nothing writes. A requested frame has no lag either, in both modes: `readback()` waits on the requested frame's own slot and returns that slot's staging buffer, which is why a capture keeps the last frame it renders where an example's `getPixels()` keeps the one three calls earlier.
-
-## getPixels() is four branches wearing one signature
-
-The accessor branches on denoise mode into genuinely different work, and only two of the four branches touch the GPU at all.
-
-None, Atrous and DLSS-RR return the lagged buffer directly, for one shared reason: whatever denoising ran, ran GPU-side into `m_outputImage`, the RGBA8 beauty the ring already stages. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then tonemaps that target into the same beauty image, so the standard readback picks it up unchanged.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||"}}
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView"}}
 
-The comment on that branch still says DLSS-RR does not dispatch denoising; it dates from the Phase 1 foundation commit and was not updated when the evaluate-and-tonemap path landed. The branch is right, its stated reason is not. What *is* true is that the tonemap runs only when NGX feature creation succeeded — where that fails, the same branch returns raw beauty.
+Two modes do their work after the frame. On a path-traced frame under NRD or OIDN, `readback()` hands off to `denoiseRequestedFrame()` once the frame's fence has signalled. Nothing has been recorded since, so the images it reads belong to the requested frame.
 
-The second branch is a cache hit: `render()` clears `m_denoiseCacheValid`, so repeat calls between two renders return the stored buffer without submitting anything.
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "denoiseRequestedFrame() && m_denoisedPixelBuffer.size() == bytes)"}}
 
-Only the last two do work. NRD reads back its own tonemapped RGBA8 image. OIDN takes a different route again: it waits for the device to go idle and copies the *live* RGBA32F accumulation image plus the albedo and normal AOVs, so it sees the current frame rather than the three-frames-old one, filters them on the host and caches the result until the next `render()`. The filter is created on `oidn::DeviceType::Default` — OIDN picks the device, and nothing here pins it to the CPU — but the round trip through host memory and `vkDeviceWaitIdle` is unconditional.
+NRD reads back its own tonemapped RGBA8 image. OIDN waits for the device to go idle, copies the RGBA32F accumulation image plus the albedo and normal AOVs, filters them on the host and caches the result until the next `render()`. The filter is created on `oidn::DeviceType::Default`: OIDN picks the device, and nothing here pins it to the CPU, but the round trip through host memory and `vkDeviceWaitIdle` is unconditional. If either fails, the log says so and `readback()` returns the noisy frame from the staging buffer.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);"}}
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "oidn::newDevice(oidn::DeviceType::Default)"}}
 
-Reading the live image means the OIDN path needs no warm-up, and the in-tree smoke test depends on that: it sets RTOffline, whose profile default latches `DenoiseMode::OIDN`, calls `render()` exactly once, and writes a PNG straight from `getPixels()`.
+Below that sits the bulk of the translation unit, more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs. Each open-codes a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture, a full queue stall per read frame.
 
-{{cite tests/renderer/renderer_test.cpp "renderer.setRenderMode(RenderMode::RTOffline);"}}
-
-Two consequences follow. First, the method is declared `const` but casts away constness to allocate a command buffer, submit it and wait — it is safe only because every consumer is a single-threaded loop that calls it after `render()` returns. Second, the RGBA8 and HDR paths do not observe the same frame, so a golden test that compares `--denoise=none` against `--denoise=oidn` output is comparing different points on the accumulation curve unless the loop has already converged.
-
-Below that sits the bulk of the translation unit — more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs, each open-coding a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture at all, and because `render()` invalidates the cache every frame, that full queue stall runs once per displayed frame.
-
-{{cite ohao/gpu/vulkan/renderer.cpp "if (!self->readbackNrdTonemapped(rgba, rw, rh))"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (!readbackNrdTonemapped(rgba, rw, rh)) {"}}
 
 ## Contracts
 
-- On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — a headless `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.
-- A presenting renderer's deferred frames never reach `m_pixelBuffer`. Read pixels from a headless renderer, or request the frame (`requestReadback()` before `render()`, then `readback()`); `readbackCopyCount()` stays 0 in windowed deferred mode and a nonzero count there is a bug.
+- Call `requestReadback()` before the `render()` whose pixels you want and `readback()` after it. The span is that frame, valid until the next `render()` or `resize()`; it is empty when the frame was not rendered (minimized, an out-of-date swapchain) or had no RGBA8 image (tonemapping off).
+- `requestedReadbackCount()` counts copies, every one of them requested. A host that counts more copies than it asked for has found a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
 - Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.
-- `getPixels()` is not reentrant with GPU work in flight: on the NRD and OIDN branches it allocates a command buffer, submits and waits on the graphics queue. It skips that whenever `m_denoiseCacheValid` still holds, so only the first call after each `render()` costs the stall.
-- `getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for out-of-tree consumers.
+- `readback()` is not reentrant with GPU work in flight: under NRD or OIDN it allocates a command buffer, submits and waits on the graphics queue. It skips that while `m_denoiseCacheValid` holds, so only the first call after each `render()` costs the stall.
+- `getDevice()`, `getPhysicalDevice()`, `graphicsQueue()` and `graphicsQueueFamily()` are wiring for consumers outside the renderer; `render_bench`'s GPU calibration kernel is the one in the tree. Work submitted on the queue must finish before the next `render()`.
 
 {{cite ohao/gpu/vulkan/renderer.hpp "VkDevice getDevice() const noexcept { return m_device; }"}}

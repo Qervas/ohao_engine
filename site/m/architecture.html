@@ -85,7 +85,7 @@
           <li>Place camera; optional env map</li>
           <li><code>setRenderMode(Deferred | RTOffline | …)</code> — RT modes call <code>ensureRTRenderer</code> lazily</li>
           <li>Loop or single shot: <code>render()</code></li>
-          <li>Read <code>getPixels()</code> / write PNG / present GLFW</li>
+          <li><code>requestReadback()</code> before the last <code>render()</code>, <code>readback()</code> after / write PNG / present in a window</li>
           <li>Optional: denoise offline still via OIDN path inside PT</li>
         </ol>
       </div>

@@ -69,7 +69,7 @@
 
       <div class="section-rule"><h2 id="role">Role</h2></div>
       <div class="prose reveal">
-        <p class="lead"><code>VulkanRenderer</code> is an <strong>offscreen-capable host</strong>. It owns the device, queues, frame ring, deferred child, RT acceleration structure, and optional PathTracers. Examples and embeds call <code>initialize → setScene → render → getPixels</code> (or present via GLFW in interactive).</p>
+        <p class="lead"><code>VulkanRenderer</code> is an <strong>offscreen-capable host</strong>. It owns the device, queues, frame ring, deferred child, RT acceleration structure, and optional PathTracers. Examples and embeds call <code>initialize → requestReadback → render → readback</code> (or present into a window through the runtime's <code>LiveHost</code>).</p>
         <p>It is deliberately split across TUs so “init plumbing” does not sit in the same file as path-trace dispatch.</p>
       </div>
 
@@ -212,11 +212,10 @@
         <div class="algo-bar">renderDeferred</div>
         <ol>
           <li>Select ring slot <code>m_currentFrame</code>; <span class="em">wait</span> on its fence (GPU finished with that slot)</li>
-          <li>Copy <em>this</em> slot’s staging buffer → <code>m_pixelBuffer</code> (RGBA8 readback of a prior submit)</li>
           <li>Reset command buffer; push camera matrices into DeferredRenderer</li>
           <li>Wire TLAS for hybrid if available; env map view; geometry buffers; update light UBO (sky/sun blend fallback)</li>
           <li>Begin cmd; <code>DeferredRenderer::render(cmd, frameIndex)</code> — full pass graph</li>
-          <li>Copy deferred final color → staging; end cmd; <span class="em">queue submit</span> with fence</li>
+          <li>Present (window), or, for a requested frame only, copy deferred final color → staging; end cmd; <span class="em">queue submit</span> with fence</li>
           <li>Advance frame index modulo ring size</li>
         </ol>
       </div>

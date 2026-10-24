@@ -204,19 +204,9 @@ Registration checks the first (a stream of the wrong length is logged and padded
 truncated) and clamps the second to 64 refs per instance. Neither mismatch is
 visible in the picture except as a wrong material.
 
-**Hand-copied constants.** The frame-ring depth is named once,
-
-{{cite ohao/render/frame/frame_resources.hpp "constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;"}}
-
-and then re-typed as a bare `+ 3` wherever a caller drives the render loop itself,
-because the pixel buffer it reads back is the frame submitted three renders ago:
-
-{{cite examples/turntable.cpp "for (int s = 0; s < spp + 3; s++) {"}}
-
-Four offline examples spell it that way. Change the named constant and four
-call sites quietly render the wrong sample count. The no-texture sentinel shows the
-same pattern with the polarity reversed. The producers use a named constant,
-`render::kNoTexture`, but there are now two more names for the same value —
+**Hand-copied constants.** The no-texture sentinel is the case. The producers use a
+named constant, `render::kNoTexture`, but there are now two more names for the same
+value:
 
 {{cite ohao/gpu/layout_meta.hpp "kNoTexture = 0xFFFFFFFFu;"}}
 
@@ -261,6 +251,5 @@ code, not as something the build guarantees.
 ## Contracts
 
 - A mesh's triangle material-slot stream must hold exactly one entry per triangle, in index order. Registration logs a length mismatch and pads or truncates; the picture is the only other symptom. An instance holds at most 64 material refs, and a slot beyond its ref count resolves to material 0.
-- `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples encode this as a literal `+ 3`; changing the constant without changing all four silently changes sample counts.
 - The RT light buffer header (count, environment index, intensity scale) is rebuilt from the light table's members on every upload. Set the index and scale through `RenderScene::setEnvMapTextureIndex` and `setEnvIntensity`; writing the buffer directly is overwritten on the next upload.
 - The variable-count flag on binding 12 of the path tracer's layout already violates the highest-binding rule, because bindings run to 37. Any fix moves the texture table to the highest-numbered binding and updates the `binding = 12` declarations in the shaders with it. Only the validation layer reports it, and only if `OHAO_VALIDATION` is set in the environment.

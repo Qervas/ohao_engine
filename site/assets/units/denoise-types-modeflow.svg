@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 356" class="unit-diagram" role="img"
-     aria-label="Data flow of DenoiseMode: the CLI string is parsed once, then stored in two independent copies. VulkanRenderer::m_denoiseMode drives the getPixels readback tap. PathTracer's RTRenderSettings::denoiseMode drives the per-frame trait queries, but is reset to the pipeline default every frame and only re-seeded for Atrous and DLSSRR.">
+     aria-label="Data flow of DenoiseMode: the CLI string is parsed once, then stored in two independent copies. VulkanRenderer::m_denoiseMode drives the readback tap. PathTracer's RTRenderSettings::denoiseMode drives the per-frame trait queries, but is reset to the pipeline default every frame and only re-seeded for Atrous and DLSSRR.">
   <defs>
     <marker id="dtmf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
@@ -35,7 +35,7 @@
   <line x1="540" y1="71" x2="566" y2="71" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
 
   <rect x="568" y="50" width="136" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="636" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">getPixels()</text>
+  <text x="636" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">readback()</text>
   <text x="636" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">picks the output tap</text>
 
   <!-- ── the narrow bridge between the two copies ────────────────── -->

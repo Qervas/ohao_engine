@@ -143,15 +143,16 @@ The deferred pair covers the other half. They render the G-buffer, the cascaded
 shadow pass, deferred lighting, the post chain and, where the device supports it, the
 RT shadows and GI, and they check the render-world migration against the previous
 renderer's own output: `cornell_box_deferred` was captured before that migration and
-`damaged_helmet_deferred` serves the same purpose on the helmet. The deferred helmet is
-looser than the rest, with its own tolerances, because its render is not bit-exact run
-to run.
+`damaged_helmet_deferred` serves the same purpose on the helmet. Both are exact
+(max_abs 0): deferred rendering is bit-identical run to run, so any difference is a
+change.
 
-The `16` is spp, not frames — `cornell_box` renders `samples + 3`, so the golden
-pins 19 accumulation frames. The deferred scenes pass `deferred` and a small sample
-count, and the count is ignored: the same line fixes a deferred run at ten frames.
+The `16` is spp, and `cornell_box` renders one frame per sample, so the golden pins
+16 accumulation frames and reads the last. The deferred scenes pass `deferred` and a
+small sample count, and the count is ignored: the same line fixes a deferred run at
+ten frames.
 
-{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : (samples + 3);"}}
+{{cite examples/cornell_box.cpp "const int frames = cli.useDeferred ? 10 : samples;"}}
 
 All ten scenes run on a fresh clone, which was not true for two months and is
 worth the paragraph.
@@ -252,7 +253,7 @@ one RTOffline frame and writes a PNG under the build directory. It checks that a
 came back and was written, but never inspects a pixel: an init-and-teardown canary,
 not a claim about the image.
 
-{{cite tests/renderer/renderer_test.cpp "check(pixels != nullptr, "a frame renders to pixels");"}}
+{{cite tests/renderer/renderer_test.cpp "check(pixels.size() == std::size_t{W} * H * 4, "a frame renders to pixels");"}}
 
 Three more binaries in the same directory do inspect pixels, by comparing renders
 with each other rather than with a committed image, and each ends with a one-line

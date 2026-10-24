@@ -68,7 +68,7 @@
 <p>The nearest failure that *is* deterministic never reaches that branch. `createPipeline` opens with a guard for a null shader module, but `RenderPassBase::loadShaderModule` throws instead of returning one:</p>
 <div class="citation-chip"><code class="citation-code">throw std::runtime_error(&quot;Failed to open shader file: &quot; + pathStr);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/render_pass_base.cpp#L36" target="_blank" rel="noopener">ohao/render/deferred/render_pass_base.cpp:36</a></div>
 <p>so a missing `overlay_gizmo.vert.spv` makes the guard unreachable, unwinds through `DeferredRenderer::initialize`, which has no handler, and is caught only by the try block wrapping the whole of `VulkanRenderer::initialize` — the entire renderer reports failure rather than one overlay pass being dropped:</p>
-<div class="citation-chip"><code class="citation-code">OHAO_LOG(Error, gpu, &quot;VulkanRenderer initialization failed: {}&quot;, e.what());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L191" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:191</a></div>
+<div class="citation-chip"><code class="citation-code">OHAO_LOG(Error, gpu, &quot;VulkanRenderer initialization failed: {}&quot;, e.what());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L190" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:190</a></div>
 </div>
 <div class="section-rule"><h2 id="the-highlight-that-cannot-fire">The highlight that cannot fire</h2></div>
 <div class="prose reveal">
