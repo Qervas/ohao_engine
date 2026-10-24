@@ -202,13 +202,13 @@ submeshes; `RenderScene` expands every visible instance into one `Draw` per subm
 and the pass issues a push-constant update plus a `vkCmdDrawIndexed` per draw. A mesh
 whose triangles already arrive grouped by material costs a handful of draws and one
 with interleaved materials costs one draw per group. Nothing in the engine does the
-grouping: the loaders append `materialPerTriangle` in traversal order, one GLTF
-primitive or one Assimp mesh at a time, and no sort by material exists anywhere in
-the asset pipeline. Runs are grouped by construction or not at all.
+grouping: the loaders append `materialPerTriangle` in traversal order, one Assimp mesh
+(a glTF primitive) at a time as the node walk reaches it, and no sort by material
+exists anywhere in the asset pipeline. Runs are grouped by construction or not at all.
 
 {{cite ohao/render/scene/model_upload.cpp "std::vector<SubmeshDesc> materialRuns(const Model& model, uint32_t triangleCount) {"}}
 
-{{cite ohao/scene/asset/model_gltf.cpp "materialPerTriangle.push_back(matIdx);"}}
+{{cite ohao/scene/asset/model_loader.cpp "model->materialPerTriangle.push_back(matIdx);"}}
 
 The draw carries almost nothing. The push constant is the submesh's material *slot*,
 16 bytes in the fragment stage, and `firstInstance` is set to the instance's slot:

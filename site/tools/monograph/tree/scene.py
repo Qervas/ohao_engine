@@ -43,9 +43,9 @@ MODULE = {
         page(
             'loaders',
             'Asset loaders',
-            'Assimp (GLB/GLTF), ufbx + Assimp (FBX), native OBJ, tinygltf direct route, procedural primitives.',
-            files=['ohao/scene/asset/model_loader.hpp', 'ohao/scene/asset/model_loader.cpp', 'ohao/scene/asset/model_gltf.cpp', 'ohao/scene/asset/model_fbx.cpp', 'ohao/scene/asset/model.cpp', 'ohao/scene/asset/primitive_mesh_generator.hpp'],
-            workflow=['Detect format by extension', 'Parse meshes, materials, textures into a Model', 'Repair normals (facade route)', 'Fill the per-material arrays + materialPerTriangle', 'render::uploadModel turns the Model into mesh, materials, textures'],
+            'Assimp (GLB/GLTF, node transforms applied), ufbx + Assimp (FBX), native OBJ, procedural primitives.',
+            files=['ohao/scene/asset/model_loader.hpp', 'ohao/scene/asset/model_loader.cpp', 'ohao/scene/asset/model_fbx.cpp', 'ohao/scene/asset/model.cpp', 'ohao/scene/asset/primitive_mesh_generator.hpp'],
+            workflow=['Detect format by extension', 'Parse meshes, materials, textures into a Model, walking the node tree', 'Repair normals', 'Fill the per-material arrays + materialPerTriangle', 'render::uploadModel turns the Model into mesh, materials, textures'],
         ),
     ],
 }

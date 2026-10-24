@@ -457,6 +457,45 @@ converges through the temporal accumulation. That is the trade the budget asks f
 is the right default for an agent's frequent looks. The goldens are re-baselined in their
 own commit, with the before/after statistics.
 
+## Reference quality
+
+*Frank's ruling, 2026-10-24 18:01:* the live frame takes the industry-standard approach
+above (1 shadow ray a light, filtered; half-resolution low-ray GI, denoised and
+accumulated), and a high-sample **reference mode** stands beside it for goldens and
+ground-truth images. Budgets unchanged.
+
+**What it is.** One switch, `quality: realtime | reference` (default `realtime`), on the
+hybrid renderer:
+- *RT shadows:* every light with `castShadows` (no 4-light cap), 8 rays each a frame
+  toward points on its area; no spatial filter, no reprojection.
+- *RT GI:* full resolution, 32 cosine rays a pixel a frame, one bounce as in realtime;
+  no à-trous, no upsample, no reprojection.
+- *Accumulation:* after the capture's temporal reset, frame k's shadow mask and GI are
+  the plain running mean of frames 1..k (no clamp, no history rejection: the camera does
+  not move within a capture). A `frames: N` reference capture is N×8 shadow rays a light
+  and N×32 GI rays a pixel.
+- Everything else (raster primary visibility, materials, SSAO, post) is the realtime
+  frame's, so a realtime capture's difference from the reference isolates the shadow and
+  GI approximations.
+
+The path tracer (`rt_offline`) stays the full ground truth for light transport; the
+reference mode is the hybrid frame's own converged answer, which the realtime frame is
+judged against.
+
+**Reached through** `render.settings {set: {quality: "reference"}}`, a capture's own
+`quality` param (which overrides it for that capture), and the CLI:
+`ohao run SCENE --render OUT --quality reference`. The examples take a `reference` flag
+beside `deferred`.
+
+**Cost.** Unbudgeted, like `rtGI.rays: 32`: the frame costs what it costs, and
+`render_bench` measures the realtime frame only. A reference capture of `cornell_720p` at
+`frames: 8` is expected in the tens of milliseconds a frame; the change record measures
+it.
+
+**Goldens.** Each hybrid scene with RT shadows or GI gets a reference golden beside its
+realtime one (`cornell_box_reference`, `helmet_game_reference` through `ohao run`), exact
+(max_abs 0), since the accumulation is a deterministic mean of seeded samples.
+
 ## SSAO
 
 Wire it in, do not remove it. The raster fallback has no other ambient occlusion, and the
@@ -543,26 +582,48 @@ each.
 ## glTF node transforms
 
 **Assimp path.** The loader walks `mRootNode` depth-first, accumulating `mTransformation`,
-and emits each (node, mesh) pair as a submesh:
+and emits each (node, mesh) pair into the model's one vertex and index list (submeshes
+still come from material runs at upload):
 - positions transformed by the node's matrix;
-- normals and tangents by its inverse transpose, renormalised;
-- triangle winding flipped where the determinant is negative.
+- normals by the inverse transpose of its upper 3x3, renormalised;
+- tangents by the upper 3x3 itself, renormalised: a tangent lies in the surface, so it
+  transforms as a direction, not as a normal (*correction*: this section said the inverse
+  transpose for both); the tangent's handedness `w` is negated where the determinant is
+  negative;
+- triangle winding flipped where the determinant is negative. `repairMeshNormals`
+  recomputes normals from the winding after every load, so a mirrored mesh without the
+  flip would come out lit from inside.
 
-**Instancing.** A mesh referenced by two nodes becomes two submeshes; instancing within a
+**Instancing.** A mesh referenced by two nodes is emitted twice; instancing within a
 model is later work (5's importer).
 
 **tinygltf.** The second glTF loader (`Model::loadFromGLTF`, used only by `env_demo` and
-`turntable`) is deleted. Those examples load through `ModelLoader` like everything else:
-one glTF path, one place to be right. The `tinygltf` dependency goes if nothing else needs
-it.
+`turntable`) is deleted with its dependency (`external/cmake/tinygltf.cmake`) and the
+`MaterialData` glTF fields (`baseColorFactor` … `alphaMode`, `doubleSided`) only it wrote.
+Those examples load through `ModelLoader` like everything else: one glTF path, one place to
+be right.
+
+**Up axis.** `SceneFramer` used to guess the up axis from the bounds (Y when the Y extent
+is at least the Z extent). The upright helmet is 1.80 tall and 2.00 deep, so the guess
+tipped it onto its back again. A glTF model is Y up by its specification: the framer's
+`computeFraming(const Model&)` forces Y for a `.gltf`/`.glb` source, and `isYUp(const
+Model&)` gives `env_demo` and `turntable` (which place the model themselves) the same rule
+instead of their inline copies of the guess.
 
 **Test.** A checked-in fixture `tests/assets/node_transforms.gltf` (a rotated and scaled
-root, a translated child, a mirrored node) pins the result.
+root, a translated child, a mirrored node, all three sharing one mesh) pins the result.
 
 **Image changes.** The helmet stands upright. Every helmet golden is re-baselined in its
 own commit (`damaged_helmet*`, `cli_damaged_helmet*`, `cli_helmet_game_deferred`). Each
 helmet scene's camera is checked by looking at the new image. If the upright helmet leaves
-the frame, the scene file's camera moves in the same commit, which says so.
+the frame, the scene file's camera moves, and the commit says so. *As built:* it did
+leave the frame (the chin was cut at the bottom of the deferred images): the framer's
+fixed distance of 1.7 S cannot fit a model whose height is its full 18 units with its
+face 9 units in front of the centre. The framer now backs the camera off until the
+model's height plus 10% fits the vertical field of view at its nearest face (never
+nearer than 1.7 S, so every model that fit keeps its camera), and both helmet scene
+files' cameras move to the framed `[0, -6.891139, 30.534174]` with the code that moves
+them, so every commit's gates stay green; the golden commit records it.
 
 ## Determinism
 
@@ -612,6 +673,7 @@ Spec 4's contract holds and extends to everything 2b adds.
 **`render.settings`** `{set?: RenderSettings}` → the current `RenderSettings`. One reflected
 params struct, so its JSON Schema, limits and docs reach agents in `tools/list` and the
 catalogue:
+- `quality: realtime | reference` ("Reference quality");
 - `rtShadows {enabled, maxLights 0–4}`;
 - `rtGI {enabled, resolution: half | full, rays 1–32}`;
 - `ssao`, `ssr`, `sss` (bools);
@@ -766,19 +828,26 @@ Numbered as the build steps reference them.
    - scene lights cast them and `castShadows: false` lights do not;
    - no hard-coded light remains (a lint on the source);
    - the capture after a reset is exact run to run;
-   - the CSM fallback renders when RT shadows are off.
+   - the CSM fallback renders when RT shadows are off;
+   - reference mode: every `castShadows` light is shadowed past the realtime cap of 4, and
+     the realtime shadow mask converges toward the reference (mean absolute difference
+     from a `frames: 16` reference capture is smaller at realtime frame 16 than at frame 1).
 10. **RT GI:**
     - deterministic across fresh renderers and processes;
     - history resets on capture;
     - multi-frame captures converge (the difference between frame 8 and frame 16 is
-      under the difference between frame 1 and frame 8).
+      under the difference between frame 1 and frame 8);
+    - reference mode: full resolution and 32 rays a frame (from `render.stats`' pass list
+      and the GI image's extent), and the realtime GI converges toward a `frames: 16`
+      reference capture as the shadows do in test 9.
 11. **Path tracer in a window** (`check_live.py`):
     - a lockstep RT window capture equals a headless RT capture of the same state
       (max_abs 0 after step 5's fix);
     - `rt_offline` presents progressively;
     - cancel mid-capture leaves the host serving.
 12. **Determinism gates:**
-    - the five deferred and the hybrid-RT goldens are exact;
+    - the five deferred and the hybrid-RT goldens are exact, and so are the reference
+      goldens (`cornell_box_reference`, `helmet_game_reference`);
     - RT offline and `rt_realtime` are exact after step 5;
     - the float-atomics shader lint.
 13. **Validation:** `check_validation.py` adds the hybrid-RT and path-traced scenes, zero
@@ -856,6 +925,13 @@ improvising. Intentional image changes are separate commits inside their step.
      `turntable` moved to `ModelLoader`.
    - The fixture; the helmet goldens re-baselined, cameras checked (own commit).
    - Test 4.
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step3.md`):* tangents by
+     the upper 3x3, not the inverse transpose; the framer forces Y up for glTF
+     (`isYUp` for the examples that place models themselves) and fits a deep model's
+     height by distance, which moved both helmet scenes' cameras to z 30.53 (see "glTF
+     node transforms"). The tinygltf loader took the `MaterialData` glTF fields with it.
+     Test 4 is `scene_tests`' two `sp2b_t04_*` tests; the second also checks that the
+     framed camera sees all eight corners of the helmet's bounds.
 4. **Correctness of what renders.**
    - RT shadows and the path tracer use the scene's lights (`Light.castShadows` added).
    - Sky and particles before SSS; the SSAO graph-import format; RT GI's binding 5; RT
@@ -876,11 +952,16 @@ improvising. Intentional image changes are separate commits inside their step.
 7. **RT shadows rebuilt.**
    - 1 ray per light, ≤ 4 lights a pixel, the spatial filter, temporal accumulation in
      realtime; CSM only as the fallback.
+   - Reference quality, shadow half: the renderer's `quality` switch, the `--quality`
+     flag on `ohao run` and the examples' `reference` flag, the capture's `quality`
+     param; `cornell_box_reference` and `helmet_game_reference` goldens (own commit).
    - Goldens re-baselined (own commit).
    - Gates `rt.shadows`, `rt.shadows.filter`, `csm`.
    - Test 9.
 8. **RT GI rebuilt.**
    - Half resolution, 2 rays, the reprojected temporal and à-trous denoiser, the upsample.
+   - Reference quality, GI half: full resolution, 32 rays, the plain running mean; the
+     reference goldens re-baselined with it (own commit).
    - Goldens re-baselined (own commit).
    - Gates `rt.gi`, `rt.gi.denoise`.
    - Test 10.
@@ -917,7 +998,7 @@ improvising. Intentional image changes are separate commits inside their step.
       recorded.
     - Test 11.
 15. **The agent surface and acceptance.**
-    - `render.settings`; capture `gpuMs`/`timings`; `engine.info.gpu`; the serve guide's
+    - `render.settings` (with `quality`); capture `gpuMs`/`timings`; `engine.info.gpu`; the serve guide's
       "Measure the frame" section; `docs/ARCHITECTURE.md` (the frame diagram, a recipe for
       adding a pass to the registry with its budget); the monograph's renderer units.
     - Five consecutive clean runs of every budget; the roadmap row done.
@@ -962,7 +1043,8 @@ Inputs no step's tests exercise by default, most likely to bite first:
 4. `render.settings` changed in realtime mid-frame: applied at the next frame boundary,
    never mid-recording.
 5. A model whose node matrix has negative scale and shares a mesh with an unmirrored
-   node: two submeshes with opposite winding, both lit correctly.
+   node: two copies with opposite winding, both lit correctly (covered by test 4's
+   fixture since step 3).
 
 ## Decisions record
 
@@ -980,10 +1062,11 @@ Inputs no step's tests exercise by default, most likely to bite first:
 | 10 | Slang | For new and rewritten shaders; GLSL elsewhere; one shared layout file |
 | 11 | RT in a window | Present path for both RT modes; lockstep RT captures; RT capture time recorded, not gated |
 | 12 | Readback | Ring deleted; request/readback everywhere |
-| 13 | glTF | Node transforms baked per (node, mesh); one glTF loader (Assimp) |
+| 13 | glTF | Node transforms baked per (node, mesh); one glTF loader (Assimp); glTF is Y up in the framer |
 | 14 | Goldens | Each intentional change its own commit with statistics; tolerances only tightened |
 | 15 | Agent surface | `render.stats` (compact pairs), `render.settings` (one reflected struct, host state), capture `gpuMs`/`timings`, `engine.info.gpu` |
 | 16 | Bench noise | Spec 4's rules plus a GPU calibration kernel and `wait_quiet.py` |
+| 17 | Reference quality (Frank, 2026-10-24 18:01) | `quality: reference`: 8 shadow rays a light (all lights), 32 GI rays a pixel at full resolution, plain running mean, unbudgeted; `render.settings`, capture param, `--quality`; reference goldens; steps 7, 8 and 15 |
 
 ## Frank actions
 

@@ -6,22 +6,19 @@ standard: v2
 figures: [scene-loaders-routing]
 ---
 
-## Two front doors, four parsers
+## One front door, three parsers
 
-The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly. Everything reaches it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else, and it has two callers: `model_viewer`, for a model outside the project, and the file asset resolver, which every `ModelAsset` in a scene goes through — so `ohao_game` (playing `helmet_game.scene.json`), `ohao run` and `model_viewer`'s in-project models all load this way.
+Every model file enters OHAO through one function. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly. Everything reaches it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else, and it has two callers: `model_viewer`, for a model outside the project, and the file asset resolver, which every `ModelAsset` in a scene goes through — so `ohao_game` (playing `helmet_game.scene.json`), `ohao run` and `model_viewer`'s in-project models all load this way.
 
 {{cite ohao/scene/asset/model_loader.cpp "// GLB, GLTF, DAE, etc → Assimp"}}
 {{cite ohao/ecs/asset_resolver.cpp "auto loaded = ModelLoader::loadResult(key);"}}
 
-The tinygltf importer in `model_gltf.cpp` is therefore unreachable from the facade — but it is not dead. `env_demo` and `turntable` call `Model::loadFromGLTF` directly, skipping `ModelLoader` entirely.
+`env_demo` and `turntable` call `ModelLoader::load` directly. There is no second glTF importer, so a `.glb` takes the same path wherever it is loaded, with the V coordinate flipped on import.
 
-{{cite examples/env_demo.cpp "else loaded = model->loadFromGLTF(modelPath);"}}
-
-So there are two glTF importers on two entry points, and they do not agree. The Assimp route flips the V coordinate on import; the tinygltf route copies `TEXCOORD_0` through untouched. Only one of those can be right for a given sampler convention, and nothing in the tree reconciles them.
-
+{{cite examples/env_demo.cpp "std::shared_ptr<Model> model = ModelLoader::load(modelPath);"}}
 {{cite ohao/scene/asset/model_loader.cpp "aiProcess_FlipUVs |"}}
 
-{{figure scene-loaders-routing "Which post-processing each load route applies. Conceptual — read from the branch structure in model_loader.cpp and model_gltf.cpp, not measured."}}
+{{figure scene-loaders-routing "Which post-processing each load route applies. Conceptual — read from the branch structure in model_loader.cpp, not measured."}}
 
 ## Why FBX is parsed twice
 
@@ -63,30 +60,37 @@ The triangle-soup detection nearby looks like it gates the repair. It does not �
 
 {{cite ohao/scene/asset/model_loader.cpp "if (isTriangleSoup || changed > vertices.size() / 10) {"}}
 
-The consequence is concrete: a cube exported with 24 vertices and six flat face normals still has only 8 distinct *positions*, so the three normals meeting at each corner are averaged into one. Hard creases cannot survive this function. Anything authored with split normals loses them the moment it goes through the facade — while the same file loaded via `loadFromGLTF` keeps them, because that path never calls the repair.
+The consequence is concrete: a cube exported with 24 vertices and six flat face normals still has only 8 distinct *positions*, so the three normals meeting at each corner are averaged into one. Hard creases cannot survive this function. Anything authored with split normals loses them on load.
 
-## Nobody walks the node tree
+## The node walk
 
-None of the loaders traverse the scene graph. The Assimp path checks `mRootNode` for null and then iterates `scene->mMeshes` linearly, concatenating raw mesh-local vertices with a running offset:
+The Assimp path walks the node tree from `mRootNode`, depth first, multiplying each node's matrix onto its parent's, and emits every mesh a node references in that accumulated space. The meshes are concatenated into one vertex and index list with a running offset, so the model's coordinates are the file's scene coordinates, not each mesh's local ones.
 
+{{cite ohao/scene/asset/model_loader.cpp "const glm::mat4 toModel = parent * toGlm(node->mTransformation);"}}
 {{cite ohao/scene/asset/model_loader.cpp "uint32_t globalVertexOffset = 0;"}}
 
-The tinygltf path does the same, iterating `gltfModel.meshes` rather than `gltfModel.scenes`/`nodes`:
+Positions take the full matrix. Normals take the inverse transpose of its upper 3x3, which keeps them perpendicular to the surface under a non-uniform scale; tangents lie in the surface, so they take the 3x3 itself. A matrix with a negative determinant mirrors the mesh, which would turn every triangle inside out, so the emitter swaps two indices of each face and negates the tangent's handedness. The winding matters beyond culling: `repairMeshNormals` below recomputes normals from it.
 
-{{cite ohao/scene/asset/model_gltf.cpp "for (const auto& mesh : gltfModel.meshes) {"}}
+{{cite ohao/scene/asset/model_loader.cpp "const glm::mat3 normalMat = glm::transpose(glm::inverse(linear));"}}
+{{cite ohao/scene/asset/model_loader.cpp "model->indices.push_back(globalVertexOffset + face.mIndices[mirrored ? 2 : 1]);"}}
 
-A file whose meshes are positioned by node transforms — a wheel parented under a hub — therefore imports with every part at its mesh-local coordinates, piled at the origin. Instancing degrades a different way: the loop visits each `aiMesh` exactly once, so a mesh referenced from several nodes contributes one copy however many times the file instances it. Only ufbx contributes any transform at all, and only the *geometry* transform of the mesh's first instance, never node-to-world.
+A mesh referenced from several nodes is emitted once per reference: instancing is flattened into copies. `tests/assets/node_transforms.gltf` pins this down: one triangle placed by a rotated and scaled parent, again under a child translation, and once more under a mirroring scale, each checked to 1e-6 with its normal and winding (`sp2b_t04` in `scene_tests`). DamagedHelmet carries its upright pose in its node: the mesh is modelled lying on its back and the node rotates it 90° about X.
+
+{{cite tests/scene/scene_tests.cpp "static void sp2b_t04_gltf_node_transforms_reach_vertices_normals_and_winding() {"}}
+
+On the FBX route the walked geometry is Assimp's, since ufbx's is thrown away (above); ufbx's own extraction applies only the *geometry* transform of a mesh's first instance.
 
 {{cite ohao/scene/asset/model_fbx.cpp "geoTransform = toGlm(mesh->instances.data[0]->geometry_to_node);"}}
 
-Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult`, and `model_viewer`'s scene builder copies it into the model entity's local `Transform` (a scene file saved from it keeps it there), so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried. A scene file loaded by itself, as `ohao_game` and `ohao run` do, gets only the rotation its `Transform` states.
+Up-axis correction is not in this module. It lives downstream in `SceneFramer`: a glTF file is Y up by its specification, so the framer leaves it unrotated; for any other format it decides Y-up versus Z-up by comparing the bounding box's Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult`, and `model_viewer`'s scene builder copies it into the model entity's local `Transform` (a scene file saved from it keeps it there). A scene file loaded by itself, as `ohao_game` and `ohao run` do, gets only the rotation its `Transform` states.
 
+{{cite ohao/render/camera/scene_framer.cpp "return computeFraming(model.vertices, isGltf(model));"}}
 {{cite ohao/render/camera/scene_framer.cpp "result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));"}}
 {{cite examples/example_scenes.hpp "out.modelTransform.rotation = flipY ? glm::quat(glm::radians(glm::vec3(0, 180, 0))) : frame.modelRotation;"}}
 
-## Roughness arrives by four different roads
+## Roughness arrives by three different roads
 
-All four loaders land their answer in the same slot, `materialColors[i].w`, and from there in the `RenderScene` material table that raster and path tracer share. Three of them read an authored roughness factor first; what separates them is the fallback, and the fallbacks do not agree. Let $g\in[0,1]$ be an authored glossiness and $N_s$ a Phong specular exponent. The second formula belongs to the Assimp route alone, which reads $N_s$ from `AI_MATKEY_SHININESS`; its domain is GLB/GLTF/DAE plus the FBX second pass, never OBJ, which is branched to the native parser before Assimp is reached.
+All three loaders land their answer in the same slot, `materialColors[i].w`, and from there in the `RenderScene` material table that raster and path tracer share. Two of them read an authored roughness factor first; what separates them is the fallback, and the fallbacks do not agree. Let $g\in[0,1]$ be an authored glossiness and $N_s$ a Phong specular exponent. The second formula belongs to the Assimp route alone, which reads $N_s$ from `AI_MATKEY_SHININESS`; its domain is GLB/GLTF/DAE plus the FBX second pass, never OBJ, which is branched to the native parser before Assimp is reached.
 
 $$r_{\text{gloss}} = 1 - g, \qquad r_{\text{assimp}} = 1 - \operatorname{clamp}\!\left(\frac{N_s}{1000},\, 0,\, 1\right)$$
 
@@ -104,12 +108,7 @@ The Assimp route reads `AI_MATKEY_ROUGHNESS_FACTOR` first and remaps shininess o
 
 {{cite ohao/scene/asset/model_loader.cpp "if (roughness == 0.5f && mat->Get(AI_MATKEY_SHININESS, shininess)"}}
 
-tinygltf copies `pbr.roughnessFactor` straight through, then, for the `KHR_materials_pbrSpecularGlossiness` materials that CC3 exports, overwrites it with $1-g$ from `glossinessFactor`. It applies no floor of its own, so the shader's clamp is the only one this route ever sees.
-
-{{cite ohao/scene/asset/model_gltf.cpp "    static_cast<float>(pbr.roughnessFactor)"}}
-{{cite ohao/scene/asset/model_gltf.cpp "materialColors.back().w = 1.0f - glossiness;"}}
-
-OBJ is the fourth road and reads nothing. Its MTL parser does store `Ns` in `MaterialData::shininess`, but no code outside `scene/asset` reads that field; what reaches the GPU is the `materialColors` row, and the OBJ path stamps every row's `.w` with 0.7.
+OBJ is the third road and reads nothing. Its MTL parser does store `Ns` in `MaterialData::shininess`, but no code outside `scene/asset` reads that field; what reaches the GPU is the `materialColors` row, and the OBJ path stamps every row's `.w` with 0.7.
 
 {{cite ohao/scene/asset/model.cpp "else if (token == "Ns") {"}}
 {{cite ohao/scene/asset/model.cpp "materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));"}}
@@ -119,21 +118,9 @@ Per-texel roughness only appears if a `{material}_gloss_*` image is sitting besi
 {{cite ohao/scene/asset/model.cpp "packed[i * 4 + 1] = 255 - gloss;"}}
 {{cite shaders/rt/pt_closesthit.rchit "roughness *= rm.g;"}}
 
-## The base color that eats itself
-
-The tinygltf path does one thing no other loader does: after decoding an albedo texture it computes the mean of its texels and writes that back over the material's base color.
-
-{{cite ohao/scene/asset/model_gltf.cpp "// Override the material base color with the texture's average color"}}
-
-That base color is not an alternative to the texture — the closest-hit shader multiplies them, after the `R8G8B8A8_SRGB` sampler has decoded the texel to linear:
-
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;"}}
-
-So a glTF with the spec-default `baseColorFactor` of 1 renders through `ModelLoader::load` at its authored albedo, and through `env_demo`/`turntable` at roughly (mean texel) × (texel) — visibly darker, and darker in proportion to how dark the texture already is. This is the sharpest of the divergences in the figure above, and the reason to treat the tinygltf route as legacy.
-
 ## Procedural primitives
 
-`PrimitiveMeshGenerator` is the fifth producer of `Model`s and the only one that reads no file. It builds a cube, a UV sphere, a platform, a cylinder, a cone, a quad and an axis-aligned box. Its caller in the engine is instantiate, which turns each primitive alternative of a `MeshSource` (`SpherePrim`, `CubePrim`, …, `QuadPrim`, `BoxPrim`) into the matching `generate*` call; that is how `cornell_box`'s spheres and walls and `helmet_game.scene.json`'s spinning cube (a `BoxPrim`) are built. The `make*` factories that return a `shared_ptr<Model>` are left to tests.
+`PrimitiveMeshGenerator` is the fourth producer of `Model`s and the only one that reads no file. It builds a cube, a UV sphere, a platform, a cylinder, a cone, a quad and an axis-aligned box. Its caller in the engine is instantiate, which turns each primitive alternative of a `MeshSource` (`SpherePrim`, `CubePrim`, …, `QuadPrim`, `BoxPrim`) into the matching `generate*` call; that is how `cornell_box`'s spheres and walls and `helmet_game.scene.json`'s spinning cube (a `BoxPrim`) are built. The `make*` factories that return a `shared_ptr<Model>` are left to tests.
 
 {{cite ohao/ecs/instantiate.cpp "[&](const CubePrim& p) { PrimitiveMeshGenerator::generateCube(*m, p.size); },"}}
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {"}}
@@ -144,11 +131,11 @@ What the generator fills is geometry only: none of the per-material arrays below
 
 ## What actually crosses into the GPU layer
 
-`scene/asset` contains no `VkDevice`, no `vkCreate*` and no command recording. The decoupling that buys is latent, not exercised: nothing under `tests/` or `tools/` loads a model, and the engine suite reaches only the pure `isSupportedExtension` predicate. It is not Vulkan-free either — `Vertex` declares its own `VkVertexInputAttributeDescription` set, so the vertex layout is authored here and merely consumed by the pipeline code.
+`scene/asset` contains no `VkDevice`, no `vkCreate*` and no command recording. The decoupling is exercised: `scene_tests` loads the node fixture and the helmet on the CPU, with no device, and checks the geometry that comes back. It is not Vulkan-free either — `Vertex` declares its own `VkVertexInputAttributeDescription` set, so the vertex layout is authored here and merely consumed by the pipeline code.
 
-{{cite tests/engine/engine_tests.cpp "EXPECT(!ModelLoader::isSupportedExtension("exe"), "exe no");"}}
+{{cite tests/scene/scene_tests.cpp "static void sp2b_t04_damaged_helmet_stands_upright() {"}}
 
-That layout carries dead weight. Skeletal animation was removed, but `boneIndices` and `boneWeights` remain in the struct and are still filled by all three of the ufbx, Assimp and tinygltf paths — 32 of every 100 bytes per vertex, uploaded to the GPU, read by nothing.
+That layout carries dead weight. Skeletal animation was removed, but `boneIndices` and `boneWeights` remain in the struct and are still filled by both the ufbx and the Assimp paths — 32 of every 100 bytes per vertex, uploaded to the GPU, read by nothing.
 
 {{cite ohao/scene/asset/model.hpp "glm::ivec4 boneIndices{0, 0, 0, 0};"}}
 

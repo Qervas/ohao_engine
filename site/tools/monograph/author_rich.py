@@ -170,7 +170,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "scene/loaders": {
         "what": [
-            "Asset loaders parse GLB/GLTF (Assimp, or tinygltf on the direct route), FBX (ufbx then Assimp), OBJ (native) and procedural primitives into a Model: geometry plus per-material arrays.",
+            "Asset loaders parse GLB/GLTF (Assimp, node transforms applied), FBX (ufbx then Assimp), OBJ (native) and procedural primitives into a Model: geometry plus per-material arrays.",
         ],
         "how": [
             "ModelLoader::load picks the parser by extension; loadResult wraps it with path/extension/empty checks.",

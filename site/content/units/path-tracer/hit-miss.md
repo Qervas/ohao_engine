@@ -67,11 +67,11 @@ makes it work.
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "vertex.normal = {x, y, z};"}}
 {{cite shaders/rt/pt_closesthit.rchit "vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }"}}
 
-The OBJ and glTF loaders substitute `(0,1,0)` when a file carries none, so they
+The OBJ and Assimp loaders substitute `(0,1,0)` when a file carries none, so they
 cannot reach the fallback either.
 
 {{cite ohao/scene/asset/model.cpp "vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);"}}
-{{cite ohao/scene/asset/model_gltf.cpp "v.normal = glm::vec3(0.0f, 1.0f, 0.0f);"}}
+{{cite ohao/scene/asset/model_loader.cpp "v.normal = nLen > 1e-20f ? n / nLen : glm::vec3(0, 1, 0);"}}
 
 The one live path that can still produce a zero normal is FBX: `ufbx` writes the
 vertex normal only when the mesh has a normal layer, so a mesh without one leaves
@@ -282,12 +282,9 @@ either of which alone suppresses the stage.
 A second, independent gap sits behind that one. The material row has no alpha slot
 — the `.a` lane of the base-colour row is where the diffuse texture index lives —
 so an untextured material with a transparent base colour could not be cut out even
-with traversal fixed. `MaterialData` does carry an alpha mode, but only the glTF
-loader ever writes it; the OBJ and FBX paths leave the default, and it reaches no
-GPU buffer in any case:
-
-{{cite ohao/scene/asset/model_gltf.cpp "mat.alphaMode = MaterialData::AlphaMode::MASK;"}}
-{{cite ohao/scene/asset/model.hpp "enum class AlphaMode { OPAQUE, MASK, BLEND } alphaMode"}}
+with traversal fixed. No loader records an alpha mode either: glTF's `alphaMode` and
+`alphaCutoff` go through Assimp and are never read, and `MaterialData` has no field
+for them.
 
 What ships instead is deletion at load time — the OBJ path drops alpha-card
 triangles by material name:

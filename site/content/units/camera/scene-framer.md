@@ -67,24 +67,26 @@ centre on x = 0 and z = 0 — which is the invariant the camera solve leans on.
 
 The heuristic's failure mode is exact and easy to hit: a Y-up model that is deeper
 than it is tall — a car, a ground plane, a sofa — reads as Z-up and gets tipped
-onto its face. The header declares an escape hatch for the one format where the
-answer is known a priori, since the glTF specification mandates Y-up:
+onto its face. The upright DamagedHelmet is one: 1.80 tall, 2.00 deep. So the
+heuristic is skipped for the one format where the answer is known a priori, since
+the glTF specification mandates Y-up. The `Model` overload passes `forceYUp` for a
+`.gltf` or `.glb` source, and `isYUp` gives hosts that place a model themselves
+(`env_demo`, `turntable`) the same answer:
 
-{{cite ohao/render/camera/scene_framer.hpp "bool forceYUp = false);"}}
+{{cite ohao/render/camera/scene_framer.cpp "return computeFraming(model.vertices, isGltf(model));"}}
+{{cite ohao/render/camera/scene_framer.cpp "if (isGltf(model)) return true;"}}
 
-No caller in the tree passes it. Every call site — `model_viewer` and two tests —
-uses the default, and `env_demo`
-re-implements the same `extent.y >= extent.z` test inline without any override at
-all. The parameter is dead; the heuristic it guards is not.
+Every caller passes a `Model`: `model_viewer`, `scene_tests` and `scene_view_gpu_test`.
+The extent test still decides for OBJ and FBX.
 
-## The camera solve has one free number
+## The camera solve has two free numbers
 
-Exactly one quantity in the camera solve is derived from the model: its mid-height.
-The rest of `cameraPosition` is literal — x = 0, z = 1.7 room half-sizes — as are
-the 45° FOV and both rotation angles.
+Two quantities in the camera solve are derived from the model: its mid-height and,
+for a model too deep to fit, the distance. The rest is literal — x = 0, the 45° FOV
+and both rotation angles.
 
 {{cite ohao/render/camera/scene_framer.cpp "float modelHeight = isYUp ? extent.y : extent.z;"}}
-{{cite ohao/render/camera/scene_framer.cpp "result.cameraPosition = {0, modelCenterY, S * 1.7f};"}}
+{{cite ohao/render/camera/scene_framer.cpp "result.cameraPosition = {0, modelCenterY, std::max(S * 1.7f, frontZ + fitDistance)};"}}
 
 `modelHeight` is the extent along the *up* axis, so after the rotation above it is
 the world-space height, and the camera sits half of it above the floor at y = −S —
@@ -114,9 +116,19 @@ so $h = 1.2\,S$; and that its silhouette is planar at the model centre, so
 $d = 1.7\,S$ across all of it. A model as deep as it is tall breaks the second —
 18 units of depth centred on z = 0 puts the near face at $d = 16.5$, where 18 units
 of height subtend $18/(2 \cdot 16.5 \tan 22.5^\circ) \approx 1.32$ of the frame and
-overflow it. The framer normalises the largest extent, not the projected one.
+overflow it. So the framer measures the near face: it places the eight corners of
+the bounds, takes the largest z, and backs the camera off until the height plus
+10% fits the field of view there,
 
-The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
+$$z_{\text{cam}} = \max\!\left(1.7\,S,\;\; z_{\text{front}} + \frac{1.1\,h/2}{\tan(\theta/2)}\right)$$
+
+which leaves every model that already fit where it was. The upright DamagedHelmet
+(16.2 units tall, its face at z = 9.0) puts the camera at z = 30.53, and its
+nearest corner fills 0.91 of the half-frame (`sp2b_t04` in `scene_tests`).
+
+{{cite ohao/render/camera/scene_framer.cpp "const float fitDistance = 1.1f * scaledHeight * 0.5f / std::tan(glm::radians(result.cameraFov * 0.5f));"}}
+
+The distance puts the camera at z ≥ 25.5, *outside* the room's z = +S = 15 wall.
 `model_viewer`'s room builder, `buildModelViewerScene` in
 `examples/example_scenes.hpp`, accommodates that by not building a front wall at all:
 
@@ -129,9 +141,9 @@ position and FOV onto a `Camera` entity, which the host applies through
 The windowed host `ohao_game` calls neither function: it loads
 `assets/scenes/helmet_game.scene.json`, which holds the framer's output for the
 helmet as data — the same front-less bedroom, the four-light rig, and the camera
-entity (with a `FlyController`) at z = 1.7·S = 25.5:
+entity (with a `FlyController`) at the helmet's framed distance:
 
-{{cite assets/scenes/helmet_game.scene.json ""Transform": { "position": [0, -6, 25.5] },"}}
+{{cite assets/scenes/helmet_game.scene.json ""Transform": { "position": [0, -6.891139, 30.534174] },"}}
 
 A change to the framer therefore reaches `ohao_game` only when that file is
 rewritten. No program builds the z = +S wall that the camera sits behind.
@@ -226,8 +238,8 @@ bug, not a lighting tweak.
 ## Contracts
 
 - Light positions are not multiples of `S`. `CeilingLight` carries an absolute z = 2, `WindowLight` an absolute y = 3 and z = 5, and `BedsideLamp` is affine throughout (`S*0.55`, `-S + 6`, `-S + 2`). Only the single wall-facing coordinate of the three commented lights — `S*0.85`, `S*0.8`, `S*0.85` — is a plain multiple, and all four radii are absolute constants. So the clearances hold only while `0.85 S + 1.2 < S`, i.e. `S > 8`; shrinking the room without shrinking the radii pushes `CeilingLight` through `model_viewer`'s ceiling, and `FrontFill` past a z = +S plane that a caller building a front wall would have to respect.
-- `cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` and `helmet_game.scene.json` omit it — or move the camera.
+- `cameraPosition` is outside the room: z ≥ 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall — `model_viewer` and `helmet_game.scene.json` omit it — or move the camera.
 - Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.
 - `FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.
-- Of the programs, only `model_viewer` calls this; `ohao_game` plays a scene file that holds a fixed copy of its output for the helmet. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.
+- Of the programs, only `model_viewer` calls this; `ohao_game` plays a scene file that holds a fixed copy of its output for the helmet. `turntable`, `cornell_box` and `env_demo` do not. `env_demo` and `turntable` place the model themselves with their own target sizes and ask only `isYUp`, so a change to the up-axis rule reaches them and a change to the scale or camera does not.
 - On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `spawnFramedLights` silently spawns nothing.

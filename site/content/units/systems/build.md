@@ -41,17 +41,16 @@ close.
 {{cite tests/shadow_system/CMakeLists.txt "target_link_libraries(shadow_system_tests PRIVATE"}}
 
 The second link flag is doing quieter damage. `STB_IMAGE_IMPLEMENTATION` is expanded
-with external linkage in two translation units that land in two different archives
-— the bindless texture uploader in `ohao_gpu_vulkan` and the GLTF loader in
-`ohao_scene` — so `stbi_load` and friends are defined twice before the executable's
-own object file is even considered.
+with external linkage in the bindless texture uploader in `ohao_gpu_vulkan`, and again
+in `tests/runtime/runtime_tests.cpp`, so that test defines `stbi_load` and friends
+twice.
 
 `stb_image_write` duplicates the same way and is the more immediate per-executable
-trigger: `model_gltf.cpp` expands it inside `ohao_scene`, and so does every
-`examples/*.cpp` main and `tests/renderer/renderer_test.cpp` — a second
-`stbi_write_png` in the executable's own object file. Exactly one engine TU avoids the
-collision, and it does so by hand: the FBX loader prefixes `STB_IMAGE_STATIC`, which
-gives its copy internal linkage.
+trigger: `ohao/runtime/image.cpp` expands it inside `ohao_runtime`, and so does every
+`examples/*.cpp` main and `tests/renderer/renderer_test.cpp`; where such an executable
+also links `ohao_runtime`, `stbi_write_png` is defined twice.
+Exactly one engine TU avoids the collision, and it does so by hand: the FBX loader
+prefixes `STB_IMAGE_STATIC`, which gives its copy internal linkage.
 
 {{cite ohao/scene/asset/model_fbx.cpp "#define STB_IMAGE_STATIC"}}
 

@@ -200,7 +200,7 @@ OHAO_VALIDATION=1 ./build/Release/ohao_game.exe --frames 600 --resize-at 200   #
 - GLFW 3.x (`ohao_game` window and input)
 - Intel OpenImageDenoise 2.x
 - NVIDIA NRD (RayTracingDenoiser) v4.17, fetched via FetchContent. Pure Vulkan, no CUDA. Opt out with `-DOHAO_NRD=OFF`.
-- Jolt Physics 5.1.0, Assimp 5.4.3, tinygltf, stb, glm, VMA, nlohmann/json (all FetchContent)
+- Jolt Physics 5.1.0, Assimp 5.4.3, stb, glm, VMA, nlohmann/json (all FetchContent)
 
 ## Project status
 

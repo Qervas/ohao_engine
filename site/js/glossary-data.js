@@ -267,7 +267,7 @@ window.OHAO_GLOSSARY = {
   },
   glTF: {
     expand: "GL Transmission Format",
-    def: "Standard 3D asset format (often .glb). OHAO loads metallic-roughness PBR via tinygltf.",
+    def: "Standard 3D asset format (often .glb). OHAO loads metallic-roughness PBR via Assimp.",
     group: "Assets",
   },
   GLB: {

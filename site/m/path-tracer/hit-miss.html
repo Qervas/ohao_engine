@@ -57,9 +57,9 @@
 <div class="citation-chip"><code class="citation-code">v.normal = normal;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/primitive_mesh_generator.cpp#L291" target="_blank" rel="noopener">ohao/scene/asset/primitive_mesh_generator.cpp:291</a></div>
 <div class="citation-chip"><code class="citation-code">vertex.normal = {x, y, z};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/primitive_mesh_generator.cpp#L119" target="_blank" rel="noopener">ohao/scene/asset/primitive_mesh_generator.cpp:119</a></div>
 <div class="citation-chip"><code class="citation-code">vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L39" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:39</a></div>
-<p>The OBJ and glTF loaders substitute `(0,1,0)` when a file carries none, so they cannot reach the fallback either.</p>
+<p>The OBJ and Assimp loaders substitute `(0,1,0)` when a file carries none, so they cannot reach the fallback either.</p>
 <div class="citation-chip"><code class="citation-code">vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L403" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:403</a></div>
-<div class="citation-chip"><code class="citation-code">v.normal = glm::vec3(0.0f, 1.0f, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L222" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:222</a></div>
+<div class="citation-chip"><code class="citation-code">v.normal = nLen &gt; 1e-20f ? n / nLen : glm::vec3(0, 1, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L424" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:424</a></div>
 <p>The one live path that can still produce a zero normal is FBX: `ufbx` writes the vertex normal only when the mesh has a normal layer, so a mesh without one leaves `Vertex::normal` at its zero-initialised default.</p>
 <div class="citation-chip"><code class="citation-code">if (mesh-&gt;vertex_normal.exists)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L261" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:261</a></div>
 <p>Real meshes therefore get no flip, and every TLAS instance disables triangle culling, so a hit from behind keeps its outward normal.</p>
@@ -137,9 +137,7 @@ $$</div>
 <p>`pt_anyhit.rahit` implements a hard 0.5 cutout, and the shader itself is sound: it takes alpha from the diffuse texture, so any textured cutout material would be tested correctly if the stage ever ran.</p>
 <div class="citation-chip"><code class="citation-code">uint diffuseTexIdx = floatBitsToUint(matColor.a);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_anyhit.rahit#L40" target="_blank" rel="noopener">shaders/rt/pt_anyhit.rahit:40</a></div>
 <p>It never runs. That is the whole of what makes it inert: every BLAS is built with `VK_GEOMETRY_OPAQUE_BIT_KHR` and every `traceRayEXT` passes `gl_RayFlagsOpaqueEXT`, either of which alone suppresses the stage.</p>
-<p>A second, independent gap sits behind that one. The material row has no alpha slot — the `.a` lane of the base-colour row is where the diffuse texture index lives — so an untextured material with a transparent base colour could not be cut out even with traversal fixed. `MaterialData` does carry an alpha mode, but only the glTF loader ever writes it; the OBJ and FBX paths leave the default, and it reaches no GPU buffer in any case:</p>
-<div class="citation-chip"><code class="citation-code">mat.alphaMode = MaterialData::AlphaMode::MASK;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L115" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:115</a></div>
-<div class="citation-chip"><code class="citation-code">enum class AlphaMode { OPAQUE, MASK, BLEND } alphaMode = AlphaMode::OPAQUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.hpp#L66" target="_blank" rel="noopener">ohao/scene/asset/model.hpp:66</a></div>
+<p>A second, independent gap sits behind that one. The material row has no alpha slot — the `.a` lane of the base-colour row is where the diffuse texture index lives — so an untextured material with a transparent base colour could not be cut out even with traversal fixed. No loader records an alpha mode either: glTF&#x27;s `alphaMode` and `alphaCutoff` go through Assimp and are never read, and `MaterialData` has no field for them.</p>
 <p>What ships instead is deletion at load time — the OBJ path drops alpha-card triangles by material name:</p>
 <div class="citation-chip"><code class="citation-code">// Filter alpha-card geometry that lacks proper alpha textures</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L210" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:210</a></div>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>Read the any-hit as a specification, not as behaviour. Making it run takes three independent changes — clear the geometry opaque bit, drop the per-ray opaque flag, and add an alpha or alpha-mode field to the material row — and any one of them alone changes nothing.</p></div>
@@ -164,7 +162,7 @@ $$</div>
         <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/primitive_mesh_generator.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/model.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_loader.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/model_fbx.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/primitive_mesh_generator.hpp</code><span class="desc"></span></div>
@@ -179,7 +177,6 @@ $$</div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/cinematic_composite.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/asset/model.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
