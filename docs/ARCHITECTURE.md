@@ -258,7 +258,17 @@ model to copy, `SkyPass` the fullscreen raster one.
    (`#include "includes/common/color.glsl"`); every `.spv` is rebuilt when any file under
    `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
    transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
-   input, `vkCmdDraw(cmd, 3, 1, 0, 0)`).
+   input, `vkCmdDraw(cmd, 3, 1, 0, 0)`). **New shaders are Slang** (`.slang`; GLSL only
+   for a pass not being rewritten): an entry point is a function under a
+   `[shader("compute")]` attribute line (further `[...]` attribute lines may follow), and
+   it keeps its name in the SPIR-V (pass it as `pName`). `slangc -target spirv -profile
+   spirv_1_6 -matrix-layout-column-major -I shaders` builds one SPIR-V per entry:
+   `bench/gpu_calibrate.slang` (one entry) → `bench_gpu_calibrate.slang.spv`, a file with
+   several entries → `<flattened>.<entry>.spv`; a `.slang` without an entry is a module
+   (`import shared.layout;`). Constants and structs C++ shares with a shader go in
+   `shaders/shared/layout.json`, then `python tools/gen_layout.py` writes
+   `shaders/shared/layout.slang`, `layout.glsl` and `ohao/gpu/shared_layout.hpp` (std430,
+   every offset asserted); `check_layout` fails while they are out of date.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
    failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base

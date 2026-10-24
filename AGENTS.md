@@ -36,6 +36,16 @@ $ C:/Users/djmax/scoop/shims/cmake --build build --config Release --target shade
   the shaders. `python tools/check.py` builds it first regardless.
 - Binaries land in `build/Release/`; SPIR-V in `build/Release/bin/shaders/`, named by
   flattening the path (`rt/pt_raygen.rgen` → `rt_pt_raygen.rgen.spv`).
+- **New shaders are Slang** (`slangc` from the Vulkan SDK, pinned in
+  `shaders/slangc.version`); a `.slang` with one `[shader(...)]` entry point gives
+  `<flattened>.spv`, with several `<flattened>.<entry>.spv`, without one it is a module.
+  Constants and structs shared with C++ live in `shaders/shared/layout.json`; regenerate
+  their `.slang`/`.glsl`/`.hpp` with `python tools/gen_layout.py` (the check below fails
+  until you do). See ARCHITECTURE.md, "add a render pass".
+
+```console
+$ python tools/gen_layout.py --check
+```
 
 ## Gates
 
@@ -67,7 +77,8 @@ something failed, 2 = the environment is wrong (the message says how).
   OHAO, as `{"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}}`: the Vulkan
   instance, device, ray tracing and validation layer; every shader's SPIR-V present and
   newer than its source and every file it includes; the assets the checked-in scenes
-  reference; glslc, cmake (not conda's) and the harnesses' Python modules; and a 64x64
+  reference; glslc, slangc (at its pinned version), cmake (not conda's) and the harnesses'
+  Python modules; and a 64x64
   deferred frame within 2 s (a wedged GPU after a crash fails here, not in every render
   test). Exit 1 when an error-level check fails; `--cpu-only` creates no device.
 
@@ -101,6 +112,7 @@ $ python tests/check/check_tests.py > /dev/null
 $ python tests/golden/test_golden_diff.py > /dev/null
 $ python tests/doctor/check_doctor.py > /dev/null
 $ python tests/serve/check_serve.py > /dev/null
+$ python tests/layout/check_layout.py > /dev/null
 ```
 
 | Suite | Covers |
@@ -116,7 +128,8 @@ $ python tests/serve/check_serve.py > /dev/null
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
-| `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes) and on the real tree; `--gpu` adds the device checks |
+| `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes, Slang entry points and imports) and on the real tree; `--gpu` adds the device checks |
+| `check_layout.py` | `shaders/shared/layout.json`'s generated files current, std430 offsets asserted, bad layouts refused, the generated GLSL and Slang compiling |
 | `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
 
 GPU suites and harnesses (each creates a Vulkan device):
@@ -196,7 +209,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `build/render_bench.json` (the per-pass baseline every renderer change is judged by);
   `--only SCENE`, `--frames N`; `--evaluate RESULTS --check BUDGETS` judges recorded
   results without a GPU. Besides the CPU loop it times a GPU calibration kernel
-  (`shaders/bench/gpu_calibrate.comp`) before and after, against
+  (`shaders/bench/gpu_calibrate.slang`) before and after, against
   `build/render_bench_reference.json` (`render_bench --calibrate`). `serve_bench` times a
   calibration loop before and after its blocks and records every other process that
   used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written

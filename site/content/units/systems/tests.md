@@ -426,7 +426,8 @@ produces must be registered.
 
 Before any test runs, the check asks `ohao doctor` whether the machine can run them at
 all: the Vulkan device, stale or missing SPIR-V (following each shader's includes the way
-glslc resolves them), missing assets, conda's cmake, the harnesses' Python modules, and a
+glslc resolves them, and each Slang file's imports), missing assets, conda's cmake,
+`slangc` at the version pinned in `shaders/slangc.version`, the harnesses' Python modules, and a
 64x64 deferred frame that must render within 2 s, so a GPU wedged after a crash is named
 as such rather than surfacing as slow renders everywhere:
 

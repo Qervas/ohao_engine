@@ -127,6 +127,10 @@ compiler on `PATH`:
 
 {{cite shaders/CMakeLists.txt "glslc shader compiler not found"}}
 
+Since 2b step 6 the same holds for `slangc`, looked for in the Vulkan SDK before `PATH`:
+
+{{cite shaders/CMakeLists.txt "slangc not found: install the Vulkan SDK"}}
+
 Jolt, Assimp and EnTT are unconditional FetchContent; the `if(TARGET Jolt)` guards
 scattered through `ohao/physics` and the example function are a fallback for a fetch
 that produced no target, not a user-facing switch. "Bare build" in this tree means

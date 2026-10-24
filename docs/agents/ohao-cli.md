@@ -181,7 +181,7 @@ degrades. `--cpu-only` skips the device checks.
 ```console
 $ build/Release/ohao doctor --cpu-only > build/doc_tmp/doctor.json
 $ python -c "import json; r = json.load(open('build/doc_tmp/doctor.json'))['result']; print([c['id'] for c in r['checks']])"
-['shaders.complete', 'shaders.fresh', 'assets.present', 'tools.glslc', 'tools.cmake', 'python.deps']
+['shaders.complete', 'shaders.fresh', 'assets.present', 'tools.glslc', 'tools.slangc', 'tools.cmake', 'python.deps']
 ```
 
 ### Serve: one engine for a whole session

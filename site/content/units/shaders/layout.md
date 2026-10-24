@@ -6,12 +6,13 @@ standard: v2
 figures: [shaders-layout-resolution]
 ---
 
-## Ninety-two lines of CMake and no permutation system
+## One CMake file and no permutation system
 
-The whole shader build is two `file(GLOB_RECURSE)` calls over `shaders/` — one
+The whole GLSL build is two `file(GLOB_RECURSE)` calls over `shaders/` — one
 collecting sources, one collecting headers for dependency tracking — plus one
 `glslc` command per matched source and a custom target that depends on the
-results. There is no shader database, no variant matrix, no reflection step.
+results; Slang sources get a third glob of their own (below). There is no shader
+database, no variant matrix, no reflection step.
 
 {{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SHADER_SOURCES"}}
 
@@ -19,7 +20,7 @@ The glob runs at configure time and, since sub-project 4, carries `CONFIGURE_DEP
 the build re-checks it and re-runs the configure step when a stage source is added or
 removed, so a new `.rgen` is compiled by the next build. It also recurses without exclusions:
 every stage source anywhere under `shaders/` is globbed and compiled, whether or
-not any C++ loads it — 40 sources, 40 SPIR-V modules. Headers are the opposite
+not any C++ loads it — 41 GLSL sources, 41 SPIR-V modules. Headers are the opposite
 case: a `.glsl` file is compiled only as text spliced into a stage, so a header no
 stage includes is never parsed at all.
 
@@ -90,6 +91,36 @@ the build detects that. No collision exists in the tree today, but the invariant
 is maintained by nobody.
 
 {{figure shaders-layout-resolution "Conceptual: how one source path becomes a flat SPIR-V name and how the loader finds it. Paths, the mirror step and the three-rung fallback ladder are read from shaders/CMakeLists.txt, tests/renderer/CMakeLists.txt and path_tracer_pipeline.cpp; the diagram is not a captured trace."}}
+
+## Slang beside GLSL
+
+Since sub-project 2b step 6 the same target also compiles Slang, and new shaders are
+written in it. `slangc` is looked for in the Vulkan SDK before `PATH`, and the version
+the SPIR-V was made with is pinned in `shaders/slangc.version`; another version only
+warns, because it still builds, but may emit different code:
+
+{{cite shaders/CMakeLists.txt "find_program(SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" ${OHAO_VULKAN_SDK_BINS})"}}
+
+A `.slang` file is compiled once per entry point, and the entry points are found by
+reading the source: a function under a `[shader("…")]` attribute line. One entry keeps
+the flattening rule (`bench/gpu_calibrate.slang` → `bench_gpu_calibrate.slang.spv`),
+several add the entry's name, and a file with none is a module that is only imported.
+The entry keeps its own name in the SPIR-V, so the pipeline's `pName` is the
+function's name, not `main`:
+
+{{cite shaders/CMakeLists.txt "COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 -entry ${ENTRY} -fvk-use-entrypoint-name"}}
+
+`ohao doctor` scans entry points the same way, so `shaders.complete` expects the same
+names and `shaders.fresh` follows `import` as it follows `#include`:
+
+{{cite tools/ohao/doctor.cpp "// Slang: import a.b;  ->  a/b.slang"}}
+
+GLSL and Slang share no source. What C++ and a shader must agree on — sizes, push
+constants — lives in `shaders/shared/layout.json`, from which `tools/gen_layout.py`
+writes a Slang module, a GLSL header and a C++ header that asserts every std430
+offset; the `check_layout` suite fails while they are out of date:
+
+{{cite shaders/bench/gpu_calibrate.slang "[numthreads(kCalibrateGroupSize, 1, 1)]"}}
 
 ## Where the SPIR-V is, and how each pipeline finds it
 

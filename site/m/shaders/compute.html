@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="two-compute-shaders-and-a-build-that-ignores-them">Two compute shaders, and a build that ignores them</h2></div>
 <div class="prose reveal">
 <p>Nothing in the build depends on the shaders. `add_custom_target(shaders ...)` is declared without `ALL`, and no `add_dependencies` call anywhere in the tree names it, so a default `cmake --build build` compiles no SPIR-V at all — `--target shaders` is a second, manual step.</p>
-<div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L54" target="_blank" rel="noopener">shaders/CMakeLists.txt:54</a></div>
+<div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L116" target="_blank" rel="noopener">shaders/CMakeLists.txt:116</a></div>
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/*.comp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L12" target="_blank" rel="noopener">shaders/CMakeLists.txt:12</a></div>
 </div>
 <div class="section-rule"><h2 id="ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</h2></div>
