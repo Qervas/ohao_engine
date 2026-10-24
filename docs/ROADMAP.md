@@ -60,7 +60,7 @@ measurable.
 | 2a | **ECS world + persistent GPU scene** — EnTT registry replaces Scene/Actor/Component; render-world extraction into persistent GPU mesh/material/instance/light tables; one BLAS per mesh; per-frame TLAS refit; one bindless texture table | golden scenes rebuilt as ECS entities render identically; moving objects correct in RT; upload cost proportional to change | [spec](specs/2026-10-03-ecs-gpu-scene-design.md) · **done** |
 | 3 | **Reflection, scene serialization + agent API** — type registry with docs/units/limits, schema catalogue + JSON Schema, stable entity IDs, canonical `.scene.json` (defaults omitted), structured validation errors, versioning, command layer with inverses, filtered/projected queries and scene summaries (token budget for agents), columnar snapshot/restore, headless `ohao` CLI; `AGENTS.md`, `docs/ARCHITECTURE.md`, refreshed `.claude/skills` | the example scenes ship as `.scene.json` files and the goldens render from them via `ohao run`; save → load → save is byte-identical; `scene_bench` budgets met | [spec](specs/2026-10-22-reflection-scene-serialization-design.md) · **done** (2026-10-23; skills installed the same day; every `scene_bench` budget and scaling ratio passes, `restore_empty` at ×10.1–11.4 over twelve consecutive runs after the restore follow-up) |
 | 4 | **Agent control surface + agent dev ergonomics** — `ohao serve` (JSON-RPC 2.0 / MCP over stdio), live window host, lockstep/realtime time control, input as data with injection and record/replay, live frame capture, log streaming; deterministic deferred rendering; one `check` entry point (CTest labels, shaders first, JUnit/JSON results), golden diff JSON + heatmaps, `ohao doctor` | an MCP agent loads, edits, plays and captures a scene in a live engine; an agent builds and verifies OHAO from one command with machine-readable pass/fail; `serve_bench` budgets met | [spec](specs/2026-10-23-agent-control-surface-design.md) · **done** (2026-10-24; tests 1–20 pass; an MCP client loads, edits, plays, records, replays and captures `helmet_game` in a live window, bit-identical on replay. Open, owned by 2b by Frank's ruling: the window readback (2 ms) and inline capture (20 ms) budgets, which miss on the deferred frame's own GPU cost. Waiting on Frank: the repo's `.mcp.json` and the manual Claude Code run) |
-| 2b | **GPU-driven rendering + renderer upgrade** — indirect G-buffer/shadow draws, GPU frustum + two-pass Hi-Z occlusion culling, meshlets with cluster culling (mesh shaders where supported), clustered lighting, Slang toolchain for new shaders, RT determinism and the open renderer findings (see "2b scope") | CPU draw-submission cost flat as instance count grows; a 100k-instance, 1,000-light scene within a GPU frame budget on the reference machine; the goldens hold; validation clean in raster and RT | — (spec after 4) |
+| 2b | **Renderer upgrade: measured, GPU-driven, cheaper, correct** — per-pass GPU timings and a render benchmark first; RT shadows (scene lights, 1 ray a light) and RT GI (half resolution, denoised) rebuilt to cut the deferred frame from ~5.4 ms to ≤ 1.5 ms at 720p; GPU frustum + two-pass Hi-Z culling with deterministic compaction and indirect draws; meshlets with mesh shaders and a fallback; clustered lighting (the 8-light cap gone); SSAO wired in; path-traced frames in a window; readback of the frame just rendered; glTF node transforms; RT determinism and validation; Slang for new shaders; `render.stats` / `render.settings` for agents (see "2b scope") | `render_bench` gates every pass; `serve_bench`'s window readback (2 ms) and inline capture (20 ms) budgets met unchanged; CPU submission flat from 10k to 100k instances; a 100k-instance, 1,000-light scene within 8 ms at 1080p; deferred and hybrid-RT goldens exact; validation clean in raster and RT | [spec](specs/2026-10-24-renderer-upgrade-design.md) · **next** |
 | 5 | **Level pipeline** — glTF-from-Blender loader, `extras` → components, collision generation, spawn points | a Blender blockout level loads, renders and collides | — |
 | 6 | **Player** — Jolt at fixed step in the ECS, physics ↔ transform sync, first-person controller, camera, footsteps | you can walk the level | — |
 | 7 | **Combat** — hitscan weapon (recoil, spread, muzzle flash, impact decals), health/damage, enemy AI, death/restart, HUD | the slice is playable | — |
@@ -77,12 +77,23 @@ rather than before them.
 
 ## 2b scope: what joins GPU culling, and what waits
 
-The test for each candidate is the "structure before effects" principle: does it change
-how geometry, lights or frames flow through the renderer (put it in 2b, while that flow is
-being rebuilt anyway), or is it an effect that plugs into a finished flow (schedule it when
-the slice needs it)?
+The spec ([2026-10-24-renderer-upgrade-design.md](specs/2026-10-24-renderer-upgrade-design.md))
+is the authority; this is its summary. The test for each candidate is the "structure before
+effects" principle: does it change how geometry, lights or frames flow through the
+renderer (put it in 2b, while that flow is being rebuilt anyway), or is it an effect that
+plugs into a finished flow (schedule it when the slice needs it)? Frank widened 2b on
+2026-10-24 into a real renderer upgrade, and the frame's GPU cost became its first goal.
 
 **In 2b:**
+- **Measurement first:** a pass registry, GPU timestamps for every pass, `render_bench`
+  with per-pass budgets, and `render.stats` / `render.settings` so agents read timings and
+  change quality settings over MCP.
+- **RT shadows and RT GI rebuilt for cost:** shadows from the scene's lights (today a
+  hard-coded light) at 1 ray a light, filtered; GI at half resolution with 2 rays,
+  reprojected temporal and à-trous denoising. This is what brings the frame to ≤ 1.5 ms.
+- **Correctness:** SSAO wired into lighting, path-traced frames presented and captured in
+  a window, readback of the frame just rendered (the lagged ring deleted), glTF node
+  transforms applied on load.
 - **GPU frustum + two-pass Hi-Z occlusion culling, indirect draws** (G-buffer and
   shadows): the core of 2b, as planned.
 - **Meshlets with cluster culling.** Instance culling first and cluster culling later
@@ -114,22 +125,25 @@ the slice needs it)?
 - **A render benchmark with budgets:** the `scene_bench` 10k/100k scenes rendered, with
   CPU submission and GPU pass times gated, as `scene_bench` gates the codec.
 
-**Later, scheduled by need:**
+**Later, scheduled by need** (each reasoned in the spec's "Scope"):
+- **ReSTIR DI (many-light shadowing).** 2b shadows up to 4 lights a pixel; ReSTIR DI earns
+  its complexity when the slice's levels need hundreds of shadowed lights.
 - **Upscaling (DLSS SR / FSR / XeSS behind one interface).** It needs a render-resolution
   vs output-resolution split, but TAA jitter and motion vectors already exist, so the
   split is a contained change. Schedule it when the slice's frame budget asks for it, with
-  FSR as the vendor-neutral first backend.
+  FSR as the vendor-neutral first backend. Not in 2b: captures are at native resolution,
+  the budgets are met without one, and each backend is a new dependency.
 - **Virtual shadow maps.** CSM works and is validation-clean; VSMs are a quality upgrade
   that consumes 2b's culling (page-visibility passes reuse it). After the level pipeline
   shows where shadow resolution falls short.
-- **ReSTIR / probe-based GI for the raster path.** The hybrid path already has 1-bounce RT
-  GI; many-light ReSTIR and probe GI are effect-level and benefit from clustered lighting
-  and meshlets being in place first. When the slice's lighting needs it.
+- **ReSTIR / probe-based GI.** 2b rebuilds the 1-bounce RT GI for cost (half resolution,
+  denoised); ReSTIR GI and probes are quality upgrades that reuse 2b's clusters, meshlets
+  and denoiser. When the slice's lighting needs it.
 
 ## Next, scheduled by need
 
 Pulled in as their own sub-projects when the slice or a user needs them: upscalers,
-virtual shadow maps, ReSTIR / probe GI (all three reasoned above); the editor UI (an
+virtual shadow maps, ReSTIR DI and ReSTIR / probe GI (reasoned above); the editor UI (an
 in-process `ohao/api` client: ImGui docking on the Vulkan backend); the asset database and
 cooked formats; gameplay code with hot reload; the C ABI; network transports for the
 control surface.
