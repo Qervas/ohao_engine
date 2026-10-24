@@ -7,10 +7,43 @@
 const uint kCalibrateGroupSize = 256u;
 // the calibration buffer's uint count (1 MiB)
 const uint kCalibrateElements = 262144u;
+// RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
+const uint kShadowMaxLights = 8u;
+// RT shadows, realtime: the lights a pixel traces at most, the most important first
+const uint kShadowLightsPerPixel = 4u;
+// RT shadows, reference quality: rays a light a pixel a frame
+const uint kShadowReferenceRays = 8u;
+// RT shadows, realtime: the temporal accumulation's longest history (its smallest blend weight is 1/this)
+const uint kShadowHistoryFrames = 16u;
+// RT shadows' filter: the pixels a workgroup filters, this many on a side
+const uint kShadowFilterTile = 16u;
+// RT shadows' filter: the spatial kernel's radius (5x5)
+const uint kShadowFilterRadius = 2u;
 
 // the calibration kernel's push constants
 struct CalibratePush {
     uint iterations;   // hash rounds per element
+};
+
+// one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)
+struct ShadowLight {
+    vec4 positionAndType;   // xyz position (directional: its travel direction; rect: a corner); w type: 0 directional, 1 sphere, 2 rect
+    vec4 edge1AndRadius;   // xyz the rect's first edge; w the light's bounding radius: a sphere's radius, a rect's half diagonal (directional: angular radius, rad)
+    vec4 edge2AndRange;   // xyz the rect's second edge; w the range (0: unlimited)
+    vec4 centreAndIntensity;   // xyz the light's centre (directional: the unit vector toward it), w its intensity: the per-pixel importance
+};
+
+// RT shadows' trace (rt/shadow_trace.slang) push constants
+struct ShadowTracePush {
+    uvec4 extent;   // x width, y height, z lights, w lights a pixel at most (realtime)
+    uvec4 seed;   // x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light
+    vec4 cameraPos;   // xyz the camera's position (the filter's depth guide is the distance from it)
+};
+
+// RT shadows' filter (rt/shadow_filter.slang) push constants
+struct ShadowFilterPush {
+    uvec4 extent;   // x width, y height, z lights, w history frames (0: none)
+    uvec4 seed;   // x render seed, y frame index since the last temporal reset: the output's dither
 };
 
 #endif

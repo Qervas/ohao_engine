@@ -1,5 +1,5 @@
 // Model Viewer — load any GLTF/OBJ and render in a Cornell box
-// Usage: ./model_viewer <model.glb> [output.png] [samples] [deferred|rt_realtime|rt_offline] [flip] [video]
+// Usage: ./model_viewer <model.glb> [output.png] [samples] [deferred [reference]|rt_realtime|rt_offline] [flip] [video]
 //                       [--denoise=X] [--print-bounds]
 //        ./model_viewer <model.glb> [flip] --save-scene <path.scene.json>   (writes the scene, renders nothing)
 //
@@ -67,7 +67,7 @@ int main(int rawArgc, char* rawArgv[]) {
     char** argv = args.argv.data();
     if (argc < 2) {
         std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] "
-                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…] [--print-bounds] "
+                     "[deferred [reference]|rt_realtime|rt_offline] [flip] [video] [--denoise=…] [--print-bounds] "
                      "[--save-scene <path>]\n";
         return 1;
     }
@@ -176,6 +176,7 @@ int main(int rawArgc, char* rawArgv[]) {
     const RenderMode mode = resolveMode(cli);
     renderer.setRenderMode(mode);
     applyDenoiseOverride(renderer, cli);
+    applyQuality(renderer, cli);
     std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
 
     if (cli.useDeferred && renderer.getDeferredRenderer()) {

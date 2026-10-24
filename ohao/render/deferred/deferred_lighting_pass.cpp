@@ -96,6 +96,18 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // Transition dummy image on first use (needed for fallback descriptor bindings)
     if (!m_dummyImageTransitioned && m_dummyImage != VK_NULL_HANDLE) {
+        for (VkImage stand : {m_dummyUintImage}) {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = stand;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &b);
+        }
         VkImageMemoryBarrier barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -225,16 +237,8 @@ void DeferredLightingPass::setEnvMap(VkImageView view, VkSampler sampler) {
     m_envMapSampler = sampler;
 }
 
-void DeferredLightingPass::setRTShadowMask(VkImageView view, VkSampler sampler) {
-    m_rtShadowView = view;
-    m_rtShadowSampler = sampler;
-    // Set flag bit 5 to tell the shader to use RT shadows
-    if (view != VK_NULL_HANDLE) {
-        m_params.flags |= 32u;   // bit 5 = RT shadows
-        m_params.flags &= ~4u;   // disable CSM (bit 2) when RT is active
-    } else {
-        m_params.flags &= ~32u;
-    }
+void DeferredLightingPass::setRTShadowMask(VkImageView visibility) {
+    m_rtShadowView = visibility;   // execute() sets the flags from it
 }
 
 void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& view,
@@ -250,7 +254,6 @@ void DeferredLightingPass::clearPerFrameInputs() {
     m_ssgiView = VK_NULL_HANDLE;
     m_ssgiSampler = VK_NULL_HANDLE;
     m_rtShadowView = VK_NULL_HANDLE;
-    m_rtShadowSampler = VK_NULL_HANDLE;
 }
 
 void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
@@ -394,9 +397,9 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     writes[12].descriptorCount = 1;
     writes[12].pBufferInfo = &cascadeBufferInfo;
 
-    // RT shadow mask (binding 14)
-    imageInfos[11].sampler = m_rtShadowSampler != VK_NULL_HANDLE ? m_rtShadowSampler : fallbackSampler;
-    imageInfos[11].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : fallbackView;
+    // RT shadow visibility (binding 14): an RG32UI view, or the RG32UI stand-in
+    imageInfos[11].sampler = fallbackSampler;
+    imageInfos[11].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : m_dummyUintView;
     imageInfos[11].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -540,7 +543,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 10: SSAO texture
     // 11: SSGI texture
     // 12: CascadeData UBO
-    // 14: RT shadow mask
+    // 14: RT shadow visibility (RG32UI)
     // 15: HDR environment map
 
     std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
@@ -794,6 +797,18 @@ bool DeferredLightingPass::createDummyResources() {
         return false;
     }
 
+    // 1x1 RG32UI stand-in for the RT shadow visibility (binding 14 is an integer sampler)
+    imageInfo.format = VK_FORMAT_R32G32_UINT;
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_dummyUintImage) != VK_SUCCESS) return false;
+    vkGetImageMemoryRequirements(m_device, m_dummyUintImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_dummyUintMemory) != VK_SUCCESS) return false;
+    vkBindImageMemory(m_device, m_dummyUintImage, m_dummyUintMemory, 0);
+    viewInfo.image = m_dummyUintImage;
+    viewInfo.format = VK_FORMAT_R32G32_UINT;
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_dummyUintView) != VK_SUCCESS) return false;
+
     // 512-byte buffer for fallback SSBO (binding 5) and UBO (binding 12) fallbacks.
     // CascadeData is 288 bytes, so 512 is sufficient for both uses.
     VkBufferCreateInfo bufInfo{};
@@ -828,6 +843,12 @@ bool DeferredLightingPass::createDummyResources() {
 }
 
 void DeferredLightingPass::destroyDummyResources() {
+    if (m_dummyUintView != VK_NULL_HANDLE) vkDestroyImageView(m_device, m_dummyUintView, nullptr);
+    if (m_dummyUintImage != VK_NULL_HANDLE) vkDestroyImage(m_device, m_dummyUintImage, nullptr);
+    if (m_dummyUintMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_dummyUintMemory, nullptr);
+    m_dummyUintView = VK_NULL_HANDLE;
+    m_dummyUintImage = VK_NULL_HANDLE;
+    m_dummyUintMemory = VK_NULL_HANDLE;
     if (m_dummyView != VK_NULL_HANDLE) vkDestroyImageView(m_device, m_dummyView, nullptr);
     if (m_dummyImage != VK_NULL_HANDLE) vkDestroyImage(m_device, m_dummyImage, nullptr);
     if (m_dummyMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_dummyMemory, nullptr);

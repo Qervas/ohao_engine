@@ -118,6 +118,7 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     renderer.setRenderMode(mode);
     const DenoiseMode denoise = parseDenoiseMode(r.denoise);
     renderer.setDenoiseMode(denoise);
+    renderer.setRenderQuality(r.quality == "reference" ? RenderQuality::Reference : RenderQuality::Realtime);
     if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
             const auto on = [&](std::string_view e) { return std::find(r.post.begin(), r.post.end(), e) != r.post.end(); };
@@ -203,7 +204,13 @@ std::optional<api::RenderStats> summarizeFrames(std::span<const render::FrameTim
 
 std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count) {
     const std::vector<render::FrameTiming> frames = renderer.frameTimings(static_cast<std::size_t>(std::max(count, 1)));
-    return summarizeFrames(frames);
+    std::optional<api::RenderStats> st = summarizeFrames(frames);
+    if (st) {
+        const auto dropped = renderer.shadowLightsDropped();
+        if (dropped && dropped->frame >= frames.front().frame && dropped->frame <= frames.back().frame)
+            st->shadowLightsDropped = dropped->pixels;
+    }
+    return st;
 }
 
 } // namespace ohao::runtime

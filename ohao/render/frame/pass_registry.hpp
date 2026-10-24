@@ -19,10 +19,11 @@ struct PassInfo {
 
 inline constexpr PassInfo kPasses[] = {
     {"scene.upload", PassKind::Transfer, "RenderScene table uploads, BLAS builds, the TLAS build or refit"},
-    {"csm", PassKind::Raster, "cascaded shadow maps: 4 cascades of 2048x2048, every draw"},
+    {"csm", PassKind::Raster, "cascaded shadow maps (4 of 2048x2048): only when RT shadows do not run"},
     {"gbuffer", PassKind::Raster, "the G-buffer: position, normal, albedo, velocity, depth"},
     {"ssao", PassKind::Compute, "screen-space ambient occlusion (the ssao post effect)"},
-    {"rt.shadows", PassKind::RayTracing, "ray-traced shadow mask"},
+    {"rt.shadows", PassKind::RayTracing, "ray-traced shadows: one ray to each of a pixel's most important lights (reference: 8 to every light)"},
+    {"rt.shadows.filter", PassKind::Compute, "RT shadows' 5x5 depth- and normal-aware filter and temporal accumulation (realtime)"},
     {"rt.gi", PassKind::RayTracing, "ray-traced one-bounce indirect light and its history copy"},
     {"lighting", PassKind::Raster, "deferred lighting into the HDR image"},
     {"sky", PassKind::Raster, "the procedural sky into the HDR image"},

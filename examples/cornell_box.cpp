@@ -1,5 +1,5 @@
 // Cornell Box — classic path tracer reference scene
-// Usage: ./cornell_box [output.png] [samples] [deferred|rt_realtime|rt_offline] [--denoise=X]
+// Usage: ./cornell_box [output.png] [samples] [deferred [reference]|rt_realtime|rt_offline] [--denoise=X]
 //        ./cornell_box --save-scene <path.scene.json>   (writes the scene, renders nothing)
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
@@ -73,6 +73,7 @@ int main(int rawArgc, char* rawArgv[]) {
     const RenderMode mode = resolveMode(cli);
     renderer.setRenderMode(mode);
     applyDenoiseOverride(renderer, cli);
+    applyQuality(renderer, cli);
 
     std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
     std::cout << "Rendering ("

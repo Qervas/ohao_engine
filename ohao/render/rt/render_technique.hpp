@@ -25,30 +25,42 @@ namespace ohao {
 class Scene;
 class Camera;
 
+// The hybrid frame's quality (sub-project 2b spec, "Reference quality"). Realtime is the
+// budgeted frame; reference traces every shadowed light with 8 rays a frame and averages
+// the frames since the last temporal reset, the realtime frame's converged answer.
+enum class RenderQuality : uint8_t { Realtime, Reference };
+
 // ─── Shadow Technique ────────────────────────────────────────────────
 
 struct ShadowInput {
     VkImageView positionBuffer;    // world-space position (GBuffer0)
     VkImageView normalBuffer;      // world-space normal (GBuffer1)
     VkImageView depthBuffer;       // depth buffer
+    VkImageView velocityBuffer = VK_NULL_HANDLE;   // UV-space motion (GBuffer3): the filter's reprojection
     uint32_t width;
     uint32_t height;
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
+    uint64_t frameNumber = 0;      // the renderer's frame number (render.stats' shadowLightsDropped)
+    glm::vec3 cameraPos{0.0f};
 
     // The scene's shadow-casting lights (RenderScene::shadowLights, or the fallback sun),
-    // <= kMaxShadowLights: light i is traced into shadow-mask channel i.
+    // <= kShadowMaxLights: light i is visibility channel i (the light UBO's params.w).
     std::span<const render::LightDesc> lights;
     // Sample seeding: the render seed and the frame index since the last temporal reset.
     uint32_t renderSeed = 0;
     uint32_t frameIndex = 0;
+
+    RenderQuality quality = RenderQuality::Realtime;
+    uint32_t maxLightsPerPixel = 4;   // realtime: the lights a pixel traces at most (0-4)
 
     // RT-specific: the RenderScene's TLAS (null if rasterization-only)
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 };
 
 struct ShadowOutput {
-    VkImage shadowMask;            // RGBA8, one channel per shadow light — 0=shadowed, 1=lit
-    VkImageView shadowMaskView;
+    // Visibility, one 8-bit channel a shadow light (0 shadowed, 255 lit), in an RG32UI image:
+    // x holds lights 0-3, y lights 4-7, the lowest byte first.
+    VkImageView visibility;
 };
 
 class IShadowTechnique {

@@ -116,9 +116,9 @@ void LightTable::set(std::span<const LightDesc> lights) {
     m_descs = sorted;
 
     // ---- Raster (ported from VulkanRenderer::updateLightBuffer) ----------------
-    // RT shadow slots: the first kMaxShadowLights raster lights, in light order, that
-    // cast shadows each own one shadow-mask channel (params.w); the rest that cast
-    // shadows get kShadowNoSlot.
+    // RT shadow slots: every raster light that casts shadows owns one visibility channel
+    // (params.w), in light order. The buffer holds MAX_LIGHTS = kMaxShadowLights lights, so
+    // none is left without one.
     std::vector<LightData> raster;
     m_shadowLights.clear();
     int shadowCasterIndex = -1;  // Index of first shadow-casting light
@@ -144,11 +144,9 @@ void LightTable::set(std::span<const LightDesc> lights) {
 
         float shadowSlot = kShadowNever;
         if (d.castShadows) {
-            shadowSlot = kShadowNoSlot;
-            if (m_shadowLights.size() < kMaxShadowLights) {
-                shadowSlot = static_cast<float>(m_shadowLights.size());
-                m_shadowLights.push_back(d);
-            }
+            static_assert(kMaxShadowLights >= MAX_LIGHTS, "a channel for every raster light");
+            shadowSlot = static_cast<float>(m_shadowLights.size());
+            m_shadowLights.push_back(d);
         }
         light.params = glm::vec4(
             glm::cos(glm::radians(d.innerConeDeg)),

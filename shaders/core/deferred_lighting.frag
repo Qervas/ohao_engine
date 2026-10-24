@@ -22,7 +22,7 @@ struct Light {
     vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     vec4 direction;     // xyz = direction, w = range
     vec4 color;         // xyz = color, w = intensity
-    vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex, w = shadow slot (-1 never, 0..3 RT mask channel, 4 casts but no channel)
+    vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex, w = shadow slot (-1 never, 0..7 its RT visibility channel)
     mat4 lightSpaceMatrix;
 };
 
@@ -36,8 +36,9 @@ layout(set = 0, binding = 5) uniform LightingUBO {
     float shadowStrength;
 } lighting;
 
-// Shadow map — CSM array (4 cascades)
-layout(set = 0, binding = 6) uniform sampler2DArray shadowMap;
+// Shadow map — CSM array (4 cascades), through the pass's comparison sampler (LESS_OR_EQUAL):
+// a lookup returns 1 where the reference depth is at or in front of the stored one.
+layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;
 
 // IBL resources
 layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
@@ -55,9 +56,11 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// RT shadow mask (binding 14) — RGBA8, one channel per shadow light (a light's params.w),
-// 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR (rt_shadow.rgen).
-layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
+// RT shadow visibility (binding 14): one 8-bit channel per shadow light (a light's params.w),
+// 0 shadowed, 255 lit, in an RG32UI image (x: lights 0-3, y: 4-7, lowest byte first), the
+// lighting pass's size. Written by rt/shadow_filter.slang (realtime) or rt/shadow_trace.slang
+// (reference).
+layout(set = 0, binding = 14) uniform usampler2D rtShadowVisibility;
 
 // HDR environment map (binding 15) — kept for descriptor layout compatibility
 layout(set = 0, binding = 15) uniform sampler2D envMap;
@@ -127,14 +130,12 @@ float calculateShadowCSM(vec3 fragPos, float viewDepth) {
 
     float shadow = 0.0;
     vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
-    float bias = cascades.shadowBias;
+    float reference = projCoords.z - cascades.shadowBias;
 
-    // 3x3 PCF
+    // 3x3 PCF, each tap a hardware comparison
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
-            float pcfDepth = texture(shadowMap,
-                vec3(projCoords.xy + vec2(x, y) * texelSize, float(cascadeIdx))).r;
-            shadow += (projCoords.z - bias > pcfDepth) ? 0.0 : 1.0;
+            shadow += texture(shadowMap, vec4(projCoords.xy + vec2(x, y) * texelSize, float(cascadeIdx), reference));
         }
     }
 
@@ -217,7 +218,7 @@ void main() {
     // Use light count from push constants (avoids SSBO layout issues with numLights offset)
     int lightCount = int(min(pc.lightCount, uint(MAX_LIGHTS)));
     const bool rtShadows = (pc.flags & 32u) != 0u;
-    vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);
+    const uvec2 rtShadow = rtShadows ? texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy : uvec2(0u);
     for (int i = 0; i < lightCount; ++i) {
         Light light = lighting.lights[i];
         int lightType = int(light.position.w);
@@ -242,13 +243,14 @@ void main() {
         vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
         // Shadow determination — RT shadows (bit 5) override CSM (bit 2). A light that
-        // casts no shadows (slot -1) is never occluded; one beyond the RT channels (slot
-        // 4) is unshadowed under RT shadows and gets CSM (directional) without them.
+        // casts no shadows (slot -1) is never occluded; without RT shadows a directional
+        // one gets CSM.
         float shadow = 1.0;
         int slot = int(round(light.params.w));
         if (slot >= 0) {
             if (rtShadows) {
-                if (slot < 4) shadow = rtShadow[slot];
+                const uint word = slot < 4 ? rtShadow.x : rtShadow.y;
+                shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);
             } else if ((pc.flags & 4u) != 0u && lightType == 0) {
                 shadow = calculateShadowCSM(fragPos, viewDepth);
             }

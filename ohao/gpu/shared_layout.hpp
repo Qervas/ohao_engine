@@ -11,6 +11,18 @@ namespace ohao::gpu::shared {
 inline constexpr uint32_t kCalibrateGroupSize = 256u;
 // the calibration buffer's uint count (1 MiB)
 inline constexpr uint32_t kCalibrateElements = 262144u;
+// RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
+inline constexpr uint32_t kShadowMaxLights = 8u;
+// RT shadows, realtime: the lights a pixel traces at most, the most important first
+inline constexpr uint32_t kShadowLightsPerPixel = 4u;
+// RT shadows, reference quality: rays a light a pixel a frame
+inline constexpr uint32_t kShadowReferenceRays = 8u;
+// RT shadows, realtime: the temporal accumulation's longest history (its smallest blend weight is 1/this)
+inline constexpr uint32_t kShadowHistoryFrames = 16u;
+// RT shadows' filter: the pixels a workgroup filters, this many on a side
+inline constexpr uint32_t kShadowFilterTile = 16u;
+// RT shadows' filter: the spatial kernel's radius (5x5)
+inline constexpr uint32_t kShadowFilterRadius = 2u;
 
 // the calibration kernel's push constants
 struct alignas(4) CalibratePush {
@@ -18,5 +30,38 @@ struct alignas(4) CalibratePush {
 };
 static_assert(offsetof(CalibratePush, iterations) == 0);
 static_assert(sizeof(CalibratePush) == 4);
+
+// one shadow-casting light as RT shadows trace it (a storage buffer of kShadowMaxLights)
+struct alignas(16) ShadowLight {
+    alignas(16) std::array<float, 4> positionAndType{};
+    alignas(16) std::array<float, 4> edge1AndRadius{};
+    alignas(16) std::array<float, 4> edge2AndRange{};
+    alignas(16) std::array<float, 4> centreAndIntensity{};
+};
+static_assert(offsetof(ShadowLight, positionAndType) == 0);
+static_assert(offsetof(ShadowLight, edge1AndRadius) == 16);
+static_assert(offsetof(ShadowLight, edge2AndRange) == 32);
+static_assert(offsetof(ShadowLight, centreAndIntensity) == 48);
+static_assert(sizeof(ShadowLight) == 64);
+
+// RT shadows' trace (rt/shadow_trace.slang) push constants
+struct alignas(16) ShadowTracePush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> seed{};
+    alignas(16) std::array<float, 4> cameraPos{};
+};
+static_assert(offsetof(ShadowTracePush, extent) == 0);
+static_assert(offsetof(ShadowTracePush, seed) == 16);
+static_assert(offsetof(ShadowTracePush, cameraPos) == 32);
+static_assert(sizeof(ShadowTracePush) == 48);
+
+// RT shadows' filter (rt/shadow_filter.slang) push constants
+struct alignas(16) ShadowFilterPush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> seed{};
+};
+static_assert(offsetof(ShadowFilterPush, extent) == 0);
+static_assert(offsetof(ShadowFilterPush, seed) == 16);
+static_assert(sizeof(ShadowFilterPush) == 32);
 
 } // namespace ohao::gpu::shared

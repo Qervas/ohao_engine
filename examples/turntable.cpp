@@ -204,6 +204,7 @@ int main(int argc, char* argv[]) {
 
     renderer.setRenderMode(rtMode);
     applyDenoiseOverride(renderer, cli);
+    applyQuality(renderer, cli);
 
     std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
 

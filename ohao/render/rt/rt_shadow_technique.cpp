@@ -4,25 +4,104 @@
 #include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace ohao {
 
-RTShadowTechnique::~RTShadowTechnique() {
-    destroy();
+namespace shared = gpu::shared;
+
+namespace {
+
+std::vector<char> readFile(const std::string& path) {
+    const std::string name = path.substr(path.find_last_of("/\\") + 1);
+    for (const std::string& p : {path, "build/shaders/" + name, "build/Release/bin/shaders/" + name}) {
+        std::ifstream file(p, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) continue;
+        const auto size = static_cast<std::size_t>(file.tellg());
+        std::vector<char> buffer(size);
+        file.seekg(0);
+        file.read(buffer.data(), static_cast<std::streamsize>(size));
+        return buffer;
+    }
+    return {};
 }
 
-bool RTShadowTechnique::loadFunctionPointers() {
-    vkCreateRayTracingPipelinesKHR =
-        (PFN_vkCreateRayTracingPipelinesKHR)vkGetDeviceProcAddr(m_device, "vkCreateRayTracingPipelinesKHR");
-    vkGetRayTracingShaderGroupHandlesKHR =
-        (PFN_vkGetRayTracingShaderGroupHandlesKHR)vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupHandlesKHR");
-    vkCmdTraceRaysKHR =
-        (PFN_vkCmdTraceRaysKHR)vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR");
-    vkGetBufferDeviceAddressFn =
-        (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(m_device, "vkGetBufferDeviceAddress");
+VkShaderModule createModule(VkDevice device, const std::vector<char>& code) {
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = code.size();
+    ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
+    VkShaderModule mod = VK_NULL_HANDLE;
+    vkCreateShaderModule(device, &ci, nullptr, &mod);
+    return mod;
+}
 
-    return vkCreateRayTracingPipelinesKHR && vkGetRayTracingShaderGroupHandlesKHR &&
-           vkCmdTraceRaysKHR && vkGetBufferDeviceAddressFn;
+VkDescriptorSetLayoutBinding layoutBinding(uint32_t index, VkDescriptorType type, VkShaderStageFlags stages) {
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = index;
+    b.descriptorType = type;
+    b.descriptorCount = 1;
+    b.stageFlags = stages;
+    return b;
+}
+
+VkWriteDescriptorSet descriptorWrite(VkDescriptorSet set, uint32_t index, VkDescriptorType type) {
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.dstBinding = index;
+    w.descriptorCount = 1;
+    w.descriptorType = type;
+    return w;
+}
+
+std::array<float, 4> f4(float x, float y, float z, float w) { return {x, y, z, w}; }
+std::array<float, 4> f4(glm::vec3 v, float w) { return {v.x, v.y, v.z, w}; }
+std::array<float, 4> f4(float v) { return {v, v, v, v}; }
+std::array<uint32_t, 4> u4(uint32_t x, uint32_t y, uint32_t z, uint32_t w) { return {x, y, z, w}; }
+
+// A light as the trace samples it (see ShadowLight in shaders/shared/layout.json).
+shared::ShadowLight toGpu(const render::LightDesc& d) {
+    shared::ShadowLight g{};
+    switch (d.kind) {
+    case render::LightKind::Directional: {   // radius is the angular radius in radians
+        const glm::vec3 toLight = -glm::normalize(d.direction);
+        g.positionAndType = f4(d.direction, 0.0f);
+        g.edge1AndRadius = f4(0.0f, 0.0f, 0.0f, d.radius);
+        g.edge2AndRange = f4(0.0f);
+        g.centreAndIntensity = f4(toLight, d.intensity);
+        break;
+    }
+    case render::LightKind::AreaRect: {      // position is a corner, as the path tracer samples it
+        const glm::vec3 half = 0.5f * (d.areaEdge1 + d.areaEdge2);
+        g.positionAndType = f4(d.position, 2.0f);
+        g.edge1AndRadius = f4(d.areaEdge1, glm::length(half));
+        g.edge2AndRange = f4(d.areaEdge2, 0.0f);
+        g.centreAndIntensity = f4(d.position + half, d.intensity);
+        break;
+    }
+    default:                                 // Point, Spot: a sphere of `radius`
+        g.positionAndType = f4(d.position, 1.0f);
+        g.edge1AndRadius = f4(0.0f, 0.0f, 0.0f, d.radius);
+        g.edge2AndRange = f4(0.0f, 0.0f, 0.0f, d.range);
+        g.centreAndIntensity = f4(d.position, d.intensity);
+        break;
+    }
+    return g;
+}
+
+constexpr VkFormat kMetaFormat = VK_FORMAT_R32G32_UINT;
+constexpr VkFormat kVisFormat = VK_FORMAT_R32G32_UINT;   // eight 8-bit visibility channels
+constexpr VkFormat kRefFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+constexpr VkImageUsageFlags kScreenUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+constexpr VkPipelineStageFlags kReaders = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+} // namespace
+
+RTShadowTechnique::~RTShadowTechnique() {
+    destroy();
 }
 
 uint32_t RTShadowTechnique::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -35,32 +114,6 @@ uint32_t RTShadowTechnique::findMemoryType(uint32_t typeFilter, VkMemoryProperty
     return UINT32_MAX;
 }
 
-VkDeviceAddress RTShadowTechnique::getBufferDeviceAddress(VkBuffer buffer) {
-    VkBufferDeviceAddressInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    info.buffer = buffer;
-    return vkGetBufferDeviceAddressFn(m_device, &info);
-}
-
-static std::vector<char> readFile(const std::string& path) {
-    std::vector<std::string> searchPaths = {
-        path,
-        "build/shaders/" + path.substr(path.find_last_of("/\\") + 1),
-        "build/Release/bin/shaders/" + path.substr(path.find_last_of("/\\") + 1),
-    };
-    for (const auto& p : searchPaths) {
-        std::ifstream file(p, std::ios::ate | std::ios::binary);
-        if (file.is_open()) {
-            size_t size = (size_t)file.tellg();
-            std::vector<char> buffer(size);
-            file.seekg(0);
-            file.read(buffer.data(), size);
-            return buffer;
-        }
-    }
-    return {};
-}
-
 bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
                               uint32_t width, uint32_t height) {
     m_device = device;
@@ -68,28 +121,24 @@ bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_width = width;
     m_height = height;
 
-    if (!loadFunctionPointers()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to load RT function pointers");
+    if (!createScreenImages() || !createImage(m_refDummy, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, 1, 1)) {
+        OHAO_LOG(Error, render, "RTShadow: failed to create its images");
         return false;
     }
-
-    if (!createOutputImage()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to create output image");
+    if (!createSlots()) {
+        OHAO_LOG(Error, render, "RTShadow: failed to create its light buffers");
         return false;
     }
-
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "RTShadow: failed to create descriptor resources");
         return false;
     }
-
-    if (!createRTPipeline()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to create RT pipeline");
+    if (!createTracePipeline()) {
+        OHAO_LOG(Error, render, "RTShadow: failed to create the trace pipeline");
         return false;
     }
-
-    if (!createShaderBindingTable()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to create SBT");
+    if (!createFilterPipeline()) {
+        OHAO_LOG(Error, render, "RTShadow: failed to create the filter pipeline");
         return false;
     }
 
@@ -97,503 +146,399 @@ bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
     return true;
 }
 
-bool RTShadowTechnique::createOutputImage() {
-    // Shadow mask: RGBA8_UNORM, one channel per shadow light — 0=shadowed, 1=lit
+bool RTShadowTechnique::createImage(Image& img, VkFormat format, VkImageUsageFlags usage, uint32_t width,
+                                    uint32_t height) {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    imageInfo.extent = {m_width, m_height, 1};
+    imageInfo.format = format;
+    imageInfo.extent = {std::max(width, 1u), std::max(height, 1u), 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.usage = usage;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_shadowMask) != VK_SUCCESS) return false;
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &img.image) != VK_SUCCESS) return false;
 
     VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(m_device, m_shadowMask, &memReqs);
-
+    vkGetImageMemoryRequirements(m_device, img.image, &memReqs);
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memReqs.size;
     allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_shadowMaskMemory) != VK_SUCCESS) return false;
-    vkBindImageMemory(m_device, m_shadowMask, m_shadowMaskMemory, 0);
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &img.memory) != VK_SUCCESS) return false;
+    vkBindImageMemory(m_device, img.image, img.memory, 0);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_shadowMask;
+    viewInfo.image = img.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.format = format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    img.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    return vkCreateImageView(m_device, &viewInfo, nullptr, &img.view) == VK_SUCCESS;
+}
 
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_shadowMaskView) == VK_SUCCESS;
+void RTShadowTechnique::destroyImage(Image& img) {
+    if (img.view) vkDestroyImageView(m_device, img.view, nullptr);
+    if (img.image) vkDestroyImage(m_device, img.image, nullptr);
+    if (img.memory) vkFreeMemory(m_device, img.memory, nullptr);
+    img = Image{};
+}
+
+bool RTShadowTechnique::createScreenImages() {
+    for (Image& m : m_meta)
+        if (!createImage(m, kMetaFormat, kScreenUsage, m_width, m_height)) return false;
+    for (Image& v : m_vis)
+        if (!createImage(v, kVisFormat, kScreenUsage, m_width, m_height)) return false;
+    m_historyValid = false;
+    return true;
+}
+
+void RTShadowTechnique::destroyScreenImages() {
+    for (Image& i : m_meta) destroyImage(i);
+    for (Image& i : m_vis) destroyImage(i);
+    destroyImage(m_refLo);
+    destroyImage(m_refHi);
+}
+
+bool RTShadowTechnique::ensureReferenceImages() {
+    if (m_refLo.image) return true;
+    constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    return createImage(m_refLo, kRefFormat, usage, m_width, m_height) &&
+           createImage(m_refHi, kRefFormat, usage, m_width, m_height);
+}
+
+bool RTShadowTechnique::createSlots() {
+    for (Slot& s : m_slots) {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = kCounterOffset + 16;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (vkCreateBuffer(m_device, &bi, nullptr, &s.buffer) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(m_device, s.buffer, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        // Every pixel reads the lights: device-local memory the host can write (resizable
+        // BAR) when there is some, else system memory, which every read crosses the bus for.
+        constexpr VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (ai.memoryTypeIndex == UINT32_MAX) ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, host);
+        if (ai.memoryTypeIndex == UINT32_MAX) return false;
+        if (vkAllocateMemory(m_device, &ai, nullptr, &s.memory) != VK_SUCCESS) return false;
+        vkBindBufferMemory(m_device, s.buffer, s.memory, 0);
+        if (vkMapMemory(m_device, s.memory, 0, VK_WHOLE_SIZE, 0, &s.mapped) != VK_SUCCESS) return false;
+        std::memset(s.mapped, 0, static_cast<std::size_t>(bi.size));
+    }
+    return true;
 }
 
 bool RTShadowTechnique::createDescriptorResources() {
-    // Layout: binding 0 = TLAS, binding 1 = shadow mask (storage image),
-    //         binding 2 = GBuffer position, binding 3 = GBuffer normal
-    VkDescriptorSetLayoutBinding bindings[4] = {};
-
-    // 0: Acceleration structure
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 1: Shadow mask output (storage image)
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 2: GBuffer position (sampled image)
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 3: GBuffer normal (sampled image)
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 4;
-    layoutInfo.pBindings = bindings;
-
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
-        return false;
-
-    // Pool
-    VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * MAX_FRAMES_IN_FLIGHT},
+    constexpr VkShaderStageFlags comp = VK_SHADER_STAGE_COMPUTE_BIT;
+    const VkDescriptorSetLayoutBinding trace[] = {
+        layoutBinding(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, comp),
+        layoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, comp),    // meta
+        layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),    // G-buffer position
+        layoutBinding(3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),    // G-buffer normal
+        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, comp),   // lights
+        layoutBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, comp),   // dropped-pixel counter
+        layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, comp),    // reference mean, lights 0-3
+        layoutBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, comp),    // reference mean, lights 4-7
+        layoutBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, comp),    // visibility out (reference)
     };
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
-    poolInfo.poolSizeCount = 3;
-    poolInfo.pPoolSizes = poolSizes;
-
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
-        return false;
-
-    // Allocate set
-    VkDescriptorSetAllocateInfo setInfo{};
-    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    setInfo.descriptorPool = m_descriptorPool;
-    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
-    layouts.fill(m_descriptorSetLayout);
-    setInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-    setInfo.pSetLayouts = layouts.data();
-
-    return vkAllocateDescriptorSets(m_device, &setInfo, m_descriptorSets.data()) == VK_SUCCESS;
-}
-
-bool RTShadowTechnique::createRTPipeline() {
-    // Load shader SPVs
-    auto rgenCode = readFile("bin/shaders/rt_rt_shadow.rgen.spv");
-    auto rmissCode = readFile("bin/shaders/rt_rt_shadow.rmiss.spv");
-    auto rahitCode = readFile("bin/shaders/rt_rt_shadow.rahit.spv");
-
-    if (rgenCode.empty() || rmissCode.empty() || rahitCode.empty()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to load RT shader SPVs");
-        return false;
+    const VkDescriptorSetLayoutBinding filter[] = {
+        layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),   // meta, this frame
+        layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),   // meta, last frame
+        layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),   // velocity
+        layoutBinding(3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, comp),   // history: last frame's visibility
+        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, comp),   // visibility out
+    };
+    for (auto [bindings, count, layout] :
+         {std::tuple{trace, 9u, &m_traceSetLayout}, std::tuple{filter, 5u, &m_filterSetLayout}}) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = count;
+        li.pBindings = bindings;
+        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
     }
 
-    // Create shader modules
-    auto createModule = [&](const std::vector<char>& code) -> VkShaderModule {
-        VkShaderModuleCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        ci.codeSize = code.size();
-        ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        vkCreateShaderModule(m_device, &ci, nullptr, &mod);
-        return mod;
+    const VkDescriptorPoolSize poolSizes[] = {
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, (4 + 1) * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, (2 + 4) * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * MAX_FRAMES_IN_FLIGHT},
     };
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 2 * MAX_FRAMES_IN_FLIGHT;
+    poolInfo.poolSizeCount = 4;
+    poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
 
-    VkShaderModule rgenModule = createModule(rgenCode);
-    VkShaderModule rmissModule = createModule(rmissCode);
-    VkShaderModule rahitModule = createModule(rahitCode);
+    for (auto [layout, sets] : {std::pair{m_traceSetLayout, &m_traceSets}, std::pair{m_filterSetLayout, &m_filterSets}}) {
+        std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
+        layouts.fill(layout);
+        VkDescriptorSetAllocateInfo setInfo{};
+        setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        setInfo.descriptorPool = m_descriptorPool;
+        setInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+        setInfo.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(m_device, &setInfo, sets->data()) != VK_SUCCESS) return false;
+    }
+    return true;
+}
 
-    // Shader stages
-    VkPipelineShaderStageCreateInfo stages[3] = {};
-
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    stages[0].module = rgenModule;
-    stages[0].pName = "main";
-
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-    stages[1].module = rmissModule;
-    stages[1].pName = "main";
-
-    stages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[2].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-    stages[2].module = rahitModule;
-    stages[2].pName = "main";
-
-    // Shader groups
-    VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
-
-    // Group 0: Ray generation
-    groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[0].generalShader = 0;  // rgen stage index
-    groups[0].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[0].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Group 1: Miss
-    groups[1].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[1].generalShader = 1;  // miss stage index
-    groups[1].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[1].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Group 2: Hit (any-hit for shadow termination)
-    groups[2].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-    groups[2].generalShader = VK_SHADER_UNUSED_KHR;
-    groups[2].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[2].anyHitShader = 2;   // rahit stage index
-    groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Pipeline layout with push constants
+bool RTShadowTechnique::createComputePipeline(const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
+                                              uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline) {
+    const auto code = readFile(std::string("bin/shaders/") + spirv);
+    if (code.empty()) {
+        OHAO_LOG(Error, render, "RTShadow: failed to load {}", spirv);
+        return false;
+    }
+    const VkShaderModule module = createModule(m_device, code);
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(ShadowPushConstants);
-
+    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.size = pushBytes;
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    layoutInfo.pSetLayouts = &setLayout;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
-
-    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTShadow: failed to create pipeline layout");
-        return false;
+    VkResult result = vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &layout);
+    if (result == VK_SUCCESS) {
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = module;
+        ci.stage.pName = entry;
+        ci.layout = layout;
+        result = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline);
     }
-
-    // Create RT pipeline
-    VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-    pipelineInfo.stageCount = 3;
-    pipelineInfo.pStages = stages;
-    pipelineInfo.groupCount = 3;
-    pipelineInfo.pGroups = groups;
-    pipelineInfo.maxPipelineRayRecursionDepth = 1;  // shadow rays don't recurse
-    pipelineInfo.layout = m_pipelineLayout;
-
-    VkResult result = vkCreateRayTracingPipelinesKHR(
-        m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_rtPipeline);
-
-    // Cleanup shader modules
-    vkDestroyShaderModule(m_device, rgenModule, nullptr);
-    vkDestroyShaderModule(m_device, rmissModule, nullptr);
-    vkDestroyShaderModule(m_device, rahitModule, nullptr);
-
-    if (result != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTShadow: failed to create RT pipeline (err={})", static_cast<int>(result));
-        return false;
-    }
-
-    OHAO_LOG(Debug, render, "RTShadow: RT pipeline created");
-    return true;
+    vkDestroyShaderModule(m_device, module, nullptr);
+    if (result != VK_SUCCESS) OHAO_LOG(Error, render, "RTShadow: {} pipeline failed (err={})", entry, static_cast<int>(result));
+    return result == VK_SUCCESS;
 }
 
-bool RTShadowTechnique::createShaderBindingTable() {
-    // Query RT pipeline properties for handle size/alignment
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps{};
-    rtProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
-    VkPhysicalDeviceProperties2 props2{};
-    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    props2.pNext = &rtProps;
-    vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
+bool RTShadowTechnique::createTracePipeline() {
+    return createComputePipeline("rt_shadow_trace.slang.spv", "trace", m_traceSetLayout,
+                                 sizeof(shared::ShadowTracePush), m_tracePipelineLayout, m_tracePipeline);
+}
 
-    uint32_t handleSize = rtProps.shaderGroupHandleSize;
-    uint32_t handleAlignment = rtProps.shaderGroupHandleAlignment;
-    uint32_t baseAlignment = rtProps.shaderGroupBaseAlignment;
+bool RTShadowTechnique::createFilterPipeline() {
+    return createComputePipeline("rt_shadow_filter.slang.spv", "filter", m_filterSetLayout,
+                                 sizeof(shared::ShadowFilterPush), m_filterPipelineLayout, m_filterPipeline);
+}
 
-    // Aligned handle size (each entry in the SBT must be aligned)
-    uint32_t handleSizeAligned = (handleSize + handleAlignment - 1) & ~(handleAlignment - 1);
+void RTShadowTechnique::transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
+                                   VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess,
+                                   bool discard) {
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcAccessMask = srcAccess;
+    b.dstAccessMask = dstAccess;
+    b.oldLayout = discard ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout;
+    b.newLayout = layout;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = img.image;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, src, dst, 0, 0, nullptr, 0, nullptr, 1, &b);
+    img.layout = layout;
+}
 
-    // 3 groups: rgen, miss, hit
-    uint32_t groupCount = 3;
-    uint32_t sbtSize = groupCount * handleSizeAligned;
-
-    // Get shader group handles from the pipeline
-    std::vector<uint8_t> handles(groupCount * handleSize);
-    if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
-                                              handles.size(), handles.data()) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTShadow: failed to get shader group handles");
-        return false;
-    }
-
-    // Create SBT buffer
-    // Each region must be baseAlignment-aligned
-    uint32_t rgenSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t missSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t totalSize = rgenSize + missSize + hitSize;
-
-    VkBufferCreateInfo bufInfo{};
-    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = totalSize;
-    bufInfo.usage = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_sbtBuffer) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, m_sbtBuffer, &memReqs);
-
-    VkMemoryAllocateFlagsInfo allocFlags{};
-    allocFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    allocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &allocFlags;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_sbtMemory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(m_device, m_sbtBuffer, m_sbtMemory, 0);
-
-    // Write handles into SBT buffer
-    void* mapped;
-    vkMapMemory(m_device, m_sbtMemory, 0, totalSize, 0, &mapped);
-    memset(mapped, 0, totalSize);
-
-    uint8_t* dst = static_cast<uint8_t*>(mapped);
-    // Rgen at offset 0
-    memcpy(dst, handles.data() + 0 * handleSize, handleSize);
-    // Miss at offset rgenSize
-    memcpy(dst + rgenSize, handles.data() + 1 * handleSize, handleSize);
-    // Hit at offset rgenSize + missSize
-    memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
-
-    vkUnmapMemory(m_device, m_sbtMemory);
-
-    // Set up strided device address regions
-    VkDeviceAddress sbtAddr = getBufferDeviceAddress(m_sbtBuffer);
-
-    m_rgenRegion.deviceAddress = sbtAddr;
-    // A raygen region holds exactly one record, and the spec requires its size
-    // to equal its stride (VUID-vkCmdTraceRaysKHR-size-04023).
-    m_rgenRegion.stride = rgenSize;
-    m_rgenRegion.size = rgenSize;
-
-    m_missRegion.deviceAddress = sbtAddr + rgenSize;
-    m_missRegion.stride = handleSizeAligned;
-    m_missRegion.size = missSize;
-
-    m_hitRegion.deviceAddress = sbtAddr + rgenSize + missSize;
-    m_hitRegion.stride = handleSizeAligned;
-    m_hitRegion.size = hitSize;
-
-    m_callRegion = {};  // not used
-
-    OHAO_LOG(Debug, render, "RTShadow: SBT created (handleSize={}, aligned={})",
-             handleSize, handleSizeAligned);
-    return true;
+void RTShadowTechnique::collectSlot(uint32_t slot) {
+    Slot& s = m_slots[slot];
+    if (!s.pending) return;
+    uint32_t pixels = 0;
+    std::memcpy(&pixels, static_cast<const uint8_t*>(s.mapped) + kCounterOffset, sizeof(pixels));
+    if (!m_latestDropped || s.frame >= m_latestDropped->frame) m_latestDropped = Dropped{s.frame, pixels};
+    s.pending = false;
 }
 
 void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     m_rendered = false;
-    if (!m_rtPipeline || input.tlas == VK_NULL_HANDLE) return;
-    if (input.lights.empty()) return;   // no light casts shadows: nothing reads the mask
+    if (!m_tracePipeline || input.tlas == VK_NULL_HANDLE) return;
+    if (input.lights.empty()) return;   // no light casts shadows: nothing reads the visibility
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
-    const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
+    const bool reference = input.quality == RenderQuality::Reference;
+    m_quality = input.quality;
+    m_lightCount = static_cast<uint32_t>(std::min<std::size_t>(input.lights.size(), shared::kShadowMaxLights));
+    m_frameIndex = input.frameIndex;
+    m_renderSeed = input.renderSeed;
+    m_slot = input.frameSlot;
+    m_velocityView = input.velocityBuffer;
+    if (reference && !ensureReferenceImages()) return;
+    if (!reference && m_velocityView == VK_NULL_HANDLE) return;
 
-    // Update descriptor set with current frame's data
+    // This slot's frame has finished (the renderer waited on its fence): read its counter,
+    // then this frame's lights and a zeroed counter.
+    collectSlot(m_slot);
+    Slot& slot = m_slots[m_slot];
+    auto* lights = static_cast<shared::ShadowLight*>(slot.mapped);
+    for (uint32_t i = 0; i < m_lightCount; ++i) lights[i] = toGpu(input.lights[i]);
+    std::memset(static_cast<uint8_t*>(slot.mapped) + kCounterOffset, 0, sizeof(uint32_t));
+    slot.pending = !reference;
+    slot.frame = input.frameNumber;
+
+    // Realtime: this frame writes the other half of each pair; reference keeps none of it.
+    if (!reference) m_cur ^= 1u;
+    else m_historyValid = false;
+    Image& meta = m_meta[m_cur];
+    Image& vis = m_vis[m_cur];   // written by this frame's trace (reference) or filter (realtime)
+    for (Image* img : {&meta, &vis})
+        transition(cmd, *img, VK_IMAGE_LAYOUT_GENERAL, kReaders, VK_ACCESS_SHADER_READ_BIT,
+                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, true);
+    if (m_refDummy.layout != VK_IMAGE_LAYOUT_GENERAL)
+        transition(cmd, m_refDummy, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, true);
+    if (reference) {
+        // The running mean reads last frame's; frame 0 after a reset (or a new image) reads none.
+        const bool keep = input.frameIndex > 0 && m_refLo.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        for (Image* ref : {&m_refLo, &m_refHi})
+            transition(cmd, *ref, VK_IMAGE_LAYOUT_GENERAL, kReaders, VK_ACCESS_SHADER_READ_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, !keep);
+    }
+
+    const VkDescriptorSet set = m_traceSets[m_slot];
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    VkAccelerationStructureKHR tlas = input.tlas;
+    const VkAccelerationStructureKHR tlas = input.tlas;
     asWrite.pAccelerationStructures = &tlas;
-
-    VkDescriptorImageInfo shadowMaskInfo{};
-    shadowMaskInfo.imageView = m_shadowMaskView;
-    shadowMaskInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    // Create a sampler for GBuffer reads
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (m_gbufferSampler == VK_NULL_HANDLE &&
-        vkCreateSampler(m_device, &samplerInfo, nullptr, &m_gbufferSampler) != VK_SUCCESS) {
-        return;
-    }
-    const VkSampler sampler = m_gbufferSampler;
-
-    VkDescriptorImageInfo posInfo{};
-    posInfo.imageView = input.positionBuffer;
-    posInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    posInfo.sampler = sampler;
-
-    VkDescriptorImageInfo normalInfo{};
-    normalInfo.imageView = input.normalBuffer;
-    normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    normalInfo.sampler = sampler;
-
-    VkWriteDescriptorSet writes[4] = {};
-
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    const VkDescriptorImageInfo metaInfo{VK_NULL_HANDLE, meta.view, VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo posInfo{VK_NULL_HANDLE, input.positionBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo normalInfo{VK_NULL_HANDLE, input.normalBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorBufferInfo lightsInfo{slot.buffer, 0, kLightBytes};
+    const VkDescriptorBufferInfo counterInfo{slot.buffer, kCounterOffset, 16};
+    const VkDescriptorImageInfo refLoInfo{VK_NULL_HANDLE, reference ? m_refLo.view : m_refDummy.view,
+                                          VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo refHiInfo{VK_NULL_HANDLE, reference ? m_refHi.view : m_refDummy.view,
+                                          VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorImageInfo visInfo{VK_NULL_HANDLE, vis.view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[9] = {
+        descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR), descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),              descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),             descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),              descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+    };
     writes[0].pNext = &asWrite;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = set;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].pImageInfo = &shadowMaskInfo;
-
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = set;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorCount = 1;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &metaInfo;
     writes[2].pImageInfo = &posInfo;
-
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = set;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[3].pImageInfo = &normalInfo;
+    writes[4].pBufferInfo = &lightsInfo;
+    writes[5].pBufferInfo = &counterInfo;
+    writes[6].pImageInfo = &refLoInfo;
+    writes[7].pImageInfo = &refHiInfo;
+    writes[8].pImageInfo = &visInfo;
+    vkUpdateDescriptorSets(m_device, 9, writes, 0, nullptr);
 
-    vkUpdateDescriptorSets(m_device, 4, writes, 0, nullptr);
-
-    // Transition shadow mask to GENERAL for storage image write
-    VkImageMemoryBarrier toGeneral{};
-    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toGeneral.srcAccessMask = 0;
-    toGeneral.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toGeneral.image = m_shadowMask;
-    toGeneral.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-        0, 0, nullptr, 0, nullptr, 1, &toGeneral);
-
-    // Bind RT pipeline and descriptors
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipelineLayout, 0, 1, &set, 0, nullptr);
-
-    // Push constants: the shadow lights, in channel order
-    ShadowPushConstants pc{};
-    const uint32_t lightCount = static_cast<uint32_t>(std::min<std::size_t>(input.lights.size(), render::kMaxShadowLights));
-    for (uint32_t i = 0; i < lightCount; ++i) {
-        const render::LightDesc& d = input.lights[i];
-        ShadowLightGpu& g = pc.lights[i];
-        switch (d.kind) {
-        case render::LightKind::Directional:
-            // radius is the angular radius in radians for a directional light
-            g.positionAndType = glm::vec4(d.direction, 0.0f);
-            g.edge1AndRadius = glm::vec4(0.0f, 0.0f, 0.0f, d.radius);
-            g.edge2AndRange = glm::vec4(0.0f);
-            break;
-        case render::LightKind::AreaRect:   // position is a corner, as the path tracer samples it
-            g.positionAndType = glm::vec4(d.position, 2.0f);
-            g.edge1AndRadius = glm::vec4(d.areaEdge1, 0.0f);
-            g.edge2AndRange = glm::vec4(d.areaEdge2, 0.0f);
-            break;
-        default:                            // Point, Spot: a sphere of `radius`
-            g.positionAndType = glm::vec4(d.position, 1.0f);
-            g.edge1AndRadius = glm::vec4(0.0f, 0.0f, 0.0f, d.radius);
-            g.edge2AndRange = glm::vec4(0.0f, 0.0f, 0.0f, d.range);
-            break;
-        }
-    }
-    pc.params = glm::uvec4(input.width, input.height, lightCount, raysPerLight(m_raysPerPixel, lightCount));
-    pc.seed = glm::uvec4(input.renderSeed, input.frameIndex, 0u, 0u);
-
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                       0, sizeof(ShadowPushConstants), &pc);
-
-    // Trace rays!
-    vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                      input.width, input.height, 1);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipelineLayout, 0, 1, &set, 0, nullptr);
+    shared::ShadowTracePush pc{};
+    pc.extent = u4(input.width, input.height, m_lightCount,
+                           std::min(input.maxLightsPerPixel, shared::kShadowLightsPerPixel));
+    pc.seed = u4(input.renderSeed, input.frameIndex, reference ? 1u : 0u,
+                         reference ? shared::kShadowReferenceRays : 1u);
+    pc.cameraPos = f4(input.cameraPos, 0.0f);
+    vkCmdPushConstants(cmd, m_tracePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (input.width + 7) / 8, (input.height + 7) / 8, 1);
     m_rendered = true;
 
-    // Transition shadow mask to SHADER_READ_ONLY for the lighting pass to sample
-    VkImageMemoryBarrier toRead{};
-    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.image = m_shadowMask;
-    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toRead);
+    if (reference) {
+        // The means stay in GENERAL for the next frame's trace; lighting reads the packed copy.
+        transition(cmd, vis, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, false);
+    } else {
+        transition(cmd, meta, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, false);
+    }
+}
 
+void RTShadowTechnique::filter(VkCommandBuffer cmd) {
+    if (!filters()) return;
+    const uint32_t prev = m_cur ^ 1u;
+    // History: none on the first frame after a reset, or before this pair holds a frame.
+    if (m_frameIndex == 0) m_historyValid = false;
+
+    // Last frame's halves are read as sampled images; one never written gets a layout only.
+    // This frame's visibility is in GENERAL since render().
+    for (Image* h : {&m_meta[prev], &m_vis[prev]})
+        if (h->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            transition(cmd, *h, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, true);
+
+    const VkDescriptorSet set = m_filterSets[m_slot];
+    constexpr VkImageLayout ro = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkDescriptorImageInfo infos[5] = {
+        {VK_NULL_HANDLE, m_meta[m_cur].view, ro},
+        {VK_NULL_HANDLE, m_meta[prev].view, ro},
+        {VK_NULL_HANDLE, m_velocityView, ro},
+        {VK_NULL_HANDLE, m_vis[prev].view, ro},
+        {VK_NULL_HANDLE, m_vis[m_cur].view, VK_IMAGE_LAYOUT_GENERAL},
+    };
+    VkWriteDescriptorSet writes[5];
+    for (uint32_t i = 0; i < 5; ++i) {
+        writes[i] = descriptorWrite(set, i, i < 4 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_filterPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_filterPipelineLayout, 0, 1, &set, 0, nullptr);
+    shared::ShadowFilterPush pc{};
+    pc.extent = u4(m_width, m_height, m_lightCount, m_historyValid ? m_historyFrames : 0u);
+    pc.seed = u4(m_renderSeed, m_frameIndex, 0u, 0u);
+    vkCmdPushConstants(cmd, m_filterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    const uint32_t tile = shared::kShadowFilterTile;
+    vkCmdDispatch(cmd, (m_width + tile - 1) / tile, (m_height + tile - 1) / tile, 1);
+
+    transition(cmd, m_vis[m_cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+               VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+               VK_ACCESS_SHADER_READ_BIT, false);
+    m_historyFrames = m_historyValid ? m_historyFrames + 1 : 1;
+    m_historyValid = true;
 }
 
 void RTShadowTechnique::resize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return;
     m_width = width;
     m_height = height;
-
-    // Recreate output image
-    if (m_shadowMaskView) { vkDestroyImageView(m_device, m_shadowMaskView, nullptr); m_shadowMaskView = VK_NULL_HANDLE; }
-    if (m_shadowMask) { vkDestroyImage(m_device, m_shadowMask, nullptr); m_shadowMask = VK_NULL_HANDLE; }
-    if (m_shadowMaskMemory) { vkFreeMemory(m_device, m_shadowMaskMemory, nullptr); m_shadowMaskMemory = VK_NULL_HANDLE; }
-
-    createOutputImage();
+    destroyScreenImages();
+    createScreenImages();   // the reference means come back on first use
 }
 
 ShadowOutput RTShadowTechnique::getOutput() const {
-    return {m_shadowMask, m_shadowMaskView};
+    return {m_vis[m_cur].view};
 }
 
 void RTShadowTechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
 
-    if (m_gbufferSampler) { vkDestroySampler(m_device, m_gbufferSampler, nullptr); m_gbufferSampler = VK_NULL_HANDLE; }
-
-    if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
-    if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
-    if (m_rtPipeline) { vkDestroyPipeline(m_device, m_rtPipeline, nullptr); m_rtPipeline = VK_NULL_HANDLE; }
-    if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
+    if (m_tracePipeline) { vkDestroyPipeline(m_device, m_tracePipeline, nullptr); m_tracePipeline = VK_NULL_HANDLE; }
+    if (m_filterPipeline) { vkDestroyPipeline(m_device, m_filterPipeline, nullptr); m_filterPipeline = VK_NULL_HANDLE; }
+    for (VkPipelineLayout* l : {&m_tracePipelineLayout, &m_filterPipelineLayout})
+        if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     if (m_descriptorPool) { vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); m_descriptorPool = VK_NULL_HANDLE; }
-    if (m_descriptorSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr); m_descriptorSetLayout = VK_NULL_HANDLE; }
-    if (m_shadowMaskView) { vkDestroyImageView(m_device, m_shadowMaskView, nullptr); m_shadowMaskView = VK_NULL_HANDLE; }
-    if (m_shadowMask) { vkDestroyImage(m_device, m_shadowMask, nullptr); m_shadowMask = VK_NULL_HANDLE; }
-    if (m_shadowMaskMemory) { vkFreeMemory(m_device, m_shadowMaskMemory, nullptr); m_shadowMaskMemory = VK_NULL_HANDLE; }
-
-    m_descriptorSets = {};
+    for (VkDescriptorSetLayout* l : {&m_traceSetLayout, &m_filterSetLayout})
+        if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
+    destroyScreenImages();
+    destroyImage(m_refDummy);
+    for (Slot& s : m_slots) {
+        if (s.buffer) vkDestroyBuffer(m_device, s.buffer, nullptr);
+        if (s.memory) vkFreeMemory(m_device, s.memory, nullptr);
+        s = Slot{};
+    }
+    m_traceSets = {};
+    m_filterSets = {};
+    m_device = VK_NULL_HANDLE;
 }
 
 } // namespace ohao

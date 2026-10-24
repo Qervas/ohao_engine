@@ -33,7 +33,9 @@ public:
                         VkImageView brdfLUT, VkSampler iblSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
-    void setRTShadowMask(VkImageView view, VkSampler sampler);
+    // RT shadow visibility (RG32UI, eight 8-bit channels: render/rt/render_technique.hpp's
+    // ShadowOutput). Null: no RT shadows this frame (CSM, if bound, shadows the directional lights).
+    void setRTShadowMask(VkImageView visibility);
     void setEnvMap(VkImageView view, VkSampler sampler);
 
     // Get output
@@ -104,7 +106,6 @@ private:
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
     VkImageView m_rtShadowView{VK_NULL_HANDLE};
-    VkSampler m_rtShadowSampler{VK_NULL_HANDLE};
     VkImageView m_envMapView{VK_NULL_HANDLE};
     VkSampler m_envMapSampler{VK_NULL_HANDLE};
 
@@ -112,6 +113,10 @@ private:
     VkImage m_dummyImage{VK_NULL_HANDLE};
     VkDeviceMemory m_dummyMemory{VK_NULL_HANDLE};
     VkImageView m_dummyView{VK_NULL_HANDLE};
+    // 1x1 RG32UI stand-in for the RT shadow visibility (an integer binding takes an integer view)
+    VkImage m_dummyUintImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_dummyUintMemory{VK_NULL_HANDLE};
+    VkImageView m_dummyUintView{VK_NULL_HANDLE};
     VkBuffer m_dummyBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_dummyBufferMemory{VK_NULL_HANDLE};
     bool m_dummyImageTransitioned{false};

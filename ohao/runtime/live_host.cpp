@@ -24,7 +24,8 @@ reflect::Diagnostic error(std::string code, std::string message) {
     return d;
 }
 
-// The window's live post settings, kept across a lockstep capture (which sets its own).
+// The window's live post settings, kept across a lockstep capture (which sets its own, and
+// its own quality). A realtime capture is the next live frame, with the live settings.
 struct PostState {
     bool bloom{false}, taa{false}, ssao{false};
     float exposure{1.0f};
@@ -197,6 +198,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         PostState live;
         auto* pp = m_renderer->getDeferredRenderer() ? m_renderer->getDeferredRenderer()->getPostProcessing() : nullptr;
         if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->getExposure()};
+        const RenderQuality liveQuality = m_renderer->renderQuality();
         CaptureSettings settings;
         settings.reset = true;
         settings.defaultExposure = m_defaultExposure;
@@ -209,6 +211,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
             pp->setSSAOEnabled(live.ssao);
             pp->setExposure(live.exposure);
         }
+        m_renderer->setRenderQuality(liveQuality);
         // The capture's last frame was presented and shows the current world: no frame
         // follows until something changes (one in flight would delay the next capture's reset).
         m_renderedChange = m_session->changeCount();

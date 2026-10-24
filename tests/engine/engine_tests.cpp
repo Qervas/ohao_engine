@@ -1722,9 +1722,9 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
            "on the right (a fixed light would put it in one place)");
     EXPECT(darkened(leftNone, leftCast).first == 0, "castShadows=false is never darker than castShadows=true");
 
-    // The light table: the first kMaxShadowLights casting lights own a channel each, in
-    // light order; a non-casting light has none (-1); a casting light past the channels
-    // gets kShadowNoSlot (4).
+    // The light table: every casting light owns a visibility channel, in light order (the
+    // light buffer holds kMaxShadowLights = MAX_LIGHTS lights, so none goes without); a
+    // non-casting light has none (-1).
     ohao::VulkanRenderer r(64, 64);
     EXPECT(r.initialize(), "the renderer starts");
     {
@@ -1739,14 +1739,14 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
         }
         world.sync();
         const auto raster = r.renderScene().rasterLights();
-        const float expected[6] = {0, 1, ohao::render::kShadowNever, 2, 3, ohao::render::kShadowNoSlot};
+        const float expected[6] = {0, 1, ohao::render::kShadowNever, 2, 3, 4};
         bool slots = raster.size() == 6;
         for (std::size_t k = 0; slots && k < 6; ++k) slots = raster[k].params.w == expected[k];
-        EXPECT(slots, "params.w: channels 0, 1, never, 2, 3, no channel");
+        EXPECT(slots, "params.w: channels 0, 1, never, 2, 3, 4");
         const auto shadow = r.renderScene().shadowLights();
-        EXPECT(shadow.size() == ohao::render::kMaxShadowLights && shadow[0].intensity == 1.0f &&
-                   shadow[1].intensity == 2.0f && shadow[2].intensity == 4.0f && shadow[3].intensity == 5.0f,
-               "shadowLights(): the four casting lights in channel order");
+        EXPECT(shadow.size() == 5 && shadow[0].intensity == 1.0f && shadow[1].intensity == 2.0f &&
+                   shadow[2].intensity == 4.0f && shadow[3].intensity == 5.0f && shadow[4].intensity == 6.0f,
+               "shadowLights(): the five casting lights in channel order");
     }
     TEST_PASS();
 }
@@ -1791,9 +1791,193 @@ static void sp2b_s4_the_sky_reaches_the_final_image_through_sss() {
     TEST_PASS();
 }
 
+// The shadow scene of sp2b_t09 (a floor, a box floating above it, the camera above and in
+// front) with the given lights: `frames` frames from a reset at `quality`, the last read back,
+// with the passes that frame ran and the dropped-pixel count it reported. Empty without RT.
+struct ShadowRun {
+    std::vector<uint8_t> px;
+    bool csm{false}, rtShadows{false}, filter{false};
+    std::optional<uint32_t> dropped;
+};
+using SceneLight = std::pair<ohao::ecs::Light, glm::vec3>;   // a light and its position
+
+static ShadowRun shadowRun(const std::vector<SceneLight>& lights, ohao::RenderQuality quality, int frames,
+                           bool rtShadows = true, glm::quat lightRotation = glm::quat(1, 0, 0, 0)) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize() || !r.isRTSupported()) return {};
+    ShadowRun out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, box;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        ohao::PrimitiveMeshGenerator::generateBox(box, {-0.5f, 1.0f, -0.5f}, {0.5f, 2.0f, 0.5f}, {1, 1, 1});
+        ohao::render::MaterialDesc mat;
+        mat.baseColor = {0.7f, 0.7f, 0.7f};
+        mat.roughness = 0.9f;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &mat);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), box, "box", {}, &mat);
+        int k = 0;
+        for (const auto& [light, pos] : lights) {
+            ohao::ecs::Transform t{pos};
+            t.rotation = lightRotation;
+            ohao::ecs::spawnLight(world, "light" + std::to_string(k++), light, t);
+        }
+        r.getCamera().setPosition({0.0f, 7.0f, 7.0f});
+        r.getCamera().setRotation(-45.0f, -90.0f);
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        r.setRTShadowsEnabled(rtShadows);
+        r.setRenderQuality(quality);
+        world.sync();
+        r.render();             // the scene's first frame builds its acceleration structures
+        r.resetAccumulation();  // the capture starts here, as a lockstep capture does
+        for (int f = 0; f < frames; ++f) {
+            world.sync();
+            if (f == frames - 1) r.requestReadback();
+            r.render();
+        }
+        const auto px = r.readback();
+        out.px.assign(px.begin(), px.end());
+        for (const auto& f : r.frameTimings(1))
+            for (uint32_t i = 0; i < f.count; ++i) {
+                out.csm = out.csm || f.pass[i] == ohao::render::passIndex("csm");
+                out.rtShadows = out.rtShadows || f.pass[i] == ohao::render::passIndex("rt.shadows");
+                out.filter = out.filter || f.pass[i] == ohao::render::passIndex("rt.shadows.filter");
+            }
+        if (const auto d = r.shadowLightsDropped()) out.dropped = d->pixels;
+    }
+    return out;
+}
+
+static ohao::ecs::Light shadowLight(float intensity, float radius, bool castShadows = true) {
+    ohao::ecs::Light l;
+    l.intensity = intensity;
+    l.range = 40.0f;
+    l.radius = radius;
+    l.castShadows = castShadows;
+    return l;
+}
+
+// The mean absolute difference of two RGBA8 frames' RGB, in levels.
+static double meanAbsDiff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+    if (a.size() != b.size() || a.empty()) return 1e9;
+    double s = 0.0;
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (i % 4 == 3) continue;
+        s += std::abs(int(a[i]) - int(b[i]));
+        ++n;
+    }
+    return s / double(n);
+}
+
+// Test 9 (2b step 7): a capture after a reset is exact run to run, realtime and reference.
+static void sp2b_t09_the_capture_after_a_reset_is_exact_run_to_run() {
+    TEST_BEGIN("sp2b_t09: an RT-shadowed capture after a reset is exact run to run (realtime and reference)");
+    const std::vector<SceneLight> lights{{shadowLight(60.0f, 0.6f), {-3.0f, 4.0f, 0.0f}}};
+    const ShadowRun a = shadowRun(lights, ohao::RenderQuality::Realtime, 6);
+    if (a.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const ShadowRun b = shadowRun(lights, ohao::RenderQuality::Realtime, 6);
+    EXPECT(a.rtShadows && a.filter, "realtime traces and filters");
+    EXPECT_EQ(maxAbsDiff(a.px, b.px), 0, "two fresh renderers' 6-frame realtime captures are identical");
+    const ShadowRun c = shadowRun(lights, ohao::RenderQuality::Reference, 4);
+    const ShadowRun d = shadowRun(lights, ohao::RenderQuality::Reference, 4);
+    EXPECT(c.rtShadows && !c.filter, "reference traces and does not filter");
+    EXPECT_EQ(maxAbsDiff(c.px, d.px), 0, "two fresh renderers' 4-frame reference captures are identical");
+    TEST_PASS();
+}
+
+// Test 9: CSM renders only as the fallback, when RT shadows are off.
+static void sp2b_t09_csm_is_the_fallback_when_rt_shadows_are_off() {
+    TEST_BEGIN("sp2b_t09: CSM shadows the frame when RT shadows are off, and only then");
+    ohao::ecs::Light sun = shadowLight(3.0f, 0.01f);
+    sun.type = ohao::ecs::LightType::Directional;
+    const glm::quat down = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0));   // -Z turned to -Y
+    const ShadowRun rt = shadowRun({{sun, {0, 10, 0}}}, ohao::RenderQuality::Realtime, 1, true, down);
+    if (rt.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const ShadowRun csm = shadowRun({{sun, {0, 10, 0}}}, ohao::RenderQuality::Realtime, 1, false, down);
+    ohao::ecs::Light noCast = sun;
+    noCast.castShadows = false;
+    const ShadowRun none = shadowRun({{noCast, {0, 10, 0}}}, ohao::RenderQuality::Realtime, 1, false, down);
+    EXPECT(rt.rtShadows && !rt.csm, "with RT shadows the frame traces them and renders no CSM");
+    EXPECT(csm.csm && !csm.rtShadows, "with RT shadows off it renders CSM and traces nothing");
+    const auto [n, x] = darkened(csm.px, none.px);
+    const auto [nRt, xRt] = darkened(rt.px, none.px);
+    std::cout << "(shadow px: CSM " << n << ", RT " << nRt << ") ";
+    // The box's shadow straight below it covers about 140 pixels of the 160x120 frame.
+    EXPECT(n > 80, "CSM darkens the floor under the box");
+    EXPECT(nRt > 80, "and so do RT shadows");
+    TEST_PASS();
+}
+
+// Test 9: reference quality shadows every castShadows light, past the realtime cap of 4 a
+// pixel; realtime reports the pixels that hit the cap.
+static void sp2b_t09_reference_shadows_every_light_past_the_realtime_cap() {
+    TEST_BEGIN("sp2b_t09: reference shadows all 6 lights; realtime traces 4 a pixel and reports the rest");
+    std::vector<SceneLight> cast, off;
+    for (int k = 0; k < 6; ++k) {
+        const float a = glm::radians(60.0f * float(k) + 15.0f);
+        const glm::vec3 pos{3.0f * std::cos(a), 4.0f, 3.0f * std::sin(a)};
+        cast.push_back({shadowLight(25.0f, 0.05f), pos});
+        off.push_back({shadowLight(25.0f, 0.05f, false), pos});
+    }
+    const ShadowRun ref = shadowRun(cast, ohao::RenderQuality::Reference, 1);
+    if (ref.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const ShadowRun rt = shadowRun(cast, ohao::RenderQuality::Realtime, 1);
+    const ShadowRun none = shadowRun(off, ohao::RenderQuality::Realtime, 1);
+    // Darker by 8 levels or more: each light carries a sixth of the light.
+    const auto darker = [](const std::vector<uint8_t>& s, const std::vector<uint8_t>& u) {
+        int n = 0;
+        for (std::size_t p = 0; p + 3 < s.size() && p + 3 < u.size(); p += 4) n += int(u[p + 1]) - int(s[p + 1]) >= 8;
+        return n;
+    };
+    const int nRef = darker(ref.px, none.px), nRt = darker(rt.px, none.px);
+    std::cout << "(darkened px: reference " << nRef << ", realtime " << nRt << "; dropped "
+              << (rt.dropped ? std::to_string(*rt.dropped) : std::string("none")) << ") ";
+    EXPECT(nRef > nRt, "reference darkens more of the frame: the shadows of the lights past a pixel's 4");
+    EXPECT(rt.dropped && *rt.dropped > 0, "realtime reports the pixels that had more than 4 lights to trace");
+    EXPECT(ref.dropped.value_or(0) == 0, "reference drops none");
+    TEST_PASS();
+}
+
+// Test 9: the realtime shadows converge toward the reference: frame 16 after a reset is
+// closer to a 16-frame reference capture than frame 1 is.
+static void sp2b_t09_realtime_converges_toward_the_reference() {
+    TEST_BEGIN("sp2b_t09: realtime frame 16 is closer to a 16-frame reference than realtime frame 1");
+    const std::vector<SceneLight> lights{{shadowLight(60.0f, 0.8f), {-2.0f, 4.0f, 1.0f}}};
+    const ShadowRun ref = shadowRun(lights, ohao::RenderQuality::Reference, 16);
+    if (ref.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const ShadowRun rt1 = shadowRun(lights, ohao::RenderQuality::Realtime, 1);
+    const ShadowRun rt16 = shadowRun(lights, ohao::RenderQuality::Realtime, 16);
+    const double d1 = meanAbsDiff(rt1.px, ref.px), d16 = meanAbsDiff(rt16.px, ref.px);
+    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << ") ";
+    EXPECT(d16 < d1, "the temporal accumulation converges toward the reference");
+    TEST_PASS();
+}
+
 static void runRTShadowTests() {
     std::cout << "\n=== RT shadows ===" << std::endl;
     sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not();
+    sp2b_t09_the_capture_after_a_reset_is_exact_run_to_run();
+    sp2b_t09_csm_is_the_fallback_when_rt_shadows_are_off();
+    sp2b_t09_reference_shadows_every_light_past_the_realtime_cap();
+    sp2b_t09_realtime_converges_toward_the_reference();
     sp2b_s4_the_sky_reaches_the_final_image_through_sss();
 }
 

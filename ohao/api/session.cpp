@@ -89,7 +89,7 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
          "at its own size, deferred; in realtime it returns its next presented frame (deterministic false). post "
          "turns on deferred effects."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...]}",
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?}",
          "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
          "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). E_STATE "
          "before the host has rendered a frame."},
@@ -661,6 +661,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     r.denoise = kDenoisers[static_cast<int>(p.denoise)];
     for (const PostEffect e : p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
     r.exposure = p.exposure;
+    if (p.quality == Quality::reference) r.quality = "reference";
     r.inlineImage = p.inlineImage;
     r.format = p.format == ImageFormat::png ? "png" : "jpeg";
     r.maxSize = p.maxSize;
@@ -718,6 +719,7 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         }
         out.endArray();
     }
+    if (st->shadowLightsDropped) { out.key("shadowLightsDropped"); out.uint64(*st->shadowLightsDropped); }
     out.endObject();
     return true;
 }

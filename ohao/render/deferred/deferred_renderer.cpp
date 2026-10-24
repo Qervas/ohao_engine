@@ -133,9 +133,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
-    // Initialize RT shadow technique
+    // Initialize RT shadow technique (inline ray queries)
     m_rtShadow = std::make_unique<RTShadowTechnique>();
-    if (m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
+    if (m_rayQuery && m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
         m_useRTShadows = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTShadow OK");
     } else {
@@ -250,8 +250,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     m_renderGraph.reset();
 
+    // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
+    // buffer. Null without RT or before anything was built.
+    const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
+    // RT shadows replace CSM whenever they trace this frame; CSM is the fallback.
+    const bool rtShadows = m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass &&
+                           !m_shadowLights.empty();
+
     // 1. Shadow pass (CSM) — writes shadow map, leaves at DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-    if (m_csmPass) {
+    if (m_csmPass && !rtShadows) {
         m_renderGraph.addPass("csm",
             [&](PassBuilder& builder) {
                 if (m_graphShadowHandle.isValid())
@@ -307,13 +314,14 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // every RT sample (and RT GI's first frame takes no history).
     const uint32_t rtFrame = m_framesSinceReset++;
 
-    // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
-    // buffer. Null without RT or before anything was built.
-    const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
-
-    // 3.7. RT Shadows — traces the scene's shadow-casting lights (setShadowLights) through
-    // the TLAS, one shadow-mask channel each. No light casts shadows: no pass.
-    if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass && !m_shadowLights.empty()) {
+    // 3.7. RT Shadows — trace the scene's shadow-casting lights (setShadowLights) through the
+    // TLAS, then (realtime) filter them, one visibility channel a light. Lighting records
+    // after these passes and writes its descriptors then.
+    const auto shadowsToLighting = [&]() {
+        if (!m_lightingPass || !m_rtShadow->rendered()) return;
+        m_lightingPass->setRTShadowMask(m_rtShadow->getOutput().visibility);
+    };
+    if (rtShadows) {
         m_renderGraph.addComputePass("rt.shadows",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -324,18 +332,29 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 si.positionBuffer = m_gbufferPass->getPositionView();
                 si.normalBuffer = m_gbufferPass->getNormalView();
                 si.depthBuffer = m_gbufferPass->getDepthView();
+                si.velocityBuffer = m_gbufferPass->getVelocityView();
                 si.width = m_width;
                 si.height = m_height;
                 si.frameSlot = frameIndex;
+                si.frameNumber = m_frameNumber;
+                si.cameraPos = m_cameraPos;
                 si.lights = m_shadowLights;
                 si.renderSeed = m_renderSeed;
                 si.frameIndex = rtFrame;
+                si.quality = m_quality;
+                si.maxLightsPerPixel = m_shadowLightsPerPixel;
                 si.tlas = sceneTlas;
                 m_rtShadow->render(c, si);
-                // Lighting records after this pass and writes its descriptors then.
-                if (m_rtShadow->rendered() && m_lightingPass)
-                    m_lightingPass->setRTShadowMask(m_rtShadow->getOutput().shadowMaskView, VK_NULL_HANDLE);
+                if (!m_rtShadow->filters()) shadowsToLighting();   // reference: the trace is the output
             });
+        if (m_quality == RenderQuality::Realtime) {
+            m_renderGraph.addComputePass("rt.shadows.filter",
+                [&](PassBuilder&) {},
+                [&](VkCommandBuffer c) {
+                    m_rtShadow->filter(c);
+                    shadowsToLighting();
+                });
+        }
     }
 
     // 3.8. RT GI — traces indirect rays, outputs color bleeding
@@ -408,7 +427,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // RTShadow / RTGI passes above hand them over after a successful render(). Until
     // then lighting falls back to CSM shadows and no indirect light.
     if (m_lightingPass) {
-        m_lightingPass->setRTShadowMask(VK_NULL_HANDLE, VK_NULL_HANDLE);
+        m_lightingPass->setRTShadowMask(VK_NULL_HANDLE);
         m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
@@ -638,6 +657,7 @@ void DeferredRenderer::resetTemporalState() {
     m_totalTime = 0.0f;
     m_framesSinceReset = 0;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
+    if (m_rtShadow) m_rtShadow->resetHistory();
     if (m_rtGI) m_rtGI->resetHistory();
     if (m_postProcessing) m_postProcessing->resetHistory();
 }

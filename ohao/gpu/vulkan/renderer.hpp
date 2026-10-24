@@ -30,6 +30,7 @@
 #include "render/rt/rt_profile_renderer.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "render/scene/model_upload.hpp"
+#include "render/rt/render_technique.hpp"
 
 namespace ohao {
 
@@ -195,6 +196,24 @@ public:
     void setRenderSeed(uint32_t seed);
     [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
+
+    // The hybrid deferred frame's quality (sub-project 2b spec, "Reference quality"):
+    // realtime, or reference (RT shadows from every light, 8 rays a frame, averaged over the
+    // frames since the last resetAccumulation). Captures reset; a live window does not
+    // average a moving camera.
+    void setRenderQuality(RenderQuality quality) noexcept { m_renderQuality = quality; }
+    [[nodiscard]] RenderQuality renderQuality() const noexcept { return m_renderQuality; }
+    // RT shadows in the deferred frame (when ray tracing is supported); off: CSM shadows
+    // the directional lights.
+    void setRTShadowsEnabled(bool on) noexcept { m_rtShadowsWanted = on; }
+    [[nodiscard]] bool rtShadowsEnabled() const noexcept { return m_rtShadowsWanted; }
+    // RT shadows: pixels of the newest finished frame (its renderer frame number) that had
+    // more lights worth tracing than the 4 they may trace. Collects finished frames first.
+    struct ShadowLightsDropped {
+        uint64_t frame{0};
+        uint32_t pixels{0};
+    };
+    [[nodiscard]] std::optional<ShadowLightsDropped> shadowLightsDropped();
 
     // Read back HDR buffers for OIDN denoising
     [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
@@ -387,6 +406,8 @@ private:
     float m_envMapIntegral{0.0f};
     float m_envIntensityScale{1.0f}; // light header offset 8
     uint32_t m_renderSeed{0};        // setRenderSeed; applied to renderers as they are created
+    RenderQuality m_renderQuality{RenderQuality::Realtime};
+    bool m_rtShadowsWanted{true};
 
     // Light-buffer shadow flag: marks the first directional/spot light as the
     // shadow caster that the deferred CSM pass renders for.

@@ -25,9 +25,11 @@ struct RenderCliOptions {
     bool flipY{false};
     bool video{false};
     bool outdoor{false};
+    bool reference{false};   // the hybrid frame at reference quality (RT shadows: every light, 8 rays)
 };
 
-/// Parse free-form trailing args: deferred | rt_realtime | rt_offline | flip | video | outdoor | --denoise=X
+/// Parse free-form trailing args: deferred | reference | rt_realtime | rt_offline | flip | video | outdoor |
+/// --denoise=X
 [[nodiscard]] inline RenderCliOptions parseRenderFlags(std::span<char*> args) {
     RenderCliOptions opts;
     for (char* raw : args) {
@@ -45,6 +47,8 @@ struct RenderCliOptions {
             opts.video = true;
         } else if (arg == "outdoor") {
             opts.outdoor = true;
+        } else if (arg == "reference") {
+            opts.reference = true;
         } else if (arg.starts_with("--denoise=")) {
             opts.denoiseOverride = parseDenoiseMode(arg.substr(10));
         }
@@ -104,6 +108,11 @@ inline void applyDenoiseOverride(VulkanRenderer& renderer, const RenderCliOption
     if (opts.denoiseOverride) {
         renderer.setDenoiseMode(*opts.denoiseOverride);
     }
+}
+
+/// The deferred frame's quality: `reference` beside `deferred` (sub-project 2b, "Reference quality").
+inline void applyQuality(VulkanRenderer& renderer, const RenderCliOptions& opts) {
+    renderer.setRenderQuality(opts.reference ? RenderQuality::Reference : RenderQuality::Realtime);
 }
 
 [[nodiscard]] inline RenderMode resolveMode(const RenderCliOptions& opts) {

@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <string_view>
+#include <algorithm>
 #include <array>
 
 namespace ohao::render { class RenderScene; class GpuPassTimer; }
@@ -37,6 +38,9 @@ public:
     ~DeferredRenderer();
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    // VK_KHR_ray_query is enabled on the device (before initialize): RT shadows trace with
+    // inline ray queries, and without them the frame keeps CSM.
+    void setRayQuerySupported(bool on) noexcept { m_rayQuery = on; }
     void cleanup();
     [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
@@ -55,6 +59,15 @@ public:
     // resetTemporalState, pixel, sample): frame k after a reset is the same in every run.
     void setRenderSeed(uint32_t seed) noexcept { m_renderSeed = seed; }
     [[nodiscard]] uint32_t framesSinceReset() const noexcept { return m_framesSinceReset; }
+    // The renderer's number of the frame about to be recorded (RT shadows' dropped-pixel count).
+    void setFrameNumber(uint64_t frame) noexcept { m_frameNumber = frame; }
+
+    // Realtime (the budgeted frame) or reference (RT shadows: every light, 8 rays, the plain
+    // mean of the frames since the last reset). Change it only between captures that reset.
+    void setQuality(RenderQuality quality) noexcept { m_quality = quality; }
+    [[nodiscard]] RenderQuality quality() const noexcept { return m_quality; }
+    // Realtime RT shadows: the lights a pixel traces at most (0-4), the most important first.
+    void setShadowLightsPerPixel(uint32_t n) noexcept { m_shadowLightsPerPixel = std::min(n, 4u); }
 
     // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
     // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
@@ -68,7 +81,7 @@ public:
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
     [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lightBuffer; }
-    // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into shadow-mask
+    // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into visibility
     // channel i (the light UBO's params.w points each raster light at its channel).
     void setShadowLights(std::span<const render::LightDesc> lights) { m_shadowLights.assign(lights.begin(), lights.end()); }
     [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
@@ -88,6 +101,7 @@ public:
     [[nodiscard]] const SSSPass* getSSSPass() const { return m_sssPass.get(); }
     [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
     [[nodiscard]] const RTShadowTechnique* getRTShadow() const { return m_rtShadow.get(); }
+    [[nodiscard]] RTShadowTechnique* rtShadow() { return m_rtShadow.get(); }
 
     // Times every pass render() records, by its render/frame/pass_registry.hpp name (the
     // renderer's per-slot timer; null: untimed).
@@ -152,6 +166,7 @@ private:
     // RT shadow technique (replaces CSM when available)
     std::unique_ptr<RTShadowTechnique> m_rtShadow;
     bool m_useRTShadows{false};
+    bool m_rayQuery{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
     bool m_useRTGI{false};
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
@@ -219,6 +234,9 @@ private:
     float m_particlesLiveUntil{-1.0f};
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
+    uint64_t m_frameNumber{0};
+    RenderQuality m_quality{RenderQuality::Realtime};
+    uint32_t m_shadowLightsPerPixel{4};
 
     [[nodiscard]] bool createParticleRenderPass();
     [[nodiscard]] bool createParticleFramebuffer();

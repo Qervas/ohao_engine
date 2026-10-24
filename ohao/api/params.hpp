@@ -30,6 +30,7 @@ enum class SaveLayout : uint8_t { compact, pretty };
 enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
 enum class Denoiser : uint8_t { none, oidn, nrd, atrous, dlss };
 enum class PostEffect : uint8_t { bloom, taa, ssao };
+enum class Quality : uint8_t { realtime, reference };
 enum class LogLevelName : uint8_t { trace, debug, info, warn, error };
 enum class LogChannelName : uint8_t { render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime };
 
@@ -162,6 +163,7 @@ struct RenderCaptureParams {
     Denoiser denoise{Denoiser::none};
     std::vector<PostEffect> post;
     std::optional<float> exposure;
+    std::optional<Quality> quality;
 };
 
 struct RenderStatsParams {

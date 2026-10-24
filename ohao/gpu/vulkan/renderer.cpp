@@ -618,11 +618,24 @@ std::vector<render::FrameTiming> VulkanRenderer::frameTimings(std::size_t n) {
     return m_passTimer.recent(n);
 }
 
+std::optional<VulkanRenderer::ShadowLightsDropped> VulkanRenderer::shadowLightsDropped() {
+    if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
+    RTShadowTechnique* shadows = m_deferredRenderer->rtShadow();
+    if (!shadows) return std::nullopt;
+    shadows->collect([&](uint32_t slot) {
+        return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
+    });
+    const auto d = shadows->latestDropped();
+    if (!d) return std::nullopt;
+    return ShadowLightsDropped{d->frame, d->pixels};
+}
+
 bool VulkanRenderer::initializeDeferredRenderer() {
     OHAO_LOG(Debug, gpu, "VulkanRenderer: Creating DeferredRenderer...");
     if (!m_deferredRenderer) {
         m_deferredRenderer = std::make_unique<DeferredRenderer>();
     }
+    m_deferredRenderer->setRayQuerySupported(m_rayQueryEnabled);   // RT shadows' inline ray queries
     OHAO_LOG(Debug, gpu, "VulkanRenderer: Calling DeferredRenderer::initialize()...");
     if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
         OHAO_LOG(Error, gpu, "VulkanRenderer: DeferredRenderer::initialize() failed!");

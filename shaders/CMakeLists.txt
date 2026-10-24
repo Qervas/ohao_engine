@@ -31,6 +31,7 @@ add_custom_command(
 file(GLOB_RECURSE SHADER_INCLUDES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/water/*.glsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shared/*.glsl"
 )
 
 # Generate compilation commands for each shader
@@ -92,6 +93,11 @@ foreach(SLANG ${SLANG_SOURCES})
         list(APPEND SLANG_ENTRIES ${CMAKE_MATCH_1})
     endforeach()
     list(LENGTH SLANG_ENTRIES SLANG_ENTRY_COUNT)
+    # A shader with inline ray queries declares the capability (else slangc warns and adds it).
+    set(SLANG_CAPS "")
+    if(SLANG_TEXT MATCHES "RayQuery<")
+        set(SLANG_CAPS -capability spvRayQueryKHR)
+    endif()
     file(RELATIVE_PATH SLANG_REL ${CMAKE_CURRENT_SOURCE_DIR} ${SLANG})
     string(REPLACE "/" "_" SLANG_FLAT ${SLANG_REL})
     foreach(ENTRY ${SLANG_ENTRIES})
@@ -103,7 +109,7 @@ foreach(SLANG ${SLANG_SOURCES})
         get_filename_component(SPIRV_NAME ${SPIRV} NAME)
         add_custom_command(
             OUTPUT ${SPIRV}
-            COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 -entry ${ENTRY} -fvk-use-entrypoint-name
+            COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 ${SLANG_CAPS} -entry ${ENTRY} -fvk-use-entrypoint-name
                     -matrix-layout-column-major -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${SPIRV}
             DEPENDS ${SLANG_SOURCES} ${CMAKE_BINARY_DIR}/shaders
             COMMENT "Compiling Slang shader ${SPIRV_NAME}"

@@ -93,6 +93,7 @@ struct RenderRequest {
     std::string denoise{"none"};       // none | oidn | nrd | atrous | dlss
     std::vector<std::string> post;     // deferred post effects turned on: bloom, taa, ssao
     std::optional<float> exposure;     // absent: the renderer's own default
+    std::string quality{"realtime"};   // deferred: realtime | reference
     bool inlineImage{false};           // also return a preview image
     std::string format{"jpeg"};        // the preview's format: jpeg (quality 85) | png
     int maxSize{768};                  // the preview's long side at most this, in pixels
@@ -125,6 +126,9 @@ struct RenderStats {
     double gpuMs{0.0};   // first pass begin to last pass end
     double cpuMs{0.0};   // recording and submission on the CPU
     std::vector<std::pair<std::string, double>> passes;   // in frame order
+    // RT shadows: pixels of the newest frame covered that had more lights worth tracing than
+    // they may trace (those shade unshadowed); absent when no covered frame traced shadows.
+    std::optional<uint32_t> shadowLightsDropped;
 };
 
 // What a session runs inside, beyond its kind: render.capture's renderer.

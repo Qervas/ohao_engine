@@ -581,8 +581,9 @@ glm::mat4 CSMPass::calculateLightViewProj(uint32_t cascade) {
     lightView[3][1] += roundedOrigin.y;
     lightView = glm::inverse(scaleBias) * lightView;
 
-    // Orthographic projection
-    glm::mat4 lightProj = glm::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
+    // Orthographic projection to Vulkan's depth range [0, 1] (glm::ortho is OpenGL's [-1, 1]:
+    // the near half of the cascade came out below 0 and the lighting pass read it as unshadowed).
+    glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);
 
     return lightProj * lightView;
 }

@@ -94,13 +94,12 @@ void VulkanRenderer::renderDeferred() {
 
     m_deferredRenderer->setRenderScene(m_renderScene.get());
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
+    m_deferredRenderer->setFrameNumber(m_framesStarted);
+    m_deferredRenderer->setQuality(m_renderQuality);
 
-    // Skeletal animation removed — all meshes are static.
-
-    // RT shadows and GI trace the RenderScene's TLAS (DeferredRenderer reads it).
-    if (isRTSupported()) {
-        m_deferredRenderer->setRTShadowsEnabled(true);
-    }
+    // RT shadows and GI trace the RenderScene's TLAS (DeferredRenderer reads it); without
+    // RT shadows, CSM.
+    m_deferredRenderer->setRTShadowsEnabled(isRTSupported() && m_rtShadowsWanted);
 
     // Pass env map to deferred renderer for reflections
     if (envMapLoaded()) {
@@ -113,7 +112,9 @@ void VulkanRenderer::renderDeferred() {
 
     // Sync fallback directional light with sky sun direction so deferred lighting matches the sky
     if (ld) {
-        if (ld->numLights == 1) {
+        // Only the fallback sun: a scene with exactly one light of its own keeps it (and its
+        // ambient) as the scene set them.
+        if (m_renderScene->rasterLights().empty()) {
             // No explicit scene lights — align the fallback sun with sky
             glm::vec3 skyLightDir = m_deferredRenderer->getLightDirection(); // points DOWN toward scene
             float nightFactor = m_deferredRenderer->getNightFactor();

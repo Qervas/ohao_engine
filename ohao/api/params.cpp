@@ -26,6 +26,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("bloom", PostEffect::bloom, "Bloom")
         .value("taa", PostEffect::taa, "Temporal anti-aliasing")
         .value("ssao", PostEffect::ssao, "Screen-space ambient occlusion");
+    r.enumeration<Quality>("Quality").doc("Hybrid deferred frame quality")
+        .value("realtime", Quality::realtime, "The budgeted frame: RT shadows from up to 4 lights a pixel, 1 ray each, filtered")
+        .value("reference", Quality::reference,
+               "Its converged answer: every shadowed light, 8 rays a frame, averaged over the capture's frames");
     r.enumeration<LogLevelName>("LogLevel").doc("Log level")
         .value("trace", LogLevelName::trace, "Everything")
         .value("debug", LogLevelName::debug, "Per-item detail")
@@ -166,7 +170,8 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("denoise", &RenderCaptureParams::denoise).doc("Path tracer denoiser")
         .field("post", &RenderCaptureParams::post).doc("Deferred post effects to turn on")
         .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; default the renderer's (0.6)")
-            .unitless().min(0.0).max(64.0);
+            .unitless().min(0.0).max(64.0)
+        .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; default realtime");
     r.type<RenderStatsParams>("RenderStatsParams").doc("render.stats params")
         .field("frames", &RenderStatsParams::frames)
             .doc("Medians over the newest this many finished frames (the renderer keeps 120)")
