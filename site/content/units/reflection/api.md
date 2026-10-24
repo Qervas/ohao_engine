@@ -21,7 +21,11 @@ Each method's params are a struct registered in its own registry (`ohao/api/para
 
 {{cite ohao/api/internal.hpp "reflect::readStruct(&out, *t, params, ctx,"}}
 
-Unknown members, types, enums and limits are reported exactly as in scene files (`E_UNKNOWN_FIELD` with a suggestion, `E_RANGE` with the limits). Errors found there, or by a rule on the params alone, mark the call `BadParams`, which the protocol server answers with JSON-RPC's -32602; anything later is a domain error.
+Unknown members, types, enums and limits are reported exactly as in scene files (`E_UNKNOWN_FIELD` with a suggestion, `E_RANGE` with the limits). Two array members carry a length cap the decoder checks before it reads any element, so an oversized batch costs a count, not a decode: `world.apply`'s commands and `input.inject`'s events, 10,000 each, which the params schema also states as `maxItems`:
+
+{{cite ohao/reflect/decode.cpp "if (f.attrs.maxItems && n.type == JsonType::Array && n.count > *f.attrs.maxItems) {"}}
+
+Errors found there, or by a rule on the params alone, mark the call `BadParams`, which the protocol server answers with JSON-RPC's -32602; anything later is a domain error.
 
 A reply is exactly one of `{"result": …}` or `{"error": {"code", "message", "data"}}`. `call` opens the envelope, writes the result straight into it, and throws the writer away if the method fails. The writer is given the world's id mapper, so entity references go out as 16-hex-digit stable ids, never as `entt::entity` values. On failure, `code` and `message` come from the first diagnostic, with ` (+N more)` appended, and `data` carries at most 20 diagnostics, each with a JSON-pointer path into the params (`/commands/4/value`):
 

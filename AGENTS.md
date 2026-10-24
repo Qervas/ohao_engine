@@ -108,14 +108,14 @@ $ python tests/serve/check_serve.py > /dev/null
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
 | `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay) |
-| `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging |
+| `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
 | `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes) and on the real tree; `--gpu` adds the device checks |
-| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps |
+| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
 
 GPU suites and harnesses (each creates a Vulkan device):
 
@@ -149,7 +149,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   window capture equals a headless capture of the same world bit for bit (post off and
   on); minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
   readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
-  camera moves 3 m in 60 injected steps.
+  camera moves 3 m in 60 injected steps; the window host over `--pipe` (a step, a capture,
+  the client's disconnect ends it cleanly).
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with

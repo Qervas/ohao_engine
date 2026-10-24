@@ -42,6 +42,7 @@ ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                     [--save OUT.scene.json]
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
+              [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
 every scene command: [--root DIR]  the project root that asset paths resolve against (default .)
 ```
 
@@ -207,6 +208,17 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
   a root for both. Anything else is `E_ACCESS`.
 - **Closing stdin ends the session:** the running request is cancelled, queued ones are
   dropped, and the server exits 0. Wait for your last reply before you close.
+- **`--pipe NAME`** (Windows) serves `\\.\pipe\ohao-NAME` instead of stdio, same framing:
+  for one local client of the user who started the server (a second client gets
+  `ERROR_PIPE_BUSY`, a client from another machine or user is refused). The server waits
+  for the client; its disconnect ends the session as closing stdin does. A name already
+  served by another process exits 1. Open it as a file (`open(r"\\.\pipe\ohao-NAME",
+  "r+b", buffering=0)` in Python).
+- **Caps.** `world.apply` takes at most 10,000 commands, `input.inject` 10,000 events per
+  call (both `E_RANGE`, the schemas' `maxItems`), and at most 100,000 injected events wait
+  for their steps (`E_STATE`: step first); `world.step` runs at most 1,000,000 frames a
+  call, `log.read` pages 1,000 lines, `world.query` 100,000 entities (use `offset` and
+  `next`).
 - **`--window [WxH]`** (default 1280x720) serves from the live host: a window a human can
   watch, lockstep by default (`--realtime` to play; `time.set` switches), `--hidden` for
   tests, `--vsync`. Requests run once per frame, and each reply is sent after the frame

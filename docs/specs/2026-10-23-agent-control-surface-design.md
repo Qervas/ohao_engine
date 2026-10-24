@@ -282,6 +282,14 @@ gives a domain error's code. The full `Host` interface is not built yet:
   dropped them in 2025-06-18, and `world.apply` already batches commands atomically.
 - **Named pipe, opt-in:** `--pipe NAME` serves `\\.\pipe\ohao-NAME` instead of stdio (see
   "Security"). Same framing. One client at a time.
+  *As built (step 10):* `rpc::PipeTransport` (`ohao/rpc/transport.cpp`, Windows only;
+  elsewhere `--pipe` is a usage error), in both hosts. The pipe is created before the window
+  or the scene, so a bad or taken name fails at once (exit 1, `E_COMMAND` on stdout). The
+  server's reader thread waits for the client in its first read (overlapped I/O; `stop()`
+  ends the wait, so closing a window nobody connected to works). **One client per
+  process:** its disconnect is the end of input, as EOF on stdin is (the session ends,
+  exit 0); stdin is not read. `NAME` is 1–64 of `[A-Za-z0-9._-]`. On exit with the client
+  still connected the server flushes the pipe before disconnecting.
 - **No other transport in 4.** There is no TCP or WebSocket listener, not even behind a
   flag.
 
@@ -856,6 +864,13 @@ SSAO into lighting is a look change and goes to 2b's renderer findings.
   no TCP, no WebSocket in 4.
 - **Named pipe (opt-in, `--pipe NAME`):** created with `PIPE_REJECT_REMOTE_CLIENTS`, a
   DACL granting only the current user, and one instance (a second client is refused).
+  *As built (step 10):* the DACL is protected (`D:P(A;;GA;;;<user SID>)`: no inherited entry,
+  no default read access for Everyone). `FILE_FLAG_FIRST_PIPE_INSTANCE` makes a name that
+  another process already serves an error rather than a second instance beside a squatter.
+  Measured: a second client gets `ERROR_PIPE_BUSY` (231); a client through
+  `\\localhost\pipe\...` (the SMB redirector, remote to the pipe) gets `ERROR_ACCESS_DENIED`
+  (5), and a control pipe with the same DACL but without the flag admits it, so the
+  refusal is the flag's.
 - **File sandbox.** Paths in params (`scene.load`, `scene.save`, `render.capture`,
   `input.record`, `input.replay`) are project-relative with `/`, resolved by the spec-3
   resolver rules (no absolute paths, no `..`). Reads are confined to `--root` (default:
@@ -872,6 +887,17 @@ SSAO into lighting is a look change and goes to 2b's renderer findings.
 - **No code execution.** No method runs a shell, loads a library or evaluates script in 4.
 - **Bounded work.** Message size, batch size (10,000 commands), `world.step` frames
   (1,000,000 per call) and log page sizes are capped; long work is cancellable.
+  *As built (step 10):* message size 64 MiB (`--max-message`), `world.step` 1,000,000
+  frames, `log.read` 1,000 lines, `world.query` 100,000 entities (step 5); `world.apply`
+  10,000 commands and, added here, `input.inject` 10,000 events a call, both as a
+  `maxItems` field attribute in reflection: counted before any element is decoded
+  (`E_RANGE` at the member, "got: N elements") and given as `maxItems` in the params
+  schema an agent reads (so `schemaHash` changed). Also added: at most 100,000 injected
+  events wait for their steps at once (`E_STATE`: step first), and the server's queue of
+  messages read but not yet run is capped at 256 MiB (`ServerOptions::maxQueued`): at the
+  cap the reader stops reading until the engine thread catches up, so a client flooding a
+  busy engine blocks on its own writes instead of growing the server's memory (ping waits
+  too then).
 - **Data is data.** Names and strings in scene files reach the agent verbatim. The agent
   guide says so: a scene from elsewhere can contain text written to steer an agent, and the
   server never interprets it.
@@ -1010,8 +1036,10 @@ put one Cornell deferred frame at 1280x720 at 5.0–5.6 ms (RT shadows at 8 rays
 at 32 samples a pixel), and a fence wait for a frame cannot be shorter than its GPU time;
 the readback itself adds ~0.3 ms. The inline capture in the bench follows five steps
 whose frames are still on the GPU (2–3 frames, 10–15 ms of backlog), then renders and
-reads back its own; with the GPU idle first it measures 12–15 ms. No budget was changed;
-the two go to Frank with the options in the step 9 change record.
+reads back its own; with the GPU idle first it measures 12–15 ms. No budget was changed.
+*Frank's ruling (2026-10-24):* `window_readback_ms` 2 and `window_capture_inline_ms` 20
+stay as they are, neither redefined nor relaxed; both misses are open items for
+sub-project 2b (a cheaper deferred frame).
 
 ## Engine development by agents (G2)
 
@@ -1162,7 +1190,8 @@ orient, edit, play, capture, replay, read logs), checked by `check_docs.py`.
   [--allow-path DIR] [--seed S] [--pipe NAME] [--log-level L] [--vsync]`**: headless by
   default; `--window` is the live host. Lockstep by default.
   *As built (step 9):* also `--hidden` (a window that is never shown, for tests; it
-  presents); `--window` alone is 1280x720.
+  presents); `--window` alone is 1280x720. *Step 10:* `--pipe NAME` in both hosts (see
+  "Transport and framing").
 - **`ohao doctor [--cpu-only]`** (above).
 - **`ohao run`** gains nothing new but runs on the same host interface; its goldens stay.
 - **`ohao_game [scene]`**: the live host in realtime with no protocol; default scene
@@ -1299,6 +1328,16 @@ CPU (no device):
    - *As built (step 5, paths part):* `api_tests` `sp4_t15_paths_are_confined_to_the_sandbox`
      and `check_serve.py`'s sandbox checks, with the message-size cap (`--max-message`)
      and the step cap. The pipe and the remaining caps are step 10's.
+   - *As built (step 10, the rest):* `rpc_tests` `sp4_t15_*` (5: the queue cap stops the
+     reader and every request is still answered in order, `stop()` releases it; pipe names;
+     one local client of the current user — the request answered over the pipe, a second
+     client `ERROR_PIPE_BUSY`, a second server on the name refused, the protected
+     one-entry DACL read back, the disconnect ending `run()`; remote refusal against a
+     control pipe; `stop()` ending a wait for a client), `api_tests`
+     `sp4_t15_batch_and_inject_caps_hold`, `reflect_tests`
+     `sp4_t15_max_items_is_checked_before_reading`, `check_serve.py`'s caps (7 checks) and
+     pipe (12 checks: `ohao serve --pipe` as a process, stdin left open) and `check_live.py`'s
+     window host over the pipe (3 checks).
 
 GPU:
 
@@ -1435,11 +1474,19 @@ improvising. Steps are ordered so the G2 tooling exists before the protocol work
    engine thread, lockstep render-on-demand, readback on request, inline previews,
    `ohao_game` on `helmet_game.scene.json`, GPU budgets in `serve_bench`. Tests 16, 17,
    18 (GPU part).
-   - *Built 2026-10-23.* See "Live host" and "Frame capture", as built, the host
-     interface note, and "Budgets", as built: two GPU budgets (readback, inline capture)
-     miss on the frame's own GPU cost and wait for Frank's ruling.
+   - *Done 2026-10-23.* See "Live host" and "Frame capture", as built, the host
+     interface note, and "Budgets", as built. Two GPU budgets (readback 2 ms, inline capture
+     20 ms) miss on the frame's own GPU cost. *Frank's ruling (2026-10-24):* both budgets
+     stay exactly as they are; the misses are open items owned by sub-project 2b, which
+     makes the deferred frame cheaper (RT GI samples, RT shadows; the deferred goldens may
+     change). Steps 10 and 11 do not work on the frame cost.
 10. **Named pipe and limits.** `--pipe`, the DACL and remote rejection, single client, the
     remaining caps. Test 15 (rest).
+    - *Done 2026-10-24.* See the as-built notes under "Transport and framing" and
+      "Security" (the pipe, the DACL, remote rejection, bounded work). Added beyond the
+      list: `input.inject`'s 10,000-event and 100,000-waiting caps, the server's 256 MiB
+      queue cap, and reflection's `maxItems` (`schemaHash` changed; CLI and serve goldens
+      updated after review: only the hash).
 11. **Acceptance and docs.** `tests/serve/e2e_mcp.py`, `.mcp.json`, the manual Claude Code
     run, `docs/agents/ohao-serve.md`, the recipes, `AGENTS.md`, the monograph module, the
     roadmap row, the final change record. Tests 19, 20; the full done criteria.
@@ -1522,6 +1569,7 @@ it can:
 2. Apply skill text changes under `.claude/skills/` (the `verify` skill gains
    `python tools/check.py`; step 2 writes the new text into its change record).
 3. Rule on any budget a step measures and misses (none expected; the process is spec 3's).
+   *Done for step 9 (2026-10-24):* the two GPU budgets stay; their misses are 2b's.
 
 ## Open decisions
 

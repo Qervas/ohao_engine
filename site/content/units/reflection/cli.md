@@ -40,7 +40,7 @@ Without a script, the results are collected into one document, `{"result": {"sce
 
 ## Script lines are RPC requests without the envelope
 
-A script line is `{"method": "...", "params": {...}}`. The spec defines this as a JSON-RPC 2.0 request without `jsonrpc` and `id`, so a script can be replayed unchanged over the planned `ohao serve` transport. The CLI parses each line, writes the params back out as text, and passes them to the same dispatch every other caller uses:
+A script line is `{"method": "...", "params": {...}}`. The spec defines this as a JSON-RPC 2.0 request without `jsonrpc` and `id`, so a script's lines become `ohao serve` requests once each gets those two members. The CLI parses each line, writes the params back out as text, and passes them to the same dispatch every other caller uses:
 
 {{cite tools/ohao/main.cpp "step(std::string(method->text), c.session->call(method->text, ptext));"}}
 
