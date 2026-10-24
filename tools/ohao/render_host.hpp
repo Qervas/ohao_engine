@@ -37,6 +37,8 @@ public:
     [[nodiscard]] api::HostKind kind() const noexcept override { return m_kind; }
     // render.capture (api::Session::setHost). The default size is 1920x1080.
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& request) override;
+    // render.stats over the frames captures rendered; nullopt before the first capture.
+    [[nodiscard]] std::optional<api::RenderStats> renderStats(int frames) override;
 
     // The renderer, once started; null before the first capture or if it failed.
     [[nodiscard]] VulkanRenderer* renderer() noexcept { return m_renderer.get(); }

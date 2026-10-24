@@ -173,4 +173,39 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     return out;
 }
 
+namespace {
+
+double median(std::vector<float>& v) {
+    std::sort(v.begin(), v.end());
+    const std::size_t n = v.size();
+    return n % 2 ? v[n / 2] : 0.5 * (static_cast<double>(v[n / 2 - 1]) + v[n / 2]);
+}
+
+} // namespace
+
+std::optional<api::RenderStats> summarizeFrames(std::span<const render::FrameTiming> frames) {
+    if (frames.empty()) return std::nullopt;
+    api::RenderStats st;
+    st.frame = frames.back().frame;
+    st.frames = static_cast<int>(frames.size());
+    std::vector<float> gpu, cpu;
+    std::array<std::vector<float>, static_cast<std::size_t>(render::kPassCount)> pass;
+    for (const render::FrameTiming& f : frames) {
+        gpu.push_back(f.gpuMs);
+        cpu.push_back(f.cpuMs);
+        for (uint32_t i = 0; i < f.count && i < render::kMaxTimedPasses; ++i)
+            if (f.pass[i] < pass.size()) pass[f.pass[i]].push_back(f.ms[i]);
+    }
+    st.gpuMs = median(gpu);
+    st.cpuMs = median(cpu);
+    for (std::size_t i = 0; i < pass.size(); ++i)
+        if (!pass[i].empty()) st.passes.emplace_back(std::string(render::kPasses[i].name), median(pass[i]));
+    return st;
+}
+
+std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count) {
+    const std::vector<render::FrameTiming> frames = renderer.frameTimings(static_cast<std::size_t>(std::max(count, 1)));
+    return summarizeFrames(frames);
+}
+
 } // namespace ohao::runtime

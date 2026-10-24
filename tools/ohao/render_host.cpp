@@ -25,6 +25,11 @@ RenderHost::RenderHost(ecs::AssetResolver& assets, api::HostKind kind) : m_asset
 // destroyed first (see the header), so the renderer can go now.
 RenderHost::~RenderHost() = default;
 
+std::optional<api::RenderStats> RenderHost::renderStats(int frames) {
+    if (!m_renderer) return std::nullopt;
+    return runtime::renderStats(*m_renderer, frames);
+}
+
 api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
     api::RenderOutcome out;
     if (!m_world) {

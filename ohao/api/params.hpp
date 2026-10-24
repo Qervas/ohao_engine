@@ -164,6 +164,11 @@ struct RenderCaptureParams {
     std::optional<float> exposure;
 };
 
+struct RenderStatsParams {
+    int32_t frames{1};   // medians over the newest this many finished frames
+    bool passes{true};   // include the per-pass times
+};
+
 struct LogReadParams {
     std::optional<int64_t> since;
     LogLevelName level{LogLevelName::info};

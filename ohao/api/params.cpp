@@ -167,6 +167,11 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("post", &RenderCaptureParams::post).doc("Deferred post effects to turn on")
         .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; default the renderer's (0.6)")
             .unitless().min(0.0).max(64.0);
+    r.type<RenderStatsParams>("RenderStatsParams").doc("render.stats params")
+        .field("frames", &RenderStatsParams::frames)
+            .doc("Medians over the newest this many finished frames (the renderer keeps 120)")
+            .unitless().min(1).max(120)
+        .field("passes", &RenderStatsParams::passes).doc("Include the per-pass GPU times");
 
     r.type<LogReadParams>("LogReadParams").doc("log.read params")
         .field("since", &LogReadParams::since).doc("Return records after this seq (the last read's next)").unitless()

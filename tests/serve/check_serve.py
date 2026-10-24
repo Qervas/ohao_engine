@@ -65,11 +65,13 @@ EXAMPLES = {
     "world_diff": {"snapshot": "a", "fields": ["/Transform"], "limit": 5},
     "world_restore": {"name": "a"},
     "render_capture": {"path": "OUT/x.png", "mode": "deferred", "width": 64, "height": 64, "post": ["taa"]},
+    "render_stats": {"frames": 30, "passes": True},
     "log_read": {"level": "warn", "channel": "rpc", "limit": 10},
 }
-# render_capture would start a GPU; input_replay would read the recording input_record is
-# still writing (api_tests replays recordings).
-CALL = [n for n in EXAMPLES if n not in ("render_capture", "input_replay")]
+# render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
+# its own); input_replay would read the recording input_record is still writing (api_tests
+# replays recordings).
+CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay")]
 
 passed = 0
 failed = 0
@@ -252,6 +254,10 @@ def test_schemas():
             rid += 1
             r = s.call(rid, "tools/call", {"name": name, "arguments": dict(example, notAMember=1)})
             check(r is not None and r.get("error", {}).get("code") == -32602, name + ": and refuses the unknown member")
+    rid += 1
+    r = s.call(rid, "tools/call", {"name": "render_stats", "arguments": {}})
+    check(r is not None and r.get("result", {}).get("isError") and "E_STATE" in json.dumps(r),
+          "render_stats before any frame is rendered: E_STATE (and no GPU is started)")
     check(s.close() == 0, "exits 0 when stdin closes")
 
 

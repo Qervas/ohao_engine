@@ -131,6 +131,11 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     return r;
 }
 
+std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
+    if (!m_renderer) return std::nullopt;
+    return runtime::renderStats(*m_renderer, frames);
+}
+
 api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
     api::RenderOutcome out;
     const VkExtent2D ext = m_window.framebufferExtent();

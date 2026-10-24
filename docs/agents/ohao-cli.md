@@ -234,7 +234,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 22 tools
+0 23 tools
 ```
 
 ## Methods
@@ -265,6 +265,7 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `world.diff` | `{snapshot, fields?, limit = 50}` → `{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}` | What changed since a snapshot. `"/Type/field"` with old and new values in file form, `"/Type"` for a component added or removed; `fields` keeps only the listed ones. `count` counts changed entities; `more` what `limit` left out. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
 | `render.capture` | `{path?, inline = false, format = jpeg, maxSize = 768, region?, mode = deferred, spp = 16, frames?, width?, height?, denoise = none, post = [], exposure?}` → `{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?}` (+ the inline image) | Renders through the world's Camera and Environment: `frames` from a reset (default 1 deferred, 10 with TAA, `spp` path-traced), the last kept, to a PNG (`path`) and/or a preview (`inline`). Needs a GPU host (`ohao run`, `ohao serve`; a window host captures deferred at its own size). Size defaults to 1920x1080 headless. |
+| `render.stats` | `{frames = 1, passes = true}` → `{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...]}` | What the host's frames cost: medians over the newest `frames` (1–120) finished frames of the GPU time (first pass to last), the CPU's recording and submission, and each pass in frame order, in ms to the microsecond. Pass names are the registry's (`ohao/render/frame/pass_registry.hpp`); a pass none of the frames ran is left out. `E_STATE` before the host has rendered (the CLI host before a capture). |
 | `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
 
 ## Edit commands

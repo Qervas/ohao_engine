@@ -7,7 +7,8 @@ A stdlib-only MCP client (newline-delimited JSON-RPC on the server's stdio, ever
 the acceptance session of the spec's test 19:
 
   initialize -> load helmet_game -> summary -> apply an edit -> snapshot -> record ->
-  inject a 61-step flight -> step with watch -> capture inline and to a file -> log read ->
+  inject a 61-step flight -> step with watch -> capture inline and to a file -> frame
+  stats (sub-project 2b, test 14) -> log read ->
   stop recording -> restore -> replay (every checkpoint matches) -> capture again
 
 and requires: the flight moves the camera as injected, the replay reaches the same world
@@ -154,7 +155,8 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 22 and "render_capture" in names and "input_replay" in names, "tools/list: 22 tools")
+    check(len(names) == 23 and "render_capture" in names and "render_stats" in names and "input_replay" in names,
+          "tools/list: 23 tools")
 
     info, _, err = c.tool("engine_info")
     check(not err and info.get("host") == "window" and info.get("time", {}).get("mode") == "lockstep",
@@ -205,6 +207,11 @@ def main():
     check(not err and shot1.get("deterministic") is True and image1 and image1.get("mimeType") == "image/jpeg" and
           jpeg1[:2] == b"\xff\xd8" and (read_bytes(first_png) or b"")[:4] == b"\x89PNG",
           "render_capture: an inline JPEG (%d bytes) and a PNG file" % len(jpeg1))
+    stats, _, err = c.tool("render_stats", {"frames": 10})
+    passes = [p[0] for p in (stats or {}).get("passes", [])]
+    check(not err and stats.get("gpuMs", 0) > 0 and "gbuffer" in passes and "lighting" in passes,
+          "render_stats: %.3f ms of GPU a frame over %s frames, %d passes" %
+          ((stats or {}).get("gpuMs", 0), (stats or {}).get("frames"), len(passes)))
 
     logs, _, err = c.tool("log_read", {"level": "info", "limit": 20})
     check(not err and isinstance(logs.get("lines"), list) and logs["lines"] and "next" in logs,

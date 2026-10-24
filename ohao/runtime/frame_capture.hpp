@@ -11,6 +11,10 @@
 #include "api/session.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
+
+#include <optional>
+#include <span>
 
 namespace ohao { class VulkanRenderer; }
 
@@ -38,5 +42,13 @@ void writeCaptureOutputs(std::span<const uint8_t> pixels, uint32_t width, uint32
 // E_COMMAND when r.region does not lie inside a width x height frame; empty otherwise.
 [[nodiscard]] std::vector<reflect::Diagnostic> checkRegion(const api::RenderRequest& r, uint32_t width,
                                                            uint32_t height);
+
+// render.stats from timed frames (oldest first): medians of the frame's GPU and CPU times
+// and of each pass over the frames that ran it, passes in registry (frame) order. nullopt
+// when `frames` is empty.
+[[nodiscard]] std::optional<api::RenderStats> summarizeFrames(std::span<const render::FrameTiming> frames);
+// The same over the renderer's newest `count` finished frames (reads every finished slot
+// first; never waits on the GPU).
+[[nodiscard]] std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count);
 
 } // namespace ohao::runtime

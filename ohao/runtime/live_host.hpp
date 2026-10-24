@@ -105,9 +105,10 @@ public:
     [[nodiscard]] InputMap& input() { return m_world->input(); }
     void quit() { m_quit = true; }
 
-    // api::Host: render.capture.
+    // api::Host: render.capture, render.stats (the frames the window presented).
     [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& request) override;
+    [[nodiscard]] std::optional<api::RenderStats> renderStats(int frames) override;
 
 private:
     void renderFrame();   // world.sync, the world's view, render + present

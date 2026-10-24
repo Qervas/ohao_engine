@@ -115,6 +115,16 @@ In lockstep a capture renders the world from a reset (1 deferred frame, 10 with 
 window or headless. A window host captures deferred at its own size; minimized it cannot
 capture (`E_STATE`).
 
+## Measure the frame
+
+`render_stats {frames}` says what the host's last frames cost on the GPU, pass by pass:
+`{frame, frames, gpuMs, cpuMs, passes: [["gbuffer", 0.06], ["rt.gi", 3.948], ...]}`,
+medians over the newest `frames` (1–120) in microseconds, passes in frame order under the
+names of `ohao/render/frame/pass_registry.hpp`. A window host answers for the frames it
+presented; a headless host for its captures' frames (`E_STATE` before the first). One
+frame's passes sum to at most its `gpuMs`. To judge a renderer change, compare against the
+baseline `render_bench` records (`build/render_bench.json`, below in AGENTS.md's gates).
+
 ## Read logs
 
 `log_read {level, channel, since, limit}` pages the engine's log (`next` is the `since`

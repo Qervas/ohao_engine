@@ -173,7 +173,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 22, "twenty-two methods");
+    CHECK(api::methods().size() == 23, "twenty-three methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -205,7 +205,55 @@ struct FakeHost final : api::Host {
     api::HostKind hostKind{api::HostKind::Headless};
     [[nodiscard]] api::HostKind kind() const noexcept override { return hostKind; }
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& r) override { return fn(r); }
+    std::optional<api::RenderStats> stats;   // render.stats' answer; nullopt: nothing rendered yet
+    std::vector<int> statsAsked;
+    [[nodiscard]] std::optional<api::RenderStats> renderStats(int frames) override {
+        statsAsked.push_back(frames);
+        return stats;
+    }
 };
+
+// render.stats (2b test 14, stats part): params checked by the session (frames 1-120), the
+// host's medians as [name, ms] pairs in microseconds, E_STATE before a frame was rendered
+// (the CLI host before a capture), E_COMMAND without a host, and never a world change.
+static void sp2b_t14_render_stats_reports_the_hosts_medians() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("render.stats")).code() == "E_COMMAND", "without a renderer render.stats is E_COMMAND");
+    FakeHost host;
+    host.hostKind = api::HostKind::Cli;
+    host.fn = [](const api::RenderRequest&) { return api::RenderOutcome{}; };
+    s.setHost(&host);
+    const Reply none(s.call("render.stats"));
+    CHECK(none.code() == "E_STATE" && host.statsAsked == std::vector<int>{1},
+          "a host that has rendered nothing: E_STATE (frames defaults to 1)");
+
+    api::RenderStats st;
+    st.frame = 41;
+    st.frames = 10;
+    st.gpuMs = 5.12345;
+    st.cpuMs = 0.4;
+    st.passes = {{"gbuffer", 0.0712843}, {"rt.gi", 2.5}, {"post.tonemap", 0.0004}};
+    host.stats = st;
+    const uint64_t changes = s.changeCount();
+    const Reply r(s.call("render.stats", R"({"frames":10})"));
+    CHECK(r.ok() && host.statsAsked.back() == 10, "frames reaches the host");
+    CHECK(r.json("/result/frame") == "41" && r.json("/result/frames") == "10" && r.json("/result/gpuMs") == "5.123" &&
+              r.json("/result/cpuMs") == "0.4",
+          "the frame, the frames covered and the medians, in microseconds");
+    CHECK(r.json("/result/passes") == R"([["gbuffer",0.071],["rt.gi",2.5],["post.tonemap",0]])",
+          "passes as [name, ms] pairs, in the host's (frame) order");
+    CHECK(!Reply(s.call("render.stats", R"({"passes":false})")).at("/result/passes"), "passes: false leaves them out");
+    CHECK(s.changeCount() == changes, "reading stats does not count as a change");
+
+    const std::size_t asked = host.statsAsked.size();
+    CHECK(Reply(s.call("render.stats", R"({"frames":0})")).code() == "E_RANGE" &&
+              Reply(s.call("render.stats", R"({"frames":121})")).code() == "E_RANGE" &&
+              Reply(s.call("render.stats", R"({"frames":"all"})")).code() == "E_TYPE" &&
+              Reply(s.call("render.stats", R"({"frame":5})")).code() == "E_UNKNOWN_FIELD",
+          "frames outside 1-120, not a number, or an unknown param is refused");
+    CHECK(host.statsAsked.size() == asked, "(before the host is asked)");
+}
 
 // render.capture (step 9): checked by the session, carried out by a host. No host: E_COMMAND.
 static void t09_render_capture_needs_a_host_and_checks_its_params() {
@@ -1837,6 +1885,7 @@ int main() {
     RUN(t09_method_table_dispatch_and_errors);
     RUN(t09_schema_get_includes_methods);
     RUN(t09_render_capture_needs_a_host_and_checks_its_params);
+    RUN(sp2b_t14_render_stats_reports_the_hosts_medians);
     RUN(sp4_t16_an_inline_capture_carries_its_image_beside_the_result);
     RUN(sp4_t16_change_count_rises_only_for_methods_that_change_the_world);
     RUN(t09_each_command_applies_and_returns_its_inverse);

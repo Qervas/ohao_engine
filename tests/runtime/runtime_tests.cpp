@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "runtime/clock.hpp"
+#include "runtime/frame_capture.hpp"
 #include "runtime/image.hpp"
 #include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
@@ -474,7 +475,44 @@ static void sp4_t16_crop_scale_and_jpeg_preview() {
     std::printf("\n      preview: downscale median %.2f ms, JPEG %zu bytes median %.2f ms", scaleMs, jpeg.size(), jpegMs);
 }
 
+// render.stats' summary (2b test 14): medians of the frame and of each pass over the frames
+// that ran it, passes in registry (frame) order whatever order they were timed in.
+static void sp2b_t14_stats_are_medians_per_pass_in_registry_order() {
+    const auto timing = [](uint64_t frame, float gpu, float cpu,
+                           std::initializer_list<std::pair<std::string_view, float>> passes) {
+        render::FrameTiming f;
+        f.frame = frame;
+        f.gpuMs = gpu;
+        f.cpuMs = cpu;
+        for (const auto& [name, ms] : passes) {
+            f.pass[f.count] = static_cast<uint8_t>(render::passIndex(name));
+            f.ms[f.count++] = ms;
+        }
+        return f;
+    };
+    CHECK(!summarizeFrames({}), "no frames: no stats");
+    // bloom runs in two frames of four; "lighting" is listed before "gbuffer" in frame 3.
+    const std::vector<render::FrameTiming> frames{
+        timing(10, 4.0f, 0.5f, {{"gbuffer", 1.0f}, {"lighting", 2.0f}, {"post.bloom", 0.5f}}),
+        timing(11, 6.0f, 0.7f, {{"gbuffer", 3.0f}, {"lighting", 2.0f}}),
+        timing(12, 5.0f, 0.6f, {{"lighting", 4.0f}, {"gbuffer", 2.0f}, {"post.bloom", 0.7f}}),
+        timing(13, 9.0f, 0.9f, {{"gbuffer", 2.0f}, {"lighting", 1.0f}}),
+    };
+    const auto st = summarizeFrames(frames);
+    CHECK(st && st->frame == 13 && st->frames == 4, "the newest frame and the count");
+    CHECK(st && st->gpuMs == 5.5 && std::abs(st->cpuMs - 0.65) < 1e-6, "even counts take the mean of the middle two");
+    const std::vector<std::pair<std::string, double>> want{{"gbuffer", 2.0}, {"lighting", 2.0}, {"post.bloom", 0.6}};
+    CHECK(st && st->passes.size() == 3 && st->passes[0].first == "gbuffer" && st->passes[1].first == "lighting" &&
+              st->passes[2].first == "post.bloom",
+          "passes in registry order");
+    bool close = st.has_value();
+    for (std::size_t i = 0; close && i < want.size(); ++i) close = std::abs(st->passes[i].second - want[i].second) < 1e-6;
+    CHECK(close, "each pass's median over the frames that ran it (bloom: two frames)");
+}
+
 int main() {
+    std::printf("[render stats]\n");
+    RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");
     RUN(sp4_t16_capture_png_round_trips_losslessly);
     RUN(sp4_t16_crop_scale_and_jpeg_preview);

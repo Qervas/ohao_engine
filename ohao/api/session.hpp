@@ -117,12 +117,28 @@ struct RenderOutcome {
     std::vector<reflect::Diagnostic> errors;
 };
 
+// render.stats: the GPU time of the frames the host rendered, per pass (names from
+// render/frame/pass_registry.hpp), as medians over the newest `frames` finished frames.
+struct RenderStats {
+    uint64_t frame{0};   // the renderer's number of the newest frame included
+    int frames{0};       // frames the medians cover
+    double gpuMs{0.0};   // first pass begin to last pass end
+    double cpuMs{0.0};   // recording and submission on the CPU
+    std::vector<std::pair<std::string, double>> passes;   // in frame order
+};
+
 // What a session runs inside, beyond its kind: render.capture's renderer.
 class Host {
 public:
     virtual ~Host() = default;
     [[nodiscard]] virtual HostKind kind() const noexcept = 0;
     [[nodiscard]] virtual RenderOutcome capture(const RenderRequest& request) = 0;
+    // render.stats over the newest `frames` finished frames; nullopt when the host has
+    // rendered nothing yet (or has no renderer).
+    [[nodiscard]] virtual std::optional<RenderStats> renderStats(int frames) {
+        (void)frames;
+        return std::nullopt;
+    }
 };
 
 class Session {

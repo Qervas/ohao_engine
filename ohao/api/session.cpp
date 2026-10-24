@@ -89,6 +89,10 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
          "at its own size, deferred; in realtime it returns its next presented frame (deterministic false). post "
          "turns on deferred effects."},
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...]}",
+         "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
+         "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). E_STATE "
+         "before the host has rendered a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
          "Engine log records after since (pass the last read's next), filtered by level and channel."},
     };
@@ -685,6 +689,39 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     return true;
 }
 
+bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                 JsonWriter& out) {
+    RenderStatsParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    if (!s.render) {
+        ctx.error("E_COMMAND", params, "this session has no renderer; render.stats needs a host with a GPU");
+        return false;
+    }
+    const std::optional<RenderStats> st = s.render->renderStats(p.frames);
+    if (!st) {
+        ctx.error("E_STATE", params, "the host has not finished rendering a frame yet",
+                  "render.capture (or a window host's next frame) first");
+        return false;
+    }
+    // Microseconds: "0.071", about 20 bytes a pass.
+    const auto ms = [](double v) { return static_cast<float>(std::round(v * 1000.0) / 1000.0); };
+    out.beginObject();
+    out.key("frame"); out.uint64(st->frame);
+    out.key("frames"); out.int64(st->frames);
+    out.key("gpuMs"); out.float32(ms(st->gpuMs));
+    out.key("cpuMs"); out.float32(ms(st->cpuMs));
+    if (p.passes) {
+        out.key("passes");
+        out.beginArray();
+        for (const auto& [name, t] : st->passes) {
+            out.beginArray(); out.string(name); out.float32(ms(t)); out.endArray();
+        }
+        out.endArray();
+    }
+    out.endObject();
+    return true;
+}
+
 bool logRead(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
     LogReadParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
@@ -726,7 +763,8 @@ constexpr MethodEntry kDispatch[] = {
     {"input.state", methodInputState}, {"input.record", methodInputRecord},
     {"input.replay", methodInputReplay, true},
     {"world.snapshot", worldSnapshot},
-    {"world.restore", worldRestore, true}, {"render.capture", renderCapture}, {"log.read", logRead},
+    {"world.restore", worldRestore, true}, {"render.capture", renderCapture},
+    {"render.stats", renderStats},   {"log.read", logRead},
 };
 
 const MethodEntry* findMethod(std::string_view name) {
