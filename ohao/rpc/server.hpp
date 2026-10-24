@@ -26,6 +26,10 @@ inline constexpr std::string_view kMcpVersions[] = {"2025-06-18", "2025-11-25"};
 
 struct ServerOptions {
     std::size_t maxMessage{64u << 20};   // longer lines are answered with -32600 and skipped
+    // Bytes of messages read but not yet run. At the limit the reader stops reading until
+    // the engine thread catches up (the client's writes then block): a client that floods a
+    // busy engine costs at most this plus one message of memory. ping waits too.
+    std::size_t maxQueued{256u << 20};
     // Replies wait for flush(): a window host sends them after the frame the requests
     // caused is presented. Notifications (progress, logs) and ping are never held.
     bool holdReplies{false};

@@ -172,6 +172,7 @@ struct Server::Impl {
         std::string id;              // raw JSON (requests)
         std::string progressToken;   // raw JSON, or empty
         std::string reply;           // Kind::Reply: the whole line
+        std::size_t bytes{0};        // counted against ServerOptions::maxQueued
         bool cancelled{false};       // cancelled while queued
     };
 
@@ -207,7 +208,10 @@ struct Server::Impl {
     std::mutex writeMutex;
     std::mutex queueMutex;
     std::condition_variable queueReady;
+    std::condition_variable queueSpace;   // the reader waits here while the queue is full
     std::deque<std::shared_ptr<Item>> queue;
+    std::size_t queuedBytes{0};
+    bool stopping{false};                 // stop() was called: the reader no longer waits for space
     bool eof{false};
     std::string runningId;   // the request on the engine thread (raw id), or empty
     std::atomic<bool> cancelRunning{false};
@@ -231,9 +235,14 @@ struct Server::Impl {
         else send(line);
     }
 
-    void enqueue(std::shared_ptr<Item> item) {
+    // Reader thread: queues an item of `bytes`, first waiting while the queue is full.
+    void enqueue(std::shared_ptr<Item> item, std::size_t bytes) {
         {
-            std::lock_guard lock(queueMutex);
+            std::unique_lock lock(queueMutex);
+            queueSpace.wait(lock, [&] { return queuedBytes < options.maxQueued || stopping; });
+            if (stopping) return;
+            item->bytes = bytes;
+            queuedBytes += bytes;
             queue.push_back(std::move(item));
         }
         queueReady.notify_one();
@@ -243,7 +252,8 @@ struct Server::Impl {
         auto item = std::make_shared<Item>();
         item->kind = Item::Kind::Reply;
         item->reply = std::move(line);
-        enqueue(std::move(item));
+        const std::size_t bytes = item->reply.size();
+        enqueue(std::move(item), bytes);
     }
 
     // ---- reader thread ----------------------------------------------------------------
@@ -270,6 +280,7 @@ struct Server::Impl {
             std::lock_guard lock(queueMutex);
             eof = true;
             queue.clear();               // nobody is left to answer
+            queuedBytes = 0;
             cancelRunning = true;        // the running request stops at its next whole step
         }
         queueReady.notify_all();
@@ -322,7 +333,7 @@ struct Server::Impl {
             item->doc = doc;
             item->params = params;
             item->method.assign(method->text);
-            enqueue(std::move(item));
+            enqueue(std::move(item), line.size());
             return;
         }
         if (method->text == "ping") {   // answered here, even while the engine is busy
@@ -339,7 +350,7 @@ struct Server::Impl {
             if (const JsonNode* meta = doc->member(*params, "_meta"); meta && meta->type == JsonType::Object)
                 if (const JsonNode* token = doc->member(*meta, "progressToken"))
                     if (!rawToken(*doc, *token, item->progressToken)) item->progressToken.clear();
-        enqueue(std::move(item));
+        enqueue(std::move(item), line.size());
     }
 
     void cancel(const JsonDocument& doc, const JsonNode* params) {
@@ -376,6 +387,8 @@ struct Server::Impl {
                 if (queue.empty()) return !eof;
                 item = std::move(queue.front());
                 queue.pop_front();
+                queuedBytes -= item->bytes;
+                queueSpace.notify_one();
                 if (item->cancelled) continue;   // MCP: a cancelled request gets no response
                 runningId = item->id;
                 cancelRunning = false;
@@ -393,6 +406,11 @@ struct Server::Impl {
 
     void stop() {
         if (!reader.joinable()) return;
+        {
+            std::lock_guard lock(queueMutex);
+            stopping = true;   // a reader waiting for queue space gives up
+        }
+        queueSpace.notify_all();
         while (!readerDone) {   // the client still holds the input open: interrupt the read
             transport.interruptRead(reader.native_handle());
             std::this_thread::sleep_for(std::chrono::milliseconds(5));

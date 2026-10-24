@@ -85,7 +85,7 @@ void registerParams(reflect::TypeRegistry& r) {
 
     r.type<WorldApplyParams>("WorldApplyParams").doc("world.apply params")
         .field("commands", &WorldApplyParams::commands).doc("Array of commands {op, ...}, applied atomically in order")
-            .required();
+            .required().maxItems(kMaxApplyCommands);
 
     r.type<WatchSpec>("WatchSpec").doc("Entities and fields world.step returns after its last step")
         .field("ids", &WatchSpec::ids).doc("Entity ids (16 hex digits)")
@@ -123,7 +123,8 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("focusLost", &InjectEvent::focusLost).doc("Releases everything held, real and injected");
     r.type<InputInjectParams>("InputInjectParams").doc("input.inject params")
         .field("events", &InputInjectParams::events).doc("Events in order; same-step events apply in this order, "
-                                                          "after that step's device events").required();
+                                                          "after that step's device events").required()
+            .maxItems(kMaxInjectEvents);
     r.type<InputStateParams>("InputStateParams").doc("input.state params");
     r.type<InputRecordParams>("InputRecordParams").doc("input.record params")
         .field("path", &InputRecordParams::path).doc("JSON-Lines file to write, under the output directory (starts)")

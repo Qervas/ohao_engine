@@ -15,14 +15,16 @@
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
-//                 [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
+//                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
-//                 over newline-delimited JSON until stdin closes (ohao/rpc). Headless and lockstep
-//                 by default; --window is the live host (a window, 1280x720 by default, lockstep
-//                 unless --realtime) that renders while an agent drives it and a human watches.
-//                 Paths in params are project-relative; writes go under --out (default
-//                 <root>/agent_out). Exit 0 when stdin closes (or the window is closed); 1 if the
-//                 scene does not load; 3 without a window or GPU.
+//                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
+//                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
+//                 disconnects. Headless and lockstep by default; --window is the live host (a
+//                 window, 1280x720 by default, lockstep unless --realtime) that renders while an
+//                 agent drives it and a human watches. Paths in params are project-relative;
+//                 writes go under --out (default <root>/agent_out). Exit 0 when the input ends (or
+//                 the window is closed); 1 if the scene does not load or the pipe cannot be
+//                 created; 3 without a window or GPU.
 //   every command: [--root DIR]   the project root asset paths are relative to (default: .)
 //
 // Output: one JSON document on stdout, {"result": ...} or {"error": {code, message,
@@ -638,12 +640,13 @@ struct WindowOption {
     uint32_t height{720};
 };
 
-// The engine as a server over stdio until stdin closes: headless (lockstep), or with
-// --window the live host (runtime::LiveHost), which serves requests once per frame and
-// renders and presents while an agent drives it. Nothing is printed on stdout but
-// protocol messages; a scene that does not load is reported on stderr before serving.
+// The engine as a server over stdio until stdin closes (or over --pipe NAME until its one
+// client disconnects): headless (lockstep), or with --window the live host
+// (runtime::LiveHost), which serves requests once per frame and renders and presents while
+// an agent drives it. Nothing is printed on stdout but protocol messages; a scene that does
+// not load is reported on stderr before serving.
 int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const WindowOption& win,
-                std::size_t maxMessage) {
+                std::size_t maxMessage, rpc::Transport& transport) {
     runtime::LiveConfig cfg;
     cfg.window.width = win.width;
     cfg.window.height = win.height;
@@ -672,7 +675,6 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
             return replyExit(reply);
         }
     }
-    rpc::StdioTransport transport(g_json);
     rpc::ServerOptions options;
     options.maxMessage = maxMessage;
     options.holdReplies = true;   // sent after the frame the requests caused is presented
@@ -703,7 +705,19 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
         log::stderrSink()->level = *level == log::Level::Off ? log::Level::Error : *level;
         if (*level == log::Level::Off) log::removeSink(log::stderrSink().get());
     }
-    if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage));
+    // The byte stream: stdio, or the named pipe, created before anything else so a bad or
+    // taken name fails at once.
+    std::unique_ptr<rpc::Transport> transport;
+    if (has(a, "--pipe")) {
+        std::string pipeError;
+        auto pipe = rpc::PipeTransport::create(opt(a, "--pipe"), pipeError);
+        if (!pipe) return usage("--pipe: " + pipeError);
+        OHAO_LOG(Info, rpc, "serving on {}", pipe->path());
+        transport = std::move(pipe);
+    } else {
+        transport = std::make_unique<rpc::StdioTransport>(g_json);
+    }
+    if (win.on) return serveWindow(a, allowPaths, win, static_cast<std::size_t>(maxMessage), *transport);
     const std::string root = opt(a, "--root", ".");
     Context c(root, api::HostKind::Headless);
     api::PathPolicy policy;
@@ -717,10 +731,9 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
             return replyExit(e);
         }
     }
-    rpc::StdioTransport transport(g_json);
     rpc::ServerOptions options;
     options.maxMessage = static_cast<std::size_t>(maxMessage);
-    rpc::Server server(*c.session, transport, options);
+    rpc::Server server(*c.session, *transport, options);
     server.run();
     return kOk;
 }
@@ -764,7 +777,7 @@ int run(int argc, char** argv) {
         }
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden"},
-                                 {"--root", "--out", "--seed", "--log-level", "--max-message"});
+                                 {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {

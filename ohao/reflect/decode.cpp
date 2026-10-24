@@ -529,6 +529,7 @@ bool readStructFast(void* obj, const TypeInfo& t, FastDecode& c) {
         if (idx < 0 || ((seen >> idx) & 1u)) return false;   // unknown, or given twice
         seen |= uint64_t{1} << idx;
         const FieldInfo& f = t.fields[static_cast<std::size_t>(idx)];
+        if (f.attrs.maxItems) return false;   // counted before reading: the tree decoder does it
         const auto& l = f.attrs.limits;
         const bool limited = l.min || l.max;
         const bool outer = c.needValue;
@@ -542,6 +543,11 @@ bool readStructFast(void* obj, const TypeInfo& t, FastDecode& c) {
 
 bool readField(void* obj, const TypeInfo& t, const FieldInfo& f, const JsonNode& n, DecodeContext& ctx) {
     const std::size_t before = ctx.errors.size();
+    if (f.attrs.maxItems && n.type == JsonType::Array && n.count > *f.attrs.maxItems) {
+        ctx.error("E_RANGE", n, t.name + "." + f.name + " has more elements than its limit",
+                  "at most " + std::to_string(*f.attrs.maxItems) + " elements", std::to_string(n.count) + " elements");
+        return false;
+    }
     const auto& l = f.attrs.limits;
     const bool limited = l.min || l.max;
     const bool outer = ctx.needValue;

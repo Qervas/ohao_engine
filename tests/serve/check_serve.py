@@ -11,8 +11,11 @@ check_serve -- `ohao serve` as a process, end to end (sub-project 4, step 5).
   test 10  stdout stays clean: rpc_print_server's test.print writes to stdout through every
            C and C++ path; every stdout line must still be a protocol message, and the
            prints must have reached stderr.
-  test 15  (paths part) absolute paths, '..' and writes outside --out are E_ACCESS;
-           --allow-path admits exactly its root; the message-size and step caps hold.
+  test 15  absolute paths, '..' and writes outside --out are E_ACCESS; --allow-path admits
+           exactly its root; the message-size, step, batch, input and page caps hold;
+           `--pipe NAME` (Windows) serves one local client: a second client, a client
+           through \\localhost and a second server on the name are refused, nothing reaches
+           stdout, and the client's disconnect ends the session with exit 0.
 
 Usage (from the repo root):
   python tests/serve/check_serve.py            # all
@@ -318,6 +321,126 @@ def test_sandbox():
     check(s.close() == 0, "exits 0")
 
 
+def test_caps():
+    print("test 15: the batch, input and page caps")
+    s, _ = serve("caps")
+
+    def error_of(rid, method, params):
+        r = s.call(rid, method, params)
+        if r is None:
+            return "no reply"
+        if "result" in r:
+            return "ok"
+        data = r["error"].get("data")
+        first = data[0]["code"] if isinstance(data, list) and data else (data or {}).get("code")
+        return str(r["error"]["code"]) + " " + str(first)
+
+    create = {"op": "entity.create"}
+    check(error_of(1, "world.apply", {"commands": [create] * 10001}) == "-32602 E_RANGE",
+          "world.apply with 10,001 commands: -32602 E_RANGE")
+    check(error_of(2, "world.apply", {"commands": [create] * 10000}) == "ok", "10,000 apply")
+    mouse = {"mouse": [1, 0]}
+    check(error_of(3, "input.inject", {"events": [mouse] * 10001}) == "-32602 E_RANGE",
+          "input.inject with 10,001 events: -32602 E_RANGE")
+    for i in range(10):
+        s.call(10 + i, "input.inject", {"events": [mouse] * 10000})
+    check(error_of(20, "input.inject", {"events": [mouse]}) == "1 E_STATE", "over 100,000 waiting events: E_STATE")
+    check(error_of(21, "log.read", {"limit": 1001}) == "-32602 E_RANGE", "a log page over 1,000 lines: -32602 E_RANGE")
+    check(error_of(22, "world.query", {"limit": 100001}) == "-32602 E_RANGE", "a query page over 100,000: -32602 E_RANGE")
+    check(s.close() == 0, "exits 0")
+
+
+# ---- test 15 (rest): the named pipe ---------------------------------------------------------
+
+def test_pipe():
+    print("test 15: the named pipe")
+    import ctypes
+    import time
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                                wintypes.DWORD, wintypes.HANDLE]
+    k32.WaitNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+
+    def refusal(path):
+        """The Windows error a client opening `path` gets, or 0 if it was admitted (then closed)."""
+        h = k32.CreateFileW(path, 0xC0000000, 0, None, 3, 0, None)
+        if h in (None, wintypes.HANDLE(-1).value):
+            return ctypes.get_last_error()
+        k32.CloseHandle(h)
+        return 0
+
+    name = "check-serve-%d" % os.getpid()
+    path = "\\\\.\\pipe\\ohao-" + name
+    # stdin stays open and unused: the pipe's end, not stdin's, ends the session.
+    s, out = serve("pipe", "--pipe", name)
+    up = False
+    for _ in range(500):
+        if k32.WaitNamedPipeW(path, 20):
+            up = True
+            break
+        time.sleep(0.02)
+    check(up, "the server creates " + path)
+    check(refusal("\\\\localhost\\pipe\\ohao-" + name) == 5,
+          "a client through \\\\localhost (a remote client to the pipe) is refused: error 5")
+    second_server = subprocess.run([OHAO, "serve", "--pipe", name], cwd=ROOT, stdin=subprocess.DEVNULL,
+                                   capture_output=True, timeout=60)
+    check(second_server.returncode == 1 and b"already exists" in second_server.stdout,
+          "a second server on the same name exits 1: already exists")
+    f = None
+    for _ in range(250):
+        try:
+            f = open(path, "r+b", buffering=0)
+            break
+        except OSError:
+            time.sleep(0.02)
+    check(f is not None, "a local client connects")
+    if f is None:
+        s.close()
+        return
+    check(refusal(path) == 231, "a second client is refused: ERROR_PIPE_BUSY (231)")
+    pending = b""
+
+    def call(rid, method, params=None):
+        nonlocal pending
+        msg = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            msg["params"] = params
+        f.write(json.dumps(msg, separators=(",", ":")).encode() + b"\n")
+        while True:
+            while b"\n" not in pending:
+                chunk = f.read(65536)
+                if not chunk:
+                    return None
+                pending += chunk
+            line, pending = pending.split(b"\n", 1)
+            reply = json.loads(line)
+            if "method" not in reply and reply.get("id") == rid:
+                return reply
+
+    init = call(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t"}})
+    check(init is not None and init["result"]["serverInfo"]["name"] == "ohao", "MCP initialize over the pipe")
+    load = call(2, "scene.load", {"path": "tests/scenes/v1/rooms.scene.json"})
+    step = call(3, "world.step", {"frames": 3})
+    check(load is not None and "result" in load and step is not None and step["result"]["frame"] == 3,
+          "native methods over the pipe (load, step)")
+    saved = call(4, "scene.save", {"path": out + "/via_pipe.scene.json"})
+    check(saved is not None and "result" in saved and os.path.exists(os.path.join(ROOT, out, "via_pipe.scene.json")),
+          "the sandbox applies over the pipe as over stdio")
+    f.close()
+    try:
+        ended = s.proc.wait(timeout=30)   # stdin is still open: only the pipe's end can end it
+    except subprocess.TimeoutExpired:
+        ended = "timeout"
+    check(ended == 0 and s.close() == 0, "the client's disconnect ends the session, stdin still open: exit 0")
+    check(not s.raw, "nothing on stdout: protocol messages go to the pipe")
+    check("serving on " + path in s.stderr(), "stderr names the pipe")
+    bad = subprocess.run([OHAO, "serve", "--pipe", "a/b"], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True,
+                         timeout=60)
+    check(bad.returncode == 1 and b"E_COMMAND" in bad.stdout, "an invalid pipe name: exit 1, E_COMMAND")
+
+
 def main():
     update = "--update" in sys.argv[1:]
     for exe in (OHAO, PRINT_SERVER):
@@ -331,6 +454,9 @@ def main():
         test_schemas()
         test_stdout_clean()
         test_sandbox()
+        test_caps()
+        if os.name == "nt":
+            test_pipe()
     shutil.rmtree(TMP, ignore_errors=True)
     shutil.rmtree(os.path.join(ROOT, "build", "serve_tmp"), ignore_errors=True)
     print("Results: " + str(passed) + "/" + str(passed + failed) + " passed")

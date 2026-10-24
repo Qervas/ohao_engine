@@ -22,6 +22,14 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#endif
+
 using namespace ohao;
 using reflect::JsonDocument;
 using reflect::JsonNode;
@@ -71,6 +79,11 @@ public:
         close();
     }
     std::atomic<int> interrupts{0};
+    // Chunks fed but not read yet.
+    std::size_t unread() {
+        std::lock_guard lock(m_mutex);
+        return m_in.size();
+    }
     // Waits until a line contains `needle` (true) or `ms` pass (false).
     bool waitFor(std::string_view needle, int ms = 20000) {
         std::unique_lock lock(m_mutex);
@@ -512,6 +525,209 @@ void sp4_t16_a_capture_preview_is_an_mcp_image_block() {
           "a capture to a file only: one text block");
 }
 
+// ---- test 15 (rest): the named pipe and the server's queue cap ------------------------------
+
+// A full queue stops the reader: with 4 KB queued it reads no further lines until the
+// engine thread runs some, and every request is still answered, in order. stop() releases
+// a reader that waits for space.
+void sp4_t15_a_full_queue_stops_the_reader() {
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    session.setHostKind(api::HostKind::Headless);
+    ScriptTransport io;
+    rpc::ServerOptions o;
+    o.maxQueued = 4096;
+    rpc::Server server(session, io, o);
+    const std::string pad(1000, 'q');   // ~1 KB a request
+    for (int i = 1; i <= 100; ++i)
+        io.feed(req(std::to_string(i), "world.query", R"({"nameContains":")" + pad + R"(","limit":1})"));
+    server.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(io.unread() >= 94, "the reader stops after about 4 KB (" + std::to_string(100 - io.unread()) + " of 100 lines read)");
+    for (int i = 0; i < 400 && countReplies(io.lines()) < 100; ++i) (void)server.poll(std::chrono::milliseconds(50));
+    const auto lines = io.lines();
+    bool inOrder = lines.size() == 100;
+    for (std::size_t i = 0; inOrder && i < lines.size(); ++i) inOrder = Msg(lines[i]).rawId() == std::to_string(i + 1);
+    CHECK(inOrder, "all 100 are answered, in order, as the engine thread drains the queue");
+    for (int i = 101; i <= 200; ++i)
+        io.feed(req(std::to_string(i), "world.query", R"({"nameContains":")" + pad + R"(","limit":1})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto t0 = std::chrono::steady_clock::now();
+    server.stop();
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(2), "stop() releases a reader waiting for space");
+}
+
+#ifdef _WIN32
+
+std::string pipeName(const char* tag) {
+    return std::string("rpct15-") + tag + "-" + std::to_string(GetCurrentProcessId());
+}
+
+std::wstring wide(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+
+HANDLE openPipeClient(const std::string& path, DWORD& error) {
+    HANDLE h = CreateFileW(wide(path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    error = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+    return h;
+}
+
+std::string readPipeLine(HANDLE h) {
+    std::string out;
+    char buf[4096];
+    while (out.find('\n') == std::string::npos) {
+        DWORD n = 0;
+        if (!ReadFile(h, buf, sizeof(buf), &n, nullptr) || n == 0) break;
+        out.append(buf, n);
+    }
+    return out;
+}
+
+std::vector<unsigned char> currentUserSid() {
+    HANDLE token = nullptr;
+    std::vector<unsigned char> buf;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return buf;
+    DWORD len = 0;
+    (void)GetTokenInformation(token, TokenUser, nullptr, 0, &len);
+    buf.resize(len);
+    if (!GetTokenInformation(token, TokenUser, buf.data(), len, &len)) buf.clear();
+    CloseHandle(token);
+    return buf;   // a TOKEN_USER
+}
+
+// One local client of the current user: a request over the pipe is answered; a second
+// client gets ERROR_PIPE_BUSY; a second server on the name is refused; the DACL is
+// protected and holds one entry, the current user; the client's disconnect ends run().
+void sp4_t15_a_pipe_serves_one_local_client_of_the_current_user() {
+    std::string error;
+    auto pipe = rpc::PipeTransport::create(pipeName("one"), error);
+    CHECK(pipe != nullptr, "the pipe is created (" + error + ")");
+    if (!pipe) return;
+    std::string again;
+    CHECK(rpc::PipeTransport::create(pipeName("one"), again) == nullptr && again.find("already exists") != std::string::npos,
+          "a second server on the same name is refused");
+
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    const DWORD rc = GetSecurityInfo(static_cast<HANDLE>(pipe->handle()), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION,
+                                     nullptr, nullptr, &dacl, nullptr, &sd);
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    bool onlyUser = false;
+    if (rc == ERROR_SUCCESS && sd && GetSecurityDescriptorControl(sd, &control, &revision) && dacl && dacl->AceCount == 1) {
+        void* ace = nullptr;
+        const auto user = currentUserSid();
+        if (GetAce(dacl, 0, &ace) && static_cast<ACE_HEADER*>(ace)->AceType == ACCESS_ALLOWED_ACE_TYPE && !user.empty())
+            onlyUser = EqualSid(&static_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart,
+                                reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid) != 0;
+    }
+    if (sd) LocalFree(sd);
+    CHECK(rc == ERROR_SUCCESS && onlyUser && (control & SE_DACL_PROTECTED),
+          "a protected DACL with one entry, allowing the current user");
+
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    session.setHostKind(api::HostKind::Headless);
+    rpc::Server server(session, *pipe);
+    std::atomic<bool> done{false};
+    std::thread t([&] {
+        server.run();
+        done = true;
+    });
+    DWORD e1 = 0, e2 = 0;
+    HANDLE client = openPipeClient(pipe->path(), e1);
+    CHECK(client != INVALID_HANDLE_VALUE, "a local client connects (" + std::to_string(e1) + ")");
+    HANDLE second = openPipeClient(pipe->path(), e2);
+    CHECK(second == INVALID_HANDLE_VALUE && e2 == ERROR_PIPE_BUSY, "a second client is refused: ERROR_PIPE_BUSY (" +
+                                                                       std::to_string(e2) + ")");
+    if (second != INVALID_HANDLE_VALUE) CloseHandle(second);
+    if (client != INVALID_HANDLE_VALUE) {
+        const std::string line = req("1", "world.info");
+        DWORD n = 0;
+        CHECK(WriteFile(client, line.data(), static_cast<DWORD>(line.size()), &n, nullptr) && n == line.size(),
+              "the request is written");
+        const Msg r(readPipeLine(client));
+        CHECK(r.rawId() == "1" && r.str({"result", "host"}) == "headless", "and answered over the pipe");
+        CloseHandle(client);
+    }
+    for (int i = 0; i < 500 && !done; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(done.load(), "the client's disconnect is the end of input: run() returns");
+    if (!done) pipe->interruptRead(nullptr);
+    t.join();
+}
+
+// A client reaching the pipe through \\localhost\pipe\... (the SMB redirector: a remote
+// client to the pipe) is refused with ERROR_ACCESS_DENIED. A control pipe with the same
+// current-user DACL but without PIPE_REJECT_REMOTE_CLIENTS admits that client, so the
+// refusal is the flag's, not the DACL's.
+void sp4_t15_a_pipe_refuses_remote_clients() {
+    const auto user = currentUserSid();
+    LPWSTR sid = nullptr;
+    CHECK(!user.empty() && ConvertSidToStringSidW(reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid, &sid),
+          "the current user's SID");
+    if (!sid) return;
+    const std::wstring sddl = L"D:P(A;;GA;;;" + std::wstring(sid) + L")";
+    LocalFree(sid);
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    (void)ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &sd, nullptr);
+    SECURITY_ATTRIBUTES sa{sizeof(sa), sd, FALSE};
+    const std::string control = pipeName("control");
+    HANDLE ctrl = CreateNamedPipeW(wide("\\\\.\\pipe\\ohao-" + control).c_str(), PIPE_ACCESS_DUPLEX,
+                                   PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, &sa);
+    if (sd) LocalFree(sd);
+    DWORD e1 = 0;
+    HANDLE c1 = openPipeClient("\\\\localhost\\pipe\\ohao-" + control, e1);
+    const bool loopback = c1 != INVALID_HANDLE_VALUE;
+    if (loopback) CloseHandle(c1);
+    if (ctrl != INVALID_HANDLE_VALUE) CloseHandle(ctrl);
+
+    std::string error;
+    auto pipe = rpc::PipeTransport::create(pipeName("remote"), error);
+    CHECK(pipe != nullptr, "the pipe is created");
+    if (!pipe) return;
+    DWORD e2 = 0;
+    HANDLE c2 = openPipeClient("\\\\localhost\\pipe\\ohao-" + pipeName("remote"), e2);
+    if (c2 != INVALID_HANDLE_VALUE) CloseHandle(c2);
+    if (!loopback) {
+        std::printf("\n      the loopback SMB path is unavailable here (error %lu): the control proves nothing", e1);
+        CHECK(c2 == INVALID_HANDLE_VALUE, "a client through \\\\localhost is not admitted");
+        return;
+    }
+    CHECK(c2 == INVALID_HANDLE_VALUE && e2 == ERROR_ACCESS_DENIED,
+          "a client through \\\\localhost is refused (ERROR_ACCESS_DENIED, " + std::to_string(e2) +
+              ") while the control pipe without the flag admits it");
+    DWORD e3 = 0;
+    HANDLE c3 = openPipeClient(pipe->path(), e3);
+    CHECK(c3 != INVALID_HANDLE_VALUE, "a local client still connects");
+    if (c3 != INVALID_HANDLE_VALUE) CloseHandle(c3);
+}
+
+// A window closed while no client ever connected: stop() ends the reader's wait for one.
+void sp4_t15_stop_ends_a_wait_for_a_client() {
+    std::string error;
+    auto pipe = rpc::PipeTransport::create(pipeName("wait"), error);
+    CHECK(pipe != nullptr, "the pipe is created");
+    if (!pipe) return;
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    rpc::Server server(session, *pipe);
+    server.start();
+    CHECK(server.poll(std::chrono::milliseconds(100)), "serving while nobody has connected");
+    const auto t0 = std::chrono::steady_clock::now();
+    server.stop();
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(2), "stop() ends the wait for a client");
+}
+
+#endif
+
+void sp4_t15_pipe_names_are_checked() {
+    CHECK(rpc::validPipeName("agent-1.main_x") && rpc::validPipeName(std::string(64, 'a')), "letters, digits, . _ -");
+    CHECK(!rpc::validPipeName("") && !rpc::validPipeName(std::string(65, 'a')) && !rpc::validPipeName("a/b") &&
+              !rpc::validPipeName("a\\b") && !rpc::validPipeName("a b") && !rpc::validPipeName("..\\x"),
+          "empty, over 64, separators and spaces are refused");
+    std::string error;
+    CHECK(rpc::PipeTransport::create("bad name", error) == nullptr && !error.empty(), "create refuses a bad name");
+}
+
 } // namespace
 
 int main() {
@@ -530,5 +746,12 @@ int main() {
     RUN(sp4_t16_poll_holds_replies_until_flush);
     RUN(sp4_t16_stop_interrupts_a_read_left_open);
     RUN(sp4_t16_a_capture_preview_is_an_mcp_image_block);
+    RUN(sp4_t15_a_full_queue_stops_the_reader);
+    RUN(sp4_t15_pipe_names_are_checked);
+#ifdef _WIN32
+    RUN(sp4_t15_a_pipe_serves_one_local_client_of_the_current_user);
+    RUN(sp4_t15_a_pipe_refuses_remote_clients);
+    RUN(sp4_t15_stop_ends_a_wait_for_a_client);
+#endif
     return ohao::test::finish("rpc_tests");
 }

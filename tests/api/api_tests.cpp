@@ -13,6 +13,7 @@
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
 #include "reflect/json_writer.hpp"
+#include "reflect/schema.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1174,6 +1175,50 @@ static void sp4_t15_paths_are_confined_to_the_sandbox() {
     fs::remove_all(root);
 }
 
+// Test 15 (caps part): world.apply takes at most 10,000 commands and input.inject 10,000
+// events, counted before any is read; at most 100,000 injected events wait at once; the
+// caps are in the params schemas an agent reads.
+static void sp4_t15_batch_and_inject_caps_hold() {
+    World w;
+    api::Session s(w, engineTypes());
+    const auto commands = [](uint32_t n) {
+        std::string p = R"({"commands":[)";
+        for (uint32_t i = 0; i < n; ++i) p += i ? R"(,{"op":"entity.create"})" : R"({"op":"entity.create"})";
+        return p + "]}";
+    };
+    const Reply over(s.call("world.apply", commands(api::kMaxApplyCommands + 1)));
+    CHECK(over.code() == "E_RANGE" && over.str("/error/data/0/path") == "/commands" && w.registry().view<ecs::EntityId>().empty(),
+          "10,001 commands: E_RANGE at /commands, nothing applied");
+    const Reply full(s.call("world.apply", commands(api::kMaxApplyCommands)));
+    CHECK(full.code().empty() && full.str("/result/applied") == "10000", "10,000 commands apply");
+
+    const auto events = [](uint32_t n) {
+        std::string p = R"({"events":[)";
+        for (uint32_t i = 0; i < n; ++i) p += i ? R"(,{"mouse":[1,0]})" : R"({"mouse":[1,0]})";
+        return p + "]}";
+    };
+    const Reply tooMany(s.call("input.inject", events(api::kMaxInjectEvents + 1)));
+    CHECK(tooMany.code() == "E_RANGE" && tooMany.str("/error/data/0/path") == "/events",
+          "10,001 events in one call: E_RANGE at /events");
+    const std::string batch = events(api::kMaxInjectEvents);
+    bool queued = true;
+    for (std::size_t i = 0; i < api::kMaxQueuedInput / api::kMaxInjectEvents; ++i)
+        queued = queued && Reply(s.call("input.inject", batch)).code().empty();
+    CHECK(queued, "100,000 events may wait");
+    CHECK(Reply(s.call("input.inject", R"({"events":[{"mouse":[1,0]}]})")).code() == "E_STATE",
+          "one more is E_STATE until the world steps");
+    CHECK(Reply(s.call("world.step", R"({"frames":1})")).code().empty() &&
+              Reply(s.call("input.inject", R"({"events":[{"mouse":[1,0]}]})")).code().empty(),
+          "a step consumes them; injecting works again");
+
+    reflect::JsonWriter apply, inject;
+    reflect::writeParamsSchema(apply, *api::paramsRegistry().find<api::WorldApplyParams>());
+    reflect::writeParamsSchema(inject, *api::paramsRegistry().find<api::InputInjectParams>());
+    CHECK(apply.str().find("\"maxItems\":10000") != std::string::npos &&
+              inject.str().find("\"maxItems\":10000") != std::string::npos,
+          "the caps are the schemas' maxItems");
+}
+
 // Test 7 (cancellation part): a cancelled world.step stops between whole steps.
 static void sp4_t07_cancel_leaves_whole_steps() {
     const std::string spinner =
@@ -1811,6 +1856,7 @@ int main() {
     RUN(sp4_engine_info_and_log_read);
     RUN(sp4_scene_load_replace_clears_and_keeps_snapshots);
     RUN(sp4_t15_paths_are_confined_to_the_sandbox);
+    RUN(sp4_t15_batch_and_inject_caps_hold);
     RUN(sp4_t07_cancel_leaves_whole_steps);
     RUN(sp4_t11_simulate_runs_once_per_step_and_sync_once_per_batch);
     RUN(sp4_t11_world_step_watch_returns_fields_after_the_last_step);

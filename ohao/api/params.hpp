@@ -21,6 +21,11 @@
 
 namespace ohao::api {
 
+// Bounded work (spec, "Security"): the caps no numeric field limit expresses.
+inline constexpr uint32_t kMaxApplyCommands = 10'000;     // world.apply commands in one batch
+inline constexpr uint32_t kMaxInjectEvents = 10'000;      // input.inject events in one call
+inline constexpr std::size_t kMaxQueuedInput = 100'000;   // injected events waiting for their step
+
 enum class SaveLayout : uint8_t { compact, pretty };
 enum class CaptureMode : uint8_t { deferred, rt_realtime, rt_offline };
 enum class Denoiser : uint8_t { none, oidn, nrd, atrous, dlss };

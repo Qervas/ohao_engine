@@ -181,6 +181,13 @@ bool methodInputInject(Session::Impl& s, const JsonDocument& doc, const JsonNode
     }
     ctx.pop();
     if (!ctx.errors.empty()) return badParams(s);
+    if (s.injected.size() + add.size() > kMaxQueuedInput) {
+        ctx.error("E_STATE", params,
+                  std::to_string(s.injected.size()) + " injected events are waiting for their steps; at most " +
+                      std::to_string(kMaxQueuedInput) + " may wait at once",
+                  "step the world (world.step) before injecting more");
+        return false;
+    }
     // Same-step events keep their order: this call's after earlier calls', and in list order.
     std::stable_sort(add.begin(), add.end(), [](const auto& a, const auto& b) { return a.step < b.step; });
     const std::size_t before = s.injected.size();

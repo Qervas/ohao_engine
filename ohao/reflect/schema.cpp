@@ -266,6 +266,7 @@ void writeStructSchema(JsonWriter& w, const TypeInfo& t) {
         w.beginArray();
         writeValueSchema(w, *f.type, f.attrs.limits);
         w.endArray();
+        if (f.attrs.maxItems) { w.key("maxItems"); w.int64(*f.attrs.maxItems); }
         w.endObject();
         for (const auto& a : f.attrs.aliases) {
             w.key(a);
@@ -292,6 +293,7 @@ void writeFieldProperty(JsonWriter& w, const TypeInfo& t, const FieldInfo& f) {
     w.beginObject();
     w.key("description"); w.string(f.attrs.doc);
     writeInlineSchema(w, *f.type, f.attrs.limits);
+    if (f.attrs.maxItems) { w.key("maxItems"); w.int64(*f.attrs.maxItems); }   // applies to an array only
     // An optional or free-JSON member has no default value to show; a required one needs none.
     if (!f.attrs.required && f.type->kind != Kind::Optional && f.type->kind != Kind::Json) {
         w.key("default");

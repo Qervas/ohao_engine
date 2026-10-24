@@ -13,6 +13,9 @@ check_live -- `ohao serve --window`, the live host, end to end (sub-project 4, s
            as loaded, and its fly camera moves moveSpeed * dt * 60 along its front after 60
            steps of injected move_forward = 1. (The presentation gate is the CTest test
            ohao_game_presentation.)
+  test 15  (the window host's part, Windows) `ohao serve --window --pipe NAME`: a step and
+           an inline capture over the pipe; the client's disconnect ends the session with
+           exit 0 and a clean teardown.
 
 Usage (from the repo root):  python tests/serve/check_live.py
 The last stdout line is the shared JSON summary. Scratch output: build/live_tmp/<pid>/.
@@ -299,6 +302,55 @@ def test_game_scene():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+def test_window_pipe():
+    print("test 15: the window host over the named pipe")
+    out = out_dir("pipe")
+    name = "check-live-%d" % os.getpid()
+    path = "\\\\.\\pipe\\ohao-" + name
+    s = Server([OHAO, "serve", "--window", "640x360", "--hidden", "--pipe", name, "--out", out,
+                "assets/scenes/cornell_box.scene.json"], "pipe", env=validation_env())
+    f = None
+    for _ in range(1500):   # the window and the renderer come up first
+        try:
+            f = open(path, "r+b", buffering=0)
+            break
+        except OSError:
+            time.sleep(0.02)
+    check(f is not None, "a client connects to the window host's pipe")
+    if f is None:
+        s.close()
+        return
+    pending = b""
+
+    def call(rid, method, params):
+        nonlocal pending
+        f.write(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params},
+                           separators=(",", ":")).encode() + b"\n")
+        while True:
+            while b"\n" not in pending:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    return None
+                pending += chunk
+            line, pending = pending.split(b"\n", 1)
+            msg = json.loads(line)
+            if "method" not in msg and msg.get("id") == rid:
+                return msg
+
+    stepped = result(call(1, "world.step", {"frames": 2})) or {}
+    shot = result(call(2, "render.capture", {"inline": True})) or {}
+    check(stepped.get("frame") == 2 and shot.get("mimeType") == "image/jpeg" and shot.get("deterministic") is True,
+          "world.step and an inline capture over the pipe")
+    f.close()
+    try:
+        code = s.proc.wait(timeout=60)   # stdin is still open: the pipe's end ends the session
+    except subprocess.TimeoutExpired:
+        code = "timeout"
+    s.close()
+    check(code == 0 and teardown_clean(s.stderr()),
+          "the client's disconnect closes the window host: exit 0, validation clean, no unasked readback")
+
+
 def main():
     if not os.path.exists(OHAO):
         print("ohao is not built: " + OHAO)
@@ -306,6 +358,8 @@ def main():
     print("check_live (sub-project 4, tests 16 and 17)")
     test_live()
     test_game_scene()
+    if os.name == "nt":
+        test_window_pipe()
     print("Results: %d/%d passed" % (passed, passed + failed))
     print(json.dumps({"suite": "check_live", "passed": passed, "failed": failed, "failures": failures}))
     return 0 if failed == 0 else 1

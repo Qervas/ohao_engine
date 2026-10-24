@@ -1136,6 +1136,40 @@ static void t08_upgrade_registration_is_checked() {
           "a path needs every step; the current version needs none");
 }
 
+struct Bag {
+    std::vector<int32_t> items;
+    int32_t size{0};
+};
+
+// Test 15 (caps part): maxItems refuses an over-long array before reading any element
+// (E_RANGE at the field, the count as "got"), admits one at the limit, appears in the params
+// schema, and is refused on a field that is not an array.
+static void sp4_t15_max_items_is_checked_before_reading() {
+    TypeRegistry r;
+    r.type<Bag>("Bag").doc("d").field("items", &Bag::items).doc("i").unitless().maxItems(3)
+        .field("size", &Bag::size).doc("s").unitless().maxItems(3);
+    CHECK(contains(r.errors(), "Bag.size: maxItems needs an array or JSON field"), "maxItems on a number is refused");
+    const auto decode = [&](int n, Bag& out) {
+        JsonValue v = JsonValue::object();
+        v.set("items", JsonValue::array());
+        for (int i = 0; i < n; ++i) v.find("items")->items().push_back(JsonValue::number(int64_t{i}));
+        const JsonDocument doc = toDocument(std::move(v));
+        DecodeContext ctx(doc);
+        readStruct(&out, *r.find<Bag>(), doc.root(), ctx);
+        return ctx.errors;
+    };
+    Bag ok;
+    CHECK(decode(3, ok).empty() && ok.items.size() == 3, "3 of at most 3 decode");
+    Bag over;
+    const auto errors = decode(4, over);
+    CHECK(errors.size() == 1 && errors[0].code == "E_RANGE" && errors[0].path == "/items" && errors[0].got == "4 elements" &&
+              over.items.empty(),
+          "4 are E_RANGE at /items, none read");
+    JsonWriter w;
+    writeParamsSchema(w, *r.find<Bag>());
+    CHECK(w.str().find(R"("maxItems":3)") != std::string::npos, "the params schema says maxItems");
+}
+
 static void bench_float_parse() {
     std::vector<std::string> texts;
     std::mt19937 rng(9);
@@ -1232,6 +1266,7 @@ int main(int argc, char** argv) {
     RUN(sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header);
     RUN(sp4_t02_lint_finds_prints);
     RUN(sp4_t02_engine_prints_only_through_the_logger);
+    RUN(sp4_t15_max_items_is_checked_before_reading);
     RUN(bench_typed_write);
     RUN(bench_float_format);
     RUN(bench_float_parse);

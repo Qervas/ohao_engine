@@ -1,5 +1,5 @@
 {"method":"scene.load","result":{"entities":21}}
-{"method":"world.info","result":{"entities":21,"frame":0,"schemaHash":"2f1413bfc516b03d","idCounter":0,"host":"cli","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"method":"world.info","result":{"entities":21,"frame":0,"schemaHash":"94eb6d1669f2d5d1","idCounter":0,"host":"cli","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"method":"world.snapshot","result":{"name":"base","entities":21,"bytes":3844}}
 {"method":"world.apply","result":{"applied":2,"results":[null,"63cbe1e459320dd7"],"inverse":[{"op":"entity.destroy","id":"63cbe1e459320dd7"},{"op":"field.set","id":"499421b6ef3e75a9","path":"/Transform/position/0","value":-2}]}}
 {"method":"world.step","result":{"frame":10}}
@@ -8,5 +8,5 @@
 {"method":"world.restore","result":{"created":0,"destroyed":1,"changed":1,"frame":0}}
 {"method":"world.query","result":{"entities":[{"id":"499421b6ef3e75a9","Transform":{"position":[-2,-3,0],"scale":[2,2,2]}}],"count":1}}
 {"method":"world.query","result":{"entities":[],"count":0}}
-{"method":"world.info","result":{"entities":21,"frame":0,"schemaHash":"2f1413bfc516b03d","idCounter":0,"host":"cli","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"method":"world.info","result":{"entities":21,"frame":0,"schemaHash":"94eb6d1669f2d5d1","idCounter":0,"host":"cli","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"method":"scene.save","result":{"path":"build/cli_tmp/edit_restore.scene.json","bytes":5818}}

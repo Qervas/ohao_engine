@@ -65,6 +65,9 @@ struct FieldAttrs {
     bool hidden{false};
     bool readOnly{false};
     bool required{false};             // must be given (method params; the schema says so)
+    // An array field (or free JSON given as an array): at most this many elements, checked
+    // before any element is read (E_RANGE) and given as the schema's maxItems.
+    std::optional<uint32_t> maxItems;
     std::vector<std::string> aliases;  // older names accepted on load
 };
 
