@@ -137,6 +137,30 @@
       "max_abs_diff": 1,
       "max_diff_frac": 0.0005,
       "_note": "As cli_cornell_box, against cornell_box_rt_realtime's golden."
+    },
+    {
+      "name": "cornell_box_reference",
+      "command": "./build/cornell_box {out} 4 deferred reference --denoise=none",
+      "golden": "tests/golden/cornell_box_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The hybrid frame at reference quality (sub-project 2b spec, 'Reference quality'; added in step 7): RT shadows from every shadow-casting light, 8 rays a frame, the plain running mean of the 10 frames since the reset. Exact: the mean of seeded samples is deterministic. RT GI is the realtime frame's until step 8 gives reference its half."
+    },
+    {
+      "name": "cli_cornell_box_reference",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred --frames 10 --quality reference",
+      "golden": "tests/golden/cornell_box_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "As cli_cornell_box_deferred, against cornell_box_reference's golden: the example and the CLI at reference quality give the same pixels."
+    },
+    {
+      "name": "cli_helmet_game_reference",
+      "command": "./build/ohao run assets/scenes/helmet_game.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 --quality reference",
+      "golden": "tests/golden/helmet_game_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "cli_helmet_game_deferred at reference quality (added in 2b step 7): its four lights' shadows from 8 rays a light a frame, averaged over the 30 frames. Exact, as every deferred scene."
     }
   ]
 }
