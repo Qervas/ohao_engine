@@ -28,6 +28,7 @@
 #include <limits>
 #include <random>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -938,6 +939,76 @@ static void sp2b_t09_no_hard_coded_light_in_render_or_gpu() {
     CHECK(offending.empty(), "no light position is written as numbers in ohao/render or ohao/gpu");
 }
 
+// ---- sub-project 2b, test 12 (lint part, step 5): no float atomics in shaders ----------------
+// A float atomicAdd / InterlockedAdd sums in whatever order the threads arrive, and float
+// addition does not associate: the same frame rounds differently run to run. A shader that
+// needs a sum accumulates integers (fixed point) or reduces in a fixed order. Flagged: an
+// atomic add whose target names a variable declared float (float, vecN, floatN, half,
+// float16_t) or whose value is a float literal or a float() cast.
+
+static std::vector<NondeterminismHit> floatAtomicHits(const std::string& file, const std::string& text) {
+    static const std::regex kFloatDecl(R"(\b(?:float|half|float16_t|f16vec[234]|vec[234]|float[234])\s+(\w+))");
+    static const std::regex kAtomicAdd(R"(\b(atomicAdd|InterlockedAdd)\s*\(([^,]*),([^\);]*))");
+    static const std::regex kIdentifier(R"([A-Za-z_]\w*)");
+    static const std::regex kFloatValue(R"(^\s*(?:[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?[fF]?|[0-9]+[fF]|float\s*\())");
+    std::vector<std::string> lines;
+    std::set<std::string> floatNames;
+    {
+        std::istringstream in(text);
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line.substr(0, line.find("//")));
+            for (std::sregex_iterator it(lines.back().begin(), lines.back().end(), kFloatDecl), end; it != end; ++it)
+                floatNames.insert((*it)[1].str());
+        }
+    }
+    std::vector<NondeterminismHit> hits;
+    for (std::size_t n = 0; n < lines.size(); ++n) {
+        const std::string& code = lines[n];
+        for (std::sregex_iterator it(code.begin(), code.end(), kAtomicAdd), end; it != end; ++it) {
+            const std::string target = (*it)[2].str(), value = (*it)[3].str();
+            bool isFloat = std::regex_search(value, kFloatValue);
+            for (std::sregex_iterator id(target.begin(), target.end(), kIdentifier), idEnd; !isFloat && id != idEnd; ++id)
+                isFloat = floatNames.count(id->str()) > 0;
+            if (isFloat) hits.push_back({file, static_cast<int>(n + 1), (*it)[1].str(), code});
+        }
+    }
+    return hits;
+}
+
+static void sp2b_t12_lint_finds_float_atomics() {
+    const std::string sample =
+        "layout(std430) buffer B { float sums[]; uint counts[]; } b;\n"
+        "atomicAdd(b.sums[i], v);\n"
+        "atomicAdd(b.counts[i], 1u);\n"
+        "atomicAdd(deadCount, 1);\n"
+        "InterlockedAdd(g_out[0], 0.5f);\n"
+        "// atomicAdd(b.sums[i], v) in a comment is fine\n"
+        "float total = 0.0; atomicAdd(total, x);\n"
+        "atomicAdd(counter, float(n));\n";
+    const auto hits = floatAtomicHits("sample.comp", sample);
+    CHECK(hits.size() == 4 && hits[0].line == 2 && hits[1].line == 5 && hits[2].line == 7 && hits[3].line == 8,
+          "finds a float target, a float literal, a float local and a float() value; skips uint/int adds and comments");
+}
+
+static void sp2b_t12_no_float_atomics_in_shaders() {
+    const fs::path root(OHAO_SOURCE_DIR);
+    static const std::set<std::string> kShaderExts = {".comp", ".vert", ".frag", ".geom", ".tesc", ".tese", ".rgen",
+                                                      ".rchit", ".rahit", ".rmiss", ".rint", ".rcall", ".mesh",
+                                                      ".task", ".glsl", ".hlsl", ".slang"};
+    std::vector<NondeterminismHit> offending;
+    std::size_t files = 0;
+    for (const auto& e : fs::recursive_directory_iterator(root / "shaders")) {
+        if (!e.is_regular_file() || !kShaderExts.count(e.path().extension().string())) continue;
+        ++files;
+        for (auto& h : floatAtomicHits(fs::relative(e.path(), root).generic_string(), readFile(e.path())))
+            offending.push_back(std::move(h));
+    }
+    CHECK(files > 30, "the shader sources were found");
+    for (const auto& h : offending) std::printf("\n      %s:%d: %s", h.file.c_str(), h.line, h.text.c_str());
+    CHECK(offending.empty(), "no atomicAdd / InterlockedAdd on a float under shaders/");
+}
+
 // ---- sub-project 4, test 2 (rpc part, step 5): the protocol server is CPU-only ------------
 static void sp4_t02_rpc_includes_no_vulkan_glfw_or_renderer_header() {
     const fs::path root(OHAO_SOURCE_DIR);
@@ -1323,6 +1394,8 @@ int main(int argc, char** argv) {
     RUN(sp4_t02_lint_finds_prints);
     RUN(sp2b_t09_lint_finds_hard_coded_light_positions);
     RUN(sp2b_t09_no_hard_coded_light_in_render_or_gpu);
+    RUN(sp2b_t12_lint_finds_float_atomics);
+    RUN(sp2b_t12_no_float_atomics_in_shaders);
     RUN(sp4_t02_engine_prints_only_through_the_logger);
     RUN(sp4_t15_max_items_is_checked_before_reading);
     RUN(bench_typed_write);
