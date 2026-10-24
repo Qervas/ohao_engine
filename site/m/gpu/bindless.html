@@ -74,8 +74,10 @@
 <div class="citation-chip"><code class="citation-code">mats[mi].*field = h.index;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L75" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:75</a></div>
 <p>and the material table packs those fields, bit-cast, into the row both pipelines read:</p>
 <div class="citation-chip"><code class="citation-code">d.baseColor.r, d.baseColor.g, d.baseColor.b, bits(d.albedoTex),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/material_table.cpp#L35" target="_blank" rel="noopener">ohao/render/scene/material_table.cpp:35</a></div>
-<p>Strings survive in exactly two places, both of them keys for the manager&#x27;s own lookup tables. The path tracer&#x27;s tint textures — a 1×1 texture per distinct encoded base colour — are named after the colour so that every material of that colour finds the one already uploaded, and the environment map is registered as `ohao_env_map`. `registerName` is what aliases a key onto an existing handle, which is why unloading cannot just erase by `tex.name` — it must scan both maps for every key still pointing at the freed slot.</p>
-<div class="citation-chip"><code class="citation-code">textures-&gt;registerName(h, name);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L110" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:110</a></div>
+<p>A string survives in one place, as a key for the manager&#x27;s own lookup tables: the environment map is registered as `ohao_env_map`.</p>
+<div class="citation-chip"><code class="citation-code">m_textureManager-&gt;registerExternalTexture(envView, &quot;ohao_env_map&quot;, BindlessTextureType::Custom);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/env_upload.cpp#L214" target="_blank" rel="noopener">ohao/gpu/vulkan/env_upload.cpp:214</a></div>
+<p>The manager can also alias a key onto an existing handle with `registerName`, which nothing in the engine calls. The alias is still why unloading cannot just erase by `tex.name` — it must scan both maps for every key still pointing at the freed slot.</p>
+<div class="citation-chip"><code class="citation-code">void registerName(BindlessTextureHandle handle, std::string_view name) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/bindless_texture_manager.hpp#L109" target="_blank" rel="noopener">ohao/gpu/vulkan/bindless_texture_manager.hpp:109</a></div>
 <div class="citation-chip"><code class="citation-code">if (it-&gt;second.index == handle.index) it = m_nameToHandle.erase(it);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/bindless_texture_manager.cpp#L586" target="_blank" rel="noopener">ohao/gpu/vulkan/bindless_texture_manager.cpp:586</a></div>
 <p>Nothing deduplicates the model textures themselves: the upload walks materials, not the model&#x27;s texture pool, so two materials pointing at the same pooled image upload it twice into two slots.</p>
 </div>
@@ -158,8 +160,8 @@
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/material_table.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/env_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
       </div>

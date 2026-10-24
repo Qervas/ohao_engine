@@ -36,7 +36,7 @@ Meshes are never unregistered. Every handle is issued at generation 0, and `info
 
 ## Material table
 
-A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture index; roughness, metallic, normal and emissive texture indices; rough-metal texture index, emissive strength and the legacy RT tint texture index. Texture indices are bit-cast into float lanes and point into the one bindless texture table. Index 0 is registered at initialisation as the default material, and is what every unknown or missing material resolves to — including every material registered after the table is full:
+A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture index; roughness, metallic, normal and emissive texture indices; rough-metal texture index, emissive strength and two unused lanes. Texture indices are bit-cast into float lanes and point into the one bindless texture table. Index 0 is registered at initialisation as the default material, and is what every unknown or missing material resolves to — including every material registered after the table is full:
 
 {{cite ohao/render/scene/material_table.cpp "return MaterialHandle{0, 0};"}}
 

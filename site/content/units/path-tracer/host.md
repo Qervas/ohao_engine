@@ -192,6 +192,12 @@ sequence across runs that change something else.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
 
+Setting the seed while the index still sits at the old one — nothing traced since
+the last reset — moves the index too, so a seed set after construction applies to
+the very next frame rather than only after the next reset:
+
+{{cite ohao/render/rt/path_tracer.hpp "if (m_sampleIndex == m_renderSeed) m_sampleIndex = seed;"}}
+
 The accumulation buffer is never cleared. On the frame where the history counter is
 zero its barrier declares the old layout `UNDEFINED`, licensing the driver to discard
 the contents; on every later frame the same barrier is a `GENERAL → GENERAL`

@@ -146,12 +146,17 @@ not something the shipping pass guards against.
 {{cite shaders/core/deferred_lighting.frag "Light light = lighting.lights[i];"}}
 
 The packing these headers assume is real, and is the contract the deferred
-pipeline depends on: type, range, intensity and shadow-map index ride in the `w`
-and `params` channels of four `vec4`s, followed by a 64-byte light-space matrix —
-128 bytes per light, `std140`-compatible by construction.
+pipeline depends on: type, range, intensity, shadow-map index and RT shadow slot
+ride in the `w` and `params` channels of four `vec4`s, followed by a 64-byte
+light-space matrix — 128 bytes per light, `std140`-compatible by construction.
 
-{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
-{{cite shaders/includes/common/types.glsl "vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused"}}
+{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = shadow slot (kShadowNever, 0..3, kShadowNoSlot)"}}
+
+The header's own copy of the struct has the same layout and documents the slot the
+same way. Nothing includes `types.glsl`; the shader that reads the slot,
+`deferred_lighting.frag`, declares its own `Light`.
+
+{{cite shaders/includes/common/types.glsl "w = shadow slot (-1 never, 0..3 RT mask channel, 4 casts but no channel)"}}
 
 ## Contracts
 

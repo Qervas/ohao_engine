@@ -124,7 +124,9 @@ that could contradict it.
 
 `render_technique.hpp` is the other half of this unit: a pluggable-technique
 contract for the hybrid passes. Each feature gets an `Input` struct of GBuffer
-views, camera matrices and a nullable `VkAccelerationStructureKHR`, an `Output`
+views, what that feature needs besides (camera matrices for GI, reflections and AO;
+the scene's shadow lights and the sample seeds for shadows) and a nullable
+`VkAccelerationStructureKHR`, an `Output`
 struct of one image plus its view, and a uniform lifecycle —
 `init / resize / render / getOutput / destroy`, plus `getName()` and `needsRT()`
 for introspection. Four interfaces are declared: shadows, GI, reflections, AO.
@@ -138,15 +140,17 @@ uses, and from none of the four interfaces:
 
 {{cite ohao/render/deferred/ssao_pass.hpp "class SSAOPass : public RenderPassBase"}}
 
-The `Output` doc comments have drifted too — `ShadowOutput::shadowMask` is
-annotated "R8 or R16F" —
+The `Output` doc comments are only half in step. `ShadowOutput::shadowMask` is
+annotated as the RGBA8 image the implementation allocates, one channel per shadow
+light —
 
-{{cite ohao/render/rt/render_technique.hpp "VkImage shadowMask;            // R8 or R16F — 0=shadowed, 1=lit"}}
+{{cite ohao/render/rt/render_technique.hpp "VkImage shadowMask;            // RGBA8, one channel per shadow light — 0=shadowed, 1=lit"}}
 
-— while the implementation commits to a single format, `VK_FORMAT_R8_UNORM`, and
-`GIOutput::indirectLight` is documented RGB16F but allocated RGBA16F.
+{{cite ohao/render/rt/rt_shadow_technique.cpp "imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;"}}
 
-{{cite ohao/render/rt/rt_shadow_technique.cpp "imageInfo.format = VK_FORMAT_R8_UNORM;"}}
+— while `GIOutput::indirectLight` is documented RGB16F but allocated RGBA16F.
+
+{{cite ohao/render/rt/rt_gi_technique.cpp "imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
 
 ## The runtime swap that is not wired
 

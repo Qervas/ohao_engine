@@ -11,7 +11,7 @@ figures: [deferred-ssr-sss-dataflow]
 `SSRPass` and `SSSPass` make the same wager: everything they need is already in the
 frame. Each reads one HDR colour image plus three GBuffer attachments and nothing else
 — no acceleration structure, no second geometry submission — as 16×16 compute
-dispatches over a fixed 1920×1080 grid writing `R16G16B16A16_SFLOAT`. But they are
+dispatches over the frame's grid writing `R16G16B16A16_SFLOAT`. But they are
 chained, not parallel. SSS consumes the deferred lighting output; the local `litOutput`
 is then reassigned to SSS's blurred image, and *that* is what SSR is handed as its
 `litScene`:
@@ -184,7 +184,7 @@ be rewritten under it. The pass therefore holds a `[slot][direction]` array and
 {{cite ohao/render/deferred/sss_pass.hpp "std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> m_descSets{};"}}
 
 Seven taps at offsets −3…+3 are scaled by `sssWidth`, fixed at 8 pixels, so the kernel
-reaches ±24 pixels of the pass's 1920×1080 grid. Fixed, not defaulted:
+reaches ±24 pixels whatever the resolution. Fixed, not defaulted:
 `SSSPass::setSSSWidth` exists and has no caller anywhere in the tree, so the member
 initialiser is the only width the shipped pipeline can ever run.
 
@@ -242,7 +242,7 @@ so specular is softened along with everything else, at the one fixed width. Clos
 gap is not a kernel change: it needs the lighting pass to emit diffuse and specular
 separately.
 
-## Ordering hazards nobody declared
+## Ordering the graph does not see
 
 The render graph tracks barriers for CSM → GBuffer → SSAO → Lighting. SSS and SSR run
 *after* `m_renderGraph.execute(cmd)` on the raw command buffer with hand-written
@@ -255,27 +255,36 @@ and post-processing prefers the SSS output whenever the pass exists:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?"}}
 
-But two passes still write into the *original* lighting image after SSS has sampled it
-— the Preetham sky (enabled by default) and the particle forward pass:
+So everything that draws into the lighting image has to be in it before SSS copies
+it. Two passes do: the Preetham sky (enabled by default) and the particle forward
+pass. Both run straight after the graph, ahead of SSS:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "// 4.6. Sky pass — fills sky pixels with Preetham sky"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "// Sky and particles write into the lighting output, so they run before SSS copies it:"}}
 
-{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Solid arrows are reads and writes that reach the tonemap; the dashed accent path is written after SSSPass has already copied the image, so it is dropped."}}
+They draw through render passes, as colour-attachment writes, and neither render
+pass's dependencies reach a compute read. When either ran, a memory barrier from
+colour-attachment output to the compute and fragment stages makes their writes
+visible to SSS, SSR and post:
 
-A second gap sits in the same area. `DeferredRenderer::onResize` forwards to the
-GBuffer, RT GI, lighting, post-processing, gizmo and sky passes — and not to SSS or SSR:
+{{cite ohao/render/deferred/deferred_renderer.cpp "vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,"}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "void DeferredRenderer::onResize(uint32_t width, uint32_t height) {"}}
+The pass registry lists the same order — `lighting`, `sky`, `particles`, `sss`, `ssr`,
+then post's own passes — and the timings come back in it.
 
-Both passes implement a correct `onResize`; nobody calls it. Their images stay at the
-1920×1080 allocated at init, and `screenSize` in the push constants comes from the same
-stale `m_width`/`m_height`, so after a window resize they produce a correctly scaled
-1080p result that post-processing samples with the new viewport's UVs.
+{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Lighting, then sky and particles, write the HDR lit image; SSSPass copies it after a barrier, and tonemap reads the copy."}}
+
+Resizing follows the same list by hand. `DeferredRenderer::onResize` forwards the new
+extent to every screen-sized pass, SSS and SSR included:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_sssPass) m_sssPass->onResize(width, height);"}}
+
+Both passes are created at the renderer's initial 1920×1080 and follow it from there;
+`screenSize` in their push constants comes from the same `m_width`/`m_height` that
+sized their images.
 
 :::key
 Neither pass has an enable switch and neither is registered with the render graph. They
-are always on, always hand-barriered, and permanently 1920×1080 — full-resolution only
-until the window is first resized. Any change to the order of the block between
+are always on and always hand-barriered. Any change to the order of the block between
 `m_renderGraph.execute()` and post-processing changes what ends up in the frame.
 :::
 
@@ -284,6 +293,6 @@ until the window is first resized. Any change to the order of the block between
 - SSR's `thickness` is in projected depth units, not world units. Linearising the depth comparison without retuning it disables all reflections.
 - SSR's sky test is exact equality with the GBuffer clear colour. Changing `clearValues[0]` to anything non-zero makes SSR trace rays for the sky.
 - The tonemap's SSR fallback binds the HDR input under an additive composite: a missing SSR view doubles scene brightness rather than contributing nothing.
-- `SSSPass` must run after everything that writes the lighting HDR image, because post-processing switches its input to the SSS output. Passes writing to the lighting image later — currently SkyPass and particles — do not reach the frame.
+- `SSSPass` must run after everything that writes the lighting HDR image, because post-processing switches its input to the SSS output. Sky and particles are ordered ahead of it for that reason; a new pass that draws into the lighting image belongs before SSS too, and inside the barrier that follows them, or it does not reach the frame.
 - `DeferredRenderer::cleanup()` releases the particle system, sky, gizmo, post-processing, lighting, CSM and GBuffer passes and nothing else. `m_sssPass`, `m_ssrPass`, `m_rtShadow` and `m_rtGI` survive it and are freed only when `~DeferredRenderer` destroys their `unique_ptr`s. Calling `cleanup()` manually and then destroying the `VkDevice` destroys all four against a dead device.
 - The tonemap ignores SSR's alpha channel. Anyone switching the `+=` to a correct OVER composite gets the coverage for free from `ssr.a`; anyone deleting the alpha write first makes that fix impossible.

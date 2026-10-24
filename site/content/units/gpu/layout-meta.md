@@ -168,10 +168,10 @@ actually bound.
 
 The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
 roughness, metallic, four bindless texture indices (albedo, normal, roughness-metallic,
-emissive), an emissive strength and the path tracer's tint-texture index — nine
-members packed into twelve floats, the last of them unused.
+emissive) and an emissive strength — eight members packed into twelve floats, the
+last two of them unused.
 
-{{cite ohao/render/scene/render_scene_types.hpp "uint32_t legacyRtTintTex{kNoTexture};"}}
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, 0.0f, 0.0f,"}}
 
 The authoring struct in `material.hpp` is a different thing. `Material` carries
 thirty-one members — index of refraction, transmission, clear coat, subsurface colour

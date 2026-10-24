@@ -119,15 +119,16 @@ and the material table packs those fields, bit-cast, into the row both pipelines
 
 {{cite ohao/render/scene/material_table.cpp "d.baseColor.r, d.baseColor.g, d.baseColor.b, bits(d.albedoTex),"}}
 
-Strings survive in exactly two places, both of them keys for the manager's own
-lookup tables. The path tracer's tint textures — a 1×1 texture per distinct encoded
-base colour — are named after the colour so that every material of that colour finds
-the one already uploaded, and the environment map is registered as `ohao_env_map`.
-`registerName` is what aliases a key onto an existing handle, which is why unloading
-cannot just erase by `tex.name` — it must scan both maps for every key still pointing
-at the freed slot.
+A string survives in one place, as a key for the manager's own lookup tables: the
+environment map is registered as `ohao_env_map`.
 
-{{cite ohao/render/scene/model_upload.cpp "textures->registerName(h, name);"}}
+{{cite ohao/gpu/vulkan/env_upload.cpp "registerExternalTexture(envView, "ohao_env_map", BindlessTextureType::Custom);"}}
+
+The manager can also alias a key onto an existing handle with `registerName`, which
+nothing in the engine calls. The alias is still why unloading cannot just erase by
+`tex.name` — it must scan both maps for every key still pointing at the freed slot.
+
+{{cite ohao/gpu/vulkan/bindless_texture_manager.hpp "void registerName(BindlessTextureHandle handle, std::string_view name) {"}}
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "if (it->second.index == handle.index) it = m_nameToHandle.erase(it);"}}
 
 Nothing deduplicates the model textures themselves: the upload walks materials, not

@@ -127,6 +127,7 @@ Each point is a fact about the tree on 2026-10-24.
   (`deferred_renderer.cpp:952`).
 - **Sky and particles are lost while SSS is active.** They write the lighting output after
   SSS has copied it, and post reads the SSS copy (`deferred_renderer.cpp:614-617`).
+  SSS runs every frame, so they never reached an image.
 - **A window host cannot present or capture path-traced frames.** `renderRTPipeline` never
   acquires or presents a swapchain image (`render_dispatch.cpp:262-345`), and
   `LiveHost::capture` refuses non-deferred modes (`live_host.cpp:141-144`).
@@ -409,6 +410,16 @@ because each pixel sums the same lights in the same order.
   deleted.
 - `Light` gains `castShadows` (bool, default true: today every light uses the RT mask).
 - The path tracer's hard-coded sphere light is replaced by the scene's lights the same way.
+- *As built in step 4:* the light table gives the first 4 casting raster lights, in light
+  order, a channel of an RGBA8 mask (`LightData::params.w`: -1 never, 0..3 the channel, 4
+  casts but no channel; `RenderScene::shadowLights()`); lighting reads each light's own
+  channel. A scene without lights shadows the fallback sun in channel 0. The 8 rays a
+  pixel are shared by the lights (`max(1, 8 / n)` each) until step 7 replaces them with 1
+  ray a light and the filter; per-pixel importance and clusters are step 7's and 13's.
+  *Correction:* the path tracer had no hard-coded light in use — `render()` took a light it
+  never read and the shaders already lit from the scene's light table; the dead
+  parameters are deleted. `castShadows` is a raster-frame control: the path tracer, the
+  ground truth, always traces visibility.
 
 **Per pixel.**
 - Up to 4 shadowed lights from the pixel's cluster, chosen by a deterministic importance
@@ -449,7 +460,9 @@ pass.
 **History** resets on every temporal reset (lockstep captures), so frame N after a reset
 is identical run to run. The frame index is the renderer's frame count since the reset;
 the technique's private counter is deleted. Binding 5 gets the real resource it was meant
-to have, not the depth placeholder.
+to have, not the depth placeholder. *Correction (step 4):* binding 5 ("the current
+frame's direct light") cannot have one — GI traces before lighting, and no shader read
+it — so it is deleted; step 8 chooses the rebuilt pass's inputs.
 
 **Image quality.** A one-frame lockstep capture (the default for deferred without TAA) is
 smoother and less converged than today's 32-ray image. A capture with `frames: 8`
@@ -640,6 +653,10 @@ Spec 4's contract holds and extends to everything 2b adds.
 - The hybrid RT passes and the path tracer seed from (render seed, frame index since the
   last temporal reset, pixel, sample).
 - `m_totalTime` and private counters seed nothing.
+- *As built (step 4):* RT shadows and GI hash (render seed, `DeferredRenderer`'s frames
+  since `resetTemporalState`, pixel, light/sample, dimension) with PCG; the path tracer's
+  sample index already started at the render seed after a reset, and now does for a fresh
+  tracer too.
 
 **Exactness.**
 - The deferred goldens stay exact, and the hybrid-RT configurations join them:
@@ -938,6 +955,17 @@ improvising. Intentional image changes are separate commits inside their step.
      seeds from the render seed and the frame index since reset; the RT double tint.
    - Goldens re-baselined per change (own commits).
    - Tests 9 (lights part), 12 (seed part).
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step4.md`):* three golden
+     re-baselines — scene lights (deferred), seeds (deferred), the double tint
+     (path-traced). Moving particles before SSS exposed three particle bugs, fixed: an
+     uncleared buffer drawn as live particles (run to run), every instance drawing particle
+     0, and a pass that ran with nothing emitted. RT GI's binding 5 is deleted rather than
+     filled (see "RT GI"). Test 9: `engine_tests` `sp2b_t09` (a box's shadow falls away from
+     the scene light and mirrors with it; `castShadows: false` casts none; slot assignment)
+     and `reflect_tests` `sp2b_t09_*` (a lint on literal light positions in `ohao/render`
+     and `ohao/gpu`); test 12: `deferred_determinism_gpu_test` `t12` (another seed moves the
+     RT noise; the same seed reproduces it). The sky reaching an SSS frame is
+     `engine_tests` `sp2b_s4`.
 5. **Validation-clean, deterministic RT.**
    - VUID 03004; the NRD push-descriptor abort; the `rt_realtime` race; RT offline's
      1-LSB flips.

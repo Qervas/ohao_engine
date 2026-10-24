@@ -278,7 +278,7 @@ run and must report nothing.
 
 {{cite tests/renderer/scene_view_gpu_test.cpp "{"cornell: the Camera entity renders exactly as the hand-set camera", c12.bytes == 0},"}}
 
-`engine_tests` runs nine sections. Two are the ones its header comment numbers first —
+`engine_tests` runs twelve sections. Two are the ones its header comment numbers first —
 `EventBus` and `CommandHistory` — and a third, `Assets`, checks the loader's extension
 list; scene entities are covered by `ecs_tests`. The fourth, `runMetaTests`, is the only
 place the renderer's compile-time contracts are exercised at all:
@@ -300,18 +300,27 @@ skipped, not passed, when the machine has no device or no layer.
 
 {{cite tests/engine/engine_tests.cpp "static void runHeadlessDeferredRenderTests() {"}}
 
-The ninth section drives the persistent render world on a real device:
+Three hold the renderer to sub-project 2b's claims, one test each: every executed
+pass registered, timed once and in frame order; frame N's readback equal to a fresh
+capture of step N, with only requested frames copying; and RT shadows cast from the
+scene's own lights, with `castShadows` false casting none and the light table's
+shadow slots handed out in light order. The RT shadow section also checks that the
+sky reaches the final image in a frame that runs SSS.
+
+{{cite tests/engine/engine_tests.cpp "static void runRTShadowTests() {"}}
+
+The last section drives the persistent render world on a real device:
 
 {{cite tests/engine/engine_tests.cpp "static void runRenderSceneTests() {"}}
 
-twelve cases covering mesh registration with its AABB, table entry and BLAS; static
+thirteen cases covering mesh registration with its AABB, table entry and BLAS; static
 instances uploading once while moving ones upload in proportion; missing material
 references falling back to the default; instance-table and mesh-arena growth without
 destroying a buffer a frame still reads; the raster shadow-caster rule; a material edit
-reaching the packed table row; the 1×1 tint textures being shared per encoded colour;
-the path tracer tracing the render world; texture slots past 1024 reaching the tracer;
-a moved instance refitting the TLAS; and a slot released and reused in one frame
-forcing a rebuild.
+reaching the packed table row; the path tracer tracing the render world; texture slots
+past 1024 reaching the tracer; a moved instance refitting the TLAS; a slot released and
+reused in one frame forcing a rebuild; the raster light UBO being one buffer per frame
+slot; and RT accumulation restarting when an instance moves or a light changes.
 
 Its `EXPECT` macro `return`s from the enclosing section function, so the first
 failure silently skips the rest of that section; the exit code is still non-zero,

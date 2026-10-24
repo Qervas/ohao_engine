@@ -306,11 +306,11 @@ pass transitions it itself, from `UNDEFINED` to `GENERAL` and then to
 The rejected alternative was declaring it as a graph-tracked write, the way the
 GBuffer normal target is declared as a graph-tracked read for this pass. Keeping
 it self-managed makes the pass drop-in for any caller with a command buffer, at
-two costs. First, the graph imports the image as `ssao_output` — under the wrong
-format, `R8_UNORM` against an `R16_SFLOAT` image — but no pass ever declares it,
+two costs. First, the graph imports the image as `ssao_output` — with the format
+the pass creates it with, `SSAOPass::kOutputFormat` — but no pass ever declares it,
 so the graph's layout ledger and the real layout can drift:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "VK_FORMAT_R8_UNORM, w, h, VK_IMAGE_LAYOUT_UNDEFINED);"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "SSAOPass::kOutputFormat, w, h, VK_IMAGE_LAYOUT_UNDEFINED);"}}
 
 Second, starting each frame from `UNDEFINED` explicitly discards the previous
 contents, so no frame can amortise its taps against the last one.

@@ -207,17 +207,23 @@ $C^1$ there, so a light does not visibly snap off at its range boundary.
 
 Shadowing resolves to one scalar per light iteration, and an RT mask, when
 present, wins outright over cascaded shadow maps — the CSM branch is `else if`,
-not an extra multiply. "Per light" flatters the RT path, though: the mask is
-sampled at `inTexCoord` with no dependence on the loop index, so when flag bit 5
-is set every light in the scene is occluded by the same screen-space term.
+not an extra multiply. The RT mask is RGBA8 with one channel per shadow-casting
+light, sampled once at `inTexCoord` before the loop; each light then picks its own
+channel by the slot the light table wrote into its `params.w`:
 
-{{cite shaders/core/deferred_lighting.frag "shadow = texture(rtShadowMask, inTexCoord).r;"}}
+{{cite shaders/core/deferred_lighting.frag "vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);"}}
+
+{{cite shaders/core/deferred_lighting.frag "if (slot < 4) shadow = rtShadow[slot];"}}
+
+A slot of -1 (the light casts no shadows, or is an emissive proxy) is never
+occluded, and slot 4 (a caster past the four channels) is unshadowed under RT.
 
 CSM picks a cascade by positive view-space depth and takes a 3×3 PCF
 tap; it neither blends between cascades nor applies a normal-offset bias, though
 the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that,
 and `shadowStrength` and the lighting UBO's `shadowBias` are equally inert. It
-also runs only for `lightType == 0`: point and spot lights cast no shadow here.
+also runs only for `lightType == 0` with a non-negative slot: point and spot lights
+cast no shadow without RT.
 
 Ambient is defensive because every input can legitimately be absent. IBL is gated
 not only on its flag but on the env map being larger than 1×1 — how the shader

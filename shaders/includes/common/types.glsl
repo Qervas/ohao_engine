@@ -20,7 +20,7 @@ struct Light {
     vec4 position;          // xyz = position, w = type
     vec4 direction;         // xyz = direction, w = range
     vec4 color;             // xyz = color, w = intensity
-    vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused
+    vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = shadow slot (-1 never, 0..3 RT mask channel, 4 casts but no channel)
     mat4 lightSpaceMatrix;  // Transform to light space for shadow mapping (64 bytes)
 };
 

@@ -141,13 +141,17 @@ Those scalars are not decoration. `DeferredRenderer` forwards them to `CSMPass::
 
 The four cascades are therefore distributed over a range ten times deeper than the projection can draw. The deepest split is the far plane itself, so the last cascade's entire extent — from wherever cascade three ends out to 1000 — lies past the point at which geometry is already clipped, and the shadow-map resolution budgeted for it is spent on nothing. This is a sharper defect than the aspect mismatch above, and it has the same cause: a scalar written at the call site instead of read from the object that owns it.
 
-## The light that goes nowhere
+## Where the path tracer's light comes from
 
-The RT dispatch closes its `render` call with four arguments that read like the scene's key light — a position four units up, intensity 30, warm white, radius 1.
+The RT dispatch hands the tracer a command buffer, the frame slot and the camera matrices, and nothing that describes a light:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);"}}
 
-`PathTracer::render` accepts all four and uses none of them — they appear in the signature and nowhere in the body; only `view` and `proj` survive, as `invView` / `invProj` in the 256-byte push-constant block. The lights the tracer samples arrive instead as the render world's RT light buffer, whose handle `setSceneBuffers` copies into the tracer right after `recordUpdates`, together with the TLAS and the mesh, material and instance tables. Deleting the four parameters would change no pixel — which is why they are worth naming: they invite someone to brighten the scene by editing a number that has no consumer.
+`view` and `proj` reach the shaders as `invView` / `invProj` in the 256-byte push-constant block. The lights the tracer samples arrive as the render world's RT light buffer, whose handle `setSceneBuffers` copies into the tracer right after `recordUpdates`, together with the TLAS and the mesh, material and instance tables.
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->setSceneBuffers(*m_renderScene);"}}
+
+The path tracer is therefore lit by exactly the lights the scene holds; there is no number at the call site to edit.
 
 ## The sun that overwrites your only light
 
@@ -160,6 +164,12 @@ The intent is stated where the buffer is filled: a scene with no lights gets one
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "// If no lights in scene, add a default directional light (direction synced by renderDeferred)"}}
 
 But `numLights == 1` cannot tell a fabricated light from an authored one. A scene with a single directional light — the ordinary outdoor case — has its authored direction silently overwritten by the sky's sun on every deferred frame. The fix is a flag on the fallback light, not a count; the count is genuinely ambiguous.
+
+The same fallback sun is what RT shadows trace when the scene has no lights. After the sky sync, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names mask channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `lights[0].direction` with the real sun's angular radius, 0.00465 rad.
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "constexpr float kSunAngularRadius = 0.00465f;"}}
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));"}}
 
 :::why
 Both bodies pipeline instead of blocking: `render()` never waits for its own submission, only for the frame that last used its slot, three submissions back. Pixels reach the CPU only through a request, and the wait for them is the caller's choice: `readback()` blocks on that one frame's fence. A loop that never reads pays for no copy and no wait. A capture pays exactly one wait, for the frame it keeps. The ring this replaced copied every headless frame and handed back the one three calls earlier: correct pixels only after the ring had turned over, and a copy paid on every frame nobody read.

@@ -98,12 +98,13 @@ which every emit dispatch allocates, overflows, undoes and returns empty-handed.
 Recycling would need a free list or a compaction pass; neither exists. `deadCount`
 has no reader at all.
 
-The arena is also never cleared. The particle buffer is allocated `DEVICE_LOCAL`
-with no staging clear and no `vkCmdFillBuffer`, yet update reads `params.w` on all
-65536 slots each frame, including slots the cursor has never reached. Vulkan leaves
-fresh device memory undefined; drivers zero pages in practice for cross-process
-isolation, and zero decodes as "dead". The pass is correct because of a driver
-habit, not because of the code.
+The arena is cleared once. Update reads `params.w` on all 65536 slots each frame,
+including slots the cursor has never reached, and Vulkan leaves fresh
+`DEVICE_LOCAL` memory undefined. So before the first emit or update records, the
+host fills the whole buffer with zeros on the GPU, followed by a barrier to the
+compute and vertex stages; zero decodes as "dead".
+
+{{cite ohao/render/particles/particle_system.cpp "vkCmdFillBuffer(cmd, m_particleBuffer, 0, VK_WHOLE_SIZE, 0u);"}}
 
 ## Integrating with a linearised drag
 
@@ -183,49 +184,50 @@ is never seen from behind. In the same spirit the particle buffer carries a
 
 {{cite ohao/render/particles/particle_system.cpp "VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT"}}
 
-The addressing is `gl_VertexIndex / 6`, which expects a flat draw of $6N$ vertices:
+The draw is instanced: one instance per particle slot, six vertices each. The
+vertex shader takes the slot from the instance index and the corner from the
+vertex index:
 
-{{cite shaders/particles/particle_render.vert "uint particleIndex = gl_VertexIndex / 6;"}}
+{{cite shaders/particles/particle_render.vert "uint particleIndex = gl_InstanceIndex;"}}
 
-The draw it gets is instanced. Update atomically counts survivors into the indirect
-buffer's `instanceCount`:
+{{cite shaders/particles/particle_render.vert "uint vertexInQuad = gl_VertexIndex % 6;"}}
 
-{{cite shaders/particles/particle_update.comp "atomicAdd(instanceCount, 1);"}}
-
-while the host pins `vertexCount` at six:
+The host pins `vertexCount` at six and zeroes `instanceCount` at record time:
 
 {{cite ohao/render/particles/particle_system.cpp "indirect[0] = 6; // vertexCount (6 vertices per billboard quad)"}}
 
-For a non-indexed draw `gl_VertexIndex` runs over `firstVertex .. firstVertex+vertexCount-1`
-*within each instance*, so it never leaves $[0,6)$ and `particleIndex` is always 0;
-the shader never reads `gl_InstanceIndex`. As wired, every instance redraws slot 0
-on top of itself, and if slot 0 is dead the pass draws nothing. Each half is
-coherent alone — the shader wants `vertexCount = 6N, instanceCount = 1`, the buffer
-wants a `gl_InstanceIndex` lookup — but they are not the same scheme.
+and update raises `instanceCount` to one past the highest slot still alive:
 
-## The target nothing reads
+{{cite shaders/particles/particle_update.comp "atomicMax(instanceCount, idx + 1u);"}}
 
-Two independent reasons keep this off screen. The first is that nothing spawns:
+A maximum does not depend on the order lanes run in, so the draw size is the same
+on every run. It covers dead slots below the highest live one too; those take the
+shader's early-out and collapse to a point at clip-space $z = -10$, which clipping
+discards.
+
+## Where the billboards land
+
+One thing keeps this off screen in the shipped engine: nothing spawns.
 `DeferredRenderer::spawnParticles` is the only path that queues an emitter config,
 and it has no caller in `ohao/` or `examples/`.
 
-The second survives fixing the draw. The particle framebuffer's colour attachment
-is the deferred lighting pass's HDR output:
+A caller that does spawn sees the result. The particle framebuffer's colour
+attachment is the deferred lighting pass's HDR output:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = m_lightingPass->getOutputView();"}}
 
-but post-processing — which owns bloom, TAA and tonemapping — prefers the SSS pass's
-output whenever `SSSPass` initialised, and `SSSPass` is created unconditionally at
-renderer init, released only if its own `initialize` fails:
+and post-processing — which owns bloom, TAA and tonemapping — prefers the SSS pass's
+output whenever `SSSPass` initialised:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_sssPass->getOutputView() : m_lightingPass->getOutputView();"}}
 
-SSS runs at step 4.5 of `DeferredRenderer::render` and blurs the lit scene into an
-image of its own; particles draw at step 4.7, after that snapshot is taken, and
-nothing downstream reads the lighting output again. So on the default path the
-particle pass writes colour into a buffer post-processing never samples. Update and
-the indirect draw still run every deferred frame, over an arena where every slot is
-dead.
+Particles draw at step 4.6 of `DeferredRenderer::render`, after the sky and before
+SSS, which runs at 4.7 and blurs the lit scene — billboards included — into an
+image of its own. Without a queued emit or a particle still within its emitter's
+`maxLifetime`, the renderer skips the pass entirely: no update dispatch and no
+draw.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "// 4.6. Particle system (forward pass over HDR, before SSS and post-processing)"}}
 
 ## Why nothing sorts
 
@@ -275,9 +277,9 @@ are alive.
 ## Contracts
 
 - `aliveCount` is an allocation cursor, not a population; after 65536 cumulative spawns the emitter falls permanently silent.
-- Update reads `params.w` across the whole arena, including slots never written — correctness rides on the driver zeroing fresh device memory. Add a `vkCmdFillBuffer` before trusting a new platform.
-- `gl_VertexIndex / 6` addressing and a 6-vertex × N-instance draw disagree; fixing either side alone preserves the mismatch.
-- Particles render into the lighting output, but post-processing samples the SSS pass output snapshotted two steps earlier — fixing the draw alone still yields nothing on screen.
+- Update reads `params.w` across the whole arena, including slots never written. `ParticleSystem::clearOnce` zeroes the buffer with `vkCmdFillBuffer` before the first emit or update records, so an untouched slot reads dead on every platform.
+- The vertex shader reads the slot from `gl_InstanceIndex` and the corner from `gl_VertexIndex % 6`; the draw must stay six vertices by `instanceCount` instances, and `instanceCount` must stay a bound on live slots (a maximum, not a count), or live particles above it are never drawn.
+- Particles render into the lighting output, and post-processing samples SSS's copy of it; the particle pass must stay ahead of SSS, inside the barrier that follows sky and particles.
 - `Particle` is redeclared in all three shaders with no shared include — a layout change must land three times.
 - `instanceCount` is reset by a host write at record time, not by a GPU command, and there is one indirect buffer rather than one per frame in flight.
 - Per-emitter `gravity` and `drag` never reach a shader; `endSize` and `colorEnd` reach emit's push block and no shader reads them.

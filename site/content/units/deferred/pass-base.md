@@ -135,7 +135,12 @@ leaving the half-built renderer alive until `VulkanRenderer` itself is destroyed
 returns a `RenderTarget` aggregate. It has exactly two callers, both inside
 `SSAOPass`:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "RenderTarget rt = createRenderTarget(VK_FORMAT_R16_SFLOAT, m_width, m_height,"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "RenderTarget rt = createRenderTarget(kOutputFormat, m_width, m_height,"}}
+
+`kOutputFormat` is `R16_SFLOAT`, a public constant so the render graph imports the
+AO image with the format it was created with.
+
+{{cite ohao/render/deferred/ssao_pass.hpp "static constexpr VkFormat kOutputFormat = VK_FORMAT_R16_SFLOAT;"}}
 
 `GBufferPass` builds all five of its targets with the same image → memory → view
 sequence written out by hand, driven by its own local `{format, usage, aspect}`

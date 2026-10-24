@@ -131,7 +131,7 @@ $$</div>
 <p>Five of the remaining seven are dead in both senses: `f0FromIOR`, `envBRDFApprox`, and the uncorrelated Smith trio, whose $(2\,n\cdot\omega)/(n\cdot\omega+\sqrt{\cdot})$ arrangement appears nowhere else under `shaders/`.</p>
 <div class="citation-chip"><code class="citation-code">float smithG(float NdotV, float NdotL, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L72" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:72</a></div>
 <p>The last two are one-line compositions the fragment shaders open-code rather than call: `getRoughnessMipLevel` as a literal `roughness * 9.0`, `evaluateBRDFWithShadow` as a multiply by `1 - shadow`.</p>
-<div class="citation-chip"><code class="citation-code">float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L276" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:276</a></div>
+<div class="citation-chip"><code class="citation-code">float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L284" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:284</a></div>
 <p>Prune by grepping the formula, not only the name: a copy written with different temporaries is invisible to a search for the usual identifiers.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>

@@ -117,48 +117,36 @@ edit that changes the topology: forget one and the refit silently traces a stale
 structure.
 :::
 
-## Base color, applied twice, on purpose
-
-The material row reserves a slot for a path-tracer-only fallback texture. A material with
-no albedo map is given a 1×1 pixel holding its base colour, transfer-encoded to sRGB,
-uploaded as `UNORM` and shared by name between every material of the same encoded
-colour:
-
-{{cite ohao/render/scene/model_upload.cpp "const std::array<uint8_t, 4> texel{linearToSRGB(baseColor.r), linearToSRGB(baseColor.g),"}}
-{{cite ohao/render/scene/model_upload.cpp "std::span<const uint8_t>(texel), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Albedo,"}}
-
-It is attached only when the material has no albedo texture and has not already been
-given one:
-
-{{cite ohao/render/scene/model_upload.cpp "if (m.albedoTex == kNoTexture && m.legacyRtTintTex == kNoTexture)"}}
+## Base color, applied once
 
 The closest-hit shader seeds `albedo` with the material's base colour and multiplies in
-the albedo texture when there is one — the glTF convention. For the fallback it
-multiplies in the tint pixel decoded by an explicit power:
+the albedo texture when there is one — the glTF convention:
 
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= pow(textureLod(textures[nonuniformEXT(legacyTintTexIdx)], texUV, 0.0).rgb, vec3(2.2));"}}
-
-For a real texture that is right. For the fallback the pixel *is* the factor. Writing
-$c$ for the material's linear base colour and $\mathrm{srgb}(\cdot)$ for the 8-bit
-transfer encode applied at upload:
-
-$$\text{albedo} \;=\; c \cdot \big(\mathrm{srgb}(c)\big)^{2.2} \;\approx\; c^{2}$$
-
-because the 2.2-power decode inverts the encode to within 8-bit quantisation. A base
-colour of 0.73 shades as roughly 0.53. The raster path applies the colour once, so an
-untextured surface is darker in the path tracer than in the G-buffer. The deviation is
-deliberate and labelled in the shader — the fallback exists so the path-traced golden
-corpus keeps matching — and it is gated: a material with an albedo texture takes the
-first branch of the shader, an untextured material without a tint takes neither, and
-only the tinted case squares.
+{{cite shaders/rt/pt_closesthit.rchit "vec3 albedo = matColor.rgb;"}}
 
 {{cite shaders/rt/pt_closesthit.rchit "if (diffuseTexIdx != 0xFFFFFFFFu) {"}}
 
+Albedo textures are uploaded as `R8G8B8A8_SRGB`, so the sampler returns linear values
+and no decode appears in the shader:
+
+{{cite ohao/render/scene/model_upload.cpp "upload(model.materialTextureIndex, model.albedoTextures, VK_FORMAT_R8G8B8A8_SRGB,"}}
+
+An untextured material is therefore its base colour, once, in the path tracer as in the
+G-buffer, which writes the base colour times the vertex colour:
+
+{{cite shaders/core/gbuffer.frag "albedo = fragColor * row0.rgb;"}}
+
+No per-material fallback texture is created for it: `modelMaterials` uploads only the
+textures the model carries, and row 2 of the material table has no texture slot beyond
+the roughness/metal index. With an albedo texture the two renderers still differ: the
+G-buffer multiplies the texture by the vertex colour and drops the base-colour factor
+that the path tracer keeps.
+
 :::key
-The diffuse sentinel is live: a material can have no albedo and no tint, and then the
-base colour applies once. The squaring is confined to the materials `uploadModel`
-tinted, and anyone who removes the tint must also re-baseline the path-traced goldens,
-because their pixels encode the squared value.
+The diffuse sentinel is the whole rule: a valid albedo index multiplies the base colour,
+`0xFFFFFFFF` leaves it alone. Any material that should look different in the path
+tracer than in the raster path has to say so in its own fields, not through a texture
+the loader adds.
 :::
 
 ## Textures at their native size, base level only
@@ -211,5 +199,5 @@ the struct marks it for deletion when RT GI is reworked.
 - A change to an instance's mask (visibility), mesh or existence must reach the TLAS as a structural change; only a transform-only change may refit.
 - The path tracer must be handed the scene buffers after `recordUpdates` each frame, never before: table growth and TLAS storage replacement change the handles.
 - Replaced TLAS storage, like replaced tables, is destroyed by the retire queue after `MAX_FRAMES_IN_FLIGHT` frames. Destroying it eagerly can free a structure an earlier frame is still tracing.
-- The tint texture is attached only to materials without an albedo map, and it squares the base colour in the path tracer. Removing it changes path-traced output and invalidates the goldens.
+- The closest-hit's albedo is the base colour, times the albedo texture when one is bound. For untextured materials the G-buffer applies the same base colour once; a change to either side alone makes those surfaces disagree between the two renderers, and any change to the closest-hit side moves the path-traced goldens.
 - All BLAS geometry is opaque and every raygen trace passes the opaque flag; an alpha-tested material will not cut out until both change.

@@ -142,32 +142,36 @@ shader seeds its hash from `(time, index)` alone.
 Two effects spawned on one frame with equal particle counts therefore get
 identical random directions, speeds and lifetimes.
 
-## The instance count arrives, the instance index does not
+## One instance a slot, up to the highest live one
 
-`update` finishes by counting survivors straight into the draw command, one
-atomic per alive lane:
+`update` finishes by raising the draw command's instance count to one past the
+highest slot still alive, one atomic per alive lane:
 
-{{cite shaders/particles/particle_update.comp "atomicAdd(instanceCount, 1);"}}
+{{cite shaders/particles/particle_update.comp "atomicMax(instanceCount, idx + 1u);"}}
 
-and the CPU pre-seeds that same struct each frame with a fixed six-vertex quad and
-a zero instance count:
+A maximum, unlike a count, does not depend on the order the lanes run in, so the
+same pool gives the same draw on every run. The CPU pre-seeds that same struct
+each frame with a fixed six-vertex quad and a zero instance count:
 
 {{cite ohao/render/particles/particle_system.cpp "indirect[0] = 6; // vertexCount"}}
 
 No vertex buffer is bound at all — the corners are a `const vec2[6]` in the vertex
 shader, expanded into a world-space quad by the two camera basis vectors pushed as
-constants. So the GPU is told: six vertices, N instances. The vertex shader then
-derives its particle from the *vertex* index:
+constants. So the GPU is told: six vertices, N instances, and the vertex shader
+takes its particle from the instance index and its corner from the vertex index:
 
-{{cite shaders/particles/particle_render.vert "uint particleIndex = gl_VertexIndex / 6;"}}
+{{cite shaders/particles/particle_render.vert "uint particleIndex = gl_InstanceIndex;"}}
 
-Under that draw `gl_VertexIndex` never leaves `[0, 6)`, so `particleIndex` is zero
-for every instance, and `gl_InstanceIndex` does not appear anywhere in
-`shaders/particles/`. The shader is written for the non-instanced form — a draw of
-6·N vertices, where the divide-and-modulo split and the dead-particle early-out
-(which clips its quad to a degenerate point) both make sense — while the C++
-issues the instanced form. The alive count is computed correctly and then never
-used to select a particle.
+The draw covers every slot below the highest live one, dead or alive. A dead slot
+in that range is drawn as a degenerate point behind the near plane and costs six
+vertex invocations. Because emission only bumps, the range is in practice every
+slot ever emitted that has a live particle above it.
+
+The alive flag has to mean something in slots no emit has touched yet, and
+device-local memory starts as whatever was there. The pool is therefore zeroed on
+the GPU once, before the first emit or update records:
+
+{{cite ohao/render/particles/particle_system.cpp "vkCmdFillBuffer(cmd, m_particleBuffer, 0, VK_WHOLE_SIZE, 0u);"}}
 
 ## Additive, depth-tested, never depth-written
 
@@ -198,9 +202,9 @@ Real smoke needs a second pipeline with `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA` and a
 sort.
 :::
 
-## The pass draws into an image nobody reads
+## Drawn into the lit image before SSS copies it
 
-Particles are stage 4.7, after lighting, SSS, SSR and sky, before
+Particles are stage 4.6: after lighting and sky, before SSS, SSR and
 post-processing. Their framebuffer's colour attachment is the lighting pass's
 output view:
 
@@ -212,15 +216,24 @@ exists, falling back to the lighting view only when it does not:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_sssPass->getOutputView() : m_lightingPass->getOutputView();"}}
 
-And it always exists. `SSSPass` is constructed unconditionally and reset only if
-`initialize()` fails, and a successful `initialize()` has already allocated its
-own output image — 1920×1080 until the renderer's first `onResize` sizes it to the
-extent — so `getOutputView()` is never null. The SSS blur runs
-at stage 4.5 — two stages *before* the particle pass — reading the lighting image
-and writing its result into its own allocation. Everything downstream, bloom and
-tonemapping included, works from that earlier snapshot. So the billboards land in
-an image nothing downstream reads. This is the second, larger reason nothing
-appears on screen — the first being the vertex indexing above.
+And it always exists: `SSSPass` is constructed unconditionally and reset only if
+`initialize()` fails. The order is what makes the billboards reach the frame. The
+SSS blur reads the lighting image *after* the particle pass has drawn into it, and
+writes its result into its own allocation, which everything downstream, bloom and
+tonemapping included, works from. Between the two sits a memory barrier from
+colour-attachment writes to compute and fragment reads, since the particle render
+pass's own dependencies do not reach the SSS compute dispatch:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;"}}
+
+The pass does not run every frame. The renderer records it only while a particle
+can be alive — from a queued emit until that emit's time plus its `maxLifetime` —
+so a scene that never emits pays for no dispatch and no draw:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "const bool particlesLive = !m_pendingEmits.empty() || m_totalTime <= m_particlesLiveUntil;"}}
+
+The clock it compares against, `m_totalTime`, advances by the frame's delta on
+every frame whether or not the pass runs.
 
 The render pass itself loads both attachments rather than clearing them, and
 declares the colour attachment's initial *and* final layouts as
@@ -249,17 +262,16 @@ framebuffer or render pipeline logs and leaves it alive.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "Particle render pass/framebuffer failed (non-fatal)"}}
 
-In that state `emit` and `update` keep dispatching every frame — burning the
-compute and the monotone `aliveCount` budget — while `render()` early-outs on the
-null pipeline. Nothing is ever drawn, and nothing says so after the one startup
-line.
+In that state `emit` and `update` keep dispatching on every frame a particle is
+live — burning the compute and the monotone `aliveCount` budget — while `render()`
+early-outs on the null pipeline. Nothing is ever drawn, and nothing says so after
+the one startup line.
 
 :::key
-The pool is a bump allocator that never recycles, and the render path counts
-survivors correctly but indexes only particle zero. Until the index is wired to
-`gl_InstanceIndex` (or the draw de-instanced) the system draws one billboard N
-times; until slots are reclaimed it is a one-shot 65,536-particle budget for the
-process.
+The pool is a bump allocator that never recycles. The render path draws one
+instance per slot up to the highest live one and lands in the image SSS copies, so
+what is emitted reaches the screen; but until slots are reclaimed the system is a
+one-shot 65,536-particle budget for the process.
 :::
 
 ## Contracts

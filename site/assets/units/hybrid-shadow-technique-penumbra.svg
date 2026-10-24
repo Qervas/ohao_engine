@@ -21,5 +21,5 @@
   <line x1="112" y1="82" x2="142" y2="82" stroke="#c4784a" stroke-width="2.4"/>
   <text x="150" y="86" font-family="DM Sans,sans-serif" font-size="12.5" fill="#e8e2d6">sphere-surface jitter in rt_shadow.rgen: (1 &#8722; x) / 2</text>
   <line x1="112" y1="102" x2="142" y2="102" stroke="#6e685c" stroke-width="1.6"/>
-  <text x="150" y="106" font-family="DM Sans,sans-serif" font-size="12.5" fill="#e8e2d6">that ramp at sampleCount = 8 &#8594; 9 discrete levels</text>
+  <text x="150" y="106" font-family="DM Sans,sans-serif" font-size="12.5" fill="#e8e2d6">that ramp at 8 rays (one shadow light) &#8594; 9 discrete levels</text>
 </svg>

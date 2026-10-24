@@ -151,9 +151,9 @@ bias that changes every frame.
 
 ## The half of the frame the graph never sees
 
-{{figure deferred-orchestrator-frame-schedule "Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; the dashed accent arrow is the particle pass writing into an image nothing downstream reads."}}
+{{figure deferred-orchestrator-frame-schedule "Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; sky and particles write the lighting image before SSS copies it."}}
 
-After `m_renderGraph.execute(cmd)` returns, SSS, SSR, sky, particles, post-processing
+After `m_renderGraph.execute(cmd)` returns, sky, particles, SSS, SSR, post-processing
 and gizmos are recorded directly, each rolling its own barriers. `SSSPass` blurs the lit
 scene into a *separate* image, and `sss_blur.comp` passes non-skin pixels through
 unchanged — so that image is a full copy of the frame at the moment SSS ran, and
@@ -161,13 +161,20 @@ post-processing prefers it when it exists:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_sssPass->getOutputView() : m_lightingPass->getOutputView();"}}
 
-But sky and particles are recorded *after* SSS and draw into the lighting image, so
-whatever they write never reaches the tonemapper. Since `deferred_lighting.frag` sets
-`outColor = vec4(0.0)` wherever the GBuffer position sample is exactly zero, and
-`sky.frag` fills whatever the GBuffer left at far depth (it discards below 0.9999), that
-is the whole sky. `onResize` keeps every screen-sized target at the output extent — the
-GBuffer, lighting, post, gizmo, sky, SSS, SSR and both RT techniques — so the ordering, not
-a stale size, is what loses those writes.
+That copy is why sky and particles come first. Both draw into the lighting image,
+and only what is in it when SSS runs reaches the tonemapper. Since
+`deferred_lighting.frag` sets `outColor = vec4(0.0)` wherever the GBuffer position
+sample is exactly zero, and `sky.frag` fills whatever the GBuffer left at far depth
+(it discards below 0.9999), the sky pass is the whole sky; recorded after SSS, a frame
+would come out with a black background. Both write through render passes as colour
+attachments, which no compute read is ordered against, so when either ran a memory
+barrier from colour-attachment output to the compute and fragment stages comes
+before SSS:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "// Sky and particles drew into the lit image as a color attachment; SSS (compute), SSR"}}
+
+`onResize` keeps every screen-sized target at the output extent — the GBuffer,
+lighting, post, gizmo, sky, SSS, SSR and both RT techniques.
 
 ## Ordering constraints that are not obvious
 
@@ -188,11 +195,20 @@ GI.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 32;"}}
 
-The wall clock hides a similar dependency. `m_totalTime` advances in one place only,
-inside the particle block; RT GI reconstructs a frame counter from it as
-`m_totalTime * 60.0f`, the sky pass takes it unscaled as a star seed. If
-`ParticleSystem` fails to initialise — non-fatal — the clock freezes at zero and both
-lose per-frame variation.
+Two clocks feed the passes, and neither depends on any pass running. `m_totalTime`
+advances by the frame's delta on every frame, outside the particle block; the sky
+pass takes it as a star seed, and the particle pass compares it against the end of
+the last emit's longest lifetime to decide whether to run at all. The RT passes
+are seeded instead by a frame counter, `m_framesSinceReset`, taken once per
+`render()` and handed to both RT shadows and RT GI with the render seed:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "const uint32_t rtFrame = m_framesSinceReset++;"}}
+
+`resetTemporalState` zeroes both clocks, keeps a pending particle lifetime by moving
+it onto the restarted clock, and drops RT GI's and TAA's history, so frame *k*
+after a reset traces the same rays in every run with the same seed.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock"}}
 
 :::key
 `RenderGraph` here is a barrier calculator, not a scheduler and not a resource manager.
@@ -205,6 +221,6 @@ Pass order, lifetimes and every barrier outside the six graph passes are hand-wr
 - A tracked texture read by two graph passes in a row gets a second barrier with `oldLayout = UNDEFINED` and `TOP_OF_PIPE` as its source: `currentLayout` is never refreshed during compilation.
 - `setRTShadowMask` and `setSSGITexture` must be called before `DeferredLightingPass::execute` records, which happens only if the RT passes are added to the graph ahead of lighting. A view handed over after lighting recorded is cleared again before the next frame's graph runs.
 - `frameIndex` must be the slot whose fence `VulkanRenderer` just waited: it selects the per-slot descriptor set each pass rewrites.
-- Anything written into the lighting HDR image after the SSS dispatch never reaches post-processing while `SSSPass` is alive; sky and particles are both in that window.
+- Anything written into the lighting HDR image after the SSS dispatch never reaches post-processing while `SSSPass` is alive. Sky and particles are recorded before it for that reason, followed by the colour-attachment-to-compute barrier; a new pass drawing into the lit image belongs in the same place.
 - `importGraphTextures()` must run after any pass reallocates its images, or the graph holds destroyed `VkImage` handles.
 - `frameIndex` is a ring index of period 3, not a monotonic counter, so `TAAPass::getJitterOffset` sees three values.

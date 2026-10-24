@@ -100,7 +100,11 @@ the light's world position. A directional sun therefore becomes a point lamp par
 at that position with $1/(1+d^2)$ falloff: wrong incident direction and wrong
 falloff at every bounce point, not merely dim. For one point lamp the single-light
 restriction itself costs nothing. With two comparable lights roughly half the
-indirect energy is absent, and the bleed colour snaps when the ranking flips.
+indirect energy is absent, and the bleed colour snaps when the ranking flips. A
+scene with no light at all leaves the defaults in place, an intensity of zero, and
+every bounce contributes nothing:
+
+{{cite ohao/render/rt/render_technique.hpp "float lightIntensity{0.0f};"}}
 
 ## One ray mask, and what it rejects
 
@@ -156,29 +160,34 @@ $$\frac{\operatorname{Var}[\hat{L}_{\text{EMA}}]}{\operatorname{Var}[\hat{L}_{\t
 relative to one frame's estimate. At $\alpha = 0.3$ that is $0.176$, an effective
 window of $(2-\alpha)/\alpha \approx 5.7$ frames — so 32 traced rays would behave
 like about 180 for a camera holding still, *if* successive frames drew independent
-samples. Nothing here establishes that. The sampler is a deterministic hash, and
-`hash2` is one 1D hash evaluated twice, at `p` and at a fixed offset from `p`, so
-both coordinates of every 2D sample leave the same generator:
+samples. The sampler is built for that. Each coordinate of each sample is its own
+integer PCG hash, nested over the render seed, the frame index, the pixel, the
+sample and the dimension:
 
-{{cite shaders/rt/rt_gi.rgen "return vec2(hash(p), hash(p + vec2(127.1, 311.7)));"}}
+{{cite shaders/rt/rt_gi.rgen "uint h = pcg(pc.seed.x ^ pcg(pc.params.w ^ pcg(pixel.x ^ pcg(pixel.y ^ pcg((s << 4u) ^ dim)))));"}}
 
-All that separates sample $s$ of frame $f$ from its neighbours is a float offset
-added to the pixel coordinate — `s * 7.13 + frameIndex * 1.618` in x, `s * 13.37`
-in y. No test in the tree measures the resulting correlation, so 180 is a ceiling,
-not a measurement.
+so a new frame index gives every ray a new direction, and the same seed and frame
+index give the same rays in every run. No test in the tree measures the
+correlation between frames, so 180 is still an estimate under that assumption, not
+a measurement.
 
 "Holding still" is load-bearing. History is sampled at the *current* pixel's UV
 with no reprojection and no motion vectors, so under camera motion the filter
-blends in indirect light computed for a different surface. The `frameIndex` gating
-the bootstrap is the technique's own monotonic counter — not `GIInput::frameIndex`,
-which the deferred renderer dutifully fills from wall-clock time and this technique
-never reads:
+blends in indirect light computed for a different surface. The frame index that
+gates the bootstrap and seeds the hash is `GIInput::frameIndex`, the deferred
+renderer's count of frames since its last temporal reset, and the seed is the
+renderer's render seed:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "pc.params = glm::uvec4(input.width, input.height, m_sampleCount, m_frameIndex);"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "pc.params = glm::uvec4(input.width, input.height, m_sampleCount, input.frameIndex);"}}
 
-Since that counter only increases, there is no history invalidation: not on a
-camera cut, not on a scene reload. The one frame that ignores history is the first
-the technique ever renders.
+{{cite ohao/render/rt/rt_gi_technique.cpp "pc.seed = glm::uvec4(input.renderSeed, 0u, 0u, 0u);"}}
+
+`DeferredRenderer::resetTemporalState` zeroes that count and marks the history
+invalid together, and `VulkanRenderer::resetAccumulation` calls it for a deferred
+frame. History is therefore dropped exactly when the caller resets accumulation;
+a camera cut or a scene change that does not reset keeps blending the old history.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI) m_rtGI->resetHistory();"}}
 
 ## The image dance, and the frame counter a resize keeps
 
@@ -203,7 +212,8 @@ and every later frame's copy ends with the history as its transfer destination.
 {{cite ohao/render/rt/rt_gi_technique.cpp "createOutputImage();"}}
 
 which marks the new history invalid, so it is cleared on its first use too. What
-`resize()` does not touch is `m_frameIndex`. The first frame after a resize
+a resize does not touch is the frame index: `DeferredRenderer::onResize` resizes the
+technique without resetting temporal state. The first frame after a resize
 therefore takes the steady-state weight of 0.3 against a history of zeros rather
 than the bootstrap 1.0: indirect light drops to 30 % of its estimate and recovers
 as $1 - 0.7^{n}$ over the following $n$ frames — about seven frames to come
@@ -231,20 +241,20 @@ whose one outgoing subpass dependency targets `FRAGMENT_SHADER` — not
 :::why
 The alternative to the copy is two images and an index that flips each frame,
 which costs nothing. The copy buys a descriptor set written once per frame with
-fixed views — the same instinct that re-writes all eight descriptors every
+fixed views — the same instinct that re-writes all seven descriptors every
 `render()` rather than caching them. Simplicity traded for full-res bandwidth, and
 the first thing to revisit if this pass ever needs to be fast.
 :::
 
-## 160 bytes of push constants for 32 the shader reads
+## 176 bytes of push constants for 48 the shader reads
 
-`GIPushConstants` is two `mat4`s, a `vec4` and a `uvec4` — 160 bytes, all declared:
+`GIPushConstants` is two `mat4`s, a `vec4` and two `uvec4`s — 176 bytes, all declared:
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "pushRange.size = sizeof(GIPushConstants);"}}
 
-The raygen reads the `vec4` and `uvec4` only. It never touches `invView` or
+The raygen reads the `vec4` and the two `uvec4`s only. It never touches `invView` or
 `invProj`, because it reconstructs nothing from depth — world position arrives
-straight from GBuffer0. Those unused matrices are 128 of the 160 bytes, and 160
+straight from GBuffer0. Those unused matrices are 128 of the 176 bytes, and 176
 exceeds the 128-byte `maxPushConstantsSize` floor the Vulkan specification
 guarantees. Nothing checks it: no code path in the engine ever reads
 `maxPushConstantsSize`. A device at the floor violates
@@ -257,24 +267,20 @@ consequence is undefined — not a guaranteed error code to branch on. Should
 `init()` then returns false, the renderer logs `DeferredRenderer: RTGI not
 available` (a warning on the `render` channel), and the frame runs without GI. Soft, but not silent.
 
-## The binding that names direct light and holds depth
+## The binding that is not there
 
-Binding 5 is declared as the current frame's direct lighting, in the descriptor
-layout and again in the raygen:
+The layout has seven bindings, numbered 0 to 4, 6 and 7. Binding 5 is left out, and
+both sides say why:
 
-{{cite shaders/rt/rt_gi.rgen "uniform sampler2D directLighting;"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "// Layout: 7 bindings (5 is unused: GI traces before lighting, so there is no direct"}}
 
-`render()` fills that slot with the GBuffer *depth* view, described in the
-`DEPTH_STENCIL_READ_ONLY_OPTIMAL` layout that depth keeps from the GBuffer pass to
-the end of the frame:
+{{cite shaders/rt/rt_gi.rgen "// (binding 5 is unused: GI traces before lighting, so this frame has no direct light yet)"}}
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "directLightInfo.imageView = input.depthBuffer;"}}
-
-Nothing samples it: `directLighting` occurs exactly once in the whole shader tree,
-in that declaration, so the slot costs nothing today. It matters as a trap.
-Binding 5 is the obvious home for the fix this page keeps circling — a bounce
-surface's real incident light, read from the frame's own direct lighting instead of
-re-derived from one push-constant lamp — and the slot already holds a depth image.
+The gap is the fix this page keeps circling, seen from the scheduling side. A
+bounce surface's real incident light would come from the frame's own direct
+lighting instead of being re-derived from one push-constant lamp, but the RTGI pass
+records before the lighting pass, whose output it would need. Reading last frame's
+lighting would need a reprojected history the technique does not keep.
 
 ## Where the bleed lands
 
@@ -319,5 +325,6 @@ in what the hit shader is permitted to know, which is one `vec4`.
 - The raygen multiplies indirect light by the receiving surface's albedo before writing. Any consumer of binding 11 must not multiply by albedo again.
 - The bounce albedo is `InstanceGpu::giAlbedoPacked.rgb`, read from binding 6 by `gl_InstanceCustomIndexEXT`, which is the `RenderScene` instance slot. It travels on `InstanceDesc` (default 0.73 grey), so a spawner that wants a coloured bounce must set it when it creates or updates the instance; nothing derives it from the material.
 - `setSSGITexture` must run after the per-frame reset and before the lighting pass records — today from the RTGI pass's callback, which the graph records first — or that frame's lighting pass takes the dummy view and never raises the SSGI flag bit. Hand over the view only when `rendered()` is true.
-- `resize()` releases and re-clears the history image but keeps the frame counter, so the first frame after it blends at 0.3 against zeros. Resetting `m_frameIndex` there would restore the bootstrap weight.
+- `resize()` releases and re-clears the history image, but a resize does not reset the deferred renderer's frame index, so the first frame after it blends at 0.3 against zeros. Calling `resetTemporalState` on resize would restore the bootstrap weight (and restart TAA's history and the frame count that seeds RT samples with it).
+- `GIInput::frameIndex` and `GIInput::renderSeed` are the only sources of sample variation: the same seed and frame index trace the same rays. A caller that passes a constant frame index freezes the noise in screen space and keeps blending at 0.3 from the second frame on.
 - The sky test is `worldPos == vec3(0.0) && posSample.a == 0.0`, matching the GBuffer0 clear exactly, so a surface at the world origin with metallic 0 gets no GI.

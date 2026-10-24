@@ -17,14 +17,20 @@ nobody gets right. `RTShadowTechnique` asks the TLAS instead: no light-space
 projection, no cascade split, no depth-map resolution to alias against. It has a
 bias of its own and it cannot see an alpha mask — both below.
 
-The result is one screen-resolution channel, `R8_UNORM`, 0 = shadowed, 1 = lit,
+The result is a screen-resolution `R8G8B8A8_UNORM` image with one channel per
+shadow light, 0 = shadowed, 1 = lit,
 
-{{cite ohao/render/rt/rt_shadow_technique.cpp "imageInfo.format = VK_FORMAT_R8_UNORM;"}}
+{{cite ohao/render/rt/rt_shadow_technique.cpp "imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;"}}
 
-which the deferred lighting fragment shader samples at binding 14 and multiplies
-into the BRDF result.
+which the deferred lighting fragment shader samples once, at binding 14, before
+its light loop:
 
-{{cite shaders/core/deferred_lighting.frag "shadow = texture(rtShadowMask, inTexCoord).r;"}}
+{{cite shaders/core/deferred_lighting.frag "vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);"}}
+
+Inside the loop each light picks its own channel by the slot stored in its
+`params.w`, and the BRDF result is multiplied by it.
+
+{{cite shaders/core/deferred_lighting.frag "if (slot < 4) shadow = rtShadow[slot];"}}
 
 Binding the mask is also what switches the pipeline — though not at the line that
 looks like it does. `setRTShadowMask` raises flag bit 5 and clears the CSM bit,
@@ -44,6 +50,37 @@ CSM only through the `else`.
 
 {{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
 
+## Which lights get a channel
+
+The light table decides. Walking the raster lights in light order, it gives each
+light whose `castShadows` is set the next free channel until there are
+`kMaxShadowLights` of them, four, and records it in `params.w`:
+
+{{cite ohao/render/scene/light_table.cpp "shadowSlot = static_cast<float>(m_shadowLights.size());"}}
+
+A light that casts shadows after the four channels are taken gets
+`kShadowNoSlot` (4); a light with `castShadows` off gets `kShadowNever` (-1), and
+so does every emissive proxy, which sits inside its own mesh.
+
+{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr float kShadowNoSlot = static_cast<float>(kMaxShadowLights);"}}
+
+{{cite ohao/render/scene/light_table.cpp "light.params = glm::vec4(0.0f, 0.0f, -1.0f, kShadowNever);   // inside its own mesh: never shadowed"}}
+
+The lighting shader reads the three cases directly. A negative slot is never
+occluded; a slot below four takes its channel when the RT bit is set; slot 4 is
+unshadowed under RT shadows and, without them, a directional light still gets
+CSM.
+
+{{cite shaders/core/deferred_lighting.frag "int slot = int(round(light.params.w));"}}
+
+The lights with a channel, in channel order, are `RenderScene::shadowLights()`,
+which the dispatch hands to the deferred renderer each frame (or, for a scene
+with no lights at all, the fallback sun as channel 0). The renderer adds the
+pass only when that list is non-empty: a frame in which no light casts shadows
+traces nothing.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass && !m_shadowLights.empty()) {"}}
+
 ## What the estimator actually computes
 
 Direct lighting from an area source is
@@ -52,17 +89,18 @@ $$L_o(x,\omega_o) = \int_{\Omega_\ell} f_r(x,\omega_o,\omega)\, L_i(\omega)\, V(
 
 where $\Omega_\ell$ is the solid angle the light subtends at the shading point
 $x$, $f_r$ is the BRDF, $L_i$ the incident radiance, $\mathbf{n}$ the shading
-normal, and $V \in \{0,1\}$ the binary visibility along $\omega$. A one-channel
-mask cannot represent that integral. What this pair of passes evaluates is the
-separable approximation
+normal, and $V \in \{0,1\}$ the binary visibility along $\omega$. One mask
+channel per light cannot represent that integral. What this pair of passes
+evaluates is the separable approximation
 
 $$L_o \approx \bar V(x)\; f_r(x,\omega_o,\bar\omega)\, L_i(\bar\omega)\,(\mathbf{n}\!\cdot\!\bar\omega),
 \qquad \bar V(x)=\frac{1}{N}\sum_{s=1}^{N} V(x,\omega_s)$$
 
-where $\bar\omega$ is the direction to the light *centre*. The raygen shader
-produces $\bar V$ by averaging $N$ traced samples into the mask:
+where $\bar\omega$ is the direction the lighting pass uses for the light. The
+raygen shader produces $\bar V$ by averaging $N$ traced samples into the light's
+channel:
 
-{{cite shaders/rt/rt_shadow.rgen "visibility /= float(sampleCount);"}}
+{{cite shaders/rt/rt_shadow.rgen "mask[l] = visibility / float(rays);"}}
 
 and the lighting pass multiplies that single number by a BRDF evaluated only at
 $\bar\omega$. Factoring $V$ out is exact wherever it is constant across the
@@ -109,65 +147,67 @@ are its consequence, not the reason for it. The price: this mask carries no
 distance signal, so its softness must come entirely from ray count.
 :::
 
-## Two penumbra samplers, one of them unreachable
+## Three penumbra samplers
 
-Softness comes from jittering the sample target, and the shader has two
-geometries for it. A directional light gets a tangent basis around the light
-direction and an offset inside a disk of angular radius `lightRadius`, with
+The push constants carry up to four lights, three `vec4`s each, followed by the
+dispatch size, the light count and the rays per light:
+
+{{cite shaders/rt/rt_shadow.rgen "ShadowLight lights[4];"}}
+
+Softness comes from jittering the sample target, and the shader has a geometry
+per light type. A directional light (type 0) gets a tangent basis around the
+light direction and an offset inside a disk of the light's angular radius, with
 $\sqrt{r_1}$ making samples uniform in disk area — a small-angle construction,
 since the offset is the angle rather than its tangent:
 
-{{cite shaders/rt/rt_shadow.rgen "float angle = lightRadius * sqrt(r1);"}}
+{{cite shaders/rt/rt_shadow.rgen "float angle = light.edge1AndRadius.w * sqrt(r1);"}}
 
-For a point light it instead displaces the light *position* to a uniformly
-distributed point on a sphere of radius `lightRadius`:
+A point or spot light (type 1) instead displaces the light *position* to a
+uniformly distributed point on a sphere of the light's radius:
 
 {{cite shaders/rt/rt_shadow.rgen "float phi = acos(1.0 - 2.0 * r2);"}}
 
-Because $\cos\varphi = 1 - 2r_2$ is uniform on $[-1,1]$, this is a correct
-uniform-area sampler of the sphere *surface* — with a consequence worth naming.
-By Archimedes' hat-box theorem a uniform distribution on a sphere projects to a
-uniform distribution on any single axis, so an occluder edge sweeping across the
-source yields a **linear** visibility ramp, not the circular-segment S-curve a
-genuinely disk-shaped source produces. The difference shows at the two ends of
-the penumbra, where the true profile approaches full light and full shadow
-tangentially and the linear one arrives with a crease.
+A rectangle (type 2) is sampled uniformly over its area, from the corner its
+position names along its two edges — the convention the path tracer samples it
+by:
 
-{{figure hybrid-shadow-technique-penumbra "Penumbra visibility for a straight occluder edge swept across the light. All three curves are analytic: the exact disk-light profile, the ramp implied by the sphere-surface sampler in rt_shadow.rgen, and that ramp quantised at sampleCount = 8. Conceptual, not a captured render."}}
+{{cite shaders/rt/rt_shadow.rgen "target = light.positionAndType.xyz + light.edge1AndRadius.xyz * r1 + light.edge2AndRange.xyz * r2;"}}
 
-At the shipping sample count the quantisation matters more than the profile:
-eight rays admit nine distinct visibility levels. The randomness is a value hash
-of the pixel coordinate offset by fixed per-sample constants, with no frame index
-anywhere in the push constants, so the noise is frozen in screen space and never
-decorrelates on its own.
+Because $\cos\varphi = 1 - 2r_2$ is uniform on $[-1,1]$, the sphere branch is a
+correct uniform-area sampler of the sphere *surface* — with a consequence worth
+naming. By Archimedes' hat-box theorem a uniform distribution on a sphere
+projects to a uniform distribution on any single axis, so an occluder edge
+sweeping across the source yields a **linear** visibility ramp, not the
+circular-segment S-curve a genuinely disk-shaped source produces. The difference
+shows at the two ends of the penumbra, where the true profile approaches full
+light and full shadow tangentially and the linear one arrives with a crease.
 
-The directional branch is never taken in the shipping engine — the only caller
-hardcodes a point light.
+{{figure hybrid-shadow-technique-penumbra "Penumbra visibility for a straight occluder edge swept across the light. All three curves are analytic: the exact disk-light profile, the ramp implied by the sphere-surface sampler in rt_shadow.rgen, and that ramp quantised at eight rays, the count a single shadow light gets. Conceptual, not a captured render."}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "si.lightType = 1;  // point light"}}
+## Rays and seeds
 
-## One mask, applied to every light
+The technique spends a fixed budget of eight rays a pixel and shares it among
+the frame's shadow lights, each getting at least one:
 
-The hardcoding goes further than the light type. `DeferredRenderer` fills
-`ShadowInput` with a fixed light position of (0, 4.5, 0) — the Cornell-box key
-light — irrespective of the scene's light SSBO,
+{{cite ohao/render/rt/rt_shadow_technique.hpp "return lights == 0 ? 0u : std::max(1u, raysPerPixel / lights);"}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "si.lightPosition = glm::vec3(0, 4.5f, 0);"}}
+So the pass costs about the same with one light as with four, and the quality
+does not: one light gets eight rays and nine distinct visibility levels, four
+lights get two rays each and three levels apiece. At these counts the
+quantisation matters more than the profile.
 
-then asks for eight rays at a 0.5-unit source radius.
+Every random number is an integer PCG hash of the render seed, the frame index
+since the last temporal reset, the pixel, the light, the sample and the
+dimension:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_rtShadow->setLightRadius(0.5f);"}}
+{{cite shaders/rt/rt_shadow.rgen "uint h = pcg(pc.seed.x ^ pcg(pc.seed.y ^ pcg(pixel.x ^ pcg(pixel.y ^ pcg((light << 24u) ^ (s << 4u) ^ dim)))));"}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_rtShadow->setSampleCount(8);"}}
+The deferred renderer supplies both seeds, the one `setRenderSeed` stored and the
+counter `resetTemporalState` zeroes, so the noise decorrelates from frame to
+frame while two renders of the same world with the same seed trace the same
+rays. Nothing in the technique accumulates the mask across frames.
 
-`deferred_lighting.frag` then applies the mask *inside* its per-light loop. Every
-light in the scene is shadowed by the visibility of that one hardcoded point
-light, and because the RT branch pre-empts CSM rather than coexisting with it, a
-directional sun that would otherwise have cascades gets it too. Enabling RT shadows is
-an improvement only for a scene whose key light matches the hardcoded one. The
-gap is in the wiring, not the algorithm: `ShadowInput` already carries direction,
-position, type and range per invocation, and the technique reads all four into
-its push constants.
+{{cite ohao/render/rt/rt_shadow_technique.cpp "pc.seed = glm::uvec4(input.renderSeed, input.frameIndex, 0u, 0u);"}}
 
 ## Sharp edges
 
@@ -191,7 +231,14 @@ The alpha being tested is not a coverage bit — GBuffer0 packs metallic there:
 
 The test works only because that attachment clears to (0,0,0,0); a non-metallic
 surface passing exactly through the world origin is classified as sky and written
-fully lit.
+fully lit in every channel.
+
+A point at more than the light's range plus its radius from a point or spot
+light skips that light entirely and keeps its channel at 1: the light
+contributes nothing there, so there is nothing to occlude. A rectangle is pushed
+with a range of 0, which the test reads as unlimited.
+
+{{cite shaders/rt/rt_shadow.rgen "if (type != 0u && range > 0.0 && distance(worldPos, light.positionAndType.xyz) > range + light.edge1AndRadius.w)"}}
 
 Samples whose jittered direction falls below the horizon are skipped and counted
 as zero visibility:
@@ -199,10 +246,10 @@ as zero visibility:
 {{cite shaders/rt/rt_shadow.rgen "if (dot(N, L) <= 0.0) continue;"}}
 
 Inside the integral that would cost nothing — those directions carry zero cosine
-weight anyway. But a skipped sample still divides by `sampleCount`, so what
+weight anyway. But a skipped sample still divides by the ray count, so what
 reaches the mask is a binary horizon *indicator* averaged over the jitter, and
 the lighting pass multiplies it into a BRDF that already applies exactly one
-$\mathbf{n}\cdot\bar\omega$, at the unjittered centre direction.
+$\mathbf{n}\cdot\bar\omega$, at the unjittered direction.
 
 {{cite shaders/includes/brdf/brdf_ggx.glsl "return (diffuse + specular) * lightColor * NdotL;"}}
 
@@ -222,11 +269,12 @@ distinction: the companion `MASK_ANIMATED = 0x00` in `rt_visibility.hpp` has no
 users at all, since skeletal geometry left the RT path.
 
 :::key
-This is a boolean visibility average, not a shadow with radiance in it.
+Each channel is a boolean visibility average, not a shadow with radiance in it.
 Everything the technique gets right — hardness, contact, penumbra width — is
 decided by where the N sample targets are placed; everything it gets wrong, at
-the terminator and across multiple lights, follows from that single scalar being
-pulled out of an integral it does not commute with.
+the terminator and inside the penumbra, follows from that scalar being pulled
+out of an integral it does not commute with. Past four shadow-casting lights it
+gets nothing right: the fifth is lit everywhere.
 :::
 
 ## Contracts
@@ -234,4 +282,5 @@ pulled out of an integral it does not commute with.
 - `DeferredRenderer::onResize` forwards the new extent to `m_rtShadow` as well as `m_rtGI`; a new RT technique that owns a screen-sized target must be added to that list, or its output keeps its `init()` extent while `vkCmdTraceRaysKHR` dispatches at the new one and the lighting pass samples a mask that no longer registers with the screen.
 - The GBuffer sampler is created on the first `render()` and destroyed only in `destroy()`; the descriptor set rewritten during recording is the one for the caller's `frameSlot`, one of `MAX_FRAMES_IN_FLIGHT`. Both hold only while the caller passes the frame-ring slot whose fence it has just waited on.
 - The pre-trace transition uses `oldLayout = VK_IMAGE_LAYOUT_UNDEFINED` with `srcStageMask = TOP_OF_PIPE`. Discarding the contents is fine — every pixel is written unconditionally each dispatch — but that barrier does not wait on last frame's fragment-shader reads of the same image.
+- Light *i* of `ShadowInput::lights` is traced into channel *i*, and the lighting shader reads channel `params.w`. The two agree only because both come from one walk of the light table: `shadowLights()` lists the lights in the order their slots were handed out. A caller that builds its own list must keep that order, and a light beyond the fourth in it is ignored.
 - `setRTShadowMask` must run after the per-frame reset and before the lighting pass records, and only when `rendered()` is true — today from the RTShadow pass's own callback, which the graph records before `DeferredLighting`. The setter only stores `m_rtShadowView`; the flag bit the fragment shader branches on and the descriptor at binding 14 are both derived from that member when the lighting pass records. Hand it over later and that frame records with bit 5 clear and the dummy view bound.

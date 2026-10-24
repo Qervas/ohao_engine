@@ -33,11 +33,11 @@
 <text x="24" y="210" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">+32</text>
 <rect x="96" y="184" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
 <rect x="246" y="184" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
-<rect x="396" y="184" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+<rect x="396" y="184" width="148" height="42" fill="#141a22" stroke="#3d4a58" stroke-width="1" stroke-dasharray="4 3"/>
 <rect x="546" y="184" width="148" height="42" fill="#141a22" stroke="#3d4a58" stroke-width="1" stroke-dasharray="4 3"/>
 <text x="102" y="210" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">roughMetalTexIdx</text>
 <text x="256" y="210" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">emissiveStrength</text>
-<text x="406" y="210" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">legacyRtTintTex</text>
+<text x="440" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="12">unused 0.0</text>
 <text x="590" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="12">unused 0.0</text>
 
 <!-- legend -->

@@ -19,7 +19,7 @@ Instantiate does not include the renderer's upload code directly. It talks to a 
 
 {{cite ohao/ecs/instantiate.hpp "class InstantiateBackend {"}}
 
-`uploadMesh` and `releaseMesh` handle geometry. `modelMaterials` registers a model's own materials with their textures. `material` registers one descriptor. The production `RenderSceneBackend` forwards these to `render::uploadModelMesh`, `RenderScene::releaseMesh` and `registerMaterial`, the same path `spawnModel` uses. For a material with no albedo texture, `material` also attaches the legacy RT tint texture that `render::modelMaterials` would have added.
+`uploadMesh` and `releaseMesh` handle geometry. `modelMaterials` registers a model's own materials with their textures. `material` registers one descriptor. The production `RenderSceneBackend` forwards these to `render::uploadModelMesh`, `RenderScene::releaseMesh` and `registerMaterial`, the same path `spawnModel` uses. `material` registers the descriptor as given, adding no texture to it.
 
 The seam is what makes the logic testable without a GPU. In `scene_tests`, a `FakeBackend` hands out sequential handles and counts every upload, release and registration, and the t11 tests assert those counts directly. The GPU half is `instantiate_gpu_test`. It renders the Cornell box twice with fresh renderers, once built through `spawnModel` and once from `MeshSource`/`MaterialOverride` entities through instantiate on a real `RenderScene`. The two images must be bit-identical, and with validation layers on there must be no messages. Then it destroys the spheres and checks that their shared mesh is released.
 

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Dataflow of the deferred SSS and SSR passes: lighting HDR image feeds SSS, SSS output feeds SSR and tonemap, while SkyPass and particles write back into the lighting HDR image that tonemap no longer reads">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Dataflow of the deferred SSS and SSR passes: DeferredLighting, then SkyPass and particles, write the HDR lit image; a barrier; SSS reads it, SSS output feeds SSR and tonemap">
 <rect width="100%" height="100%" fill="#0f1419"/>
 <defs>
 <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
@@ -40,9 +40,9 @@
 <text x="630" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">hdr + ssr</text>
 
 <!-- late writers -->
-<rect x="215" y="228" width="125" height="34" fill="#1a222c" stroke="#c4784a"/>
+<rect x="215" y="228" width="125" height="34" fill="#1a222c" stroke="#3d4a58"/>
 <text x="277" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SkyPass</text>
-<rect x="380" y="228" width="125" height="34" fill="#1a222c" stroke="#c4784a"/>
+<rect x="380" y="228" width="125" height="34" fill="#1a222c" stroke="#3d4a58"/>
 <text x="442" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">Particles</text>
 
 <!-- edges -->
@@ -65,12 +65,12 @@
 <polyline points="285,168 285,196 630,196 630,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
 <text x="404" y="208" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 0 — post-FX HDR input</text>
 
-<!-- late write-back path -->
-<polyline points="442,228 442,214 100,214 100,172" fill="none" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ahw)"/>
-<line x1="277" y1="228" x2="277" y2="214" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3"/>
-<text x="120" y="228" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">write back, too late</text>
+<!-- sky and particles write the lit image before SSS reads it -->
+<polyline points="442,228 442,214 100,214 100,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="277" y1="228" x2="277" y2="214" stroke="#3d4a58" stroke-width="1.4"/>
+<text x="120" y="228" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">write, before SSS</text>
 
-<text x="28" y="290" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">SkyPass and the particle pass render into the HDR lit image after SSSPass has already copied it.</text>
-<text x="28" y="305" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">While SSSPass is alive, tonemap reads sssOut — so those writes never reach the frame.</text>
+<text x="28" y="290" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SkyPass and the particle pass render into the HDR lit image right after lighting, then a memory barrier.</text>
+<text x="28" y="305" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SSSPass copies the image with sky and particles in it; tonemap reads sssOut, so they reach the frame.</text>
 <text x="28" y="322" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">Conceptual — read from the pass ordering in DeferredRenderer::render(). Not a captured frame or a profile.</text>
 </svg>

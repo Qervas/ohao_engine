@@ -172,14 +172,11 @@ roughness-metallic textures are `UNORM`:
 {{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {"}}
 
 Hit shaders have no derivatives, so every fetch is a `textureLod` at level 0 at
-native resolution. One material path keeps an old behaviour on purpose. A material
-without an albedo texture carries a 1x1 `UNORM` texture of its sRGB-encoded base
-colour, and the shader multiplies the base colour by that texel after `pow(.., 2.2)`
-— so an untextured surface's base colour is applied twice. The path tracer's
-goldens render that way, and a spare lane of the material table's third row
-(`legacyRtTintTexIdx`) exists only to carry the tint texture's index:
+native resolution. The albedo is the base colour, multiplied by the albedo texture
+when the material has one; an untextured surface is its base colour, applied once.
+The third row's last two lanes are unused.
 
-{{cite shaders/rt/pt_closesthit.rchit "albedo *= pow(textureLod(textures[nonuniformEXT(legacyTintTexIdx)], texUV, 0.0).rgb, vec3(2.2));"}}
+{{cite shaders/rt/pt_closesthit.rchit "albedo *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).rgb;"}}
 
 The HDR environment map sits in the *same* GLSL array as an `R32G32B32A32_SFLOAT`
 image — legal because combined-image-sampler descriptors are independent — which is

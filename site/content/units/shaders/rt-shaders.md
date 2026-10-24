@@ -263,8 +263,9 @@ when RT initialisation fails.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_useRTShadows = true;"}}
 
-Each takes a single light through push constants; neither binds the light SSBO,
-so they handle one source per dispatch. The GI pass traces one cosine-weighted
+Neither binds the light SSBO; their lights arrive in push constants. The shadow
+pass takes up to four of the scene's shadow-casting lights and writes one mask
+channel each; the GI pass takes one, the brightest. The GI pass traces one cosine-weighted
 bounce, never fires a shadow ray from the secondary hit, uses a non-physical
 `1/(1+d²)` falloff, and approximates the hit surface's normal as the negated ray
 direction — a colour-bleed approximation, not a GI solver.
@@ -278,10 +279,12 @@ tests before accumulating.
 
 {{cite shaders/rt/rt_gi.rmiss "giPayload = vec4(0.0, 0.0, 0.0, -1.0);"}}
 
-The shadow pass's jitter hash has no frame term, so its penumbra noise is frozen
-per pixel and never resolves:
+Both draw their random numbers from the same integer PCG hash, keyed by the render
+seed and the frame index since the last temporal reset as well as the pixel and
+sample, so their noise changes every frame and repeats exactly for the same seed
+and frame:
 
-{{cite shaders/rt/rt_shadow.rgen "float r1 = hash(vec2(pixel) + vec2(float(s) * 7.13, float(s) * 13.37));"}}
+{{cite shaders/rt/rt_shadow.rgen "float r1 = rand01(uvec2(pixel), l, s, 0u);"}}
 
 Both trace with ray mask `0x01` under comments claiming static-only visibility.
 That filter selects nothing among live geometry — every visible TLAS instance is

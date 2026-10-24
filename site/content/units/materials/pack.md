@@ -34,8 +34,8 @@ The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 12>`, 
 ## Integers that have to travel as floats
 
 Four of the twelve lanes hold bindless texture indices — uint32 values in an
-array whose element type is float — and a fifth, the legacy RT tint texture, sits in
-row 2. `pack` reinterprets the bits instead of converting the value:
+array whose element type is float. `pack` reinterprets the bits instead of
+converting the value:
 
 {{cite ohao/render/scene/material_table.cpp "const auto bits = [](uint32_t u) { return std::bit_cast<float>(u); };"}}
 
@@ -97,10 +97,10 @@ shader reads the triangle's slot from the mesh's slot stream, then the instance'
 material-reference list, with the same `OHAO_MATERIAL_INDEX` macro the G-buffer uses,
 so raster and RT cannot disagree about which material a triangle has.
 
-Row 2 carries one lane that only the path tracer reads. `legacyRtTintTex` is a 1×1
-texture of the material's sRGB-encoded base colour, which the closest-hit multiplies
-in when the material has no albedo texture, so every untextured material reaches the
-path tracer with a texture of its own colour. The raster passes never look at it.
+Row 2 is half empty: the roughness/metal texture index and the emissive strength,
+then two lanes `pack` writes as zero and no shader reads.
+
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, 0.0f, 0.0f,"}}
 
 {{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
 
@@ -111,7 +111,7 @@ uints beside the colours — needs no bit-casting and no NaN/subnormal disciplin
 costs a second descriptor binding per consumer and a second buffer to keep in step.
 It does not save a fetch: the closest-hit already issues three separate loads from the
 table before it decodes a single index. OHAO pays for the one binding with the
-standing rule that five of the twelve lanes are opaque bits.
+standing rule that four of the twelve lanes are opaque bits.
 :::
 
 ## The constants that are load-bearing, and the ones that are decoration
@@ -236,7 +236,7 @@ size contract that passes.
 ## Contracts
 
 - A `MaterialDesc` must carry finished bindless indices when it is registered. The table has no second pass that patches texture lanes in, so a texture uploaded after `registerMaterial` never reaches the row.
-- Nothing may do arithmetic on the five index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
+- Nothing may do arithmetic on the four index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
 - Row 0 is the default material and the fallback for a short material list and a full table. Code that registers materials must not assume a returned handle is distinct from 0.
 - The light-buffer header is written by `LightTable::recordUploads`, whole, whenever the table is dirty. The environment index and intensity live in the table, so a light rebuild keeps them; anything else writing binding 11 would have to reproduce the 16-byte header.
 - The GLSL `GPULight` lives in three hand-maintained raygen copies. `OHAO_ASSERT_GPU_LAYOUT` sees none of them, and no test reflects the SPIR-V.

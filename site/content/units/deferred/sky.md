@@ -35,7 +35,7 @@ Geometry is one oversized triangle generated from `gl_VertexIndex`, no vertex bu
 {{cite ohao/render/deferred/sky_pass.cpp "vkCmdDraw(cmd, 3, 1, 0, 0);"}}
 
 :::why
-The obvious alternative is a sky *dome* rasterised into the GBuffer with a depth test. That spends GBuffer bandwidth on pixels carrying no material, forces the lighting pass to special-case an "unlit" material, and puts the sky at a finite distance where the velocity target and TAA reproject it wrongly. A fullscreen pass after lighting removes all three. The price: the sky cannot feed anything that consumes the GBuffer — SSAO, the SSS blur and screen-space reflections have all already run by the time it exists.
+The obvious alternative is a sky *dome* rasterised into the GBuffer with a depth test. That spends GBuffer bandwidth on pixels carrying no material, forces the lighting pass to special-case an "unlit" material, and puts the sky at a finite distance where the velocity target and TAA reproject it wrongly. A fullscreen pass after lighting removes all three. The price: the sky cannot feed anything that consumes the GBuffer — SSAO has already run by the time it exists, and the SSS blur and screen-space reflections, which run after it, see it only as colour in the lit image, never as a surface.
 :::
 
 ## Six Perez evaluations, or none
@@ -134,10 +134,14 @@ and the derivation above is the only code that assigns `m_moonDirection`, which 
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?"}}
 
-The SSS blur runs earlier in the same command buffer, reading the lighting image before the sky wrote it. On that path the sky lands in an image the tonemapper never reads; the particle pass, sharing the target, inherits the same problem.
+So the sky has to be in the lighting image before SSS copies it, and it is: the sky pass is recorded straight after the render graph, ahead of particles and SSS.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "// 4.5. Sky pass — fills sky pixels with Preetham sky"}}
+
+The sky writes through its render pass as a colour attachment, and SSS reads in a compute shader that no subpass dependency reaches, so a memory barrier from colour-attachment output to the compute and fragment stages follows the sky and particle passes whenever either ran. `engine_tests` holds the result to a frame that runs SSS: its top row must be lit sky, not black.
 
 :::key
-The sky pass writes into the lighting pass's HDR image, not into "the frame". Anything that inserts a full-screen copy between lighting and post-processing silently drops the sky, and the SSS pass already is such a copy.
+The sky pass writes into the lighting pass's HDR image, not into "the frame". Anything that inserts a full-screen copy between lighting and post-processing has to run after the sky, or it drops the sky; the SSS pass is such a copy, and it is ordered after.
 :::
 
 ## Contracts

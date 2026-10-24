@@ -54,7 +54,7 @@
 </div>
 <div class="section-rule"><h2 id="material-table">Material table</h2></div>
 <div class="prose reveal">
-<p>A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture index; roughness, metallic, normal and emissive texture indices; rough-metal texture index, emissive strength and the legacy RT tint texture index. Texture indices are bit-cast into float lanes and point into the one bindless texture table. Index 0 is registered at initialisation as the default material, and is what every unknown or missing material resolves to — including every material registered after the table is full:</p>
+<p>A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture index; roughness, metallic, normal and emissive texture indices; rough-metal texture index, emissive strength and two unused lanes. Texture indices are bit-cast into float lanes and point into the one bindless texture table. Index 0 is registered at initialisation as the default material, and is what every unknown or missing material resolves to — including every material registered after the table is full:</p>
 <div class="citation-chip"><code class="citation-code">return MaterialHandle{0, 0};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/material_table.cpp#L49" target="_blank" rel="noopener">ohao/render/scene/material_table.cpp:49</a></div>
 <p>The table is append-only and never grows. Uploading a model registers one material per `materialColors` row whether or not an identical pack already exists, so 4096 is a budget on materials *loaded*, not materials distinct.</p>
 </div>
