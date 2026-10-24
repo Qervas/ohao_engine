@@ -1,0 +1,31 @@
+{
+  "comment": "Sub-project 2b spec, 'Frame cost: the deferred budget' and 'Performance budgets (summary)' (render_bench; medians of GPU ms, Release, reference machine: RTX 5070 Laptop GPU). Each budget is gated from the 2b build step that delivers it: render_bench --check gates those with gatedFrom <= currentStep and reports the rest as pending. A pass budget measures the sum of its passes' medians ('x.*' is every pass named x.<something>); 'frame' is the frame's rendering on the GPU without the final copy out. Per-pass budgets of a scene may be moved between its passes by the step that measures them (spec rule); a frame budget, a capture budget or a total never rises without Frank's ruling.",
+  "currentStep": 1,
+  "maxCalibrationSlowdown": 1.25,
+  "maxGpuCalibrationSlowdown": 1.25,
+  "maxExternalCorePct": 50,
+  "budgets": [
+    {"scene": "cornell_720p", "name": "frame", "budgetMs": 1.50, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "cull+hiz", "passes": ["cull.*", "hiz.*"], "budgetMs": 0.10, "gatedFrom": 11},
+    {"scene": "cornell_720p", "name": "gbuffer", "passes": ["gbuffer", "gbuffer.*"], "budgetMs": 0.15, "gatedFrom": 11},
+    {"scene": "cornell_720p", "name": "csm", "passes": ["csm"], "budgetMs": 0.00, "gatedFrom": 7},
+    {"scene": "cornell_720p", "name": "rt.shadows", "passes": ["rt.shadows"], "budgetMs": 0.20, "gatedFrom": 7},
+    {"scene": "cornell_720p", "name": "rt.shadows.filter", "passes": ["rt.shadows.filter"], "budgetMs": 0.05, "gatedFrom": 7},
+    {"scene": "cornell_720p", "name": "rt.gi", "passes": ["rt.gi"], "budgetMs": 0.30, "gatedFrom": 8},
+    {"scene": "cornell_720p", "name": "rt.gi.denoise", "passes": ["rt.gi.denoise"], "budgetMs": 0.20, "gatedFrom": 8},
+    {"scene": "cornell_720p", "name": "ssao", "passes": ["ssao"], "budgetMs": 0.00, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.03, "gatedFrom": 13},
+    {"scene": "cornell_720p", "name": "lighting", "passes": ["lighting"], "budgetMs": 0.12, "gatedFrom": 13},
+    {"scene": "cornell_720p", "name": "sss", "passes": ["sss"], "budgetMs": 0.02, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "ssr", "passes": ["ssr"], "budgetMs": 0.10, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "sky+particles", "passes": ["sky", "particles"], "budgetMs": 0.05, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "post", "passes": ["post.*"], "budgetMs": 0.05, "gatedFrom": 9},
+    {"scene": "helmet_game_720p", "name": "frame", "budgetMs": 3.0, "gatedFrom": 9},
+    {"scene": "helmet_game_1080p", "name": "frame", "budgetMs": 5.0, "gatedFrom": 9},
+    {"scene": "bench100k_1080p", "name": "frame", "budgetMs": 8.0, "gatedFrom": 13},
+    {"scene": "bench100k_1080p", "name": "cpu", "measure": "cpu", "budgetMs": 0.5, "gatedFrom": 11},
+    {"scene": "bench100k_1080p", "name": "cpu / bench10k_1080p", "measure": "cpuRatio", "of": "bench10k_1080p", "budgetRatio": 1.2, "gatedFrom": 11},
+    {"scene": "bench100k_1080p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.10, "gatedFrom": 13},
+    {"scene": "meshlet_build_1m", "name": "build (CPU)", "measure": "meshletBuild", "budgetMs": 60, "gatedFrom": 12}
+  ]
+}

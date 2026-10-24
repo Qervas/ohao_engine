@@ -11,6 +11,10 @@
   t3_every_test_executable_is_registered: every test executable the main build produced
   (*_test, *_tests, *_bench in build/Release) runs as a CTest test, and every registered
   test carries exactly one known label.
+  sp2b_t02_* (sub-project 2b, test 2): render_bench --evaluate on fixture results
+  (tests/check/render_bench): a pending budget is reported with its measurement and not
+  gated; a missed gated budget fails by scene and pass name; a noisy run (busy CPU or a slow
+  GPU calibration) exits 2 and counts nothing as passed.
 Standard library only.
 """
 import importlib.util
@@ -146,6 +150,84 @@ def t3_an_unknown_label_is_an_environment_error():
     assert r.returncode == 2 and "unknown label" in verdict.get("error", ""), f"exit 2 with the reason (got {r.returncode})"
 
 
+# ---- render_bench's verdict (sub-project 2b, test 2) -----------------------------------------
+# render_bench --evaluate applies budgets to recorded results without a GPU; variants of the
+# fixture (tests/check/render_bench) are written under build/check_fixture/render_bench.
+
+RB_FIXTURE = ROOT / "tests" / "check" / "render_bench"
+RB_SCRATCH = FIXTURE_BUILD / "render_bench"
+RENDER_BENCH = MAIN_BUILD / "Release" / "render_bench.exe"
+
+
+def evaluate_render_bench(name, results_edit=None, budgets_edit=None):
+    """Runs render_bench --evaluate on the fixture, edited; returns (exit code, summary, out json)."""
+    assert RENDER_BENCH.exists(), f"render_bench is built ({RENDER_BENCH})"
+    RB_SCRATCH.mkdir(parents=True, exist_ok=True)
+    results = json.loads((RB_FIXTURE / "results.json").read_text(encoding="utf-8"))
+    budgets = json.loads((RB_FIXTURE / "budgets.json").read_text(encoding="utf-8"))
+    if results_edit:
+        results_edit(results)
+    if budgets_edit:
+        budgets_edit(budgets)
+    rpath, bpath, opath = (RB_SCRATCH / f"{name}.{k}.json" for k in ("results", "budgets", "out"))
+    rpath.write_text(json.dumps(results), encoding="utf-8")
+    bpath.write_text(json.dumps(budgets), encoding="utf-8")
+    r = subprocess.run([str(RENDER_BENCH), "--evaluate", str(rpath), "--check", str(bpath), "--out", str(opath)],
+                       capture_output=True, text=True, cwd=ROOT)
+    lines = r.stdout.strip().splitlines()
+    summary = json.loads(lines[-1]) if lines else {}
+    out = json.loads(opath.read_text(encoding="utf-8")) if opath.exists() else {}
+    return r.returncode, summary, out
+
+
+def sp2b_t02_a_pending_budget_is_reported_not_gated():
+    code, summary, out = evaluate_render_bench("pending")
+    status = {b["name"] + "@" + b["scene"]: b for b in out.get("budgets", [])}
+    assert code == 0 and summary.get("passed") == 2 and summary.get("failed") == 0, \
+        f"gbuffer and post are gated and met; nothing else counts (exit {code}, {summary})"
+    gi = status.get("rt.gi@cornell_720p", {})
+    assert gi.get("status") == "pending" and abs(gi.get("measured", 0) - 3.956) < 1e-3, \
+        f"rt.gi, over its budget but gated from step 5, is pending with its measurement: {gi}"
+    assert status.get("frame@bench100k_1080p", {}).get("status") == "unmeasured", \
+        "a pending budget whose scene is not measured yet is reported as unmeasured, not failed"
+    scene = out["scenes"][0]
+    assert scene["frame"].get("budget") == 1.5 and \
+        next(p for p in scene["passes"] if p["name"] == "rt.gi").get("budget") == 0.3, \
+        "the scenes carry their frame and single-pass budgets (the spec's results shape)"
+
+
+def sp2b_t02_a_missed_gated_budget_names_its_pass():
+    code, summary, out = evaluate_render_bench("gated", budgets_edit=lambda b: b.update(currentStep=5))
+    fails = summary.get("failures", [])
+    assert code == 1 and summary.get("passed") == 2 and summary.get("failed") == 2, f"exit 1, two missed ({code}, {summary})"
+    assert any(f.startswith("cornell_720p rt.gi:") and "3.956" in f and "0.300" in f for f in fails), \
+        f"the miss names the scene, the pass, the median and the budget: {fails}"
+    assert any("bench100k_1080p frame" in f and "not measured" in f for f in fails), \
+        f"a gated budget that was not measured is a failure, by name: {fails}"
+    assert out.get("verdict") == "over", "the results file says over"
+
+
+def sp2b_t02_a_noisy_run_is_never_a_pass():
+    def busy(r):
+        r["externalLoad"] = {"totalCorePct": 80.0, "busy": [{"name": "UnrealEditor.exe", "corePct": 75.0}]}
+    code, summary, out = evaluate_render_bench("noisy_load", results_edit=busy)
+    assert code == 2 and summary.get("noisy") is True and summary.get("passed") == 0, \
+        f"other processes over half a core: exit 2, noisy, nothing counted as passed ({code}, {summary})"
+    assert all(b["status"] in ("noisy", "pending", "unmeasured") for b in out.get("budgets", [])), \
+        "the gated budgets are marked noisy, not pass"
+
+    def slow_gpu(r):
+        r["calibration"]["gpu"]["afterMs"] = 2.5
+    code, summary, _ = evaluate_render_bench("noisy_gpu", results_edit=slow_gpu)
+    assert code == 2 and summary.get("noisy") is True and \
+        any("GPU calibration" in f for f in summary.get("failures", [])), \
+        f"a GPU calibration over its reference by more than 25% is noisy, and says so ({code}, {summary})"
+    code, summary, _ = evaluate_render_bench("noisy_gated", results_edit=busy,
+                                             budgets_edit=lambda b: b.update(currentStep=5))
+    assert code == 2 and summary.get("passed") == 0, \
+        f"noisy wins over a missed budget: exit 2, still nothing passed ({code}, {summary})"
+
+
 def t3_every_test_executable_is_registered():
     ctest = check.find_ctest(check.find_cmake())
     r = subprocess.run([str(ctest), "--test-dir", str(MAIN_BUILD), "-C", "Release", "-N", "--show-only=json-v1"],
@@ -182,6 +264,9 @@ def main():
                    t3_an_unknown_label_is_an_environment_error):
             run(fn)
     run(t3_every_test_executable_is_registered)
+    for fn in (sp2b_t02_a_pending_budget_is_reported_not_gated, sp2b_t02_a_missed_gated_budget_names_its_pass,
+               sp2b_t02_a_noisy_run_is_never_a_pass):
+        run(fn)
     print(f"Results: {passed}/{passed + failed} passed")
     print(json.dumps({"suite": "check_tests", "passed": passed, "failed": failed, "failures": failures},
                      separators=(",", ":")))

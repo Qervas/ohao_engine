@@ -1,0 +1,14 @@
+{
+  "comment": "Budgets for check_tests' sp2b_t02 cases (not the real ones: tests/bench/render_budgets.json). At currentStep 4, gbuffer and post are gated and met; rt.gi, the frame and bench100k are pending.",
+  "currentStep": 4,
+  "maxCalibrationSlowdown": 1.25,
+  "maxGpuCalibrationSlowdown": 1.25,
+  "maxExternalCorePct": 50,
+  "budgets": [
+    {"scene": "cornell_720p", "name": "frame", "budgetMs": 1.50, "gatedFrom": 9},
+    {"scene": "cornell_720p", "name": "gbuffer", "passes": ["gbuffer", "gbuffer.*"], "budgetMs": 0.15, "gatedFrom": 3},
+    {"scene": "cornell_720p", "name": "rt.gi", "passes": ["rt.gi"], "budgetMs": 0.30, "gatedFrom": 5},
+    {"scene": "cornell_720p", "name": "post", "passes": ["post.*"], "budgetMs": 0.05, "gatedFrom": 4},
+    {"scene": "bench100k_1080p", "name": "frame", "budgetMs": 8.0, "gatedFrom": 5}
+  ]
+}

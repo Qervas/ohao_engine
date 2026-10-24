@@ -1,0 +1,26 @@
+{
+  "comment": "A render_bench result for check_tests' sp2b_t02 cases: cornell_720p as measured before 2b (rt.gi far over its 2b budget), a quiet machine.",
+  "gpu": "fixture GPU",
+  "calibration": {
+    "cpu": {"beforeMs": 26.0, "afterMs": 27.0, "referenceMs": 25.0},
+    "gpu": {"beforeMs": 1.60, "afterMs": 1.62, "referenceMs": 1.58}
+  },
+  "externalLoad": {"totalCorePct": 3.5, "busy": []},
+  "scenes": [
+    {
+      "name": "cornell_720p", "width": 1280, "height": 720, "frames": 100,
+      "frame": {"median": 4.876, "p95": 4.892},
+      "span": {"median": 5.084, "p95": 5.101},
+      "cpu": {"median": 0.110, "p95": 0.131},
+      "passes": [
+        {"name": "scene.upload", "median": 0.0, "p95": 0.0, "frames": 100},
+        {"name": "gbuffer", "median": 0.061, "p95": 0.061, "frames": 100},
+        {"name": "rt.shadows", "median": 0.517, "p95": 0.520, "frames": 100},
+        {"name": "rt.gi", "median": 3.956, "p95": 3.971, "frames": 100},
+        {"name": "lighting", "median": 0.178, "p95": 0.179, "frames": 100},
+        {"name": "post.tonemap", "median": 0.014, "p95": 0.014, "frames": 100},
+        {"name": "readback", "median": 0.211, "p95": 0.229, "frames": 100}
+      ]
+    }
+  ]
+}
