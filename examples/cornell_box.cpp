@@ -81,21 +81,24 @@ int main(int rawArgc, char* rawArgv[]) {
               << ")...\n";
 
     auto start = std::chrono::high_resolution_clock::now();
-    const int frames = cli.useDeferred ? 10 : (samples + 3);
+    // Deferred: 10 frames (RT GI's history converges); path traced: one frame per sample.
+    // The last frame is the one written.
+    const int frames = cli.useDeferred ? 10 : samples;
     for (int i = 0; i < frames; i++) {
         world.sync();   // headless: no Application drives the systems
         if (i == 0 && !ecs::instantiateErrors(world).empty()) {
             std::cerr << "FATAL: meshes could not be built (see the instantiate errors above)\n";
             return 2;
         }
+        if (i == frames - 1) renderer.requestReadback();
         renderer.render();
     }
+    // That frame, denoised when a CPU denoiser is on.
+    const auto pixels = renderer.readback();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms\n";
 
-    // getPixelSpan() — same buffer as getPixels(); OIDN applied when denoise != None
-    const auto pixels = renderer.getPixelSpan();
     if (!pixels.empty()) {
         stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
                        pixels.data(), static_cast<int>(W * 4));

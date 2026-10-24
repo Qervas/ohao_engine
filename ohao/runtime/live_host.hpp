@@ -68,8 +68,8 @@ struct LiveConfig {
 struct RunReport {
     uint64_t frames{0};             // loop iterations
     uint64_t rendered{0};           // frames rendered and presented (captures included)
-    uint64_t readbackCopies{0};     // unrequested: must stay 0
-    uint64_t requestedReadbacks{0};
+    uint64_t readbackCopies{0};     // copies beyond the host's requests: must stay 0
+    uint64_t requestedReadbacks{0}; // copies made (each for a capture's request)
     uint64_t validationMessages{0};
     bool     validationEnabled{false};
     double   avgFrameMs{0.0};
@@ -112,6 +112,8 @@ public:
 
 private:
     void renderFrame();   // world.sync, the world's view, render + present
+    // Readback copies the renderer made beyond the host's own requests (a bug if not 0).
+    [[nodiscard]] uint64_t unrequestedReadbacks() const noexcept;
 
     LiveConfig m_cfg;
     Window m_window;
@@ -126,6 +128,7 @@ private:
     bool m_needRender{true};            // a resize, a capture, the first frame
     uint64_t m_renderedChange{~0ull};   // the session's changeCount at the last render
     uint64_t m_rendered{0};
+    uint64_t m_readbackRequests{0};     // readbacks the host asked for (captures)
     float m_defaultExposure{0.6f};      // the renderer's own, for captures that name none
     bool m_quit{false};
     bool m_shutDown{false};

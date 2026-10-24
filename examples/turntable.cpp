@@ -227,15 +227,16 @@ int main(int argc, char* argv[]) {
 
         renderer.resetAccumulation();
 
-        for (int s = 0; s < spp + 3; s++) {
+        for (int s = 0; s < spp; s++) {   // one frame per sample; the last is written
             world.sync();   // headless: no Application drives the systems
+            if (s == spp - 1) renderer.requestReadback();
             renderer.render();
         }
 
         char filename[256];
         snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);
 
-        const auto pixels = renderer.getPixelSpan();
+        const auto pixels = renderer.readback();
         if (!pixels.empty()) {
             stbi_write_png(filename, static_cast<int>(W), static_cast<int>(H), 4,
                            pixels.data(), static_cast<int>(W * 4));

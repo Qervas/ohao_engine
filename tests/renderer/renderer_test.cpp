@@ -74,11 +74,13 @@ int main(int argc, char* argv[]) {
 
     // 3. Render
     renderer.setRenderMode(RenderMode::RTOffline);
+    renderer.requestReadback();
     renderer.render();
-    const uint8_t* pixels = renderer.getPixels();
-    check(pixels != nullptr, "a frame renders to pixels");
+    const auto pixels = renderer.readback();
+    check(pixels.size() == std::size_t{W} * H * 4, "a frame renders to pixels");
 
     // 4. Save
-    if (pixels) check(stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4) != 0, "the frame is written as a PNG");
+    if (!pixels.empty())
+        check(stbi_write_png(output.c_str(), W, H, 4, pixels.data(), W * 4) != 0, "the frame is written as a PNG");
     return finish();
 }

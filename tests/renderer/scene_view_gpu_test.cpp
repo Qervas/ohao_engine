@@ -90,10 +90,11 @@ Shot shoot(const Setup& s, ecs::AssetResolver& assets) {
         if (s.mode != RenderMode::Deferred) renderer.setDenoiseMode(DenoiseMode::None);
         for (int i = 0; i < s.frames; ++i) {
             world.update(0.0f);
+            if (i == s.frames - 1) renderer.requestReadback();
             renderer.render();
         }
         if (!ecs::instantiateErrors(world).empty()) shot.note += "instantiate reported errors; ";
-        const auto span = renderer.getPixelSpan();
+        const auto span = renderer.readback();   // the last frame
         shot.pixels.assign(span.begin(), span.end());
     }
     shot.validation = renderer.validationMessageCount();

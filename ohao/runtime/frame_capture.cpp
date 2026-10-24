@@ -151,10 +151,8 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
         renderer.render();
         submitted = Clock::now();
     }
-    // The CPU denoisers read the last frame back themselves; every other image comes from
-    // the frame's staging buffer.
-    const bool cpuDenoise = isRTRenderMode(mode) && (denoise == DenoiseMode::OIDN || denoise == DenoiseMode::NRD);
-    const std::span<const uint8_t> pixels = cpuDenoise ? renderer.getPixelSpan() : renderer.readback();
+    // The last frame, exactly (a CPU denoiser runs inside readback()).
+    const std::span<const uint8_t> pixels = renderer.readback();
     out.readbackMs = msSince(submitted);
     if (pixels.size() != static_cast<std::size_t>(out.width) * out.height * 4) {
         out.errors.push_back(error("E_RENDER", "the renderer produced no image"));

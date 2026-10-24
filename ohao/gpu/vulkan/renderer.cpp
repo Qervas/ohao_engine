@@ -55,7 +55,6 @@ uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, Vk
 VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     : m_width(width), m_height(height)
 {
-    m_pixelBuffer.resize(width * height * 4); // RGBA
     m_camera = std::make_unique<Camera>();
     m_camera->setPosition(glm::vec3(0.0f, 0.0f, 3.0f));
     m_camera->setRotation(0.0f, -90.0f);
@@ -475,6 +474,9 @@ void VulkanRenderer::resetAccumulation() {
         // the way resize() restarts the slots.
         if (!m_deferredRenderer || !m_initialized) return;
         vkDeviceWaitIdle(m_device);
+        // Every slot's frame has finished: read their timings before the slots restart, or
+        // an older frame would enter the ring after a newer one.
+        m_passTimer.collectAll([](uint32_t) { return true; });
         m_currentFrame = 0;
         m_deferredRenderer->resetTemporalState();
         return;
@@ -654,67 +656,37 @@ void VulkanRenderer::setRealtimeSamplesPerFrame(uint32_t n) {
     }
 }
 
-const uint8_t* VulkanRenderer::getPixels() const {
-    // Atrous denoises the beauty (m_outputImage) in place on the GPU, so
-    // m_pixelBuffer already holds the denoised result — same readback path as
-    // None. Do NOT route it through the NRD/OIDN CPU paths below.
-    // Phase 1: DLSSRR does not yet dispatch denoising (foundation only) — the
-    // beauty in m_pixelBuffer is the raw RT output, same readback path as None.
-    if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||
-        m_denoiseMode == DenoiseMode::DLSSRR) {
-        return m_pixelBuffer.data();
-    }
-    if (m_denoiseCacheValid) {
-        return m_denoisedPixelBuffer.data();
-    }
-
-    // Sub-plan 4.E T1: NRD is GPU-side. Readback the tonemapped binding 30.
+bool VulkanRenderer::denoiseRequestedFrame() {
+    if (m_denoiseCacheValid) return true;
+    // NRD denoises on the GPU: read its tonemapped output (binding 30).
     if (m_denoiseMode == DenoiseMode::NRD) {
         std::vector<uint8_t> rgba;
         uint32_t rw = 0, rh = 0;
-        (void)rw; (void)rh;  // readback fills them; size is implicit in the buffer.
-        auto* self = const_cast<VulkanRenderer*>(this);
-        if (!self->readbackNrdTonemapped(rgba, rw, rh)) {
-            OHAO_LOG(Error, gpu, "Denoise: NRD readback failed — returning noisy pixels");
-            return m_pixelBuffer.data();
+        if (!readbackNrdTonemapped(rgba, rw, rh)) {
+            OHAO_LOG(Error, gpu, "Denoise: NRD readback failed; returning the noisy frame");
+            return false;
         }
         m_denoisedPixelBuffer = std::move(rgba);
         m_denoiseCacheValid = true;
-        return m_denoisedPixelBuffer.data();
+        return true;
     }
-
-    // Shared readback + float3 conversion for any denoiser backend.
-    // readbackHDRBuffers is non-const and has device-global side effects
-    // (allocates a command buffer, submits it, waits idle). Functionally
-    // safe after render() completes in a single-threaded game loop.
-    // TODO: make readbackHDRBuffers const by factoring the staging-buffer
-    // machinery behind a mutable cache.
+    // OIDN: the frame's beauty, albedo and normal AOVs, denoised on the CPU.
     std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
     uint32_t rw = 0, rh = 0;
-    auto* self = const_cast<VulkanRenderer*>(this);
-    if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
-        OHAO_LOG(Error, gpu, "Denoise: readbackHDRBuffers failed — returning noisy pixels");
-        return m_pixelBuffer.data();
+    if (!readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+        OHAO_LOG(Error, gpu, "Denoise: readbackHDRBuffers failed; returning the noisy frame");
+        return false;
     }
     auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
     auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
     auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
-
-    bool denoised = false;
-
-    // OIDN is the offline denoiser backend.
-    if (!denoised) {
-        denoised = ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
-                                      rw, rh, /*hdr*/ true);
-        if (!denoised) {
-            OHAO_LOG(Error, gpu, "Denoise: OIDN failed — returning noisy pixels");
-            return m_pixelBuffer.data();
-        }
+    if (!ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(), rw, rh, /*hdr*/ true)) {
+        OHAO_LOG(Error, gpu, "Denoise: OIDN failed; returning the noisy frame");
+        return false;
     }
-
     m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
     m_denoiseCacheValid = true;
-    return m_denoisedPixelBuffer.data();
+    return true;
 }
 
 VkImage VulkanRenderer::getMotionVectorImage() const {

@@ -121,7 +121,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     RunReport r;
     r.frames = frame;
     r.rendered = m_rendered;
-    r.readbackCopies = m_renderer->readbackCopyCount();
+    r.readbackCopies = unrequestedReadbacks();
     r.requestedReadbacks = m_renderer->requestedReadbackCount();
     r.validationMessages = m_renderer->validationMessageCount();
     r.validationEnabled = m_renderer->validationEnabled();
@@ -129,6 +129,11 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
     r.avgGpuMs = m_stats.avgGpuMs();
     r.fps = m_stats.fps();
     return r;
+}
+
+uint64_t LiveHost::unrequestedReadbacks() const noexcept {
+    const uint64_t copies = m_renderer ? m_renderer->requestedReadbackCount() : 0;
+    return copies > m_readbackRequests ? copies - m_readbackRequests : 0;
 }
 
 std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
@@ -159,6 +164,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         m_world->sync();
         for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
             OHAO_LOG(Warn, runtime, "live host: {}", w);
+        ++m_readbackRequests;
         m_renderer->requestReadback();
         m_renderer->render();
         ++m_rendered;
@@ -194,6 +200,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         CaptureSettings settings;
         settings.reset = true;
         settings.defaultExposure = m_defaultExposure;
+        ++m_readbackRequests;   // captureFrame requests its last frame (at most one)
         out = captureFrame(*m_renderer, *m_world, *m_assets, r, settings);
         m_rendered += static_cast<uint64_t>(std::max(0, out.frames));
         if (pp) {
@@ -215,7 +222,7 @@ uint64_t LiveHost::shutdown() {
     m_shutDown = true;
     uint64_t validation = 0;
     const bool validated = m_renderer && m_renderer->validationEnabled();
-    const uint64_t unrequested = m_renderer ? m_renderer->readbackCopyCount() : 0;
+    const uint64_t unrequested = unrequestedReadbacks();
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     m_session.reset();
     m_world.reset();   // releases its RenderScene slots while the RenderScene exists

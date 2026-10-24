@@ -1269,39 +1269,19 @@ static void runHeadlessDeferredRenderTests() {
 static void runOrphanedEntryPointTests() {
     std::cout << "\n[Entry points whose only caller was removed]\n";
 
-    TEST_BEGIN("resize() resizes the readback buffer it owns");
+    TEST_BEGIN("resize() records the new size, growing and shrinking");
     {
+        // On a renderer that was never initialized: resize() still records the size
+        // the next initialize() and readback() use.
         ohao::VulkanRenderer renderer(64, 48);
-        // MEASURE getPixelBufferSize(), NOT getPixelSpan().size(). The span
-        // accessor returns an EMPTY span when getPixels() is null, which it is
-        // on a renderer that was never initialized -- so a span-based check
-        // reads 0 before and 0 after and cannot see whether resize did anything.
-        // An earlier version of this test did exactly that and passed against a
-        // deliberately broken resize(). getPixelBufferSize() has no such guard
-        // and is the buffer resize() actually owns.
-        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(64 * 48 * 4),
-                  "constructor must size the pixel buffer to width*height*4");
         EXPECT_EQ(renderer.getWidth(), 64u, "constructor must record its width");
         EXPECT_EQ(renderer.getHeight(), 48u, "constructor must record its height");
-
-        // 96x64, NOT 96x32. The first draft of this test resized 64x48 -> 96x32,
-        // which is 3072 pixels either way: the assertion compared 12288 against
-        // 12288 and held perfectly against a resize() that did nothing at all.
-        // An invariant is only as strong as the case it is evaluated on, and a
-        // dimension change that preserves the pixel count is the one case this
-        // particular invariant cannot see.
         renderer.resize(96, 64);
-        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(96 * 64 * 4),
-                  "resize must re-size the readback buffer, or the next readback "
-                  "copies the new frame's bytes into a buffer sized for the old one");
         EXPECT_EQ(renderer.getWidth(), 96u, "resize must record the new width");
         EXPECT_EQ(renderer.getHeight(), 64u, "resize must record the new height");
-
-        // AND SHRINKING, separately: a grow can be satisfied by a vector that
-        // only ever reserves, while the readback length is taken from size().
         renderer.resize(16, 16);
-        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(16 * 16 * 4),
-                  "resize must shrink the readback buffer too, not just grow it");
+        EXPECT_EQ(renderer.getWidth(), 16u, "resize must shrink the width too");
+        EXPECT_EQ(renderer.getHeight(), 16u, "resize must shrink the height too");
         TEST_PASS();
     }
 
@@ -1324,15 +1304,14 @@ static void runOrphanedEntryPointTests() {
         renderer.setRenderMode(ohao::RenderMode::Deferred);
         for (int i = 0; i < 4; ++i) renderer.render();
         renderer.resize(256, 128);
-        for (int i = 0; i < 4; ++i) renderer.render();   // drain the readback ring at the new size
-        EXPECT_EQ(renderer.getPixelBufferSize(), static_cast<size_t>(256 * 128 * 4),
-                  "readback buffer follows the resize");
+        renderer.requestReadback();
+        renderer.render();   // the first frame at the new size, read back
+        const auto px = renderer.readback();
+        EXPECT_EQ(px.size(), static_cast<size_t>(256 * 128 * 4), "the readback follows the resize");
         EXPECT(std::abs(renderer.getCamera().getAspectRatio() - 2.0f) < 1e-5f,
                "resize must update the camera aspect, or the image is stretched");
-        const uint8_t* px = renderer.getPixels();
-        EXPECT(px != nullptr, "pixels available after resize");
         size_t opaque = 0;
-        for (size_t i = 3; i < renderer.getPixelBufferSize(); i += 4) opaque += px[i] != 0;
+        for (size_t i = 3; i < px.size(); i += 4) opaque += px[i] != 0;
         EXPECT_EQ(opaque, static_cast<size_t>(256 * 128),
                   "every pixel of the resized frame was written (alpha set)");
 
@@ -1543,6 +1522,128 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
 static void runPassTimingTests() {
     std::cout << "\n=== Pass timing ===" << std::endl;
     sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame();
+}
+
+// =============================================================================
+// SECTION — READBACK (sub-project 2b, test 3)
+// =============================================================================
+
+// A cube turning 600 degrees a second about Y (10 degrees a 1/60 s step), a light, and the
+// camera on it: its angle is a known function of the step.
+static void buildSpinScene(ohao::ecs::World& world, ohao::VulkanRenderer& r) {
+    ohao::Model cube;
+    const glm::vec3 n[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (const glm::vec3& f : n) {
+        const glm::vec3 u = std::abs(f.y) > 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        const glm::vec3 t = glm::cross(u, f);   // with u and f, a right-handed face frame
+        const auto base = static_cast<uint32_t>(cube.vertices.size());
+        for (const glm::vec2 c : {glm::vec2(-1, -1), glm::vec2(1, -1), glm::vec2(1, 1), glm::vec2(-1, 1)}) {
+            ohao::Vertex v{};
+            v.position = 0.6f * (f + c.x * t + c.y * u);
+            v.normal = f;
+            v.tangent = glm::vec4(t, 1.0f);
+            v.color = {1, 1, 1};   // the G-buffer multiplies the material by it
+            v.boneWeights = {1, 0, 0, 0};
+            cube.vertices.push_back(v);
+        }
+        // Wound as makeQuad below: clockwise about the face normal.
+        for (const uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) cube.indices.push_back(base + k);
+    }
+    ohao::render::MaterialDesc mat;
+    mat.baseColor = {0.8f, 0.3f, 0.1f};
+    ohao::ecs::Transform t;
+    t.rotation = glm::angleAxis(glm::radians(25.0f), glm::vec3(1, 0, 0));   // a top face in view
+    const entt::entity e =
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), cube, "spinning_cube", t, &mat);
+    world.registry().emplace<ohao::ecs::Spin>(e, ohao::ecs::Spin{{0, 1, 0}, 600.0f});
+    ohao::ecs::Light light;
+    light.intensity = 150.0f;
+    ohao::ecs::spawnLight(world, "light", light, ohao::ecs::Transform{{1.5f, 2.0f, 3.0f}});
+    r.getCamera().setPosition({0.0f, 0.0f, 4.0f});
+    r.getCamera().setRotation(0.0f, -90.0f);
+    r.setRenderMode(ohao::RenderMode::Deferred);
+}
+
+// A fresh renderer's single frame of the spin scene after `steps` steps.
+static std::vector<uint8_t> freshCapture(int steps) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return {};
+    std::vector<uint8_t> out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        for (int k = 0; k < steps; ++k) world.simulate(1.0f / 60.0f);
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.assign(px.begin(), px.end());
+    }
+    return out;
+}
+
+static int maxAbsDiff(const std::vector<uint8_t>& a, std::span<const uint8_t> b) {
+    if (a.size() != b.size() || a.empty()) return 256;
+    int m = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) m = std::max(m, std::abs(int(a[i]) - int(b[i])));
+    return m;
+}
+
+// Frame N's readback is frame N: rendering a spinning cube step by step and reading frame N
+// (the temporal history reset just before it, so only the frame read can differ) gives
+// exactly a fresh renderer's single capture of step N, and not step N-3, which is what the
+// deleted headless ring delivered. No frame copies unless asked.
+static void sp2b_t03_frame_n_readback_is_frame_n_and_only_requested_frames_copy() {
+    TEST_BEGIN("sp2b_t03: frame N's readback equals a fresh capture of step N; only requested frames copy");
+    constexpr int kSteps = 9;
+    const std::vector<uint8_t> stepN = freshCapture(kSteps);
+    if (stepN.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const std::vector<uint8_t> stepNMinus3 = freshCapture(kSteps - ohao::MAX_FRAMES_IN_FLIGHT);
+    EXPECT(maxAbsDiff(stepN, stepNMinus3) > 32,
+           "the cube's angle shows: step N and step N-3 differ (else this test proves nothing)");
+
+    ohao::VulkanRenderer r(160, 120);
+    EXPECT(r.initialize(), "the renderer starts");
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        for (int k = 1; k <= kSteps; ++k) {
+            world.simulate(1.0f / 60.0f);
+            world.sync();
+            if (k == kSteps) {
+                r.resetAccumulation();   // frame N renders as a fresh renderer's first frame
+                r.requestReadback();
+            }
+            r.render();
+        }
+        const auto px = r.readback();
+        const int diff = maxAbsDiff(stepN, px);
+        std::cout << "(max_abs vs step N " << diff << ", vs step N-3 " << maxAbsDiff(stepNMinus3, px) << ") ";
+        EXPECT_EQ(diff, 0, "frame N's readback is exactly a fresh capture of step N");
+        EXPECT_EQ(r.requestedReadbackCount(), uint64_t{1}, "nine frames, one request: one copy");
+
+        world.sync();
+        r.render();   // not requested
+        EXPECT(r.readback().empty(), "an unrequested frame leaves nothing to read");
+        EXPECT_EQ(r.requestedReadbackCount(), uint64_t{1}, "and copies nothing");
+
+        const auto timings = r.frameTimings(ohao::render::GpuPassTimer::kRingFrames);
+        for (std::size_t i = 1; i < timings.size(); ++i)
+            EXPECT(timings[i].frame > timings[i - 1].frame,
+                   "the timings stay in frame order across the reset (resetAccumulation collects first)");
+    }
+    TEST_PASS();
+}
+
+static void runReadbackTests() {
+    std::cout << "\n=== Readback ===" << std::endl;
+    sp2b_t03_frame_n_readback_is_frame_n_and_only_requested_frames_copy();
 }
 
 // =============================================================================
@@ -1777,11 +1878,15 @@ static void runRenderSceneTests() {
         r->getCamera().setRotation(0.0f, -90.0f);
         r->setRenderMode(ohao::RenderMode::RTOffline);
         if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
-        for (int k = 0; k < 6; ++k) { world.update(0.0f); r->render(); }
+        for (int k = 0; k < 6; ++k) {
+            world.update(0.0f);
+            if (k == 5) r->requestReadback();
+            r->render();
+        }
         RenderScene& rs = r->renderScene();
         EXPECT(rs.tlas() != VK_NULL_HANDLE, "the RenderScene built a TLAS for the path tracer");
         EXPECT_EQ(rs.rtLightCount(), 1u, "the scene's light reached the RT light list");
-        const auto px = r->getPixelSpan();
+        const auto px = r->readback();
         EXPECT_EQ(px.size(), size_t{64 * 64 * 4}, "a full readback");
         const std::size_t centre = (32 * 64 + 32) * 4, corner = 0;
         EXPECT(px[centre] > 20, "the lit quad covers the image centre (closest-hit read the scene)");
@@ -1853,8 +1958,13 @@ static void runRenderSceneTests() {
         r->getCamera().setRotation(0.0f, -90.0f);
         r->setRenderMode(ohao::RenderMode::RTOffline);
         if (r->getRenderMode() != ohao::RenderMode::RTOffline) { std::cout << "(no path tracer -- skipped) "; TEST_PASS(); return; }
-        for (int k = 0; k < 6; ++k) { world.update(0.0f); r->render(); }
-        const auto px = r->getPixelSpan();
+        for (int k = 0; k < 6; ++k) {
+            world.update(0.0f);
+            if (k == 5) r->requestReadback();
+            r->render();
+        }
+        const auto px = r->readback();
+        EXPECT_EQ(px.size(), size_t{64 * 64 * 4}, "a full readback");
         int redLeft = 0, greenTop = 0;
         for (int y = 0; y < 64; ++y)
             for (int x = 0; x < 64; ++x) {
@@ -2040,6 +2150,7 @@ int main() {
     runHeadlessPathTracerTests();
     runHeadlessDeferredRenderTests();
     runPassTimingTests();
+    runReadbackTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
     float panX = 0.0f;
     float rotY = 0.0f;  // --rot-y=<deg/frame>: yaw the camera each seq frame (mouse-look repro)
     // Debug capture: --seq=<K> renders K consecutive realtime frames and writes
-    // EACH frame's getPixels() to OUT_%03d.png (zero-padded), advancing the
+    // EACH frame (read back) to OUT_%03d.png (zero-padded), advancing the
     // sampler/temporal naturally between frames (no reset). Behind the flag so
     // default single-PNG behavior is unchanged. Used to difference the temporal
     // "blinking light blob". If --pan-x is set in seq mode, the camera is
@@ -393,8 +393,10 @@ int main(int argc, char* argv[]) {
     // LightingMode::None → no lights, HDR env IBL only (pure environment)
 
     // Headless: no Application drives the systems, so every frame syncs the world.
-    const auto renderFrame = [&] {
+    // `keep`: read this frame back (renderer.readback() after it).
+    const auto renderFrame = [&](bool keep = false) {
         world.sync();
+        if (keep) renderer.requestReadback();
         renderer.render();
     };
 
@@ -440,7 +442,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ---- Debug: consecutive per-frame capture (--seq=K) ----
-    // Renders K consecutive frames, dumping each frame's getPixels() to a
+    // Renders K consecutive frames, dumping each frame (read back) to a
     // zero-padded OUT_%03d.png. Sampler/temporal advance naturally (no reset).
     // Continuous pan: when panX != 0, translate camera +X by panX each frame.
     if (seqCount > 0 && rtMode == RenderMode::RTRealtime) {
@@ -467,16 +469,16 @@ int main(int argc, char* argv[]) {
                 camera.rotate(0.0f, rotY);        // yaw sweep — reproduces mouse-look rotation
                 renderer.notifyCameraChanged();
             }
-            renderFrame();
-            const uint8_t* px = renderer.getPixels();
+            renderFrame(true);
+            const auto px = renderer.readback();
             char nameBuf[1024];
             std::snprintf(nameBuf, sizeof(nameBuf), "%s_%03d%s",
                           base.c_str(), f, suffix.c_str());
-            if (px) {
-                stbi_write_png(nameBuf, W, H, 4, px, W * 4);
+            if (!px.empty()) {
+                stbi_write_png(nameBuf, W, H, 4, px.data(), W * 4);
                 std::cout << "[seq] frame " << f << " -> " << nameBuf << std::endl;
             } else {
-                std::cerr << "[seq] frame " << f << " getPixels() returned null\n";
+                std::cerr << "[seq] frame " << f << ": readback returned no image\n";
             }
         }
         auto seqMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -487,21 +489,20 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    // If --pan-x is set, render samples+2 frames, then translate camera +X
-    // and render one final frame — that last frame's MV reflects the pan.
-    int preCount = samples + 3;
-    if (panX != 0.0f) preCount = samples + 2;
-    for (int i = 0; i < preCount; i++) renderFrame();
+    // One frame per sample, the last one written. If --pan-x is set, the camera
+    // translates +X before the last frame, so that frame's MV reflects the pan.
+    const int preCount = panX != 0.0f ? samples - 1 : samples;
+    for (int i = 0; i < preCount; i++) renderFrame(i == preCount - 1 && panX == 0.0f);
     if (panX != 0.0f) {
         auto pos = camera.getPosition();
         camera.setPosition({pos.x + panX, pos.y, pos.z});
-        renderFrame();
+        renderFrame(true);
     }
+    const auto pixels = renderer.readback();   // denoised when a CPU denoiser is on
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    const auto pixels = renderer.getPixelSpan();
     if (!pixels.empty()) {
         stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
                        pixels.data(), static_cast<int>(W * 4));

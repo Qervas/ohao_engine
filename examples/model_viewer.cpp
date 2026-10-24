@@ -188,14 +188,16 @@ int main(int rawArgc, char* rawArgv[]) {
     }
 
     // Headless: no Application drives the systems, so every frame syncs the world.
+    // `keep`: read this frame back (renderer.readback() after it).
     bool firstFrame = true;
-    const auto renderFrame = [&] {
+    const auto renderFrame = [&](bool keep = false) {
         world.sync();
         if (firstFrame && !ecs::instantiateErrors(world).empty()) {
             std::cerr << "FATAL: meshes could not be built (see the instantiate errors above)\n";
             std::exit(2);
         }
         firstFrame = false;
+        if (keep) renderer.requestReadback();
         renderer.render();
     };
 
@@ -204,7 +206,9 @@ int main(int rawArgc, char* rawArgv[]) {
                                   : (mode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline"))
               << ")...\n";
     auto start = std::chrono::high_resolution_clock::now();
-    const int frames = cli.useDeferred ? 30 : (samples + 3);
+    // Deferred: 30 frames (TAA and RT GI histories converge); path traced: one frame per
+    // sample. The last frame is the one written.
+    const int frames = cli.useDeferred ? 30 : samples;
 
     if (cli.video && cli.useDeferred) {
         constexpr int fps = 30;
@@ -217,8 +221,8 @@ int main(int rawArgc, char* rawArgv[]) {
 
         std::cout << "Recording " << totalFrames << " frames to " << videoDir << "/\n";
         for (int i = 0; i < totalFrames; i++) {
-            renderFrame();
-            const auto px = renderer.getPixelSpan();
+            renderFrame(true);
+            const auto px = renderer.readback();
             if (!px.empty()) {
                 char fname[256];
                 snprintf(fname, sizeof(fname), "%s/frame_%04d.png", videoDir.c_str(), i);
@@ -238,12 +242,12 @@ int main(int rawArgc, char* rawArgv[]) {
         return 0;
     }
 
-    for (int i = 0; i < frames; i++) renderFrame();
+    for (int i = 0; i < frames; i++) renderFrame(i == frames - 1);
+    const auto pixels = renderer.readback();   // denoised when a CPU denoiser is on
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms\n";
 
-    const auto pixels = renderer.getPixelSpan();
     if (!pixels.empty()) {
         stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
                        pixels.data(), static_cast<int>(W * 4));

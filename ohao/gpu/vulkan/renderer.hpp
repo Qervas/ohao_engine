@@ -91,8 +91,9 @@ struct LightUniformBuffer {
  *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
  *   ecs::installRenderExtract(world, renderer.renderScene());
- *   world.sync(); renderer.render();
- *   const uint8_t* pixels = renderer.getPixels(); // RGBA format
+ *   world.sync();
+ *   renderer.requestReadback(); renderer.render();
+ *   std::span<const uint8_t> pixels = renderer.readback();   // that frame, RGBA8
  */
 class VulkanRenderer {
 public:
@@ -107,17 +108,17 @@ public:
     [[nodiscard]] bool isPresenting() const noexcept { return m_swapchain != nullptr; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
     void setPresentExtent(VkExtent2D extent);
-    // Headless readback copies recorded since initialize (windowed mode: always 0).
-    [[nodiscard]] uint64_t readbackCopyCount() const noexcept { return m_readbackCopies; }
-    // Readback on request: the next frame render() records also leaves its final RGBA8
-    // image in that frame slot's persistently mapped staging buffer (a window frame copies
-    // only when asked; a headless frame always does). readback() then waits for that
-    // frame's fence (never the queue) and returns its pixels, width * height * 4 bytes,
-    // valid until the next render() or resize(); empty when the frame was not rendered
-    // (minimized, an out-of-date swapchain) or produced no RGBA8 image.
+    // The only way to read a frame. requestReadback() marks the next frame render()
+    // records: it alone copies its final RGBA8 image into its slot's persistently mapped
+    // staging buffer (no other frame, headless or windowed, copies anything). readback()
+    // then waits for that frame's fence (never the queue) and returns its pixels,
+    // width * height * 4 bytes, valid until the next render() or resize(); empty when the
+    // frame was not rendered (minimized, an out-of-date swapchain) or produced no RGBA8
+    // image. A path-traced frame with a CPU-side denoiser (OIDN, NRD) is denoised here,
+    // from that frame's images.
     void requestReadback() noexcept { m_readbackRequested = true; }
     [[nodiscard]] std::span<const uint8_t> readback();
-    // Window frames that copied for a request (the unrequested count stays readbackCopyCount).
+    // Frames that copied into their staging buffer: every one of them was requested.
     [[nodiscard]] uint64_t requestedReadbackCount() const noexcept { return m_requestedReadbacks; }
     void shutdown();
 
@@ -286,19 +287,8 @@ public:
     // Debug: readback RGBA8 specular color AOV (4 bytes per pixel).
     [[nodiscard]] bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
 
-    // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
-    // the buffer is lazily denoised on the first call after render();
-    // subsequent calls return the cached result until the next render().
-    [[nodiscard]] const uint8_t* getPixels() const;
-    /// Non-owning view of the same buffer as getPixels() (RGBA8).
-    [[nodiscard]] std::span<const uint8_t> getPixelSpan() const {
-        const uint8_t* p = getPixels();
-        if (!p) return {};
-        return std::span<const uint8_t>{p, m_pixelBuffer.size()};
-    }
     [[nodiscard]] uint32_t getWidth() const noexcept { return m_width; }
     [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
-    [[nodiscard]] size_t getPixelBufferSize() const noexcept { return m_pixelBuffer.size(); }
     [[nodiscard]] VkExtent2D getExtent() const noexcept {
         return VkExtent2D{.width = m_width, .height = m_height};
     }
@@ -411,7 +401,6 @@ private:
     std::unique_ptr<Swapchain> m_swapchain;
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAcquired{};
     bool m_swapchainDirty{false};
-    uint64_t m_readbackCopies{0};
     // Readback on request (requestReadback / readback).
     bool m_readbackRequested{false};
     bool m_readbackReady{false};     // m_readbackSlot's staging buffer holds a requested frame
@@ -426,9 +415,6 @@ private:
     ValidationLog m_validationMessages;
     bool m_validationEnabled{false};
 
-    // Pixel buffer (CPU accessible)
-    std::vector<uint8_t> m_pixelBuffer;
-
     // Denoise state
     DenoiseMode                  m_denoiseMode{DenoiseMode::None};
     bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
@@ -436,8 +422,13 @@ private:
     // m_rtSettings each frame in applyRTRenderSettings so the per-frame reset in
     // prepareRTSceneForFrame doesn't clobber it (same pattern as aniso/SSS).
     uint32_t                     m_realtimeSamplesPerFrame{1};
-    mutable std::vector<uint8_t> m_denoisedPixelBuffer;
-    mutable bool                 m_denoiseCacheValid{false};
+    // The requested frame, denoised on the CPU (OIDN) or read from NRD's tonemapped
+    // output: what readback() returns for those modes, until the next render().
+    std::vector<uint8_t>         m_denoisedPixelBuffer;
+    bool                         m_denoiseCacheValid{false};
+    // readback()'s CPU-denoiser path: fills m_denoisedPixelBuffer from the requested
+    // frame's images (the device must be idle on that frame). False when it cannot.
+    bool denoiseRequestedFrame();
 
     // Camera
     std::unique_ptr<Camera> m_camera;
@@ -477,8 +468,9 @@ private:
     [[nodiscard]] bool initializeDeferredRenderer();
     void applyRTRenderSettings();
     void renderDeferred();
-    // Returns whether the frame's staging buffer received the final image.
-    bool copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);
+    // A requested headless frame: its final RGBA8 image into the slot's staging buffer.
+    // Returns whether the staging buffer received it.
+    bool copyDeferredOutputToStaging(VkCommandBuffer cmd);
 
     RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };

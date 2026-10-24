@@ -100,15 +100,17 @@ struct RunResult {
     std::string note;
 };
 
+// Renders `frames` frames, the last one requested for copyPixels().
 void renderFrames(ecs::World& world, VulkanRenderer& renderer, int frames) {
     for (int i = 0; i < frames; ++i) {
         world.update(0.0f);
+        if (i == frames - 1) renderer.requestReadback();
         renderer.render();
     }
 }
 
 std::vector<uint8_t> copyPixels(VulkanRenderer& renderer) {
-    const auto span = renderer.getPixelSpan();
+    const auto span = renderer.readback();
     return std::vector<uint8_t>(span.begin(), span.end());
 }
 

@@ -204,13 +204,15 @@ void gpuCheck(std::vector<Check>& out) {
     }
     renderer.setRenderMode(RenderMode::Deferred);
     const auto t1 = Clock::now();
+    renderer.requestReadback();
     renderer.render();
+    // Read back: the frame is timed to its fence, so a hung GPU cannot pass by submitting.
+    const bool image = renderer.readback().size() == std::size_t{64} * 64 * 4;
     const auto t2 = Clock::now();
     const double initMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
     const double frameMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
     char detail[160];
     std::snprintf(detail, sizeof detail, "renderer start %.0f ms, 64x64 deferred frame %.1f ms", initMs, frameMs);
-    const bool image = !renderer.getPixelSpan().empty();
     renderer.shutdown();
     if (frameMs <= 2000.0 && image)
         out.push_back(pass("gpu.wedged", "error", detail));
