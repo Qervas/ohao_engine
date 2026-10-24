@@ -154,16 +154,16 @@ bool RTGITechnique::createOutputImage() {
 }
 
 bool RTGITechnique::createDescriptorResources() {
-    // Layout: 8 bindings
+    // Layout: 7 bindings (5 is unused: GI traces before lighting, so there is no direct
+    // light of this frame to read)
     //   0: TLAS (acceleration structure) — RAYGEN
     //   1: GI output (storage image) — RAYGEN
     //   2: GBuffer position (sampled image) — RAYGEN
     //   3: GBuffer normal (sampled image) — RAYGEN
     //   4: GBuffer albedo (sampled image) — RAYGEN
-    //   5: Direct lighting (sampled image) — RAYGEN
     //   6: RenderScene instance table SSBO — CLOSEST_HIT
     //   7: GI history (sampled image) — RAYGEN (temporal blend)
-    VkDescriptorSetLayoutBinding bindings[8] = {};
+    VkDescriptorSetLayoutBinding bindings[7] = {};
 
     // 0: Acceleration structure
     bindings[0].binding = 0;
@@ -195,27 +195,21 @@ bool RTGITechnique::createDescriptorResources() {
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // 5: Direct lighting (sampled image)
-    bindings[5].binding = 5;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
     // 6: RenderScene instance table (closest-hit reads giAlbedoPacked by slot)
-    bindings[6].binding = 6;
-    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[5].binding = 6;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
     // 7: GI history (sampled image for temporal accumulation)
-    bindings[7].binding = 7;
-    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[7].descriptorCount = 1;
-    bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    bindings[6].binding = 7;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 8;
+    layoutInfo.bindingCount = 7;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -225,7 +219,7 @@ bool RTGITechnique::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 * MAX_FRAMES_IN_FLIGHT},  // 4 gbuffer + 1 history
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * MAX_FRAMES_IN_FLIGHT},  // 3 gbuffer + 1 history
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
 
@@ -510,11 +504,6 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     albedoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     albedoInfo.sampler = sampler;
 
-    VkDescriptorImageInfo directLightInfo{};
-    directLightInfo.imageView = input.depthBuffer;   // binding 5 is declared but unread by rt_gi.rgen
-    directLightInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    directLightInfo.sampler = sampler;
-
     // 6: the RenderScene instance table (rt_gi.rchit reads giAlbedoPacked by slot)
     VkDescriptorBufferInfo materialBufInfo{};
     materialBufInfo.buffer = input.instances;
@@ -526,7 +515,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     historyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     historyInfo.sampler = sampler;
 
-    VkWriteDescriptorSet writes[8] = {};
+    VkWriteDescriptorSet writes[7] = {};
 
     // 0: Acceleration structure
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -568,31 +557,23 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[4].pImageInfo = &albedoInfo;
 
-    // 5: Direct lighting
+    // 6: Material buffer SSBO
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[5].dstSet = set;
-    writes[5].dstBinding = 5;
+    writes[5].dstBinding = 6;
     writes[5].descriptorCount = 1;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[5].pImageInfo = &directLightInfo;
-
-    // 6: Material buffer SSBO
-    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = set;
-    writes[6].dstBinding = 6;
-    writes[6].descriptorCount = 1;
-    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[6].pBufferInfo = &materialBufInfo;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].pBufferInfo = &materialBufInfo;
 
     // 7: GI history (sampled image for temporal blend)
-    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = set;
-    writes[7].dstBinding = 7;
-    writes[7].descriptorCount = 1;
-    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[7].pImageInfo = &historyInfo;
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = set;
+    writes[6].dstBinding = 7;
+    writes[6].descriptorCount = 1;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[6].pImageInfo = &historyInfo;
 
-    vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+    vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
 
     // A history image that was never written is undefined memory, and the raygen blends
     // it into the result -- a NaN there would survive every later frame. Zero it first.

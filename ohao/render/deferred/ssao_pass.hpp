@@ -42,7 +42,8 @@ public:
     // The 16 texels of the noise texture for `seed` (unit vectors in XY).
     [[nodiscard]] static std::array<glm::vec4, 16> noise(uint32_t seed);
 
-    // Get output
+    // Get output: one AO value a pixel, in this format (the render graph imports it so)
+    static constexpr VkFormat kOutputFormat = VK_FORMAT_R16_SFLOAT;
     [[nodiscard]] VkImageView getOutputView() const { return m_aoOutputView; }
     [[nodiscard]] VkImage getOutputImage() const { return m_aoOutput; }
     [[nodiscard]] VkSampler getSampler() const { return m_sampler; }

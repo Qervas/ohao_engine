@@ -209,6 +209,9 @@ private:
     float m_deltaTime{0.016f};
     float m_totalTime{0.0f};
     std::queue<ParticleEmitterConfig> m_pendingEmits;
+    // m_totalTime until which an emitted particle can still be alive (the particles pass
+    // runs only until then); below zero: nothing was ever emitted.
+    float m_particlesLiveUntil{-1.0f};
 
     [[nodiscard]] bool createParticleRenderPass();
     [[nodiscard]] bool createParticleFramebuffer();

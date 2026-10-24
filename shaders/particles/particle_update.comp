@@ -78,6 +78,7 @@ void main() {
 
     particles[idx] = p;
 
-    // Count alive particles for indirect draw
-    atomicAdd(instanceCount, 1);
+    // The draw covers instances 0..highest alive slot (one instance a slot; the vertex
+    // shader drops dead ones). A max, unlike a count, does not depend on thread order.
+    atomicMax(instanceCount, idx + 1u);
 }

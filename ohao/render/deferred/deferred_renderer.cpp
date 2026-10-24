@@ -417,29 +417,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_passTimer) m_passTimer->end(cmd);
     };
 
-    // 4.5. SSS — separable subsurface scattering blur on skin
-    VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
-    if (m_sssPass && litOutput) {
-        timerBegin("sss");
-        m_sssPass->setLitSceneView(litOutput);
-        m_sssPass->execute(cmd, frameIndex);
-        litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
-        timerEnd();
-    }
+    // Sky and particles write into the lighting output, so they run before SSS copies it:
+    // post reads SSS's copy, and anything drawn into the lit image after it was lost.
 
-    // 4.6. SSR — screen-space reflections on glossy surfaces
-    if (m_ssrPass && litOutput) {
-        timerBegin("ssr");
-        m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
-        m_ssrPass->setLitSceneView(litOutput);
-        m_ssrPass->execute(cmd, frameIndex);
-        if (m_postProcessing) {
-            m_postProcessing->setSSRView(m_ssrPass->getOutputView());
-        }
-        timerEnd();
-    }
-
-    // 4.6. Sky pass — fills sky pixels with Preetham sky
+    // 4.5. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {
         timerBegin("sky");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
@@ -459,14 +440,18 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         timerEnd();
     }
 
-    // 4.7. Particle system (forward pass over HDR, before post-processing)
-    if (m_particleSystem && m_lightingPass) {
+    // 4.6. Particle system (forward pass over HDR, before SSS and post-processing)
+    // Only while a particle can be alive: since the last emit plus its longest lifetime.
+    m_totalTime += m_deltaTime;
+    const bool particlesLive = !m_pendingEmits.empty() || m_totalTime <= m_particlesLiveUntil;
+    const bool particlesRun = m_particleSystem && m_lightingPass && particlesLive;
+    if (particlesRun) {
         timerBegin("particles");
-        m_totalTime += m_deltaTime;
 
         // Process pending emits
         while (!m_pendingEmits.empty()) {
             m_particleSystem->emit(cmd, m_pendingEmits.front(), m_totalTime);
+            m_particlesLiveUntil = std::max(m_particlesLiveUntil, m_totalTime + m_pendingEmits.front().maxLifetime);
             m_pendingEmits.pop();
         }
 
@@ -505,6 +490,41 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             vkCmdEndRenderPass(cmd);
         }
         timerEnd();  // particles
+    }
+
+    // Sky and particles drew into the lit image as a color attachment; SSS (compute), SSR
+    // and post sample it. Neither render pass's dependencies reach a compute read.
+    if (m_lightingPass && ((m_skyPass && m_skyEnabled) || particlesRun)) {
+        VkMemoryBarrier toRead{};
+        toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &toRead,
+                             0, nullptr, 0, nullptr);
+    }
+
+    // 4.7. SSS — separable subsurface scattering blur on skin, over the lit image with
+    // sky and particles in it
+    VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
+    if (m_sssPass && litOutput) {
+        timerBegin("sss");
+        m_sssPass->setLitSceneView(litOutput);
+        m_sssPass->execute(cmd, frameIndex);
+        litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
+        timerEnd();
+    }
+
+    // 4.8. SSR — screen-space reflections on glossy surfaces
+    if (m_ssrPass && litOutput) {
+        timerBegin("ssr");
+        m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
+        m_ssrPass->setLitSceneView(litOutput);
+        m_ssrPass->execute(cmd, frameIndex);
+        if (m_postProcessing) {
+            m_postProcessing->setSSRView(m_ssrPass->getOutputView());
+        }
+        timerEnd();
     }
 
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
@@ -607,6 +627,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 }
 
 void DeferredRenderer::resetTemporalState() {
+    m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock
     m_totalTime = 0.0f;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
     if (m_rtGI) m_rtGI->resetHistory();
@@ -848,7 +869,7 @@ void DeferredRenderer::importGraphTextures() {
         if (ssaoImg != VK_NULL_HANDLE) {
             m_graphSSAOHandle = m_renderGraph.importTexture(
                 "ssao_output", ssaoImg, m_postProcessing->getSSAOOutput(),
-                VK_FORMAT_R8_UNORM, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
+                SSAOPass::kOutputFormat, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
         }
     }
 

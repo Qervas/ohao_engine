@@ -231,7 +231,7 @@ void SSAOPass::updateDescriptorSet() {
 
 bool SSAOPass::createOutputImage() {
     // Create AO render target using helper
-    RenderTarget rt = createRenderTarget(VK_FORMAT_R16_SFLOAT, m_width, m_height,
+    RenderTarget rt = createRenderTarget(kOutputFormat, m_width, m_height,
                                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     if (rt.image == VK_NULL_HANDLE) return false;
 

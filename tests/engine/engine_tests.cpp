@@ -1151,6 +1151,9 @@ static void runHeadlessDeferredRenderTests() {
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
 
+            // No sky: an empty scene is then a cleared frame, the known image the stride
+            // check below needs (with the sky on, every pixel of an empty scene is sky).
+            renderer.setSkyEnabled(false);
             vkBeginCommandBuffer(cmd, &bi);
             renderer.render(cmd, 0u);
             vkEndCommandBuffer(cmd);
@@ -1748,9 +1751,50 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
     TEST_PASS();
 }
 
+// Sky and particles draw into the lit image before SSS copies it (2b step 4): the sky is in
+// the final image of a frame that runs SSS. It used to be drawn after SSS's copy, which
+// post reads, so every SSS frame lost it: the open sky came out black.
+static void sp2b_s4_the_sky_reaches_the_final_image_through_sss() {
+    TEST_BEGIN("sp2b step 4: the sky reaches the final image in a frame that runs SSS");
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-50.0f, -0.1f, -50.0f}, {50.0f, 0.0f, 50.0f}, {1, 1, 1});
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {});
+        r.getCamera().setPosition({0.0f, 1.0f, 0.0f});
+        r.getCamera().setRotation(10.0f, -90.0f);   // the horizon low, the sky above it
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        EXPECT(px.size() == 160u * 120u * 4u, "the frame reads back");
+        bool sss = false;
+        for (const auto& f : r.frameTimings(1))
+            for (const int p : f.pass) sss = sss || p == ohao::render::passIndex("sss");
+        EXPECT(sss, "the frame ran SSS (else this test proves nothing)");
+        int skyPixels = 0;
+        for (uint32_t x = 0; x < 160 && px.size() == 160u * 120u * 4u; ++x) {
+            const std::size_t p = (2u * 160u + x) * 4u;   // row 2, near the top
+            skyPixels += int(px[p]) + int(px[p + 1]) + int(px[p + 2]) > 30;
+        }
+        std::cout << "(lit sky pixels in row 2: " << skyPixels << "/160) ";
+        EXPECT(skyPixels == 160, "the top row is sky, not the black of an unlit pixel");
+    }
+    TEST_PASS();
+}
+
 static void runRTShadowTests() {
     std::cout << "\n=== RT shadows ===" << std::endl;
     sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not();
+    sp2b_s4_the_sky_reaches_the_final_image_through_sss();
 }
 
 // =============================================================================

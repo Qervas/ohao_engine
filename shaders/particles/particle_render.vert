@@ -36,7 +36,8 @@ const vec2 quadVertices[6] = vec2[](
 );
 
 void main() {
-    uint particleIndex = gl_VertexIndex / 6;
+    // One instance a particle slot (the indirect draw's instanceCount), 6 vertices a quad
+    uint particleIndex = gl_InstanceIndex;
     uint vertexInQuad = gl_VertexIndex % 6;
 
     Particle p = particles[particleIndex];

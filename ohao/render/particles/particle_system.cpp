@@ -101,7 +101,8 @@ bool ParticleSystem::createBuffers() {
     // Particle buffer (SSBO)
     VkDeviceSize particleSize = sizeof(GPUParticle) * m_maxParticles;
     if (!createBuffer(particleSize,
-                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                       m_particleBuffer, m_particleMemory)) {
         return false;
@@ -427,8 +428,23 @@ bool ParticleSystem::createRenderPipeline(VkRenderPass renderPass) {
     return true;
 }
 
+void ParticleSystem::clearOnce(VkCommandBuffer cmd) {
+    if (m_cleared || m_particleBuffer == VK_NULL_HANDLE) return;
+    // Device-local memory starts as whatever was there: every slot's `alive` must read 0.
+    vkCmdFillBuffer(cmd, m_particleBuffer, 0, VK_WHOLE_SIZE, 0u);
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &barrier, 0,
+                         nullptr, 0, nullptr);
+    m_cleared = true;
+}
+
 void ParticleSystem::emit(VkCommandBuffer cmd, const ParticleEmitterConfig& config, float time) {
     if (m_emitPipeline == VK_NULL_HANDLE) return;
+    clearOnce(cmd);
 
     struct EmitPushConstants {
         glm::vec4 emitPosition;
@@ -474,6 +490,7 @@ void ParticleSystem::emit(VkCommandBuffer cmd, const ParticleEmitterConfig& conf
 
 void ParticleSystem::update(VkCommandBuffer cmd, float deltaTime) {
     if (m_updatePipeline == VK_NULL_HANDLE) return;
+    clearOnce(cmd);
 
     // Reset indirect draw buffer instance count
     uint32_t* indirect;

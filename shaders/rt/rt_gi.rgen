@@ -11,7 +11,7 @@ layout(set = 0, binding = 1, rgba16f) uniform image2D giOutput;       // indirec
 layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;
 layout(set = 0, binding = 3) uniform sampler2D gBufferNormal;
 layout(set = 0, binding = 4) uniform sampler2D gBufferAlbedo;
-layout(set = 0, binding = 5) uniform sampler2D directLighting;        // current frame's direct light
+// (binding 5 is unused: GI traces before lighting, so this frame has no direct light yet)
 layout(set = 0, binding = 7) uniform sampler2D giHistory;             // previous frame GI (for temporal blend)
 
 layout(push_constant) uniform PushConstants {

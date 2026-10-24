@@ -55,6 +55,9 @@ public:
 
     // Update all particles (call once per frame before render)
     void update(VkCommandBuffer cmd, float deltaTime);
+    // Zeroes the particle buffer the first time it is used (emit/update call it), so no
+    // slot of uninitialized memory reads as alive.
+    void clearOnce(VkCommandBuffer cmd);
 
     // Create the render pipeline (needs a render pass to be provided)
     bool initRenderPipeline(VkRenderPass renderPass);
@@ -85,6 +88,7 @@ private:
 
     // GPU buffers
     VkBuffer m_particleBuffer{VK_NULL_HANDLE};
+    bool m_cleared{false};
     VkDeviceMemory m_particleMemory{VK_NULL_HANDLE};
     VkBuffer m_counterBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_counterMemory{VK_NULL_HANDLE};
