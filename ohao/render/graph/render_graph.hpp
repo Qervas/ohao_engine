@@ -10,6 +10,8 @@
 #include <functional>
 #include <memory>
 
+namespace ohao::render { class GpuPassTimer; }
+
 namespace ohao {
 
 class GpuAllocator;
@@ -178,6 +180,10 @@ public:
      */
     void execute(VkCommandBuffer cmd);
 
+    // Times each pass (its barriers included) under its name, which must be a
+    // render/frame/pass_registry.hpp name. Null: untimed.
+    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
+
     /**
      * Reset the graph for next frame
      * Clears pass list but keeps allocated resources
@@ -255,6 +261,7 @@ private:
 
     // Compilation state
     bool m_compiled{false};
+    render::GpuPassTimer* m_passTimer{nullptr};
 
     // Name to handle mapping for debugging
     std::unordered_map<std::string, TextureHandle> m_textureNameMap;

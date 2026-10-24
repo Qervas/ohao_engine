@@ -1,4 +1,5 @@
 #include "post_processing_pipeline.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include <array>
 
 namespace ohao {
@@ -85,23 +86,28 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // ── 1. Bloom ──────────────────────────────────────────────────────
     float bloomStrength = 0.0f;
     if (m_bloomEnabled && m_bloomPass) {
+        if (m_passTimer) m_passTimer->begin(cmd, "post.bloom");
         m_bloomPass->setInputImage(currentInput);
         m_bloomPass->execute(cmd, frameIndex);
         if (m_bloomPass->didExecute()) bloomStrength = 1.0f;
+        if (m_passTimer) m_passTimer->end(cmd);
     }
 
     // ── 2. TAA (temporal anti-aliasing) ───────────────────────────────
     if (m_taaEnabled && m_taaPass) {
+        if (m_passTimer) m_passTimer->begin(cmd, "post.taa");
         m_taaPass->setCurrentFrame(currentInput);
         m_taaPass->execute(cmd, frameIndex);
         VkImageView taaOutput = m_taaPass->getOutputView();
         if (taaOutput != VK_NULL_HANDLE) currentInput = taaOutput;
+        if (m_passTimer) m_passTimer->end(cmd);
     }
 
     // ── 3. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && frameIndex < MAX_FRAMES_IN_FLIGHT &&
         m_tonemapDescSets[frameIndex] != VK_NULL_HANDLE) {
+        if (m_passTimer) m_passTimer->begin(cmd, "post.tonemap");
 
         // Bloom output only when bloom ran this frame; otherwise the image was never
         // written. Strength is 0 then, so any read-only image fills the binding.
@@ -151,6 +157,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
+        if (m_passTimer) m_passTimer->end(cmd);
 
         m_didExecute = true;
     }

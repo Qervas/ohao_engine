@@ -142,6 +142,9 @@ if (!createLightBuffer()) {
             OHAO_LOG(Error, gpu, "Failed to initialize frame resources");
             return false;
         }
+        // Per-pass GPU timing: one query pool per frame slot. Without timestamps the
+        // renderer still renders; it just reports no timings.
+        (void)m_passTimer.init(m_device, m_physicalDevice, m_graphicsQueueFamily, MAX_FRAMES_IN_FLIGHT);
 
         // Set shader base path for all render passes
         RenderPassBase::setShaderBasePath(m_shaderBasePath);
@@ -232,6 +235,7 @@ void VulkanRenderer::shutdown() {
         m_swapchain.reset();
 
         // Cleanup multi-frame resources
+        m_passTimer.destroy();
         m_frameResources.shutdown();
 
         destroyLightBuffers();
@@ -598,7 +602,17 @@ void VulkanRenderer::setPresentExtent(VkExtent2D extent) {
 }
 
 float VulkanRenderer::gpuFrameMs() const noexcept {
-    return m_deferredRenderer ? m_deferredRenderer->gpuFrameMs() : 0.0f;
+    const render::FrameTiming* f = m_passTimer.latest();
+    return f ? f->gpuMs : 0.0f;
+}
+
+std::vector<render::FrameTiming> VulkanRenderer::frameTimings(std::size_t n) {
+    if (m_device != VK_NULL_HANDLE && m_frameResources.isInitialized()) {
+        m_passTimer.collectAll([&](uint32_t slot) {
+            return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
+        });
+    }
+    return m_passTimer.recent(n);
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {
@@ -613,6 +627,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
         return false;
     }
     OHAO_LOG(Info, gpu, "VulkanRenderer: DeferredRenderer initialized, resizing to {}x{}", m_width, m_height);
+    m_deferredRenderer->setPassTimer(&m_passTimer);
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setExposure(0.6f);

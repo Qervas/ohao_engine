@@ -22,7 +22,7 @@
 #include <string_view>
 #include <array>
 
-namespace ohao::render { class RenderScene; }
+namespace ohao::render { class RenderScene; class GpuPassTimer; }
 
 namespace ohao {
 
@@ -78,12 +78,9 @@ public:
     [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
     [[nodiscard]] const RTShadowTechnique* getRTShadow() const { return m_rtShadow.get(); }
 
-    // Sum of the last frame's per-pass GPU timings in ms; 0 when timing is unavailable.
-    [[nodiscard]] float gpuFrameMs() const noexcept {
-        float sum = 0.0f;
-        for (int i = 0; i < m_passTimingCount; ++i) sum += m_passTimingsMs[i];
-        return sum;
-    }
+    // Times every pass render() records, by its render/frame/pass_registry.hpp name (the
+    // renderer's per-slot timer; null: untimed).
+    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
     // Wireframe mode
     void setWireframeEnabled(bool enabled);
@@ -129,10 +126,6 @@ public:
 
     // Get jitter offset for TAA
     [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
-
-    // === Introspection (MCP AI agent support) ===
-    [[nodiscard]] nlohmann::json getPipelineInfo() const;
-    [[nodiscard]] nlohmann::json getPerfStats() const;
 
     // === Hot-reload (runtime shader swap) ===
     [[nodiscard]] bool reloadShaderForPass(std::string_view passName, std::string_view spvPath);
@@ -228,18 +221,7 @@ private:
     // Called once after initialize() and again after each onResize().
     void importGraphTextures();
 
-    // === GPU Timing ===
-    static constexpr int GPU_TIMER_COUNT = 25;  // max passes to time
-    VkQueryPool m_timestampPool{VK_NULL_HANDLE};
-    float m_timestampPeriod{1.0f};  // nanoseconds per tick
-    bool m_gpuTimingEnabled{false};
-    std::array<float, GPU_TIMER_COUNT> m_passTimingsMs{};  // per-pass ms from last frame
-    std::array<const char*, GPU_TIMER_COUNT> m_passTimingNames{};
-    int m_passTimingCount{0};
-
-    [[nodiscard]] bool initGpuTiming();
-    void cleanupGpuTiming();
-    void readbackGpuTimings();  // read previous frame's results
+    render::GpuPassTimer* m_passTimer{nullptr};   // VulkanRenderer's, per frame slot
 };
 
 } // namespace ohao

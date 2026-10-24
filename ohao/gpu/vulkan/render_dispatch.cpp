@@ -6,6 +6,7 @@
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 
+#include <chrono>
 #include <utility>
 
 namespace ohao {
@@ -78,6 +79,7 @@ void VulkanRenderer::renderDeferred() {
     // Retire-queue tick. After the early returns above: every tick then matches a
     // frame that is submitted on this slot, so MAX_FRAMES_IN_FLIGHT ticks cover
     // every slot's fence.
+    const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();
     m_frameResources.resetFrame(m_currentFrame);
 
@@ -155,14 +157,19 @@ void VulkanRenderer::renderDeferred() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(cmd, &beginInfo);
+    m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
+    m_passTimer.begin(cmd, "scene.upload");
     m_renderScene->recordUpdates(cmd, m_currentFrame);
+    m_passTimer.end(cmd);
 
-    // Execute deferred rendering pipeline
+    // Execute deferred rendering pipeline (it times its own passes)
     m_deferredRenderer->render(cmd, m_currentFrame);
 
+    m_passTimer.begin(cmd, m_swapchain ? "present" : "readback");
     const bool copied = m_swapchain ? blitDeferredOutputToSwapchain(cmd, imageIndex,
                                                                     wantReadback ? frame.stagingBuffer : VK_NULL_HANDLE)
                                     : copyDeferredOutputToPixelBuffer(cmd);   // headless readback
+    m_passTimer.end(cmd);
     if (wantReadback) finishReadbackRequest(copied);
 
     vkEndCommandBuffer(cmd);
@@ -182,6 +189,7 @@ void VulkanRenderer::renderDeferred() {
         submitInfo.pSignalSemaphores = &renderFinished;
     }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     if (m_swapchain) {
         const VkResult pr = m_swapchain->present(m_graphicsQueue, imageIndex);
@@ -274,6 +282,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
         memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped, m_width * m_height * 4);
     }
 
+    const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();   // retire-queue tick, after the slot's fence wait
     m_frameResources.resetFrame(m_currentFrame);
 
@@ -289,7 +298,10 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
+    m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
+    m_passTimer.begin(cmd, "scene.upload");
     m_renderScene->recordUpdates(cmd, m_currentFrame);
+    m_passTimer.end(cmd);
     // The traced scene changed (TLAS built or refit, instance data or lights
     // uploaded): treat it like a view change. Accumulating profiles restart; the
     // realtime profile flags the frame and keeps its denoiser history. A still
@@ -309,13 +321,16 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
+    m_passTimer.begin(cmd, "pt.render");
     rtRenderer->render(cmd, m_currentFrame, ptView, ptProj,
                        glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
                        glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
+    m_passTimer.end(cmd);
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = rtRenderer->getOutputImage();
     if (ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
+        m_passTimer.begin(cmd, "pt.readback");
         // Output is already in TRANSFER_SRC_OPTIMAL from render()
         VkBufferImageCopy copyRegion{};
         copyRegion.bufferOffset = 0;
@@ -330,6 +345,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
         vkCmdCopyImageToBuffer(cmd, ptOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                frame.stagingBuffer, 1, &copyRegion);
         stagingToHost(cmd, frame.stagingBuffer);
+        m_passTimer.end(cmd);
         if (wantReadback) finishReadbackRequest(true);
     }
 
@@ -340,6 +356,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
@@ -414,6 +431,8 @@ void VulkanRenderer::resize(uint32_t width, uint32_t height) {
 
     if (m_initialized) {
         vkDeviceWaitIdle(m_device);
+        // Every slot's frame has finished: read their timings before m_currentFrame resets.
+        m_passTimer.collectAll([](uint32_t) { return true; });
 
         // Resize multi-frame staging buffers (critical for correct pixel readback!)
         if (m_frameResources.isInitialized()) {

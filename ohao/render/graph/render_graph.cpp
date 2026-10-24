@@ -1,5 +1,6 @@
 #include "render_graph.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include "core/log.hpp"
 #include <algorithm>
 #include <queue>
@@ -416,6 +417,7 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
 
     for (const auto& compiledPass : m_compiledPasses) {
         const RenderPassDef& pass = m_passes[compiledPass.passIndex];
+        if (m_passTimer) m_passTimer->begin(cmd, pass.name);
 
         // Insert barriers
         for (const auto& barrier : compiledPass.barriers) {
@@ -509,6 +511,7 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
         if (pass.type == PassType::Graphics && pass.vulkanRenderPass != VK_NULL_HANDLE) {
             vkCmdEndRenderPass(cmd);
         }
+        if (m_passTimer) m_passTimer->end(cmd);
     }
 }
 

@@ -21,6 +21,7 @@
 #include "core/concepts.hpp"
 #include "gpu/layout_meta.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
@@ -126,8 +127,13 @@ public:
 
     // Camera
     [[nodiscard]] Camera& getCamera() { return *m_camera; }
-    // Last deferred frame's GPU time in ms (timestamp queries); 0 when unavailable.
+    // The newest finished frame's GPU time in ms (first pass begin to last pass end); 0
+    // when timing is unavailable or no frame has finished.
     [[nodiscard]] float gpuFrameMs() const noexcept;
+    // Per-pass GPU timings (render/frame/pass_registry.hpp names) of the newest finished
+    // frames, at most n, oldest first. Collects every frame whose fence has signalled first,
+    // without waiting for one that has not.
+    [[nodiscard]] std::vector<render::FrameTiming> frameTimings(std::size_t n);
 
     // Validation (OHAO_VALIDATION=1 at initialize). validationEnabled() is false when
     // the variable is unset OR the Khronos layer is not installed -- callers must
@@ -155,9 +161,13 @@ public:
                                            : nullptr;
     }
 
-    // Vulkan handles for out-of-tree consumers — wiring only, no callers here.
+    // Vulkan handles for out-of-tree consumers (render_bench's GPU calibration kernel). Work
+    // submitted on the queue must finish before the next render() (the renderer does not
+    // synchronize with it).
     [[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }
     [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
+    [[nodiscard]] VkQueue graphicsQueue() const noexcept { return m_graphicsQueue; }
+    [[nodiscard]] uint32_t graphicsQueueFamily() const noexcept { return m_graphicsQueueFamily; }
 
     // Render mode
     void setRenderMode(RenderMode mode);
@@ -342,6 +352,8 @@ private:
 
     // Multi-frame rendering (ring buffer)
     FrameResourceManager m_frameResources;
+    // Per-pass GPU timestamps, one query pool per frame slot (render/frame/gpu_pass_timer.hpp).
+    render::GpuPassTimer m_passTimer;
     uint32_t m_currentFrame{0};
     uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts
 

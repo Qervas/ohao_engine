@@ -1,6 +1,7 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "core/log.hpp"
 #include <array>
@@ -132,9 +133,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
-    // GPU timing for per-pass profiling
-    initGpuTiming();
-
     // Initialize RT shadow technique
     m_rtShadow = std::make_unique<RTShadowTechnique>();
     if (m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
@@ -164,7 +162,6 @@ void DeferredRenderer::cleanup() {
 
     vkDeviceWaitIdle(m_device);
 
-    cleanupGpuTiming();
     m_renderGraph.shutdown();
 
     if (m_particleSystem) {
@@ -206,84 +203,7 @@ void DeferredRenderer::cleanup() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// GPU Timing — VkQueryPool timestamp queries for per-pass profiling
-// ---------------------------------------------------------------------------
-
-bool DeferredRenderer::initGpuTiming() {
-    // Query timestamp period from physical device
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-    m_timestampPeriod = props.limits.timestampPeriod;  // nanoseconds per tick
-
-    if (m_timestampPeriod == 0.0f) {
-        OHAO_LOG(Warn, render, "DeferredRenderer: GPU does not support timestamps");
-        m_gpuTimingEnabled = false;
-        return false;
-    }
-
-    // Create query pool: 2 queries per pass (begin + end)
-    VkQueryPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-    poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    poolInfo.queryCount = GPU_TIMER_COUNT * 2;
-
-    if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_timestampPool) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create timestamp query pool");
-        m_gpuTimingEnabled = false;
-        return false;
-    }
-
-    m_gpuTimingEnabled = true;
-    m_passTimingsMs.fill(0.0f);
-    m_passTimingNames.fill(nullptr);
-    m_passTimingCount = 0;
-
-    OHAO_LOG(Info, render, "DeferredRenderer: GPU timing enabled (period={}ns)", m_timestampPeriod);
-    return true;
-}
-
-void DeferredRenderer::cleanupGpuTiming() {
-    if (m_timestampPool != VK_NULL_HANDLE) {
-        vkDestroyQueryPool(m_device, m_timestampPool, nullptr);
-        m_timestampPool = VK_NULL_HANDLE;
-    }
-    m_gpuTimingEnabled = false;
-}
-
-void DeferredRenderer::readbackGpuTimings() {
-    if (!m_gpuTimingEnabled || m_passTimingCount == 0) return;
-
-    // Read all timestamp results (2 per pass: begin + end)
-    std::array<uint64_t, GPU_TIMER_COUNT * 2> timestamps{};
-    uint32_t queryCount = static_cast<uint32_t>(m_passTimingCount * 2);
-
-    VkResult result = vkGetQueryPoolResults(
-        m_device, m_timestampPool,
-        0, queryCount,
-        queryCount * sizeof(uint64_t), timestamps.data(), sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT);
-
-    if (result == VK_SUCCESS) {
-        // Convert tick deltas to milliseconds
-        float nsToMs = m_timestampPeriod / 1'000'000.0f;
-        for (int i = 0; i < m_passTimingCount; i++) {
-            uint64_t begin = timestamps[i * 2];
-            uint64_t end   = timestamps[i * 2 + 1];
-            m_passTimingsMs[i] = static_cast<float>(end - begin) * nsToMs;
-        }
-    }
-    // VK_NOT_READY is fine — first frame has no results yet
-}
-
 void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
-    // Read back GPU timings from PREVIOUS frame (results are 1 frame behind)
-    if (m_gpuTimingEnabled) {
-        readbackGpuTimings();
-        vkCmdResetQueryPool(cmd, m_timestampPool, 0, GPU_TIMER_COUNT * 2);
-        m_passTimingCount = 0;
-    }
-
     // Update camera matrices for TAA jitter
     glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(frameIndex) : glm::vec2(0.0f);
     glm::mat4 jitteredProj = m_proj;
@@ -332,7 +252,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 1. Shadow pass (CSM) — writes shadow map, leaves at DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     if (m_csmPass) {
-        m_renderGraph.addPass("CSM",
+        m_renderGraph.addPass("csm",
             [&](PassBuilder& builder) {
                 if (m_graphShadowHandle.isValid())
                     builder.declareDepthWrite(m_graphShadowHandle,
@@ -344,7 +264,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 2. G-Buffer pass — writes MRT outputs; render pass finalLayouts are:
     //    color buffers → SHADER_READ_ONLY_OPTIMAL, depth → DEPTH_STENCIL_READ_ONLY_OPTIMAL
     if (m_gbufferPass) {
-        m_renderGraph.addPass("GBuffer",
+        m_renderGraph.addPass("gbuffer",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.declareColorWrite(m_graphNormalHandle,
@@ -361,8 +281,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 3. SSAO — reads normal buffer (already at SHADER_READ_ONLY after GBuffer).
     //    SSAO self-manages its output transitions internally (UNDEFINED→GENERAL→SHADER_READ_ONLY).
-    if (m_postProcessing && m_gbufferPass) {
-        m_renderGraph.addComputePass("SSAO",
+    //    Only when the effect is on, so a frame without it has no ssao pass (or timing);
+    //    lighting then binds its fallback view.
+    const bool ssaoOn = m_postProcessing && m_postProcessing->getSSAOEnabled();
+    if (!ssaoOn && m_lightingPass) m_lightingPass->setSSAOTexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
+    if (ssaoOn && m_gbufferPass) {
+        m_renderGraph.addComputePass("ssao",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.readComputeTexture(m_graphNormalHandle);
@@ -385,7 +309,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 3.7. RT Shadows — traces shadow rays using TLAS, outputs shadow mask
     if (m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
-        m_renderGraph.addComputePass("RTShadow",
+        m_renderGraph.addComputePass("rt.shadows",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.readComputeTexture(m_graphNormalHandle);
@@ -418,7 +342,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 3.8. RT GI — traces indirect rays, outputs color bleeding
     if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
-        m_renderGraph.addComputePass("RTGI",
+        m_renderGraph.addComputePass("rt.gi",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.readComputeTexture(m_graphNormalHandle);
@@ -463,7 +387,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 4. Deferred lighting — reads GBuffer + shadow. Key barrier: shadow map
     //    DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL (was missing before).
     if (m_lightingPass && m_gbufferPass) {
-        m_renderGraph.addPass("DeferredLighting",
+        m_renderGraph.addPass("lighting",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.readTexture(m_graphNormalHandle,
@@ -481,11 +405,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
     }
 
-    // Time the render graph (CSM+GBuffer+SSAO+Lighting)
-    if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
-        m_passTimingNames[m_passTimingCount] = "RenderGraph";
-        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2);
-    }
     // RT shadow mask and GI reach lighting only from a frame that traced them: the
     // RTShadow / RTGI passes above hand them over after a successful render(). Until
     // then lighting falls back to CSM shadows and no indirect light.
@@ -494,33 +413,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
 
+    m_renderGraph.setPassTimer(m_passTimer);   // times each graph pass under its name
     m_renderGraph.compile();
     m_renderGraph.execute(cmd);
-    if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
-        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2 + 1);
-        m_passTimingCount++;
-    }
 
-    // GPU timing helper for direct passes
+    // Direct passes: timed by registry name (render/frame/pass_registry.hpp).
     auto timerBegin = [&](const char* name) {
-        if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
-            m_passTimingNames[m_passTimingCount] = name;
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                m_timestampPool, m_passTimingCount * 2);
-        }
+        if (m_passTimer) m_passTimer->begin(cmd, name);
     };
     auto timerEnd = [&]() {
-        if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                m_timestampPool, m_passTimingCount * 2 + 1);
-            m_passTimingCount++;
-        }
+        if (m_passTimer) m_passTimer->end(cmd);
     };
 
     // 4.5. SSS — separable subsurface scattering blur on skin
     VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
     if (m_sssPass && litOutput) {
-        timerBegin("SSS");
+        timerBegin("sss");
         m_sssPass->setLitSceneView(litOutput);
         m_sssPass->execute(cmd, frameIndex);
         litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
@@ -529,7 +437,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 4.6. SSR — screen-space reflections on glossy surfaces
     if (m_ssrPass && litOutput) {
-        timerBegin("SSR");
+        timerBegin("ssr");
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
         m_ssrPass->setLitSceneView(litOutput);
         m_ssrPass->execute(cmd, frameIndex);
@@ -541,7 +449,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 4.6. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {
-        timerBegin("SkyPass");
+        timerBegin("sky");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_skyPass->setCameraData(invViewProj, m_cameraPos);
         // Sun direction: opposite of the directional light direction (light points down → sun up)
@@ -560,8 +468,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 4.7. Particle system (forward pass over HDR, before post-processing)
-    timerBegin("Particles");
     if (m_particleSystem && m_lightingPass) {
+        timerBegin("particles");
         m_totalTime += m_deltaTime;
 
         // Process pending emits
@@ -604,11 +512,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
             vkCmdEndRenderPass(cmd);
         }
+        timerEnd();  // particles
     }
-    timerEnd();  // Particles
 
-    // 5. Post-processing (bloom, TAA, SSAO, tonemapping)
-    timerBegin("PostProcessing");
+    // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
         // Use SSS output if available (blurred skin), otherwise raw lighting
         VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?
@@ -617,13 +524,13 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_sssPass->getOutputImage() : m_lightingPass->getOutputImage();
         m_postProcessing->setHDRInputWithImage(hdrView, hdrImage);
         m_postProcessing->setDeltaTime(m_deltaTime);
+        m_postProcessing->setPassTimer(m_passTimer);
         m_postProcessing->execute(cmd, frameIndex);
     }
-    timerEnd();  // PostProcessing
 
     // 6. Gizmo pass (transform handles for selected objects)
-    timerBegin("Gizmo");
     if (m_gizmoPass && m_gizmoEnabled) {
+        timerBegin("gizmo");
         // Determine the final output image — must be from a pass that actually ran
         VkImage finalImage = VK_NULL_HANDLE;
         VkImageView finalView = VK_NULL_HANDLE;
@@ -641,8 +548,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_gizmoPass->setViewProjection(m_proj * m_view);
             m_gizmoPass->execute(cmd, frameIndex);
         }
+        timerEnd();  // gizmo
     }
-    timerEnd();  // Gizmo
 
     // Store current view-proj for next frame's motion vectors
     m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
@@ -1053,81 +960,6 @@ bool DeferredRenderer::createParticleFramebuffer() {
     }
 
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// Introspection — pipeline info for MCP AI agents
-// ---------------------------------------------------------------------------
-
-nlohmann::json DeferredRenderer::getPipelineInfo() const {
-    using json = nlohmann::json;
-
-    auto passEntry = [](const char* name, const char* type, int order,
-                        bool initialized, bool enabled) -> json {
-        return {
-            {"name", name}, {"type", type}, {"order", order},
-            {"initialized", initialized}, {"enabled", enabled}
-        };
-    };
-
-    json passes = json::array();
-    // Render graph passes
-    passes.push_back(passEntry("CSM",              "graphics", 1,  m_csmPass != nullptr,        true));
-    passes.push_back(passEntry("GBuffer",           "graphics", 2,  m_gbufferPass != nullptr,    true));
-    passes.push_back(passEntry("SSAO",              "compute",  3,  true,                        m_postProcessing && m_postProcessing->getSSAOEnabled()));
-    passes.push_back(passEntry("DeferredLighting",  "graphics", 4,  m_lightingPass != nullptr,   true));
-    passes.push_back(passEntry("SkyPass",           "graphics", 5,  m_skyPass != nullptr,        m_skyEnabled));
-    passes.push_back(passEntry("ParticleSystem",    "graphics", 6,  m_particleSystem != nullptr, m_particleSystem != nullptr));
-    passes.push_back(passEntry("PostProcessing",    "graphics", 7,  m_postProcessing != nullptr, true));
-    passes.push_back(passEntry("GizmoPass",         "graphics", 8,  m_gizmoPass != nullptr,      m_gizmoEnabled));
-
-    return {
-        {"pass_count",  passes.size()},
-        {"passes",      passes},
-        {"resolution",  {m_width, m_height}},
-        {"delta_time",  m_deltaTime},
-        {"total_time",  m_totalTime},
-    };
-}
-
-nlohmann::json DeferredRenderer::getPerfStats() const {
-    using json = nlohmann::json;
-
-    // Count active passes
-    int activePasses = 0;
-    auto check = [&](bool initialized, bool enabled) {
-        if (initialized && enabled) ++activePasses;
-    };
-    check(m_gbufferPass != nullptr,    true);
-    check(m_csmPass != nullptr,        true);
-    check(m_lightingPass != nullptr,   true);
-    check(m_postProcessing != nullptr, true);
-    check(m_skyPass != nullptr,        m_skyEnabled);
-
-    return {
-        {"resolution",    {m_width, m_height}},
-        {"delta_time",    m_deltaTime},
-        {"total_time",    m_totalTime},
-        {"fps_estimate",  m_deltaTime > 0.0f ? 1.0f / m_deltaTime : 0.0f},
-        {"active_passes", activePasses},
-        {"ssao_enabled",  m_postProcessing && m_postProcessing->getSSAOEnabled()},
-        {"effects", {
-            {"sky",        m_skyEnabled},
-        }},
-        {"gpu_timing_enabled", m_gpuTimingEnabled},
-        {"gpu_timings_ms",     [&]() {
-            json timings = json::object();
-            float totalMs = 0.0f;
-            for (int i = 0; i < m_passTimingCount; i++) {
-                if (m_passTimingNames[i]) {
-                    timings[m_passTimingNames[i]] = m_passTimingsMs[i];
-                    totalMs += m_passTimingsMs[i];
-                }
-            }
-            timings["_total"] = totalMs;
-            return timings;
-        }()},
-    };
 }
 
 // ---------------------------------------------------------------------------

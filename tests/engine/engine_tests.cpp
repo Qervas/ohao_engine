@@ -18,6 +18,8 @@
 #include <cstring>
 
 #include "core/core.hpp"
+#include "core/log.hpp"
+#include "render/frame/pass_registry.hpp"
 #include "gpu/layout_meta.hpp"
 #include "gpu/vulkan/vk_utils.hpp"
 #include "gpu/vulkan/material_instance.hpp"
@@ -1461,6 +1463,89 @@ static void runOrphanedEntryPointTests() {
 }
 
 // =============================================================================
+// SECTION — PASS TIMING (sub-project 2b, test 1)
+// =============================================================================
+
+// Renders `n` deferred frames, the last one read back (so its fence has signalled and
+// every frame's timings can be collected), and returns the renderer's timings.
+static std::vector<ohao::render::FrameTiming> timedFrames(ohao::VulkanRenderer& r, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (i == n - 1) r.requestReadback();
+        r.render();
+    }
+    (void)r.readback();
+    return r.frameTimings(ohao::render::GpuPassTimer::kRingFrames);
+}
+
+static bool hasPass(const ohao::render::FrameTiming& f, std::string_view name) {
+    const int index = ohao::render::passIndex(name);
+    for (uint32_t i = 0; i < f.count; ++i)
+        if (f.pass[i] == index) return true;
+    return false;
+}
+
+// Every executed pass is a registry pass with its own timer, named once per frame, in
+// registry (frame) order; the passes' sum is at most the frame's span (+5%); a pass turned
+// off leaves the timings.
+static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() {
+    using namespace ohao::render;
+    TEST_BEGIN("sp2b_t01: every executed pass is registered, timed once, in order, within the frame");
+    ohao::VulkanRenderer renderer(320, 180);
+    if (!renderer.initialize()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    renderer.setRenderMode(ohao::RenderMode::Deferred);
+    auto* d = renderer.getDeferredRenderer();
+    EXPECT(d && d->getPostProcessing(), "deferred post-processing exists");
+    auto* pp = d->getPostProcessing();
+    pp->setSSAOEnabled(true);
+    pp->setTAAEnabled(true);
+    pp->setBloomEnabled(true);
+
+    const std::vector<FrameTiming> frames = timedFrames(renderer, 8);
+    EXPECT_EQ(frames.size(), size_t{8}, "every rendered frame's timings are collected");
+    for (std::size_t i = 1; i < frames.size(); ++i)
+        EXPECT(frames[i].frame == frames[i - 1].frame + 1, "frames are kept oldest first, none skipped");
+    for (const FrameTiming& f : frames) {
+        EXPECT(f.count > 0 && f.gpuMs > 0.0f, "each frame has passes and a span");
+        float sum = 0.0f;
+        for (uint32_t i = 0; i < f.count; ++i) {
+            EXPECT(f.pass[i] < kPassCount, "every pass is in the registry");
+            if (i > 0) EXPECT(f.pass[i] > f.pass[i - 1], "each pass once per frame, in registry order");
+            EXPECT(f.ms[i] >= 0.0f, "no negative pass time");
+            sum += f.ms[i];
+        }
+        EXPECT(sum <= f.gpuMs * 1.05f, "the passes' sum is at most the frame's span plus 5%");
+    }
+    const FrameTiming& last = frames.back();
+    for (const char* name : {"scene.upload", "gbuffer", "ssao", "lighting", "post.bloom", "post.taa", "post.tonemap",
+                             "readback"})
+        EXPECT(hasPass(last, name), "a frame with SSAO, TAA and bloom runs " + std::string(name));
+    EXPECT(!hasPass(last, "present") && !hasPass(last, "pt.render"), "a headless deferred frame has no present");
+    // The timer reports a refused pass once per process: read the whole run's errors.
+    const auto errors = ohao::log::read(0, ohao::log::Level::Error, ohao::log::Channel::render, 4096);
+    for (const auto& rec : errors.lines)
+        EXPECT(rec.msg.find("pass timing") == std::string::npos, "no pass was refused by the timer: " + rec.msg);
+
+    pp->setBloomEnabled(false);
+    pp->setSSAOEnabled(false);
+    const std::vector<FrameTiming> after = timedFrames(renderer, 2);
+    EXPECT(!after.empty(), "frames after the change are timed");
+    EXPECT(!hasPass(after.back(), "post.bloom") && !hasPass(after.back(), "ssao") &&
+               hasPass(after.back(), "post.taa") && hasPass(after.back(), "post.tonemap"),
+           "bloom and SSAO turned off leave the timings; TAA and tonemapping stay");
+    std::cout << "(frame " << last.gpuMs << " ms, " << last.count << " passes) ";
+    TEST_PASS();
+}
+
+static void runPassTimingTests() {
+    std::cout << "\n=== Pass timing ===" << std::endl;
+    sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame();
+}
+
+// =============================================================================
 // SECTION — RENDER SCENE (persistent GPU render world)
 // =============================================================================
 
@@ -1954,6 +2039,7 @@ int main() {
     runHeadlessDeferredTests();
     runHeadlessPathTracerTests();
     runHeadlessDeferredRenderTests();
+    runPassTimingTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

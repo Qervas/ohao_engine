@@ -8,6 +8,8 @@
 #include <array>
 #include <memory>
 
+namespace ohao::render { class GpuPassTimer; }
+
 namespace ohao {
 
 // Tonemapping operator enum
@@ -53,6 +55,8 @@ public:
     };
     [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
     void setSSRView(VkImageView ssr) { m_ssrView = ssr; }
+    // Times bloom, TAA and tonemapping as post.bloom, post.taa, post.tonemap (null: untimed).
+    void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
     // Feature toggles
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
@@ -147,6 +151,7 @@ private:
     bool m_ssaoEnabled{false};
     bool m_tonemappingEnabled{true};
     bool m_didExecute{false};
+    render::GpuPassTimer* m_passTimer{nullptr};
 
     float m_totalTime{0.0f};
 
