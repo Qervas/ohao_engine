@@ -19,7 +19,10 @@
 #include "reflect/schema.hpp"
 #include "render/scene/model_upload.hpp"
 #include "scene/asset/model.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "scene/asset/primitive_mesh_generator.hpp"
+
+#include <array>
 
 #include "example_scenes.hpp"   // the cornell_box / model_viewer worlds (examples/)
 
@@ -1584,7 +1587,7 @@ static void t20_example_scenes_save_load_and_validate() {
     const AssetRef helmet{"assets/test_models/DamagedHelmet.glb", {}};
     auto model = files.loadModel(helmet);
     CHECK(model, "the helmet loads");
-    const FrameResult frame = SceneFramer::computeFraming(model.value()->vertices);
+    const FrameResult frame = SceneFramer::computeFraming(*model.value());
     World d;
     d.seedIds(examples::kModelViewerIdSeed);
     const auto scene = examples::buildModelViewerScene(d, *model.value(), frame, helmet, false);
@@ -1826,6 +1829,79 @@ static void t21_edited_files_are_judged_identically() {
     CHECK(edits == 3000, "all edits checked");
 }
 
+// ---- glTF node transforms (sub-project 2b, test 4) ----------------------------------------
+
+// tests/assets/node_transforms.gltf: one triangle (0,0,0) (1,0,0) (0,1,0), normal +Z, wound
+// counter-clockwise about it, referenced by three nodes: a root whose matrix rotates 90
+// degrees about Z and scales by 2, its child translated (5,0,0), and a root mirrored in X
+// (scale (-1,1,1)) and translated (0,0,5). Every expected coordinate is exact.
+static void sp2b_t04_gltf_node_transforms_reach_vertices_normals_and_winding() {
+    const auto model = ModelLoader::load((fs::path(OHAO_SOURCE_DIR) / "tests" / "assets" / "node_transforms.gltf").string());
+    CHECK(model && model->indices.size() == 9, "three (node, mesh) pairs, one triangle each");
+    using Tri = std::array<glm::vec3, 3>;
+    const std::vector<Tri> expected = {
+        {glm::vec3(0, 0, 0), glm::vec3(0, 2, 0), glm::vec3(-2, 0, 0)},      // root: rotate 90 about Z, scale 2
+        {glm::vec3(0, 10, 0), glm::vec3(0, 12, 0), glm::vec3(-2, 10, 0)},   // child: the root's matrix after (5,0,0)
+        {glm::vec3(0, 0, 5), glm::vec3(-1, 0, 5), glm::vec3(0, 1, 5)},      // mirrored in X, then (0,0,5)
+    };
+    const auto near = [](const glm::vec3& a, const glm::vec3& b) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(1e-6f))); };
+    std::vector<bool> found(expected.size(), false);
+    for (std::size_t t = 0; t < 3; ++t) {
+        const Vertex* v[3];
+        for (int k = 0; k < 3; ++k) v[k] = &model->vertices[model->indices[t * 3 + k]];
+        for (int k = 0; k < 3; ++k)
+            CHECK(near(v[k]->normal, glm::vec3(0, 0, 1)), "every normal is +Z: the mirror's inverse transpose keeps it");
+        const glm::vec3 faceN = glm::cross(v[1]->position - v[0]->position, v[2]->position - v[0]->position);
+        CHECK(glm::dot(faceN, v[0]->normal) > 0.0f,
+              "winding keeps the front face toward the normal (reversed under the mirror)");
+        bool matched = false;
+        for (std::size_t e = 0; e < expected.size() && !matched; ++e) {
+            if (found[e]) continue;
+            bool all = true;
+            for (const glm::vec3& p : expected[e]) {
+                bool any = false;
+                for (int k = 0; k < 3; ++k) any = any || near(v[k]->position, p);
+                all = all && any;
+            }
+            if (all) found[e] = matched = true;
+        }
+        CHECK(matched, "each triangle's positions are its node's accumulated transform of the mesh, within 1e-6");
+    }
+}
+
+// The DamagedHelmet's glTF root node turns its Z-up mesh (top to bottom ±0.901, front to
+// back -0.813..1.187) to Y up: through the loader the helmet stands upright, its up axis
+// +Y symmetric about the origin and its depth along Z, and the framer (glTF is Y up)
+// leaves it unrotated. Without the node transform the mesh lies on its back: Y spans
+// -1.187..0.813 and the framer's Z-up guess rotated it.
+static void sp2b_t04_damaged_helmet_stands_upright() {
+    const auto model = ModelLoader::load((fs::path(OHAO_SOURCE_DIR) / "assets" / "test_models" / "DamagedHelmet.glb").string());
+    CHECK(model && !model->vertices.empty(), "the helmet loads");
+    glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (const Vertex& v : model->vertices) {
+        lo = glm::min(lo, v.position);
+        hi = glm::max(hi, v.position);
+    }
+    std::printf("\n      bounds (%.3f %.3f %.3f)..(%.3f %.3f %.3f) ", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+    CHECK(std::abs(lo.y + hi.y) < 1e-3f && std::abs(hi.y - 0.901f) < 1e-3f,
+          "up is +Y: the helmet spans -0.901..0.901 top to bottom, as its mesh does along its own up axis");
+    CHECK(hi.z - lo.z > hi.y - lo.y + 0.1f, "its 2.0 depth lies along Z, not Y");
+    const FrameResult frame = SceneFramer::computeFraming(*model);
+    CHECK(frame.modelRotation == glm::quat(1, 0, 0, 0), "the framer leaves a glTF model unrotated: glTF is Y up");
+    CHECK(SceneFramer::isYUp(*model), "isYUp (env_demo, turntable) says Y for glTF although the helmet is deeper than tall");
+    // Every corner of the placed bounds inside a 16:9 view from the framed camera (looking down -Z).
+    const float tanHalf = std::tan(glm::radians(frame.cameraFov * 0.5f));
+    float worst = 0.0f;
+    for (int c = 0; c < 8; ++c) {
+        const glm::vec3 corner((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y, (c & 4) ? hi.z : lo.z);
+        const glm::vec3 p = frame.modelRotation * (corner * frame.modelScale) + frame.modelPosition - frame.cameraPosition;
+        const float depth = -p.z;
+        worst = std::max({worst, std::abs(p.y) / (depth * tanHalf), std::abs(p.x) / (depth * tanHalf * 16.0f / 9.0f)});
+    }
+    std::printf("camera z %.3f, worst corner at %.3f of the half view ", frame.cameraPosition.z, worst);
+    CHECK(worst <= 1.0f, "the framed camera sees the whole upright helmet");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -1899,6 +1975,8 @@ int main(int argc, char** argv) {
     RUN(t21_clean_files_stream_and_load_identically);
     RUN(t21_numbers_are_judged_identically);
     RUN(t21_edited_files_are_judged_identically);
+    RUN(sp2b_t04_gltf_node_transforms_reach_vertices_normals_and_winding);
+    RUN(sp2b_t04_damaged_helmet_stands_upright);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

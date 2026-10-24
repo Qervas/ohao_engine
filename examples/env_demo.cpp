@@ -10,7 +10,9 @@
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
 #include "scene/asset/model.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "render/camera/camera.hpp"
+#include "render/camera/scene_framer.hpp"
 
 #include <iostream>
 #include <optional>
@@ -245,14 +247,10 @@ int main(int argc, char* argv[]) {
     ecs::World world;
     ecs::installRenderExtract(world, renderer.renderScene());
 
-    // Load model
-    auto model = std::make_shared<Model>();
-    bool loaded = false;
-    auto dot = modelPath.find_last_of('.');
-    std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-    if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
-    else if (ext == "fbx" || ext == "FBX" || ext == "dae" || ext == "blend") loaded = model->loadFromFBX(modelPath);
-    else loaded = model->loadFromGLTF(modelPath);
+    // Load model: one loader for every format (glTF node transforms included)
+    std::shared_ptr<Model> model = ModelLoader::load(modelPath);
+    const bool loaded = model && !model->empty();
+    if (!model) model = std::make_shared<Model>();
 
     // Sub-plan 4.H: track normalized-space model bounds so we can drop the
     // ground plane right under the loaded model (bottom Y) and size studio
@@ -269,11 +267,9 @@ int main(int argc, char* argv[]) {
         }
         glm::vec3 extent = bmax - bmin;
         glm::vec3 center = (bmin + bmax) * 0.5f;
-        // Orientation — mirror SceneFramer's proven up-axis logic (model_viewer uses it).
-        // env_demo previously reinvented this with the same heuristic PLUS a hardcoded 180°
-        // Y-flip, which rendered Y-up models (MetalRoughSpheres) mirrored/backwards. The
-        // 180° flip was the bug — SceneFramer applies NO rotation for Y-up models.
-        bool isYUp = (extent.y >= extent.z);
+        // Orientation: SceneFramer's up axis (glTF is Y up; other formats by the bounds).
+        // A Y-up model gets no rotation.
+        const bool isYUp = SceneFramer::isYUp(*model);
         // Scale by the LARGEST extent so wide/flat models don't overflow the frame
         // (height-only scaling blew up the chess board and the sphere grid).
         float maxExtent = std::max({extent.x, extent.y, extent.z});

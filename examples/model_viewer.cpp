@@ -112,8 +112,8 @@ int main(int rawArgc, char* rawArgv[]) {
         return 2;
     }
 
-    // Framing (room size, camera, lights) from the model bounds.
-    const FrameResult frame = SceneFramer::computeFraming(model->vertices);
+    // Framing (room size, camera, lights) from the model bounds; glTF is Y up.
+    const FrameResult frame = SceneFramer::computeFraming(*model);
 
     if (args.path) {
         ecs::World world;

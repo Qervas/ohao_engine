@@ -28,7 +28,7 @@ if(TARGET Jolt)
     target_link_libraries(renderer_test PRIVATE Jolt)
 endif()
 
-# Allow duplicate stbi symbols (model_gltf.cpp defines STB_IMAGE_IMPLEMENTATION)
+# Allow duplicate stbi symbols (stb implementations in the engine libraries and in this test)
 if(MSVC)
     target_link_options(renderer_test PRIVATE /FORCE:MULTIPLE)
 else()

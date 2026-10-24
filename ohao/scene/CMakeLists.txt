@@ -21,13 +21,9 @@ target_link_libraries(ohao_scene
         ${Vulkan_LIBRARIES}
 )
 
-# tinygltf + stb for asset loading
-if(TARGET tinygltf)
-    target_link_libraries(ohao_scene PUBLIC tinygltf)
-endif()
+# stb for image decoding (glTF goes through Assimp)
 target_include_directories(ohao_scene PRIVATE
     ${stb_SOURCE_DIR}
-    ${tinygltf_SOURCE_DIR}
     ${nlohmann_json_SOURCE_DIR}/include
     ${nlohmann_json_SOURCE_DIR}/single_include
     ${CMAKE_SOURCE_DIR}/external  # ufbx.h

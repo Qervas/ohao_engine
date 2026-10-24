@@ -17,7 +17,7 @@
     {
       "id": "0c6901342a294695",
       "Name": { "value": "MainCamera" },
-      "Transform": { "position": [0, -6, 25.5] },
+      "Transform": { "position": [0, -6.891139, 30.534174] },
       "Camera": {},
       "FlyController": {}
     },
@@ -180,7 +180,10 @@
     {
       "id": "caac71fc3f738361",
       "Name": { "value": "Model" },
-      "Transform": { "position": [0.022334218, -4.315605, 9.468198e-05], "scale": [9, 9, 9] },
+      "Transform": {
+        "position": [0.022334216, -6.8912344, 1.6843946],
+        "scale": [8.999999, 8.999999, 8.999999]
+      },
       "MeshSource": {
         "source": { "ModelAsset": { "asset": { "path": "assets/test_models/DamagedHelmet.glb" } } }
       },

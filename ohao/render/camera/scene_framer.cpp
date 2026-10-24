@@ -3,8 +3,9 @@
 #include "scene/asset/model.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
-#include <iostream>
+#include <string>
 
 namespace ohao {
 
@@ -69,8 +70,16 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     // For Z-up models, after rotation the height in Y = modelHeight (the Z extent)
     float scaledHeight = modelHeight * scale;
     float modelCenterY = -S + scaledHeight * 0.5f;
-    result.cameraPosition = {0, modelCenterY, S * 1.7f};
     result.cameraFov = 45.0f;
+    // Distance: S * 1.7, or further back when the model's height (plus 10%) would not fit
+    // the vertical field of view at its nearest face (a tall model scaled to the room).
+    float frontZ = -FLT_MAX;
+    for (int c = 0; c < 8; ++c) {
+        const glm::vec3 corner((c & 1) ? bmax.x : bmin.x, (c & 2) ? bmax.y : bmin.y, (c & 4) ? bmax.z : bmin.z);
+        frontZ = std::max(frontZ, (result.modelRotation * (corner * scale)).z + result.modelPosition.z);
+    }
+    const float fitDistance = 1.1f * scaledHeight * 0.5f / std::tan(glm::radians(result.cameraFov * 0.5f));
+    result.cameraPosition = {0, modelCenterY, std::max(S * 1.7f, frontZ + fitDistance)};
 
     // 4-light studio setup (tuned for S=15 room).
     // Radii kept strictly inside the room so no light sphere penetrates a
@@ -95,6 +104,32 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     };
 
     return result;
+}
+
+namespace {
+
+bool isGltf(const Model& model) {
+    const std::string& path = model.getSourcePath();
+    const auto dot = path.find_last_of('.');
+    std::string ext = dot == std::string::npos ? std::string() : path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == "gltf" || ext == "glb";
+}
+
+} // namespace
+
+FrameResult SceneFramer::computeFraming(const Model& model) {
+    return computeFraming(model.vertices, isGltf(model));
+}
+
+bool SceneFramer::isYUp(const Model& model) {
+    if (isGltf(model)) return true;
+    glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
+    for (const auto& v : model.vertices) {
+        bmin = glm::min(bmin, v.position);
+        bmax = glm::max(bmax, v.position);
+    }
+    return bmax.y - bmin.y >= bmax.z - bmin.z;
 }
 
 void SceneFramer::applyCamera(Camera& camera, const FrameResult& result) {

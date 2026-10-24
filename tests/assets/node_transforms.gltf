@@ -1,0 +1,26 @@
+{
+  "asset": {"version": "2.0", "generator": "hand-written: OHAO scene_tests sp2b_t04 (sub-project 2b, test 4)"},
+  "scene": 0,
+  "scenes": [{"nodes": [0, 2]}],
+  "nodes": [
+    {"name": "rotated_scaled_root", "matrix": [0, 2, 0, 0, -2, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1], "mesh": 0, "children": [1]},
+    {"name": "translated_child", "translation": [5, 0, 0], "mesh": 0},
+    {"name": "mirrored", "translation": [0, 0, 5], "scale": [-1, 1, 1], "mesh": 0}
+  ],
+  "meshes": [
+    {"name": "triangle", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2}]}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962},
+    {"buffer": 0, "byteOffset": 72, "byteLength": 6, "target": 34963}
+  ],
+  "buffers": [
+    {"byteLength": 80, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIAAAA="}
+  ]
+}

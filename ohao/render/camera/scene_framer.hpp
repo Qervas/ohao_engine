@@ -13,6 +13,7 @@ namespace ohao {
 
 class Camera;
 struct Vertex;
+class Model;
 
 struct FrameResult {
     float roomHalfSize{0.f};
@@ -42,6 +43,13 @@ public:
     // forceYUp: set true for formats that guarantee Y-up (GLB/glTF)
     [[nodiscard]] static FrameResult computeFraming(const std::vector<Vertex>& vertices,
                                                     bool forceYUp = false);
+    // The same for a loaded model: Y up is forced for glTF (.gltf, .glb), which mandates
+    // it and whose node transforms the loader has already applied; other formats guess
+    // the up axis from the bounds.
+    [[nodiscard]] static FrameResult computeFraming(const Model& model);
+    // The up axis computeFraming(model) uses: Y for glTF, otherwise Y when the bounds are
+    // at least as tall (Y) as they are deep (Z). For hosts that place a model themselves.
+    [[nodiscard]] static bool isYUp(const Model& model);
 
     // The FrameResult's lights become entities through ecs::spawnFramedLights
     // (ecs/framing.hpp).

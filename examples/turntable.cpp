@@ -14,7 +14,9 @@
 #include "ecs/render_extract.hpp"
 #include "ecs/spawn.hpp"
 #include "scene/asset/model.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "render/camera/camera.hpp"
+#include "render/camera/scene_framer.hpp"
 
 #include <iostream>
 #include <optional>
@@ -122,10 +124,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Load model
-    auto model = std::make_shared<Model>();
-    auto dot = modelPath.find_last_of('.');
-    std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-    bool loaded = (ext == "obj") ? model->loadFromOBJ(modelPath) : model->loadFromGLTF(modelPath);
+    // One loader for every format (glTF node transforms included).
+    std::shared_ptr<Model> model = ModelLoader::load(modelPath);
+    const bool loaded = model && !model->empty();
+    if (!model) model = std::make_shared<Model>();
 
     // Refuse rather than turntable an empty box. Without this the run
     // still exits 0 and still writes frames, so any caller checking the
@@ -149,7 +151,7 @@ int main(int argc, char* argv[]) {
         float scale = targetHeight / modelHeight;
 
         ecs::Transform t;
-        bool isYUp = ((bmax.y - bmin.y) >= (bmax.z - bmin.z));
+        const bool isYUp = SceneFramer::isYUp(*model);   // glTF is Y up; others by the bounds
         if (isYUp) {
             t.rotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
         } else {

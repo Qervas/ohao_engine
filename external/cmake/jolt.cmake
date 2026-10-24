@@ -16,7 +16,7 @@ set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 
-# Try local pre-fetched first (same pattern as miniaudio/tinygltf)
+# Try local pre-fetched first (same pattern as miniaudio)
 # Jolt repo has CMakeLists.txt in Build/ subdirectory, not root
 set(JOLT_LOCAL_DIR "${CMAKE_BINARY_DIR}/_deps/joltphysics-src")
 

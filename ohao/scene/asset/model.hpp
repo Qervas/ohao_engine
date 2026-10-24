@@ -52,21 +52,6 @@ struct MaterialData{
     std::string normalTexture;      // map_Bump or bump
     std::string heightTexture;      // map_d or map_disp
 
-    // PBR fields (GLTF)
-    glm::vec4 baseColorFactor{1.0f};
-    float metallicFactor{1.0f};
-    float roughnessFactor{1.0f};
-    std::string baseColorTexture;
-    std::string metallicRoughnessTexture;
-    std::string occlusionTexture;
-    std::string emissiveTexture;
-#ifdef OPAQUE
-#undef OPAQUE  // Windows wingdi.h conflict
-#endif
-    enum class AlphaMode { OPAQUE, MASK, BLEND } alphaMode = AlphaMode::OPAQUE;
-    float alphaCutoff{0.5f};
-    bool doubleSided{false};
-
     bool isLight{false};
     glm::vec3 lightPosition{0.0f};
     float lightIntensity{1.0f};
@@ -126,7 +111,6 @@ public:
     }
 
     [[nodiscard]] bool loadFromOBJ(std::string_view filename);
-    [[nodiscard]] bool loadFromGLTF(std::string_view filename);
     [[nodiscard]] bool loadFromFBX(std::string_view filename);  // Assimp-based (FBX, Collada, etc.)
     [[nodiscard]] bool loadMTL(std::string_view filename);
     void setupDefaultMaterial();

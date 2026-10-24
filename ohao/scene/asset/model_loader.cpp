@@ -381,11 +381,18 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         }
     }
 
-    // Extract geometry
+    // Geometry: the node hierarchy, depth first. Each (node, mesh) pair is emitted in model
+    // space: positions by the node's accumulated matrix, normals by its inverse transpose,
+    // tangents by its upper 3x3 (both renormalised), and triangle winding reversed where the
+    // matrix mirrors (negative determinant), so front faces stay front faces. A mesh two
+    // nodes reference is emitted twice. Meshes no node references are not emitted.
     uint32_t globalVertexOffset = 0;
-    for (unsigned mi = 0; mi < scene->mNumMeshes; mi++) {
-        const aiMesh* mesh = scene->mMeshes[mi];
-        uint32_t matIdx = mesh->mMaterialIndex;
+    const auto emitMesh = [&](const aiMesh* mesh, const glm::mat4& toModel) {
+        const uint32_t matIdx = mesh->mMaterialIndex;
+        const glm::mat3 linear(toModel);
+        const glm::mat3 normalMat = glm::transpose(glm::inverse(linear));
+        const float det = glm::determinant(linear);
+        const bool mirrored = det < 0.0f;
 
         // Bone data
         struct BoneInfluence { glm::ivec4 indices{0}; glm::vec4 weights{0.0f}; };
@@ -411,16 +418,22 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         // Vertices
         for (unsigned vi = 0; vi < mesh->mNumVertices; vi++) {
             Vertex v{};
-            v.position = toGlm(mesh->mVertices[vi]);
-            v.normal = mesh->HasNormals() ? toGlm(mesh->mNormals[vi]) : glm::vec3(0, 1, 0);
+            v.position = glm::vec3(toModel * glm::vec4(toGlm(mesh->mVertices[vi]), 1.0f));
+            const glm::vec3 n = normalMat * (mesh->HasNormals() ? toGlm(mesh->mNormals[vi]) : glm::vec3(0, 1, 0));
+            const float nLen = glm::length(n);
+            v.normal = nLen > 1e-20f ? n / nLen : glm::vec3(0, 1, 0);
             v.texCoord = mesh->HasTextureCoords(0)
                 ? glm::vec2(mesh->mTextureCoords[0][vi].x, mesh->mTextureCoords[0][vi].y)
                 : glm::vec2(0);
             v.texCoord1 = mesh->HasTextureCoords(1)
                 ? glm::vec2(mesh->mTextureCoords[1][vi].x, mesh->mTextureCoords[1][vi].y)
                 : v.texCoord;  // fallback to UV0 if no UV1
-            if (mesh->HasTangentsAndBitangents())
-                v.tangent = glm::vec4(toGlm(mesh->mTangents[vi]), 1.0f);
+            if (mesh->HasTangentsAndBitangents()) {
+                const glm::vec3 t = linear * toGlm(mesh->mTangents[vi]);
+                const float tLen = glm::length(t);
+                // A mirror flips the bitangent's handedness along with the winding.
+                v.tangent = glm::vec4(tLen > 1e-20f ? t / tLen : glm::vec3(1, 0, 0), mirrored ? -1.0f : 1.0f);
+            }
             v.color = glm::vec3(model->materialColors[matIdx]);
 
             auto& bd = boneData[vi];
@@ -435,13 +448,21 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         for (unsigned fi = 0; fi < mesh->mNumFaces; fi++) {
             const aiFace& face = mesh->mFaces[fi];
             if (face.mNumIndices != 3) continue;
-            for (unsigned ii = 0; ii < 3; ii++)
-                model->indices.push_back(globalVertexOffset + face.mIndices[ii]);
+            model->indices.push_back(globalVertexOffset + face.mIndices[0]);
+            model->indices.push_back(globalVertexOffset + face.mIndices[mirrored ? 2 : 1]);
+            model->indices.push_back(globalVertexOffset + face.mIndices[mirrored ? 1 : 2]);
             model->materialPerTriangle.push_back(matIdx);
         }
 
         globalVertexOffset += mesh->mNumVertices;
-    }
+    };
+    std::function<void(const aiNode*, const glm::mat4&)> walk = [&](const aiNode* node, const glm::mat4& parent) {
+        const glm::mat4 toModel = parent * toGlm(node->mTransformation);
+        for (unsigned k = 0; k < node->mNumMeshes; ++k)
+            if (node->mMeshes[k] < scene->mNumMeshes) emitMesh(scene->mMeshes[node->mMeshes[k]], toModel);
+        for (unsigned c = 0; c < node->mNumChildren; ++c) walk(node->mChildren[c], toModel);
+    };
+    walk(scene->mRootNode, glm::mat4(1.0f));
 
     // Skeletal animation removed — skeleton and animation channels are no
     // longer built. Bone weights remain in the Vertex struct as inert data.

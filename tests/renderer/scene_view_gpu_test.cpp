@@ -164,7 +164,7 @@ int main() {
     std::string viewerText;
     Shot v1, v2, v3;
     if (model) {
-        const FrameResult frame = SceneFramer::computeFraming(model.value()->vertices);
+        const FrameResult frame = SceneFramer::computeFraming(*model.value());
         const auto buildViewer = [&](ecs::World& w) {
             w.seedIds(examples::kModelViewerIdSeed);
             examples::buildModelViewerScene(w, *model.value(), frame, helmet, false);
