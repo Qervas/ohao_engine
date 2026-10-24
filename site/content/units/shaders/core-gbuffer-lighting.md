@@ -54,8 +54,9 @@ That remap is a UNORM convention, left from when the target was
 says `RGB10A2` and the shared header still calls itself the `A2R10G10B10`
 encoder, but the image is half-float now; the remap survives only because
 `decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder
-lives in `includes/common/encoding.glsl` and is the one every consumer runs —
-`deferred_lighting.frag`, `ssao.comp`, `ssr.comp`, `rt_gi.rgen`, `rt_shadow.rgen`.
+lives in `includes/common/encoding.glsl` and is the one every GLSL consumer runs —
+`deferred_lighting.frag`, `ssao.comp`, `ssr.comp`, `rt_gi.rgen`; the Slang RT shadow
+passes carry their own `decodeOctahedron` with the same remap.
 
 {{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}
 
@@ -205,21 +206,23 @@ $C^1$ there, so a light does not visibly snap off at its range boundary.
 
 ## What is bound, and what is actually read
 
-Shadowing resolves to one scalar per light iteration, and an RT mask, when
+Shadowing resolves to one scalar per light iteration, and RT visibility, when
 present, wins outright over cascaded shadow maps — the CSM branch is `else if`,
-not an extra multiply. The RT mask is RGBA8 with one channel per shadow-casting
-light, sampled once at `inTexCoord` before the loop; each light then picks its own
-channel by the slot the light table wrote into its `params.w`:
+not an extra multiply. The RT visibility is an `R32G32_UINT` image of eight 8-bit
+channels, one per shadow-casting light (x: lights 0-3, y: 4-7), bound as a
+`usampler2D` and fetched once at `gl_FragCoord` before the loop; each light then
+picks its own byte by the slot the light table wrote into its `params.w`:
 
-{{cite shaders/core/deferred_lighting.frag "vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);"}}
+{{cite shaders/core/deferred_lighting.frag "texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy"}}
 
-{{cite shaders/core/deferred_lighting.frag "if (slot < 4) shadow = rtShadow[slot];"}}
+{{cite shaders/core/deferred_lighting.frag "const uint word = slot < 4 ? rtShadow.x : rtShadow.y;"}}
 
 A slot of -1 (the light casts no shadows, or is an emissive proxy) is never
-occluded, and slot 4 (a caster past the four channels) is unshadowed under RT.
+occluded; slots 0 to 7 cover every light the eight-entry buffer can hold, so under
+RT every caster has a channel.
 
-CSM picks a cascade by positive view-space depth and takes a 3×3 PCF
-tap; it neither blends between cascades nor applies a normal-offset bias, though
+CSM picks a cascade by positive view-space depth and takes a 3×3 PCF of hardware
+depth comparisons (a `sampler2DArrayShadow`); it neither blends between cascades nor applies a normal-offset bias, though
 the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that,
 and `shadowStrength` and the lighting UBO's `shadowBias` are equally inert. It
 also runs only for `lightType == 0` with a non-negative slot: point and spot lights

@@ -18,17 +18,19 @@ It does not schedule. `topologicalSort` copies passes into the execution list in
 
 {{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now"}}
 
-So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.gi` → `lighting` (the pass registry's
-names, each timed under it; `ssao` only while the effect is on) is a decision made by hand
+So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.shadows.filter` → `rt.gi` → `lighting`
+(the pass registry's names, each timed under it; `csm` only in frames where RT shadows do
+not run, `rt.shadows.filter` only in realtime quality, `ssao` only while the effect is on)
+is a decision made by hand
 in `render()`, not from declared dependencies. What the graph earns is barriers:
 `computeBarriers` walks that order tracking each texture's last access and emits a
 `VkImageMemoryBarrier` at the first read following a write.
 
 ## declareColorWrite: a promise about a render pass the graph cannot see
 
-Three of the six are graphics passes — CSM, GBuffer, DeferredLighting — each owning its
-`VkRenderPass` and framebuffers, built before the graph existed; SSAO, RTShadow and RTGI
-enter through `addComputePass` and own neither. The graph could take those render passes
+Three of the seven are graphics passes — CSM, GBuffer, DeferredLighting — each owning its
+`VkRenderPass` and framebuffers, built before the graph existed; SSAO, the RT shadow trace
+and filter, and RTGI enter through `addComputePass` and own neither. The graph could take those render passes
 over, through `useColorAttachment`. It uses the other door:
 
 {{cite ohao/render/graph/render_graph.cpp "// NOT added to colorAttachments"}}
@@ -178,9 +180,11 @@ lighting, post, gizmo, sky, SSS, SSR and both RT techniques.
 
 ## Ordering constraints that are not obvious
 
-Before compiling the graph, `render()` clears the RT shadow mask and the GI view out
-of the lighting pass. They come back only from inside the `RTShadow` and `RTGI`
-pass lambdas, and only when that technique's `render()` actually traced:
+Before compiling the graph, `render()` clears the RT shadow visibility and the GI view
+out of the lighting pass. They come back only from inside the RT pass lambdas — the
+shadow visibility from `rt.shadows.filter` in realtime quality or from `rt.shadows`
+in reference, the GI view from `rt.gi` — and only when that technique's `render()`
+actually traced:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI->rendered() && m_lightingPass)"}}
 

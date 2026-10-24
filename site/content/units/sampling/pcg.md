@@ -43,9 +43,10 @@ implementation that is compiled, self-consistent, and currently unreachable on t
 
 No example parses a `--sampler` flag; switching sampler is supposed to mean switching
 profile, which also switches raygen, bounce budget and denoiser. This implementation has
-exactly one consumer — `sampler_api.glsl` — and its constants appear nowhere else in the
-tree: the deferred pipeline's `rt_shadow.rgen` and `rt_gi.rgen` roll their own `hash(vec2)`
-and never touch this interface.
+exactly one consumer — `sampler_api.glsl`. The deferred pipeline's RT shadow passes
+(`rt/shadow_trace.slang`, `rt/shadow_filter.slang`) and `rt_gi.rgen` carry their own copies
+of the same PCG permutation, with the same constants, as a stateless integer hash of seed,
+frame, pixel and sample, and never touch this interface.
 
 :::why
 The realtime profile asks for PCG because Sobol's cost is per *dimension*, not per

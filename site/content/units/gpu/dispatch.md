@@ -153,19 +153,19 @@ The RT dispatch hands the tracer a command buffer, the frame slot and the camera
 
 The path tracer is therefore lit by exactly the lights the scene holds; there is no number at the call site to edit.
 
-## The sun that overwrites your only light
+## The fallback sun that follows the sky
 
-`renderDeferred` does something no other body does: it edits the frame slot's light buffer after filling it. When the buffer reports exactly one light, it replaces `lights[0].direction` with the sky pass's sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.
-
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (ld->numLights == 1) {"}}
-
-The intent is stated where the buffer is filled: a scene with no lights gets one fabricated directional light, and the comment says its direction is synced by `renderDeferred`.
+`renderDeferred` does something no other body does: it edits the frame slot's light buffer after filling it. A scene with no lights gets one fabricated directional light where the buffer is filled, and the comment there says its direction is synced by `renderDeferred`:
 
 {{cite ohao/gpu/vulkan/buffer_setup.cpp "// If no lights in scene, add a default directional light (direction synced by renderDeferred)"}}
 
-But `numLights == 1` cannot tell a fabricated light from an authored one. A scene with a single directional light — the ordinary outdoor case — has its authored direction silently overwritten by the sky's sun on every deferred frame. The fix is a flag on the fallback light, not a count; the count is genuinely ambiguous.
+That sync runs only when the render world holds no raster lights, so it can touch nothing but the fabricated light. It replaces `lights[0].direction` with the sky pass's sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.
 
-The same fallback sun is what RT shadows trace when the scene has no lights. After the sky sync, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names mask channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `lights[0].direction` with the real sun's angular radius, 0.00465 rad.
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_renderScene->rasterLights().empty()) {"}}
+
+The test is the render world's own light list, not the buffer's count: a scene with exactly one light of its own — the ordinary outdoor case — keeps its authored direction, colour and ambient, because a count of one cannot tell a fabricated light from an authored one.
+
+The same fallback sun is what RT shadows trace when the scene has no lights. After the sky sync, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names visibility channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `lights[0].direction` with the real sun's angular radius, 0.00465 rad.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "constexpr float kSunAngularRadius = 0.00465f;"}}
 
@@ -176,7 +176,7 @@ Both bodies pipeline instead of blocking: `render()` never waits for its own sub
 :::
 
 :::key
-Nothing in this file checks that the modes agree with each other. Dispatch is the last point where camera, layout and light state are translated into GPU state, and it translates them differently per mode: two projection paths, owners of the same layout transition on both sides of a module boundary, near/far literals that contradict the matrix they travel with, one mode that rewrites the light buffer behind the scene's back, and one mode that can present while the other cannot. Differences between modes that look like renderer bugs are usually decided here, not in a shader.
+Nothing in this file checks that the modes agree with each other. Dispatch is the last point where camera, layout and light state are translated into GPU state, and it translates them differently per mode: two projection paths, owners of the same layout transition on both sides of a module boundary, near/far literals that contradict the matrix they travel with, one mode that steers its fabricated sun from the sky, and one mode that can present while the other cannot. Differences between modes that look like renderer bugs are usually decided here, not in a shader.
 :::
 
 ## Contracts

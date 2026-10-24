@@ -105,8 +105,8 @@ consumers reconstruct it from depth:
 Reconstruction from `D32_SFLOAT` plus an inverse view-projection is the standard
 alternative, and it is cheaper: 8 bytes per pixel saved, full float precision
 kept. OHAO rejects it because five consumers read this target directly —
-deferred lighting, SSR, the subsurface-scattering blur, and the RT shadow and
-RT GI raygens — and two of them launch rays from the value. Storing it once
+deferred lighting, SSR, the subsurface-scattering blur, the RT shadow trace and
+the RT GI raygen — and two of them launch rays from the value. Storing it once
 removes a class of per-consumer reconstruction bugs. The rejection is not
 total: SSAO reconstructs view-space position from depth instead, so the engine
 already pays for both approaches.
@@ -123,9 +123,9 @@ is invisible. For a coordinate in [64, 128) the exponent is 6, giving $\Delta =
 2^{-4} = 0.0625$; at 1000 units, $\Delta = 0.5$. Round-to-nearest leaves the
 stored coordinate within half a gap of the true one, so the error to compare
 against anything is $\Delta/2$, not $\Delta$. Compare it to the fixed offset the
-RT shadow raygen applies to the position it reads back out of this buffer:
+RT shadow trace applies to the position it reads back out of this buffer:
 
-{{cite shaders/rt/rt_shadow.rgen "vec3 origin = worldPos + N * 0.05;"}}
+{{cite shaders/rt/shadow_trace.slang "const float3 origin = p + n * 0.05;"}}
 
 The bias is 0.05. Half a gap first exceeds it in [128, 256), where $\Delta =
 0.125$ and the worst-case per-component error is 0.0625 — past roughly 128 units
@@ -141,8 +141,8 @@ rasterised here" by testing GBuffer0 against its clear value of `(0,0,0,0)`:
 
 {{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
 
-The identical exact-equality test is duplicated in `rt_shadow.rgen`,
-`rt_gi.rgen`, and `postprocess/ssr.comp`. The fifth reader opts out entirely:
+The same exact-equality test is duplicated in `rt/shadow_trace.slang` (as
+`all(position == float4(0.0))`), `rt_gi.rgen`, and `postprocess/ssr.comp`. The fifth reader opts out entirely:
 the subsurface blur has no coverage test, gates on a skin heuristic over albedo
 and metallic instead, and then treats `length(position)` as an edge-aware depth
 proxy — so a sky tap arrives as a legal coordinate of magnitude zero rather than

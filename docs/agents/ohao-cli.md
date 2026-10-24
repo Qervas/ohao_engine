@@ -38,7 +38,7 @@ ohao summary  SCENE [--depth D] [--max-children N] [--max-nodes N]
 ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                     [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
-                     [--post bloom,taa,ssao] [--exposure E]]
+                     [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]]
                     [--save OUT.scene.json]
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
@@ -144,8 +144,16 @@ last: by default 1 deferred frame (10 with TAA) or `--spp` path-traced ones. The
 RT GI keeps a history, so give `--frames` (about 10) for converged indirect light. Without
 `--post` no post effect is on; `model_viewer` turns on `--post taa,ssao,bloom --exposure 1`.
 
+The deferred frame has two qualities. `realtime` (the default) is the budgeted frame: RT
+shadows trace one ray to each of a pixel's 4 most important lights, filtered and averaged
+over the frames since the reset. `reference` is its converged answer: every shadow-casting
+light, 8 rays a frame, the plain mean of the capture's frames; slower, for a ground truth
+of the realtime frame (the path tracer, `--mode rt_offline`, is the ground truth for light
+transport). Give it `--frames` too.
+
 ```console
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell.png --mode deferred --size 960x540   # gpu
+$ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell_ref.png --mode deferred --frames 10 --quality reference --size 960x540   # gpu
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell_rt.png --mode rt_offline --spp 16 --denoise none   # gpu
 ```
 
@@ -264,8 +272,8 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `world.snapshot` | `{name}` → `{name, entities, bytes}` | Captures the world in memory under a name. |
 | `world.diff` | `{snapshot, fields?, limit = 50}` → `{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}` | What changed since a snapshot. `"/Type/field"` with old and new values in file form, `"/Type"` for a component added or removed; `fields` keeps only the listed ones. `count` counts changed entities; `more` what `limit` left out. |
 | `world.restore` | `{name}` → `{created, destroyed, changed, frame}` | Back to a snapshot, writing only what differs. The snapshot is kept. |
-| `render.capture` | `{path?, inline = false, format = jpeg, maxSize = 768, region?, mode = deferred, spp = 16, frames?, width?, height?, denoise = none, post = [], exposure?}` → `{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?}` (+ the inline image) | Renders through the world's Camera and Environment: `frames` from a reset (default 1 deferred, 10 with TAA, `spp` path-traced), the last kept, to a PNG (`path`) and/or a preview (`inline`). Needs a GPU host (`ohao run`, `ohao serve`; a window host captures deferred at its own size). Size defaults to 1920x1080 headless. |
-| `render.stats` | `{frames = 1, passes = true}` → `{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...]}` | What the host's frames cost: medians over the newest `frames` (1–120) finished frames of the GPU time (first pass to last), the CPU's recording and submission, and each pass in frame order, in ms to the microsecond. Pass names are the registry's (`ohao/render/frame/pass_registry.hpp`); a pass none of the frames ran is left out. `E_STATE` before the host has rendered (the CLI host before a capture). |
+| `render.capture` | `{path?, inline = false, format = jpeg, maxSize = 768, region?, mode = deferred, spp = 16, frames?, width?, height?, denoise = none, post = [], exposure?, quality?}` → `{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?}` (+ the inline image) | Renders through the world's Camera and Environment: `frames` from a reset (default 1 deferred, 10 with TAA, `spp` path-traced), the last kept, to a PNG (`path`) and/or a preview (`inline`). `quality` (deferred): `realtime` (default) or `reference`, RT shadows from every light, 8 rays a frame, averaged over the frames. Needs a GPU host (`ohao run`, `ohao serve`; a window host captures deferred at its own size). Size defaults to 1920x1080 headless. |
+| `render.stats` | `{frames = 1, passes = true}` → `{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?}` | What the host's frames cost: medians over the newest `frames` (1–120) finished frames of the GPU time (first pass to last), the CPU's recording and submission, and each pass in frame order, in ms to the microsecond. Pass names are the registry's (`ohao/render/frame/pass_registry.hpp`); a pass none of the frames ran is left out. `shadowLightsDropped`: pixels of the newest covered frame that had more lights worth an RT shadow than the 4 a pixel traces (those shade unshadowed); absent when no covered frame traced RT shadows. `E_STATE` before the host has rendered (the CLI host before a capture). |
 | `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
 
 ## Edit commands

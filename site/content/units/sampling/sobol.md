@@ -213,8 +213,8 @@ frame accumulation.
 The 128 direction numbers exist twice: a `constexpr` array in the CPU reference,
 and a `const uint[128]` compiled into each raygen module that includes the
 sampler — `pt_raygen`, `pt_raygen_offline` and `pt_raygen_realtime`, but not
-`rt_gi.rgen` or `rt_shadow.rgen`, which pull only `encoding.glsl` and carry no
-copy. There is no descriptor binding and no upload; the 512 bytes ride in the
+`rt_gi.rgen`, which pulls only `encoding.glsl`, or the Slang RT shadow passes,
+which import only the shared layout; neither carries a copy. There is no descriptor binding and no upload; the 512 bytes ride in the
 SPIR-V.
 
 {{cite shaders/includes/rt/sampler_sobol_tables.glsl "const uint OHAO_SOBOL_DIRS[128] = uint[128]("}}

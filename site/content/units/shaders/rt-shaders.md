@@ -59,7 +59,7 @@ grain back inside.
 
 {{cite shaders/rt/pt_miss.rmiss "payload.color = vec3(0.0);"}}
 
-## Two any-hit shaders that cannot run
+## An any-hit shader that cannot run
 
 `pt_anyhit.rahit` is a textbook alpha test — interpolate the UV, sample the
 bindless diffuse texture, drop the intersection below 0.5.
@@ -70,16 +70,15 @@ It is compiled, linked into the hit group, and never executed. Every
 `traceRayEXT` site in both profile raygens — nine offline, fourteen realtime —
 passes `gl_RayFlagsOpaqueEXT`, and both BLAS
 builders in `rt_acceleration_structure.cpp` stamp `VK_GEOMETRY_OPAQUE_BIT_KHR` on
-the geometry; either alone suppresses any-hit. The hybrid shadow pipeline repeats
-it — `rt_shadow.rahit` is wired in as that hit group's any-hit, and its raygen
-forces opacity anyway.
+the geometry; either alone suppresses any-hit. The hybrid shadow trace has no hit
+shaders at all: it is a compute pass of inline ray queries, and its query forces
+opacity too and ends on the first hit.
 
-{{cite shaders/rt/rt_shadow.rgen "uint rayFlags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;"}}
+{{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
 
-Shadows still work, via the same sentinel — `shadowPayload` starts at 0 and only
-the miss shader raises it.
+Its visibility is the query's committed status — lit when nothing was committed:
 
-{{cite shaders/rt/rt_shadow.rmiss "shadowPayload = 1.0;  // no occlusion = fully lit"}}
+{{cite shaders/rt/shadow_trace.slang "return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;"}}
 
 The dead any-hit costs nothing, but the alpha cutout the path tracer is documented
 to support is inert everywhere, not only in shadow: the flag sits on the primary
@@ -88,9 +87,10 @@ the geometry rather than to a ray type. A foliage or hair card is a solid quad t
 camera, GI and shadow rays alike.
 
 :::key
-Occlusion in both RT pipelines is signalled by the *absence* of a hit shader, not
-the presence of one. That is why both any-hit programs can be dead without
-shadows breaking — and why alpha cutout is silently dead with them.
+Occlusion is signalled by the *absence* of a hit — the path tracer's miss shader
+running, the shadow query committing nothing — not by any hit shader. That is why
+the any-hit program can be dead without shadows breaking — and why alpha cutout is
+silently dead with it.
 :::
 
 ## What the closest hit decodes, and the 24-bit fuse
@@ -254,37 +254,41 @@ render hands the denoiser its average rather than its last sample:
 
 ## The hybrid pair, and what it is not
 
-`rt_shadow.rgen` and `rt_gi.rgen` are a different family — they read the deferred
-GBuffer instead of tracing primary rays. Both are on by default. The `{false}`
-member initializers in `deferred_renderer.hpp` are only the pre-init value;
-`DeferredRenderer::init` flips each flag to `true` as soon as the corresponding
-technique's own `init()` succeeds, and the CSM / no-GI fallback branches run only
-when RT initialisation fails.
+`rt/shadow_trace.slang` (with its filter, `rt/shadow_filter.slang`) and
+`rt_gi.rgen` are a different family — they read the deferred GBuffer instead of
+tracing primary rays. Both are on by default. The `{false}` member initializers in
+`deferred_renderer.hpp` are only the pre-init value; `DeferredRenderer::init` flips
+each flag to `true` as soon as the corresponding technique's own `init()` succeeds
+(for shadows, only on a device with ray queries). The CSM fallback runs when RT
+shadows do not trace a frame — initialisation failed, no TLAS, or no light casts
+shadows — and the no-GI branch when RT GI is not available.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_useRTShadows = true;"}}
 
-Neither binds the light SSBO; their lights arrive in push constants. The shadow
-pass takes up to four of the scene's shadow-casting lights and writes one mask
-channel each; the GI pass takes one, the brightest. The GI pass traces one cosine-weighted
-bounce, never fires a shadow ray from the secondary hit, uses a non-physical
-`1/(1+d²)` falloff, and approximates the hit surface's normal as the negated ray
-direction — a colour-bleed approximation, not a GI solver.
+The shadow trace is not a ray tracing pipeline at all: it is a compute shader with
+inline ray queries, no shader binding table, and its lights arrive in a storage
+buffer the C++ side writes per frame slot. It ranks the frame's shadow-casting lights
+(up to eight) per pixel by importance and traces one ray to each of the four most
+important; the filter then turns those bits into one 8-bit visibility channel a
+light (see the hybrid shadow technique). The GI pass binds no light buffer either:
+its light arrives in push constants, one, the brightest. It traces one
+cosine-weighted bounce, never fires a shadow ray from the secondary hit, uses a
+non-physical `1/(1+d²)` falloff, and approximates the hit surface's normal as the
+negated ray direction — a colour-bleed approximation, not a GI solver.
 
 {{cite shaders/rt/rt_gi.rgen "float hitNdotL = max(dot(normalize(toLightFromHit), -dir), 0.0);"}}
 
-Both lean on the same absent-hit signal as the path tracer, and each has the miss
-shader the path tracer does without: `rt_shadow.rmiss` raises the shadow payload
-to fully lit, `rt_gi.rmiss` writes −1 into alpha as the miss marker the raygen
-tests before accumulating.
+GI leans on the same absent-hit signal as the path tracer, and has the miss shader
+the path tracer does without: `rt_gi.rmiss` writes −1 into alpha as the miss marker
+the raygen tests before accumulating.
 
 {{cite shaders/rt/rt_gi.rmiss "giPayload = vec4(0.0, 0.0, 0.0, -1.0);"}}
 
-Both draw their random numbers from the same integer PCG hash, keyed by the render
-seed and the frame index since the last temporal reset as well as the pixel and
-sample, so their noise changes every frame and repeats exactly for the same seed
-and frame:
+Both draw their random numbers from an integer PCG hash, keyed by the render seed
+and the frame index since the last temporal reset as well as the pixel and sample,
+so their noise changes every frame and repeats exactly for the same seed and frame:
 
-{{cite shaders/rt/rt_shadow.rgen "float r1 = rand01(uvec2(pixel), l, s, 0u);"}}
+{{cite shaders/rt/shadow_trace.slang "return pcg(pc.seed.x ^ pcg(pc.seed.y ^ pcg(pixel.x ^ pcg(pixel.y))));"}}
 
 Both trace with ray mask `0x01` under comments claiming static-only visibility.
 That filter selects nothing among live geometry — every visible TLAS instance is
@@ -297,7 +301,7 @@ and distance unconditionally.
 
 ## The rest of shaders/rt, and which of it runs
 
-Twenty files sit in `shaders/rt/`. Past the two pipelines above, four
+Nineteen files sit in `shaders/rt/`. Past the path tracer and the hybrid passes above, four
 `cinematic_*.comp` passes run after NRD compose — bright-pass extract, a 13-tap
 downsampling blur that builds the bloom mip chain, a gather-based DoF, and the
 composite that applies AgX and writes binding 30 — each built and dispatched

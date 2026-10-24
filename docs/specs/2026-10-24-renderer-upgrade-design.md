@@ -428,7 +428,9 @@ because each pixel sums the same lights in the same order.
   by angular size).
 - The sample is a hash of (render seed, frame index since reset, pixel, light slot). It
   changes per frame so temporal accumulation converges, and repeats exactly after a reset.
-- Results go to an RGBA8 image, one channel per light slot.
+- Results go to an RGBA8 image, one channel per light slot. *As built (step 7):* one
+  RG32UI image of eight 8-bit channels, one per shadow-casting light (see "Build order",
+  step 7).
 - Lights beyond 4 a pixel shade unshadowed. A deliberate limit, and `render.stats`
   reports how many pixels hit it.
 
@@ -1030,6 +1032,28 @@ improvising. Intentional image changes are separate commits inside their step.
    - Goldens re-baselined (own commit).
    - Gates `rt.shadows`, `rt.shadows.filter`, `csm`.
    - Test 9.
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step7.md`):* both passes are
+     Slang compute (`shaders/rt/shadow_trace.slang`, `shadow_filter.slang`): the trace uses
+     inline ray queries, not a ray tracing pipeline (no shader binding table, measured
+     cheaper; without `VK_KHR_ray_query` the frame keeps CSM). *Correction:* the output is
+     not an RGBA8 image of 4 per-pixel slots but one RG32UI image of eight 8-bit channels,
+     one per shadow-casting light of the light buffer (every caster, up to 8, owns a
+     channel in `params.w`), dithered so the temporal mean stays unbiased: lighting reads
+     one texel, and no per-pixel slot table is needed. Importance is intensity over squared
+     distance with ties by index, 0 out of range, wholly behind the surface or (a spot)
+     outside its cone. The filter skips the 5x5 kernel for a light the neighbourhood
+     agrees on; the temporal weight is 1/(n+1) down to 1/16 with no neighbourhood clamp
+     (a moving light trails for up to 16 frames). Reference quality's GI is the realtime
+     GI until step 8. Bugs fixed on the way: CSM never shadowed (an OpenGL-depth ortho
+     and a comparison sampler read as a depth texture), and a scene with exactly one light
+     was treated as the fallback sun. Test 9: `engine_tests` `sp2b_t09_*` (exact after a
+     reset, CSM fallback, reference past the cap with `shadowLightsDropped`, a spot outside
+     its cone, convergence toward the reference); goldens `cornell_box_reference`,
+     `cli_cornell_box_reference`, `cli_helmet_game_reference`. **Budgets:** `csm` passes;
+     `cornell_720p` `rt.shadows` measured 0.255 ms (budget 0.20) and `rt.shadows.filter`
+     0.062 ms (budget 0.05): Cornell's 8 shadow-casting lights make every pixel trace 4
+     rays at about 0.048 ms each, plus 0.06 ms of fixed work. Not moved: awaiting Frank's
+     ruling (the change record lists the options).
 8. **RT GI rebuilt.**
    - Half resolution, 2 rays, the reprojected temporal and à-trous denoiser, the upsample.
    - Reference quality, GI half: full resolution, 32 rays, the plain running mean; the

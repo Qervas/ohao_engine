@@ -106,9 +106,16 @@ reading the source: a function under a `[shader("…")]` attribute line. One ent
 the flattening rule (`bench/gpu_calibrate.slang` → `bench_gpu_calibrate.slang.spv`),
 several add the entry's name, and a file with none is a module that is only imported.
 The entry keeps its own name in the SPIR-V, so the pipeline's `pName` is the
-function's name, not `main`:
+function's name, not `main` (`rt/shadow_trace.slang`'s `trace` becomes
+`rt_shadow_trace.slang.spv`, loaded with entry `"trace"`):
 
-{{cite shaders/CMakeLists.txt "COMMAND ${SLANGC} ${SLANG} -target spirv -profile spirv_1_6 -entry ${ENTRY} -fvk-use-entrypoint-name"}}
+{{cite shaders/CMakeLists.txt "-target spirv -profile spirv_1_6 ${SLANG_CAPS} -entry ${ENTRY} -fvk-use-entrypoint-name"}}
+
+`SLANG_CAPS` is empty unless the source uses inline ray queries: a file whose text
+contains `RayQuery<` is compiled with `-capability spvRayQueryKHR`, which the RT
+shadow trace needs and nothing else in the tree asks for.
+
+{{cite shaders/CMakeLists.txt "set(SLANG_CAPS -capability spvRayQueryKHR)"}}
 
 `ohao doctor` scans entry points the same way, so `shaders.complete` expects the same
 names and `shaders.fresh` follows `import` as it follows `#include`:

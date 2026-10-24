@@ -21,9 +21,14 @@ depth:
 
 {{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
 
-and its PCF taps accumulate *visibility* — 1.0 where the fragment is lit:
+and its PCF taps accumulate *visibility* — 1.0 where the fragment is lit. Each tap is
+a hardware depth comparison: the map is bound as a `sampler2DArrayShadow` through the
+pass's `LESS_OR_EQUAL` comparison sampler, and the fourth coordinate is the biased
+reference depth:
 
-{{cite shaders/core/deferred_lighting.frag "shadow += (projCoords.z - bias > pcfDepth) ? 0.0 : 1.0;"}}
+{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
+
+{{cite shaders/core/deferred_lighting.frag "float(cascadeIdx), reference));"}}
 
 ## The include that has to come last
 

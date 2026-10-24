@@ -181,8 +181,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 11 scenes: 5 examples, 6 through
-  `ohao run`): `--only NAME`, `--update` after a deliberate change (look at what drifted
+- **Render goldens** (`tests/golden/manifest.json`, 14 scenes: 6 examples, 8 through
+  `ohao run`; three at the deferred frame's `reference` quality): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
   `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
@@ -271,6 +271,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: frame 1 and frame 10 of Cornell differ (max_abs 29). Pass `frames` for
   a converged image; the deferred goldens state theirs (`--frames 7`, `--frames 27`).
+- RT shadows are compute with inline ray queries (`VK_KHR_ray_query`; without it the
+  frame keeps CSM, which renders only when RT shadows do not). They keep a history too: the
+  filter averages the frames since the last reset, so frame 1 is the noisiest. Every
+  shadow-casting raster light (up to 8) owns a visibility channel (`params.w`), but a pixel
+  traces only its 4 most important; `render.stats`' `shadowLightsDropped` counts the pixels
+  that had more.
 - The validation layer stops at 10 reports per VUID; set
   `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see them all. The engine names no Vulkan
   objects: find a handle's creation site by temporarily printing handles at `vkCreate*`.

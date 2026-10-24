@@ -100,7 +100,7 @@ $$</div>
 <p>When the render extract resolves it into a world-space light, the centre goes through the entity&#x27;s world matrix and the radius does not:</p>
 <div class="citation-chip"><code class="citation-code">d.position = glm::vec3(wt.world * glm::vec4(p.localCenter, 1.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L170" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:170</a></div>
 <p>Scaling an emissive entity moves its light correctly and leaves its size behind. The proxy is not a GPU upload by itself: it becomes an `EmissiveProxyLight` component, then a `LightDesc` of a special kind that the light table lowers twice — into the deferred `LightData` array after the regular lights, as a point light with a range of ten radii,</p>
-<div class="citation-chip"><code class="citation-code">light.direction = glm::vec4(0, -1, 0, d.radius * 10.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/light_table.cpp#L173" target="_blank" rel="noopener">ohao/render/scene/light_table.cpp:173</a></div>
+<div class="citation-chip"><code class="citation-code">light.direction = glm::vec4(0, -1, 0, d.radius * 10.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/light_table.cpp#L171" target="_blank" rel="noopener">ohao/render/scene/light_table.cpp:171</a></div>
 <p>and into the path tracer&#x27;s `GPULight` buffer as a sphere light.</p>
 </div>
 <div class="section-rule"><h2 id="the-hdri-is-its-own-upload">The HDRI is its own upload</h2></div>

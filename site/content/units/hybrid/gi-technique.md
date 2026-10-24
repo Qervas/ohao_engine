@@ -130,8 +130,8 @@ TLAS custom index and returns it; nothing in it can reject a hit, so a hit the
 traversal reports always counts as a bounce surface. The header meant to keep the
 mask constants in sync across host and shader,
 `shaders/rt/includes/rt_masks.glsl`, has no `#include` anywhere in the tree: the two
-raygen shaders that use the mask, `rt_gi.rgen` and `rt_shadow.rgen`, each spell
-`0x01` as a literal.
+shaders that use the mask, `rt_gi.rgen` and `rt/shadow_trace.slang`, each spell
+`0x01` themselves, as a literal and as a constant of its own.
 
 The albedo itself comes from the instance table, not from a per-actor buffer
 filled by the TLAS build loop. Its home is `InstanceGpu::giAlbedoPacked`, whose

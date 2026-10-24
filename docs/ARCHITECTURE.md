@@ -320,7 +320,8 @@ Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).
 1. **The scene** is a checked-in `.scene.json` (`assets/scenes/`); a golden renders it
    through `ohao run`, so everything about the render is on the command line: `--mode`,
    `--frames` (deferred: from a reset, the last kept; with TAA give enough frames to
-   converge), `--post`, `--exposure`, `--spp`/`--denoise` for the path tracer.
+   converge), `--post`, `--exposure`, `--quality` (deferred: `realtime` or `reference`),
+   `--spp`/`--denoise` for the path tracer.
 2. **The entry** in `tests/golden/manifest.json`: `name`, `command` (`{out}` is the
    image the harness compares), `golden` (`tests/golden/<name>.png`), the tolerance and a
    `_note` saying what the image is and why its tolerance is what it is. **Deferred

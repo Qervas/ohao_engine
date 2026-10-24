@@ -15,23 +15,28 @@ UBO to the lighting pass.
 
 {{cite ohao/render/deferred/csm_pass.hpp "static constexpr uint32_t SHADOW_MAP_SIZE = 2048;"}}
 
-The lighting shader only consults it when the RT shadow mask is absent.
-`DeferredLightingPass::execute` zeroes the flag word every frame and rebuilds it from
-the currently bound views: an RT shadow view sets bit 5, and only its absence lets the
-CSM array view set bit 2. `DeferredRenderer` clears the RT mask before recording the
-graph and hands it back only from an `RTShadow` pass whose `render()` actually traced,
-so a frame with no TLAS instances falls back to this page's map rather than sampling
-an unwritten mask.
+The pass is recorded only when RT shadows are not. `DeferredRenderer` decides before
+building the graph whether they trace this frame — the RT shadow technique initialised
+(the device has ray queries), the scene has a TLAS, and some light casts shadows — and
+adds `csm` only when they do not:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtShadow->rendered() && m_lightingPass)"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_csmPass && !rtShadows) {"}}
+
+The lighting shader consults the map only when no RT visibility is bound.
+`DeferredLightingPass::execute` zeroes the flag word every frame and rebuilds it from
+the currently bound views: an RT visibility view sets bit 5, and only its absence lets
+the CSM array view set bit 2. `DeferredRenderer` clears the RT view before recording
+the graph and hands it back only from an RT shadow pass whose `render()` actually
+traced; `setRTShadowMask` just stores the view.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (!m_lightingPass || !m_rtShadow->rendered()) return;"}}
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 4;   // CSM fallback (bit 2)"}}
 
-`setRTShadowMask` performs the same bit arithmetic at bind time, but that assignment
-never reaches the GPU: `execute` overwrites the whole word before pushing it.
-
-That matters for the rest of this page: several defects below survive precisely
-because the default configuration on an RT-capable device never exercises this path.
+So on an RT-capable device with a shadow-casting light this page's map is never
+drawn: it shadows frames on devices without ray queries and scenes without a TLAS.
+That is why the cascade-pairing defect below has survived — the default
+configuration never exercises this path.
 
 ## Where to cut the frustum
 
@@ -129,44 +134,47 @@ no back face to record and casts no shadow at all, while thin closed objects
 peter-pan. The `normalBias` and `cascadeBlendWidth` fields the C++ struct fills are
 read by nothing in the shipping shader.
 
-## The depth convention nobody set
+## The depth convention, set per matrix
 
-`GLM_FORCE_DEPTH_ZERO_TO_ONE` is not defined anywhere in this repository — the only
-occurrence is a comment in the picking system noting its absence. GLM therefore
-emits OpenGL-convention matrices with NDC depth in $[-1, 1]$, including the light's
-orthographic projection:
+`GLM_FORCE_DEPTH_ZERO_TO_ONE` is not defined anywhere in this repository, so GLM's
+default projections are OpenGL-convention, with NDC depth in $[-1, 1]$. Vulkan clips
+against $0 \le z_c \le w_c$ and the lighting shader rejects any `projCoords.z` below 0
+as "lit", so a $[-1, 1]$ light projection would leave the near half of every cascade —
+the half holding the occluders closest to the light — unshadowed. The light's
+orthographic projection therefore names the Vulkan range explicitly, with GLM's `_ZO`
+variant:
 
-{{cite ohao/render/deferred/csm_pass.cpp "glm::mat4 lightProj = glm::ortho(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);"}}
+{{cite ohao/render/deferred/csm_pass.cpp "glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, radius * 2.0f);"}}
 
-Vulkan clips against $0 \le z_c \le w_c$, so the near half of that volume — the half
-containing the occluders closest to the light — would be clipped away entirely. It
-survives only because depth clamping is enabled, which also disables z-plane
-clipping and flattens those fragments onto depth 0:
+The frustum-corner unprojection makes the matching assumption, using NDC
+$z \in \{0, 1\}$ with a comment asserting the Vulkan range. Depth clamping stays on,
+which disables z-plane clipping and flattens any occluder in front of the cascade's
+near plane onto depth 0 instead of dropping it:
 
 {{cite ohao/render/deferred/csm_pass.cpp "rasterizer.depthClampEnable = VK_TRUE; // Clamp depth to [0, 1]"}}
 
-On the sampling side the same $[-1, 1]$ range reaches `calculateShadowCSM`, which
-rejects any `projCoords.z` below 0 and returns "lit". The frustum-corner
-unprojection makes the mirror-image assumption, using NDC $z \in \{0, 1\}$ with a
-comment asserting the Vulkan range. Defining the GLM macro would fix the light
-projection and break every camera projection that currently agrees with it — a
-repo-wide change, not a one-line edit.
+Defining the GLM macro globally instead would change every camera projection in the
+engine at once — a repo-wide change, not a one-line edit — so the cascade matrix
+carries its own convention.
 
-## The sampler that ships, and the one that looks official
+## The sampler that ships
 
-No shader `#include`s it, so nothing in it is reachable from any pipeline. Its two
-entry points, `sampleCSM` and `sampleCSM_PCSS`, have zero callers; the helpers
-`selectCascade`, `getShadowCoords` and `sampleShadowPCF` are called only from those
-two dead functions. And unlike the classic "unused function, live formula" case the
-math is not inlined anywhere either. What runs instead is written directly into the
-deferred lighting shader, which defines its own `selectCascade` over the live UBO and
-its own 3×3 box PCF over nine taps — no Poisson disk, no normal bias, no cascade
-blend:
+There is no CSM sampling include: what runs is written directly into the deferred
+lighting shader, which defines its own `selectCascade` over the live UBO and its own
+3×3 box PCF over nine taps — no Poisson disk, no normal bias, no cascade blend:
 
 {{cite shaders/core/deferred_lighting.frag "float calculateShadowCSM(vec3 fragPos, float viewDepth) {"}}
 
-The two also disagree structurally: the include's `CascadeData` ends in a `float
-padding` where the C++ struct and the live UBO both declare a `uint cascadeCount`.
+Each tap is a hardware depth comparison. The cascade array is declared
+`sampler2DArrayShadow` and bound with the pass's comparison sampler
+(`compareEnable`, `VK_COMPARE_OP_LESS_OR_EQUAL`, white border), so `texture()` with a
+`vec4(uv, layer, reference)` returns 1 where the biased reference depth is at or in
+front of the stored one; with linear filtering the driver may blend the four
+comparisons of a tap.
+
+{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
+
+{{cite ohao/render/deferred/csm_pass.cpp "samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;"}}
 
 ## One render pass per cascade
 
@@ -224,4 +232,6 @@ all four array layers rather than layer 0 alone.
 - `setCameraData` must receive the **unjittered** projection. `DeferredRenderer` passes `m_proj` while the GBuffer pass gets `jitteredProj`; a jittered matrix would nudge every cascade sphere each frame and defeat the texel snapping.
 - The lighting shader applies CSM only to lights of type 0 (directional) and only when flag bit 2 is set. Point and spot lights are unshadowed on this path.
 - The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from a push constant recorded into its own command buffer, and its instance-table set is per frame slot.
-- The shadow sampler is created with `compareEnable = VK_TRUE` and `VK_COMPARE_OP_LESS_OR_EQUAL`, but binding 6 is declared `sampler2DArray` (not `sampler2DArrayShadow`) and the shader compares depths itself. The comparison state is dead, and Vulkan requires a compare-enabled sampler to be used with depth-compare instructions.
+- The shadow sampler is created with `compareEnable = VK_TRUE` and `VK_COMPARE_OP_LESS_OR_EQUAL`, and binding 6 must stay a `sampler2DArrayShadow` sampled with a reference depth: Vulkan requires a compare-enabled sampler to be used only with depth-compare instructions.
+- The light projection must keep producing depth in $[0, 1]$ (`orthoRH_ZO`); a $[-1, 1]$ matrix leaves the near half of every cascade unshadowed with no error anywhere.
+- The `csm` pass is recorded only in frames where RT shadows do not run; anything that wants the map in an RT frame gets one that was not drawn this frame.

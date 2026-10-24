@@ -150,13 +150,21 @@ pipeline depends on: type, range, intensity, shadow-map index and RT shadow slot
 ride in the `w` and `params` channels of four `vec4`s, followed by a 64-byte
 light-space matrix — 128 bytes per light, `std140`-compatible by construction.
 
-{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = shadow slot (kShadowNever, 0..3, kShadowNoSlot)"}}
+{{cite ohao/render/scene/render_scene_types.hpp "w = shadow slot (kShadowNever, 0..7)"}}
 
-The header's own copy of the struct has the same layout and documents the slot the
-same way. Nothing includes `types.glsl`; the shader that reads the slot,
-`deferred_lighting.frag`, declares its own `Light`.
+The slot is -1 for a light that never casts, else the light's RT visibility channel,
+0 to 7: the buffer holds eight lights and the visibility eight channels, so every
+caster has one.
 
-{{cite shaders/includes/common/types.glsl "w = shadow slot (-1 never, 0..3 RT mask channel, 4 casts but no channel)"}}
+{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kMaxShadowLights = MAX_LIGHTS;"}}
+
+The header's own copy of the struct has the same layout and the same 0..7 range in its
+comment. Nothing includes `types.glsl`, so nothing compiles that copy; the shader that
+reads the slot, `deferred_lighting.frag`, declares its own `Light`.
+
+{{cite shaders/includes/common/types.glsl "w = shadow slot (-1 never, 0..7 its RT visibility channel)"}}
+
+{{cite shaders/core/deferred_lighting.frag "w = shadow slot (-1 never, 0..7 its RT visibility channel)"}}
 
 ## Contracts
 

@@ -113,31 +113,39 @@ geometry and an unbounded value in an `R16G16B16A16_SFLOAT` target whose ceiling
 
 {{cite shaders/core/deferred_lighting.frag "float invSq = 1.0 / max(d2, 0.01);"}}
 
-## One mask channel per shadow light
+## One visibility channel per shadow light
 
 Shadowing is decided per fragment before the BRDF, and the two shadow techniques
-are mutually exclusive rather than combined: if an RT shadow mask is bound the C++
-side sets bit 5 and never sets the CSM bit.
+are mutually exclusive rather than combined: if an RT visibility view is bound the
+C++ side sets bit 5 and never sets the CSM bit.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 32;  // RT shadows (bit 5)"}}
 
-The mask is a screen-space RGBA8 image, one channel per shadow-casting light,
-sampled once at the fragment's own UV before the loop:
+The visibility is a screen-space `R32G32_UINT` image holding eight 8-bit channels,
+one per shadow-casting light (x: lights 0-3, y: 4-7, lowest byte first), bound as a
+`usampler2D` at binding 14. It is read once before the loop with an integer
+`texelFetch` at the fragment's own pixel — no filtering, no UV — because the RT passes
+write it at the lighting pass's resolution:
 
-{{cite shaders/core/deferred_lighting.frag "vec4 rtShadow = rtShadows ? texture(rtShadowMask, inTexCoord) : vec4(1.0);"}}
+{{cite shaders/core/deferred_lighting.frag "texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy"}}
 
 Each light names its channel in `params.w`, which the light table fills: -1 for a
-light that never casts (its `castShadows` off, or an emissive proxy), 0 to 3 for
-the first four casters in light order, 4 for any caster after them.
+light that never casts (its `castShadows` off, or an emissive proxy), otherwise 0 to
+7, the caster's position among the casters in light order. The UBO holds eight
+lights and there are eight channels, so every caster has one.
 
 {{cite shaders/core/deferred_lighting.frag "int slot = int(round(light.params.w));"}}
 
-A negative slot is never occluded. With RT shadows on, slots 0 to 3 take their
-channel and slot 4 stays unshadowed; with them off, the slot only says whether the
-light casts at all, and the CSM path decides the rest. That path is gated on
-`lightType == 0`, so point and spot lights cast no shadow without RT at all. Cascades themselves are a 3×3 PCF tap on the array slice
-chosen by view-space depth, and the cascade UBO carries a `cascadeBlendWidth` the
-shader never reads:
+A negative slot is never occluded. With RT shadows on, a light's shadow is its byte
+of the word divided by 255:
+
+{{cite shaders/core/deferred_lighting.frag "shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);"}}
+
+With them off, the slot only says whether the light casts at all, and the CSM path
+decides the rest. That path is gated on `lightType == 0`, so point and spot lights
+cast no shadow without RT at all. Cascades themselves are a 3×3 PCF of hardware
+depth comparisons on the array slice chosen by view-space depth, and the cascade UBO
+carries a `cascadeBlendWidth` the shader never reads:
 
 {{cite shaders/core/deferred_lighting.frag "float cascadeBlendWidth;"}}
 
@@ -237,5 +245,5 @@ shipped feature.
 - GBuffer0's clear colour and the shader's sky test are one invariant in two files. Changing either alone sends background pixels through the lighting loop.
 - The pass owns one descriptor set per frame in flight (`maxSets = MAX_FRAMES_IN_FLIGHT`, three today), and `execute(cmd, frameIndex)` rewrites all 15 bindings of `m_descriptorSets[frameIndex]` only, at record time. Its inputs — light buffer, SSAO, RT shadow mask, GI, env map — can change between frames, so the set has to be rewritten; a single shared set would be rewritten while up to two already-submitted frames still read it. The per-slot set is safe because `VulkanRenderer::renderDeferred` waits the fence of `m_currentFrame` and then records the deferred renderer with that same slot, so the set's previous use is retired. The contract is on the caller: `frameIndex` must be the slot whose fence was waited. {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}} {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
 - `LightingParams` is 184 bytes, all scalar after `screenSize`; the explicit `padding*` floats after `wetness`, `snowCover` and `frostCover` are unread spacers that keep the C++ struct byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
-- Binding an RT shadow mask disables CSM for that frame outright. A light's `params.w` and the mask's channels are one contract with the light table and `rt_shadow.rgen`: the table hands out slots 0 to 3 in the same order it lists `shadowLights()`, and the RT pass traces light *i* into channel *i*. A fifth shadow caster is unshadowed under RT shadows.
-- Declared and never read by this shader: `lighting.numLights` (the host reads it back off the mapped buffer instead), `lighting.shadowBias`, `lighting.shadowStrength`, each light's `lightSpaceMatrix`, `params.z`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3, 4, 7, 8 and 10. Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow mask at 14.
+- Binding an RT visibility view disables CSM for that frame outright. A light's `params.w` and the visibility's channels are one contract with the light table and the RT shadow passes (`rt/shadow_trace.slang`, `rt/shadow_filter.slang`): the table hands out slots 0 to 7 in the same order it lists `shadowLights()`, and the RT passes write light *i* into channel *i*. The visibility image must stay the lighting pass's size, since it is fetched at `gl_FragCoord`.
+- Declared and never read by this shader: `lighting.numLights` (the host reads it back off the mapped buffer instead), `lighting.shadowBias`, `lighting.shadowStrength`, each light's `lightSpaceMatrix`, `params.z`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3, 4, 7, 8 and 10. Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow visibility at 14.

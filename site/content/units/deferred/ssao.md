@@ -15,8 +15,8 @@ whatever the camera can see, read out of the depth buffer and steered by the
 GBuffer normal — and everything on this page is a consequence of trying to read
 occlusion out of that heightfield.
 
-It is not, in this engine, what a frame leans on. An RTShadow and an RTGI compute
-pass are registered immediately after SSAO and trace against the renderer's TLAS,
+It is not, in this engine, what a frame leans on. The RT shadow passes and an RTGI
+compute pass are registered immediately after SSAO and trace against the renderer's TLAS,
 and `DeferredRenderer::initialize` enables each the moment its technique comes up:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_useRTShadows = true;"}}

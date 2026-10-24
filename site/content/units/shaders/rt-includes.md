@@ -235,9 +235,10 @@ The third header defines two ray-mask constants and pins them to their C++ twin:
 {{cite shaders/rt/includes/rt_masks.glsl "#define RT_RAY_MASK_STATIC   0x01"}}
 
 No shader in the tree includes it. The two that want a static-only ray mask
-paste the literal instead — `rt_shadow.rgen` with the constant's name in a
-trailing comment, `rt_gi.rgen` pointing at the C++ header rather than at this
-one:
+write the value down themselves instead — `rt/shadow_trace.slang` as a Slang
+constant, `kRayMaskStatic`, that names the C++ constant in a comment (Slang could
+not include this GLSL header anyway), `rt_gi.rgen` as a literal pointing at the
+C++ header rather than at this one:
 
 {{cite shaders/rt/rt_gi.rgen "uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)"}}
 
