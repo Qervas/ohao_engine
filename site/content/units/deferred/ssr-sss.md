@@ -21,8 +21,9 @@ is then reassigned to SSS's blurred image, and *that* is what SSR is handed as i
 So on the default path — `SSSPass` is only reset if it fails to initialise — every
 screen-space reflection returns post-SSS radiance, and reflected skin is blurred twice.
 Both passes are created unconditionally by `DeferredRenderer` and run on every deferred
-frame: no quality flag, no scene-content test, and neither appears in the pass list
-`getPipelineInfo()` reports. What differs is how far each pushes the bet, and how each
+frame: no quality flag, no scene-content test; every frame's pass timings carry both, as
+`sss` and `ssr` (0.046 and 0.021 ms of Cornell's 720p frame, where no material is skin).
+What differs is how far each pushes the bet, and how each
 is wired into the tail of the frame — which is where the sharp edges are.
 
 ## The reflection ray marches in world space

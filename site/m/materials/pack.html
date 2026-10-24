@@ -99,7 +99,7 @@ $$</div>
 <p>The same header carries a constant that reads like a hard limit and is not one:</p>
 <div class="citation-chip"><code class="citation-code">static constexpr uint32_t MAX_GPU_LIGHTS = 64;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L19" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:19</a></div>
 <p>It is referenced: the light table sizes the device buffer as the header plus 64 lights and truncates a longer list with a one-time log. The shaders clamp their light choice against `lightBuf.lightCount`, which is already post-truncation. The deferred side is the same kind of bound — its cap is a fixed array length, so it genuinely bounds the loop:</p>
-<div class="citation-chip"><code class="citation-code">LightData lights[MAX_LIGHTS];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L77" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:77</a></div>
+<div class="citation-chip"><code class="citation-code">LightData lights[MAX_LIGHTS];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L78" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:78</a></div>
 </div>
 <div class="section-rule"><h2 id="the-bill-for-an-overloaded-lane">The bill for an overloaded lane</h2></div>
 <div class="prose reveal">

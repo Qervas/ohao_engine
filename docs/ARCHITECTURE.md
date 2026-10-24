@@ -81,6 +81,9 @@ VulkanRenderer::render()
   deferred passes or a path tracer, then present (window) or readback (headless); a
   window frame reads back only when asked (requestReadback, then readback(): that frame's
   fence, never the queue)
+  every pass between two GPU timestamps (render/frame/gpu_pass_timer.hpp), named in the
+  pass registry; a frame slot's times are read when the slot comes round, after its fence:
+  render.stats, render_bench, never a stall
 ```
 
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
@@ -278,10 +281,15 @@ model to copy, `SkyPass` the fullscreen raster one.
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
    and `reset()` on failure, as SSR does); record it in `render()` at its place in the
    frame (after lighting: SSS, SSR, sky, particles, post, gizmo) inside
-   `timerBegin("Name") … timerEnd()` (a string literal: it is the GPU timing label in
-   `getPerfStats()["gpu_timings_ms"]`); resize it in `onResize`, and hand it again any
-   view of another pass that a resize recreates. A pass left at its creation size is
-   invisible to validation and wrong on screen.
+   `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
+   of another pass that a resize recreates. A pass left at its creation size is invisible
+   to validation and wrong on screen. A graph pass is timed under its `addPass` name.
+   Either way the name goes in the **pass registry** (`ohao/render/frame/pass_registry.hpp`,
+   `kPasses`, at its place in frame order, lowercase and dotted: `rt.gi.denoise`): the
+   timer (`GpuPassTimer`, `render/frame/gpu_pass_timer.hpp`) times only registered names,
+   logs an unknown one once as an error, and `engine_tests`' `sp2b_t01` fails. The pass's
+   time then shows in `render.stats` and `render_bench`; give it a budget in
+   `tests/bench/render_budgets.json` (spec 2b, "How budgets are gated").
 6. **Check it:** build (the shader comes with any target that renders); run validation
    with a resize; run the goldens — a pass that changes pixels changes the deferred goldens
    on purpose, so look at the diff (`build/golden_diff/`), then `--update`; and

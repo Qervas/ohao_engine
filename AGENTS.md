@@ -105,16 +105,16 @@ $ python tests/serve/check_serve.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG) |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay) |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats` |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
-| `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered |
+| `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
 | `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes) and on the real tree; `--gpu` adds the device checks |
 | `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
@@ -138,11 +138,13 @@ $ python tests/serve/e2e_mcp.py > /dev/null   # gpu
 $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   # gpu # slow
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
 $ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
+$ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
 - `engine_tests`: event bus, command history, assets, headless deferred and path-traced
-  frames, RenderScene. `ecs_tests`: world, hierarchy, transforms and the render extract
+  frames, RenderScene, per-pass GPU timing (every pass registered, timed once, in frame
+  order, within the frame; a pass turned off leaves the timings). `ecs_tests`: world, hierarchy, transforms and the render extract
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
@@ -182,7 +184,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `tools/list` size; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
   its frame is presented, a frame's readback, inline and PNG captures, the reader thread's
   CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
-  `build/serve_bench.json`. `serve_bench` times a
+  `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
+  `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
+  (gated once `currentStep` reaches it, else reported `pending` with its measurement);
+  headless captures of `cornell_720p` and `helmet_game_720p`/`_1080p`, 5 warm-up and 100
+  timed frames each, every pass's median and p95 from GPU timestamps, results in
+  `build/render_bench.json` (the per-pass baseline every renderer change is judged by);
+  `--only SCENE`, `--frames N`; `--evaluate RESULTS --check BUDGETS` judges recorded
+  results without a GPU. Besides the CPU loop it times a GPU calibration kernel
+  (`shaders/bench/gpu_calibrate.comp`) before and after, against
+  `build/render_bench_reference.json` (`render_bench --calibrate`). `serve_bench` times a
   calibration loop before and after its blocks and records every other process that
   used CPU meanwhile; a run >25% slower than `build/serve_bench_reference.json` (written
   by `serve_bench --calibrate` on a quiet machine) or beside other processes using more
@@ -192,8 +203,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   are contended (a probe over 1.5x its fastest round); it prints each op's median in
   clean and in contended rounds. This laptop slows a busy core by itself after about 3 s
   of sustained load (`scene_bench --machine-test` shows it), more with other bots' work
-  running. A budget is met after five consecutive passes and changes only by Frank's
-  ruling.
+  running. `python tools/bench/wait_quiet.py` waits until other processes use under half a
+  core for a minute (exit 1 at `--deadline`); run it before a bench whose verdict you need.
+  A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
   `docs/agents/skills/` until they are installed there; see its README).

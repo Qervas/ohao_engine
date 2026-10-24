@@ -63,7 +63,7 @@
 <div class="section-rule"><h2 id="the-bindless-array-and-the-flag-that-never-moved">The bindless array and the flag that never moved</h2></div>
 <div class="prose reveal">
 <p>Binding 12 is sized to the texture manager&#x27;s capacity, not to however many textures the scene happens to use. The renderer hands the path tracer the same number the G-buffer&#x27;s table was created with, so a material&#x27;s bindless slot indexes the array directly:</p>
-<div class="citation-chip"><code class="citation-code">slot-&gt;setBindlessCapacity(m_textureManager ? m_textureManager-&gt;getMaxTextures()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L306" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:306</a></div>
+<div class="citation-chip"><code class="citation-code">slot-&gt;setBindlessCapacity(m_textureManager ? m_textureManager-&gt;getMaxTextures()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L310" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:310</a></div>
 <p>The path tracer then clamps that against what the device allows for an update-after-bind combined-image-sampler array in one set and one stage, leaving room for the set&#x27;s other resources. The shaders learn the final size through a specialization constant, so an index at or past it reads as &quot;no texture&quot;:</p>
 <div class="citation-chip"><code class="citation-code">layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L46" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:46</a></div>
 <p>Three descriptor binding flags apply to binding 12. Two still do work; the third is a leftover.</p>
@@ -120,7 +120,7 @@
 <p>Adding a storage-image or storage-buffer binding without bumping that count makes `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and `createDescriptorResources` return false. That failure is named, not silent — `init()` logs it as an error on the `render` channel and aborts:</p>
 <div class="citation-chip"><code class="citation-code">OHAO_LOG(Error, render, &quot;PathTracer: failed to create descriptor resources&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L104" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:104</a></div>
 <p>It is total, though. `ensureRTRenderer` drops the half-built profile when `init` fails, and the RT dispatch then returns immediately because `getRTRenderer` hands back null, so no trace is ever recorded:</p>
-<div class="citation-chip"><code class="citation-code">if (!rtRenderer || !isRTSupported()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L264" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:264</a></div>
+<div class="citation-chip"><code class="citation-code">if (!rtRenderer || !isRTSupported()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L272" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:272</a></div>
 </div>
 <div class="section-rule"><h2 id="two-profiles-one-layout">Two profiles, one layout</h2></div>
 <div class="prose reveal">

@@ -124,8 +124,9 @@ Nor is there compaction. The BLAS builder that actually runs asks for
 
 The dormant packed variant is the file's one `PREFER_FAST_BUILD`, exactly as its
 header above advertises. `ALLOW_COMPACTION` appears in no build in the engine, and
-there is no AS query pool to read a compacted size back through — the tree's only
-`vkCreateQueryPool` is the deferred renderer's timestamp pool. No compacted-size
+there is no AS query pool to read a compacted size back through — every
+`vkCreateQueryPool` in the tree makes a timestamp pool (the per-frame-slot pass timer,
+`render_bench`'s calibration kernel). No compacted-size
 readback, no second build pass: BLAS memory stays at the driver's conservative
 build-time estimate.
 

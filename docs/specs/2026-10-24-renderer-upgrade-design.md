@@ -193,20 +193,31 @@ and `render_bench` all read the registry, so a pass cannot run unmeasured.
 ## Profiling first: per-pass timestamps and `render_bench`
 
 **Timestamps.** Each registered pass writes a begin and an end timestamp
-(`vkCmdWriteTimestamp2`, `TOP_OF_PIPE` / `BOTTOM_OF_PIPE`) into a per-frame-slot query
-pool sized for the registry (64 passes; one pool per frame in flight, so reading frame
-N-3's results never waits). Results are read when the slot's fence has signalled, which
-the renderer already waits on, so timing adds no stall. `timestampPeriod` converts ticks
-to ms. A frame's timings are kept in a 120-frame ring for `render.stats`. Timing is always
-on; its cost (2 queries a pass) is part of the frame budget's margin.
+(`vkCmdWriteTimestamp`, both at `BOTTOM_OF_PIPE`: each marks the moment all earlier work
+has finished, so passes never overlap and their sum is at most the frame's span; a
+`TOP_OF_PIPE` begin would let a pass's time include the tail of the pass before it) into a
+per-frame-slot query pool sized for 64 passes (one pool per frame in flight, so reading
+frame N-3's results never waits). Results are read when the slot's fence has signalled,
+which the renderer already waits on, so timing adds no stall. `timestampPeriod` converts
+ticks to ms, masked to the queue's `timestampValidBits`. A frame's timings are kept in a
+120-frame ring for `render.stats`. Timing is always on; its cost (2 queries a pass) is
+part of the frame budget's margin. Names come from the pass registry
+(`ohao/render/frame/pass_registry.hpp`, in frame order); a name outside it is not timed
+and is logged once as an error.
 
 **`render_bench`** (`tools/bench/render_bench.cpp`, CTest label `bench`, GPU) renders fixed
 scenes headless for 5 warm-up and 100 timed frames. Each frame has its own timestamps,
 read synchronously after its fence (the bench may wait; the engine never does). It reports
 per-pass and per-frame median and p95 to `build/render_bench.json` in the shared summary
 shape (`{suite, passed, failed, failures, noisy}` plus `scenes: [{name, frame: {median,
-p95, budget}, passes: [{name, median, p95, budget}]}]`). With `--check
-tests/bench/render_budgets.json` it fails on any budget missed.
+p95, budget}, span, cpu, passes: [{name, median, p95, frames, budget}]}]` and `budgets:
+[{scene, name, measure, passes?, budget, gatedFrom, measured, status}]`). `frame` is the
+frame's rendering on the GPU, first pass to the start of the final copy out (`present` /
+`readback`), the quantity the frame budgets bound; `span` includes the copy. A budget
+measures the frame, the CPU, a CPU ratio, or a group of passes (the sum of their medians;
+`x.*` is every pass named `x.<something>`). With `--check tests/bench/render_budgets.json`
+it fails on any gated budget missed; `--evaluate RESULTS` judges recorded results without
+a GPU (test 2).
 
 | Scene | Content | Settings |
 |---|---|---|
@@ -217,12 +228,14 @@ tests/bench/render_budgets.json` it fails on any budget missed.
 | `bench10k_1080p` | the same at 10,002 entities | For the CPU-submission scaling ratio |
 
 **Noise.** The bench follows spec 4's measurement rules (calibration, a load record,
-`noisy` exit 2, `check.py` reruns). It adds a **GPU calibration kernel**: a fixed compute
-dispatch (a 2^24-iteration integer hash over 1 MiB), timed by timestamps before and after
-the timed frames, against `build/render_bench_reference.json` written by `--calibrate`.
-More than 25% slower, or other processes over half a core, or GPU utilisation by other
-processes over 10% (sampled with `nvidia-smi --query-compute-apps` when present, else
-skipped and recorded as unknown), makes the run `noisy`.
+`noisy` exit 2, `check.py` reruns). It adds a **GPU calibration kernel**
+(`shaders/bench/gpu_calibrate.comp`): a fixed compute dispatch (an integer hash over 1 MiB,
+8,192 rounds per element, 2^31 in all: about 1.6 ms on the reference GPU), timed by
+timestamps before and after the timed frames (best of five after two warm-ups), against
+`build/render_bench_reference.json` written by `--calibrate`. Either calibration more than
+25% slower than its reference, or other processes over half a core, makes the run `noisy`.
+Other processes' GPU use is not sampled: `nvidia-smi --query-compute-apps` reports their
+memory, not their utilisation, so the calibration kernel is the GPU contention check.
 
 **Machine quiet.** `tools/bench/wait_quiet.py` waits until the other processes together
 use less than half a core for a minute (spec 4's step 11 used a scratch version). A step
@@ -582,11 +595,14 @@ Spec 4's contract holds and extends to everything 2b adds.
 ## The agent-facing surface
 
 **`render.stats`** `{frames = 1, passes = true}` →
-`{frame, gpuMs, cpuMs, passes: [["gbuffer.early", 0.071], ...], over?: ["rt.gi"], lightsOverflow?, shadowLightsDropped?}`.
+`{frame, frames, gpuMs, cpuMs, passes: [["gbuffer.early", 0.071], ...], over?: ["rt.gi"], lightsOverflow?, shadowLightsDropped?}`.
 
-- `frames` (1–120) gives medians over the last frames the host rendered.
-- Passes are `[name, ms]` pairs, two decimals of a hundredth of a millisecond: about 40
-  bytes a pass, so a whole frame report is about 1 KB.
+- `frames` (1–120) gives medians over the last frames the host rendered (`frames` in the
+  result: how many there were). A pass's median is over the frames that ran it.
+- Passes are `[name, ms]` pairs, in frame order, in ms rounded to the microsecond: about
+  20 bytes a pass, so a whole frame report is under 1 KB.
+- Built in step 1 without `over` (no host knows its scene's budget class until step 15),
+  `lightsOverflow` (step 13) and `shadowLightsDropped` (step 7).
 - `over` lists the passes over their `render_budgets.json` budget for the current scene
   class, when the host knows it (the bench scenes and any scene with a `budget` hint).
 - Over MCP it is `render_stats`. GPU hosts only; the CLI host is `E_STATE`.
@@ -809,6 +825,14 @@ improvising. Intentional image changes are separate commits inside their step.
    - The baseline profile of today's frame, split by pass, recorded in the change record.
      Every later step is judged against it.
    - Tests 1, 2.
+   - *As built (2026-10-24, `docs/changes/2026-10-24-renderer-step1.md`):* timestamps both
+     at `BOTTOM_OF_PIPE` and `render.stats` without `over` (see the sections above); the
+     GPU calibration kernel is GLSL (Slang arrives in step 6, which moves it) and 2^31
+     hash rounds, not 2^24 (about 0.01 ms, too short to time); no per-process GPU
+     sampling. Test 1 is `engine_tests`' `sp2b_t01`, test 2 `check_tests`' `sp2b_t02_*`
+     through `render_bench --evaluate`; `check.py`'s rerun of a noisy bench was already
+     covered by `t3_a_noisy_bench_is_rerun_at_most_twice`. Baseline, `cornell_720p`:
+     frame 4.87 ms GPU, `rt.gi` 3.95 ms of it.
 2. **Readback on request everywhere.**
    - The headless ring deleted; examples, doctor and the CPU-denoiser path on
      `requestReadback`/`readback`.

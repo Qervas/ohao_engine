@@ -18,7 +18,8 @@ It does not schedule. `topologicalSort` copies passes into the execution list in
 
 {{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now"}}
 
-So CSM → GBuffer → SSAO → RTShadow → RTGI → DeferredLighting is a decision made by hand
+So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.gi` → `lighting` (the pass registry's
+names, each timed under it; `ssao` only while the effect is on) is a decision made by hand
 in `render()`, not from declared dependencies. What the graph earns is barriers:
 `computeBarriers` walks that order tracking each texture's last access and emits a
 `VkImageMemoryBarrier` at the first read following a write.
@@ -71,8 +72,9 @@ field and pairs it with `TOP_OF_PIPE` and an empty access mask:
 
 {{cite ohao/render/graph/render_graph.cpp "// Transition from undefined"}}
 
-`gbuffer_normal` is read by SSAO and again by DeferredLighting, so the graph emits
-exactly that — after the write, immediately before lighting samples it. `UNDEFINED`
+`gbuffer_normal` is read by the first compute pass (`ssao` when the effect is on, else
+`rt.shadows`) and again by each pass after it, so the graph emits exactly that — after
+the write, immediately before lighting samples it. `UNDEFINED`
 licenses the driver to discard the contents, the source scope carries no dependency, and
 both are legal, so validation stays silent.
 

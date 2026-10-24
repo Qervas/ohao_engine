@@ -23,12 +23,14 @@ nothing about each other. Nothing is aliased, nothing is reordered, no memory is
 owned. Reading this unit as "a frame graph" will mislead you; reading it as "a
 barrier scheduler with a frame-graph-shaped API" will not.
 
-The six are CSM, GBuffer, SSAO, RTShadow, RTGI and DeferredLighting, in that
-order — three `addPass`, three `addComputePass`. The last two are conditional:
-`RTShadowTechnique` and `RTGITechnique` must have initialised and `RenderScene`
-must have a built TLAS (its handle stays null without ray tracing and before the
-first build), which on ray-tracing hardware with geometry in the scene is the
-ordinary case, not an opt-in.
+The six are `csm`, `gbuffer`, `ssao`, `rt.shadows`, `rt.gi` and `lighting`, in
+that order — three `addPass`, three `addComputePass` — named as the pass registry
+names them, since the graph times each pass under its name. Three are conditional.
+`ssao` is registered only while the effect is on. `rt.shadows` and `rt.gi` need
+`RTShadowTechnique` and `RTGITechnique` to have initialised and `RenderScene` to
+have a built TLAS (its handle stays null without ray tracing and before the first
+build), which on ray-tracing hardware with geometry in the scene is the ordinary
+case, not an opt-in.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {"}}
 
@@ -127,11 +129,12 @@ and says nothing whatever about a compute reader.
 {{cite ohao/render/deferred/gbuffer_pass.cpp "dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;"}}
 
 Three of the graph's passes are compute dispatches that sample G-buffer colour —
-SSAO, RTShadow and RTGI — and two of them own a target's *first* read after the
-G-buffer wrote it: SSAO on `gbuffer_normal`, RTGI on `gbuffer_albedo`. Only those
-two take the read-after-write branch, so `COLOR_ATTACHMENT_OUTPUT →
-COMPUTE_SHADER` is emitted exactly twice, each because a setup lambda called
-`readComputeTexture` and the graph turned it into a compute-stage read.
+`ssao`, `rt.shadows` and `rt.gi` — and two of them own a target's *first* read
+after the G-buffer wrote it: the first of them on `gbuffer_normal` (`ssao` when
+the effect is on, else `rt.shadows`), `rt.gi` on `gbuffer_albedo`. Only those two
+take the read-after-write branch, so `COLOR_ATTACHMENT_OUTPUT → COMPUTE_SHADER` is
+emitted exactly twice, each because a setup lambda called `readComputeTexture` and
+the graph turned it into a compute-stage read.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "builder.readComputeTexture(m_graphAlbedoHandle);"}}
 
@@ -152,7 +155,7 @@ aspect and a validation error.
 
 {{cite ohao/render/graph/render_graph.cpp "isDepthFormat(tex.format) ? VK_IMAGE_ASPECT_DEPTH_BIT"}}
 
-{{figure graph-render-graph-layout-timeline "Layout and stage track of four imported textures across the six passes the deferred frame registers on ray-tracing hardware. Conceptual: derived by hand-executing computeBarriers against the pass declarations in deferred_renderer.cpp, not captured from a validation-layer trace."}}
+{{figure graph-render-graph-layout-timeline "Layout and stage track of four imported textures across the six passes the deferred frame registers on ray-tracing hardware with SSAO on. Conceptual: derived by hand-executing computeBarriers against the pass declarations in deferred_renderer.cpp, not captured from a validation-layer trace."}}
 
 ## Why every read-after-read starts from UNDEFINED
 
@@ -168,12 +171,13 @@ read-with-a-read-predecessor branch is therefore never "transition from wherever
 it was"; it is always "transition from `UNDEFINED`" — and Vulkan permits an
 implementation to discard the image contents across that transition.
 
-The default frame emits four of them. `gbuffer_normal` is read by SSAO,
-RTShadow, RTGI and DeferredLighting in that order; only the first of those four
+A frame with SSAO on emits four of them. `gbuffer_normal` is read by `ssao`,
+`rt.shadows`, `rt.gi` and `lighting` in that order; only the first of those four
 finds a write in the map, so reads two, three and four each produce an
 `UNDEFINED → SHADER_READ_ONLY_OPTIMAL` transition on the normal target.
-`gbuffer_albedo` contributes the fourth: RTGI reads it first and takes the
-read-after-write branch, DeferredLighting reads it second and does not.
+`gbuffer_albedo` contributes the fourth: `rt.gi` reads it first and takes the
+read-after-write branch, `lighting` reads it second and does not. The default
+frame, without SSAO, has one normal read fewer and emits three.
 
 Both sides of all four name the same layout, so nothing needs to move — which is
 why the pipeline renders — but the code depends on that rather than stating it.
