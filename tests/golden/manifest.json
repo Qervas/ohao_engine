@@ -67,7 +67,7 @@
       "golden": "tests/golden/cornell_box_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "Deferred hybrid (G-buffer + RT shadows/GI where supported). Captured on master before sub-project 2a so the ECS/RenderScene migration is checked against the old renderer's own output. Exact since sub-project 4 step 1 (2026-10-23): deferred rendering is bit-identical run to run, ten separate-process renders gave one pixel hash, and this golden has measured max_abs 0 in every session since 2026-10-09. Any difference is a change to look at, not noise."
+      "_note": "Deferred hybrid (G-buffer + RT shadows/GI where supported). Captured on master before sub-project 2a so the ECS/RenderScene migration is checked against the old renderer's own output. Exact since sub-project 4 step 1 (2026-10-23): deferred rendering is bit-identical run to run, ten separate-process renders gave one pixel hash, and this golden has measured max_abs 0 in every session since 2026-10-09. Any difference is a change to look at, not noise. Re-captured 2026-10-24 (sub-project 2b step 2): the example now writes the last of its 10 frames, not frame 7 from the deleted headless readback ring; frame 10 vs 7 is max_abs 3 on 36.8% of pixels, RT GI's history three frames further on, and equals `ohao run --frames 10` bit for bit."
     },
     {
       "name": "damaged_helmet_deferred",
@@ -75,7 +75,7 @@
       "golden": "tests/golden/damaged_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "Deferred hybrid on the helmet with TAA, SSAO and bloom; same purpose as cornell_box_deferred. Exact since sub-project 4 step 1 (2026-10-23). It used to move run to run (max_abs 1-5, ~2.6% of pixels) because bloom's mip chain read each mip before the previous render pass's writes were visible, and TAA's first frame read an unset previous view-projection; both are fixed, ten separate-process renders gave one pixel hash, and the golden was regenerated then (the old one differed by max_abs 1 on 2.9% of pixels, scattered: one sample of the race)."
+      "_note": "Deferred hybrid on the helmet with TAA, SSAO and bloom; same purpose as cornell_box_deferred. Exact since sub-project 4 step 1 (2026-10-23). It used to move run to run (max_abs 1-5, ~2.6% of pixels) because bloom's mip chain read each mip before the previous render pass's writes were visible, and TAA's first frame read an unset previous view-projection; both are fixed, ten separate-process renders gave one pixel hash, and the golden was regenerated then (the old one differed by max_abs 1 on 2.9% of pixels, scattered: one sample of the race). Re-captured 2026-10-24 (sub-project 2b step 2): model_viewer now writes the last of its 30 frames, not frame 27 from the deleted headless readback ring; frame 30 vs 27 is max_abs 9 on 39.4% of pixels, scattered few-LSB noise of the RT GI and TAA histories converging, and equals `ohao run --frames 30` bit for bit."
     },
     {
       "name": "cornell_box_rt_realtime",
@@ -103,19 +103,19 @@
     },
     {
       "name": "cli_cornell_box_deferred",
-      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred --frames 7",
+      "command": "./build/ohao run assets/scenes/cornell_box.scene.json --render {out} --mode deferred --frames 10",
       "golden": "tests/golden/cornell_box_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. No post effects; 7 frames because the example renders 10 and its readback lags the last frame by MAX_FRAMES_IN_FLIGHT (3), so its PNG is frame 7, while a capture keeps the last frame it renders (sub-project 4 step 9). The RT GI history makes frame 7 differ from frame 1 or 10. Exact, as cornell_box_deferred: the example and the CLI give the same pixels."
+      "_note": "As cli_cornell_box, against cornell_box_deferred's golden. No post effects; 10 frames, as the example renders, both keeping the last frame they render (readback on request, sub-project 2b step 2; until then the example's PNG lagged by MAX_FRAMES_IN_FLIGHT and was frame 7). The RT GI history makes frame 10 differ from frame 1. Exact, as cornell_box_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_damaged_helmet_deferred",
-      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 27 --post taa,ssao,bloom --exposure 1",
+      "command": "./build/ohao run assets/scenes/damaged_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
       "golden": "tests/golden/damaged_helmet_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6) and, its readback lagging by MAX_FRAMES_IN_FLIGHT (3), writes frame 27; a capture keeps the last frame it renders, hence --frames 27. The scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
+      "_note": "As cli_cornell_box, against damaged_helmet_deferred's golden. model_viewer renders 30 deferred frames with TAA, SSAO and bloom on at exposure 1 (the renderer's own default is 0.6) and writes the last one, as a capture does, hence --frames 30 (until sub-project 2b step 2 the example's readback lagged by MAX_FRAMES_IN_FLIGHT and wrote frame 27). The scene file holds no render settings, so the command line states them. Exact, as damaged_helmet_deferred: the example and the CLI give the same pixels."
     },
     {
       "name": "cli_helmet_game_deferred",
