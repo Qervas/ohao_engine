@@ -60,6 +60,67 @@ std::vector<reflect::Diagnostic> checkRegion(const api::RenderRequest& r, uint32
     return errors;
 }
 
+namespace {
+
+// The inline image of a preview already at its size: PNG or JPEG q85, into out.
+void encodeInline(const Rgba8Image& image, const api::RenderRequest& r, api::RenderOutcome& out) {
+    const bool png = r.format == "png";
+    out.image = png ? encodePng(image) : encodeJpeg(image, 85);
+    out.imageMime = png ? "image/png" : "image/jpeg";
+    out.imageWidth = image.width;
+    out.imageHeight = image.height;
+    if (out.image.empty()) out.errors.push_back(error("E_RENDER", "the preview could not be encoded"));
+}
+
+} // namespace
+
+bool requestCaptureReadback(VulkanRenderer& renderer, const api::RenderRequest& r, bool needPixels) {
+    if (!r.inlineImage || !r.path.empty() || needPixels || !renderer.previewOnGpu()) {
+        renderer.requestReadback();
+        return false;
+    }
+    VulkanRenderer::PreviewRequest p;
+    p.rect = r.region ? std::array<uint32_t, 4>{static_cast<uint32_t>((*r.region)[0]), static_cast<uint32_t>((*r.region)[1]),
+                                                static_cast<uint32_t>((*r.region)[2]), static_cast<uint32_t>((*r.region)[3])}
+                      : std::array<uint32_t, 4>{0, 0, renderer.getWidth(), renderer.getHeight()};
+    p.maxSide = static_cast<uint32_t>(std::max(1, r.maxSize));
+    renderer.requestPreviewReadback(p);
+    return true;
+}
+
+void readCaptureOutputs(VulkanRenderer& renderer, const api::RenderRequest& r, bool previewOnly,
+                        uint64_t framesBefore, api::RenderOutcome& out, std::vector<uint8_t>* keepPixels) {
+    // The frames queued ahead finish first, by queue order: their time is not this readback's.
+    const auto queued = Clock::now();
+    renderer.waitForSubmitted(framesBefore);
+    const Clock::time_point submitted = Clock::now();
+    OHAO_LOG(Debug, render, "capture: frames queued ahead finished in {:.2f} ms", msSince(queued));
+    if (previewOnly) {
+        const VulkanRenderer::Preview preview = renderer.readbackPreview();
+        out.readbackMs = msSince(submitted);
+        if (preview.pixels.empty()) {
+            out.errors.push_back(error("E_RENDER", "the renderer produced no image"));
+            return;
+        }
+        const auto start = Clock::now();
+        const Rgba8Image image{preview.width, preview.height,
+                               std::vector<uint8_t>(preview.pixels.begin(), preview.pixels.end())};
+        encodeInline(image, r, out);
+        OHAO_LOG(Debug, render, "capture outputs: GPU preview {}x{}, {} {:.2f} ms", preview.width, preview.height,
+                 r.format == "png" ? "png" : "jpeg", msSince(start));
+        out.encodeMs = msSince(start);
+        return;
+    }
+    const std::span<const uint8_t> pixels = renderer.readback();   // a CPU denoiser runs in here
+    out.readbackMs = msSince(submitted);
+    if (pixels.size() != static_cast<std::size_t>(out.width) * out.height * 4) {
+        out.errors.push_back(error("E_RENDER", "the renderer produced no image"));
+        return;
+    }
+    if (keepPixels) keepPixels->assign(pixels.begin(), pixels.end());
+    writeCaptureOutputs(pixels, out.width, out.height, r, out);
+}
+
 void writeCaptureOutputs(std::span<const uint8_t> pixels, uint32_t width, uint32_t height,
                          const api::RenderRequest& r, api::RenderOutcome& out) {
     const auto start = Clock::now();
@@ -83,17 +144,10 @@ void writeCaptureOutputs(std::span<const uint8_t> pixels, uint32_t width, uint32
         if (!r.region) image = Rgba8Image{w, h, std::vector<uint8_t>(kept.begin(), kept.end())};
         image = fitWithin(std::move(image), static_cast<uint32_t>(std::max(1, r.maxSize)));
         const double scaleMs = msSince(start) - cropMs - fileMs;
-        const bool png = r.format == "png";
-        out.image = png ? encodePng(image) : encodeJpeg(image, 85);
+        encodeInline(image, r, out);
         OHAO_LOG(Debug, render, "capture outputs: crop {:.2f} ms, scale {:.2f} ms, {} {:.2f} ms", cropMs, scaleMs,
-                 png ? "png" : "jpeg", msSince(start) - cropMs - fileMs - scaleMs);
-        out.imageMime = png ? "image/png" : "image/jpeg";
-        out.imageWidth = image.width;
-        out.imageHeight = image.height;
-        if (out.image.empty()) {
-            out.errors.push_back(error("E_RENDER", "the preview could not be encoded"));
-            return;
-        }
+                 r.format == "png" ? "png" : "jpeg", msSince(start) - cropMs - fileMs - scaleMs);
+        if (!out.errors.empty()) return;
     }
     out.encodeMs = msSince(start);
 }
@@ -135,7 +189,8 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     const double resetMs = msSince(start) - setupMs;
 
     const int frames = captureFrames(r);
-    Clock::time_point submitted = Clock::now();
+    bool previewOnly = false;
+    uint64_t framesBefore = 0;
     for (int i = 0; i < frames; ++i) {
         world.sync();   // derived state only: rendering never steps the simulation
         if (i == 0) {
@@ -148,23 +203,19 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
             }
             if (!out.errors.empty()) return out;
         }
-        if (i == frames - 1) renderer.requestReadback();
+        if (i == frames - 1) {
+            framesBefore = renderer.framesSubmitted();
+            previewOnly = requestCaptureReadback(renderer, r, settings.keepPixels != nullptr);
+        }
         renderer.render();
-        submitted = Clock::now();
     }
-    // The last frame, exactly (a CPU denoiser runs inside readback()).
-    const std::span<const uint8_t> pixels = renderer.readback();
-    out.readbackMs = msSince(submitted);
-    if (pixels.size() != static_cast<std::size_t>(out.width) * out.height * 4) {
-        out.errors.push_back(error("E_RENDER", "the renderer produced no image"));
-        return out;
-    }
-    if (settings.keepPixels) settings.keepPixels->assign(pixels.begin(), pixels.end());
-    writeCaptureOutputs(pixels, out.width, out.height, r, out);
+    // The last frame, exactly.
+    readCaptureOutputs(renderer, r, previewOnly, framesBefore, out, settings.keepPixels);
     if (!out.errors.empty()) return out;
     out.frames = frames;
     out.ms = msSince(start);
-    OHAO_LOG(Debug, render, "capture: setup {:.2f} ms, reset {:.2f} ms, {} frames submitted {:.2f} ms, readback {:.2f} ms, "
+    OHAO_LOG(Debug, render, "capture: setup {:.2f} ms, reset {:.2f} ms, {} frames submitted and the frames ahead of the last "
+                            "finished {:.2f} ms, readback {:.2f} ms, "
                             "encode {:.2f} ms; GPU frame (timestamps, an earlier frame) {:.2f} ms",
              setupMs, resetMs, frames, out.ms - setupMs - resetMs - out.readbackMs - out.encodeMs, out.readbackMs,
              out.encodeMs, renderer.gpuFrameMs());

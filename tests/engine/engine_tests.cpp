@@ -7,8 +7,10 @@
  *   3. Assets, meta/traits, headless deferred/path tracer, RenderScene
  */
 
+#include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -45,6 +47,7 @@
 #include "scene/asset/model.hpp"
 #include "scene/asset/model_loader.hpp"
 #include "scene/asset/primitive_mesh_generator.hpp"
+#include "runtime/image.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
 
@@ -2373,6 +2376,204 @@ static void runSSAOTests() {
     sp2b_s9_sss_runs_only_on_flagged_tiles();
 }
 
+// =============================================================================
+// SECTION — THE CAPTURE PATH (sub-project 2b, step 10)
+// =============================================================================
+
+// The spin scene with TAA, 6 frames from a reset, the last read back; `warmup` frames
+// before the reset move the frame-in-flight slot the capture starts in.
+static std::vector<uint8_t> taaCapture(int warmup) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return {};
+    std::vector<uint8_t> out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        r.getDeferredRenderer()->getPostProcessing()->setTAAEnabled(true);
+        r.getCamera().setPosition({1.5f, 1.0f, 3.0f});   // a different picture in the history the reset drops
+        for (int k = 0; k < warmup; ++k) {
+            world.sync();
+            r.render();
+        }
+        r.getCamera().setPosition({0.0f, 0.0f, 4.0f});   // buildSpinScene's view
+        r.resetAccumulation();
+        for (int f = 0; f < 6; ++f) {
+            world.sync();
+            if (f == 5) r.requestReadback();
+            r.render();
+        }
+        const auto px = r.readback();
+        out.assign(px.begin(), px.end());
+    }
+    return out;
+}
+
+// The reset no longer restarts the frame slots, so nothing a capture renders may depend on
+// the slot it starts in: TAA's jitter now walks its Halton samples by the frame index since
+// the reset, and its history clear waits on earlier frames by queue order.
+static void sp2b_s10_a_capture_after_a_reset_is_the_same_from_any_frame_slot() {
+    TEST_BEGIN("sp2b_s10: a TAA capture after a reset is exact whatever frame slot it starts in");
+    const std::vector<uint8_t> fresh = taaCapture(0);
+    if (fresh.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    for (const int warmup : {1, 2, 7}) {
+        const int diff = maxAbsDiff(fresh, taaCapture(warmup));
+        std::cout << "(warm-up " << warmup << ": max_abs " << diff << ") ";
+        EXPECT_EQ(diff, 0, "the capture after a reset equals a fresh renderer's");
+    }
+    TEST_PASS();
+}
+
+// The reset waits for nothing: frames submitted before it are still running when it returns,
+// and it returns in well under the spec's 0.1 ms budget's order of magnitude.
+static void sp2b_s10_the_reset_does_not_wait_for_the_gpu() {
+    TEST_BEGIN("sp2b_s10: resetAccumulation leaves the frames in flight running (no device idle)");
+    ohao::VulkanRenderer r(1920, 1080);
+    if (!r.initialize()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        r.setRenderQuality(ohao::RenderQuality::Reference);   // the heaviest frame: full-resolution RT GI
+        auto* pp = r.getDeferredRenderer()->getPostProcessing();
+        pp->setTAAEnabled(true);
+        pp->setSSAOEnabled(true);
+        world.sync();
+        r.render();   // builds the acceleration structures
+        double worstMs = 0.0;
+        uint32_t inFlight = 0;
+        for (int round = 0; round < 5; ++round) {
+            for (int f = 0; f < 3; ++f) {
+                world.sync();
+                r.render();
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            r.resetAccumulation();
+            worstMs = std::max(worstMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            inFlight = std::max(inFlight, r.framesInFlight());
+        }
+        std::cout << "(frames in flight after the reset, most: " << inFlight << "; slowest reset " << worstMs << " ms) ";
+        EXPECT(inFlight > 0, "a reset right after three 1080p reference frames finds some still running");
+        EXPECT(worstMs < 0.1, "the reset takes under 0.1 ms (the spec's budget)");
+    }
+    TEST_PASS();
+}
+
+struct PreviewRun {
+    std::vector<uint8_t> full;      // the frame, read back in full
+    std::vector<uint8_t> preview;   // the same frame, the GPU preview only
+    uint32_t width{0}, height{0};
+    bool fullEmpty{false};          // readback() after the preview request
+    bool previewPass{false}, copyPass{false};
+    double previewMs{0.0};          // capture.preview's GPU time
+    uint64_t copies{0};
+};
+
+// One spin-scene frame read back in full, then (after a reset, so it is the same frame) as
+// a GPU preview of `rect` within `maxSide`.
+static PreviewRun previewRun(uint32_t width, uint32_t height, std::array<uint32_t, 4> rect, uint32_t maxSide) {
+    ohao::VulkanRenderer r(width, height);
+    if (!r.initialize()) return {};
+    PreviewRun out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.full.assign(px.begin(), px.end());
+        r.resetAccumulation();
+        world.sync();
+        r.requestPreviewReadback({rect, maxSide});
+        r.render();
+        out.fullEmpty = r.readback().empty();
+        const ohao::VulkanRenderer::Preview p = r.readbackPreview();
+        out.preview.assign(p.pixels.begin(), p.pixels.end());
+        out.width = p.width;
+        out.height = p.height;
+        out.copies = r.requestedReadbackCount();
+        for (const auto& f : r.frameTimings(1)) {
+            out.previewPass = hasPass(f, "capture.preview");
+            out.copyPass = hasPass(f, "readback");
+            for (uint32_t i = 0; i < f.count; ++i)
+                if (f.pass[i] == ohao::render::passIndex("capture.preview")) out.previewMs = f.ms[i];
+        }
+    }
+    return out;
+}
+
+// The GPU preview is runtime::fitWithin's box filter: the same size, bytes within 1 (float
+// rounding), exact when nothing is scaled.
+static void sp2b_s10_gpu_preview_matches_the_cpu_downscale() {
+    TEST_BEGIN("sp2b_s10: capture.preview equals the CPU box filter within 1 (same size; exact unscaled)");
+    struct Case {
+        uint32_t w, h;
+        std::array<uint32_t, 4> rect;
+        uint32_t maxSide, wantW, wantH;
+        int tolerance;
+    };
+    const Case cases[] = {{1280, 720, {0, 0, 1280, 720}, 768, 768, 432, 1},
+                          {1280, 720, {100, 60, 500, 300}, 200, 200, 120, 1},
+                          {1920, 1080, {0, 0, 1920, 1080}, 768, 768, 432, 1},
+                          {160, 120, {0, 0, 160, 120}, 768, 160, 120, 0}};
+    for (const Case& c : cases) {
+        const PreviewRun run = previewRun(c.w, c.h, c.rect, c.maxSide);
+        if (run.full.empty()) {
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        const std::array<int32_t, 4> region{int32_t(c.rect[0]), int32_t(c.rect[1]), int32_t(c.rect[2]), int32_t(c.rect[3])};
+        const ohao::runtime::Rgba8Image cpu =
+            ohao::runtime::fitWithin(ohao::runtime::crop(run.full, c.w, c.h, region), c.maxSide);
+        EXPECT(run.width == c.wantW && run.height == c.wantH, "the preview has the long side within maxSide, aspect kept");
+        EXPECT(cpu.width == run.width && cpu.height == run.height, "the same size as the CPU preview");
+        int diff = maxAbsDiff(cpu.pixels, run.preview);
+        std::size_t differing = 0;
+        for (std::size_t i = 0; i < cpu.pixels.size() && i < run.preview.size(); ++i) differing += cpu.pixels[i] != run.preview[i];
+        std::cout << "(" << c.w << "x" << c.h << " -> " << run.width << "x" << run.height << ": max_abs " << diff << ", "
+                  << differing << " bytes differ, capture.preview " << run.previewMs << " ms) ";
+        EXPECT(diff <= c.tolerance, "the preview's bytes are the CPU filter's within the tolerance");
+    }
+    TEST_PASS();
+}
+
+// A preview request copies the preview and nothing else: no full readback, no `readback`
+// pass, one requested copy, the capture.preview pass timed.
+static void sp2b_s10_a_preview_request_reads_back_only_the_preview() {
+    TEST_BEGIN("sp2b_s10: a preview request reads back only the preview (no full copy)");
+    const PreviewRun run = previewRun(1280, 720, {0, 0, 1280, 720}, 768);
+    if (run.full.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    EXPECT(run.fullEmpty, "readback() returns nothing for a preview frame");
+    EXPECT_EQ(run.preview.size(), std::size_t{768} * 432 * 4, "readbackPreview() is 768x432 RGBA8: 1.3 MB, not 3.7");
+    EXPECT(run.previewPass, "the frame ran capture.preview");
+    EXPECT(!run.copyPass, "and no readback copy");
+    EXPECT_EQ(run.copies, uint64_t{2}, "two requests (full, preview): two copies");
+    TEST_PASS();
+}
+
+static void runCapturePathTests() {
+    std::cout << "\n=== Capture path ===" << std::endl;
+    sp2b_s10_a_capture_after_a_reset_is_the_same_from_any_frame_slot();
+    sp2b_s10_the_reset_does_not_wait_for_the_gpu();
+    sp2b_s10_gpu_preview_matches_the_cpu_downscale();
+    sp2b_s10_a_preview_request_reads_back_only_the_preview();
+}
+
 static void runRTGITests() {
     std::cout << "\n=== RT GI ===" << std::endl;
     sp2b_t10_a_reference_mean_restarts_after_realtime_frames();
@@ -2883,6 +3084,7 @@ int main() {
     runRTShadowTests();
     runRTGITests();
     runSSAOTests();
+    runCapturePathTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

@@ -114,6 +114,11 @@
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
        {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the upsample's depth guide)"}
+     ]},
+    {"name": "PreviewPush", "doc": "capture.preview (capture/preview.slang) push constants",
+     "fields": [
+       {"name": "src", "type": "uint4", "doc": "the source rectangle of the final image: x, y its origin, z, w its size"},
+       {"name": "dst", "type": "uint4", "doc": "x, y the preview's size (each at most the source's)"}
      ]}
   ]
 }

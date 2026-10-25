@@ -204,8 +204,10 @@ void DeferredRenderer::cleanup() {
 }
 
 void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
-    // Update camera matrices for TAA jitter
-    glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(frameIndex) : glm::vec2(0.0f);
+    // TAA's jitter: the Halton sample of this frame's index since the last temporal reset (not
+    // the frame-in-flight slot, which cycled 3 of the 16 samples and made a capture depend on
+    // the slot it started in).
+    glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(m_framesSinceReset) : glm::vec2(0.0f);
     glm::mat4 jitteredProj = m_proj;
     jitteredProj[2][0] += jitter.x;
     jitteredProj[2][1] += jitter.y;

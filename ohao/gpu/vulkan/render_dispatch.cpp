@@ -1,7 +1,9 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include "render/deferred/capture_preview_pass.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "render/frame/preview_extent.hpp"
 #include "render/rt/rt_visibility.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
@@ -38,8 +40,46 @@ void VulkanRenderer::finishReadbackRequest(bool copied) noexcept {
     ++m_requestedReadbacks;
 }
 
+uint32_t VulkanRenderer::framesInFlight() {
+    if (!m_initialized) return 0;
+    uint32_t n = 0;
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s)
+        n += vkGetFenceStatus(m_device, m_frameResources.getFrame(s).renderFence) == VK_NOT_READY ? 1u : 0u;
+    return n;
+}
+
+void VulkanRenderer::waitForSubmitted(uint64_t n) {
+    if (n == 0 || !m_initialized) return;
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s)
+        if (m_slotSubmitted[s] == n) m_frameResources.waitForFrame(s);
+}
+
+VulkanRenderer::Preview VulkanRenderer::readbackPreview() {
+    if (!m_readbackReady || m_previewWidth == 0) return {};
+    const FrameResources& f = m_frameResources.getFrame(m_readbackSlot);
+    if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
+    const std::size_t bytes = static_cast<std::size_t>(m_previewWidth) * m_previewHeight * 4;
+    return {{static_cast<const uint8_t*>(f.stagingBufferMapped), bytes}, m_previewWidth, m_previewHeight};
+}
+
+bool VulkanRenderer::recordPreview(VkCommandBuffer cmd, const PreviewRequest& request) {
+    if (!m_previewPass || !m_deferredRenderer || !m_deferredRenderer->finalOutputIsRGBA8()) return false;
+    FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
+    const auto& rect = request.rect;
+    if (frame.stagingBuffer == VK_NULL_HANDLE || rect[2] == 0 || rect[3] == 0 || rect[0] + rect[2] > m_width ||
+        rect[1] + rect[3] > m_height)
+        return false;
+    const auto [w, h] = render::previewExtent(rect[2], rect[3], request.maxSide);
+    m_passTimer.begin(cmd, "capture.preview");
+    m_previewPass->record(cmd, m_currentFrame, m_deferredRenderer->getFinalOutput(), rect, w, h, frame.stagingBuffer);
+    m_passTimer.end(cmd);
+    m_previewWidth = w;
+    m_previewHeight = h;
+    return true;
+}
+
 std::span<const uint8_t> VulkanRenderer::readback() {
-    if (!m_readbackReady) return {};
+    if (!m_readbackReady || m_previewWidth != 0) return {};
     const FrameResources& f = m_frameResources.getFrame(m_readbackSlot);
     if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};
     const std::size_t bytes = static_cast<std::size_t>(m_width) * m_height * 4;
@@ -56,7 +96,9 @@ void VulkanRenderer::renderDeferred() {
     log::setFrame(++m_framesStarted);
     // A request belongs to this frame; a frame that is not rendered leaves no readback.
     const bool wantReadback = std::exchange(m_readbackRequested, false);
+    const std::optional<PreviewRequest> preview = std::exchange(m_previewRequest, std::nullopt);
     m_readbackReady = false;
+    m_previewWidth = m_previewHeight = 0;
 
     // Rebuild the swapchain BEFORE taking a frame slot. Recreating resizes the
     // renderer, which idles the device and resets m_currentFrame; doing it after
@@ -186,14 +228,19 @@ void VulkanRenderer::renderDeferred() {
     // Execute deferred rendering pipeline (it times its own passes)
     m_deferredRenderer->render(cmd, m_currentFrame);
 
+    // A preview request: only the preview reaches the staging buffer (capture.preview).
+    const bool previewed = wantReadback && preview && recordPreview(cmd, *preview);
+    const bool copyFull = wantReadback && !previewed;
+
     // A window frame presents (and copies too when asked); a headless frame copies only
     // when asked, and otherwise ends with its final image.
-    bool copied = false;
+    bool copied = previewed;
     if (m_swapchain) {
         m_passTimer.begin(cmd, "present");
-        copied = blitDeferredOutputToSwapchain(cmd, imageIndex, wantReadback ? frame.stagingBuffer : VK_NULL_HANDLE);
+        copied = blitDeferredOutputToSwapchain(cmd, imageIndex, copyFull ? frame.stagingBuffer : VK_NULL_HANDLE) ||
+                 previewed;
         m_passTimer.end(cmd);
-    } else if (wantReadback) {
+    } else if (copyFull) {
         m_passTimer.begin(cmd, "readback");
         copied = copyDeferredOutputToStaging(cmd);
         m_passTimer.end(cmd);
@@ -217,6 +264,7 @@ void VulkanRenderer::renderDeferred() {
         submitInfo.pSignalSemaphores = &renderFinished;
     }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     if (m_swapchain) {
@@ -299,8 +347,11 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     auto* rtRenderer = getRTRenderer(m_renderMode);
     if (!rtRenderer || !isRTSupported()) return;
     log::setFrame(++m_framesStarted);
+    // A preview request reads back in full here: the path tracer has no capture.preview.
     const bool wantReadback = std::exchange(m_readbackRequested, false);
+    m_previewRequest.reset();
     m_readbackReady = false;
+    m_previewWidth = m_previewHeight = 0;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
@@ -377,6 +428,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+    m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);

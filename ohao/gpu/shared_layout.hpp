@@ -166,4 +166,13 @@ static_assert(offsetof(GIDenoisePush, params) == 16);
 static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
 static_assert(sizeof(GIDenoisePush) == 48);
 
+// capture.preview (capture/preview.slang) push constants
+struct alignas(16) PreviewPush {
+    alignas(16) std::array<uint32_t, 4> src{};
+    alignas(16) std::array<uint32_t, 4> dst{};
+};
+static_assert(offsetof(PreviewPush, src) == 0);
+static_assert(offsetof(PreviewPush, dst) == 16);
+static_assert(sizeof(PreviewPush) == 32);
+
 } // namespace ohao::gpu::shared

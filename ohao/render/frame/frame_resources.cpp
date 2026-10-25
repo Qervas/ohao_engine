@@ -178,7 +178,9 @@ bool FrameResourceManager::createStagingBuffers(size_t size) {
                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     constexpr VkMemoryPropertyFlags kCoherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     for (auto& frame : m_frames) {
-        if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, kCached, frame.stagingBuffer,
+        // Storage too: capture.preview writes a preview straight into it.
+        if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, kCached,
+                          frame.stagingBuffer,
                           frame.stagingBufferMemory, kCoherent))
         {
             return false;

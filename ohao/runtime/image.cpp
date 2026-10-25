@@ -7,6 +7,7 @@
 #include "runtime/image.hpp"
 
 #include "core/log.hpp"
+#include "render/frame/preview_extent.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -338,11 +339,8 @@ Rgba8Image crop(std::span<const uint8_t> frame, uint32_t width, uint32_t height,
 }
 
 Rgba8Image fitWithin(Rgba8Image image, uint32_t maxSide) {
-    const uint32_t longSide = std::max(image.width, image.height);
-    if (maxSide == 0 || longSide <= maxSide) return image;
-    const double s = static_cast<double>(maxSide) / longSide;
-    const uint32_t w = std::max<uint32_t>(1, static_cast<uint32_t>(std::lround(image.width * s)));
-    const uint32_t h = std::max<uint32_t>(1, static_cast<uint32_t>(std::lround(image.height * s)));
+    const auto [w, h] = render::previewExtent(image.width, image.height, maxSide);
+    if (w == image.width && h == image.height) return image;
     const Taps tx = areaTaps(image.width, w), ty = areaTaps(image.height, h);
 
     // Vertical pass first: each output row is a weighted sum of whole source rows, one

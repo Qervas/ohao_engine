@@ -18,7 +18,7 @@ endif()
 
 if(MSVC)
     target_link_libraries(engine_tests PRIVATE
-        ohao_ecs ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
+        ohao_runtime ohao_ecs ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
 else()
     target_link_libraries(engine_tests PRIVATE
         ohao_ecs ohao_scene ohao_physics ohao_core

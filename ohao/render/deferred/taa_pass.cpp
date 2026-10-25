@@ -118,7 +118,7 @@ void TAAPass::clearHistory(VkCommandBuffer cmd) {
     std::array<VkImageMemoryBarrier, HISTORY_COUNT> barriers{};
     for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
         barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[i].srcAccessMask = 0;
+        barriers[i].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         barriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -127,8 +127,10 @@ void TAAPass::clearHistory(VkCommandBuffer cmd) {
         barriers[i].image = m_historyImages[i];
         barriers[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     }
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                         0, nullptr, 0, nullptr, HISTORY_COUNT, barriers.data());
+    // After a reset, frames still in flight may write (TAA) or sample (TAA, tonemap) these
+    // images: the clear waits for them by queue order, not for the device.
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, HISTORY_COUNT, barriers.data());
 
     const VkClearColorValue zero{};
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};

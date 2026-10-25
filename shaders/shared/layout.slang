@@ -125,3 +125,10 @@ struct GIDenoisePush
     uint4 params;   // x history frames (0: none), y the a-trous step in pixels
     float4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
 };
+
+// capture.preview (capture/preview.slang) push constants
+struct PreviewPush
+{
+    uint4 src;   // the source rectangle of the final image: x, y its origin, z, w its size
+    uint4 dst;   // x, y the preview's size (each at most the source's)
+};

@@ -37,6 +37,7 @@ namespace ohao {
 namespace render { class RenderScene; }
 
 class Camera;
+class CapturePreviewPass;
 class DeferredRenderer;
 
 // Render mode selection
@@ -117,10 +118,43 @@ public:
     // frame was not rendered (minimized, an out-of-date swapchain) or produced no RGBA8
     // image. A path-traced frame with a CPU-side denoiser (OIDN, NRD) is denoised here,
     // from that frame's images.
-    void requestReadback() noexcept { m_readbackRequested = true; }
+    void requestReadback() noexcept {
+        m_readbackRequested = true;
+        m_previewRequest.reset();
+    }
     [[nodiscard]] std::span<const uint8_t> readback();
+    // An inline capture's form of the request (capture.preview): the next frame copies
+    // nothing but a box-filtered preview of `rect` ([x, y, w, h], inside the frame) whose long
+    // side is at most maxSide (render::previewExtent), made on the GPU and written straight
+    // into its staging buffer. readbackPreview() then returns it (readback() returns nothing).
+    // Deferred frames only (previewOnGpu()); in another mode the frame reads back in full.
+    struct PreviewRequest {
+        std::array<uint32_t, 4> rect{};
+        uint32_t maxSide{0};
+    };
+    struct Preview {
+        std::span<const uint8_t> pixels;   // width * height * 4, RGBA8, rows top down
+        uint32_t width{0};
+        uint32_t height{0};
+    };
+    [[nodiscard]] bool previewOnGpu() const noexcept {
+        return m_previewPass != nullptr && m_renderMode == RenderMode::Deferred;
+    }
+    void requestPreviewReadback(const PreviewRequest& request) noexcept {
+        m_readbackRequested = true;
+        m_previewRequest = request;
+    }
+    [[nodiscard]] Preview readbackPreview();
     // Frames that copied into their staging buffer: every one of them was requested.
     [[nodiscard]] uint64_t requestedReadbackCount() const noexcept { return m_requestedReadbacks; }
+    // Submitted frames whose fence has not signalled yet; asks the fences, never waits.
+    [[nodiscard]] uint32_t framesInFlight();
+    // Frames that reached the queue so far; waitForSubmitted(n) returns once the n-th has
+    // finished on the GPU (at once for 0, or for a frame whose slot was reused since). A
+    // capture waits so for the frames queued before the one it reads, then times that
+    // frame's readback alone.
+    [[nodiscard]] uint64_t framesSubmitted() const noexcept { return m_framesSubmitted; }
+    void waitForSubmitted(uint64_t n);
     void shutdown();
 
     // Rendering
@@ -369,6 +403,8 @@ private:
     render::GpuPassTimer m_passTimer;
     uint32_t m_currentFrame{0};
     uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts
+    uint64_t m_framesSubmitted{0};
+    std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_slotSubmitted{};   // the submitted frame each slot holds
 
     // Light uniform buffers, one per frame slot (host-visible, persistently mapped)
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_lightBuffers{};
@@ -431,6 +467,14 @@ private:
     bool m_readbackReady{false};     // m_readbackSlot's staging buffer holds a requested frame
     uint32_t m_readbackSlot{0};
     uint64_t m_requestedReadbacks{0};
+    // A preview request (requestPreviewReadback) and, for the ready readback, its preview's
+    // size (0 x 0: the staging buffer holds the full frame).
+    std::optional<PreviewRequest> m_previewRequest;
+    uint32_t m_previewWidth{0};
+    uint32_t m_previewHeight{0};
+    std::unique_ptr<CapturePreviewPass> m_previewPass;   // null when its pipeline failed: previews on the CPU
+    // Records capture.preview for the frame on m_currentFrame; false when the frame has no RGBA8 image.
+    bool recordPreview(VkCommandBuffer cmd, const PreviewRequest& request);
     // Marks the frame being recorded on m_currentFrame as the requested one when it wrote
     // its staging buffer (`copied`), and clears the request.
     void finishReadbackRequest(bool copied) noexcept;

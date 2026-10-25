@@ -165,24 +165,33 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         m_world->sync();
         for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
             OHAO_LOG(Warn, runtime, "live host: {}", w);
-        ++m_readbackRequests;
-        m_renderer->requestReadback();
-        m_renderer->render();
-        ++m_rendered;
-        const auto submitted = Clock::now();
-        const auto pixels = m_renderer->readback();
-        out.readbackMs = std::chrono::duration<double, std::milli>(Clock::now() - submitted).count();
-        out.width = m_renderer->getWidth();
-        out.height = m_renderer->getHeight();
-        if (pixels.size() != static_cast<std::size_t>(out.width) * out.height * 4) {
-            out.errors.push_back(error("E_STATE", "the window did not present a frame (minimized or resizing)"));
-            return out;
-        }
+        // The renderer's size before the frame: a pending resize applies in render(), and a
+        // region checked against the old size could leave the new frame.
+        out.width = ext.width;
+        out.height = ext.height;
         if (auto e = checkRegion(r, out.width, out.height); !e.empty()) {
             out.errors = std::move(e);
             return out;
         }
-        writeCaptureOutputs(pixels, out.width, out.height, r, out);
+        ++m_readbackRequests;
+        const uint64_t framesBefore = m_renderer->framesSubmitted();
+        const bool previewOnly = requestCaptureReadback(*m_renderer, r, false);
+        m_renderer->render();
+        ++m_rendered;
+        if (m_renderer->getWidth() != out.width || m_renderer->getHeight() != out.height) {
+            out.errors.push_back(error("E_STATE", "the window did not present a frame (minimized or resizing)"));
+            return out;
+        }
+        readCaptureOutputs(*m_renderer, r, previewOnly, framesBefore, out);
+        if (!out.errors.empty()) {
+            // No frame reached the staging buffer: the swapchain was out of date or minimized.
+            for (auto& d : out.errors)
+                if (d.code == "E_RENDER") {
+                    d.code = "E_STATE";
+                    d.message = "the window did not present a frame (minimized or resizing)";
+                }
+            return out;
+        }
         out.frames = 1;
         out.deterministic = false;
         out.ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();

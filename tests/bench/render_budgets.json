@@ -1,6 +1,6 @@
 {
   "comment": "Sub-project 2b spec, 'Frame cost: the deferred budget' and 'Performance budgets (summary)' (render_bench; medians of GPU ms, Release, reference machine: RTX 5070 Laptop GPU). Each budget is gated from the 2b build step that delivers it: render_bench --check gates those with gatedFrom <= currentStep and reports the rest as pending. A pass budget measures the sum of its passes' medians ('x.*' is every pass named x.<something>); 'frame' is the frame's rendering on the GPU without the final copy out. Per-pass budgets of a scene may be moved between its passes by the step that measures them (spec rule); a frame budget, a capture budget or a total never rises without Frank's ruling.",
-  "currentStep": 9,
+  "currentStep": 10,
   "maxCalibrationSlowdown": 1.25,
   "maxGpuCalibrationSlowdown": 1.25,
   "maxExternalCorePct": 50,

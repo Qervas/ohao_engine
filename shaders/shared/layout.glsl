@@ -118,4 +118,10 @@ struct GIDenoisePush {
     vec4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
 };
 
+// capture.preview (capture/preview.slang) push constants
+struct PreviewPush {
+    uvec4 src;   // the source rectangle of the final image: x, y its origin, z, w its size
+    uvec4 dst;   // x, y the preview's size (each at most the source's)
+};
+
 #endif

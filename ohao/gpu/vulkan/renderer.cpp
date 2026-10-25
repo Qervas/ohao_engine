@@ -4,6 +4,7 @@
 #include "render/camera/camera.hpp"
 #include "render/rt/denoise/oidn_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include "render/deferred/capture_preview_pass.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
@@ -218,6 +219,7 @@ void VulkanRenderer::shutdown() {
             m_deferredRenderer->cleanup();
             m_deferredRenderer.reset();
         }
+        m_previewPass.reset();
 
         // Cleanup texture manager
         if (m_textureManager) {
@@ -468,15 +470,11 @@ void VulkanRenderer::forEachRTRenderer(const std::function<void(IRTRendererProfi
 
 void VulkanRenderer::resetAccumulation() {
     if (m_renderMode == RenderMode::Deferred) {
-        // The deferred path accumulates too (RT GI and TAA history, a clock, the frame
-        // slot that indexes TAA's jitter). Idle, then start over as a fresh renderer does,
-        // the way resize() restarts the slots.
+        // The deferred path accumulates too (RT shadow, RT GI and TAA history, TAA's jitter
+        // index, a clock). The reset is state for the next frame to record: its passes start
+        // without history and clear what they keep, in its own command buffer, ordered after
+        // the frames in flight by the queue alone. Nothing here waits for the GPU.
         if (!m_deferredRenderer || !m_initialized) return;
-        vkDeviceWaitIdle(m_device);
-        // Every slot's frame has finished: read their timings before the slots restart, or
-        // an older frame would enter the ring after a newer one.
-        m_passTimer.collectAll([](uint32_t) { return true; });
-        m_currentFrame = 0;
         m_deferredRenderer->resetTemporalState();
         return;
     }
@@ -649,6 +647,12 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
         pp->setExposure(0.6f);
         pp->setNoiseSeed(m_renderSeed);
+    }
+    // capture.preview: without it, inline captures read the full frame and preview on the CPU.
+    m_previewPass = std::make_unique<CapturePreviewPass>();
+    if (!m_previewPass->initialize(m_device)) {
+        OHAO_LOG(Warn, gpu, "VulkanRenderer: capture.preview unavailable; previews are made on the CPU");
+        m_previewPass.reset();
     }
     return true;
 }
