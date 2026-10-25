@@ -7,8 +7,18 @@
 const uint kCalibrateGroupSize = 256u;
 // GPU culling (cull/instances.slang): draws a workgroup classifies and scans, one a thread
 const uint kCullGroupSize = 256u;
-// GPU culling: indirect command lists, two (one-sided, double-sided) for each of six phases: the early and late G-buffer passes and four CSM cascades
+// GPU culling: the draw lists (5 uints a command, drawCount commands a list): four for each G-buffer phase (instance one-sided, instance double-sided, meshlet one-sided, meshlet double-sided) and one for each of four CSM cascades
 const uint kCullLists = 12u;
+// the early G-buffer phase's first list (four)
+const uint kCullListEarly = 0u;
+// the late G-buffer phase's first list (four)
+const uint kCullListLate = 4u;
+// CSM cascade c's list is kCullListCascade0 + c
+const uint kCullListCascade0 = 8u;
+// the mesh-shader fallback's per-meshlet lists (VkDrawIndirectCommand each, meshletEntryCount a list): early one-sided, early double-sided, late one-sided, late double-sided; their counts follow the draw lists' (counts[kCullLists + i])
+const uint kCullMeshletLists = 4u;
+// GPU culling's count words: kCullLists then kCullMeshletLists
+const uint kCullCounts = 16u;
 // GPU culling phase: the early pass, the draws visible last frame and in the frustum
 const uint kCullPhaseEarly = 0u;
 // GPU culling phase: the late pass, the draws visible now (frustum and Hi-Z) not drawn early; it records visibility for the next frame
@@ -19,10 +29,26 @@ const uint kCullPhaseShadow = 2u;
 const uint kCullFrustum = 1u;
 // CullPush.config.z bit: test the Hi-Z pyramid (late phase)
 const uint kCullOcclusion = 2u;
-// CullPush.config.z bit: one-sided draws go to the phase's first list, double-sided to its second (else all to the first)
-const uint kCullSplitSided = 4u;
+// CullPush.config.z / MeshletPush.config.y bit: test one-sided draws' meshlets against their normal cones
+const uint kCullCone = 8u;
 // DrawRecord.info.y bit: the material is one-sided (back faces culled)
 const uint kDrawOneSided = 1u;
+// a meshlet's vertices at most (the mesh shader's output vertices)
+const uint kMeshletMaxVertices = 64u;
+// a meshlet's triangles at most (the mesh shader's output primitives)
+const uint kMeshletMaxTriangles = 124u;
+// meshlets a task-shader workgroup tests (one thread each)
+const uint kMeshletTaskGroup = 32u;
+// geometry auto: a draw with fewer triangles stays on the instance path (measured: a few-meshlet draw costs more to launch than its culling saves)
+const uint kMeshletMinTriangles = 4096u;
+// the fallback's per-meshlet draws: firstVertex = the draw's index << this (a meshlet's 372 vertices at most fit below), firstInstance = the meshlet
+const uint kMeshletVertexShift = 9u;
+// CullPush.extra.z: every draw on the instance path
+const uint kGeometryInstances = 0u;
+// CullPush.extra.z: draws of kMeshletMinTriangles or more on the meshlet path
+const uint kGeometryAuto = 1u;
+// CullPush.extra.z: every draw with meshlets on the meshlet path
+const uint kGeometryMeshlets = 2u;
 // the calibration buffer's uint count (1 MiB)
 const uint kCalibrateElements = 262144u;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
@@ -136,19 +162,35 @@ struct GIDenoisePush {
     vec4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
 };
 
+// one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
+struct MeshletGpu {
+    uvec4 range;   // x its first entry in the meshlet-vertex arena, y its first in the meshlet-triangle arena, z its vertex count, w its triangle count
+    vec4 sphere;   // xyz the bounding sphere's centre (mesh space), w its radius
+    vec4 cone;   // xyz the normal cone's unit axis (mesh space), w its cutoff: back-facing from a camera at c when dot(centre - c, axis) >= cutoff * |centre - c| + radius; 1: never
+};
+
 // one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance
 struct DrawRecord {
     uvec4 draw;   // x first index, y index count, z vertex offset (an int's bits), w the instance-table slot
-    uvec4 info;   // x the material slot, y flags (kDrawOneSided)
-    vec4 aabbMin;   // xyz the mesh's local bounding box, minimum
+    uvec4 info;   // x the material slot, y flags (kDrawOneSided), z the submesh's first meshlet, w its meshlet count
+    vec4 aabbMin;   // xyz the mesh's local bounding box, minimum; w the draw's first meshlet entry (a uint's bits: the meshlets of the draws before it)
     vec4 aabbMax;   // xyz the mesh's local bounding box, maximum
 };
 
 // GPU culling (cull/instances.slang) push constants, every entry
 struct CullPush {
     mat4 viewProj;   // the view-projection the draws are rasterized with (jitter included)
-    uvec4 config;   // x draw count, y phase (kCullPhase*), z flags (kCullFrustum, kCullOcclusion, kCullSplitSided), w the phase's list pair (list 2w and 2w+1)
+    uvec4 config;   // x the items culled (draws, or meshlet entries), y phase (kCullPhase*), z flags (kCullFrustum, kCullOcclusion, kCullCone), w the draw count
     uvec4 hiz;   // x, y the frame's size in pixels; z the Hi-Z pyramid's levels; w the scan's block count
+    vec4 camera;   // xyz the camera's world position (the cone test)
+    uvec4 extra;   // x the first list written (its count word), y the lists written (1, 2 or 4), z the geometry mode (kGeometry*)
+};
+
+// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.frag's block first)
+struct MeshletPush {
+    uvec4 config;   // x the drawn list's first command (uints into the culling commands), y flags (kCullFrustum, kCullOcclusion, kCullCone), z the Hi-Z pyramid's levels
+    uvec4 hiz;   // x, y the frame's size in pixels
+    vec4 camera;   // xyz the camera's world position
 };
 
 // the Hi-Z build (cull/hiz.slang) push constants

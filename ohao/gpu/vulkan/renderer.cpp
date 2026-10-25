@@ -634,6 +634,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
         m_deferredRenderer = std::make_unique<DeferredRenderer>();
     }
     m_deferredRenderer->setRayQuerySupported(m_rayQueryEnabled);   // RT shadows' inline ray queries
+    m_deferredRenderer->setMeshShaderSupported(m_meshShaderEnabled);   // the G-buffer's meshlet path
     OHAO_LOG(Debug, gpu, "VulkanRenderer: Calling DeferredRenderer::initialize()...");
     if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
         OHAO_LOG(Error, gpu, "VulkanRenderer: DeferredRenderer::initialize() failed!");

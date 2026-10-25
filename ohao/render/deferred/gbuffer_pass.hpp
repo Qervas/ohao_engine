@@ -14,14 +14,17 @@ class GpuCulling;
 
 // G-Buffer generation pass
 // Outputs: Position, Normal, Albedo, Velocity, Depth
-// GPU-driven (sub-project 2b spec, "GPU-driven geometry"), in five timed parts: cull.instances
-// (last frame's visible draws in the frustum), gbuffer.early (draws them, clearing the
-// targets), hiz.build (the depth pyramid), cull.late (every draw against the frustum and the
-// pyramid), gbuffer.late (draws the newly visible, loading the targets). Draws are
-// vkCmdDrawIndexedIndirectCount over GpuCulling's lists, one-sided materials with back faces
-// culled. firstInstance indexes RenderScene's draw table; set 0 = bindless textures, set 1
-// "scene" = {instances, materials, material refs, camera UBO, SSS tiles, draw table}, one set
-// per frame slot.
+// GPU-driven (sub-project 2b spec, "GPU-driven geometry", "Meshlets and mesh shaders"), in
+// five timed parts: cull.instances (last frame's visible draws in the frustum), gbuffer.early
+// (draws them, clearing the targets), hiz.build (the depth pyramid), cull.late (every draw
+// against the frustum and the pyramid), gbuffer.late (draws the newly visible, loading the
+// targets). Each part draws GpuCulling's four lists of its phase: instance draws with
+// vkCmdDrawIndexedIndirectCount (core/gbuffer.vert; firstInstance indexes RenderScene's draw
+// table), then meshlet draws with task and mesh shaders (cull/meshlets.slang) or, without
+// them, the fallback's per-meshlet draws through its pull vertex shader; one-sided materials
+// with back faces culled. Set 0 = bindless textures, set 1 "scene" = {instances, materials,
+// material refs, camera UBO, SSS tiles, draw table, vertex arena, meshlets, meshlet vertices,
+// meshlet triangles, culling commands, Hi-Z pyramid}, one set per frame slot.
 class GBufferPass : public RenderPassBase {
 public:
     GBufferPass() = default;
@@ -36,6 +39,8 @@ public:
     // Setup for rendering
     void setRenderScene(const render::RenderScene* scene) { m_renderScene = scene; }
     void setCulling(GpuCulling* culling) { m_culling = culling; }
+    // VK_EXT_mesh_shader is enabled (before initialize): the mesh-shader pipelines are built.
+    void setMeshShaderSupported(bool on) { m_meshShaderSupported = on; }
     // Times the five parts (the render graph does not time this pass).
     void setPassTimer(render::GpuPassTimer* timer) { m_passTimer = timer; }
     void setViewProjection(const glm::mat4& view, const glm::mat4& proj,
@@ -88,14 +93,20 @@ private:
     [[nodiscard]] bool createGBuffer();
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createSceneDescriptors();
+    // Set 1's bindings: 0-5 as before the meshlets, then 6 the vertex arena, 7-9 the meshlet
+    // arenas, 10 GPU culling's commands, 11 the Hi-Z pyramid (sampled, GENERAL).
+    static constexpr uint32_t kSceneBindings = 12;
+    static constexpr uint32_t kSceneHiZ = 11;
+    [[nodiscard]] static VkDescriptorType sceneBindingType(uint32_t binding);
     void destroySceneDescriptors();
     void destroyGBuffer();
     // Rewrites the frame slot's scene set and camera UBO. False when the scene has
     // no buffers to bind.
     [[nodiscard]] bool updateSceneSet(uint32_t frameIndex);
-    // One of the two render passes (`late`: loads what the early one drew), drawing list pair
-    // `pair` when `draw`.
-    void drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, uint32_t pair, bool draw);
+    [[nodiscard]] bool createMeshletPipelines(VkGraphicsPipelineCreateInfo base, VkPipelineRasterizationStateCreateInfo raster);
+    // One of the two render passes (`late`: loads what the early one drew), drawing its phase's
+    // lists when `draw`.
+    void drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, bool draw);
     void timerBegin(VkCommandBuffer cmd, const char* name);
     void timerEnd(VkCommandBuffer cmd);
 
@@ -114,7 +125,15 @@ private:
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipeline m_cullBackPipeline{VK_NULL_HANDLE};
     VkPipeline m_wireframePipeline{VK_NULL_HANDLE};
+    // The meshlet path, [0] one-sided (back faces culled), [1] double-sided: task + mesh
+    // shaders (when supported) and the fallback's pull vertex shader.
+    std::array<VkPipeline, 2> m_meshPipelines{};
+    std::array<VkPipeline, 2> m_pullPipelines{};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
+    bool m_meshShaderSupported{false};
+    // The stages the scene set and the push block reach: vertex and fragment, task and mesh
+    // when supported.
+    [[nodiscard]] VkShaderStageFlags geometryStages() const noexcept;
 
     GpuCulling* m_culling{nullptr};
     render::GpuPassTimer* m_passTimer{nullptr};
@@ -152,8 +171,9 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constant: the SSS tiles across and down (matches gbuffer.frag; the material slot
-    // comes from the draw record).
+    // Push constants: the SSS tiles across and down (gbuffer.frag, bytes 0-15; the material
+    // slot comes from the draw record), then gpu::shared::MeshletPush (the meshlet shaders,
+    // bytes 16-63; their block covers 0-63).
     struct DrawPushConstant {
         uint32_t tilesX, tilesY;
         uint32_t pad0, pad1;
@@ -163,6 +183,7 @@ private:
     glm::mat4 m_view{1.0f};
     glm::mat4 m_projection{1.0f};
     glm::mat4 m_prevViewProj{1.0f};
+    glm::vec3 m_cameraPos{0.0f};   // this frame's, from the view (the meshlet cone test)
 
     // Wireframe mode
     bool m_wireframeEnabled{false};

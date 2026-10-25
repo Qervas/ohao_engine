@@ -282,9 +282,14 @@ bool VulkanRenderer::createLogicalDevice() {
         };
         const bool rqExt = extSupported(VK_KHR_RAY_QUERY_EXTENSION_NAME);
         const bool afExt = extSupported(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        const bool msExt = extSupported(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderProbe{};
+        meshShaderProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatProbe{};
         atomicFloatProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        atomicFloatProbe.pNext = msExt ? &meshShaderProbe : nullptr;
 
         VkPhysicalDeviceRayQueryFeaturesKHR rayQueryProbe{};
         rayQueryProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
@@ -298,6 +303,14 @@ bool VulkanRenderer::createLogicalDevice() {
         rayQuerySupported = rqExt && (rayQueryProbe.rayQuery == VK_TRUE);
         m_rayQueryEnabled = rayQuerySupported;
         bufferAtomicAddSupported = afExt && (atomicFloatProbe.shaderBufferFloat32AtomicAdd == VK_TRUE);
+        m_meshShaderEnabled = msExt && meshShaderProbe.taskShader == VK_TRUE && meshShaderProbe.meshShader == VK_TRUE;
+        if (m_meshShaderEnabled) {
+            m_enabledDeviceExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+            OHAO_LOG(Debug, gpu, "caps: enabling optional device ext: {}", VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        } else {
+            OHAO_LOG(Info, gpu, "caps: no task/mesh shaders ({}): meshlets draw through the compute fallback",
+                     VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        }
 
         if (rayQuerySupported) {
             m_enabledDeviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
@@ -330,9 +343,16 @@ bool VulkanRenderer::createLogicalDevice() {
     if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
+    // Vulkan 1.1 features: the meshlet task shader reads its draw's index (DrawIndex, the
+    // DrawParameters capability).
+    VkPhysicalDeviceVulkan11Features features11{};
+    features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    features11.shaderDrawParameters = VK_TRUE;
+
     // Vulkan 1.2 features (buffer device address, descriptor indexing)
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    features12.pNext = &features11;
     features12.bufferDeviceAddress = VK_TRUE;
     features12.descriptorIndexing = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
@@ -388,6 +408,16 @@ bool VulkanRenderer::createLogicalDevice() {
         atomicFloatFeatures.pNext = optionalChainTail;
         atomicFloatFeatures.shaderBufferFloat32AtomicAdd = VK_TRUE;
         optionalChainTail = &atomicFloatFeatures;
+    }
+
+    // Task and mesh shaders (the G-buffer's meshlet path). Same conditional-chain rule.
+    VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures{};
+    if (m_meshShaderEnabled) {
+        meshShaderFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+        meshShaderFeatures.pNext = optionalChainTail;
+        meshShaderFeatures.taskShader = VK_TRUE;
+        meshShaderFeatures.meshShader = VK_TRUE;
+        optionalChainTail = &meshShaderFeatures;
     }
 
     VkPhysicalDeviceFeatures2 deviceFeatures2{};

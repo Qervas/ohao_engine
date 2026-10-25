@@ -45,6 +45,8 @@ void GBufferPass::cleanup() {
         m_pipeline = VK_NULL_HANDLE;
     }
     safeDestroy(m_cullBackPipeline);
+    for (VkPipeline& p : m_meshPipelines) safeDestroy(p);
+    for (VkPipeline& p : m_pullPipelines) safeDestroy(p);
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
@@ -94,14 +96,15 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     resetSSSTiles(cmd);
     // The draws are culled with the view-projection they are rasterized with (jitter included).
     const glm::mat4 viewProj = m_projection * m_view;
+    m_cameraPos = glm::vec3(glm::inverse(m_view)[3]);
     namespace shared = gpu::shared;
 
     timerBegin(cmd, "cull.instances");
-    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseEarly, GpuCulling::kPairEarly, viewProj);
+    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseEarly, shared::kCullListEarly, 4, viewProj, m_cameraPos);
     timerEnd(cmd);
 
     timerBegin(cmd, "gbuffer.early");
-    drawPass(cmd, frameIndex, false, GpuCulling::kPairEarly, haveScene);
+    drawPass(cmd, frameIndex, false, haveScene);
     timerEnd(cmd);
 
     timerBegin(cmd, "hiz.build");
@@ -109,15 +112,21 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     timerEnd(cmd);
 
     timerBegin(cmd, "cull.late");
-    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseLate, GpuCulling::kPairLate, viewProj);
+    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseLate, shared::kCullListLate, 4, viewProj, m_cameraPos);
     timerEnd(cmd);
 
     timerBegin(cmd, "gbuffer.late");
-    drawPass(cmd, frameIndex, true, GpuCulling::kPairLate, haveScene);
+    drawPass(cmd, frameIndex, true, haveScene);
     timerEnd(cmd);
 }
 
-void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, uint32_t pair, bool draw) {
+VkShaderStageFlags GBufferPass::geometryStages() const noexcept {
+    VkShaderStageFlags s = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (m_meshShaderSupported) s |= VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+    return s;
+}
+
+void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, bool draw) {
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)
     clearValues[1].color = {{0.5f, 0.5f, 0.5f, 0.0f}}; // OctNormal (rg) + Roughness (b) + Emissive (a)
@@ -162,15 +171,36 @@ void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, 
         const VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, m_renderScene->indexArena(), 0, VK_INDEX_TYPE_UINT32);
+        namespace shared = gpu::shared;
+        const uint32_t phase = late ? shared::kCullPhaseLate : shared::kCullPhaseEarly;
+        const uint32_t firstList = late ? shared::kCullListLate : shared::kCullListEarly;
         const VkExtent2D tiles = sssTiles();
         const DrawPushConstant push{tiles.width, tiles.height, 0u, 0u};
-        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DrawPushConstant), &push);
-        // The pair's first list is one-sided (back faces culled), its second double-sided.
+        vkCmdPushConstants(cmd, m_pipelineLayout, geometryStages(), 0, sizeof(DrawPushConstant), &push);
+        // The phase's lists: instance draws one-sided (back faces culled) and double-sided,
+        // then meshlet draws one-sided and double-sided.
         const bool wire = m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE;
         for (uint32_t k = 0; k < 2; ++k) {
             const VkPipeline pipeline = wire ? m_wireframePipeline : (k == 0 ? m_cullBackPipeline : m_pipeline);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            m_culling->drawList(cmd, pair * 2 + k);
+            m_culling->drawList(cmd, firstList + k);
+        }
+        const bool meshShaders = m_culling->meshShadersActive() && m_meshPipelines[0] != VK_NULL_HANDLE;
+        const VkShaderStageFlags meshletStages = geometryStages() & ~VkShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+        for (uint32_t k = 0; k < 2; ++k) {
+            const uint32_t list = firstList + 2 + k;
+            if (meshShaders) {
+                shared::MeshletPush mp{};
+                mp.config = {list * m_culling->drawCount() * 5u, m_culling->meshletFlags(phase), m_culling->hizLevels(), 0u};
+                mp.hiz = {m_width, m_height, 0u, 0u};
+                mp.camera = {m_cameraPos.x, m_cameraPos.y, m_cameraPos.z, 0.0f};
+                vkCmdPushConstants(cmd, m_pipelineLayout, meshletStages, sizeof(DrawPushConstant), sizeof(mp), &mp);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipelines[k]);
+                m_culling->drawMeshTasks(cmd, list);
+            } else if (m_pullPipelines[k] != VK_NULL_HANDLE) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pullPipelines[k]);
+                m_culling->drawMeshletFallback(cmd, (late ? 2u : 0u) + k);
+            }
         }
     }
 
@@ -220,7 +250,8 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
     const VkBuffer drawTable = m_renderScene->drawTable();
     if (instances == VK_NULL_HANDLE || materials == VK_NULL_HANDLE || materialRefs == VK_NULL_HANDLE ||
         drawTable == VK_NULL_HANDLE || m_renderScene->vertexArena() == VK_NULL_HANDLE ||
-        m_renderScene->indexArena() == VK_NULL_HANDLE)
+        m_renderScene->indexArena() == VK_NULL_HANDLE || m_renderScene->meshletArena() == VK_NULL_HANDLE ||
+        m_culling->commandBuffer() == VK_NULL_HANDLE || m_culling->hizView() == VK_NULL_HANDLE)
         return false;
 
     const CameraUBO camera{m_projection * m_view, m_prevViewProj};
@@ -228,25 +259,39 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
 
     // The table buffers can be replaced (arena / table growth), so the set is
     // rewritten every frame; the slot's previous use finished at its fence wait.
-    const std::array<VkDescriptorBufferInfo, 6> infos{{
+    const std::array<VkDescriptorBufferInfo, kSceneBindings> infos{{
         {instances, 0, VK_WHOLE_SIZE},
         {materials, 0, VK_WHOLE_SIZE},
         {materialRefs, 0, VK_WHOLE_SIZE},
         {m_cameraBuffers[frameIndex], 0, sizeof(CameraUBO)},
         {m_sssTiles.buffer, 0, VK_WHOLE_SIZE},
         {drawTable, 0, VK_WHOLE_SIZE},
+        {m_renderScene->vertexArena(), 0, VK_WHOLE_SIZE},
+        {m_renderScene->meshletArena(), 0, VK_WHOLE_SIZE},
+        {m_renderScene->meshletVertexArena(), 0, VK_WHOLE_SIZE},
+        {m_renderScene->meshletTriangleArena(), 0, VK_WHOLE_SIZE},
+        {m_culling->commandBuffer(), 0, VK_WHOLE_SIZE},
+        {},
     }};
-    std::array<VkWriteDescriptorSet, 6> writes{};
+    const VkDescriptorImageInfo hizInfo{VK_NULL_HANDLE, m_culling->hizView(), VK_IMAGE_LAYOUT_GENERAL};
+    std::array<VkWriteDescriptorSet, kSceneBindings> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_sceneSets[frameIndex];
         writes[i].dstBinding = i;
         writes[i].descriptorCount = 1;
-        writes[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].pBufferInfo = &infos[i];
+        writes[i].descriptorType = sceneBindingType(i);
+        if (i == kSceneHiZ) writes[i].pImageInfo = &hizInfo;
+        else writes[i].pBufferInfo = &infos[i];
     }
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     return true;
+}
+
+VkDescriptorType GBufferPass::sceneBindingType(uint32_t binding) {
+    if (binding == 3) return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    if (binding == kSceneHiZ) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 }
 
 bool GBufferPass::createSceneDescriptors() {
@@ -258,12 +303,12 @@ bool GBufferPass::createSceneDescriptors() {
                                m_sssTiles))
         return false;
 
-    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};   // 5: the draw table
+    std::array<VkDescriptorSetLayoutBinding, kSceneBindings> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
-        bindings[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorType = sceneBindingType(i);
         bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[i].stageFlags = geometryStages();
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -278,9 +323,10 @@ bool GBufferPass::createSceneDescriptors() {
         if (vkCreateDescriptorSetLayout(m_device, &emptyInfo, nullptr, &m_emptyLayout) != VK_SUCCESS) return false;
     }
 
-    const std::array<VkDescriptorPoolSize, 2> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * MAX_FRAMES_IN_FLIGHT},
+    const std::array<VkDescriptorPoolSize, 3> poolSizes{{
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (kSceneBindings - 2) * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_FRAMES_IN_FLIGHT},
     }};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -740,11 +786,14 @@ bool GBufferPass::createPipeline() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Push constant: the SSS tiles across and down (fragment stage)
-    VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(DrawPushConstant);
+    // Push constants: the SSS tiles across and down (fragment stage, bytes 0-15); the meshlet
+    // shaders' block (bytes 0-63, MeshletPush from 16; the instance vertex shader has none).
+    const std::array<VkPushConstantRange, 2> pushRanges{{
+        {VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DrawPushConstant)},
+        {geometryStages() & ~VkShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT), 0,
+         sizeof(DrawPushConstant) + sizeof(gpu::shared::MeshletPush)},
+    }};
+    static_assert(sizeof(DrawPushConstant) + sizeof(gpu::shared::MeshletPush) <= 128);
 
     // Pipeline layout: set 0 = bindless textures (an empty stand-in without a
     // texture manager), set 1 = the scene
@@ -757,8 +806,8 @@ bool GBufferPass::createPipeline() {
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
+    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushRanges.size());
+    pipelineLayoutInfo.pPushConstantRanges = pushRanges.data();
 
     if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(m_device, vertShader, nullptr);
@@ -803,6 +852,13 @@ bool GBufferPass::createPipeline() {
         return false;
     }
 
+    // The meshlet path: the same fragment shader and state, its own geometry stages.
+    if (!createMeshletPipelines(pipelineInfo, rasterizer)) {
+        vkDestroyShaderModule(m_device, vertShader, nullptr);
+        vkDestroyShaderModule(m_device, fragShader, nullptr);
+        return false;
+    }
+
     // Create wireframe pipeline variant
     rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
     rasterizer.lineWidth = 1.0f;
@@ -817,6 +873,62 @@ bool GBufferPass::createPipeline() {
     // Wireframe pipeline is optional - don't fail if it doesn't create
     // (e.g., if wideLines feature isn't supported)
     return true;
+}
+
+bool GBufferPass::createMeshletPipelines(VkGraphicsPipelineCreateInfo base, VkPipelineRasterizationStateCreateInfo raster) {
+    // base: the instance pipeline's state (its fragment stage second); [0] culls back faces
+    // (front faces counter-clockwise, as the instance path), [1] culls none.
+    const VkPipelineShaderStageCreateInfo frag = base.pStages[1];
+    const auto stage = [](VkShaderStageFlagBits s, VkShaderModule m, const char* entry) {
+        VkPipelineShaderStageCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        info.stage = s;
+        info.module = m;
+        info.pName = entry;
+        return info;
+    };
+    const auto build = [&](const VkPipelineShaderStageCreateInfo* stages, uint32_t count, bool vertexInput,
+                           std::array<VkPipeline, 2>& out) {
+        VkPipelineVertexInputStateCreateInfo noVertices{};
+        noVertices.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkGraphicsPipelineCreateInfo info = base;
+        info.stageCount = count;
+        info.pStages = stages;
+        // A mesh pipeline has no vertex input or input assembly; the pull shader reads no
+        // attributes (a triangle list).
+        info.pVertexInputState = vertexInput ? &noVertices : nullptr;
+        if (!vertexInput) info.pInputAssemblyState = nullptr;
+        for (uint32_t k = 0; k < 2; ++k) {
+            VkPipelineRasterizationStateCreateInfo r = raster;
+            r.polygonMode = VK_POLYGON_MODE_FILL;
+            r.cullMode = k == 0 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+            r.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            info.pRasterizationState = &r;
+            if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &info, nullptr, &out[k]) != VK_SUCCESS) return false;
+        }
+        return true;
+    };
+
+    VkShaderModule pull = loadShaderModule("cull_meshlets.slang.pull.spv");
+    bool ok = pull != VK_NULL_HANDLE;
+    if (ok) {
+        const VkPipelineShaderStageCreateInfo stages[2] = {stage(VK_SHADER_STAGE_VERTEX_BIT, pull, "pull"), frag};
+        ok = build(stages, 2, true, m_pullPipelines);
+    }
+    if (pull) vkDestroyShaderModule(m_device, pull, nullptr);
+    if (!ok || !m_meshShaderSupported) return ok;
+
+    VkShaderModule task = loadShaderModule("cull_meshlets.slang.task.spv");
+    VkShaderModule mesh = loadShaderModule("cull_meshlets.slang.mesh.spv");
+    ok = task != VK_NULL_HANDLE && mesh != VK_NULL_HANDLE;
+    if (ok) {
+        const VkPipelineShaderStageCreateInfo stages[3] = {stage(VK_SHADER_STAGE_TASK_BIT_EXT, task, "task"),
+                                                           stage(VK_SHADER_STAGE_MESH_BIT_EXT, mesh, "mesh"), frag};
+        ok = build(stages, 3, false, m_meshPipelines);
+    }
+    if (task) vkDestroyShaderModule(m_device, task, nullptr);
+    if (mesh) vkDestroyShaderModule(m_device, mesh, nullptr);
+    return ok;
 }
 
 

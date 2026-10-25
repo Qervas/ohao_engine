@@ -17,6 +17,8 @@
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
 #include "reflect/schema.hpp"
+#include "gpu/shared_layout.hpp"
+#include "render/scene/meshlet_builder.hpp"
 #include "render/scene/model_upload.hpp"
 #include "scene/asset/model.hpp"
 #include "scene/asset/model_loader.hpp"
@@ -1902,6 +1904,193 @@ static void sp2b_t04_damaged_helmet_stands_upright() {
     CHECK(worst <= 1.0f, "the framed camera sees the whole upright helmet");
 }
 
+// ---- meshlets (sub-project 2b, test 7) ---------------------------------------------------
+
+// The builder's contract on one index range: every triangle exactly once (as the same three
+// vertices, in the same winding), within the limits, spheres containing their vertices,
+// cones containing their triangles' normals, and the cone test never culling a meshlet with
+// a triangle facing the camera (from 512 viewpoints around the range's bounds).
+static std::string checkMeshlets(const std::vector<Vertex>& verts, const std::vector<uint32_t>& idx, uint32_t first,
+                                 uint32_t count, const render::MeshletSet& set) {
+    char buf[256];
+    std::map<std::array<uint32_t, 3>, uint32_t> got;   // the meshlets' triangles, as global indices
+    std::size_t seen = 0;
+    glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (const render::Meshlet& m : set.meshlets) {
+        if (m.vertexCount == 0 || m.vertexCount > gpu::shared::kMeshletMaxVertices) return "a meshlet past the vertex limit";
+        if (m.triangleCount == 0 || m.triangleCount > gpu::shared::kMeshletMaxTriangles) return "a meshlet past the triangle limit";
+        for (uint32_t i = 0; i < m.vertexCount; ++i) {
+            const glm::vec3& p = verts[set.vertices[m.vertexOffset + i]].position;
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+            if (glm::length(p - m.center) > m.radius * (1.0f + 1e-5f) + 1e-6f) return "a vertex outside its meshlet's sphere";
+        }
+        const float sinCutoff = m.coneCutoff < 1.0f ? std::sqrt(1.0f - m.coneCutoff * m.coneCutoff) : -1.0f;
+        for (uint32_t t = 0; t < m.triangleCount; ++t) {
+            const uint32_t packed = set.triangles[m.triangleOffset + t];
+            if (packed >> 24) return "a packed triangle with bits above its three local indices";
+            uint32_t g[3];
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t local = (packed >> (8 * k)) & 0xFFu;
+                if (local >= m.vertexCount) return "a local index past its meshlet's vertices";
+                g[k] = set.vertices[m.vertexOffset + local];
+            }
+            ++got[{g[0], g[1], g[2]}];   // as wound: the same vertices in the same order
+            ++seen;
+            const glm::vec3 n = glm::cross(verts[g[1]].position - verts[g[0]].position, verts[g[2]].position - verts[g[0]].position);
+            const float len = glm::length(n);
+            if (len > 1e-12f && sinCutoff >= 0.0f && glm::dot(n / len, m.coneAxis) < sinCutoff - 1e-4f) {
+                std::snprintf(buf, sizeof(buf), "a normal outside its cone (dot %.5f, cone %.5f)", glm::dot(n / len, m.coneAxis), sinCutoff);
+                return buf;
+            }
+        }
+    }
+    // Exactly once: the meshlets' triangles and the range's are the same multiset (a triangle
+    // repeated in the range appears as often in the meshlets).
+    std::map<std::array<uint32_t, 3>, uint32_t> want;
+    for (uint32_t tri = first / 3; tri < (first + count) / 3; ++tri) ++want[{idx[tri * 3], idx[tri * 3 + 1], idx[tri * 3 + 2]}];
+    if (seen != count / 3) {
+        std::snprintf(buf, sizeof(buf), "%zu triangles in meshlets for %u in the range", seen, count / 3);
+        return buf;
+    }
+    if (want != got) return "the meshlets' triangles are not the range's, each once";
+
+    // The cone test, as the cull shader runs it, from viewpoints around the bounds.
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+    const glm::vec3 c = 0.5f * (lo + hi);
+    const float extent = std::max(glm::length(hi - lo), 1e-3f);
+    uint32_t culled = 0;
+    for (int view = 0; view < 512; ++view) {
+        glm::vec3 dir(u(rng), u(rng), u(rng));
+        if (glm::length(dir) < 1e-3f) dir = glm::vec3(0, 0, 1);
+        const glm::vec3 cam = c + glm::normalize(dir) * extent * (0.6f + 3.0f * (view % 8) / 8.0f);
+        for (const render::Meshlet& m : set.meshlets) {
+            const glm::vec3 d = m.center - cam;
+            if (m.coneCutoff >= 1.0f || glm::dot(d, m.coneAxis) < m.coneCutoff * glm::length(d) + m.radius) continue;
+            ++culled;
+            for (uint32_t t = 0; t < m.triangleCount; ++t) {
+                const uint32_t packed = set.triangles[m.triangleOffset + t];
+                const glm::vec3& a = verts[set.vertices[m.vertexOffset + (packed & 0xFFu)]].position;
+                const glm::vec3& b = verts[set.vertices[m.vertexOffset + ((packed >> 8) & 0xFFu)]].position;
+                const glm::vec3& e = verts[set.vertices[m.vertexOffset + ((packed >> 16) & 0xFFu)]].position;
+                if (glm::dot(glm::cross(b - a, e - a), a - cam) < 0.0f) return "the cone test culled a meshlet with a front-facing triangle";
+            }
+        }
+    }
+    std::size_t cones = 0;
+    for (const render::Meshlet& m : set.meshlets) cones += m.coneCutoff < 1.0f ? 1 : 0;
+    std::printf("[%zu meshlets, %zu with cones, %u cone-culled of %zu tests] ", set.meshlets.size(), cones, culled,
+                set.meshlets.size() * 512);
+    return {};
+}
+
+static bool sameMeshlets(const render::MeshletSet& a, const render::MeshletSet& b) {
+    if (a.meshlets.size() != b.meshlets.size() || a.vertices != b.vertices || a.triangles != b.triangles) return false;
+    return std::memcmp(a.meshlets.data(), b.meshlets.data(), a.meshlets.size() * sizeof(render::Meshlet)) == 0;
+}
+
+static void sp2b_t07_meshlets_cover_primitives_within_limits_and_bounds() {
+    const std::shared_ptr<Model> models[] = {
+        PrimitiveMeshGenerator::makeCube(), PrimitiveMeshGenerator::makeSphere(0.5f, 64, 32),
+        PrimitiveMeshGenerator::makeCylinder(0.5f, 1.0f, 48), PrimitiveMeshGenerator::makeCone(0.5f, 1.0f, 48),
+        PrimitiveMeshGenerator::makePlatform()};
+    for (const auto& model : models) {
+        render::MeshletSet set;
+        const auto count = static_cast<uint32_t>(model->indices.size());
+        render::buildMeshlets(model->vertices, model->indices, 0, count, set);
+        const std::string why = checkMeshlets(model->vertices, model->indices, 0, count, set);
+        if (!why.empty()) std::printf("\n      %s ", why.c_str());
+        CHECK(why.empty(), "every triangle once, within limits, bounds and cones contain their vertices and normals");
+    }
+}
+
+// A 300x300 grid (180,000 triangles) in index order is dense enough to fill meshlets to
+// their limits; built twice it is identical byte for byte, and appending to a set offsets
+// the second build past the first.
+static void sp2b_t07_meshlets_fill_limits_and_are_deterministic() {
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> idx;
+    const uint32_t n = 300;
+    for (uint32_t y = 0; y <= n; ++y)
+        for (uint32_t x = 0; x <= n; ++x) {
+            Vertex v{};
+            v.position = glm::vec3(float(x) * 0.01f, std::sin(float(x) * 0.05f) * std::cos(float(y) * 0.07f) * 0.2f, float(y) * 0.01f);
+            verts.push_back(v);
+        }
+    for (uint32_t y = 0; y < n; ++y)
+        for (uint32_t x = 0; x < n; ++x) {
+            const uint32_t a = y * (n + 1) + x, b = a + 1, c = a + n + 1, d = c + 1;
+            idx.insert(idx.end(), {a, c, b, b, c, d});
+        }
+    render::MeshletSet set, again;
+    render::buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+    render::buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), again);
+    const std::string why = checkMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+    if (!why.empty()) std::printf("\n      %s ", why.c_str());
+    CHECK(why.empty(), "the grid's meshlets hold the contract");
+    CHECK(sameMeshlets(set, again), "two builds are identical byte for byte");
+    // A grid is vertex-bound: 64 vertices as an 8x8 patch hold 98 triangles (0.79 of 124);
+    // growing in strips (2x32) would hold 62.
+    double tfill = 0.0, vfill = 0.0;
+    for (const auto& m : set.meshlets) {
+        tfill += m.triangleCount;
+        vfill += m.vertexCount;
+    }
+    tfill /= double(set.meshlets.size()) * gpu::shared::kMeshletMaxTriangles;
+    vfill /= double(set.meshlets.size()) * gpu::shared::kMeshletMaxVertices;
+    std::printf("mean fill %.3f of 64 vertices, %.3f of 124 triangles ", vfill, tfill);
+    CHECK(vfill > 0.9, "a regular grid fills meshlets to over 90% of the vertex limit");
+    CHECK(tfill > 0.7, "compact patches, not strips: over 70% of the triangle limit");
+
+    // Two submeshes appended to one set: the second range's offsets follow the first's.
+    render::MeshletSet two;
+    const auto half = static_cast<uint32_t>(idx.size() / 2);
+    render::buildMeshlets(verts, idx, 0, half, two);
+    const std::size_t firstMeshlets = two.meshlets.size(), firstVerts = two.vertices.size(), firstTris = two.triangles.size();
+    render::buildMeshlets(verts, idx, half, static_cast<uint32_t>(idx.size()) - half, two);
+    CHECK(two.meshlets[firstMeshlets].vertexOffset == firstVerts && two.meshlets[firstMeshlets].triangleOffset == firstTris,
+          "a second range appends after the first");
+    render::MeshletSet secondOnly;
+    render::buildMeshlets(verts, idx, half, static_cast<uint32_t>(idx.size()) - half, secondOnly);
+    CHECK(two.meshlets.size() - firstMeshlets == secondOnly.meshlets.size(), "the second range builds as it does alone");
+    const std::vector<render::Meshlet> tail(two.meshlets.begin() + firstMeshlets, two.meshlets.end());
+    const std::string tailWhy = checkMeshlets(verts, idx, half, static_cast<uint32_t>(idx.size()) - half,
+                                              render::MeshletSet{tail, two.vertices, two.triangles});
+    CHECK(tailWhy.empty(), "the second range's meshlets hold the contract at their offsets");
+}
+
+// Repeated and degenerate triangles: a triangle using one vertex twice counts it once against
+// the limit, a zero-area triangle has no facing and never narrows a cone, and every one of
+// them is still drawn exactly once.
+static void sp2b_t07_meshlets_keep_degenerate_and_repeated_triangles() {
+    std::vector<Vertex> verts(6);
+    verts[0].position = {0, 0, 0}; verts[1].position = {1, 0, 0}; verts[2].position = {0, 1, 0};
+    verts[3].position = {1, 1, 0}; verts[4].position = {2, 2, 0}; verts[5].position = {0, 0, 1};
+    const std::vector<uint32_t> idx = {0, 1, 2,  0, 1, 2,  1, 1, 3,  0, 3, 4,  2, 1, 3,  0, 2, 5,  5, 5, 5};
+    render::MeshletSet set;
+    render::buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+    const std::string why = checkMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+    if (!why.empty()) std::printf("\n      %s ", why.c_str());
+    CHECK(why.empty(), "duplicates, collinear and point triangles each appear once");
+    // The +Z triangles and the degenerate ones share a meshlet; (0, 2, 5), facing +X, 90 degrees
+    // from them, starts its own.
+    CHECK(set.meshlets.size() == 2 && set.meshlets[0].vertexCount == 5 && set.meshlets[0].triangleCount == 5,
+          "the coherent triangles in one meshlet, each vertex once; the perpendicular one apart");
+}
+
+// The DamagedHelmet (15,452 triangles, one submesh): the real asset holds the contract.
+static void sp2b_t07_meshlets_cover_the_damaged_helmet() {
+    const auto model = ModelLoader::load((fs::path(OHAO_SOURCE_DIR) / "assets" / "test_models" / "DamagedHelmet.glb").string());
+    CHECK(model && !model->indices.empty(), "the helmet loads");
+    render::MeshletSet set;
+    const auto count = static_cast<uint32_t>(model->indices.size());
+    render::buildMeshlets(model->vertices, model->indices, 0, count, set);
+    const std::string why = checkMeshlets(model->vertices, model->indices, 0, count, set);
+    if (!why.empty()) std::printf("\n      %s ", why.c_str());
+    CHECK(why.empty(), "the helmet's meshlets hold the contract");
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -1977,6 +2166,10 @@ int main(int argc, char** argv) {
     RUN(t21_edited_files_are_judged_identically);
     RUN(sp2b_t04_gltf_node_transforms_reach_vertices_normals_and_winding);
     RUN(sp2b_t04_damaged_helmet_stands_upright);
+    RUN(sp2b_t07_meshlets_cover_primitives_within_limits_and_bounds);
+    RUN(sp2b_t07_meshlets_fill_limits_and_are_deterministic);
+    RUN(sp2b_t07_meshlets_keep_degenerate_and_repeated_triangles);
+    RUN(sp2b_t07_meshlets_cover_the_damaged_helmet);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

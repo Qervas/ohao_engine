@@ -1,4 +1,6 @@
 #include "render/scene/mesh_registry.hpp"
+#include "render/scene/meshlet_builder.hpp"
+#include "gpu/shared_layout.hpp"
 
 #include <algorithm>
 #include <cfloat>
@@ -13,7 +15,9 @@ constexpr VkDeviceSize kInitialVertices      = 1u << 20;   // 1 Mi
 constexpr VkDeviceSize kInitialIndices       = 4u << 20;   // 4 Mi
 constexpr VkDeviceSize kInitialTriangles     = 1u << 20;   // 1 Mi
 constexpr VkDeviceSize kInitialMeshes        = 4096;
+constexpr VkDeviceSize kInitialMeshlets      = 16384;
 constexpr VkDeviceSize kVertexStride         = sizeof(Vertex);   // 100
+static_assert(sizeof(gpu::shared::MeshletGpu) == 48);
 
 constexpr VkBufferUsageFlags kGeometryUsage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -31,7 +35,10 @@ bool MeshRegistry::initialize(const Context& ctx) {
            createArena(m_indices, sizeof(uint32_t), kInitialIndices,
                        kGeometryUsage | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) &&
            createArena(m_triangleSlots, sizeof(uint32_t), kInitialTriangles, kTableUsage) &&
-           createArena(m_meshTable, sizeof(MeshGpu), kInitialMeshes, kTableUsage);
+           createArena(m_meshTable, sizeof(MeshGpu), kInitialMeshes, kTableUsage) &&
+           createArena(m_meshlets, sizeof(gpu::shared::MeshletGpu), kInitialMeshlets, kTableUsage) &&
+           createArena(m_meshletVertices, sizeof(uint32_t), kInitialVertices, kTableUsage) &&
+           createArena(m_meshletTriangles, sizeof(uint32_t), kInitialTriangles, kTableUsage);
 }
 
 void MeshRegistry::shutdown() {
@@ -43,7 +50,8 @@ void MeshRegistry::shutdown() {
     }
     m_meshes.clear();
     if (m_ctx.allocator) {
-        for (Arena* a : {&m_vertices, &m_indices, &m_triangleSlots, &m_meshTable}) {
+        for (Arena* a : {&m_vertices, &m_indices, &m_triangleSlots, &m_meshTable, &m_meshlets, &m_meshletVertices,
+                         &m_meshletTriangles}) {
             m_ctx.allocator->destroyBuffer(a->buf);
             *a = Arena{};
         }
@@ -178,12 +186,29 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     mesh.aabbMin = mn;
     mesh.aabbMax = mx;
 
-    // One staging buffer for the whole registration: vertices | indices | slots | entry.
+    // Meshlets, submesh by submesh (offsets local to this mesh until placed in the arenas).
+    MeshletSet meshlets;
+    std::vector<std::array<uint32_t, 2>> submeshMeshlets;
+    for (const SubmeshDesc& s : mesh.submeshes) {
+        const auto first = static_cast<uint32_t>(meshlets.meshlets.size());
+        buildMeshlets(data.vertices, data.indices, s.firstIndex, s.indexCount, meshlets);
+        submeshMeshlets.push_back({first, static_cast<uint32_t>(meshlets.meshlets.size()) - first});
+    }
+    const auto meshletCount = static_cast<uint32_t>(meshlets.meshlets.size());
+    const auto meshletVertexCount = static_cast<uint32_t>(meshlets.vertices.size());
+    const auto meshletTriangleCount = static_cast<uint32_t>(meshlets.triangles.size());
+
+    // One staging buffer for the whole registration:
+    // vertices | indices | slots | entry | meshlets | meshlet vertices | meshlet triangles.
     const VkDeviceSize vBytes = VkDeviceSize{vertexCount} * kVertexStride;
     const VkDeviceSize iBytes = VkDeviceSize{indexCount} * sizeof(uint32_t);
     const VkDeviceSize tBytes = VkDeviceSize{triangleCount} * sizeof(uint32_t);
     const VkDeviceSize eBytes = sizeof(MeshGpu);
-    GpuBuffer staging = m_ctx.allocator->createBuffer(vBytes + iBytes + tBytes + eBytes,
+    const VkDeviceSize mBytes = VkDeviceSize{meshletCount} * sizeof(gpu::shared::MeshletGpu);
+    const VkDeviceSize mvBytes = VkDeviceSize{meshletVertexCount} * sizeof(uint32_t);
+    const VkDeviceSize mtBytes = VkDeviceSize{meshletTriangleCount} * sizeof(uint32_t);
+    const VkDeviceSize meshletAt = vBytes + iBytes + tBytes + eBytes;
+    GpuBuffer staging = m_ctx.allocator->createBuffer(meshletAt + mBytes + mvBytes + mtBytes,
                                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                       AllocationUsage::CpuToGpu, true);
     if (!staging.isValid() || !staging.getMappedData()) {
@@ -202,18 +227,40 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     ok = ok && reserve(m_indices, indexCount, cmd, retired, grown);
     ok = ok && reserve(m_triangleSlots, triangleCount, cmd, retired, grown);
     ok = ok && reserve(m_meshTable, 1, cmd, retired, grown);
+    ok = ok && reserve(m_meshlets, meshletCount, cmd, retired, grown);
+    ok = ok && reserve(m_meshletVertices, meshletVertexCount, cmd, retired, grown);
+    ok = ok && reserve(m_meshletTriangles, meshletTriangleCount, cmd, retired, grown);
 
     if (ok) {
         mesh.vertexOffset = static_cast<uint32_t>(m_vertices.used);
         mesh.indexOffset = static_cast<uint32_t>(m_indices.used);
         mesh.triangleSlotOffset = static_cast<uint32_t>(m_triangleSlots.used);
         const MeshGpu entry{mesh.vertexOffset, mesh.indexOffset, mesh.indexCount, mesh.triangleSlotOffset};
+        const auto meshletBase = static_cast<uint32_t>(m_meshlets.used);
+        for (auto& sm : submeshMeshlets) sm[0] += meshletBase;
+        mesh.submeshMeshlets = std::move(submeshMeshlets);
 
         auto* dst = static_cast<std::byte*>(staging.getMappedData());
         std::memcpy(dst, data.vertices.data(), static_cast<std::size_t>(vBytes));
         std::memcpy(dst + vBytes, data.indices.data(), static_cast<std::size_t>(iBytes));
         if (tBytes) std::memcpy(dst + vBytes + iBytes, triangleSlots.data(), static_cast<std::size_t>(tBytes));
         std::memcpy(dst + vBytes + iBytes + tBytes, &entry, sizeof(entry));
+        // Meshlets with arena offsets; their vertices stay mesh-local (a draw adds its
+        // vertex offset, as for the index arena).
+        auto* gpuMeshlets = reinterpret_cast<gpu::shared::MeshletGpu*>(dst + meshletAt);
+        const auto vertexBase = static_cast<uint32_t>(m_meshletVertices.used);
+        const auto triangleBase = static_cast<uint32_t>(m_meshletTriangles.used);
+        for (uint32_t i = 0; i < meshletCount; ++i) {
+            const Meshlet& s = meshlets.meshlets[i];
+            gpu::shared::MeshletGpu g{};
+            g.range = {vertexBase + s.vertexOffset, triangleBase + s.triangleOffset, s.vertexCount, s.triangleCount};
+            g.sphere = {s.center.x, s.center.y, s.center.z, s.radius};
+            g.cone = {s.coneAxis.x, s.coneAxis.y, s.coneAxis.z, s.coneCutoff};
+            std::memcpy(gpuMeshlets + i, &g, sizeof(g));
+        }
+        if (mvBytes) std::memcpy(dst + meshletAt + mBytes, meshlets.vertices.data(), static_cast<std::size_t>(mvBytes));
+        if (mtBytes)
+            std::memcpy(dst + meshletAt + mBytes + mvBytes, meshlets.triangles.data(), static_cast<std::size_t>(mtBytes));
         m_ctx.allocator->flushBuffer(staging);
 
         // Growth copies (old -> new) and these writes touch disjoint ranges.
@@ -227,6 +274,18 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
         }
         const VkBufferCopy eCopy{vBytes + iBytes + tBytes, m_meshTable.used * sizeof(MeshGpu), eBytes};
         vkCmdCopyBuffer(cmd, staging.buffer, m_meshTable.buf.buffer, 1, &eCopy);
+        if (mBytes) {
+            const VkBufferCopy mCopy{meshletAt, m_meshlets.used * sizeof(gpu::shared::MeshletGpu), mBytes};
+            vkCmdCopyBuffer(cmd, staging.buffer, m_meshlets.buf.buffer, 1, &mCopy);
+        }
+        if (mvBytes) {
+            const VkBufferCopy mvCopy{meshletAt + mBytes, m_meshletVertices.used * sizeof(uint32_t), mvBytes};
+            vkCmdCopyBuffer(cmd, staging.buffer, m_meshletVertices.buf.buffer, 1, &mvCopy);
+        }
+        if (mtBytes) {
+            const VkBufferCopy mtCopy{meshletAt + mBytes + mvBytes, m_meshletTriangles.used * sizeof(uint32_t), mtBytes};
+            vkCmdCopyBuffer(cmd, staging.buffer, m_meshletTriangles.buf.buffer, 1, &mtCopy);
+        }
     }
 
     // Make the arenas visible to every later submission (draws, shaders, BLAS builds).
@@ -244,6 +303,9 @@ MeshHandle MeshRegistry::registerMesh(const MeshData& data, std::vector<GpuBuffe
     m_indices.used += indexCount;
     m_triangleSlots.used += triangleCount;
     m_meshTable.used += 1;
+    m_meshlets.used += meshletCount;
+    m_meshletVertices.used += meshletVertexCount;
+    m_meshletTriangles.used += meshletTriangleCount;
 
     // A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so
     // existing BLASes survive arena growth untouched.
@@ -262,6 +324,8 @@ BlasHandle MeshRegistry::release(MeshHandle h) {
     mesh.blas = INVALID_BLAS;
     mesh.submeshes.clear();
     mesh.submeshes.shrink_to_fit();
+    mesh.submeshMeshlets.clear();
+    mesh.submeshMeshlets.shrink_to_fit();
     return blas;
 }
 

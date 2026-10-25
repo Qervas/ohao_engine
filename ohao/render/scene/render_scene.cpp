@@ -6,6 +6,7 @@
 #include "gpu/shared_layout.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <set>
@@ -62,6 +63,7 @@ struct RenderScene::Impl {
     uint32_t drawTableCapacity{0};
     uint64_t uploadedVersion{~0ull};
     std::vector<gpu::shared::DrawRecord> drawRecords;
+    uint32_t meshletEntries{0};   // the uploaded table's meshlets, all draws
 
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
@@ -206,11 +208,14 @@ struct RenderScene::Impl {
             if ((g.flags & kInstanceVisible) == 0) continue;
             const MeshInfo* mesh = meshes.info(MeshHandle{g.mesh, 0});
             if (!mesh) continue;
-            for (const SubmeshDesc& sub : mesh->submeshes) {
+            for (std::size_t s = 0; s < mesh->submeshes.size(); ++s) {
+                const SubmeshDesc& sub = mesh->submeshes[s];
                 const bool oneSided = !materials.doubleSided(instances.materialIndexFor(slot, sub.materialSlot));
+                const std::array<uint32_t, 2> ml = s < mesh->submeshMeshlets.size() ? mesh->submeshMeshlets[s]
+                                                                                   : std::array<uint32_t, 2>{0u, 0u};
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
-                                     mesh->aabbMin, mesh->aabbMax, &g.world, oneSided});
+                                     mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1]});
             }
         }
         drawsDirty = false;
@@ -236,14 +241,17 @@ struct RenderScene::Impl {
             drawTableCapacity = cap;
         }
         drawRecords.resize(n);
+        uint32_t entries = 0;
         for (uint32_t i = 0; i < n; ++i) {
             const Draw& d = draws[i];
             gpu::shared::DrawRecord& r = drawRecords[i];
             r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
-            r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, 0u, 0u};
-            r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, 0.0f};
+            r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, d.firstMeshlet, d.meshletCount};
+            r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};
             r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};
+            entries += d.meshletCount;
         }
+        meshletEntries = entries;
         batch.upload(drawTable.buffer, 0, drawRecords.data(), VkDeviceSize{n} * sizeof(gpu::shared::DrawRecord));
         uploadedVersion = drawsVersion;
         return true;
@@ -508,6 +516,12 @@ uint32_t RenderScene::drawCount() const {
     return m->uploadedVersion == m->drawsVersion ? static_cast<uint32_t>(m->draws.size()) : 0u;
 }
 uint64_t RenderScene::drawsVersion() const { return m->drawsVersion; }
+uint32_t RenderScene::meshletEntryCount() const {
+    return m->uploadedVersion == m->drawsVersion ? m->meshletEntries : 0u;
+}
+VkBuffer RenderScene::meshletArena() const { return m->meshes.meshletArena(); }
+VkBuffer RenderScene::meshletVertexArena() const { return m->meshes.meshletVertexArena(); }
+VkBuffer RenderScene::meshletTriangleArena() const { return m->meshes.meshletTriangleArena(); }
 
 const RenderSceneStats& RenderScene::stats() const noexcept { return m->stats; }
 VkAccelerationStructureKHR RenderScene::tlas() const { return m->rt() ? m->rtAccel->getTLAS() : VK_NULL_HANDLE; }

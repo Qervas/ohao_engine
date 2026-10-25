@@ -41,9 +41,13 @@
 #include "gpu_calibration.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
+#include "render/deferred/gpu_culling.hpp"
 #include "render/frame/pass_registry.hpp"
+#include "render/scene/meshlet_builder.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -107,6 +111,40 @@ bool writeBenchScenes(const std::string& only) {
     return true;
 }
 
+// ---- the meshlet build (CPU) ----------------------------------------------------------------
+
+// The meshlet builder on a million triangles: a 708x708 grid, heights from two waves, in row
+// order as a vertex-cache-ordered asset would be. Builds back to back, the median of them.
+constexpr const char* kMeshletScene = "meshlet_build_1m";
+constexpr int kMeshletBuilds = 9;
+
+std::vector<double> timeMeshletBuild() {
+    constexpr uint32_t n = 708;   // 2 * 708^2 = 1,002,528 triangles
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> idx;
+    verts.reserve(std::size_t{n + 1} * (n + 1));
+    idx.reserve(std::size_t{n} * n * 6);
+    for (uint32_t y = 0; y <= n; ++y)
+        for (uint32_t x = 0; x <= n; ++x) {
+            Vertex v{};
+            v.position = glm::vec3(float(x) * 0.1f, std::sin(float(x) * 0.031f) * std::cos(float(y) * 0.047f) * 4.0f, float(y) * 0.1f);
+            verts.push_back(v);
+        }
+    for (uint32_t y = 0; y < n; ++y)
+        for (uint32_t x = 0; x < n; ++x) {
+            const uint32_t a = y * (n + 1) + x, b = a + 1, c = a + n + 1, d = c + 1;
+            idx.insert(idx.end(), {a, c, b, b, c, d});
+        }
+    std::vector<double> ms;
+    for (int i = 0; i < kMeshletBuilds; ++i) {
+        render::MeshletSet set;
+        const auto t0 = std::chrono::steady_clock::now();
+        render::buildMeshlets(verts, idx, 0, static_cast<uint32_t>(idx.size()), set);
+        ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    return ms;
+}
+
 // ---- results --------------------------------------------------------------------------------
 
 struct Stats {
@@ -129,8 +167,9 @@ struct PassResult {
 struct SceneResult {
     std::string name;
     uint32_t width{0}, height{0};
-    int frames{0};
+    int frames{0};               // frames, or for meshlet_build_1m builds
     Stats frame, span, cpu;
+    Stats meshletBuild;          // meshlet_build_1m only
     std::vector<PassResult> passes;   // registry (frame) order
     std::string error;                // the capture failed
 };
@@ -250,6 +289,7 @@ std::optional<Measurement> readMeasurement(const std::string& text, std::string&
         sr.frame = r.stat(s, "frame");
         sr.span = r.stat(s, "span");
         sr.cpu = r.stat(s, "cpu");
+        sr.meshletBuild = r.stat(s, "meshletBuild");
         sr.error = r.str(s, "error");
         r.each(s, "passes", [&](const reflect::JsonNode* p) {
             sr.passes.push_back({r.str(p, "name"), {r.num(p, "median"), r.num(p, "p95")}, static_cast<int>(r.num(p, "frames"))});
@@ -319,6 +359,8 @@ void measure(const Measurement& m, Budget& b) {
         b.measured = s->frame.median;
     } else if (b.measure == "cpu") {
         b.measured = s->cpu.median;
+    } else if (b.measure == "meshletBuild") {
+        b.measured = s->meshletBuild.median;
     } else if (b.measure == "cpuRatio") {
         const SceneResult* of = findScene(m, b.of);
         if (of && of->cpu.median > 0) b.measured = s->cpu.median / of->cpu.median;
@@ -424,8 +466,11 @@ std::optional<double> budgetOf(const std::vector<Budget>& budgets, const std::st
 
 int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets, int currentStep, const Verdict& v,
            const std::string& outPath) {
+    int timedFrames = 0;
+    for (const SceneResult& s : m.scenes)
+        if (s.name != kMeshletScene) { timedFrames = s.frames; break; }
     std::printf("render_bench (sub-project 2b): %d warm-up + %d timed frames per scene, headless, %s\n", kWarmup,
-                m.scenes.empty() ? 0 : m.scenes.front().frames, m.gpu.empty() ? "GPU unknown" : m.gpu.c_str());
+                timedFrames, m.gpu.empty() ? "GPU unknown" : m.gpu.c_str());
     const auto cal = [](double a, double b, double ref) {
         char buf[128];
         if (ref > 0)
@@ -443,6 +488,11 @@ int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets,
     for (const SceneResult& s : m.scenes) {
         if (!s.error.empty()) {
             std::printf("    %s: FAILED: %s\n", s.name.c_str(), s.error.c_str());
+            continue;
+        }
+        if (s.name == kMeshletScene) {
+            std::printf("    %s, %d builds: median %.3f ms p95 %.3f ms (CPU)\n", s.name.c_str(), s.frames,
+                        s.meshletBuild.median, s.meshletBuild.p95);
             continue;
         }
         std::printf("    %s %ux%u, %d frames: frame median %.3f ms p95 %.3f ms (span %.3f, CPU %.3f ms)\n", s.name.c_str(),
@@ -527,6 +577,7 @@ int report(const Measurement& m, std::vector<Budget>& budgets, bool haveBudgets,
         writeStats(j, "frame", s.frame, budgetOf(budgets, s.name, "frame"));
         writeStats(j, "span", s.span);
         writeStats(j, "cpu", s.cpu, budgetOf(budgets, s.name, "cpu"));
+        if (s.name == kMeshletScene) writeStats(j, "meshletBuild", s.meshletBuild, budgetOf(budgets, s.name, "meshletBuild"));
         j.key("passes");
         j.beginArray();
         for (const PassResult& p : s.passes) {
@@ -677,12 +728,32 @@ int calibrateReference(const std::string& refPath) {
     return 0;
 }
 
-Measurement run(const std::string& only, int timed) {
+// --geometry / --fallback: GPU culling's meshlet settings for every scene (default: the
+// renderer's, geometry auto on task and mesh shaders).
+struct GeometryChoice {
+    std::optional<GpuCulling::Geometry> geometry;
+    bool fallback{false};
+};
+
+Measurement run(const std::string& only, int timed, const GeometryChoice& choice) {
     Measurement m;
     if (!writeBenchScenes(only)) std::fprintf(stderr, "render_bench: the bench scenes could not be written\n");
     bench::LoadMonitor monitor;
     monitor.start();
     m.cpuCal0 = bench::calibrationMs();
+    if (only.empty() || only == kMeshletScene) {
+        const std::vector<double> ms = timeMeshletBuild();
+        SceneResult res;
+        res.name = kMeshletScene;
+        res.frames = static_cast<int>(ms.size());
+        res.meshletBuild = stats(ms);
+        m.scenes.push_back(std::move(res));
+        if (only == kMeshletScene) {
+            m.cpuCal1 = bench::calibrationMs();
+            m.busy = monitor.stop(5.0, &m.external);
+            return m;
+        }
+    }
     Gpu gpu;
     // The renderer starts on the first capture; the GPU calibration needs its device.
     const SceneSpec& first = sceneSpecs().front();
@@ -690,6 +761,13 @@ Measurement run(const std::string& only, int timed) {
     bench::GpuCalibration kernel;
     VkShaderModule module = VK_NULL_HANDLE;
     VulkanRenderer* r = gpu.host->renderer();
+    if (startErr.empty() && r && r->getDeferredRenderer() && r->getDeferredRenderer()->culling()) {
+        GpuCulling* culling = r->getDeferredRenderer()->culling();
+        GpuCulling::Settings s = culling->settings();
+        if (choice.geometry) s.geometry = *choice.geometry;
+        if (choice.fallback) s.meshShaders = false;
+        culling->setSettings(s);
+    }
     if (startErr.empty() && r) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(r->getPhysicalDevice(), &props);
@@ -734,6 +812,7 @@ int main(int argc, char** argv) {
     std::string evaluatePath, only;
     bool calibrate = false, outGiven = false;
     int timed = kTimed;
+    GeometryChoice geometry;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
@@ -743,9 +822,14 @@ int main(int argc, char** argv) {
         else if (a == "--only" && i + 1 < argc) only = argv[++i];
         else if (a == "--frames" && i + 1 < argc) timed = std::clamp(std::atoi(argv[++i]), 10, 110);
         else if (a == "--calibrate") calibrate = true;
+        else if (a == "--geometry" && i + 1 < argc && std::strcmp(argv[i + 1], "instances") == 0) geometry.geometry = GpuCulling::Geometry::Instances, ++i;
+        else if (a == "--geometry" && i + 1 < argc && std::strcmp(argv[i + 1], "auto") == 0) geometry.geometry = GpuCulling::Geometry::Auto, ++i;
+        else if (a == "--geometry" && i + 1 < argc && std::strcmp(argv[i + 1], "meshlets") == 0) geometry.geometry = GpuCulling::Geometry::Meshlets, ++i;
+        else if (a == "--fallback") geometry.fallback = true;
         else {
             std::fprintf(stderr, "usage: render_bench [--check budgets.json] [--out file] [--reference file] "
-                                 "[--frames N] [--only SCENE] | --calibrate | --evaluate results.json --check budgets.json\n");
+                                 "[--frames N] [--only SCENE] [--geometry instances|auto|meshlets] [--fallback] | "
+                                 "--calibrate | --evaluate results.json --check budgets.json\n");
             return 2;
         }
     }
@@ -790,7 +874,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
         SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 #endif
-        m = run(only, timed);
+        m = run(only, timed, geometry);
         const std::string ref = readText(refPath);
         m.cpuRef = bench::readReference(refPath);
         m.gpuRef = jsonNumber(ref, "gpuCalibrationMs", 0.0);

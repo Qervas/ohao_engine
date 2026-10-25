@@ -1,5 +1,6 @@
-// cull_parity_gpu_test (sub-project 2b, test 6): GPU culling changes what is drawn, never what
-// is seen, and builds its lists the same way every run.
+// cull_parity_gpu_test (sub-project 2b, tests 6 and 7): GPU culling changes what is drawn, never
+// what is seen, and builds its lists the same way every run; the meshlet path draws the same
+// image through task and mesh shaders as through their compute fallback.
 //
 //   t06 parity     the same frames with culling on and off are identical images (max_abs 0):
 //                  a built scene with a wall hiding a row of boxes, boxes off screen and boxes in
@@ -11,6 +12,11 @@
 //                  in exactly one (early or late).
 //   t06 face cull  one-sided materials (back faces culled) render the helmet as double-sided ones
 //                  do: the culled faces were hidden anyway.
+//   t07 meshlets   every draw on the meshlet path, task + mesh shaders and the fallback (compute
+//                  culling, per-meshlet indirect draws, vertex pulling) give identical images
+//                  (max_abs 0, PNG byte for byte) for the occlusion scene, Cornell and the helmet
+//                  room; meshlet culling on and off too; the fallback's lists are the same
+//                  every run, and the helmet's meshlet culling drops meshlets.
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
@@ -93,21 +99,47 @@ void buildOcclusionScene(ecs::World& world, VulkanRenderer& r, bool oneSided) {
     r.setRenderMode(RenderMode::Deferred);
 }
 
+// A G-buffer phase's lists: instance one-sided, instance double-sided, meshlet one-sided,
+// meshlet double-sided; early (lists 0-3) then late (4-7).
+constexpr uint32_t kGBufferLists = 8;
+
+// The cone scene: one one-sided sphere (128 x 64 sectors, over kMeshletMinTriangles: the
+// meshlet path under geometry auto) seen from the front, its back half facing away.
+void buildSphereScene(ecs::World& world, VulkanRenderer& r) {
+    Model sphere;
+    PrimitiveMeshGenerator::generateSphere(sphere, 1.0f, 128, 64);
+    render::MaterialDesc m;
+    m.baseColor = {0.7f, 0.6f, 0.5f};
+    m.doubleSided = false;
+    ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), sphere, "sphere", {}, &m);
+    ecs::Light light;
+    light.intensity = 40.0f;
+    light.castShadows = false;
+    ecs::spawnLight(world, "light", light, ecs::Transform{{2.0f, 3.0f, 4.0f}});
+    r.getCamera().setPosition({0.0f, 0.5f, 4.0f});
+    r.getCamera().setRotation(-7.0f, -90.0f);
+    r.setRenderMode(RenderMode::Deferred);
+}
+
 struct Run {
     std::vector<uint8_t> image;
     GpuCulling::Capture lists;   // the last frame's
-    std::vector<std::array<uint32_t, 4>> counts;   // per frame: early 1-/2-sided, late 1-/2-sided
+    std::vector<std::array<uint32_t, kGBufferLists>> counts;   // per frame, the G-buffer lists' draw counts
+    uint32_t meshlets{0};        // the scene's meshlets
 };
 
-// `frames` frames of the occlusion scene from a reset, culling as `s`, the last read back.
-Run occlusionRun(GpuCulling::Settings s, int frames, bool oneSided = false) {
+enum class Scene { Occlusion, Sphere };
+
+// `frames` frames of a built scene from a reset, culling as `s`, the last read back.
+Run sceneRun(Scene scene, GpuCulling::Settings s, int frames, bool oneSided = false) {
     Run out;
     VulkanRenderer r(320, 180);
     if (!r.initialize()) return out;
     {
         ecs::World world;   // after the renderer: released first
         ecs::installRenderExtract(world, r.renderScene());
-        buildOcclusionScene(world, r, oneSided);
+        if (scene == Scene::Occlusion) buildOcclusionScene(world, r, oneSided);
+        else buildSphereScene(world, r);
         GpuCulling* culling = r.getDeferredRenderer()->culling();
         culling->setSettings(s);
         culling->setCapture(true);
@@ -119,28 +151,38 @@ Run occlusionRun(GpuCulling::Settings s, int frames, bool oneSided = false) {
             r.render();
             r.waitForSubmitted(r.framesSubmitted());
             out.lists = culling->capture();
-            if (out.lists.counts.size() >= 4)
-                out.counts.push_back({out.lists.counts[0], out.lists.counts[1], out.lists.counts[2], out.lists.counts[3]});
+            if (out.lists.counts.size() >= kGBufferLists) {
+                std::array<uint32_t, kGBufferLists> c{};
+                std::copy_n(out.lists.counts.begin(), kGBufferLists, c.begin());
+                out.counts.push_back(c);
+            }
         }
         const auto px = r.readback();
         out.image.assign(px.begin(), px.end());
+        for (const auto& d : r.renderScene().draws()) out.meshlets += d.meshletCount;
     }
     return out;
+}
+
+Run occlusionRun(GpuCulling::Settings s, int frames, bool oneSided = false) {
+    return sceneRun(Scene::Occlusion, s, frames, oneSided);
 }
 
 std::string countsText(const Run& run) {
     std::string s;
     for (const auto& c : run.counts)
-        s += "[" + std::to_string(c[0] + c[1]) + "+" + std::to_string(c[2] + c[3]) + "]";
+        s += "[" + std::to_string(c[0] + c[1] + c[2] + c[3]) + "+" + std::to_string(c[4] + c[5] + c[6] + c[7]) + "]";
     return s;
 }
 
-// The draws listed by `list` (their draw-table indices: firstInstance).
+// The draws listed by `list` (their draw-table indices: an instance command's firstInstance,
+// a meshlet command's fourth word).
 std::vector<uint32_t> listed(const GpuCulling::Capture& c, uint32_t list) {
     std::vector<uint32_t> out;
     if (c.counts.size() <= list) return out;
     const std::size_t base = std::size_t{list} * c.drawCount * 5;
-    for (uint32_t k = 0; k < c.counts[list]; ++k) out.push_back(c.commands[base + k * 5 + 4]);
+    const uint32_t word = list % 4 >= 2 ? 3 : 4;
+    for (uint32_t k = 0; k < c.counts[list]; ++k) out.push_back(c.commands[base + k * 5 + word]);
     return out;
 }
 
@@ -179,7 +221,7 @@ void t06_occluded_and_offscreen_boxes_are_not_drawn() {
     if (run.image.empty()) return;
     // Draw order: floor 0, wall 1, hidden 2..6, seen 7..9, off screen 10..11.
     std::vector<int> drawn(run.lists.drawCount, 0);
-    for (uint32_t list = 0; list < 4; ++list)
+    for (uint32_t list = 0; list < kGBufferLists; ++list)
         for (const uint32_t d : listed(run.lists, list)) ++drawn[d];
     const int firstHidden = 2, firstSeen = firstHidden + kHidden, firstOff = firstSeen + kSeen;
     bool hidden = true, seen = true, off = true;
@@ -193,7 +235,7 @@ void t06_occluded_and_offscreen_boxes_are_not_drawn() {
     check(seen, "t06: each box in view is drawn exactly once (early or late)");
     check(off, "t06: the boxes off screen are not drawn (frustum)");
     const auto& c = run.counts.back();
-    check(c[0] + c[1] > 0, "t06: from frame 2 the early pass draws last frame's visible set");
+    check(c[0] + c[1] + c[2] + c[3] > 0, "t06: from frame 2 the early pass draws last frame's visible set");
 }
 
 void t06_face_culling_changes_no_pixel() {
@@ -203,9 +245,9 @@ void t06_face_culling_changes_no_pixel() {
     if (doubleSided.image.empty()) return;
     const int d = maxAbs(doubleSided.image, oneSided.image);
     const auto& c = oneSided.counts.back();
-    std::printf("  max_abs %d; one-sided run's lists: %u one-sided + %u double-sided early, %u + %u late\n", d, c[0], c[1],
-                c[2], c[3]);
-    check(c[0] + c[2] > 0 && c[1] + c[3] == 0, "t06: one-sided draws use the face-culled list");
+    const uint32_t one = c[0] + c[2] + c[4] + c[6], two = c[1] + c[3] + c[5] + c[7];
+    std::printf("  max_abs %d; one-sided run's lists: %u one-sided, %u double-sided\n", d, one, two);
+    check(one > 0 && two == 0, "t06: one-sided draws use the face-culled lists");
     check(d == 0, "t06: face culling changes no pixel of closed boxes");
 }
 
@@ -226,10 +268,17 @@ std::vector<uint8_t> readFile(const std::string& p) {
     return bytes;
 }
 
+// What a scene capture's culling did in its last frame.
+struct SceneLists {
+    std::string text;               // the G-buffer lists' counts
+    GpuCulling::Capture capture;
+    uint32_t meshletDrawMeshlets{0};   // the meshlets of the draws on the meshlet path
+};
+
 // A checked-in scene captured as `ohao run` captures it (the CLI's stack), culling as `s`; the
 // PNG (OHAO's deterministic encoder: equal files are equal images) written to `png`.
 std::vector<uint8_t> sceneCapture(const char* path, const char* capture, GpuCulling::Settings s, const std::string& png,
-                                  std::string& lists) {
+                                  SceneLists& lists) {
     ecs::FileAssetResolver assets(OHAO_SOURCE_DIR);
     host::RenderHost host(assets, api::HostKind::Headless);
     std::vector<uint8_t> out;
@@ -267,9 +316,17 @@ std::vector<uint8_t> sceneCapture(const char* path, const char* capture, GpuCull
         const api::RenderOutcome o = host.capture(r);
         if (!o.errors.empty()) return out;
         out = readFile(png);
-        const GpuCulling::Capture c = culling->capture();
-        for (uint32_t list = 0; list < 4 && list < c.counts.size(); ++list) lists += std::to_string(c.counts[list]) + " ";
-        lists += "of " + std::to_string(c.drawCount);
+        lists.capture = culling->capture();
+        const GpuCulling::Capture& c = lists.capture;
+        for (uint32_t list = 0; list < kGBufferLists && list < c.counts.size(); ++list)
+            lists.text += std::to_string(c.counts[list]) + " ";
+        lists.text += "of " + std::to_string(c.drawCount);
+        for (const auto& d : host.renderer()->renderScene().draws()) {
+            const bool meshletPath = d.meshletCount > 0 && (s.geometry == GpuCulling::Geometry::Meshlets ||
+                                                            (s.geometry == GpuCulling::Geometry::Auto &&
+                                                             d.indexCount / 3 >= shared::kMeshletMinTriangles));
+            if (meshletPath) lists.meshletDrawMeshlets += d.meshletCount;
+        }
     }
     return out;
 }
@@ -282,21 +339,129 @@ void t06_parity_scene_files() {
         // Per-process names: CTest may run another copy of this test.
         const std::string base = std::string(OHAO_BINARY_DIR) + "/cull_parity_" + c.tag + "_" +
                                  std::to_string(static_cast<unsigned long>(_getpid()));
-        std::string onLists, offLists;
+        SceneLists onLists, offLists;
         const auto on = sceneCapture(c.path, c.capture, {true, true}, base + "_on.png", onLists);
         const auto off = sceneCapture(c.path, c.capture, {false, false}, base + "_off.png", offLists);
         if (on.empty() || off.empty()) {
             check(false, std::string("t06: ") + c.name + ": the capture rendered");
             continue;
         }
-        std::printf("  %s: PNGs %s; last frame's lists (early 1-/2-sided, late 1-/2-sided) on: %s, off: %s\n", c.name,
-                    on == off ? "identical" : ("DIFFER (" + base + "_on.png / _off.png)").c_str(), onLists.c_str(),
-                    offLists.c_str());
+        std::printf("  %s: PNGs %s; last frame's lists (early, late: instance 1-/2-sided, meshlet 1-/2-sided) on: %s, off: %s\n", c.name,
+                    on == off ? "identical" : ("DIFFER (" + base + "_on.png / _off.png)").c_str(), onLists.text.c_str(),
+                    offLists.text.c_str());
         check(on == off, std::string("t06: ") + c.name + ": culling on = off");
         if (on == off) {
             std::remove((base + "_on.png").c_str());
             std::remove((base + "_off.png").c_str());
         }
+    }
+}
+
+// ---- test 7: meshlets ---------------------------------------------------------------------------
+
+using Geometry = GpuCulling::Geometry;
+constexpr GpuCulling::Settings kMeshShaders{true, true, Geometry::Meshlets, true};
+constexpr GpuCulling::Settings kFallback{true, true, Geometry::Meshlets, false};
+
+uint32_t meshletDraws(const std::array<uint32_t, kGBufferLists>& c) { return c[2] + c[3] + c[6] + c[7]; }
+
+uint32_t fallbackMeshlets(const GpuCulling::Capture& c) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < shared::kCullMeshletLists && shared::kCullLists + i < c.counts.size(); ++i)
+        n += c.counts[shared::kCullLists + i];
+    return n;
+}
+
+// Every draw of the occlusion scene on the meshlet path: task and mesh shaders, and the compute
+// fallback, over 1, 2 and 4 frames (the early pass drawing from frame 2), with culling on and off.
+void t07_mesh_shaders_and_fallback_render_the_occlusion_scene_identically() {
+    std::printf("t07: the mesh-shader and fallback meshlet paths render the occlusion scene identically\n");
+    for (const int frames : {1, 2, 4}) {
+        const Run mesh = occlusionRun(kMeshShaders, frames), fallback = occlusionRun(kFallback, frames);
+        if (mesh.image.empty()) {
+            std::printf("  (no Vulkan device -- skipped)\n");
+            return;
+        }
+        GpuCulling::Settings off = kFallback;
+        off.frustum = off.occlusion = false;
+        const Run fallbackOff = occlusionRun(off, frames);
+        const int d = maxAbs(mesh.image, fallback.image), dOff = maxAbs(fallback.image, fallbackOff.image);
+        std::printf("  %d frames: mesh vs fallback max_abs %d, fallback culling on vs off %d; meshlet draws %u, fallback "
+                    "meshlets drawn %u of %u\n",
+                    frames, d, dOff, meshletDraws(mesh.counts.back()), fallbackMeshlets(fallback.lists),
+                    fallback.lists.meshletEntries);
+        check(meshletDraws(mesh.counts.back()) > 0 && meshletDraws(fallback.counts.back()) > 0,
+              "t07: geometry meshlets puts the draws on the meshlet lists");
+        check(fallback.lists.meshletEntries > 0 && fallbackMeshlets(fallback.lists) > 0,
+              "t07: the fallback culls and lists meshlets");
+        check(d == 0, "t07: mesh shaders = fallback, occlusion scene, " + std::to_string(frames) + " frames");
+        check(dOff == 0, "t07: meshlet culling on = off, occlusion scene, " + std::to_string(frames) + " frames");
+    }
+}
+
+// The cone test on the GPU: the sphere's back-facing meshlets are dropped, by the task shader
+// and by the fallback alike, and the image is the instance path's.
+void t07_cone_culling_drops_back_facing_meshlets() {
+    std::printf("t07: normal cones drop the one-sided sphere's back-facing meshlets\n");
+    const GpuCulling::Settings mesh{true, true, Geometry::Auto, true}, fallback{true, true, Geometry::Auto, false},
+        instances{true, true, Geometry::Instances, true};
+    const Run m = sceneRun(Scene::Sphere, mesh, 2), f = sceneRun(Scene::Sphere, fallback, 2),
+              i = sceneRun(Scene::Sphere, instances, 2);
+    if (m.image.empty()) return;
+    const uint32_t drawn = fallbackMeshlets(f.lists);
+    std::printf("  fallback drew %u of the sphere's %u meshlets; mesh vs fallback max_abs %d, meshlets vs instances %d\n",
+                drawn, f.meshlets, maxAbs(m.image, f.image), maxAbs(m.image, i.image));
+    check(meshletDraws(m.counts.back()) == 1, "t07: geometry auto puts the 16,000-triangle sphere on the meshlet path");
+    check(drawn > 0 && drawn < f.meshlets, "t07: the cone test drops the sphere's back-facing meshlets");
+    check(maxAbs(m.image, f.image) == 0, "t07: sphere: mesh shaders = fallback");
+    check(maxAbs(m.image, i.image) == 0, "t07: sphere: culled meshlets = the instance path's image");
+}
+
+void t07_fallback_twin_runs_build_identical_meshlet_lists() {
+    std::printf("t07: two fresh renderers build byte-identical fallback meshlet lists\n");
+    const Run a = occlusionRun(kFallback, 3), b = occlusionRun(kFallback, 3);
+    if (a.image.empty()) return;
+    check(!a.lists.meshletCommands.empty(), "t07: the fallback's meshlet commands were captured");
+    check(a.lists.counts == b.lists.counts && a.lists.meshletCommands == b.lists.meshletCommands,
+          "t07: twin runs: the same per-meshlet commands, byte for byte");
+}
+
+// The checked-in scenes on the meshlet path, mesh shaders against the fallback (PNG byte for
+// byte), and the meshlets actually culled: the helmet (one-sided, 15,452 triangles) draws fewer
+// meshlets than it has.
+void t07_mesh_shaders_and_fallback_render_the_scene_files_identically() {
+    std::printf("t07: the mesh-shader and fallback meshlet paths render the checked-in scenes identically\n");
+    struct Case { const char* name; const char* tag; const char* path; const char* capture; Geometry geometry; };
+    for (const Case& c : {Case{"cornell, every draw on meshlets", "cornell", "assets/scenes/cornell_box.scene.json", "plain",
+                               Geometry::Meshlets},
+                          Case{"helmet room, geometry auto, post", "helmet", "assets/scenes/helmet_game.scene.json", "post",
+                               Geometry::Auto}}) {
+        const std::string base = std::string(OHAO_BINARY_DIR) + "/meshlet_parity_" + c.tag + "_" +
+                                 std::to_string(static_cast<unsigned long>(_getpid()));
+        SceneLists meshLists, fallbackLists, instanceLists;
+        const auto mesh = sceneCapture(c.path, c.capture, {true, true, c.geometry, true}, base + "_mesh.png", meshLists);
+        const auto fallback =
+            sceneCapture(c.path, c.capture, {true, true, c.geometry, false}, base + "_fallback.png", fallbackLists);
+        const auto instances =
+            sceneCapture(c.path, c.capture, {true, true, Geometry::Instances, true}, base + "_instances.png", instanceLists);
+        if (mesh.empty() || fallback.empty() || instances.empty()) {
+            check(false, std::string("t07: ") + c.name + ": the captures rendered");
+            continue;
+        }
+        const uint32_t drawn = fallbackMeshlets(fallbackLists.capture);
+        std::printf("  %s: mesh vs fallback PNGs %s, meshlets vs instances PNGs %s; lists mesh %s, fallback %s; fallback "
+                    "drew %u meshlets of the meshlet draws' %u\n",
+                    c.name, mesh == fallback ? "identical" : "DIFFER", mesh == instances ? "identical" : "differ",
+                    meshLists.text.c_str(), fallbackLists.text.c_str(), drawn, fallbackLists.meshletDrawMeshlets);
+        check(mesh == fallback, std::string("t07: ") + c.name + ": mesh shaders = fallback");
+        check(drawn > 0 && drawn <= fallbackLists.meshletDrawMeshlets,
+              std::string("t07: ") + c.name + ": the fallback draws meshlets of the meshlet draws only");
+        check(mesh == instances, std::string("t07: ") + c.name + ": the meshlet path = the instance path");
+        if (mesh == fallback) {
+            std::remove((base + "_mesh.png").c_str());
+            std::remove((base + "_fallback.png").c_str());
+        }
+        if (mesh == instances) std::remove((base + "_instances.png").c_str());
     }
 }
 
@@ -308,5 +473,9 @@ int main() {
     t06_occluded_and_offscreen_boxes_are_not_drawn();
     t06_face_culling_changes_no_pixel();
     t06_parity_scene_files();
+    t07_mesh_shaders_and_fallback_render_the_occlusion_scene_identically();
+    t07_cone_culling_drops_back_facing_meshlets();
+    t07_fallback_twin_runs_build_identical_meshlet_lists();
+    t07_mesh_shaders_and_fallback_render_the_scene_files_identically();
     return test::finish("cull_parity_gpu_test", g_passed, g_failed, g_failures);
 }

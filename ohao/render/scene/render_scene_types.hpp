@@ -7,6 +7,7 @@
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -140,6 +141,8 @@ static_assert(sizeof(MeshGpu) == 16);
 struct MeshInfo {
     uint32_t vertexOffset, vertexCount, indexOffset, indexCount, triangleSlotOffset;
     std::vector<SubmeshDesc> submeshes;
+    // Per submesh: its first meshlet in the meshlet arena and its meshlet count.
+    std::vector<std::array<uint32_t, 2>> submeshMeshlets;
     glm::vec3 aabbMin, aabbMax;
     BlasHandle blas{INVALID_BLAS};
     std::string debugName;

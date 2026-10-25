@@ -8,9 +8,11 @@
 namespace ohao::render {
 
 // Mesh arenas: every registered mesh is appended to one shared vertex arena, index
-// arena (mesh-local indices), triangle material-slot stream and mesh table. Each
-// mesh owns one BLAS built against the arenas. Registration is load-time work: it
-// uploads and builds synchronously.
+// arena (mesh-local indices), triangle material-slot stream and mesh table, and its
+// submeshes' meshlets (render/scene/meshlet_builder) to the meshlet arenas: the meshlets
+// (gpu::shared::MeshletGpu), their vertices (mesh-local indices) and their packed local
+// triangles. Each mesh owns one BLAS built against the arenas, from its original
+// triangles. Registration is load-time work: it uploads and builds synchronously.
 class MeshRegistry {
 public:
     struct Context {
@@ -37,6 +39,9 @@ public:
     [[nodiscard]] VkBuffer indexArena() const noexcept { return m_indices.buf.buffer; }
     [[nodiscard]] VkBuffer triangleSlotBuffer() const noexcept { return m_triangleSlots.buf.buffer; }
     [[nodiscard]] VkBuffer meshTable() const noexcept { return m_meshTable.buf.buffer; }
+    [[nodiscard]] VkBuffer meshletArena() const noexcept { return m_meshlets.buf.buffer; }
+    [[nodiscard]] VkBuffer meshletVertexArena() const noexcept { return m_meshletVertices.buf.buffer; }
+    [[nodiscard]] VkBuffer meshletTriangleArena() const noexcept { return m_meshletTriangles.buf.buffer; }
 
 private:
     struct Arena {
@@ -57,6 +62,7 @@ private:
 
     Context m_ctx{};
     Arena m_vertices, m_indices, m_triangleSlots, m_meshTable;
+    Arena m_meshlets, m_meshletVertices, m_meshletTriangles;
     std::vector<MeshInfo> m_meshes;
 };
 

@@ -81,7 +81,7 @@ public:
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;
 
-    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; };
+    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; };
     // Visible instance x submesh draws, in slot order; rebuilt only when instances change.
     [[nodiscard]] std::span<const Draw> draws() const;
     // The same list on the GPU (gpu::shared::DrawRecord each), uploaded by recordUpdates:
@@ -90,6 +90,14 @@ public:
     [[nodiscard]] VkBuffer drawTable() const;
     [[nodiscard]] uint32_t drawCount() const;
     [[nodiscard]] uint64_t drawsVersion() const;
+    // The draws' meshlets in draw order, each a "meshlet entry" (DrawRecord::aabbMin.w holds a
+    // draw's first entry): what the mesh-shader fallback culls one by one. 0 while the table
+    // is stale, as drawCount.
+    [[nodiscard]] uint32_t meshletEntryCount() const;
+    // The meshlet arenas (MeshRegistry).
+    [[nodiscard]] VkBuffer meshletArena() const;
+    [[nodiscard]] VkBuffer meshletVertexArena() const;
+    [[nodiscard]] VkBuffer meshletTriangleArena() const;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
     // TLAS over every slot below the instance high-water mark (custom index = slot;

@@ -11,8 +11,18 @@ namespace ohao::gpu::shared {
 inline constexpr uint32_t kCalibrateGroupSize = 256u;
 // GPU culling (cull/instances.slang): draws a workgroup classifies and scans, one a thread
 inline constexpr uint32_t kCullGroupSize = 256u;
-// GPU culling: indirect command lists, two (one-sided, double-sided) for each of six phases: the early and late G-buffer passes and four CSM cascades
+// GPU culling: the draw lists (5 uints a command, drawCount commands a list): four for each G-buffer phase (instance one-sided, instance double-sided, meshlet one-sided, meshlet double-sided) and one for each of four CSM cascades
 inline constexpr uint32_t kCullLists = 12u;
+// the early G-buffer phase's first list (four)
+inline constexpr uint32_t kCullListEarly = 0u;
+// the late G-buffer phase's first list (four)
+inline constexpr uint32_t kCullListLate = 4u;
+// CSM cascade c's list is kCullListCascade0 + c
+inline constexpr uint32_t kCullListCascade0 = 8u;
+// the mesh-shader fallback's per-meshlet lists (VkDrawIndirectCommand each, meshletEntryCount a list): early one-sided, early double-sided, late one-sided, late double-sided; their counts follow the draw lists' (counts[kCullLists + i])
+inline constexpr uint32_t kCullMeshletLists = 4u;
+// GPU culling's count words: kCullLists then kCullMeshletLists
+inline constexpr uint32_t kCullCounts = 16u;
 // GPU culling phase: the early pass, the draws visible last frame and in the frustum
 inline constexpr uint32_t kCullPhaseEarly = 0u;
 // GPU culling phase: the late pass, the draws visible now (frustum and Hi-Z) not drawn early; it records visibility for the next frame
@@ -23,10 +33,26 @@ inline constexpr uint32_t kCullPhaseShadow = 2u;
 inline constexpr uint32_t kCullFrustum = 1u;
 // CullPush.config.z bit: test the Hi-Z pyramid (late phase)
 inline constexpr uint32_t kCullOcclusion = 2u;
-// CullPush.config.z bit: one-sided draws go to the phase's first list, double-sided to its second (else all to the first)
-inline constexpr uint32_t kCullSplitSided = 4u;
+// CullPush.config.z / MeshletPush.config.y bit: test one-sided draws' meshlets against their normal cones
+inline constexpr uint32_t kCullCone = 8u;
 // DrawRecord.info.y bit: the material is one-sided (back faces culled)
 inline constexpr uint32_t kDrawOneSided = 1u;
+// a meshlet's vertices at most (the mesh shader's output vertices)
+inline constexpr uint32_t kMeshletMaxVertices = 64u;
+// a meshlet's triangles at most (the mesh shader's output primitives)
+inline constexpr uint32_t kMeshletMaxTriangles = 124u;
+// meshlets a task-shader workgroup tests (one thread each)
+inline constexpr uint32_t kMeshletTaskGroup = 32u;
+// geometry auto: a draw with fewer triangles stays on the instance path (measured: a few-meshlet draw costs more to launch than its culling saves)
+inline constexpr uint32_t kMeshletMinTriangles = 4096u;
+// the fallback's per-meshlet draws: firstVertex = the draw's index << this (a meshlet's 372 vertices at most fit below), firstInstance = the meshlet
+inline constexpr uint32_t kMeshletVertexShift = 9u;
+// CullPush.extra.z: every draw on the instance path
+inline constexpr uint32_t kGeometryInstances = 0u;
+// CullPush.extra.z: draws of kMeshletMinTriangles or more on the meshlet path
+inline constexpr uint32_t kGeometryAuto = 1u;
+// CullPush.extra.z: every draw with meshlets on the meshlet path
+inline constexpr uint32_t kGeometryMeshlets = 2u;
 // the calibration buffer's uint count (1 MiB)
 inline constexpr uint32_t kCalibrateElements = 262144u;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
@@ -184,6 +210,17 @@ static_assert(offsetof(GIDenoisePush, params) == 16);
 static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
 static_assert(sizeof(GIDenoisePush) == 48);
 
+// one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh
+struct alignas(16) MeshletGpu {
+    alignas(16) std::array<uint32_t, 4> range{};
+    alignas(16) std::array<float, 4> sphere{};
+    alignas(16) std::array<float, 4> cone{};
+};
+static_assert(offsetof(MeshletGpu, range) == 0);
+static_assert(offsetof(MeshletGpu, sphere) == 16);
+static_assert(offsetof(MeshletGpu, cone) == 32);
+static_assert(sizeof(MeshletGpu) == 48);
+
 // one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance
 struct alignas(16) DrawRecord {
     alignas(16) std::array<uint32_t, 4> draw{};
@@ -202,11 +239,26 @@ struct alignas(16) CullPush {
     alignas(16) std::array<float, 16> viewProj{};
     alignas(16) std::array<uint32_t, 4> config{};
     alignas(16) std::array<uint32_t, 4> hiz{};
+    alignas(16) std::array<float, 4> camera{};
+    alignas(16) std::array<uint32_t, 4> extra{};
 };
 static_assert(offsetof(CullPush, viewProj) == 0);
 static_assert(offsetof(CullPush, config) == 64);
 static_assert(offsetof(CullPush, hiz) == 80);
-static_assert(sizeof(CullPush) == 96);
+static_assert(offsetof(CullPush, camera) == 96);
+static_assert(offsetof(CullPush, extra) == 112);
+static_assert(sizeof(CullPush) == 128);
+
+// the G-buffer's meshlet shaders (cull/meshlets.slang: task, mesh, pull) push constants, at offset 16 (gbuffer.frag's block first)
+struct alignas(16) MeshletPush {
+    alignas(16) std::array<uint32_t, 4> config{};
+    alignas(16) std::array<uint32_t, 4> hiz{};
+    alignas(16) std::array<float, 4> camera{};
+};
+static_assert(offsetof(MeshletPush, config) == 0);
+static_assert(offsetof(MeshletPush, hiz) == 16);
+static_assert(offsetof(MeshletPush, camera) == 32);
+static_assert(sizeof(MeshletPush) == 48);
 
 // the Hi-Z build (cull/hiz.slang) push constants
 struct alignas(16) HiZPush {

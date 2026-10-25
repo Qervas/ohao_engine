@@ -516,6 +516,9 @@ private:
     // VK_KHR_ray_query + its rayQuery feature were enabled at vkCreateDevice. Only
     // then may a barrier name a non-RT shader stage with ACCELERATION_STRUCTURE_READ.
     bool m_rayQueryEnabled{false};
+    // VK_EXT_mesh_shader (task and mesh shaders) was enabled: the G-buffer's meshlet path
+    // draws through it, else through its compute + vertex-pulling fallback.
+    bool m_meshShaderEnabled{false};
 
     // Shader base path
     std::string m_shaderBasePath;

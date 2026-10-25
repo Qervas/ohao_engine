@@ -29,6 +29,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     if (m_textureManager) {
         m_gbufferPass->setTextureManager(m_textureManager);
     }
+    m_gbufferPass->setMeshShaderSupported(m_meshShader);
     if (!m_gbufferPass->initialize(device, physicalDevice)) {
         OHAO_LOG(Error, render, "DeferredRenderer: GBufferPass failed");
         return false;
@@ -45,7 +46,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // GPU culling: the G-buffer's and CSM's indirect draw lists
     m_culling = std::make_unique<GpuCulling>();
-    if (!m_culling->initialize(device, physicalDevice) ||
+    if (!m_culling->initialize(device, physicalDevice, m_meshShader) ||
         !m_culling->resize(m_width, m_height, m_gbufferPass->getDepthView())) {
         OHAO_LOG(Error, render, "DeferredRenderer: GpuCulling failed");
         return false;

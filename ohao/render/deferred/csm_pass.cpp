@@ -122,8 +122,8 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
         // Every cascade's list, before the render passes (compute outside them).
         for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade)
-            m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, GpuCulling::kPairCascade0 + cascade,
-                            m_cascadeData.viewProj[cascade]);
+            m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, gpu::shared::kCullListCascade0 + cascade, 1,
+                            m_cascadeData.viewProj[cascade], glm::vec3(0.0f));
     }
 
     // Render each cascade
@@ -157,7 +157,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // The cascade's culled list (its pair's first list: shadows draw both faces)
+        // The cascade's culled list (every draw on the instance path; shadows draw both faces)
         if (haveDraws) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
@@ -171,7 +171,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(ShadowPushConstant), &push);
             // firstInstance = the draw record: the shader reads its instance through it.
-            m_culling->drawList(cmd, (GpuCulling::kPairCascade0 + cascade) * 2);
+            m_culling->drawList(cmd, gpu::shared::kCullListCascade0 + cascade);
         }
 
         vkCmdEndRenderPass(cmd);

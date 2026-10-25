@@ -42,6 +42,9 @@ public:
     // VK_KHR_ray_query is enabled on the device (before initialize): RT shadows trace with
     // inline ray queries, and without them the frame keeps CSM.
     void setRayQuerySupported(bool on) noexcept { m_rayQuery = on; }
+    // VK_EXT_mesh_shader is enabled (before initialize): the G-buffer's meshlet path runs task
+    // and mesh shaders, else its compute + vertex-pulling fallback.
+    void setMeshShaderSupported(bool on) noexcept { m_meshShader = on; }
     void cleanup();
     [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
@@ -171,6 +174,7 @@ private:
     std::unique_ptr<RTShadowTechnique> m_rtShadow;
     bool m_useRTShadows{false};
     bool m_rayQuery{false};
+    bool m_meshShader{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
     bool m_useRTGI{false};
     VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
