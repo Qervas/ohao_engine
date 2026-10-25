@@ -304,6 +304,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     uint32_t numMats = scene->mNumMaterials;
     model->materialColors.resize(numMats, glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
     model->materialMetallic.resize(numMats, 0.0f);
+    model->materialDoubleSided.resize(numMats, 1u);
     model->materialTextureIndex.resize(numMats, -1);
     model->materialNormalTexIndex.resize(numMats, -1);
     model->materialRoughMetalTexIndex.resize(numMats, -1);
@@ -328,6 +329,11 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
 
         model->materialColors[m] = glm::vec4(color.r, color.g, color.b, roughness);
         model->materialMetallic[m] = metallic;
+        // glTF's doubleSided (default false): Assimp's glTF importer always reports it as
+        // TWOSIDED. Formats that do not say keep the double-sided default.
+        int twoSided = 1;
+        if (mat->Get(AI_MATKEY_TWOSIDED, twoSided) == aiReturn_SUCCESS)
+            model->materialDoubleSided[m] = twoSided != 0 ? 1u : 0u;
 
         // Textures
         model->materialTextureIndex[m] = loadAssimpTexture(scene, mat,

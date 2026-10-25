@@ -209,7 +209,7 @@ def main():
           "render_capture: an inline JPEG (%d bytes) and a PNG file" % len(jpeg1))
     stats, _, err = c.tool("render_stats", {"frames": 10})
     passes = [p[0] for p in (stats or {}).get("passes", [])]
-    check(not err and stats.get("gpuMs", 0) > 0 and "gbuffer" in passes and "lighting" in passes,
+    check(not err and stats.get("gpuMs", 0) > 0 and "gbuffer.late" in passes and "lighting" in passes,
           "render_stats: %.3f ms of GPU a frame over %s frames, %d passes" %
           ((stats or {}).get("gpuMs", 0), (stats or {}).get("frames"), len(passes)))
 

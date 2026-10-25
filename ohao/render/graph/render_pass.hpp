@@ -98,6 +98,7 @@ struct RenderPassDef {
     std::string name;
     uint32_t index{0};
     PassType type{PassType::Graphics};
+    bool selfTimed{false};   // times its own parts (RenderGraph::addPass)
 
     // Resource accesses
     std::vector<ResourceAccess> reads;

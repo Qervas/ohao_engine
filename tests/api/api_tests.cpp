@@ -233,7 +233,7 @@ static void sp2b_t14_render_stats_reports_the_hosts_medians() {
     st.frames = 10;
     st.gpuMs = 5.12345;
     st.cpuMs = 0.4;
-    st.passes = {{"gbuffer", 0.0712843}, {"rt.gi", 2.5}, {"post.tonemap", 0.0004}};
+    st.passes = {{"gbuffer.late", 0.0712843}, {"rt.gi", 2.5}, {"post.tonemap", 0.0004}};
     host.stats = st;
     const uint64_t changes = s.changeCount();
     const Reply r(s.call("render.stats", R"({"frames":10})"));
@@ -241,7 +241,7 @@ static void sp2b_t14_render_stats_reports_the_hosts_medians() {
     CHECK(r.json("/result/frame") == "41" && r.json("/result/frames") == "10" && r.json("/result/gpuMs") == "5.123" &&
               r.json("/result/cpuMs") == "0.4",
           "the frame, the frames covered and the medians, in microseconds");
-    CHECK(r.json("/result/passes") == R"([["gbuffer",0.071],["rt.gi",2.5],["post.tonemap",0]])",
+    CHECK(r.json("/result/passes") == R"([["gbuffer.late",0.071],["rt.gi",2.5],["post.tonemap",0]])",
           "passes as [name, ms] pairs, in the host's (frame) order");
     CHECK(!Reply(s.call("render.stats", R"({"passes":false})")).at("/result/passes"), "passes: false leaves them out");
     CHECK(s.changeCount() == changes, "reading stats does not count as a change");

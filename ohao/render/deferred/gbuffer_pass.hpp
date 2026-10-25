@@ -1,21 +1,27 @@
 #pragma once
 
 #include "render_pass_base.hpp"
-#include "render/culling.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "render/rt/rt_compute.hpp"
 #include <array>
 
-namespace ohao::render { class RenderScene; }
+namespace ohao::render { class RenderScene; class GpuPassTimer; }
 
 namespace ohao {
 
+class GpuCulling;
+
 // G-Buffer generation pass
 // Outputs: Position, Normal, Albedo, Velocity, Depth
-// Draws RenderScene::draws(): set 0 = bindless textures, set 1 "scene" = {instances,
-// materials, material refs, camera UBO}, one set per frame slot; push constant =
-// the draw's material slot.
+// GPU-driven (sub-project 2b spec, "GPU-driven geometry"), in five timed parts: cull.instances
+// (last frame's visible draws in the frustum), gbuffer.early (draws them, clearing the
+// targets), hiz.build (the depth pyramid), cull.late (every draw against the frustum and the
+// pyramid), gbuffer.late (draws the newly visible, loading the targets). Draws are
+// vkCmdDrawIndexedIndirectCount over GpuCulling's lists, one-sided materials with back faces
+// culled. firstInstance indexes RenderScene's draw table; set 0 = bindless textures, set 1
+// "scene" = {instances, materials, material refs, camera UBO, SSS tiles, draw table}, one set
+// per frame slot.
 class GBufferPass : public RenderPassBase {
 public:
     GBufferPass() = default;
@@ -29,6 +35,9 @@ public:
 
     // Setup for rendering
     void setRenderScene(const render::RenderScene* scene) { m_renderScene = scene; }
+    void setCulling(GpuCulling* culling) { m_culling = culling; }
+    // Times the five parts (the render graph does not time this pass).
+    void setPassTimer(render::GpuPassTimer* timer) { m_passTimer = timer; }
     void setViewProjection(const glm::mat4& view, const glm::mat4& proj,
                           const glm::mat4& prevViewProj);
 
@@ -52,9 +61,6 @@ public:
     [[nodiscard]] VkFormat getAlbedoFormat() const { return m_gbuffer[2].format; }
     [[nodiscard]] VkFormat getVelocityFormat() const { return m_gbuffer[3].format; }
     [[nodiscard]] VkFormat getDepthFormat() const { return m_gbuffer[4].format; }
-
-    [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
-    [[nodiscard]] VkFramebuffer getFramebuffer() const { return m_framebuffer; }
 
     // Texture manager for bindless textures
     void setTextureManager(BindlessTextureManager* texManager) { m_textureManager = texManager; }
@@ -87,19 +93,31 @@ private:
     // Rewrites the frame slot's scene set and camera UBO. False when the scene has
     // no buffers to bind.
     [[nodiscard]] bool updateSceneSet(uint32_t frameIndex);
+    // One of the two render passes (`late`: loads what the early one drew), drawing list pair
+    // `pair` when `draw`.
+    void drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, uint32_t pair, bool draw);
+    void timerBegin(VkCommandBuffer cmd, const char* name);
+    void timerEnd(VkCommandBuffer cmd);
 
     // G-Buffer render targets
     static constexpr uint32_t GBUFFER_COUNT = 5;
     std::array<RenderTarget, GBUFFER_COUNT> m_gbuffer;
 
-    // Render pass and framebuffer
+    // The early render pass clears and leaves the targets for the late one (depth readable by
+    // the Hi-Z build); the late one loads them and leaves them for the lighting. They are
+    // compatible: one framebuffer, one set of pipelines.
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
+    VkRenderPass m_lateRenderPass{VK_NULL_HANDLE};
     VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
 
-    // Pipeline (static meshes)
+    // Pipelines: double-sided (no face culling), one-sided (back faces culled), wireframe
     VkPipeline m_pipeline{VK_NULL_HANDLE};
+    VkPipeline m_cullBackPipeline{VK_NULL_HANDLE};
     VkPipeline m_wireframePipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
+
+    GpuCulling* m_culling{nullptr};
+    render::GpuPassTimer* m_passTimer{nullptr};
 
     // Descriptors for G-Buffer access
     VkDescriptorSetLayout m_gbufferLayout{VK_NULL_HANDLE};
@@ -134,12 +152,11 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constant: the draw's submesh material slot, the SSS tiles across and down
-    // (matches gbuffer.frag).
+    // Push constant: the SSS tiles across and down (matches gbuffer.frag; the material slot
+    // comes from the draw record).
     struct DrawPushConstant {
-        uint32_t materialSlot;
         uint32_t tilesX, tilesY;
-        uint32_t pad;
+        uint32_t pad0, pad1;
     };
     static_assert(sizeof(DrawPushConstant) == 16);
 

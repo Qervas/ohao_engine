@@ -341,6 +341,8 @@ bool VulkanRenderer::createLogicalDevice() {
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    // GPU culling's draws: vkCmdDrawIndexedIndirectCount (the count from the GPU)
+    features12.drawIndirectCount = VK_TRUE;
 
     // Vulkan 1.3 features. glslc lowers `discard` to OpDemoteToHelperInvocation for
     // SPIR-V 1.6, so shaders using discard (deferred lighting, sky, particles,
@@ -400,6 +402,7 @@ bool VulkanRenderer::createLogicalDevice() {
     deviceFeatures2.features.depthClamp = VK_TRUE;
     deviceFeatures2.features.wideLines = VK_TRUE;
     deviceFeatures2.features.multiDrawIndirect = VK_TRUE;
+    deviceFeatures2.features.drawIndirectFirstInstance = VK_TRUE;   // firstInstance = the draw record
     deviceFeatures2.features.shaderInt64 = VK_TRUE;
     deviceFeatures2.features.fragmentStoresAndAtomics = VK_TRUE;
     deviceFeatures2.features.vertexPipelineStoresAndAtomics = VK_TRUE;

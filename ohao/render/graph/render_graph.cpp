@@ -240,12 +240,14 @@ void RenderGraph::shutdown() {
 
 void RenderGraph::addPass(std::string_view name,
                            std::function<void(PassBuilder&)> setup,
-                           std::function<void(VkCommandBuffer)> execute) {
+                           std::function<void(VkCommandBuffer)> execute,
+                           bool selfTimed) {
     uint32_t passIdx = static_cast<uint32_t>(m_passes.size());
     RenderPassDef pass{};
     pass.name = std::string(name);
     pass.index = passIdx;
     pass.type = PassType::Graphics;
+    pass.selfTimed = selfTimed;
     pass.executeCallback = std::move(execute);
 
     m_passes.push_back(std::move(pass));
@@ -417,7 +419,8 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
 
     for (const auto& compiledPass : m_compiledPasses) {
         const RenderPassDef& pass = m_passes[compiledPass.passIndex];
-        if (m_passTimer) m_passTimer->begin(cmd, pass.name);
+        const bool timed = m_passTimer && !pass.selfTimed;
+        if (timed) m_passTimer->begin(cmd, pass.name);
 
         // Insert barriers
         for (const auto& barrier : compiledPass.barriers) {
@@ -511,7 +514,7 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
         if (pass.type == PassType::Graphics && pass.vulkanRenderPass != VK_NULL_HANDLE) {
             vkCmdEndRenderPass(cmd);
         }
-        if (m_passTimer) m_passTimer->end(cmd);
+        if (timed) m_passTimer->end(cmd);
     }
 }
 

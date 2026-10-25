@@ -36,6 +36,7 @@ layout(location = 3) out vec2 outVelocity;
 layout(set = 0, binding = 0) uniform sampler2D textures[];
 
 layout(location = 8) flat in uint fragInstance;
+layout(location = 9) flat in uint fragMaterialSlot;   // the draw record's
 
 // Set 1 "scene": RenderScene's instance, material and material-reference tables.
 layout(set = 1, binding = 0, std430) readonly buffer Instances { InstanceGpu instances[]; };
@@ -45,9 +46,8 @@ layout(set = 1, binding = 2, std430) readonly buffer MaterialRefs { uint materia
 // bit 0 skin, bit 1 under the horizontal blur; then the vertical and horizontal tile lists).
 layout(set = 1, binding = 4, std430) buffer SSSTiles { uint sssTiles[]; };
 
-// The draw's submesh material slot and the frame's SSS tiles across and down (16 bytes,
-// fragment stage).
-layout(push_constant) uniform PushConstants { uint materialSlot; uint tilesX; uint tilesY; uint pad; } pc;
+// The frame's SSS tiles across and down (16 bytes, fragment stage).
+layout(push_constant) uniform PushConstants { uint tilesX; uint tilesY; uint pad0; uint pad1; } pc;
 
 // Flags `tile` with `bit` and, the first time, appends it to the list whose count is
 // header word `countWord` (the indirect dispatch's x). A plain read first: most fragments of a
@@ -83,7 +83,7 @@ vec2 encodeNormalOctahedron(vec3 n) {
 
 void main() {
     InstanceGpu inst = instances[fragInstance];
-    uint m = OHAO_MATERIAL_INDEX(inst, pc.materialSlot, materialRefs);
+    uint m = OHAO_MATERIAL_INDEX(inst, fragMaterialSlot, materialRefs);
     vec4 row0 = matRows[m * 3u + 0u];   // baseColor, albedoTex
     vec4 row1 = matRows[m * 3u + 1u];   // roughness, metallic, normalTex, emissiveTex
     vec4 row2 = matRows[m * 3u + 2u];   // roughMetalTex, emissiveStrength

@@ -24,6 +24,9 @@ public:
     // Full table: logs and returns the default material.
     MaterialHandle add(const MaterialDesc& desc);
     [[nodiscard]] uint32_t count() const noexcept { return static_cast<uint32_t>(m_packs.size()); }
+    [[nodiscard]] bool doubleSided(uint32_t index) const noexcept {
+        return index >= m_doubleSided.size() || m_doubleSided[index] != 0;
+    }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 
     [[nodiscard]] VkDeviceSize pendingBytes() const noexcept { return m_dirty.size() * sizeof(Pack); }
@@ -35,6 +38,7 @@ private:
     GpuAllocator* m_allocator{nullptr};
     GpuBuffer m_buffer;
     std::vector<Pack> m_packs;
+    std::vector<uint8_t> m_doubleSided;   // host only: the draw table's face-culling flag
     std::set<uint32_t> m_dirty;
 };
 

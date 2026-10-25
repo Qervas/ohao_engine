@@ -79,6 +79,9 @@ public:
     std::vector<glm::vec4> materialColors;
     // Per-material metallic factor (0 = dielectric, 1 = metal)
     std::vector<float> materialMetallic;
+    // Per-material sidedness (glTF doubleSided, through Assimp's TWOSIDED): 0 one-sided, its
+    // back faces culled. Empty (OBJ, FBX): every material double-sided.
+    std::vector<uint8_t> materialDoubleSided;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

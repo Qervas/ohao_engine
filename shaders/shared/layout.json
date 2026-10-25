@@ -11,6 +11,24 @@
   "constants": [
     {"name": "kCalibrateGroupSize", "type": "uint", "value": 256,
      "doc": "render_bench's GPU calibration kernel: threads per workgroup"},
+    {"name": "kCullGroupSize", "type": "uint", "value": 256,
+     "doc": "GPU culling (cull/instances.slang): draws a workgroup classifies and scans, one a thread"},
+    {"name": "kCullLists", "type": "uint", "value": 12,
+     "doc": "GPU culling: indirect command lists, two (one-sided, double-sided) for each of six phases: the early and late G-buffer passes and four CSM cascades"},
+    {"name": "kCullPhaseEarly", "type": "uint", "value": 0,
+     "doc": "GPU culling phase: the early pass, the draws visible last frame and in the frustum"},
+    {"name": "kCullPhaseLate", "type": "uint", "value": 1,
+     "doc": "GPU culling phase: the late pass, the draws visible now (frustum and Hi-Z) not drawn early; it records visibility for the next frame"},
+    {"name": "kCullPhaseShadow", "type": "uint", "value": 2,
+     "doc": "GPU culling phase: a CSM cascade, the draws in its frustum"},
+    {"name": "kCullFrustum", "type": "uint", "value": 1,
+     "doc": "CullPush.config.z bit: test the frustum"},
+    {"name": "kCullOcclusion", "type": "uint", "value": 2,
+     "doc": "CullPush.config.z bit: test the Hi-Z pyramid (late phase)"},
+    {"name": "kCullSplitSided", "type": "uint", "value": 4,
+     "doc": "CullPush.config.z bit: one-sided draws go to the phase's first list, double-sided to its second (else all to the first)"},
+    {"name": "kDrawOneSided", "type": "uint", "value": 1,
+     "doc": "DrawRecord.info.y bit: the material is one-sided (back faces culled)"},
     {"name": "kCalibrateElements", "type": "uint", "value": 262144,
      "doc": "the calibration buffer's uint count (1 MiB)"},
     {"name": "kShadowMaxLights", "type": "uint", "value": 8,
@@ -114,6 +132,23 @@
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
        {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the upsample's depth guide)"}
+     ]},
+    {"name": "DrawRecord", "doc": "one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance",
+     "fields": [
+       {"name": "draw", "type": "uint4", "doc": "x first index, y index count, z vertex offset (an int's bits), w the instance-table slot"},
+       {"name": "info", "type": "uint4", "doc": "x the material slot, y flags (kDrawOneSided)"},
+       {"name": "aabbMin", "type": "float4", "doc": "xyz the mesh's local bounding box, minimum"},
+       {"name": "aabbMax", "type": "float4", "doc": "xyz the mesh's local bounding box, maximum"}
+     ]},
+    {"name": "CullPush", "doc": "GPU culling (cull/instances.slang) push constants, every entry",
+     "fields": [
+       {"name": "viewProj", "type": "float4x4", "doc": "the view-projection the draws are rasterized with (jitter included)"},
+       {"name": "config", "type": "uint4", "doc": "x draw count, y phase (kCullPhase*), z flags (kCullFrustum, kCullOcclusion, kCullSplitSided), w the phase's list pair (list 2w and 2w+1)"},
+       {"name": "hiz", "type": "uint4", "doc": "x, y the frame's size in pixels; z the Hi-Z pyramid's levels; w the scan's block count"}
+     ]},
+    {"name": "HiZPush", "doc": "the Hi-Z build (cull/hiz.slang) push constants",
+     "fields": [
+       {"name": "size", "type": "uint4", "doc": "x, y the level written; z, w the level (or depth buffer) read"}
      ]},
     {"name": "PreviewPush", "doc": "capture.preview (capture/preview.slang) push constants",
      "fields": [

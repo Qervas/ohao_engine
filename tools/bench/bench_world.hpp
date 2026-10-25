@@ -8,6 +8,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <random>
 #include <string>
@@ -83,6 +84,72 @@ inline void buildBenchWorld(ecs::World& w, int n, uint64_t seed) {
     w.registry().emplace<ecs::Camera>(c, ecs::Camera{50.0f, 0.1f, 500.0f, true});
     const auto env = w.create("Environment");
     w.registry().emplace<Environment>(env, Environment{AssetRef{"assets/env/bench_sky.hdr", {}}, 1.25f});
+}
+
+// render_bench's bench10k_1080p / bench100k_1080p (sub-project 2b spec, "Profiling first"): n
+// renderables on a square grid 400 m across, each one of 20 primitive meshes (5 shapes x 4
+// sizes, so the RenderScene holds 20 meshes instanced n times) with one of 8 materials; point
+// lights above the grid (4 of them shadowed) and a sun; the camera at the grid's edge, looking
+// across it. Lights are capped at 8 until clustered lighting (2b step 13): 7 points and the
+// sun. Built from a fixed seed, so every build is the same world.
+inline void buildRenderBenchWorld(ecs::World& w, int n, uint64_t seed) {
+    using namespace ohao::ecs;
+    w.seedIds(seed);
+    std::mt19937_64 rng(seed);
+    static constexpr float kSizes[] = {0.3f, 0.45f, 0.6f, 0.75f};
+    static constexpr float kChannel[] = {0.1f, 0.25f, 0.45f, 0.65f, 0.85f};
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));
+    const float spacing = 400.0f / static_cast<float>(side);
+    for (int i = 0; i < n; ++i) {
+        Transform t;
+        t.position = {-200.0f + spacing * (0.5f + static_cast<float>(i % side)), 0.0f,
+                      -200.0f + spacing * (0.5f + static_cast<float>(i / side))};
+        t.rotation = glm::angleAxis(static_cast<float>(rng() % 360) * 0.0174532925f, glm::vec3(0.0f, 1.0f, 0.0f));
+        const auto e = w.create("Mesh_" + std::to_string(i), t);
+        const float s = kSizes[rng() % std::size(kSizes)];
+        MeshSource ms;
+        switch (rng() % 5) {
+        case 0: ms.source = SpherePrim{s, 16, 8}; break;
+        case 1: ms.source = CubePrim{s * 2.0f}; break;
+        case 2: ms.source = PlatformPrim{s * 2.0f, s, s * 2.0f}; break;
+        case 3: ms.source = CylinderPrim{s, s * 2.0f, 12}; break;
+        default: ms.source = ConePrim{s, s * 2.0f, 12}; break;
+        }
+        w.registry().emplace<MeshSource>(e, ms);
+        const auto c = [&] { return kChannel[rng() % std::size(kChannel)]; };
+        w.registry().emplace<MaterialOverride>(e, MaterialOverride{{c(), c(), c()}, 0.6f, 0.0f, 0.0f});
+    }
+    // The ground under the grid.
+    Transform ground;
+    const auto g = w.create("Ground", ground);
+    w.registry().emplace<MeshSource>(g, MeshSource{PlatformPrim{420.0f, 0.2f, 420.0f}});
+    w.registry().emplace<MaterialOverride>(g, MaterialOverride{{0.5f, 0.5f, 0.5f}, 0.9f, 0.0f, 0.0f});
+    for (int i = 0; i < 7; ++i) {
+        Transform lt;
+        lt.position = {-150.0f + 50.0f * static_cast<float>(i), 12.0f, 120.0f - 40.0f * static_cast<float>(i % 3)};
+        const auto l = w.create("Light_" + std::to_string(i), lt);
+        Light light;
+        light.color = {1.0f, 0.9f, 0.8f};
+        light.intensity = 400.0f;
+        light.range = 60.0f;
+        light.castShadows = i < 4;
+        w.registry().emplace<Light>(l, light);
+    }
+    Transform sunT;
+    sunT.rotation = glm::angleAxis(glm::radians(-50.0f), glm::normalize(glm::vec3(1.0f, 0.0f, 0.3f)));
+    const auto sun = w.create("Sun", sunT);
+    Light sunLight;
+    sunLight.type = LightType::Directional;
+    sunLight.intensity = 2.0f;
+    sunLight.radius = 0.00465f;
+    w.registry().emplace<Light>(sun, sunLight);
+    Transform cam;
+    cam.position = {0.0f, 25.0f, 215.0f};
+    cam.rotation = glm::angleAxis(glm::radians(-12.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const auto c = w.create("MainCamera", cam);
+    w.registry().emplace<ecs::Camera>(c, ecs::Camera{60.0f, 0.1f, 1000.0f, true});
+    const auto env = w.create("Environment");
+    w.registry().emplace<Environment>(env, Environment{});
 }
 
 } // namespace ohao::bench

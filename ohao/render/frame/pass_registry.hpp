@@ -20,7 +20,11 @@ struct PassInfo {
 inline constexpr PassInfo kPasses[] = {
     {"scene.upload", PassKind::Transfer, "RenderScene table uploads, BLAS builds, the TLAS build or refit"},
     {"csm", PassKind::Raster, "cascaded shadow maps (4 of 2048x2048): only when RT shadows do not run"},
-    {"gbuffer", PassKind::Raster, "the G-buffer: position, normal, albedo, velocity, depth"},
+    {"cull.instances", PassKind::Compute, "GPU culling, early phase: the draws visible last frame and in the frustum, as indirect lists (prefix-sum compaction)"},
+    {"gbuffer.early", PassKind::Raster, "the G-buffer (position, normal, albedo, velocity, depth) cleared, and the early lists drawn"},
+    {"hiz.build", PassKind::Compute, "the max-depth pyramid of the early pass's depth"},
+    {"cull.late", PassKind::Compute, "GPU culling, late phase: every draw against the frustum and the pyramid; the newly visible listed, visibility recorded"},
+    {"gbuffer.late", PassKind::Raster, "the late lists drawn into the G-buffer"},
     {"ssao", PassKind::Compute, "screen-space ambient occlusion (the ssao post effect)"},
     {"rt.shadows", PassKind::RayTracing, "ray-traced shadows: one ray to each of a pixel's most important lights (reference: 8 to every light)"},
     {"rt.shadows.filter", PassKind::Compute, "RT shadows' 5x5 depth- and normal-aware filter and temporal accumulation (realtime)"},

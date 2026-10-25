@@ -27,7 +27,6 @@
 #include "gpu/vulkan/material_instance.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "render/camera/camera.hpp"
-#include "render/culling.hpp"
 #include "physics/backend/physics_backend.hpp"
 #include "physics/common/physics_constants.hpp"
 #include "physics/world/physics_world.hpp"
@@ -544,7 +543,7 @@ void runMetaTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("Render graph handles + culling AABB + camera");
+    TEST_BEGIN("Render graph handles + camera");
     {
         TextureHandle th{};
         EXPECT(!th, "invalid texture handle");
@@ -552,10 +551,6 @@ void runMetaTests() {
         EXPECT(th && th.isValid(), "valid handle");
         auto usage = TextureUsage::ColorAttachment | TextureUsage::ShaderRead;
         EXPECT(hasFlag(usage, TextureUsage::ShaderRead), "usage flag");
-        AABB box{glm::vec3(-1.f), glm::vec3(1.f)};
-        EXPECT(box.isValid(), "AABB valid");
-        EXPECT(glm::length(box.center()) < 1e-5f, "AABB center origin");
-        EXPECT(box.size() == glm::vec3(2.f), "AABB size");
         Camera cam;
         EXPECT(cam.isPerspective(), "default perspective");
         EXPECT(cam.getFov() > 0.f, "fov");
@@ -1507,8 +1502,8 @@ static void sp2b_t01_every_pass_is_registered_timed_once_and_within_the_frame() 
         EXPECT(sum <= f.gpuMs * 1.05f, "the passes' sum is at most the frame's span plus 5%");
     }
     const FrameTiming& last = frames.back();
-    for (const char* name : {"scene.upload", "gbuffer", "ssao", "lighting", "post.bloom", "post.taa", "post.tonemap",
-                             "readback"})
+    for (const char* name : {"scene.upload", "cull.instances", "gbuffer.early", "hiz.build", "cull.late", "gbuffer.late",
+                             "ssao", "lighting", "post.bloom", "post.taa", "post.tonemap", "readback"})
         EXPECT(hasPass(last, name), "a frame with SSAO, TAA and bloom runs " + std::string(name));
     EXPECT(!hasPass(last, "present") && !hasPass(last, "pt.render"), "a headless deferred frame has no present");
     // The timer reports a refused pass once per process: read the whole run's errors.

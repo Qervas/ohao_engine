@@ -59,6 +59,9 @@ struct MaterialDesc {
     uint32_t emissiveTex{kNoTexture};
     float emissiveStrength{0.0f};
     float subsurface{0.0f};   // > 0: the SSS blur's strength on this material's pixels (table row 2, z)
+    // False: one-sided, its back faces culled in raster (glTF's doubleSided: false). Materials
+    // that never say (scene-file materials, OBJ, FBX) stay double-sided.
+    bool doubleSided{true};
 };
 
 struct InstanceDesc {

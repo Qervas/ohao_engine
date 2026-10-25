@@ -1,4 +1,6 @@
 #include "gbuffer_pass.hpp"
+#include "gpu_culling.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include "render/scene/render_scene.hpp"
 #include "scene/asset/model.hpp"
 #include "gpu/shared_layout.hpp"
@@ -42,6 +44,7 @@ void GBufferPass::cleanup() {
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
     }
+    safeDestroy(m_cullBackPipeline);
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
@@ -67,20 +70,54 @@ void GBufferPass::cleanup() {
         vkDestroyRenderPass(m_device, m_renderPass, nullptr);
         m_renderPass = VK_NULL_HANDLE;
     }
+    safeDestroy(m_lateRenderPass);
 
     destroyGBuffer();
 }
 
+void GBufferPass::timerBegin(VkCommandBuffer cmd, const char* name) {
+    if (m_passTimer) m_passTimer->begin(cmd, name);
+}
+
+void GBufferPass::timerEnd(VkCommandBuffer cmd) {
+    if (m_passTimer) m_passTimer->end(cmd);
+}
+
 void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
-    // Always run the render pass, scene or not: its clears are what every later pass
-    // samples. With no scene the G-buffer is simply empty (depth 1 = all sky).
+    // Always run both render passes, scene or not: the early one's clears are what every
+    // later pass samples. With no scene the G-buffer is simply empty (depth 1 = all sky).
 
-    // The slot's set and camera UBO are written before the render pass begins, and the SSS
-    // classification is reset (no tile flagged: the SSS dispatches are empty).
-    const bool haveScene = m_renderScene && !m_renderScene->draws().empty() && updateSceneSet(frameIndex);
+    // The slot's set and camera UBO are written and the SSS classification reset (no tile
+    // flagged: the SSS dispatches are empty) before the first render pass. The culling began
+    // the frame before the graph ran (DeferredRenderer::render).
+    const bool haveScene = m_renderScene && m_culling && m_culling->drawCount() > 0 && updateSceneSet(frameIndex);
     resetSSSTiles(cmd);
+    // The draws are culled with the view-projection they are rasterized with (jitter included).
+    const glm::mat4 viewProj = m_projection * m_view;
+    namespace shared = gpu::shared;
 
-    // Begin render pass
+    timerBegin(cmd, "cull.instances");
+    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseEarly, GpuCulling::kPairEarly, viewProj);
+    timerEnd(cmd);
+
+    timerBegin(cmd, "gbuffer.early");
+    drawPass(cmd, frameIndex, false, GpuCulling::kPairEarly, haveScene);
+    timerEnd(cmd);
+
+    timerBegin(cmd, "hiz.build");
+    if (haveScene) m_culling->buildHiZ(cmd);
+    timerEnd(cmd);
+
+    timerBegin(cmd, "cull.late");
+    if (haveScene) m_culling->cull(cmd, shared::kCullPhaseLate, GpuCulling::kPairLate, viewProj);
+    timerEnd(cmd);
+
+    timerBegin(cmd, "gbuffer.late");
+    drawPass(cmd, frameIndex, true, GpuCulling::kPairLate, haveScene);
+    timerEnd(cmd);
+}
+
+void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, uint32_t pair, bool draw) {
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)
     clearValues[1].color = {{0.5f, 0.5f, 0.5f, 0.0f}}; // OctNormal (rg) + Roughness (b) + Emissive (a)
@@ -90,7 +127,7 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = m_renderPass;
+    renderPassInfo.renderPass = late ? m_lateRenderPass : m_renderPass;
     renderPassInfo.framebuffer = m_framebuffer;
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {m_width, m_height};
@@ -114,44 +151,26 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     scissor.extent = {m_width, m_height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    if (haveScene) {
-        // Build view frustum for culling
-        Frustum frustum;
-        frustum.extractFromViewProj(m_projection * m_view);
-
-        const VkPipeline pipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
-                                        ? m_wireframePipeline : m_pipeline;
-        bool bound = false;
-
-        for (const render::RenderScene::Draw& draw : m_renderScene->draws()) {
-            // Frustum culling: the mesh's world-space AABB against the frustum
-            const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);
-            if (!frustum.isAABBVisible(worldAABB)) continue;
-
-            if (!bound) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                // Set 0: bindless textures; set 1: the scene.
-                const VkDescriptorSet texSet =
-                    m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
-                if (texSet != VK_NULL_HANDLE) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
-                }
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        m_pipelineLayout, 1, 1, &m_sceneSets[frameIndex], 0, nullptr);
-                const VkBuffer vertexBuffer = m_renderScene->vertexArena();
-                const VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(cmd, m_renderScene->indexArena(), 0, VK_INDEX_TYPE_UINT32);
-                bound = true;
-            }
-
-            const VkExtent2D tiles = sssTiles();
-            const DrawPushConstant push{draw.materialSlot, tiles.width, tiles.height, 0u};
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(DrawPushConstant), &push);
-            // firstInstance = the slot: the shaders index the instance table with it.
-            vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);
+    if (draw && m_culling->drawCount() > 0) {
+        // Set 0: bindless textures; set 1: the scene.
+        const VkDescriptorSet texSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
+        if (texSet != VK_NULL_HANDLE)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, 1, &m_sceneSets[frameIndex],
+                                0, nullptr);
+        const VkBuffer vertexBuffer = m_renderScene->vertexArena();
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, m_renderScene->indexArena(), 0, VK_INDEX_TYPE_UINT32);
+        const VkExtent2D tiles = sssTiles();
+        const DrawPushConstant push{tiles.width, tiles.height, 0u, 0u};
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DrawPushConstant), &push);
+        // The pair's first list is one-sided (back faces culled), its second double-sided.
+        const bool wire = m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE;
+        for (uint32_t k = 0; k < 2; ++k) {
+            const VkPipeline pipeline = wire ? m_wireframePipeline : (k == 0 ? m_cullBackPipeline : m_pipeline);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            m_culling->drawList(cmd, pair * 2 + k);
         }
     }
 
@@ -198,8 +217,10 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
     const VkBuffer instances = m_renderScene->instanceBuffer();
     const VkBuffer materials = m_renderScene->materialBuffer();
     const VkBuffer materialRefs = m_renderScene->materialRefBuffer();
+    const VkBuffer drawTable = m_renderScene->drawTable();
     if (instances == VK_NULL_HANDLE || materials == VK_NULL_HANDLE || materialRefs == VK_NULL_HANDLE ||
-        m_renderScene->vertexArena() == VK_NULL_HANDLE || m_renderScene->indexArena() == VK_NULL_HANDLE)
+        drawTable == VK_NULL_HANDLE || m_renderScene->vertexArena() == VK_NULL_HANDLE ||
+        m_renderScene->indexArena() == VK_NULL_HANDLE)
         return false;
 
     const CameraUBO camera{m_projection * m_view, m_prevViewProj};
@@ -207,14 +228,15 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
 
     // The table buffers can be replaced (arena / table growth), so the set is
     // rewritten every frame; the slot's previous use finished at its fence wait.
-    const std::array<VkDescriptorBufferInfo, 5> infos{{
+    const std::array<VkDescriptorBufferInfo, 6> infos{{
         {instances, 0, VK_WHOLE_SIZE},
         {materials, 0, VK_WHOLE_SIZE},
         {materialRefs, 0, VK_WHOLE_SIZE},
         {m_cameraBuffers[frameIndex], 0, sizeof(CameraUBO)},
         {m_sssTiles.buffer, 0, VK_WHOLE_SIZE},
+        {drawTable, 0, VK_WHOLE_SIZE},
     }};
-    std::array<VkWriteDescriptorSet, 5> writes{};
+    std::array<VkWriteDescriptorSet, 6> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_sceneSets[frameIndex];
@@ -236,7 +258,7 @@ bool GBufferPass::createSceneDescriptors() {
                                m_sssTiles))
         return false;
 
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};   // 5: the draw table
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -257,7 +279,7 @@ bool GBufferPass::createSceneDescriptors() {
     }
 
     const std::array<VkDescriptorPoolSize, 2> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
     }};
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -430,109 +452,85 @@ void GBufferPass::destroyGBuffer() {
 }
 
 bool GBufferPass::createRenderPass() {
-    // Attachment descriptions
-    std::array<VkAttachmentDescription, GBUFFER_COUNT> attachments{};
+    // Two compatible render passes over the same five targets: the early one clears them and
+    // leaves the colors as attachments and the depth readable (the Hi-Z build samples it); the
+    // late one loads them all and leaves them for the passes that sample the G-buffer.
+    constexpr std::array<VkFormat, GBUFFER_COUNT> kFormats = {
+        VK_FORMAT_R16G16B16A16_SFLOAT,   // position + metallic
+        VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface
+        VK_FORMAT_R8G8B8A8_SRGB,         // albedo + AO
+        VK_FORMAT_R16G16_SFLOAT,         // velocity
+        VK_FORMAT_D32_SFLOAT,            // depth
+    };
+    const auto make = [&](bool late, VkRenderPass& out) {
+        std::array<VkAttachmentDescription, GBUFFER_COUNT> attachments{};
+        for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
+            const bool depth = i == 4;
+            VkAttachmentDescription& a = attachments[i];
+            a.format = kFormats[i];
+            a.samples = VK_SAMPLE_COUNT_1_BIT;
+            a.loadOp = late ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            const VkImageLayout between =
+                depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            a.initialLayout = late ? between : VK_IMAGE_LAYOUT_UNDEFINED;
+            a.finalLayout = late ? (depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                          : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                 : between;
+        }
 
-    // Position + Metallic
-    attachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        std::array<VkAttachmentReference, 4> colorRefs{};
+        for (uint32_t i = 0; i < 4; ++i) colorRefs[i] = {i, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        const VkAttachmentReference depthRef{4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
-    // Normal + Roughness
-    attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[1].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+        subpass.pColorAttachments = colorRefs.data();
+        subpass.pDepthStencilAttachment = &depthRef;
 
-    // Albedo + AO
-    attachments[2].format = VK_FORMAT_R8G8B8A8_SRGB;
-    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        constexpr VkPipelineStageFlags kAttachments = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        constexpr VkAccessFlags kWrites = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        // Identical in both passes (render pass compatibility includes the dependencies: one
+        // framebuffer and one set of pipelines serve both), so each is the union of what the two
+        // need. In: the previous frame's readers of the targets (lighting, the compute passes),
+        // the early pass's writes and the Hi-Z build's and late cull's reads of the depth. Out:
+        // the late pass's and the Hi-Z build's readers, and the late pass's attachments.
+        constexpr VkPipelineStageFlags kReaders =
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        constexpr VkAccessFlags kAll = kWrites | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+        std::array<VkSubpassDependency, 2> dependencies{};
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = kAttachments | kReaders;
+        dependencies[0].srcAccessMask = kWrites;
+        dependencies[0].dstStageMask = kAttachments;
+        dependencies[0].dstAccessMask = kWrites | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dependencies[1].srcAccessMask = kWrites;
+        dependencies[1].dstStageMask = kReaders | kAttachments;
+        dependencies[1].dstAccessMask = kAll;
 
-    // Velocity
-    attachments[3].format = VK_FORMAT_R16G16_SFLOAT;
-    attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    // Depth
-    attachments[4].format = VK_FORMAT_D32_SFLOAT;
-    attachments[4].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[4].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-    // Subpass
-    std::array<VkAttachmentReference, 4> colorRefs{};
-    for (uint32_t i = 0; i < 4; ++i) {
-        colorRefs[i].attachment = i;
-        colorRefs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
-
-    VkAttachmentReference depthRef{};
-    depthRef.attachment = 4;
-    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
-    subpass.pColorAttachments = colorRefs.data();
-    subpass.pDepthStencilAttachment = &depthRef;
-
-    // Subpass dependencies
-    std::array<VkSubpassDependency, 2> dependencies{};
-
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    dependencies[1].srcSubpass = 0;
-    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    renderPassInfo.pAttachments = attachments.data();
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
-    renderPassInfo.pDependencies = dependencies.data();
-
-    return vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass) == VK_SUCCESS;
+        VkRenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+        renderPassInfo.pDependencies = dependencies.data();
+        return vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &out) == VK_SUCCESS;
+    };
+    return make(false, m_renderPass) && make(true, m_lateRenderPass);
 }
 
 bool GBufferPass::createFramebuffer() {
@@ -742,7 +740,7 @@ bool GBufferPass::createPipeline() {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Push constant: the draw's material slot (fragment stage)
+    // Push constant: the SSS tiles across and down (fragment stage)
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstant.offset = 0;
@@ -788,6 +786,17 @@ bool GBufferPass::createPipeline() {
     VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
                                                 nullptr, &m_pipeline);
 
+    if (result != VK_SUCCESS) {
+        vkDestroyShaderModule(m_device, vertShader, nullptr);
+        vkDestroyShaderModule(m_device, fragShader, nullptr);
+        return false;
+    }
+
+    // One-sided materials: back faces culled. Front faces are counter-clockwise as the
+    // rasterizer sees them (glTF's convention; measured on the helmet: test 6, the goldens).
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_cullBackPipeline);
     if (result != VK_SUCCESS) {
         vkDestroyShaderModule(m_device, vertShader, nullptr);
         vkDestroyShaderModule(m_device, fragShader, nullptr);

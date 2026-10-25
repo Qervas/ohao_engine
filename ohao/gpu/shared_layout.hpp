@@ -9,6 +9,24 @@ namespace ohao::gpu::shared {
 
 // render_bench's GPU calibration kernel: threads per workgroup
 inline constexpr uint32_t kCalibrateGroupSize = 256u;
+// GPU culling (cull/instances.slang): draws a workgroup classifies and scans, one a thread
+inline constexpr uint32_t kCullGroupSize = 256u;
+// GPU culling: indirect command lists, two (one-sided, double-sided) for each of six phases: the early and late G-buffer passes and four CSM cascades
+inline constexpr uint32_t kCullLists = 12u;
+// GPU culling phase: the early pass, the draws visible last frame and in the frustum
+inline constexpr uint32_t kCullPhaseEarly = 0u;
+// GPU culling phase: the late pass, the draws visible now (frustum and Hi-Z) not drawn early; it records visibility for the next frame
+inline constexpr uint32_t kCullPhaseLate = 1u;
+// GPU culling phase: a CSM cascade, the draws in its frustum
+inline constexpr uint32_t kCullPhaseShadow = 2u;
+// CullPush.config.z bit: test the frustum
+inline constexpr uint32_t kCullFrustum = 1u;
+// CullPush.config.z bit: test the Hi-Z pyramid (late phase)
+inline constexpr uint32_t kCullOcclusion = 2u;
+// CullPush.config.z bit: one-sided draws go to the phase's first list, double-sided to its second (else all to the first)
+inline constexpr uint32_t kCullSplitSided = 4u;
+// DrawRecord.info.y bit: the material is one-sided (back faces culled)
+inline constexpr uint32_t kDrawOneSided = 1u;
 // the calibration buffer's uint count (1 MiB)
 inline constexpr uint32_t kCalibrateElements = 262144u;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
@@ -165,6 +183,37 @@ static_assert(offsetof(GIDenoisePush, extent) == 0);
 static_assert(offsetof(GIDenoisePush, params) == 16);
 static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
 static_assert(sizeof(GIDenoisePush) == 48);
+
+// one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance
+struct alignas(16) DrawRecord {
+    alignas(16) std::array<uint32_t, 4> draw{};
+    alignas(16) std::array<uint32_t, 4> info{};
+    alignas(16) std::array<float, 4> aabbMin{};
+    alignas(16) std::array<float, 4> aabbMax{};
+};
+static_assert(offsetof(DrawRecord, draw) == 0);
+static_assert(offsetof(DrawRecord, info) == 16);
+static_assert(offsetof(DrawRecord, aabbMin) == 32);
+static_assert(offsetof(DrawRecord, aabbMax) == 48);
+static_assert(sizeof(DrawRecord) == 64);
+
+// GPU culling (cull/instances.slang) push constants, every entry
+struct alignas(16) CullPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<uint32_t, 4> config{};
+    alignas(16) std::array<uint32_t, 4> hiz{};
+};
+static_assert(offsetof(CullPush, viewProj) == 0);
+static_assert(offsetof(CullPush, config) == 64);
+static_assert(offsetof(CullPush, hiz) == 80);
+static_assert(sizeof(CullPush) == 96);
+
+// the Hi-Z build (cull/hiz.slang) push constants
+struct alignas(16) HiZPush {
+    alignas(16) std::array<uint32_t, 4> size{};
+};
+static_assert(offsetof(HiZPush, size) == 0);
+static_assert(sizeof(HiZPush) == 16);
 
 // capture.preview (capture/preview.slang) push constants
 struct alignas(16) PreviewPush {

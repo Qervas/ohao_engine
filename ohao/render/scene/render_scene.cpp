@@ -3,6 +3,7 @@
 #include "render/scene/light_table.hpp"
 #include "render/scene/material_table.hpp"
 #include "render/scene/mesh_registry.hpp"
+#include "gpu/shared_layout.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -54,6 +55,13 @@ struct RenderScene::Impl {
     RenderSceneStats stats;
     std::vector<Draw> draws;
     bool drawsDirty{true};
+    uint64_t drawsVersion{0};
+    // The draw list on the GPU (gpu::shared::DrawRecord each), rewritten whole when the
+    // list changes; `uploadedVersion` is the version it holds.
+    GpuBuffer drawTable;
+    uint32_t drawTableCapacity{0};
+    uint64_t uploadedVersion{~0ull};
+    std::vector<gpu::shared::DrawRecord> drawRecords;
 
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
@@ -199,13 +207,49 @@ struct RenderScene::Impl {
             const MeshInfo* mesh = meshes.info(MeshHandle{g.mesh, 0});
             if (!mesh) continue;
             for (const SubmeshDesc& sub : mesh->submeshes) {
+                const bool oneSided = !materials.doubleSided(instances.materialIndexFor(slot, sub.materialSlot));
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
-                                     mesh->aabbMin, mesh->aabbMax, &g.world});
+                                     mesh->aabbMin, mesh->aabbMax, &g.world, oneSided});
             }
         }
         drawsDirty = false;
+        ++drawsVersion;
     }
+
+    // Grows the device draw table if needed (the old one retired), then records the whole
+    // list's upload. False (version kept stale) on allocation failure.
+    bool recordDrawTable(detail::StagingBatch& batch, std::vector<GpuBuffer>& retired) {
+        const auto n = static_cast<uint32_t>(draws.size());
+        if (n > drawTableCapacity) {
+            uint32_t cap = std::max(drawTableCapacity, InstanceTable::kInitialCapacity);
+            while (cap < n) cap *= 2;
+            GpuBuffer bigger = allocator.createBuffer(VkDeviceSize{cap} * sizeof(gpu::shared::DrawRecord),
+                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                      AllocationUsage::GpuOnly);
+            if (!bigger.isValid()) {
+                OHAO_LOG(Error, render, "RenderScene: draw table allocation failed ({} draws)", cap);
+                return false;
+            }
+            if (drawTable.isValid()) retired.push_back(drawTable);
+            drawTable = bigger;
+            drawTableCapacity = cap;
+        }
+        drawRecords.resize(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            const Draw& d = draws[i];
+            gpu::shared::DrawRecord& r = drawRecords[i];
+            r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
+            r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, 0u, 0u};
+            r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, 0.0f};
+            r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};
+        }
+        batch.upload(drawTable.buffer, 0, drawRecords.data(), VkDeviceSize{n} * sizeof(gpu::shared::DrawRecord));
+        uploadedVersion = drawsVersion;
+        return true;
+    }
+
+    [[nodiscard]] bool drawTableStale() const noexcept { return uploadedVersion != drawsVersion && !draws.empty(); }
 };
 
 RenderScene::RenderScene() : m(std::make_unique<Impl>()) {}
@@ -259,6 +303,10 @@ void RenderScene::shutdown() {
     m->retireQueue.clear();
     m->allocator.destroyBuffer(m->tlasInstances);
     m->tlasInstances = GpuBuffer{};
+    m->allocator.destroyBuffer(m->drawTable);
+    m->drawTable = GpuBuffer{};
+    m->drawTableCapacity = 0;
+    m->uploadedVersion = ~0ull;
     m->tlasCapacity = 0;
     m->tlasHost.clear();
     m->tlasDirty.clear();
@@ -358,8 +406,11 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
 
     const bool tlasChanged = !m->tlasDirty.empty();
     bool tlasUploaded = !tlasChanged;
+    if (m->instances.consumeDrawsDirty() || m->drawsDirty) m->rebuildDraws();
+    const bool drawUpload = m->drawTableStale();
     const VkDeviceSize need = m->materials.pendingBytes() + m->instances.pendingBytes() +
-                              m->lights.pendingBytes() + m->tlasDirty.size() * kTlasInstanceBytes;
+                              m->lights.pendingBytes() + m->tlasDirty.size() * kTlasInstanceBytes +
+                              (drawUpload ? m->draws.size() * sizeof(gpu::shared::DrawRecord) : 0u);
     if (need > 0 || m->instances.needsGpuGrowth() || m->tlasNeedsGrowth()) {
         if (need == 0 || m->ensureStaging(frameSlot, need)) {
             detail::StagingBatch batch{};
@@ -391,6 +442,7 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
             m->stats.lightBytesUploaded = m->lights.recordUploads(batch);
             m->stats.instanceTableGrowths = m->instances.gpuGrowths();
             if (m->rt()) tlasUploaded = m->recordTlasUploads(batch, retired);
+            if (drawUpload) (void)m->recordDrawTable(batch, retired);
             if (batch.used > 0) m->allocator.flushBuffer(m->staging[frameSlot], 0, batch.used);
 
             VkMemoryBarrier after{};
@@ -449,6 +501,13 @@ std::span<const RenderScene::Draw> RenderScene::draws() const {
     if (m->instances.consumeDrawsDirty() || m->drawsDirty) m->rebuildDraws();
     return m->draws;
 }
+
+VkBuffer RenderScene::drawTable() const { return m->drawTable.buffer; }
+// The uploaded list's length: zero until recordUpdates has uploaded the current version.
+uint32_t RenderScene::drawCount() const {
+    return m->uploadedVersion == m->drawsVersion ? static_cast<uint32_t>(m->draws.size()) : 0u;
+}
+uint64_t RenderScene::drawsVersion() const { return m->drawsVersion; }
 
 const RenderSceneStats& RenderScene::stats() const noexcept { return m->stats; }
 VkAccelerationStructureKHR RenderScene::tlas() const { return m->rt() ? m->rtAccel->getTLAS() : VK_NULL_HANDLE; }

@@ -205,6 +205,7 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
             mats[i].baseColor = glm::vec3(model.materialColors[i]);
             mats[i].roughness = model.materialColors[i].w;
             mats[i].metallic = i < model.materialMetallic.size() ? model.materialMetallic[i] : 0.0f;
+            mats[i].doubleSided = i >= model.materialDoubleSided.size() || model.materialDoubleSided[i] != 0;
         }
         uploadTextures(textures, model, mats);
         for (auto& m : mats)

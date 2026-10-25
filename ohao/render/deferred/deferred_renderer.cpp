@@ -1,4 +1,5 @@
 #include "deferred_renderer.hpp"
+#include "gpu_culling.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/scene/render_scene.hpp"
 #include "render/frame/gpu_pass_timer.hpp"
@@ -41,6 +42,16 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         return false;
     }
     OHAO_LOG(Debug, render, "DeferredRenderer: CSMPass OK");
+
+    // GPU culling: the G-buffer's and CSM's indirect draw lists
+    m_culling = std::make_unique<GpuCulling>();
+    if (!m_culling->initialize(device, physicalDevice) ||
+        !m_culling->resize(m_width, m_height, m_gbufferPass->getDepthView())) {
+        OHAO_LOG(Error, render, "DeferredRenderer: GpuCulling failed");
+        return false;
+    }
+    m_gbufferPass->setCulling(m_culling.get());
+    m_csmPass->setCulling(m_culling.get());
 
     // Initialize deferred lighting pass
     m_lightingPass = std::make_unique<DeferredLightingPass>();
@@ -197,6 +208,10 @@ void DeferredRenderer::cleanup() {
         m_csmPass->cleanup();
         m_csmPass.reset();
     }
+    if (m_culling) {
+        m_culling->cleanup();
+        m_culling.reset();
+    }
     if (m_gbufferPass) {
         m_gbufferPass->cleanup();
         m_gbufferPass.reset();
@@ -269,9 +284,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_csmPass->execute(c, frameIndex); });
     }
 
-    // 2. G-Buffer pass — writes MRT outputs; render pass finalLayouts are:
-    //    color buffers → SHADER_READ_ONLY_OPTIMAL, depth → DEPTH_STENCIL_READ_ONLY_OPTIMAL
+    // 2. G-Buffer pass — GPU-culled, in five parts it times itself (cull.instances,
+    //    gbuffer.early, hiz.build, cull.late, gbuffer.late); its late render pass's finalLayouts
+    //    are: color buffers → SHADER_READ_ONLY_OPTIMAL, depth → DEPTH_STENCIL_READ_ONLY_OPTIMAL
     if (m_gbufferPass) {
+        m_gbufferPass->setPassTimer(m_passTimer);
         m_renderGraph.addPass("gbuffer",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -284,7 +301,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                     builder.declareDepthWrite(m_graphDepthHandle,
                                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             },
-            [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); });
+            [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); }, /*selfTimed=*/true);
     }
 
     // 3. SSAO — reads the G-buffer's position and normal (SHADER_READ_ONLY after the
@@ -430,6 +447,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_lightingPass->setRTShadowMask(VK_NULL_HANDLE);
         m_lightingPass->setSSGITexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
+
+    // The frame's culling state (the draw table bound, a stale history cleared), before the
+    // graph: CSM culls its cascades and the G-buffer its two phases inside it.
+    if (m_culling && m_renderScene) (void)m_culling->beginFrame(cmd, frameIndex, *m_renderScene);
 
     m_renderGraph.setPassTimer(m_passTimer);   // times each graph pass under its name
     m_renderGraph.compile();
@@ -602,6 +623,8 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     m_height = height;
 
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
+    // The Hi-Z pyramid follows the new depth buffer (the G-buffer resize idled the device).
+    if (m_culling && m_gbufferPass) m_culling->resize(width, height, m_gbufferPass->getDepthView());
     // The G-buffer's views were just destroyed and recreated. Hand the new ones to
     // post-processing NOW, before its own onResize rewrites descriptor sets: any
     // rewrite that still holds an old view writes a destroyed handle.
@@ -662,6 +685,7 @@ void DeferredRenderer::resetTemporalState() {
     if (m_rtShadow) m_rtShadow->resetHistory();
     if (m_rtGI) m_rtGI->resetHistory();
     if (m_postProcessing) m_postProcessing->resetHistory();
+    if (m_culling) m_culling->resetHistory();   // the first frame draws in its late pass
 }
 
 void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {

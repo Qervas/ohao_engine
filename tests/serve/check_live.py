@@ -232,7 +232,7 @@ def test_live():
     # One frame: its passes' sum is at most its span (medians over several are not additive).
     stats = result(s.call("render.stats", {"frames": 1})) or {}
     names = [p[0] for p in stats.get("passes", [])]
-    check(stats.get("frames") == 1 and stats.get("gpuMs", 0) > 0 and "gbuffer" in names and "lighting" in names
+    check(stats.get("frames") == 1 and stats.get("gpuMs", 0) > 0 and "gbuffer.late" in names and "lighting" in names
           and "present" in names and sum(p[1] for p in stats.get("passes", [])) <= stats.get("gpuMs", 0) * 1.05 + 0.01,
           "render.stats on the window host: per-pass medians (%s), their sum within the frame's %.3f ms"
           % (", ".join(names), stats.get("gpuMs", 0)))

@@ -491,18 +491,18 @@ static void sp2b_t14_stats_are_medians_per_pass_in_registry_order() {
         return f;
     };
     CHECK(!summarizeFrames({}), "no frames: no stats");
-    // bloom runs in two frames of four; "lighting" is listed before "gbuffer" in frame 3.
+    // bloom runs in two frames of four; "lighting" is listed before "gbuffer.late" in frame 3.
     const std::vector<render::FrameTiming> frames{
-        timing(10, 4.0f, 0.5f, {{"gbuffer", 1.0f}, {"lighting", 2.0f}, {"post.bloom", 0.5f}}),
-        timing(11, 6.0f, 0.7f, {{"gbuffer", 3.0f}, {"lighting", 2.0f}}),
-        timing(12, 5.0f, 0.6f, {{"lighting", 4.0f}, {"gbuffer", 2.0f}, {"post.bloom", 0.7f}}),
-        timing(13, 9.0f, 0.9f, {{"gbuffer", 2.0f}, {"lighting", 1.0f}}),
+        timing(10, 4.0f, 0.5f, {{"gbuffer.late", 1.0f}, {"lighting", 2.0f}, {"post.bloom", 0.5f}}),
+        timing(11, 6.0f, 0.7f, {{"gbuffer.late", 3.0f}, {"lighting", 2.0f}}),
+        timing(12, 5.0f, 0.6f, {{"lighting", 4.0f}, {"gbuffer.late", 2.0f}, {"post.bloom", 0.7f}}),
+        timing(13, 9.0f, 0.9f, {{"gbuffer.late", 2.0f}, {"lighting", 1.0f}}),
     };
     const auto st = summarizeFrames(frames);
     CHECK(st && st->frame == 13 && st->frames == 4, "the newest frame and the count");
     CHECK(st && st->gpuMs == 5.5 && std::abs(st->cpuMs - 0.65) < 1e-6, "even counts take the mean of the middle two");
-    const std::vector<std::pair<std::string, double>> want{{"gbuffer", 2.0}, {"lighting", 2.0}, {"post.bloom", 0.6}};
-    CHECK(st && st->passes.size() == 3 && st->passes[0].first == "gbuffer" && st->passes[1].first == "lighting" &&
+    const std::vector<std::pair<std::string, double>> want{{"gbuffer.late", 2.0}, {"lighting", 2.0}, {"post.bloom", 0.6}};
+    CHECK(st && st->passes.size() == 3 && st->passes[0].first == "gbuffer.late" && st->passes[1].first == "lighting" &&
               st->passes[2].first == "post.bloom",
           "passes in registry order");
     bool close = st.has_value();

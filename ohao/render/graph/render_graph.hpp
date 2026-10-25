@@ -126,9 +126,12 @@ public:
      * @param setup Setup function to declare resources
      * @param execute Execute function to record commands
      */
+    // `selfTimed`: the pass times its own parts under their registry names (the graph does
+    // not time it: one open timer at a time).
     void addPass(std::string_view name,
                  std::function<void(PassBuilder&)> setup,
-                 std::function<void(VkCommandBuffer)> execute);
+                 std::function<void(VkCommandBuffer)> execute,
+                 bool selfTimed = false);
 
     /**
      * Add a compute pass to the graph

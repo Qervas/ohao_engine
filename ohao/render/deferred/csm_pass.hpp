@@ -8,9 +8,12 @@ namespace ohao::render { class RenderScene; }
 
 namespace ohao {
 
-// Cascaded Shadow Map pass for directional light shadows. Draws RenderScene::draws()
-// into each cascade: set 0 = the instance table (one set per frame slot), push
-// constant = the cascade's view-projection.
+class GpuCulling;
+
+// Cascaded Shadow Map pass for directional light shadows: the fallback without RT shadows.
+// GPU-culled (sub-project 2b spec, "GPU-driven geometry"): each cascade culls the draw table to
+// its frustum's sides (depth is clamped) and draws indirectly. Set 0 = the instance table and
+// the draw table (one set per frame slot), push constant = the cascade's view-projection.
 class CSMPass : public RenderPassBase {
 public:
     static constexpr uint32_t CASCADE_COUNT = 4;
@@ -26,6 +29,7 @@ public:
 
     // Configuration
     void setRenderScene(const render::RenderScene* scene) { m_renderScene = scene; }
+    void setCulling(GpuCulling* culling) { m_culling = culling; }
     void setLightDirection(const glm::vec3& direction) { m_lightDirection = glm::normalize(direction); }
     void setCameraData(const glm::mat4& view, const glm::mat4& proj,
                        float nearPlane, float farPlane);
@@ -78,8 +82,10 @@ private:
 
     // Scene the pass draws (owned by VulkanRenderer)
     const render::RenderScene* m_renderScene{nullptr};
+    GpuCulling* m_culling{nullptr};
 
-    // Set 0: the instance table, one set per frame slot, rewritten in execute(cmd, slot)
+    // Set 0: the instance table and the draw table, one set per frame slot, rewritten in
+    // execute(cmd, slot)
     VkDescriptorSetLayout m_sceneLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_scenePool{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_sceneSets{};

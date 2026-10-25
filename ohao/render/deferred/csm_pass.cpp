@@ -1,4 +1,6 @@
 #include "csm_pass.hpp"
+#include "gpu_culling.hpp"
+#include "gpu/shared_layout.hpp"
 #include <cstring>
 #include "render/scene/render_scene.hpp"
 #include "../../scene/asset/model.hpp"
@@ -99,24 +101,29 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Update cascade buffer
     memcpy(m_cascadeBufferMapped, &m_cascadeData, sizeof(CascadeData));
 
-    // The slot's instance-table set, rewritten every frame: the table buffer can be
+    // The slot's set (instance table, draw table), rewritten every frame: the buffers can be
     // replaced by growth; the slot's previous use finished at its fence wait.
-    const std::span<const render::RenderScene::Draw> draws = m_renderScene->draws();
     const VkBuffer instances = m_renderScene->instanceBuffer();
-    const bool haveDraws = !draws.empty() && instances != VK_NULL_HANDLE &&
-                           m_renderScene->vertexArena() != VK_NULL_HANDLE &&
-                           m_renderScene->indexArena() != VK_NULL_HANDLE &&
-                           m_sceneSets[frameIndex] != VK_NULL_HANDLE;
+    const VkBuffer drawTable = m_renderScene->drawTable();
+    const bool haveDraws = m_culling && m_culling->drawCount() > 0 && instances != VK_NULL_HANDLE &&
+                           drawTable != VK_NULL_HANDLE && m_renderScene->vertexArena() != VK_NULL_HANDLE &&
+                           m_renderScene->indexArena() != VK_NULL_HANDLE && m_sceneSets[frameIndex] != VK_NULL_HANDLE;
     if (haveDraws) {
-        const VkDescriptorBufferInfo info{instances, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_sceneSets[frameIndex];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &info;
-        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+        const VkDescriptorBufferInfo infos[2] = {{instances, 0, VK_WHOLE_SIZE}, {drawTable, 0, VK_WHOLE_SIZE}};
+        VkWriteDescriptorSet writes[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = m_sceneSets[frameIndex];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
+        // Every cascade's list, before the render passes (compute outside them).
+        for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade)
+            m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, GpuCulling::kPairCascade0 + cascade,
+                            m_cascadeData.viewProj[cascade]);
     }
 
     // Render each cascade
@@ -150,7 +157,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Every visible draw into this cascade (no culling, as before)
+        // The cascade's culled list (its pair's first list: shadows draw both faces)
         if (haveDraws) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
@@ -163,10 +170,8 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
             const ShadowPushConstant push{m_cascadeData.viewProj[cascade]};
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(ShadowPushConstant), &push);
-            for (const render::RenderScene::Draw& draw : draws) {
-                // firstInstance = the slot: the shader indexes the instance table with it.
-                vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);
-            }
+            // firstInstance = the draw record: the shader reads its instance through it.
+            m_culling->drawList(cmd, (GpuCulling::kPairCascade0 + cascade) * 2);
         }
 
         vkCmdEndRenderPass(cmd);
@@ -340,18 +345,21 @@ bool CSMPass::createCascadeBuffer() {
 }
 
 bool CSMPass::createSceneDescriptors() {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // 0: the instance table, 1: the draw table
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_sceneLayout) != VK_SUCCESS) return false;
 
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT};
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * MAX_FRAMES_IN_FLIGHT};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;

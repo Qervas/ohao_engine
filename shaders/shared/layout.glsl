@@ -5,6 +5,24 @@
 
 // render_bench's GPU calibration kernel: threads per workgroup
 const uint kCalibrateGroupSize = 256u;
+// GPU culling (cull/instances.slang): draws a workgroup classifies and scans, one a thread
+const uint kCullGroupSize = 256u;
+// GPU culling: indirect command lists, two (one-sided, double-sided) for each of six phases: the early and late G-buffer passes and four CSM cascades
+const uint kCullLists = 12u;
+// GPU culling phase: the early pass, the draws visible last frame and in the frustum
+const uint kCullPhaseEarly = 0u;
+// GPU culling phase: the late pass, the draws visible now (frustum and Hi-Z) not drawn early; it records visibility for the next frame
+const uint kCullPhaseLate = 1u;
+// GPU culling phase: a CSM cascade, the draws in its frustum
+const uint kCullPhaseShadow = 2u;
+// CullPush.config.z bit: test the frustum
+const uint kCullFrustum = 1u;
+// CullPush.config.z bit: test the Hi-Z pyramid (late phase)
+const uint kCullOcclusion = 2u;
+// CullPush.config.z bit: one-sided draws go to the phase's first list, double-sided to its second (else all to the first)
+const uint kCullSplitSided = 4u;
+// DrawRecord.info.y bit: the material is one-sided (back faces culled)
+const uint kDrawOneSided = 1u;
 // the calibration buffer's uint count (1 MiB)
 const uint kCalibrateElements = 262144u;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
@@ -116,6 +134,26 @@ struct GIDenoisePush {
     uvec4 extent;   // x, y the half-resolution size; z, w the frame's
     uvec4 params;   // x history frames (0: none), y the a-trous step in pixels
     vec4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
+};
+
+// one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance
+struct DrawRecord {
+    uvec4 draw;   // x first index, y index count, z vertex offset (an int's bits), w the instance-table slot
+    uvec4 info;   // x the material slot, y flags (kDrawOneSided)
+    vec4 aabbMin;   // xyz the mesh's local bounding box, minimum
+    vec4 aabbMax;   // xyz the mesh's local bounding box, maximum
+};
+
+// GPU culling (cull/instances.slang) push constants, every entry
+struct CullPush {
+    mat4 viewProj;   // the view-projection the draws are rasterized with (jitter included)
+    uvec4 config;   // x draw count, y phase (kCullPhase*), z flags (kCullFrustum, kCullOcclusion, kCullSplitSided), w the phase's list pair (list 2w and 2w+1)
+    uvec4 hiz;   // x, y the frame's size in pixels; z the Hi-Z pyramid's levels; w the scan's block count
+};
+
+// the Hi-Z build (cull/hiz.slang) push constants
+struct HiZPush {
+    uvec4 size;   // x, y the level written; z, w the level (or depth buffer) read
 };
 
 // capture.preview (capture/preview.slang) push constants

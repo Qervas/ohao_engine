@@ -2,6 +2,7 @@
 
 // Core passes only — stripped to essentials
 #include "gbuffer_pass.hpp"
+#include "gpu_culling.hpp"
 #include "deferred_lighting_pass.hpp"
 #include "csm_pass.hpp"
 #include "post_processing_pipeline.hpp"
@@ -98,6 +99,8 @@ public:
     // Post-processing configuration
     [[nodiscard]] PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
     [[nodiscard]] const GBufferPass* getGBufferPass() const { return m_gbufferPass.get(); }
+    // GPU culling: its settings (frustum, occlusion) and, for tests, its captured lists.
+    [[nodiscard]] GpuCulling* culling() noexcept { return m_culling.get(); }
     [[nodiscard]] const SSSPass* getSSSPass() const { return m_sssPass.get(); }
     [[nodiscard]] const SSRPass* getSSRPass() const { return m_ssrPass.get(); }
     [[nodiscard]] const RTShadowTechnique* getRTShadow() const { return m_rtShadow.get(); }
@@ -162,6 +165,7 @@ private:
     // Render passes
     std::unique_ptr<GBufferPass> m_gbufferPass;
     std::unique_ptr<CSMPass> m_csmPass;
+    std::unique_ptr<GpuCulling> m_culling;   // the G-buffer's and CSM's draw lists
 
     // RT shadow technique (replaces CSM when available)
     std::unique_ptr<RTShadowTechnique> m_rtShadow;

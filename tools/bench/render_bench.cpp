@@ -30,10 +30,12 @@
 // reruns it). Exit 1 when a gated budget is missed or a scene could not be rendered.
 #include "api/session.hpp"
 #include "bench_env.hpp"
+#include "bench_world.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
+#include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "gpu_calibration.hpp"
@@ -74,14 +76,35 @@ struct SceneSpec {
     std::optional<float> exposure;
 };
 
-// The spec's table; bench100k_* and bench10k_* arrive with GPU-driven geometry (step 11).
+// The spec's table. The bench scenes are built in code (bench_world.hpp) and written to
+// build/render_bench/ by writeBenchScenes before the run.
 const std::vector<SceneSpec>& sceneSpecs() {
     static const std::vector<SceneSpec> s = {
         {"cornell_720p", "assets/scenes/cornell_box.scene.json", 1280, 720, {}, std::nullopt},
         {"helmet_game_720p", "assets/scenes/helmet_game.scene.json", 1280, 720, {"taa", "ssao", "bloom"}, 1.0f},
         {"helmet_game_1080p", "assets/scenes/helmet_game.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
+        {"bench10k_1080p", "build/render_bench/bench10k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
+        {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
     };
     return s;
+}
+
+const reflect::TypeRegistry& engineTypes();
+
+// bench10k and bench100k (bench_world.hpp's render scenes) as scene files, for the run's
+// scene.load; only those the run renders.
+bool writeBenchScenes(const std::string& only) {
+    fs::create_directories("build/render_bench");
+    for (const auto& [name, n] : {std::pair{"bench10k", 10'000}, std::pair{"bench100k", 100'000}}) {
+        if (!only.empty() && only.rfind(name, 0) != 0) continue;
+        ecs::World w;
+        bench::buildRenderBenchWorld(w, n, 2026);
+        auto text = ecs::saveScene(w, engineTypes(), ecs::SaveOptions{reflect::JsonLayout::Compact});
+        if (!text) return false;
+        std::ofstream(std::string("build/render_bench/") + name + ".scene.json", std::ios::binary | std::ios::trunc)
+            << text.value();
+    }
+    return true;
 }
 
 // ---- results --------------------------------------------------------------------------------
@@ -656,6 +679,7 @@ int calibrateReference(const std::string& refPath) {
 
 Measurement run(const std::string& only, int timed) {
     Measurement m;
+    if (!writeBenchScenes(only)) std::fprintf(stderr, "render_bench: the bench scenes could not be written\n");
     bench::LoadMonitor monitor;
     monitor.start();
     m.cpuCal0 = bench::calibrationMs();
