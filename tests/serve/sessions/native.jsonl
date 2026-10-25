@@ -22,4 +22,7 @@
 {"jsonrpc":"2.0","id":10,"method":"scene.load","params":{"path":"tests/scenes/v1/rooms.scene.json","replace":true}}
 {"jsonrpc":"2.0","id":11,"method":"scene.save","params":{"path":"build/serve_tmp/native/rooms.scene.json"}}
 {"jsonrpc":"2.0","method":"world.step","params":{"frames":2}}
+{"jsonrpc":"2.0","id":30,"method":"render.settings"}
+{"jsonrpc":"2.0","id":31,"method":"render.settings","params":{"set":{"rtGI":{"rays":4},"ssr":false}}}
+{"jsonrpc":"2.0","id":32,"method":"render.settings","params":{"set":{"csm":{"size":100}}}}
 {"jsonrpc":"2.0","id":"end","method":"world.info"}

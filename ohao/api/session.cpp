@@ -22,9 +22,10 @@ constexpr std::size_t kMaxErrorData = 20;   // diagnostics per error envelope
 std::vector<reflect::MethodDoc> buildMethods() {
     const reflect::TypeRegistry& p = paramsRegistry();
     return {
-        {"engine.info", p.find<EngineInfoParams>(), "{protocolVersion, schemaHash, version, host, time}",
+        {"engine.info", p.find<EngineInfoParams>(),
+         "{protocolVersion, schemaHash, version, host, time, gpu?: {name, driver, rayTracing, meshShaders}}",
          "The native handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host "
-         "and time state."},
+         "and time state; gpu once the host has a device (a headless host creates it at its first render)."},
         {"schema.get", p.find<SchemaGetParams>(), "the catalogue (ohao_schema.json), compact",
          "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
         {"scene.validate", p.find<SceneValidateParams>(), "{ok, errors?, warnings?, upgraded?, more?}",
@@ -83,12 +84,19 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
          "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
         {"render.capture", p.find<RenderCaptureParams>(),
-         "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, deterministic, validation?} (+ the "
-         "inline image)",
+         "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
+         "deterministic, validation?} (+ the inline image)",
          "Renders the world through its Camera and Environment: frames from a reset, the last kept, to a PNG "
          "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
          "at its own size, presenting each frame; in realtime it returns its next presented frame in its live mode "
-         "(deterministic false). post turns on deferred effects. Cancellable between frames, with progress."},
+         "(deterministic false). post turns on deferred effects; quality, post and exposure left out come from "
+         "render.settings. gpuMs: the last frame's GPU time; timings adds its passes. Cancellable between frames, "
+         "with progress."},
+        {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
+         "Reads, or with set changes, the host's renderer settings: quality, RT shadows and GI, SSAO/SSR/SSS, the "
+         "geometry path, occlusion culling, the CSM fallback, exposure. Members of set left out keep their value. "
+         "Host state, never saved in scene files; captures take them as defaults. The defaults are the budgeted "
+         "frame. E_STATE on a host that renders nothing (the CLI)."},
         {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?}",
          "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
          "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). E_STATE "
@@ -185,6 +193,16 @@ bool engineInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, D
     out.key("version"); out.string(kEngineVersion);
     out.key("host"); out.string(hostKindName(s.host));
     out.key("time"); writeTime(s, out);
+    if (s.render)
+        if (const auto gpu = s.render->gpuInfo()) {
+            out.key("gpu");
+            out.beginObject();
+            out.key("name"); out.string(gpu->name);
+            out.key("driver"); out.string(gpu->driver);
+            out.key("rayTracing"); out.boolean(gpu->rayTracing);
+            out.key("meshShaders"); out.boolean(gpu->meshShaders);
+            out.endObject();
+        }
     out.endObject();
     return true;
 }
@@ -659,9 +677,17 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     if (p.width) r.width = static_cast<uint32_t>(*p.width);
     if (p.height) r.height = static_cast<uint32_t>(*p.height);
     r.denoise = kDenoisers[static_cast<int>(p.denoise)];
-    for (const PostEffect e : p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
-    r.exposure = p.exposure;
-    if (p.quality == Quality::reference) r.quality = "reference";
+    // What the capture leaves out comes from the host's render.settings.
+    const std::optional<RenderSettings> settings = s.render->renderSettings();
+    if (p.post) {
+        for (const PostEffect e : *p.post) r.post.emplace_back(kEffects[static_cast<int>(e)]);
+    } else if (settings && settings->ssao) {
+        r.post.emplace_back("ssao");
+    }
+    r.exposure = p.exposure ? p.exposure : (settings ? std::optional<float>(settings->exposure) : std::nullopt);
+    const Quality quality = p.quality ? *p.quality : (settings ? settings->quality : Quality::realtime);
+    if (quality == Quality::reference) r.quality = "reference";
+    r.timings = p.timings;
     r.inlineImage = p.inlineImage;
     r.format = p.format == ImageFormat::png ? "png" : "jpeg";
     r.maxSize = p.maxSize;
@@ -688,10 +714,44 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     out.key("ms"); out.float32(static_cast<float>(o.ms));
     out.key("readbackMs"); out.float32(static_cast<float>(o.readbackMs));
     out.key("encodeMs"); out.float32(static_cast<float>(o.encodeMs));
+    const auto ms = [](double v) { return static_cast<float>(std::round(v * 1000.0) / 1000.0); };
+    if (o.gpuMs) { out.key("gpuMs"); out.float32(ms(*o.gpuMs)); }
+    if (p.timings) {
+        out.key("timings");
+        out.beginArray();
+        for (const auto& [name, t] : o.timings) {
+            out.beginArray(); out.string(name); out.float32(ms(t)); out.endArray();
+        }
+        out.endArray();
+    }
     out.key("deterministic"); out.boolean(o.deterministic);
     if (o.validationMessages) { out.key("validation"); out.uint64(*o.validationMessages); }
     out.endObject();
     if (p.inlineImage) s.image = ResultImage{o.imageMime, base64(o.image)};
+    return true;
+}
+
+bool renderSettings(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                    JsonWriter& out) {
+    RenderSettingsParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    std::optional<RenderSettings> current = s.render ? s.render->renderSettings() : std::nullopt;
+    if (!current) {
+        ctx.error("E_STATE", params, "this host renders nothing of its own: render.settings needs a GPU host",
+                  "ohao serve (headless or --window)");
+        return false;
+    }
+    if (const JsonNode* set = ctx.doc.member(params, "set")) {
+        // The members given change; the rest keep their value (decoded onto the current ones).
+        ctx.push("set");
+        reflect::readStruct(&*current, *paramsRegistry().find<RenderSettings>(), *set, ctx);
+        ctx.pop();
+        if (!ctx.errors.empty()) return badParams(s);
+        s.render->setRenderSettings(*current);
+        ++s.changes;   // a change, as a mutating method's: a lockstep window redraws
+        current = s.render->renderSettings();
+    }
+    reflect::writeStruct(&*current, out, *paramsRegistry().find<RenderSettings>());
     return true;
 }
 
@@ -772,7 +832,7 @@ constexpr MethodEntry kDispatch[] = {
     {"input.replay", methodInputReplay, true},
     {"world.snapshot", worldSnapshot},
     {"world.restore", worldRestore, true}, {"render.capture", renderCapture},
-    {"render.stats", renderStats},   {"log.read", logRead},
+    {"render.stats", renderStats},   {"render.settings", renderSettings}, {"log.read", logRead},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

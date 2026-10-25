@@ -164,6 +164,22 @@ std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
     return runtime::renderStats(*m_renderer, frames);
 }
 
+std::optional<api::RenderSettings> LiveHost::renderSettings() {
+    if (!m_renderer) return std::nullopt;
+    return readRenderSettings(*m_renderer);
+}
+
+void LiveHost::setRenderSettings(const api::RenderSettings& settings) {
+    if (!m_renderer) return;
+    applyRenderSettings(*m_renderer, settings);
+    m_needRender = true;
+}
+
+std::optional<api::Host::GpuInfo> LiveHost::gpuInfo() {
+    if (!m_renderer) return std::nullopt;
+    return runtime::gpuInfo(*m_renderer);
+}
+
 api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
     api::RenderOutcome out;
     const VkExtent2D ext = m_window.framebufferExtent();

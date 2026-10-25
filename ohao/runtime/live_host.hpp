@@ -117,6 +117,10 @@ public:
     [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& request) override;
     [[nodiscard]] std::optional<api::RenderStats> renderStats(int frames) override;
+    // render.settings: the window's renderer (applied between frames; the next frame redraws).
+    [[nodiscard]] std::optional<api::RenderSettings> renderSettings() override;
+    void setRenderSettings(const api::RenderSettings& settings) override;
+    [[nodiscard]] std::optional<GpuInfo> gpuInfo() override;
 
 private:
     void renderFrame();   // world.sync, the world's view, render + present

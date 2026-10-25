@@ -63,10 +63,17 @@ void reproject(int2 q, float4 gc, out float4 fast, out float4 slow)
     slow = float4(0.0);
     const int2 halfSize = int2(pc.extent.xy);
     const int2 full = int2(pc.extent.zw);
-    const int2 p = min(q * 2, full - 1);
+    const uint shift = pc.params.z;   // the trace is the frame >> shift (1 half, 0 full)
+    const int2 p = min(q << int(shift), full - 1);
     const float2 uv = (float2(p) + 0.5) / float2(full);
     const float2 prevUv = uv - tVelocity.Load(int3(p, 0));
-    const float2 hp = (prevUv * float2(full) - 0.5) * 0.5;   // in last frame's half-resolution samples
+    // In last frame's trace samples. The half-resolution expression is kept exactly as it was
+    // (a multiply by a selected factor compiles differently and moved a few pixels by 1 LSB).
+    float2 hp;
+    if (shift != 0u)
+        hp = (prevUv * float2(full) - 0.5) * 0.5;
+    else
+        hp = prevUv * float2(full) - 0.5;
     const int2 base = int2(floor(hp));
     const float2 f = hp - float2(base);
     float wsum = 0.0;
@@ -239,9 +246,11 @@ void upsample(uint3 id : SV_DispatchThreadID)
     const float dc = distance(position.xyz, pc.cameraPos.xyz);
     const float3 nc = decodeOctahedron(uNormal.Load(int3(pixel, 0)).xy);
     const int2 halfSize = int2(pc.extent.xy);
-    // Half-resolution sample q sits on full-resolution pixel 2q.
-    const int2 base = pixel >> 1;
-    const float2 f = float2(pixel & 1) * 0.5;
+    // Half-resolution sample q sits on full-resolution pixel 2q; at full resolution (shift 0)
+    // the sample is the pixel and the taps past it weigh 0.
+    const uint shift = pc.params.z;
+    const int2 base = pixel >> int(shift);
+    const float2 f = shift != 0u ? float2(pixel & 1) * 0.5 : float2(0.0);
     const float invTol = 1.0 / (0.05 * dc);
     float3 sum = float3(0.0), best = float3(0.0);
     float wsum = 0.0, bestW = -1.0;

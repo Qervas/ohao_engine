@@ -30,6 +30,24 @@ std::optional<api::RenderStats> RenderHost::renderStats(int frames) {
     return runtime::renderStats(*m_renderer, frames);
 }
 
+std::optional<api::RenderSettings> RenderHost::renderSettings() {
+    if (m_kind == api::HostKind::Cli) return std::nullopt;
+    if (m_renderer) return runtime::readRenderSettings(*m_renderer);
+    return m_settings;
+}
+
+void RenderHost::setRenderSettings(const api::RenderSettings& settings) {
+    if (m_kind == api::HostKind::Cli) return;
+    m_settings = settings;
+    m_settingsSet = true;
+    if (m_renderer) runtime::applyRenderSettings(*m_renderer, settings);
+}
+
+std::optional<api::Host::GpuInfo> RenderHost::gpuInfo() {
+    if (!m_renderer) return std::nullopt;
+    return runtime::gpuInfo(*m_renderer);
+}
+
 api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
     api::RenderOutcome out;
     if (!m_world) {
@@ -53,6 +71,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
             if (auto* pp = deferred->getPostProcessing()) m_defaultExposure = pp->getExposure();
         ecs::installRenderExtract(*m_world, m_renderer->renderScene());
         ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
+        if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size
     }

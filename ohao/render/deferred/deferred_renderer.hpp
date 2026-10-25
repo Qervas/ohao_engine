@@ -73,6 +73,24 @@ public:
     [[nodiscard]] RenderQuality quality() const noexcept { return m_quality; }
     // Realtime RT shadows: the lights a pixel traces at most (0-4), the most important first.
     void setShadowLightsPerPixel(uint32_t n) noexcept { m_shadowLightsPerPixel = std::min(n, 4u); }
+    [[nodiscard]] uint32_t shadowLightsPerPixel() const noexcept { return m_shadowLightsPerPixel; }
+
+    // render.settings switches (between frames). RT GI on or off (off: no indirect light), its
+    // realtime trace at half or full resolution and its rays a pixel (1-32); SSR and SSS on or
+    // off; the CSM fallback's cascades (1-4) and size (512-4096; a new size rebuilds the map).
+    void setRTGIEnabled(bool on) noexcept { m_rtgiWanted = on; }
+    [[nodiscard]] bool rtGIEnabled() const noexcept { return m_rtgiWanted; }
+    [[nodiscard]] bool rtGIAvailable() const noexcept { return m_useRTGI && m_rtGI != nullptr; }
+    void setRTGIRealtime(bool fullResolution, uint32_t rays);
+    [[nodiscard]] bool rtGIFullResolution() const noexcept { return m_giFull; }
+    [[nodiscard]] uint32_t rtGIRays() const noexcept { return m_giRays; }
+    void setSSREnabled(bool on) noexcept { m_ssrWanted = on; }
+    [[nodiscard]] bool ssrEnabled() const noexcept { return m_ssrWanted; }
+    void setSSSEnabled(bool on) noexcept { m_sssWanted = on; }
+    [[nodiscard]] bool sssEnabled() const noexcept { return m_sssWanted; }
+    void configureCSM(uint32_t cascades, uint32_t size);
+    [[nodiscard]] uint32_t csmCascades() const noexcept { return m_csmPass ? m_csmPass->cascades() : 4u; }
+    [[nodiscard]] uint32_t csmSize() const noexcept { return m_csmPass ? m_csmPass->size() : 2048u; }
 
     // Scene configuration. The G-buffer and CSM passes draw the RenderScene, RT
     // shadows/GI trace its TLAS, and RT GI takes its bounce light from its lights.
@@ -187,6 +205,11 @@ private:
     bool m_meshShader{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
     bool m_useRTGI{false};
+    bool m_rtgiWanted{true};
+    bool m_giFull{false};
+    uint32_t m_giRays{2};
+    bool m_ssrWanted{true};
+    bool m_sssWanted{true};
     VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<SSRPass> m_ssrPass;

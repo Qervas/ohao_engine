@@ -39,6 +39,12 @@ public:
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest& request) override;
     // render.stats over the frames captures rendered; nullopt before the first capture.
     [[nodiscard]] std::optional<api::RenderStats> renderStats(int frames) override;
+    // render.settings (headless only; the CLI host has none: E_STATE). Kept until the renderer
+    // starts, then applied to it; read back from it once it runs.
+    [[nodiscard]] std::optional<api::RenderSettings> renderSettings() override;
+    void setRenderSettings(const api::RenderSettings& settings) override;
+    // engine.info's gpu, once the first capture started the renderer.
+    [[nodiscard]] std::optional<GpuInfo> gpuInfo() override;
 
     // The renderer, once started; null before the first capture or if it failed.
     [[nodiscard]] VulkanRenderer* renderer() noexcept { return m_renderer.get(); }
@@ -54,6 +60,8 @@ private:
     bool m_failed{false};
     int m_captures{0};
     float m_defaultExposure{1.0f};   // read from the renderer at startup; a capture without one uses it
+    api::RenderSettings m_settings;  // before the renderer starts
+    bool m_settingsSet{false};       // render.settings changed them: applied when the renderer starts
 };
 
 } // namespace ohao::host

@@ -2579,6 +2579,179 @@ static void runRTGITests() {
     sp2b_t10_a_red_wall_bleeds_onto_the_floor();
 }
 
+// ---- render settings (sub-project 2b, step 15: render.settings) ----------------------------
+
+// The passes one frame of a small lit scene ran under `s`, and what RT GI and CSM report.
+struct SettingsRun {
+    bool ok{false};
+    std::vector<std::string> passes;
+    ohao::VulkanRenderer::RenderSettings readBack;
+    VkExtent2D giExtent{0, 0};
+    uint32_t giRays{0};
+    std::vector<uint8_t> px;
+};
+
+static SettingsRun settingsRun(const ohao::VulkanRenderer::RenderSettings& s, int frames = 2) {
+    SettingsRun out;
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return out;
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, box;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        // A box floating over the floor: its shadow falls straight below it, in view.
+        ohao::PrimitiveMeshGenerator::generateBox(box, {-0.5f, 1.0f, -0.5f}, {0.5f, 2.0f, 0.5f}, {1, 1, 1});
+        ohao::render::MaterialDesc grey;
+        grey.baseColor = {0.7f, 0.7f, 0.7f};
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), box, "box", {}, &grey);
+        ohao::ecs::Light sun;
+        sun.type = ohao::ecs::LightType::Directional;
+        sun.intensity = 3.0f;
+        ohao::ecs::Transform sunT;
+        sunT.position = {0.0f, 10.0f, 0.0f};
+        sunT.rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0));   // straight down: the box's shadow below it
+        ohao::ecs::spawnLight(world, "sun", sun, sunT);
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        r.setRenderSettings(s);
+        r.getCamera().setPosition({0.0f, 7.0f, 7.0f});
+        r.getCamera().setRotation(-45.0f, -90.0f);
+        r.resetAccumulation();
+        for (int f = 0; f < frames; ++f) {
+            world.sync();
+            if (f == frames - 1) r.requestReadback();
+            r.render();
+        }
+        const auto px = r.readback();
+        out.px.assign(px.begin(), px.end());
+        for (const auto& f : r.frameTimings(1))
+            for (uint32_t i = 0; i < f.count; ++i) out.passes.emplace_back(ohao::render::kPasses[f.pass[i]].name);
+        out.readBack = r.renderSettings();
+        if (auto* d = r.getDeferredRenderer(); d && d->getRT_GI()) {
+            out.giExtent = d->getRT_GI()->traceExtent();
+            out.giRays = d->getRT_GI()->raysPerPixel();
+        }
+        out.ok = true;
+    }
+    return out;
+}
+
+static bool ran(const SettingsRun& r, std::string_view pass) {
+    return std::find(r.passes.begin(), r.passes.end(), pass) != r.passes.end();
+}
+
+static void sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip() {
+    TEST_BEGIN("sp2b_t14: render settings default to the budgeted frame and read back what was set");
+    const ohao::VulkanRenderer::RenderSettings defaults;
+    const SettingsRun d = settingsRun(defaults);
+    if (!d.ok) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const auto& b = d.readBack;
+    EXPECT(b.quality == ohao::RenderQuality::Realtime && b.rtShadows && b.rtShadowMaxLights == 4 && b.rtGI &&
+               !b.rtGIFullResolution && b.rtGIRays == 2 && !b.ssao && b.ssr && b.sss &&
+               b.geometry == ohao::GpuCulling::Geometry::Auto && b.occlusionCulling && b.csmCascades == 4 &&
+               b.csmSize == 2048 && b.exposure == defaults.exposure,
+           "the defaults read back unchanged");
+    {
+        // A fresh renderer, before any set, is already at the defaults (exposure included): a
+        // headless host reports them before its renderer starts and captures with them.
+        ohao::VulkanRenderer fresh(64, 64);
+        EXPECT(fresh.initialize() && fresh.renderSettings().exposure == defaults.exposure &&
+                   fresh.renderSettings().csmSize == defaults.csmSize && fresh.renderSettings().rtGIRays == defaults.rtGIRays,
+               "a fresh renderer starts at the defaults");
+    }
+    ohao::VulkanRenderer::RenderSettings s;
+    s.rtShadowMaxLights = 2;
+    s.rtGIRays = 5;
+    s.ssao = true;
+    s.geometry = ohao::GpuCulling::Geometry::Instances;
+    s.occlusionCulling = false;
+    s.csmCascades = 3;
+    s.csmSize = 1024;
+    s.exposure = 1.5f;
+    const auto t = settingsRun(s).readBack;
+    EXPECT(t.rtShadowMaxLights == 2 && t.rtGIRays == 5 && t.ssao && t.geometry == ohao::GpuCulling::Geometry::Instances &&
+               !t.occlusionCulling && t.csmCascades == 3 && t.csmSize == 1024 && t.exposure == 1.5f,
+           "every changed knob reads back");
+    TEST_PASS();
+}
+
+static void sp2b_t14_switches_turn_their_passes_off() {
+    TEST_BEGIN("sp2b_t14: ssr, sss, ssao, rtGI and rtShadows switch their passes; the frame still renders");
+    const SettingsRun on = settingsRun({});
+    if (!on.ok) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    ohao::VulkanRenderer::RenderSettings s;
+    s.ssr = false;
+    s.sss = false;
+    s.rtGI = false;
+    s.rtShadows = false;
+    const SettingsRun off = settingsRun(s);
+    s.ssao = true;
+    const SettingsRun ssao = settingsRun(s);
+    EXPECT(ran(on, "ssr") && ran(on, "sss") && !ran(on, "ssao"), "the defaults run ssr and sss, not ssao");
+    EXPECT(!ran(off, "ssr") && !ran(off, "sss"), "ssr and sss off: neither runs");
+    EXPECT(!ran(off, "rt.gi") && !ran(off, "rt.gi.denoise") && !ran(off, "rt.shadows"), "rtGI and rtShadows off: none of their passes");
+    EXPECT(ran(off, "csm"), "rtShadows off: the CSM fallback draws the sun's shadow");
+    EXPECT(ran(ssao, "ssao"), "ssao on: it runs");
+    EXPECT(!off.px.empty() && !on.px.empty(), "both frames read back");
+    TEST_PASS();
+}
+
+static void sp2b_t14_gi_resolution_and_rays_reach_the_trace() {
+    TEST_BEGIN("sp2b_t14: rtGI resolution full traces the frame's size, rays reach the trace; half stays exact");
+    ohao::VulkanRenderer::RenderSettings s;
+    const SettingsRun half = settingsRun(s, 4);
+    if (!half.ok || half.giExtent.width == 0) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    s.rtGIFullResolution = true;
+    s.rtGIRays = 6;
+    const SettingsRun full = settingsRun(s, 4);
+    const SettingsRun half2 = settingsRun({}, 4);
+    EXPECT(half.giExtent.width == 80 && half.giExtent.height == 60 && half.giRays == 2, "half: 80x60, 2 rays");
+    EXPECT(full.giExtent.width == 160 && full.giExtent.height == 120 && full.giRays == 6, "full: 160x120, 6 rays");
+    EXPECT(ran(full, "rt.gi.denoise"), "full resolution still denoises");
+    EXPECT_EQ(maxAbsDiff(half.px, half2.px), 0, "half resolution renders the same image twice");
+    EXPECT(maxAbsDiff(half.px, full.px) > 0, "full resolution changes the indirect light");
+    TEST_PASS();
+}
+
+static void sp2b_t14_csm_cascades_and_size_apply() {
+    TEST_BEGIN("sp2b_t14: csm cascades and size rebuild the fallback's shadow map; the image follows");
+    ohao::VulkanRenderer::RenderSettings s;
+    s.rtShadows = false;
+    const SettingsRun four = settingsRun(s);
+    if (!four.ok) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    s.csmCascades = 1;
+    s.csmSize = 512;
+    const SettingsRun one = settingsRun(s);
+    EXPECT(ran(one, "csm") && one.readBack.csmCascades == 1 && one.readBack.csmSize == 512, "one 512x512 cascade drawn");
+    EXPECT(maxAbsDiff(four.px, one.px) > 0, "a coarser shadow map changes the shadow");
+    TEST_PASS();
+}
+
+static void runRenderSettingsTests() {
+    std::cout << "\n=== Render settings ===" << std::endl;
+    sp2b_t14_settings_defaults_are_the_budgeted_frame_and_round_trip();
+    sp2b_t14_switches_turn_their_passes_off();
+    sp2b_t14_gi_resolution_and_rays_reach_the_trace();
+    sp2b_t14_csm_cascades_and_size_apply();
+}
+
 static void runRTShadowTests() {
     std::cout << "\n=== RT shadows ===" << std::endl;
     sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not();
@@ -3074,6 +3247,7 @@ int main() {
     runRTShadowTests();
     runRTGITests();
     runSSAOTests();
+    runRenderSettingsTests();
     runCapturePathTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();

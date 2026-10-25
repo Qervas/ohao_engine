@@ -417,7 +417,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_lightingPass && m_rtGI->rendered())
             m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
     };
-    if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
+    if (m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
         m_renderGraph.addComputePass("rt.gi",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -590,7 +590,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 4.7. SSS — separable subsurface scattering blur, in place on the lit image (with sky
     // and particles in it), over the tiles the G-buffer pass flagged for subsurface materials
     const VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
-    if (m_sssPass && litOutput) {
+    if (m_sssPass && m_sssWanted && litOutput) {
         timerBegin("sss");
         m_sssPass->setLitImage(m_lightingPass->getOutputImage(), litOutput);
         m_sssPass->setCameraPos(m_cameraPos);
@@ -605,7 +605,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_postProcessing->setSSRView(VK_NULL_HANDLE);
         m_postProcessing->setSSRProjection(jitteredProj);
     }
-    if (m_ssrPass && litOutput) {
+    if (m_ssrPass && m_ssrWanted && litOutput) {
         timerBegin("ssr");
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
         m_ssrPass->setLitSceneView(litOutput);
@@ -905,6 +905,19 @@ void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType ty
     m_pendingEmits.push(config);
 }
 
+void DeferredRenderer::setRTGIRealtime(bool fullResolution, uint32_t rays) {
+    if (m_rtGI) m_rtGI->setRealtime(fullResolution, rays);
+    m_giFull = fullResolution;
+    m_giRays = std::clamp(rays, 1u, 32u);
+}
+
+void DeferredRenderer::configureCSM(uint32_t cascades, uint32_t size) {
+    if (!m_csmPass || !m_csmPass->configure(cascades, size)) return;
+    // A new shadow map: lighting samples it and the graph tracks its layout.
+    if (m_lightingPass) m_lightingPass->setShadowMap(m_csmPass->getShadowMapArrayView(), m_csmPass->getShadowSampler());
+    importGraphTextures();
+}
+
 void DeferredRenderer::importGraphTextures() {
     // Reinitialize the graph to clear previous imported handles.
     m_renderGraph.shutdown();
@@ -951,7 +964,7 @@ void DeferredRenderer::importGraphTextures() {
             "csm_shadow",
             m_csmPass->getShadowMapImage(), m_csmPass->getShadowMapArrayView(),
             VK_FORMAT_D32_SFLOAT,
-            CSMPass::SHADOW_MAP_SIZE, CSMPass::SHADOW_MAP_SIZE,
+            m_csmPass->size(), m_csmPass->size(),
             VK_IMAGE_LAYOUT_UNDEFINED);
     }
 

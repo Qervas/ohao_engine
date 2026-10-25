@@ -1,13 +1,13 @@
 {
   "comment": "Sub-project 2b spec, 'Frame cost: the deferred budget' and 'Performance budgets (summary)' (render_bench; medians of GPU ms, Release, reference machine: RTX 5070 Laptop GPU). Each budget is gated from the 2b build step that delivers it: render_bench --check gates those with gatedFrom <= currentStep and reports the rest as pending. A pass budget measures the sum of its passes' medians ('x.*' is every pass named x.<something>); 'frame' is the frame's rendering on the GPU without the final copy out. Per-pass budgets of a scene may be moved between its passes by the step that measures them (spec rule); a frame budget, a capture budget or a total never rises without Frank's ruling.",
-  "currentStep": 13,
+  "currentStep": 15,
   "maxCalibrationSlowdown": 1.25,
   "maxGpuCalibrationSlowdown": 1.25,
   "maxExternalCorePct": 50,
   "budgets": [
     {"scene": "cornell_720p", "name": "frame", "budgetMs": 1.50, "gatedFrom": 9},
     {"scene": "cornell_720p", "name": "cull+hiz", "passes": ["cull.*", "hiz.*"], "budgetMs": 0.10, "gatedFrom": 11},
-    {"scene": "cornell_720p", "name": "gbuffer", "passes": ["gbuffer", "gbuffer.*"], "budgetMs": 0.10, "gatedFrom": 11, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.15 -> 0.10 toward rt.shadows"},
+    {"scene": "cornell_720p", "name": "gbuffer", "passes": ["gbuffer.*"], "budgetMs": 0.10, "gatedFrom": 11, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.15 -> 0.10 toward rt.shadows"},
     {"scene": "cornell_720p", "name": "csm", "passes": ["csm"], "budgetMs": 0.00, "gatedFrom": 7},
     {"scene": "cornell_720p", "name": "rt.shadows", "passes": ["rt.shadows"], "budgetMs": 0.30, "gatedFrom": 7, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.20 -> 0.30; 8 shadowed lights trace 4 rays a pixel"},
     {"scene": "cornell_720p", "name": "rt.shadows.filter", "passes": ["rt.shadows.filter"], "budgetMs": 0.08, "gatedFrom": 7, "moved": "Frank's ruling 2026-10-25 (2b step 7): 0.05 -> 0.08; memory-bound over 8 light channels"},

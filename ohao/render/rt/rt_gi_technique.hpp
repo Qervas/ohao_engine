@@ -57,6 +57,12 @@ public:
         m_historyValid = false;
         m_refFrames = 0;
     }
+    // Realtime quality's trace (render.settings rtGI): half or full resolution (the denoiser
+    // runs at the trace's size and the upsample becomes a copy), and its rays a pixel (1-32).
+    // A resolution change idles the device and rebuilds the realtime images; call it between
+    // frames.
+    void setRealtime(bool fullResolution, uint32_t rays);
+    [[nodiscard]] bool fullResolution() const noexcept { return m_shift == 0u; }
     void destroy() override;
 
 private:
@@ -106,6 +112,8 @@ private:
     glm::vec3 m_cameraPos{0.0f};
     VkExtent2D m_traceExtent{0, 0};
     uint32_t m_rays = 0;
+    uint32_t m_shift = 1;   // realtime: the trace is the frame >> m_shift (1 half, 0 full)
+    uint32_t m_realtimeRays = gpu::shared::kGIRealtimeRays;
 
     std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
 

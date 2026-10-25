@@ -143,9 +143,9 @@
      ]},
     {"name": "GITracePush", "doc": "RT GI's trace (rt/gi_trace.slang) push constants",
      "fields": [
-       {"name": "extent", "type": "uint4", "doc": "x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's"},
+       {"name": "extent", "type": "uint4", "doc": "x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z rays a pixel, w lights"},
-       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)"},
+       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it)"}
      ]},
     {"name": "SSAOPush", "doc": "SSAO (compute/ssao.slang) push constants, both entries",
@@ -172,7 +172,7 @@
     {"name": "GIDenoisePush", "doc": "RT GI's denoiser (rt/gi_denoise.slang) push constants",
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
-       {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels"},
+       {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels, z the trace is the frame >> z (1 half resolution, 0 full)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the upsample's depth guide)"}
      ]},
     {"name": "MeshletGpu", "doc": "one meshlet of the meshlet arena (render/scene/meshlet_builder): at most kMeshletMaxVertices vertices and kMeshletMaxTriangles triangles of one submesh",

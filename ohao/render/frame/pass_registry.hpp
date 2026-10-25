@@ -19,7 +19,7 @@ struct PassInfo {
 
 inline constexpr PassInfo kPasses[] = {
     {"scene.upload", PassKind::Transfer, "RenderScene table uploads, BLAS builds, the TLAS build or refit"},
-    {"csm", PassKind::Raster, "cascaded shadow maps (4 of 2048x2048): only when RT shadows do not run"},
+    {"csm", PassKind::Raster, "cascaded shadow maps (render.settings csm, default 4 of 2048x2048): only when RT shadows do not run"},
     {"cull.instances", PassKind::Compute, "GPU culling, early phase: the draws visible last frame and in the frustum, as indirect lists (prefix-sum compaction)"},
     {"gbuffer.early", PassKind::Raster, "the G-buffer (position, normal, albedo, velocity, depth) cleared, and the early lists drawn"},
     {"hiz.build", PassKind::Compute, "the max-depth pyramid of the early pass's depth"},
@@ -29,7 +29,7 @@ inline constexpr PassInfo kPasses[] = {
     {"ssao", PassKind::Compute, "screen-space ambient occlusion (the ssao post effect)"},
     {"rt.shadows", PassKind::RayTracing, "ray-traced shadows: one ray to each of a pixel's most important lights (reference: 8 to every light)"},
     {"rt.shadows.filter", PassKind::Compute, "RT shadows' 5x5 depth- and normal-aware filter and temporal accumulation (realtime)"},
-    {"rt.gi", PassKind::RayTracing, "ray-traced one-bounce indirect light: half resolution, 2 rays a pixel (reference: full, 32)"},
+    {"rt.gi", PassKind::RayTracing, "ray-traced one-bounce indirect light: render.settings rtGI, default half resolution, 2 rays a pixel (reference: full, 32)"},
     {"rt.gi.denoise", PassKind::Compute, "RT GI's reprojected temporal accumulation, 2 a-trous iterations and joint-bilateral upsample (realtime)"},
     {"lighting", PassKind::Raster, "deferred lighting into the HDR image"},
     {"sky", PassKind::Raster, "the procedural sky into the HDR image"},

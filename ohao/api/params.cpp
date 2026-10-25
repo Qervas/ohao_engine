@@ -168,10 +168,44 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("height", &RenderCaptureParams::height).doc("Frame height; default 1080 (a window: its own)").unit("px")
             .min(16).max(8192)
         .field("denoise", &RenderCaptureParams::denoise).doc("Path tracer denoiser")
-        .field("post", &RenderCaptureParams::post).doc("Deferred post effects to turn on")
-        .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; default the renderer's (0.6)")
+        .field("post", &RenderCaptureParams::post)
+            .doc("Deferred post effects to turn on; absent: render.settings' ssao alone")
+        .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; absent: render.settings'")
             .unitless().min(0.0).max(64.0)
-        .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; default realtime");
+        .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; absent: render.settings'")
+        .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times");
+    r.enumeration<GIResolution>("GIResolution").doc("RT GI's realtime trace resolution")
+        .value("half", GIResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
+        .value("full", GIResolution::full, "The frame's size");
+    r.enumeration<GeometryPath>("GeometryPath").doc("How the G-buffer draws")
+        .value("auto", GeometryPath::automatic, "Meshlets for draws of 4,096 triangles or more, instances below")
+        .value("meshlets", GeometryPath::meshlets, "Every draw with meshlets")
+        .value("instances", GeometryPath::instances, "Every draw instanced");
+    r.type<RtShadowsSettings>("RtShadowsSettings").doc("Ray-traced shadows (without them: cascaded shadow maps)")
+        .field("enabled", &RtShadowsSettings::enabled).doc("Trace RT shadows (needs ray tracing)")
+        .field("maxLights", &RtShadowsSettings::maxLights).doc("Realtime: the lights a pixel traces, most important first")
+            .unitless().min(0).max(4);
+    r.type<RtGISettings>("RtGISettings").doc("Ray-traced one-bounce indirect light")
+        .field("enabled", &RtGISettings::enabled).doc("Trace RT GI (needs ray tracing); off: no indirect light")
+        .field("resolution", &RtGISettings::resolution).doc("Realtime trace resolution")
+        .field("rays", &RtGISettings::rays).doc("Realtime: rays a pixel").unitless().min(1).max(32);
+    r.type<CsmSettings>("CsmSettings").doc("Cascaded shadow maps: the fallback without RT shadows")
+        .field("cascades", &CsmSettings::cascades).doc("Cascades drawn").unitless().min(1).max(4)
+        .field("size", &CsmSettings::size).doc("Each cascade's size").unit("px").min(512).max(4096);
+    r.type<RenderSettings>("RenderSettings").doc("The host's renderer settings; the defaults are the budgeted frame")
+        .field("quality", &RenderSettings::quality).doc("Deferred quality")
+        .field("rtShadows", &RenderSettings::rtShadows).doc("RT shadows")
+        .field("rtGI", &RenderSettings::rtGI).doc("RT GI")
+        .field("ssao", &RenderSettings::ssao).doc("Screen-space ambient occlusion")
+        .field("ssr", &RenderSettings::ssr).doc("Screen-space reflections")
+        .field("sss", &RenderSettings::sss).doc("Subsurface scattering")
+        .field("geometry", &RenderSettings::geometry).doc("G-buffer geometry path")
+        .field("occlusionCulling", &RenderSettings::occlusionCulling).doc("The late pass's Hi-Z occlusion test")
+        .field("csm", &RenderSettings::csm).doc("Cascaded shadow maps")
+        .field("exposure", &RenderSettings::exposure).doc("Exposure").unitless().min(0.001).max(64.0);
+    r.type<RenderSettingsParams>("RenderSettingsParams").doc("render.settings params")
+        .field("set", &RenderSettingsParams::set)
+            .doc("Settings to change: the members given change, the rest keep their value; absent: read only");
     r.type<RenderStatsParams>("RenderStatsParams").doc("render.stats params")
         .field("frames", &RenderStatsParams::frames)
             .doc("Medians over the newest this many finished frames (the renderer keeps 120)")

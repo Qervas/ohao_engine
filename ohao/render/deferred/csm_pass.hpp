@@ -16,8 +16,8 @@ class GpuCulling;
 // the draw table (one set per frame slot), push constant = the cascade's view-projection.
 class CSMPass : public RenderPassBase {
 public:
-    static constexpr uint32_t CASCADE_COUNT = 4;
-    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    static constexpr uint32_t CASCADE_COUNT = 4;        // at most (the array's layers, the lists)
+    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;   // the default size of one cascade
 
     CSMPass() = default;
     ~CSMPass() override;
@@ -36,6 +36,13 @@ public:
 
     // Split scheme: 0.0 = linear, 1.0 = logarithmic
     void setSplitLambda(float lambda) { m_splitLambda = lambda; }
+
+    // render.settings csm: the cascades drawn (1-CASCADE_COUNT) and each one's size (512-4096).
+    // A new size idles the device and rebuilds the shadow map: its views change, so the caller
+    // rebinds them (returns true then). Between frames.
+    bool configure(uint32_t cascades, uint32_t size);
+    [[nodiscard]] uint32_t cascades() const noexcept { return m_cascades; }
+    [[nodiscard]] uint32_t size() const noexcept { return m_size; }
 
     // Get shadow map for sampling
     [[nodiscard]] VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
@@ -99,6 +106,9 @@ private:
 
     // Cascade configuration
     float m_splitLambda{0.95f}; // 0.95 = mostly logarithmic
+    uint32_t m_cascades{CASCADE_COUNT};
+    uint32_t m_size{SHADOW_MAP_SIZE};
+    void destroyShadowMap();   // the image, its views, the framebuffers and the sampler
     std::array<float, CASCADE_COUNT + 1> m_cascadeSplits{};
 
     // Cascade data for shader

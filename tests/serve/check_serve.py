@@ -66,6 +66,7 @@ EXAMPLES = {
     "world_restore": {"name": "a"},
     "render_capture": {"path": "OUT/x.png", "mode": "deferred", "width": 64, "height": 64, "post": ["taa"]},
     "render_stats": {"frames": 30, "passes": True},
+    "render_settings": {"set": {"rtGI": {"rays": 4}, "ssr": False}},
     "log_read": {"level": "warn", "channel": "rpc", "limit": 10},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on

@@ -1,6 +1,7 @@
 #include "csm_pass.hpp"
 #include "gpu_culling.hpp"
 #include "gpu/shared_layout.hpp"
+#include "core/log.hpp"
 #include <cstring>
 #include "render/scene/render_scene.hpp"
 #include "../../scene/asset/model.hpp"
@@ -121,13 +122,13 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
         vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
         // Every cascade's list, before the render passes (compute outside them).
-        for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade)
+        for (uint32_t cascade = 0; cascade < m_cascades; ++cascade)
             m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, gpu::shared::kCullListCascade0 + cascade, 1,
                             m_cascadeData.viewProj[cascade], glm::vec3(0.0f));
     }
 
     // Render each cascade
-    for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade) {
+    for (uint32_t cascade = 0; cascade < m_cascades; ++cascade) {
         VkClearValue clearValue{};
         clearValue.depthStencil = {1.0f, 0};
 
@@ -136,7 +137,7 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         renderPassInfo.renderPass = m_renderPass;
         renderPassInfo.framebuffer = m_framebuffers[cascade];
         renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
+        renderPassInfo.renderArea.extent = {m_size, m_size};
         renderPassInfo.clearValueCount = 1;
         renderPassInfo.pClearValues = &clearValue;
 
@@ -146,15 +147,15 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = static_cast<float>(SHADOW_MAP_SIZE);
-        viewport.height = static_cast<float>(SHADOW_MAP_SIZE);
+        viewport.width = static_cast<float>(m_size);
+        viewport.height = static_cast<float>(m_size);
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
         vkCmdSetViewport(cmd, 0, 1, &viewport);
 
         VkRect2D scissor{};
         scissor.offset = {0, 0};
-        scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
+        scissor.extent = {m_size, m_size};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         // The cascade's culled list (every draw on the instance path; shadows draw both faces)
@@ -179,6 +180,33 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Shadow map layout transition is handled by the RenderGraph barrier system.
 }
 
+bool CSMPass::configure(uint32_t cascades, uint32_t size) {
+    m_cascades = std::clamp(cascades, 1u, CASCADE_COUNT);
+    calculateCascadeSplits();
+    size = std::clamp(size, 512u, 4096u);
+    if (size == m_size || m_device == VK_NULL_HANDLE) {
+        m_size = size;
+        return false;
+    }
+    vkDeviceWaitIdle(m_device);   // frames in flight sample and render the old map
+    destroyShadowMap();
+    m_size = size;
+    if (!createShadowMap() || !createFramebuffers())
+        OHAO_LOG(Error, render, "CSM: the {}x{} shadow map could not be created", m_size, m_size);
+    return true;
+}
+
+void CSMPass::destroyShadowMap() {
+    for (auto& fb : m_framebuffers) safeDestroy(fb);
+    for (auto& view : m_cascadeViews) safeDestroy(view);
+    safeDestroy(m_shadowMapArrayView);
+    if (m_shadowMap != VK_NULL_HANDLE) vkDestroyImage(m_device, m_shadowMap, nullptr);
+    if (m_shadowMapMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_shadowMapMemory, nullptr);
+    m_shadowMap = VK_NULL_HANDLE;
+    m_shadowMapMemory = VK_NULL_HANDLE;
+    safeDestroy(m_shadowSampler);
+}
+
 void CSMPass::setCameraData(const glm::mat4& view, const glm::mat4& proj,
                             float nearPlane, float farPlane) {
     m_cameraView = view;
@@ -194,7 +222,7 @@ bool CSMPass::createShadowMap() {
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = VK_FORMAT_D32_SFLOAT;
-    imageInfo.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1};
+    imageInfo.extent = {m_size, m_size, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = CASCADE_COUNT;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -303,8 +331,8 @@ bool CSMPass::createFramebuffers() {
         framebufferInfo.renderPass = m_renderPass;
         framebufferInfo.attachmentCount = 1;
         framebufferInfo.pAttachments = &m_cascadeViews[i];
-        framebufferInfo.width = SHADOW_MAP_SIZE;
-        framebufferInfo.height = SHADOW_MAP_SIZE;
+        framebufferInfo.width = m_size;
+        framebufferInfo.height = m_size;
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffers[i]) != VK_SUCCESS) {
@@ -493,8 +521,8 @@ void CSMPass::calculateCascadeSplits() {
 
     m_cascadeSplits[0] = m_nearPlane;
 
-    for (uint32_t i = 1; i <= CASCADE_COUNT; ++i) {
-        float p = static_cast<float>(i) / static_cast<float>(CASCADE_COUNT);
+    for (uint32_t i = 1; i <= m_cascades; ++i) {
+        float p = static_cast<float>(i) / static_cast<float>(m_cascades);
 
         // Logarithmic split
         float log = m_nearPlane * std::pow(ratio, p);
@@ -507,6 +535,8 @@ void CSMPass::calculateCascadeSplits() {
 
         m_cascadeSplits[i] = d;
     }
+    for (uint32_t i = m_cascades + 1; i <= CASCADE_COUNT; ++i) m_cascadeSplits[i] = m_farPlane;   // unused
+    m_cascadeData.cascadeCount = m_cascades;
 
     // Store split depths (view space) for shader
     m_cascadeData.splitDepths = glm::vec4(
@@ -520,7 +550,7 @@ void CSMPass::calculateCascadeSplits() {
 void CSMPass::updateCascadeMatrices() {
     glm::mat4 invCameraView = glm::inverse(m_cameraView);
 
-    for (uint32_t cascade = 0; cascade < CASCADE_COUNT; ++cascade) {
+    for (uint32_t cascade = 0; cascade < m_cascades; ++cascade) {
         m_cascadeData.viewProj[cascade] = calculateLightViewProj(cascade);
     }
 }
@@ -571,7 +601,7 @@ glm::mat4 CSMPass::calculateLightViewProj(uint32_t cascade) {
     }
 
     // Round to texel size for stable shadows
-    float texelsPerUnit = static_cast<float>(SHADOW_MAP_SIZE) / (radius * 2.0f);
+    float texelsPerUnit = static_cast<float>(m_size) / (radius * 2.0f);
     glm::mat4 scaleBias = glm::scale(glm::mat4(1.0f), glm::vec3(texelsPerUnit));
 
     // Light view matrix

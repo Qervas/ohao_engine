@@ -142,7 +142,8 @@ void trace(uint3 id : SV_DispatchThreadID)
     const uint2 pixel = id.xy;
     if (any(pixel >= pc.extent.xy)) return;
     const bool reference = pc.flags.x == 1u;
-    const uint2 full = min(reference ? pixel : pixel * 2u, pc.extent.zw - 1u);
+    // Realtime traces the frame >> flags.w (1: half resolution, 0: full).
+    const uint2 full = min(reference ? pixel : pixel << pc.flags.w, pc.extent.zw - 1u);
 
     const float4 position = gPosition.Load(int3(full, 0));
     if (all(position == float4(0.0)))   // sky: no indirect light

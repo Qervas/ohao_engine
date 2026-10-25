@@ -3,6 +3,7 @@
 // params object and a JSON result; the CLI, the JSON-RPC/MCP server (ohao_rpc), the
 // C ABI and the editor all dispatch through Session::call, so each operation has exactly
 // one implementation.
+#include "api/params.hpp"
 #include "api/paths.hpp"
 #include "core/input.hpp"
 #include "core/timeline.hpp"
@@ -98,6 +99,7 @@ struct RenderRequest {
     std::string format{"jpeg"};        // the preview's format: jpeg (quality 85) | png
     int maxSize{768};                  // the preview's long side at most this, in pixels
     std::optional<std::array<int32_t, 4>> region;   // [x, y, w, h] of the frame, before scaling
+    bool timings{false};                            // the last frame's pass list in the outcome
     // The call's cancel flag and progress (frames rendered of frames), checked between whole
     // frames; null outside a protocol call.
     const CallControl* control{nullptr};
@@ -111,6 +113,8 @@ struct RenderOutcome {
     uint32_t height{0};
     bool deterministic{true};   // false: a window's next presented frame, as is (realtime)
     bool cancelled{false};      // stopped by the call's cancel flag between frames: no image
+    std::optional<double> gpuMs;   // the capture's last frame on the GPU (its timestamps)
+    std::vector<std::pair<std::string, double>> timings;   // its passes, in frame order (timings)
     std::optional<uint64_t> validationMessages;   // set when the Vulkan validation layers are on
     std::string image;          // the encoded preview (inlineImage), raw bytes
     std::string imageMime;
@@ -150,6 +154,19 @@ public:
         (void)frames;
         return std::nullopt;
     }
+    // render.settings: the host's renderer settings (host state, never in scene files), and
+    // their change (between frames; captures take them as defaults). nullopt: the host
+    // renders nothing of its own (E_STATE).
+    [[nodiscard]] virtual std::optional<RenderSettings> renderSettings() { return std::nullopt; }
+    virtual void setRenderSettings(const RenderSettings& settings) { (void)settings; }
+    // engine.info's gpu: nullopt until the host has a device.
+    struct GpuInfo {
+        std::string name;
+        std::string driver;
+        bool rayTracing{false};
+        bool meshShaders{false};
+    };
+    [[nodiscard]] virtual std::optional<GpuInfo> gpuInfo() { return std::nullopt; }
 };
 
 class Session {

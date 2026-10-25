@@ -161,9 +161,46 @@ struct RenderCaptureParams {
     std::optional<int32_t> width;
     std::optional<int32_t> height;
     Denoiser denoise{Denoiser::none};
-    std::vector<PostEffect> post;
-    std::optional<float> exposure;
-    std::optional<Quality> quality;
+    std::optional<std::vector<PostEffect>> post;   // absent: the host's render.settings (ssao)
+    std::optional<float> exposure;                 // absent: render.settings exposure
+    std::optional<Quality> quality;                // absent: render.settings quality
+    bool timings{false};                           // the capture frame's pass list in the result
+};
+
+// render.settings (sub-project 2b spec, "The agent-facing surface"): every quality knob of
+// the host's renderer. Host state: never in scene files. The defaults are the budgeted frame.
+enum class GIResolution : uint8_t { half, full };
+enum class GeometryPath : uint8_t { automatic, meshlets, instances };   // "auto", "meshlets", "instances"
+
+struct RtShadowsSettings {
+    bool enabled{true};
+    int32_t maxLights{4};
+};
+struct RtGISettings {
+    bool enabled{true};
+    GIResolution resolution{GIResolution::half};
+    int32_t rays{2};
+};
+struct CsmSettings {
+    int32_t cascades{4};
+    int32_t size{2048};
+};
+struct RenderSettings {
+    Quality quality{Quality::realtime};
+    RtShadowsSettings rtShadows;
+    RtGISettings rtGI;
+    bool ssao{false};
+    bool ssr{true};
+    bool sss{true};
+    GeometryPath geometry{GeometryPath::automatic};
+    bool occlusionCulling{true};
+    CsmSettings csm;
+    float exposure{0.6f};   // the renderer's own (VulkanRenderer::RenderSettings)
+};
+
+// Without `set`: read. With it: the members given change, the rest keep their value.
+struct RenderSettingsParams {
+    std::optional<RenderSettings> set;
 };
 
 struct RenderStatsParams {

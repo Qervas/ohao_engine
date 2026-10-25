@@ -155,12 +155,14 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 23 and "render_capture" in names and "render_stats" in names and "input_replay" in names,
-          "tools/list: 23 tools")
+    check(len(names) == 24 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+          and "input_replay" in names, "tools/list: 24 tools")
 
     info, _, err = c.tool("engine_info")
-    check(not err and info.get("host") == "window" and info.get("time", {}).get("mode") == "lockstep",
-          "engine_info: a window host in lockstep")
+    gpu = (info or {}).get("gpu", {})
+    check(not err and info.get("host") == "window" and info.get("time", {}).get("mode") == "lockstep" and
+          gpu.get("name") and "rayTracing" in gpu and "meshShaders" in gpu,
+          "engine_info: a window host in lockstep, on %s" % gpu.get("name"))
     loaded, _, err = c.tool("scene_load", {"path": SCENE, "seed": SEED})
     check(not err and loaded.get("entities", 0) > 0, "scene_load helmet_game (%s entities)" % (loaded or {}).get("entities"))
     summary, _, err = c.tool("world_summary", {"depth": 1})
@@ -212,6 +214,23 @@ def main():
     check(not err and stats.get("gpuMs", 0) > 0 and "gbuffer.late" in passes and "lighting" in passes,
           "render_stats: %.3f ms of GPU a frame over %s frames, %d passes" %
           ((stats or {}).get("gpuMs", 0), (stats or {}).get("frames"), len(passes)))
+
+    # A settings change and what it costs (2b test 14): SSR off, the capture's own pass list
+    # without it, render_stats over the frames since; then back, so the replay below compares
+    # against the first capture.
+    settings, _, err = c.tool("render_settings")
+    check(not err and settings.get("ssr") is True and settings.get("rtGI", {}).get("rays") == 2,
+          "render_settings: the budgeted defaults")
+    changed, _, err = c.tool("render_settings", {"set": {"ssr": False}})
+    check(not err and changed.get("ssr") is False and changed.get("sss") is True, "render_settings: ssr off, the rest kept")
+    timed, _, err = c.tool("render_capture", {"inline": True, "timings": True})
+    names_ssr = [p[0] for p in (timed or {}).get("timings", [])]
+    check(not err and timed.get("gpuMs", 0) > 0 and "lighting" in names_ssr and "ssr" not in names_ssr,
+          "a capture with timings: %.3f ms of GPU, %d passes, no ssr" % ((timed or {}).get("gpuMs", 0), len(names_ssr)))
+    stats2, _, err = c.tool("render_stats", {"frames": 1})
+    check(not err and "ssr" not in [p[0] for p in (stats2 or {}).get("passes", [])], "render_stats agrees: no ssr")
+    back, _, err = c.tool("render_settings", {"set": {"ssr": True}})
+    check(not err and back.get("ssr") is True, "render_settings: ssr back on")
 
     logs, _, err = c.tool("log_read", {"level": "info", "limit": 20})
     check(not err and isinstance(logs.get("lines"), list) and logs["lines"] and "next" in logs,

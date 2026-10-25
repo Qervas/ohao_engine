@@ -173,7 +173,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 23, "twenty-three methods");
+    CHECK(api::methods().size() == 24, "twenty-four methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -211,7 +211,80 @@ struct FakeHost final : api::Host {
         statsAsked.push_back(frames);
         return stats;
     }
+    std::optional<api::RenderSettings> settings;   // render.settings' state; nullopt: none (E_STATE)
+    int settingsSet{0};
+    [[nodiscard]] std::optional<api::RenderSettings> renderSettings() override { return settings; }
+    void setRenderSettings(const api::RenderSettings& s) override {
+        settings = s;
+        ++settingsSet;
+    }
 };
+
+// render.settings (2b test 14): E_STATE on a host without settings (the CLI), reads the
+// host's settings, a set changes only the members given (nested ones too), limits and
+// unknown fields are refused before the host is touched, a set counts as a change and a read
+// does not; captures take quality, post (ssao) and exposure from the settings unless they
+// name their own, and carry gpuMs and (timings) the pass list.
+static void sp2b_t14_render_settings_reads_changes_and_defaults_captures() {
+    World w;
+    api::Session s(w, engineTypes());
+    CHECK(Reply(s.call("render.settings")).code() == "E_STATE", "without a host: E_STATE");
+    FakeHost host;
+    std::vector<api::RenderRequest> seen;
+    host.fn = [&](const api::RenderRequest& r) {
+        seen.push_back(r);
+        api::RenderOutcome o;
+        o.width = 4;
+        o.height = 4;
+        o.gpuMs = 1.23456;
+        if (r.timings) o.timings = {{"gbuffer.early", 0.0712843}, {"lighting", 0.27}};
+        return o;
+    };
+    s.setHost(&host);
+    CHECK(Reply(s.call("render.settings")).code() == "E_STATE", "a host without settings (the CLI): E_STATE");
+
+    host.settings = api::RenderSettings{};
+    uint64_t changes = s.changeCount();
+    const Reply read(s.call("render.settings"));
+    CHECK(read.ok() && read.json("/result/quality") == R"("realtime")" && read.json("/result/rtGI/rays") == "2" &&
+              read.json("/result/rtGI/resolution") == R"("half")" && read.json("/result/geometry") == R"("auto")" &&
+              read.json("/result/csm/size") == "2048" && read.json("/result/ssr") == "true",
+          "a read returns every setting, the budgeted defaults");
+    CHECK(s.changeCount() == changes && host.settingsSet == 0, "a read changes nothing");
+
+    const Reply set(s.call("render.settings", R"({"set":{"rtGI":{"rays":8},"ssr":false,"quality":"reference"}})"));
+    CHECK(set.ok() && host.settingsSet == 1 && host.settings->rtGI.rays == 8 && host.settings->rtGI.enabled &&
+              host.settings->rtGI.resolution == api::GIResolution::half && !host.settings->ssr &&
+              host.settings->sss && host.settings->quality == api::Quality::reference,
+          "a set changes the members given, nested ones too; the rest keep their value");
+    CHECK(set.json("/result/rtGI/rays") == "8" && set.json("/result/ssr") == "false", "and answers the settings now in effect");
+    CHECK(s.changeCount() == changes + 1, "a set counts as a change (a lockstep window redraws)");
+
+    changes = s.changeCount();
+    CHECK(Reply(s.call("render.settings", R"({"set":{"rtGI":{"rays":33}}})")).code() == "E_RANGE" &&
+              Reply(s.call("render.settings", R"({"set":{"rtShadows":{"maxLights":5}}})")).code() == "E_RANGE" &&
+              Reply(s.call("render.settings", R"({"set":{"csm":{"size":256}}})")).code() == "E_RANGE" &&
+              Reply(s.call("render.settings", R"({"set":{"geometry":"triangles"}})")).code() == "E_ENUM" &&
+              Reply(s.call("render.settings", R"({"set":{"ssgi":true}})")).code() == "E_UNKNOWN_FIELD" &&
+              Reply(s.call("render.settings", R"({"set":{"exposure":0}})")).code() == "E_RANGE",
+          "limits, enum names and unknown settings are refused");
+    CHECK(host.settingsSet == 1 && s.changeCount() == changes, "(before the host is touched)");
+
+    // Captures default to the settings: quality reference (set above), ssao, exposure.
+    (void)s.call("render.settings", R"({"set":{"ssao":true,"exposure":2.5}})");
+    const Reply cap(s.call("render.capture", R"({"inline":true,"timings":true})"));
+    CHECK(cap.ok() && !seen.empty() && seen.back().quality == "reference" &&
+              seen.back().post == std::vector<std::string>{"ssao"} && seen.back().exposure == 2.5f && seen.back().timings,
+          "a capture that names none takes quality, post (ssao) and exposure from the settings");
+    CHECK(cap.json("/result/gpuMs") == "1.235" &&
+              cap.json("/result/timings") == R"([["gbuffer.early",0.071],["lighting",0.27]])",
+          "gpuMs and the pass list come back, in microseconds");
+    (void)s.call("render.capture", R"({"inline":true,"quality":"realtime","post":[],"exposure":1})");
+    CHECK(seen.back().quality == "realtime" && seen.back().post.empty() && seen.back().exposure == 1.0f &&
+              !seen.back().timings,
+          "a capture's own quality, post and exposure override the settings");
+    CHECK(!Reply(s.call("render.capture", R"({"inline":true})")).at("/result/timings"), "no timings unless asked");
+}
 
 // render.stats (2b test 14, stats part): params checked by the session (frames 1-120), the
 // host's medians as [name, ms] pairs in microseconds, E_STATE before a frame was rendered
@@ -1886,6 +1959,7 @@ int main() {
     RUN(t09_schema_get_includes_methods);
     RUN(t09_render_capture_needs_a_host_and_checks_its_params);
     RUN(sp2b_t14_render_stats_reports_the_hosts_medians);
+    RUN(sp2b_t14_render_settings_reads_changes_and_defaults_captures);
     RUN(sp4_t16_an_inline_capture_carries_its_image_beside_the_result);
     RUN(sp4_t16_change_count_rises_only_for_methods_that_change_the_world);
     RUN(t09_each_command_applies_and_returns_its_inverse);

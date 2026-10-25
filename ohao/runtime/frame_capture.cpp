@@ -88,11 +88,35 @@ bool requestCaptureReadback(VulkanRenderer& renderer, const api::RenderRequest& 
     return true;
 }
 
+namespace {
+
+// The read frame's GPU time and (r.timings) its passes: its fence has signalled, so it is the
+// newest finished frame.
+void captureTimings(VulkanRenderer& renderer, const api::RenderRequest& r, api::RenderOutcome& out) {
+    const std::vector<render::FrameTiming> frames = renderer.frameTimings(1);
+    if (frames.empty()) return;
+    const render::FrameTiming& f = frames.back();
+    out.gpuMs = f.gpuMs;
+    if (!r.timings) return;
+    for (uint32_t i = 0; i < f.count && i < render::kMaxTimedPasses; ++i)
+        if (f.pass[i] < static_cast<uint32_t>(render::kPassCount))
+            out.timings.emplace_back(std::string(render::kPasses[f.pass[i]].name), f.ms[i]);
+}
+
+} // namespace
+
 void readCaptureOutputs(VulkanRenderer& renderer, const api::RenderRequest& r, bool previewOnly,
                         uint64_t framesBefore, api::RenderOutcome& out, std::vector<uint8_t>* keepPixels) {
     // The frames queued ahead finish first, by queue order: their time is not this readback's.
     const auto queued = Clock::now();
     renderer.waitForSubmitted(framesBefore);
+    // Once the read frame's fence has signalled (the readback below waits for it), its times.
+    struct Timings {
+        VulkanRenderer& renderer;
+        const api::RenderRequest& r;
+        api::RenderOutcome& out;
+        ~Timings() { captureTimings(renderer, r, out); }
+    } timings{renderer, r, out};
     const Clock::time_point submitted = Clock::now();
     OHAO_LOG(Debug, render, "capture: frames queued ahead finished in {:.2f} ms", msSince(queued));
     if (previewOnly) {
@@ -260,6 +284,62 @@ std::optional<api::RenderStats> summarizeFrames(std::span<const render::FrameTim
     for (std::size_t i = 0; i < pass.size(); ++i)
         if (!pass[i].empty()) st.passes.emplace_back(std::string(render::kPasses[i].name), median(pass[i]));
     return st;
+}
+
+api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
+    const VulkanRenderer::RenderSettings r = renderer.renderSettings();
+    api::RenderSettings s;
+    s.quality = r.quality == RenderQuality::Reference ? api::Quality::reference : api::Quality::realtime;
+    s.rtShadows = {r.rtShadows, static_cast<int32_t>(r.rtShadowMaxLights)};
+    s.rtGI = {r.rtGI, r.rtGIFullResolution ? api::GIResolution::full : api::GIResolution::half,
+              static_cast<int32_t>(r.rtGIRays)};
+    s.ssao = r.ssao;
+    s.ssr = r.ssr;
+    s.sss = r.sss;
+    s.geometry = r.geometry == GpuCulling::Geometry::Meshlets    ? api::GeometryPath::meshlets
+                 : r.geometry == GpuCulling::Geometry::Instances ? api::GeometryPath::instances
+                                                                 : api::GeometryPath::automatic;
+    s.occlusionCulling = r.occlusionCulling;
+    s.csm = {static_cast<int32_t>(r.csmCascades), static_cast<int32_t>(r.csmSize)};
+    s.exposure = r.exposure;
+    return s;
+}
+
+void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s) {
+    VulkanRenderer::RenderSettings r;
+    r.quality = s.quality == api::Quality::reference ? RenderQuality::Reference : RenderQuality::Realtime;
+    r.rtShadows = s.rtShadows.enabled;
+    r.rtShadowMaxLights = static_cast<uint32_t>(std::clamp(s.rtShadows.maxLights, 0, 4));
+    r.rtGI = s.rtGI.enabled;
+    r.rtGIFullResolution = s.rtGI.resolution == api::GIResolution::full;
+    r.rtGIRays = static_cast<uint32_t>(std::clamp(s.rtGI.rays, 1, 32));
+    r.ssao = s.ssao;
+    r.ssr = s.ssr;
+    r.sss = s.sss;
+    r.geometry = s.geometry == api::GeometryPath::meshlets    ? GpuCulling::Geometry::Meshlets
+                 : s.geometry == api::GeometryPath::instances ? GpuCulling::Geometry::Instances
+                                                              : GpuCulling::Geometry::Auto;
+    r.occlusionCulling = s.occlusionCulling;
+    r.csmCascades = static_cast<uint32_t>(std::clamp(s.csm.cascades, 1, 4));
+    r.csmSize = static_cast<uint32_t>(std::clamp(s.csm.size, 512, 4096));
+    r.exposure = s.exposure;
+    renderer.setRenderSettings(r);
+}
+
+api::Host::GpuInfo gpuInfo(const VulkanRenderer& renderer) {
+    api::Host::GpuInfo g;
+    if (renderer.getPhysicalDevice() == VK_NULL_HANDLE) return g;
+    VkPhysicalDeviceProperties p{};
+    vkGetPhysicalDeviceProperties(renderer.getPhysicalDevice(), &p);
+    g.name = p.deviceName;
+    const uint32_t v = p.driverVersion;
+    g.driver = p.vendorID == 0x10DE   // NVIDIA packs 10.8.8.6
+                   ? std::to_string((v >> 22) & 0x3ffu) + "." + std::to_string((v >> 14) & 0xffu)
+                   : std::to_string(VK_API_VERSION_MAJOR(v)) + "." + std::to_string(VK_API_VERSION_MINOR(v)) + "." +
+                         std::to_string(VK_API_VERSION_PATCH(v));
+    g.rayTracing = renderer.isRTSupported();
+    g.meshShaders = renderer.meshShadersEnabled();
+    return g;
 }
 
 std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count) {

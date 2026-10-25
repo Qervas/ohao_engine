@@ -121,8 +121,8 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint3
 }
 
 bool RTGITechnique::createScreenImages() {
-    m_halfWidth = (m_width + 1) / 2;
-    m_halfHeight = (m_height + 1) / 2;
+    m_halfWidth = m_shift ? (m_width + 1) / 2 : m_width;
+    m_halfHeight = m_shift ? (m_height + 1) / 2 : m_height;
     const auto half = [&](Image& img, VkFormat format) {
         return rtc::createImage(m_device, m_physicalDevice, img, format, kUsage, m_halfWidth, m_halfHeight);
     };
@@ -279,7 +279,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         m_cur ^= 1u;
         prepareHalfImages(cmd);
         m_traceExtent = {m_halfWidth, m_halfHeight};
-        m_rays = shared::kGIRealtimeRays;
+        m_rays = m_realtimeRays;
     }
     for (Image* d : {&m_guideDummy, &m_refDummy})
         if (d->layout != kGeneral)
@@ -328,7 +328,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     shared::GITracePush pc{};
     pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
     pc.seed = u4(input.renderSeed, input.frameIndex, m_rays, lightCount);
-    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, reference ? m_refFrames : 0u, 0u);
+    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, reference ? m_refFrames : 0u, m_shift);
     pc.cameraPos = f4(input.cameraPos, 0.0f);
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
@@ -350,7 +350,7 @@ void RTGITechnique::denoise(VkCommandBuffer cmd) {
     constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     shared::GIDenoisePush pc{};
     pc.extent = u4(m_halfWidth, m_halfHeight, m_width, m_height);
-    pc.params = u4(m_historyValid ? 1u : 0u, 1u, 0u, 0u);
+    pc.params = u4(m_historyValid ? 1u : 0u, 1u, m_shift, 0u);
     pc.cameraPos = f4(m_cameraPos, 0.0f);
 
     // Writes `views` (binding first + i; the last one storage) into `set` and dispatches.
@@ -426,6 +426,17 @@ void RTGITechnique::resize(uint32_t width, uint32_t height) {
     m_height = height;
     destroyScreenImages();
     createScreenImages();   // the reference mean comes back on first use
+}
+
+void RTGITechnique::setRealtime(bool fullResolution, uint32_t rays) {
+    m_realtimeRays = std::clamp(rays, 1u, shared::kGIReferenceRays);
+    const uint32_t shift = fullResolution ? 0u : 1u;
+    if (shift == m_shift) return;
+    m_shift = shift;
+    if (m_device == VK_NULL_HANDLE) return;
+    vkDeviceWaitIdle(m_device);   // frames in flight read the realtime images
+    destroyScreenImages();
+    createScreenImages();
 }
 
 GIOutput RTGITechnique::getOutput() const {

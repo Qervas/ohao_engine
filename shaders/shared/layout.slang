@@ -145,9 +145,9 @@ struct GILight
 // RT GI's trace (rt/gi_trace.slang) push constants
 struct GITracePush
 {
-    uint4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's
+    uint4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's
     uint4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
-    uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)
+    uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)
     float4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
 };
 
@@ -182,7 +182,7 @@ struct SSSPush
 struct GIDenoisePush
 {
     uint4 extent;   // x, y the half-resolution size; z, w the frame's
-    uint4 params;   // x history frames (0: none), y the a-trous step in pixels
+    uint4 params;   // x history frames (0: none), y the a-trous step in pixels, z the trace is the frame >> z (1 half resolution, 0 full)
     float4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
 };
 

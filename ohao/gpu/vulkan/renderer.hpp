@@ -32,6 +32,7 @@
 #include "render/scene/model_upload.hpp"
 #include "render/rt/render_technique.hpp"
 #include "render/deferred/light_clusters.hpp"
+#include "render/deferred/gpu_culling.hpp"
 
 namespace ohao {
 
@@ -187,6 +188,8 @@ public:
     // synchronize with it).
     [[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }
     [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
+    // VK_EXT_mesh_shader is enabled (the meshlet path runs task and mesh shaders).
+    [[nodiscard]] bool meshShadersEnabled() const noexcept { return m_meshShaderEnabled; }
     [[nodiscard]] VkQueue graphicsQueue() const noexcept { return m_graphicsQueue; }
     [[nodiscard]] uint32_t graphicsQueueFamily() const noexcept { return m_graphicsQueueFamily; }
 
@@ -226,6 +229,29 @@ public:
     // the directional lights.
     void setRTShadowsEnabled(bool on) noexcept { m_rtShadowsWanted = on; }
     [[nodiscard]] bool rtShadowsEnabled() const noexcept { return m_rtShadowsWanted; }
+
+    // Every quality knob in one value (sub-project 2b spec, "The agent-facing surface":
+    // render.settings). The defaults are the budgeted configuration. Set it between frames;
+    // a GI resolution or CSM size change idles the device and rebuilds those images.
+    // renderSettings() reads the knobs back from the passes that hold them.
+    struct RenderSettings {
+        RenderQuality quality{RenderQuality::Realtime};
+        bool rtShadows{true};
+        uint32_t rtShadowMaxLights{4};   // realtime: the lights a pixel traces (0-4)
+        bool rtGI{true};
+        bool rtGIFullResolution{false};  // realtime: the trace at the frame's size, not half
+        uint32_t rtGIRays{2};            // realtime: rays a pixel (1-32)
+        bool ssao{false};
+        bool ssr{true};
+        bool sss{true};
+        GpuCulling::Geometry geometry{GpuCulling::Geometry::Auto};
+        bool occlusionCulling{true};
+        uint32_t csmCascades{4};         // the CSM fallback (without RT shadows): 1-4
+        uint32_t csmSize{2048};          // 512-4096
+        float exposure{0.6f};            // the post stack's; a fresh renderer starts here
+    };
+    void setRenderSettings(const RenderSettings& s);
+    [[nodiscard]] RenderSettings renderSettings() const;
     // The deferred frame's constant ambient light, in place of the default (0.35 with scene
     // lights, the sky's day/night value with the fallback sun); nullopt: the default.
     void setAmbientIntensity(std::optional<float> ambient) noexcept { m_ambientOverride = ambient; }

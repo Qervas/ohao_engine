@@ -348,6 +348,55 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
     OHAO_LOG(Info, gpu, "Render mode set to: {}", names[static_cast<int>(mode)]);
 }
 
+void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
+    m_renderQuality = s.quality;
+    m_rtShadowsWanted = s.rtShadows;
+    if (!m_deferredRenderer) return;
+    DeferredRenderer& d = *m_deferredRenderer;
+    d.setShadowLightsPerPixel(s.rtShadowMaxLights);
+    d.setRTGIEnabled(s.rtGI);
+    if (s.rtGIFullResolution != d.rtGIFullResolution() || s.rtGIRays != d.rtGIRays())
+        d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
+    d.setSSREnabled(s.ssr);
+    d.setSSSEnabled(s.sss);
+    if (s.csmCascades != d.csmCascades() || s.csmSize != d.csmSize()) d.configureCSM(s.csmCascades, s.csmSize);
+    if (GpuCulling* c = d.culling()) {
+        GpuCulling::Settings cs = c->settings();
+        cs.geometry = s.geometry;
+        cs.occlusion = s.occlusionCulling;
+        c->setSettings(cs);
+    }
+    if (auto* pp = d.getPostProcessing()) {
+        pp->setSSAOEnabled(s.ssao);
+        pp->setExposure(s.exposure);
+    }
+}
+
+VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
+    RenderSettings s;
+    s.quality = m_renderQuality;
+    s.rtShadows = m_rtShadowsWanted;
+    if (!m_deferredRenderer) return s;
+    DeferredRenderer& d = *m_deferredRenderer;
+    s.rtShadowMaxLights = d.shadowLightsPerPixel();
+    s.rtGI = d.rtGIEnabled();
+    s.rtGIFullResolution = d.rtGIFullResolution();
+    s.rtGIRays = d.rtGIRays();
+    s.ssr = d.ssrEnabled();
+    s.sss = d.sssEnabled();
+    s.csmCascades = d.csmCascades();
+    s.csmSize = d.csmSize();
+    if (GpuCulling* c = d.culling()) {
+        s.geometry = c->settings().geometry;
+        s.occlusionCulling = c->settings().occlusion;
+    }
+    if (auto* pp = d.getPostProcessing()) {
+        s.ssao = pp->getSSAOEnabled();
+        s.exposure = pp->getExposure();
+    }
+    return s;
+}
+
 void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
     m_rtSettings = settings;
     applyRTRenderSettings();
@@ -649,7 +698,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     m_deferredRenderer->setRenderSeed(m_renderSeed);
     m_deferredRenderer->onResize(m_width, m_height);
     if (auto* pp = m_deferredRenderer->getPostProcessing()) {
-        pp->setExposure(0.6f);
+        pp->setExposure(RenderSettings{}.exposure);
         pp->setNoiseSeed(m_renderSeed);
     }
     // capture.preview: without it, inline captures read the full frame and preview on the CPU.
