@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Render graph · Meshlets and mesh shaders — OHAO Monograph</title>
+  <meta name="description" content="The greedy meshlet builder, its arenas, task/mesh shaders and the vertex-pulling fallback." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="graph/meshlets" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Meshlets and mesh shaders</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">graph</p>
+          <h1>Meshlets and mesh shaders</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>The greedy meshlet builder, its arenas, task/mesh shaders and the vertex-pulling fallback.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#clusters-below-the-draw">Clusters below the draw</a></li><li><a href="#the-builder">The builder</a></li><li><a href="#sphere-and-cone">Sphere and cone</a></li><li><a href="#determinism-and-cost">Determinism and cost</a></li><li><a href="#arenas-and-draw-records">Arenas and draw records</a></li><li><a href="#task-and-mesh-shaders">Task and mesh shaders</a></li><li><a href="#the-fallback">The fallback</a></li><li><a href="#one-test-one-transform">One test, one transform</a></li><li><a href="#when-a-draw-takes-meshlets">When a draw takes meshlets</a></li><li><a href="#test-7">Test 7</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="clusters-below-the-draw">Clusters below the draw</h2></div>
+<div class="prose reveal">
+<p>GPU culling (the GPU culling unit) decides per draw: a draw is a whole instance&#x27;s submesh, and a draw that is partly visible is drawn whole. A meshlet is a smaller unit, a cluster of at most `kMeshletMaxVertices` (64) vertices and `kMeshletMaxTriangles` (124) triangles of one submesh, with a bounding sphere and a normal cone. A large draw on the meshlet path is culled meshlet by meshlet, so the part of a mesh behind an occluder, off screen or facing away is never rasterized. The limits are the mesh shader&#x27;s output sizes:</p>
+<div class="citation-chip"><code class="citation-code">out vertices GVertex verts[kMeshletMaxVertices], out indices uint3 tris[kMeshletMaxTriangles])</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L165" target="_blank" rel="noopener">shaders/cull/meshlets.slang:165</a></div>
+<p>Meshlets are built once, at mesh registration, by `render/scene/meshlet_builder`; drawn by task and mesh shaders where the device has `VK_EXT_mesh_shader`; and drawn through a compute pass and a vertex-pulling shader where it does not. Both paths cull with one test and transform with one function, and a test requires their images to be identical to each other and to the instance path&#x27;s.</p>
+</div>
+<div class="section-rule"><h2 id="the-builder">The builder</h2></div>
+<div class="prose reveal">
+<p>`buildMeshlets` is greedy. It starts a meshlet at the first unused triangle in index order, then keeps adding the unused triangle that shares the most vertices with the meshlet so far. It finds those from a vertex-to-triangle adjacency built once per call, in compressed rows:</p>
+<div class="citation-chip"><code class="citation-code">// Vertex -&gt; triangles (CSR): counts, then each vertex&#x27;s end, filled backwards to its start.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L61" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:61</a></div>
+<p>When a vertex joins the meshlet, every unused triangle around it gains a point of score, from 1 to 3, and is appended to the bucket of its new score. Buckets are read oldest first, so among the triangles that share as many vertices, the one that became a candidate earliest wins:</p>
+<div class="citation-chip"><code class="citation-code">std::array&lt;std::vector&lt;uint32_t&gt;, 4&gt; bucket;   // candidates by score (1..3), in the order they reached it</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L86" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:86</a></div>
+<p>That order is what makes a meshlet a compact patch rather than a strip. Newest first, a meshlet chases the edge it just grew and becomes a long ribbon; oldest first, it fills in around where it started. `scene_tests` measures it on a 300×300 grid, which is vertex-bound: 64 vertices as an 8×8 patch hold 98 triangles, as a 2×32 strip 62:</p>
+<div class="citation-chip"><code class="citation-code">CHECK(tfill &gt; 0.7, &quot;compact patches, not strips: over 70% of the triangle limit&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L2044" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:2044</a></div>
+<p>A candidate is taken only if it is still unused, still in the bucket it was read from (a stale entry has since been raised to a higher one), and coherent:</p>
+<div class="citation-chip"><code class="citation-code">if (!used[t] &amp;&amp; score[t] == s &amp;&amp; coherent(t)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L157" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:157</a></div>
+<p>Coherent means its unit face normal is within about 53 degrees of the meshlet&#x27;s mean normal so far, $\hat n \cdot \sum \hat n_i \ge 0.6 \, \lvert \sum \hat n_i \rvert$ (arccos 0.6 is 53.1 degrees), so a meshlet stays flat enough for its normal cone to cull. A degenerate triangle has no normal and fits any meshlet:</p>
+<div class="citation-chip"><code class="citation-code">constexpr float kConeLimit = 0.6f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L17" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:17</a></div>
+<div class="citation-chip"><code class="citation-code">glm::dot(n, normalSum) &gt;= normalLimit;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L143" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:143</a></div>
+<p>With no neighbour left, the builder takes the next unused triangle in index order, if it is coherent:</p>
+<div class="citation-chip"><code class="citation-code">if (next == kNone) {   // no neighbour: the next triangle in index order</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L163" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:163</a></div>
+<p>The meshlet closes when there is no candidate or the next one does not fit, by triangle count or by the vertices it would add:</p>
+<div class="citation-chip"><code class="citation-code">return m.triangleCount &lt; kMaxTriangles &amp;&amp; m.vertexCount + newVertices(t) &lt;= kMaxVertices;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L136" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:136</a></div>
+<p>Each triangle is stored as its three meshlet-local indices, a byte each, in one `uint`:</p>
+<div class="citation-chip"><code class="citation-code">out.triangles.push_back(local[0] | (local[1] &lt;&lt; 8) | (local[2] &lt;&lt; 16));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L130" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:130</a></div>
+<p>Every triangle lands in exactly one meshlet, in a meshlet that holds each of its vertices once.</p>
+</div>
+<div class="section-rule"><h2 id="sphere-and-cone">Sphere and cone</h2></div>
+<div class="prose reveal">
+<p>A closed meshlet gets its bounds. The sphere is centred on its vertices&#x27; box, with the farthest vertex as its radius:</p>
+<div class="citation-chip"><code class="citation-code">m.center = 0.5f * (mn + mx);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L32" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:32</a></div>
+<p>The cone&#x27;s axis is the triangles&#x27; mean unit normal. Its cutoff is the sine of the widest angle between the axis and any triangle&#x27;s normal, meshoptimizer&#x27;s convention; a meshlet whose normals spread past about 84 degrees (cosine 0.1) keeps the cutoff 1, which never culls:</p>
+<div class="citation-chip"><code class="citation-code">if (minDot &gt; 0.1f) m.coneCutoff = std::sqrt(1.0f - minDot * minDot);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/meshlet_builder.cpp#L49" target="_blank" rel="noopener">ohao/render/scene/meshlet_builder.cpp:49</a></div>
+<p>With $c$ the sphere&#x27;s centre, $r$ its radius, $e$ the camera and $\hat a$ the axis, the meshlet faces wholly away from the camera when</p>
+<div class="math-block">$$
+(c - e) \cdot \hat a \;\ge\; s \, \lvert c - e \rvert + r
+$$</div>
+<p>where $s$ is the cutoff. The radius term widens the test from the centre to the whole sphere, the conservative side: a meshlet is culled only when the cone faces away from every point the sphere could hold.</p>
+</div>
+<div class="section-rule"><h2 id="determinism-and-cost">Determinism and cost</h2></div>
+<div class="prose reveal">
+<p>The builder has no hash maps and no randomness, and it visits triangles in a fixed order, so the same mesh gives the same meshlets byte for byte, which `scene_tests` checks on the grid:</p>
+<div class="citation-chip"><code class="citation-code">CHECK(sameMeshlets(set, again), &quot;two builds are identical byte for byte&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L2032" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:2032</a></div>
+<p>It runs inside `registerMesh`, which is load-time work, so its cost is load time. `render_bench` times it on a million triangles, a 708×708 grid in row order, nine builds back to back:</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t n = 708;   // 2 * 708^2 = 1,002,528 triangles</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/bench/render_bench.cpp#L122" target="_blank" rel="noopener">tools/bench/render_bench.cpp:122</a></div>
+<p>The median is budgeted at 60 ms:</p>
+<div class="citation-chip"><code class="citation-code">{&quot;scene&quot;: &quot;meshlet_build_1m&quot;, &quot;name&quot;: &quot;build (CPU)&quot;, &quot;measure&quot;: &quot;meshletBuild&quot;, &quot;budgetMs&quot;: 60, &quot;gatedFrom&quot;: 12}</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/bench/render_budgets.json#L29" target="_blank" rel="noopener">tests/bench/render_budgets.json:29</a></div>
+<p>The builder sits behind one function, so a better clusterer can replace it. The spec chose it over meshoptimizer, which would cluster better but adds a dependency:</p>
+<div class="citation-chip"><code class="citation-code">for backface culling. The builder is deterministic and adds no dependency; meshoptimizer</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/specs/2026-10-24-renderer-upgrade-design.md#L372" target="_blank" rel="noopener">docs/specs/2026-10-24-renderer-upgrade-design.md:372</a></div>
+</div>
+<div class="section-rule"><h2 id="arenas-and-draw-records">Arenas and draw records</h2></div>
+<div class="prose reveal">
+<p>`MeshRegistry` keeps three more arenas beside the vertex and index arenas: the meshlets as 48-byte `gpu::shared::MeshletGpu` records, their vertices, and their packed triangles:</p>
+<div class="citation-chip"><code class="citation-code">createArena(m_meshlets, sizeof(gpu::shared::MeshletGpu), kInitialMeshlets, kTableUsage) &amp;&amp;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L39" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:39</a></div>
+<p>`registerMesh` builds each submesh&#x27;s meshlets in turn and records where they start and how many there are in `MeshInfo::submeshMeshlets`:</p>
+<div class="citation-chip"><code class="citation-code">buildMeshlets(data.vertices, data.indices, s.firstIndex, s.indexCount, meshlets);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L194" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:194</a></div>
+<p>A `MeshletGpu`&#x27;s `range` holds its first entries in the two meshlet streams (arena offsets) and its vertex and triangle counts; `sphere` and `cone` hold the bounds. The meshlet vertices stay mesh-local, as the index arena&#x27;s indices do, and a draw adds its vertex offset:</p>
+<div class="citation-chip"><code class="citation-code">g.range = {vertexBase + s.vertexOffset, triangleBase + s.triangleOffset, s.vertexCount, s.triangleCount};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L256" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:256</a></div>
+<p>Ray tracing does not use them: each mesh&#x27;s BLAS is built from its original triangles.</p>
+<div class="citation-chip"><code class="citation-code">// triangles. Each mesh owns one BLAS built against the arenas, from its original</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.hpp#L14" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.hpp:14</a></div>
+<p>`RenderScene` carries a submesh&#x27;s meshlets into its draw: `DrawRecord.info.z` is the first meshlet and `info.w` the count:</p>
+<div class="citation-chip"><code class="citation-code">r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, d.firstMeshlet, d.meshletCount};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L249" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:249</a></div>
+<p>and `aabbMin.w`, as a uint&#x27;s bits, the draw&#x27;s first *meshlet entry*: the number of meshlets of all the draws before it. Entries number every meshlet of every draw in draw order, which is what the fallback culls one by one:</p>
+<div class="citation-chip"><code class="citation-code">r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast&lt;float&gt;(entries)};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L250" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:250</a></div>
+</div>
+<div class="section-rule"><h2 id="task-and-mesh-shaders">Task and mesh shaders</h2></div>
+<div class="prose reveal">
+<p>The device enables `VK_EXT_mesh_shader` when the GPU offers both its task and mesh stages, and Vulkan 1.1&#x27;s `shaderDrawParameters`, since the task shader reads its draw&#x27;s index (`DrawIndex`):</p>
+<div class="citation-chip"><code class="citation-code">m_meshShaderEnabled = msExt &amp;&amp; meshShaderProbe.taskShader == VK_TRUE &amp;&amp; meshShaderProbe.meshShader == VK_TRUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L306" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:306</a></div>
+<div class="citation-chip"><code class="citation-code">features11.shaderDrawParameters = VK_TRUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L350" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:350</a></div>
+<p>GPU culling puts the meshlet path&#x27;s draws on their own lists, as task dispatches of one workgroup per 32 meshlets (`kMeshletTaskGroup`), and `drawMeshTasks` draws a list with `vkCmdDrawMeshTasksIndirectCountEXT`:</p>
+<div class="citation-chip"><code class="citation-code">m_drawMeshTasksIndirectCount(cmd, m_commands.buffer, VkDeviceSize{list} * m_drawCount * kCommandBytes,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.cpp#L503" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.cpp:503</a></div>
+<p>A task workgroup reads its draw&#x27;s index from the command that launched it, in the culling commands bound at set 1, binding 10:</p>
+<div class="citation-chip"><code class="citation-code">const uint drawIndex = commands[pc.m.config.x + drawId * 5u + 3u];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L128" target="_blank" rel="noopener">shaders/cull/meshlets.slang:128</a></div>
+<p>Each of its 32 threads tests one meshlet:</p>
+<div class="citation-chip"><code class="citation-code">keep = meshletVisible(meshlets[d.info.z + local], view, hiz);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L139" target="_blank" rel="noopener">shaders/cull/meshlets.slang:139</a></div>
+<p>then an inclusive scan over the survivors places each in the payload in meshlet order, and the workgroup launches one mesh workgroup per survivor:</p>
+<div class="citation-chip"><code class="citation-code">DispatchMesh(gKeep[kMeshletTaskGroup - 1u], 1, 1, gPayload);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L154" target="_blank" rel="noopener">shaders/cull/meshlets.slang:154</a></div>
+<p>A mesh workgroup has 64 threads, one per output vertex. Its first thread builds the instance&#x27;s matrices once into shared memory; then each thread transforms its vertex and unpacks up to two triangles:</p>
+<div class="citation-chip"><code class="citation-code">verts[k] = shadeVertex(d.draw.z + meshletVertices[m.range.x + k], d, gXform);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L174" target="_blank" rel="noopener">shaders/cull/meshlets.slang:174</a></div>
+<div class="citation-chip"><code class="citation-code">tris[k] = uint3(packed &amp; 0xFFu, (packed &gt;&gt; 8u) &amp; 0xFFu, (packed &gt;&gt; 16u) &amp; 0xFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L178" target="_blank" rel="noopener">shaders/cull/meshlets.slang:178</a></div>
+<p>Thirty-two threads with two vertices each measured slower, 0.232 ms for the helmet room&#x27;s `gbuffer.early` at 1080p against 0.218 ms:</p>
+<div class="citation-chip"><code class="citation-code">// A thread a vertex (64; 32 threads with two vertices each measured slower: helmet room 1080p</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L157" target="_blank" rel="noopener">shaders/cull/meshlets.slang:157</a></div>
+</div>
+<div class="section-rule"><h2 id="the-fallback">The fallback</h2></div>
+<div class="prose reveal">
+<p>Without mesh shaders, or with `Settings::meshShaders` off, the meshlet lists are culled in compute. `classifyMeshlets` runs one thread per meshlet entry and finds its draw by binary search over the draws&#x27; first entries, the last draw whose first entry is at most the thread&#x27;s (a draw without meshlets shares its first entry with the next, and the search passes over it):</p>
+<div class="citation-chip"><code class="citation-code">if (asuint(draws[mid].aabbMin.w) &lt;= e) lo = mid;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L179" target="_blank" rel="noopener">shaders/cull/instances.slang:179</a></div>
+<p>The entry&#x27;s meshlet is the draw&#x27;s first meshlet plus the entry&#x27;s offset within the draw:</p>
+<div class="citation-chip"><code class="citation-code">const MeshletGpu m = meshlets[d.info.z + e - asuint(d.aabbMin.w)];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L203" target="_blank" rel="noopener">shaders/cull/instances.slang:203</a></div>
+<p>Only the meshlets of draws the phase put on a meshlet list are tested; the survivors are compacted by the same block scan as the draws, and `scatterMeshlets` writes a `VkDrawIndirectCommand` per survivor. Its vertex count is the meshlet&#x27;s triangle corners, its instance count 1, and the two remaining words carry what the vertex shader needs: `firstVertex` is the draw&#x27;s index shifted up by `kMeshletVertexShift`, and `firstInstance` is the meshlet:</p>
+<div class="citation-chip"><code class="citation-code">meshletCommands[at + 2u] = i &lt;&lt; kMeshletVertexShift;         // firstVertex: the draw record</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L232" target="_blank" rel="noopener">shaders/cull/instances.slang:232</a></div>
+<div class="citation-chip"><code class="citation-code">meshletCommands[at + 3u] = meshlet;                          // firstInstance: the meshlet</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L233" target="_blank" rel="noopener">shaders/cull/instances.slang:233</a></div>
+<p>The shift is 9: a meshlet has at most 124 × 3 = 372 corners, which fit below 512, so the vertex index splits into the draw (high bits) and the corner (low bits):</p>
+<div class="citation-chip"><code class="citation-code">{&quot;name&quot;: &quot;kMeshletVertexShift&quot;, &quot;type&quot;: &quot;uint&quot;, &quot;value&quot;: 9,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L50" target="_blank" rel="noopener">shaders/shared/layout.json:50</a></div>
+<p>`drawMeshletFallback` draws the lists with `vkCmdDrawIndirectCount`, and the pull vertex shader, bound with no vertex input, recovers its draw, its corner and its meshlet:</p>
+<div class="citation-chip"><code class="citation-code">const DrawRecord d = draws[vertexIndex &gt;&gt; kMeshletVertexShift];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L187" target="_blank" rel="noopener">shaders/cull/meshlets.slang:187</a></div>
+<p>and reads the corner&#x27;s local index from the packed triangle, then the vertex from the vertex arena as raw floats:</p>
+<div class="citation-chip"><code class="citation-code">const uint local = (packed &gt;&gt; (8u * (corner % 3u))) &amp; 0xFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L191" target="_blank" rel="noopener">shaders/cull/meshlets.slang:191</a></div>
+<p>The fallback&#x27;s draws are not indexed: three vertex invocations a triangle, each pulling and transforming its own corner, where a mesh workgroup transforms each of the meshlet&#x27;s vertices once.</p>
+</div>
+<div class="section-rule"><h2 id="one-test-one-transform">One test, one transform</h2></div>
+<div class="prose reveal">
+<p>Both paths cull with `common.slang`&#x27;s `meshletVisible`, the same module the draw culler uses. Its setup per draw puts the camera in the mesh&#x27;s space, inverting the world matrix by Cramer&#x27;s rule, so the cone and sphere stay in mesh space:</p>
+<div class="citation-chip"><code class="citation-code">v.cameraLocal = det != 0.0 ? float3(dot(d, cross(b, c)), dot(d, cross(c, a)), dot(d, cross(a, b))) / det : float3(0.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/common.slang#L116" target="_blank" rel="noopener">shaders/cull/common.slang:116</a></div>
+<p>The cone test runs only for a one-sided draw (a double-sided one shows its back faces) whose matrix keeps winding: facing is invariant under an affine map of positive determinant, and a mirroring matrix flips it:</p>
+<div class="citation-chip"><code class="citation-code">v.cone = (flags &amp; kCullCone) != 0u &amp;&amp; oneSided &amp;&amp; det &gt; 0.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/common.slang#L117" target="_blank" rel="noopener">shaders/cull/common.slang:117</a></div>
+<div class="citation-chip"><code class="citation-code">if (dot(d, m.cone.xyz) &gt;= m.cone.w * length(d) + m.sphere.w) return false;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/common.slang#L132" target="_blank" rel="noopener">shaders/cull/common.slang:132</a></div>
+<p>Then the sphere&#x27;s box goes through `boxBounds` and, in the late phase, `occluded`, the draw culler&#x27;s own frustum and Hi-Z tests:</p>
+<div class="citation-chip"><code class="citation-code">const Bounds b = boxBounds(v.viewProj, v.c0, v.c1, v.c2, v.c3, m.sphere.xyz - r, m.sphere.xyz + r, false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/common.slang#L136" target="_blank" rel="noopener">shaders/cull/common.slang:136</a></div>
+<p>The mesh and pull shaders transform with one function, `shadeVertex`, which repeats `gbuffer.vert`&#x27;s operations in order, and take the instance&#x27;s matrices from one function, `instanceXform`:</p>
+<div class="citation-chip"><code class="citation-code">// gbuffer.vert&#x27;s transform, the same operations: the world position, the normal and tangent</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L86" target="_blank" rel="noopener">shaders/cull/meshlets.slang:86</a></div>
+<p>The normal matrix is where the match is easy to lose. `gbuffer.vert` computes it as `transpose(inverse(mat3(inst.world)))`, and glslc compiles that `inverse` to the `MatrixInverse` instruction of GLSL.std.450. The Slang shaders emit that same instruction through `spirv_asm`, so the driver computes the inverse the same way on all three paths:</p>
+<div class="citation-chip"><code class="citation-code">mat3 normalMatrix = transpose(inverse(mat3(inst.world)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L47" target="_blank" rel="noopener">shaders/core/gbuffer.vert:47</a></div>
+<div class="citation-chip"><code class="citation-code">const float3x3 inv = spirv_asm { result:$$float3x3 = OpExtInst glsl450 MatrixInverse $w3 };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/meshlets.slang#L81" target="_blank" rel="noopener">shaders/cull/meshlets.slang:81</a></div>
+<p>The meshlet pipelines share the instance pipelines&#x27; fragment shader and state, one culling back faces with counter-clockwise front faces and one culling none. A meshlet draw therefore writes the same G-buffer values a whole-draw draw would, and culling a meshlet removes only triangles that would not have reached the image.</p>
+</div>
+<div class="section-rule"><h2 id="when-a-draw-takes-meshlets">When a draw takes meshlets</h2></div>
+<div class="prose reveal">
+<p>A meshlet draw is launched as a task workgroup per 32 meshlets and a mesh workgroup per survivor. Under `geometry: auto`, the default, a draw stays on the instance path below `kMeshletMinTriangles` triangles, because on a draw of a few meshlets that launch costs more than the culling saves:</p>
+<div class="citation-chip"><code class="citation-code">{&quot;name&quot;: &quot;kMeshletMinTriangles&quot;, &quot;type&quot;: &quot;uint&quot;, &quot;value&quot;: 4096,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L48" target="_blank" rel="noopener">shaders/shared/layout.json:48</a></div>
+<div class="citation-chip"><code class="citation-code">&quot;doc&quot;: &quot;geometry auto: a draw with fewer triangles stays on the instance path (measured: a few-meshlet draw costs more to launch than its culling saves)&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L49" target="_blank" rel="noopener">shaders/shared/layout.json:49</a></div>
+<p>The threshold was first 256. At 256, `bench100k_1080p`&#x27;s spheres, 256 triangles each, took the meshlet path, and its `gbuffer.early` rose from 1.70 to 2.41 ms:</p>
+<div class="citation-chip"><code class="citation-code">`gbuffer.early` rose from 1.70 to 2.41 ms). Settings select</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/specs/2026-10-24-renderer-upgrade-design.md#L392" target="_blank" rel="noopener">docs/specs/2026-10-24-renderer-upgrade-design.md:392</a></div>
+<p>At 4,096 those draws stay instanced, and the helmet (15,452 triangles) takes meshlets:</p>
+<p>{{cite tests/renderer/cull_parity_gpu_test.cpp &quot;the helmet (one-sided, 15,452 triangles)&quot;}} `geometry: meshlets` puts every draw that has meshlets on the path, `geometry: instances` none; `render_bench`&#x27;s `--geometry` and `--fallback` switches select them for a run:</p>
+<div class="citation-chip"><code class="citation-code">else if (a == &quot;--fallback&quot;) geometry.fallback = true;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/bench/render_bench.cpp#L828" target="_blank" rel="noopener">tools/bench/render_bench.cpp:828</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Where the device allows it, meshlets are culled in the task shader rather than by a compute pass that writes per-meshlet draws: the compaction is a 32-wide scan in shared memory and the mesh workgroups are launched from it, so no per-meshlet list is written to memory and read back by an indirect draw. The fallback writes those lists because without mesh shaders an indirect draw is the only way to draw part of a draw. One culling module keeps the two in step: a meshlet the task shader drops, the fallback drops too.</p></div>
+</div>
+<div class="section-rule"><h2 id="test-7">Test 7</h2></div>
+<div class="prose reveal">
+<p>`cull_parity_gpu_test`&#x27;s test 7 holds the paths together. The occlusion scene with every draw on meshlets renders identically through task and mesh shaders and through the fallback, over 1, 2 and 4 frames, and with meshlet culling on and off:</p>
+<div class="citation-chip"><code class="citation-code">check(d == 0, &quot;t07: mesh shaders = fallback, occlusion scene, &quot; + std::to_string(frames) + &quot; frames&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/cull_parity_gpu_test.cpp#L397" target="_blank" rel="noopener">tests/renderer/cull_parity_gpu_test.cpp:397</a></div>
+<p>A one-sided 16,000-triangle sphere, on the meshlet path under `auto`, has some of its meshlets dropped by the cone test, with the image unchanged against the instance path:</p>
+<div class="citation-chip"><code class="citation-code">check(drawn &gt; 0 &amp;&amp; drawn &lt; f.meshlets, &quot;t07: the cone test drops the sphere&#x27;s back-facing meshlets&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/cull_parity_gpu_test.cpp#L415" target="_blank" rel="noopener">tests/renderer/cull_parity_gpu_test.cpp:415</a></div>
+<p>Cornell with every draw on meshlets and the helmet room under `auto` with post give byte-identical PNGs on the mesh-shader path, the fallback and the instance path:</p>
+<div class="citation-chip"><code class="citation-code">check(mesh == instances, std::string(&quot;t07: &quot;) + c.name + &quot;: the meshlet path = the instance path&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/cull_parity_gpu_test.cpp#L459" target="_blank" rel="noopener">tests/renderer/cull_parity_gpu_test.cpp:459</a></div>
+<p>and two fresh renderers build the fallback&#x27;s per-meshlet lists byte for byte:</p>
+<div class="citation-chip"><code class="citation-code">&quot;t07: twin runs: the same per-meshlet commands, byte for byte&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/cull_parity_gpu_test.cpp#L426" target="_blank" rel="noopener">tests/renderer/cull_parity_gpu_test.cpp:426</a></div>
+<p>The builder&#x27;s half of test 7 is in `scene_tests`: every triangle in exactly one meshlet within the limits, the bounds and cones containing their vertices and normals, for the primitives, the grid, degenerate and repeated triangles, and the DamagedHelmet.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The meshlet path and the instance path must render the same pixels. `shadeVertex` repeats `gbuffer.vert`; a change to one is a change to the other, and the normal matrix must stay `MatrixInverse` on both. Test 7 compares them exactly.</li>
+<li>The task shader and the fallback must cull with `common.slang`&#x27;s `meshletVisible`, never a copy.</li>
+<li>`DrawRecord.aabbMin.w` must be the prefix sum of the meshlet counts of the draws before it, in draw order; the fallback&#x27;s binary search relies on it being non-decreasing.</li>
+<li>A meshlet has at most 372 corners, below `1 &lt;&lt; kMeshletVertexShift`. Raising `kMeshletMaxTriangles` past 170 needs a larger shift, which halves the draws the fallback can address.</li>
+<li>Meshlet bounds are computed at registration; a mesh whose vertices change on the GPU afterwards keeps its old spheres and cones.</li>
+<li>BLAS builds use the original triangles; the meshlet arenas are raster-only.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/cull/meshlets.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/meshlet_builder.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/scene/scene_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/bench/render_bench.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/bench/render_budgets.json</code><span class="desc"></span></div>
+        <div class="row"><code>docs/specs/2026-10-24-renderer-upgrade-design.md</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/mesh_registry.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/mesh_registry.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gpu_culling.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/cull/instances.slang</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/shared/layout.json</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/cull/common.slang</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
+        <div class="row"><code>tests/renderer/cull_parity_gpu_test.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/meshlet_builder.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="culling.html"><div class="label">← Prev</div><div class="title">GPU culling</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

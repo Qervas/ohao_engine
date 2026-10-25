@@ -92,7 +92,7 @@
 <div class="prose reveal">
 <p>Two shapes account for nearly all of them.</p>
 <p>**Slot joins.** The ray-tracing path no longer joins arrays by a running walk of the scene. Each TLAS instance&#x27;s custom index is the instance&#x27;s slot in the `RenderScene` table,</p>
-<div class="citation-chip"><code class="citation-code">vi.instanceCustomIndex = slot &amp; 0xFFFFFFu;   // 24 bits</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L103" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:103</a></div>
+<div class="citation-chip"><code class="citation-code">vi.instanceCustomIndex = slot &amp; 0xFFFFFFu;   // 24 bits</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L105" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:105</a></div>
 <p>and the hit shaders use that single number to fetch the instance row, which names the mesh, its index range and its material refs.</p>
 <div class="citation-chip"><code class="citation-code">InstanceGpu inst = instances[gl_InstanceCustomIndexEXT];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L60" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:60</a></div>
 <p>That makes the instance key explicit — the same slot addresses the TLAS entry, the instance row and the draw list — but two positional joins survive underneath it. The per-triangle material slot is read at `triangleSlotOffset + gl_PrimitiveID`, so the slot stream must run parallel to the mesh&#x27;s index order:</p>

@@ -532,6 +532,11 @@ window.OHAO_NAV_TREE = [
         "id": "graph/culling",
         "title": "GPU culling",
         "href": "m/graph/culling.html"
+      },
+      {
+        "id": "graph/meshlets",
+        "title": "Meshlets and mesh shaders",
+        "href": "m/graph/meshlets.html"
       }
     ]
   },

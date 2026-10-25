@@ -168,7 +168,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (below). `cull_parity_gpu_test`: GPU culling on and off render the same image (a built scene
   with occluded and off-screen boxes, Cornell, the helmet room), two runs build byte-identical
   lists, occluded and off-screen draws are in no list, face culling changes no pixel of
-  closed meshes. `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  closed meshes (test 6); the meshlet path through task and mesh shaders and through their
+  compute fallback render the same image as each other and as the instance path (the
+  occlusion scene, a one-sided sphere whose back-facing meshlets the cones drop, Cornell, the
+  helmet room), and the fallback's lists are byte-identical run to run (test 7). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size and a path-traced mode refused), log.read; a lockstep
   window capture equals a headless capture of the same world bit for bit (post off and
@@ -210,10 +213,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
   `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
   (gated once `currentStep` reaches it, else reported `pending` with its measurement);
-  headless captures of `cornell_720p` and `helmet_game_720p`/`_1080p`, 5 warm-up and 100
-  timed frames each, every pass's median and p95 from GPU timestamps, results in
-  `build/render_bench.json` (the per-pass baseline every renderer change is judged by);
-  `--only SCENE`, `--frames N`; `--evaluate RESULTS --check BUDGETS` judges recorded
+  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p` and
+  `bench10k_1080p`/`bench100k_1080p`, 5 warm-up and 100 timed frames each, every pass's median
+  and p95 from GPU timestamps, and `meshlet_build_1m` (the meshlet builder on a million
+  triangles, CPU, median of 9), results in `build/render_bench.json` (the per-pass baseline
+  every renderer change is judged by); `--only SCENE`, `--frames N`, `--geometry
+  instances|auto|meshlets` and `--fallback` (the meshlet path without mesh shaders) to compare
+  the geometry paths; `--evaluate RESULTS --check BUDGETS` judges recorded
   results without a GPU. Besides the CPU loop it times a GPU calibration kernel
   (`shaders/bench/gpu_calibrate.slang`) before and after, against
   `build/render_bench_reference.json` (`render_bench --calibrate`). `serve_bench` times a
@@ -284,6 +290,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   is never drawn, so a culling bug hides geometry: `cull_parity_gpu_test` compares culling on
   and off exactly. A mip chain halves rounding down: a pyramid whose levels assume rounding
   up reads past them (the Hi-Z is padded to powers of two for that reason).
+- A G-buffer phase has four lists: instance one-sided, instance double-sided, meshlet
+  one-sided, meshlet double-sided (`kCullListEarly`/`kCullListLate` + 0..3; a cascade has one,
+  `kCullListCascade0 + c`, every draw instanced). A meshlet list's command is a task dispatch
+  whose fourth word is the draw's index (the task shader reads it through `SV_DrawIndex`, which
+  needs `shaderDrawParameters`); the fallback's per-meshlet draws carry the draw in firstVertex
+  (`<< kMeshletVertexShift`) and the meshlet in firstInstance. `geometry: auto` sends draws of
+  `kMeshletMinTriangles` (4,096) or more to meshlets: below that the meshlet path measured
+  slower. Its images must equal the instance path's exactly: `cull/meshlets.slang` repeats
+  `gbuffer.vert`'s operations (`MatrixInverse` through `spirv_asm`; Slang has no `inverse`).
+  Wireframe mode applies to instance draws only.
 - `resetAccumulation()` never waits for the GPU: the next frame's passes start without
   history and clear what they keep in their own command buffer, after the frames in flight
   by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's

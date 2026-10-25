@@ -82,7 +82,12 @@ VulkanRenderer::render()
                                the instances change
   GpuCulling                   the draw table to indirect lists on the GPU: early (last
                                frame's visible), Hi-Z of that depth, late (newly visible);
-                               the G-buffer and CSM draw only those
+                               the G-buffer and CSM draw only those. Draws of 4,096
+                               triangles or more go on meshlet lists: a task shader tests
+                               their meshlets (cone, frustum, Hi-Z) and mesh shaders draw
+                               the rest (without VK_EXT_mesh_shader: a compute pass and
+                               per-meshlet draws, the same image). The meshlets are built
+                               at registerMesh (render/scene/meshlet_builder)
   deferred passes or a path tracer, then present (window); any frame, headless or
   windowed, copies to the CPU only when asked (requestReadback, then readback(): that
   frame's fence, never the queue); an inline capture of a deferred frame asks for the

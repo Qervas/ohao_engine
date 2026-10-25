@@ -62,11 +62,15 @@ Slots come from a free list that always returns the lowest released slot, and th
 
 ## The draw table
 
-`draws()` — the raster draw list, one entry per visible instance × submesh, in slot order — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates. Each `Draw` also records whether its submesh's material is one-sided, resolved through the instance's material list the way the shader resolves it.
+`draws()` — the raster draw list, one entry per visible instance × submesh, in slot order — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates. Each `Draw` also records whether its submesh's material is one-sided, resolved through the instance's material list the way the shader resolves it, and the submesh's meshlets in the meshlet arena (first and count, from `MeshInfo::submeshMeshlets`).
 
-Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot and the one-sided flag; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
+Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided flag, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
 
-{{cite ohao/render/scene/render_scene.cpp "r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, 0u, 0u};"}}
+{{cite ohao/render/scene/render_scene.cpp "r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, d.firstMeshlet, d.meshletCount};"}}
+
+The box's spare `w` carries one more number, as a uint's bits: the draw's first *meshlet entry*, the meshlets of every draw before it. `meshletEntryCount()` is the total, what the mesh-shader fallback culls one entry a thread:
+
+{{cite ohao/render/scene/render_scene.cpp "r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};"}}
 
 It is what GPU culling reads, and what the G-buffer and CSM vertex shaders index with `firstInstance`. `drawCount()` reports the uploaded list's length, and zero while the current version has not been uploaded yet, so no pass draws from a table that does not match the list:
 

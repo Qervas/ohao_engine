@@ -279,11 +279,17 @@ late pass's attachments and every later reader.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "// Identical in both passes (render pass compatibility includes the dependencies: one"}}
 
-Each render pass draws its phase's two lists. The first holds one-sided draws and is
-drawn with back faces culled; the second holds double-sided draws, drawn with no face
+Each render pass draws its phase's four lists. The first two are instance draws: the
+one-sided ones drawn with back faces culled, the double-sided ones with no face
 culling:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "const VkPipeline pipeline = wire ? m_wireframePipeline : (k == 0 ? m_cullBackPipeline : m_pipeline);"}}
+
+The other two are the meshlet path's, one-sided and double-sided again, drawn with task
+and mesh shaders where the device has them and through the vertex-pulling fallback where
+it does not; the meshlets unit covers both:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "m_culling->drawMeshletFallback(cmd, (late ? 2u : 0u) + k);"}}
 
 Sidedness is the material's. `MaterialDesc::doubleSided` defaults to true, and only the
 glTF loader says otherwise, from Assimp's `TWOSIDED` key (glTF's `doubleSided`, false
@@ -324,8 +330,12 @@ behind a barrier against the previous frame's indirect and shader reads of it:
 The buffer is host-mapped, and `sssTilesFlagged()` reads the vertical list's count
 from it: the tiles the last frame whose fence has been waited on flagged.
 
-The push-constant block is 16 bytes, the SSS tile grid and padding, an eighth of the
-128-byte floor Vulkan guarantees, so the pass has no device-limit hazard to check for.
+The fragment stage's push-constant block is 16 bytes, the SSS tile grid and padding;
+the meshlet stages see a second range, those 16 bytes followed by the 48-byte
+`MeshletPush`, 64 bytes in all, half the 128-byte floor Vulkan guarantees, so the pass
+has no device-limit hazard to check for:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "static_assert(sizeof(DrawPushConstant) + sizeof(gpu::shared::MeshletPush) <= 128);"}}
 The per-pass data — the camera's current and previous view-projection — lives in a
 128-byte uniform buffer, one per frame slot, host-visible and persistently mapped,
 written in `execute` after that slot's fence wait.

@@ -189,14 +189,15 @@ framebuffer:
 render pass begins (compute cannot run inside one). The shadow phase of GPU culling
 tests each draw's box against the cascade's four side planes only: the pipeline clamps
 depth, so a caster in front of the cascade's near plane still lands in the map and must
-not be culled for it.
+not be culled for it. Cascade $c$ writes one list, `kCullListCascade0 + c`:
 
-{{cite ohao/render/deferred/csm_pass.cpp "m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, GpuCulling::kPairCascade0 + cascade,"}}
+{{cite ohao/render/deferred/csm_pass.cpp "m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, gpu::shared::kCullListCascade0 + cascade, 1,"}}
 
 It then loops over the four cascades, begins the depth-only render pass on that
 cascade's framebuffer, and draws the cascade's list with one
 `vkCmdDrawIndexedIndirectCount`. The shadow phase puts one-sided and double-sided draws
-in the same list, since the shadow pipeline's face culling is its own. Nothing routes
+in the same list, since the shadow pipeline's face culling is its own, and every draw
+stays on the instance path: meshlets are the G-buffer's alone. Nothing routes
 primitives to a layer: the framebuffer already *is* the layer. The pipeline therefore
 has a vertex stage and nothing else — no geometry shader, no fragment shader — and
 the vertex shader projects straight into the cascade being rendered. The object's

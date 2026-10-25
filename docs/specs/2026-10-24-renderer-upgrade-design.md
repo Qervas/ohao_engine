@@ -365,13 +365,16 @@ keep it off.
 
 **Build.** At mesh registration, every mesh is split into meshlets of at most 64 vertices
 and 124 triangles. The greedy builder lives in-repo (`ohao/render/scene/meshlet_builder.*`):
-it walks triangles in index order, adds the neighbour that shares the most vertices, and
-starts a new meshlet at the limits. Each meshlet stores a bounding sphere and a normal cone
+it walks triangles in index order, adds the neighbour that shares the most vertices (the
+oldest such candidate first, so a meshlet grows as a compact patch), skips neighbours whose
+normal strays more than ~53 degrees from the meshlet's mean normal (so the cone can cull),
+and starts a new meshlet at the limits. Each meshlet stores a bounding sphere and a normal cone
 for backface culling. The builder is deterministic and adds no dependency; meshoptimizer
 would cluster better but needs the network and a new dependency (spec 4's rule), and the
-builder sits behind one function so it can be swapped. Meshlet data (vertex indices,
-packed local triangle indices, bounds) lives in two more arenas beside the vertex and
-index arenas. BLAS building keeps using the original triangles.
+builder sits behind one function so it can be swapped. Meshlet data lives in three more
+arenas beside the vertex and index arenas: the meshlets (`MeshletGpu`: ranges, sphere,
+cone), their vertices (mesh-local indices) and their packed local triangles. BLAS building
+keeps using the original triangles.
 
 **Draw.**
 - **With `VK_EXT_mesh_shader`** (the reference RTX 5070 Laptop GPU has it): a task shader
@@ -383,8 +386,10 @@ index arenas. BLAS building keeps using the original triangles.
 - Both paths read the same meshlet data and share the culling code (one Slang module).
   A test requires their images to be identical.
 
-**When.** Meshes under 256 triangles skip meshlets and stay on the instance path; their
-per-meshlet overhead would cost more than it saves. Settings select
+**When.** Draws under 4,096 triangles (`kMeshletMinTriangles`) skip meshlets and stay on
+the instance path; their per-meshlet overhead would cost more than it saves (measured in
+step 12: at 256, `bench100k_1080p`'s 256-triangle spheres took the meshlet path and its
+`gbuffer.early` rose from 1.70 to 2.41 ms). Settings select
 `geometry: auto | meshlets | instances`; the default is `auto`.
 
 ## Clustered lighting
@@ -1195,6 +1200,33 @@ improvising. Intentional image changes are separate commits inside their step.
       setting.
     - Gates the meshlet-build budget.
     - Test 7.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step12.md`):*
+      `buildMeshlets` (`ohao/render/scene/meshlet_builder.*`) runs per submesh at
+      `registerMesh`; `MeshRegistry` keeps three meshlet arenas; `DrawRecord.info.zw` is the
+      draw's meshlet range and `aabbMin.w` its first meshlet entry. `shaders/cull/common.slang`
+      holds every culling test; `cull/instances.slang` writes four lists a G-buffer phase and
+      runs the fallback's `classifyMeshlets`/`scatterMeshlets`; `cull/meshlets.slang` has the
+      task, mesh and pull shaders. `GpuCulling::Settings` gains `geometry` and `meshShaders`
+      (the protocol switch is step 15's `render.settings`). *Corrections:* (1) the builder
+      takes the oldest best candidate (newest-first grew strips: a grid's meshlets held 0.50
+      of the triangle limit, now 0.75) and skips neighbours more than ~53 degrees from the
+      meshlet's mean normal (without it only 56 of the helmet's 248 meshlets had a cone and
+      none culled in its scene; with it 879 meshlets, all with cones, 209 culled there).
+      (2) Three arenas, not two (meshlets, their vertices, their triangles). (3) A G-buffer
+      phase writes four lists (instance and meshlet, one- and double-sided); a cascade one,
+      with every draw instanced: CSM keeps the instance path. (4) The fallback has no entry
+      table: a meshlet entry finds its draw by binary search over the draws' first entries,
+      and its indirect draw carries the draw in firstVertex (`<< kMeshletVertexShift`) and the
+      meshlet in firstInstance. (5) The task shader reads its draw from its command through
+      `SV_DrawIndex` (`shaderDrawParameters` enabled). (6) The meshlet path repeats
+      `gbuffer.vert`'s operations (`MatrixInverse` through `spirv_asm`), so its images equal
+      the instance path's too: no golden changed. (7) The cone test applies to one-sided
+      draws whose matrix keeps winding; Hi-Z to the late phase. (8) `kMeshletMinTriangles` is
+      4,096, not 256 ("When", above). (9) The face normals are computed over up to 8 threads
+      for meshes of 64k triangles or more (one thread: 11 ms of the million-triangle build).
+      **Budget:** `meshlet_build_1m` 51.0 ms (60), clean run alone; the final full runs were
+      noisy. On the reference GPU the meshlet path is slower than the instance path for a
+      fully visible mesh (helmet room 1080p `gbuffer.early` 0.215–0.220 ms against 0.202).
 13. **Clustered lighting.**
     - `lights.cluster`; the uncapped light table; lighting, particles and GI on clusters.
     - The 1,000-light `bench100k_1080p`.
@@ -1263,7 +1295,7 @@ Inputs no step's tests exercise by default, most likely to bite first:
 | 4 | RT GI | Half resolution, 2 rays, reprojected temporal + 2 à-trous + joint-bilateral upsample; history reset on capture |
 | 5 | SSAO | Wired, not removed; fixed; half resolution; ambient term only |
 | 6 | Culling | GPU frustum + two-pass Hi-Z; prefix-sum compaction (no order-dependent atomics); indirect draws |
-| 7 | Meshlets | In-repo greedy builder (64 v / 124 t, sphere + cone), no new dependency; mesh shaders where supported, vertex-pulling fallback; meshes < 256 triangles stay instanced |
+| 7 | Meshlets | In-repo greedy builder (64 v / 124 t, sphere + cone), no new dependency; mesh shaders where supported, vertex-pulling fallback; draws < 4,096 triangles stay instanced (step 12's measurement; 256 at first) |
 | 8 | Lights | Froxels 16x9x24, ≤ 256 lights a cluster, table of 65,536; ordered build |
 | 9 | Upscalers, VSM, ReSTIR, probes | Later (reasons in "Scope") |
 | 10 | Slang | For new and rewritten shaders; GLSL elsewhere; one shared layout file |

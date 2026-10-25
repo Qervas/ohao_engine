@@ -42,11 +42,13 @@ retire queue before it is destroyed, so the frame path never idles the device.
 
 Every registered mesh is appended to four shared buffers: a vertex arena, an index
 arena, a per-triangle material-slot stream and a mesh table of 16-byte `MeshGpu`
-entries. A mesh records its slice as element offsets — `vertexOffset`, `indexOffset`,
+entries. Three more take its submeshes' meshlets: the 48-byte `MeshletGpu` records,
+their vertices and their packed local triangles (the meshlets unit's subject). A mesh
+records its slice as element offsets — `vertexOffset`, `indexOffset`,
 `triangleSlotOffset` — not byte offsets. The whole registration travels in one staging
-buffer, laid out vertices, indices, slots, entry:
+buffer, laid out vertices, indices, slots, entry, then the three meshlet streams:
 
-{{cite ohao/render/scene/mesh_registry.cpp "// One staging buffer for the whole registration: vertices | indices | slots | entry."}}
+{{cite ohao/render/scene/mesh_registry.cpp "// vertices | indices | slots | entry | meshlets | meshlet vertices | meshlet triangles."}}
 
 An arena that is full is replaced by one sized at twice what is required, the old
 contents are copied across on the same command buffer, and the old buffer is pushed to

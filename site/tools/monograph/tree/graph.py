@@ -36,8 +36,14 @@ MODULE = {
         page(
             'culling',
             'GPU culling',
-            'The draw table to indirect lists: early/late two-pass occlusion, Hi-Z, cascades.',
-            files=['ohao/render/deferred/gpu_culling.hpp', 'ohao/render/deferred/gpu_culling.cpp', 'shaders/cull/instances.slang', 'shaders/cull/hiz.slang'],
+            'The draw table to indirect lists: early/late two-pass occlusion, four lists a G-buffer phase, Hi-Z, cascades.',
+            files=['ohao/render/deferred/gpu_culling.hpp', 'ohao/render/deferred/gpu_culling.cpp', 'shaders/cull/instances.slang', 'shaders/cull/common.slang', 'shaders/cull/hiz.slang'],
+        ),
+        page(
+            'meshlets',
+            'Meshlets and mesh shaders',
+            'The greedy meshlet builder, its arenas, task/mesh shaders and the vertex-pulling fallback.',
+            files=['ohao/render/scene/meshlet_builder.hpp', 'ohao/render/scene/meshlet_builder.cpp', 'shaders/cull/meshlets.slang', 'shaders/cull/common.slang'],
         ),
     ],
 }

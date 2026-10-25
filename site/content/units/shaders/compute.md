@@ -63,15 +63,19 @@ effect on the frame are the deferred SSAO unit's subject.
 
 ## cull/: the draw lists and the depth pyramid
 
-GPU culling's two modules sit in their own directory, `shaders/cull/`, and compile by
-the same Slang glob. `instances.slang` has three entry points, so three files, which
+GPU culling's modules sit in their own directory, `shaders/cull/`, and compile by
+the same Slang glob. `instances.slang` has five entry points, so five files, which
 `GpuCulling` loads by entry name with one shared set layout and push range:
 
-{{cite ohao/render/deferred/gpu_culling.cpp "rtc::createComputePipeline(m_device, "cull_instances.slang.classify.spv", "classify", m_setLayout,"}}
+{{cite ohao/render/deferred/gpu_culling.cpp "{"cull_instances.slang.classifyMeshlets.spv", "classifyMeshlets", &m_classifyMeshlets},"}}
 
 `classify` and `scatter` run one thread per draw in workgroups of `kCullGroupSize`
-(256), and `scanBlocks` a single workgroup of the same size; the host dispatches
-`(draws + 255) / 256` groups. `hiz.slang`'s `fromDepth` and `downsample` build the
+(256), `classifyMeshlets` and `scatterMeshlets` (the mesh-shader fallback) one per
+meshlet entry, and `scanBlocks` a single workgroup of the same size; the host
+dispatches `(items + 255) / 256` groups. `common.slang` has no entry point: it is the
+module of culling tests that `instances.slang` and `meshlets.slang` both import.
+`meshlets.slang` is not compute: its task, mesh and pull entries are the G-buffer's
+meshlet geometry stages, loaded by `GBufferPass`. `hiz.slang`'s `fromDepth` and `downsample` build the
 max-depth pyramid in 8×8 workgroups, one dispatch per level. Their push blocks,
 `CullPush` and `HiZPush`, and the `DrawRecord` they read come from
 `shaders/shared/layout.json`. The algorithm — phases, prefix-sum compaction and the

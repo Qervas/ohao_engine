@@ -678,9 +678,14 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Effects without mesh component spam.",
     },
     "graph/culling": {
-        "what": ["GpuCulling: RenderScene's draw table to indirect draw lists on the GPU (early, late and cascade phases; one-sided and double-sided lists)."],
-        "how": ["gpu_culling.hpp/cpp + cull/instances.slang (classify, scanBlocks, scatter: prefix-sum compaction, no atomics) / cull/hiz.slang (fromDepth, downsample: the max-depth pyramid)."],
+        "what": ["GpuCulling: RenderScene's draw table to indirect draw lists on the GPU (early, late and cascade phases; four lists a G-buffer phase: instance and meshlet, one-sided and double-sided)."],
+        "how": ["gpu_culling.hpp/cpp + cull/instances.slang (classify, scanBlocks, scatter: prefix-sum compaction, no atomics; classifyMeshlets, scatterMeshlets: the mesh-shader fallback) / cull/common.slang (the shared tests) / cull/hiz.slang (fromDepth, downsample: the max-depth pyramid)."],
         "why": "The CPU records the same few commands at any instance count; two-pass occlusion keeps the image identical to drawing everything.",
+    },
+    "graph/meshlets": {
+        "what": ["Meshlets: submeshes split at registration into clusters of at most 64 vertices and 124 triangles, each with a bounding sphere and a normal cone, culled and drawn one by one."],
+        "how": ["meshlet_builder (greedy, oldest candidate first, normal-coherent) into MeshRegistry's three meshlet arenas; cull/meshlets.slang task + mesh shaders under VK_EXT_mesh_shader, else classifyMeshlets/scatterMeshlets per-meshlet indirect draws and the pull vertex shader; one culling module, cull/common.slang."],
+        "why": "Large draws stop rasterizing their hidden, off-screen and back-facing parts; both paths render the instance path's image exactly (test 7).",
     },
     "physics/backend": {
         "what": ["IPhysicsBackend plugin: factory picks Jolt or null; helpers convert shapes without leaking Jolt into scene headers."],
