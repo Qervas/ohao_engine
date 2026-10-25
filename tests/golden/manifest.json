@@ -161,6 +161,70 @@
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
       "_note": "cli_helmet_game_deferred at reference quality (added in 2b step 7): its four lights' shadows from 8 rays a light a frame, averaged over the 30 frames. Exact, as every deferred scene. Re-captured 2026-10-25 (2b step 8): reference RT GI (full resolution, 32 rays a pixel a frame, the running mean of the 30 frames), and the environment's diffuse light through GI rays instead of unoccluded IBL; max_abs 80 on 95.2% of pixels, looked at before the update. Re-captured 2026-10-25 (2b step 9): SSAO applied, SSR at half resolution, SSS only on `subsurface` materials; max_abs 65 on 30.2% of pixels, looked at before the update. Re-captured 2026-10-25 (Khronos validation pack): AO only from glTF's occlusionTexture, as cli_helmet_game_deferred; max_abs 251 on 37.6% of pixels, looked at before the update."
+    },
+    {
+      "name": "khronos_metal_rough_spheres_deferred",
+      "command": "./build/model_viewer assets/khronos/MetalRoughSpheres/MetalRoughSpheres.gltf {out} 4 deferred --denoise=none",
+      "golden": "tests/golden/khronos_metal_rough_spheres_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "Khronos validation pack (2026-10-25, docs/changes/2026-10-25-khronos-validation-pack.md): glTF-Sample-Models MetalRoughSpheres, core metallic-roughness only (base color and metallicRoughness textures, no extensions, no alpha), framed by model_viewer as damaged_helmet is (30 deferred frames, TAA, SSAO and bloom, exposure 1). Exact. Its metallicRoughness map's R channel is 0: the G-buffer used to take AO from it and rendered every sphere black; AO now comes only from glTF's occlusionTexture, which this model has none of. Known, not a regression: the environment has one mip level, so IBL specular does not widen with roughness (the path-traced reference shows the gradient); the two sheets of spheres 8 units apart are in the file."
+    },
+    {
+      "name": "cli_khronos_metal_rough_spheres_deferred",
+      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/khronos_metal_rough_spheres_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The scene file model_viewer --save-scene wrote for MetalRoughSpheres, through the CLI: the same pixels as the example (as cli_damaged_helmet_deferred)."
+    },
+    {
+      "name": "cli_khronos_metal_rough_spheres_reference",
+      "command": "./build/ohao run assets/scenes/khronos_metal_rough_spheres.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 --quality reference",
+      "golden": "tests/golden/khronos_metal_rough_spheres_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "cli_khronos_metal_rough_spheres_deferred at reference quality (8 shadow rays to every light, 32 GI rays at full resolution, averaged over the 30 frames). Exact."
+    },
+    {
+      "name": "khronos_flight_helmet_deferred",
+      "command": "./build/model_viewer assets/khronos/FlightHelmet/FlightHelmet.gltf {out} 4 deferred --denoise=none",
+      "golden": "tests/golden/khronos_flight_helmet_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "Khronos validation pack: glTF-Sample-Models FlightHelmet (CC0, Microsoft), 6 meshes, 6 materials with packed occlusion-roughness-metal maps (the occlusionTexture is the metallicRoughness image: uploaded once, AO from its R), normal maps, framed by model_viewer. Exact. Known: LensesMat is alphaMode BLEND and the frame has no alpha path, so the goggle lenses render opaque."
+    },
+    {
+      "name": "cli_khronos_flight_helmet_deferred",
+      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/khronos_flight_helmet_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The FlightHelmet scene file through the CLI: the same pixels as the example."
+    },
+    {
+      "name": "cli_khronos_flight_helmet_reference",
+      "command": "./build/ohao run assets/scenes/khronos_flight_helmet.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 --quality reference",
+      "golden": "tests/golden/khronos_flight_helmet_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "cli_khronos_flight_helmet_deferred at reference quality. Exact."
+    },
+    {
+      "name": "cli_khronos_sponza_deferred",
+      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/khronos_sponza_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "Khronos validation pack: glTF-Sample-Models Sponza (Crytek / Frank Meinl, PBR textures by Alexandre Pestana; see assets/khronos/Sponza/LICENSE.md), 103 meshes, 25 materials, at its own scale (about 30 m long) with a hand-placed camera in the atrium looking down the nave, a sun through the open roof and five atrium point lights; no example twin (model_viewer would frame it from outside). Exact. Known: three materials are alphaMode MASK (the potted plants' leaves among them) and the frame has no alpha test, so their cut-out leaves render as opaque cards."
+    },
+    {
+      "name": "cli_khronos_sponza_reference",
+      "command": "./build/ohao run assets/scenes/khronos_sponza.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 --quality reference",
+      "golden": "tests/golden/khronos_sponza_reference.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "cli_khronos_sponza_deferred at reference quality. Exact."
     }
   ]
 }

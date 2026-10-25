@@ -20,3 +20,6 @@ tests/serve/expected/** text eol=lf
 shaders/shared/** text eol=lf
 ohao/gpu/shared_layout.hpp text eol=lf
 shaders/slangc.version text eol=lf
+# The Khronos validation pack: third-party files kept byte for byte as published (the
+# .gltf JSON and READMEs included), so their attribution and the goldens never drift.
+assets/khronos/** -text

@@ -1,0 +1,71 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "Light": 1,
+    "MeshSource": 1,
+    "Name": 1,
+    "Transform": 1
+  },
+  "entities": [
+    {
+      "id": "5b0a9e3c1d7f2a01",
+      "Name": { "value": "MainCamera" },
+      "Transform": { "position": [4, 1.8, 0], "rotation": [0, 0.707107, 0, 0.707107] },
+      "Camera": { "fovDeg": 70 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a02",
+      "Name": { "value": "Environment" },
+      "Environment": { "hdri": { "path": "assets/test_models/env_outdoor.hdr" } }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a03",
+      "Name": { "value": "Sponza" },
+      "MeshSource": {
+        "source": { "ModelAsset": { "asset": { "path": "assets/khronos/Sponza/Sponza.gltf" } } }
+      }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a04",
+      "Name": { "value": "Sun" },
+      "Transform": {
+        "position": [0, 20, 0],
+        "rotation": [-0.512432, 0.253613, 0.161569, 0.804357]
+      },
+      "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a10",
+      "Name": { "value": "AtriumLight0" },
+      "Transform": { "position": [-10, 2.5, 0] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 40, "radius": 0.2 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a11",
+      "Name": { "value": "AtriumLight1" },
+      "Transform": { "position": [-5, 2.5, 0] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 40, "radius": 0.2 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a12",
+      "Name": { "value": "AtriumLight2" },
+      "Transform": { "position": [0, 2.5, 0] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 40, "radius": 0.2 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a13",
+      "Name": { "value": "AtriumLight3" },
+      "Transform": { "position": [5, 2.5, 0] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 40, "radius": 0.2 }
+    },
+    {
+      "id": "5b0a9e3c1d7f2a14",
+      "Name": { "value": "AtriumLight4" },
+      "Transform": { "position": [10, 2.5, 0] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 40, "radius": 0.2 }
+    }
+  ]
+}
