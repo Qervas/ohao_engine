@@ -80,7 +80,10 @@ VulkanRenderer::render()
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit
   deferred passes or a path tracer, then present (window); any frame, headless or
   windowed, copies to the CPU only when asked (requestReadback, then readback(): that
-  frame's fence, never the queue)
+  frame's fence, never the queue); an inline capture of a deferred frame asks for the
+  preview alone (requestPreviewReadback: capture.preview box-filters the final image into
+  the staging buffer). resetAccumulation() waits for nothing: the next frame starts
+  without history.
   every pass between two GPU timestamps (render/frame/gpu_pass_timer.hpp), named in the
   pass registry; a frame slot's times are read when the slot comes round, after its fence:
   render.stats, render_bench, never a stall

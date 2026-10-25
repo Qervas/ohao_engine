@@ -7,7 +7,7 @@ standard: v2
 
 ## Two bodies that share a skeleton
 
-`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines nine functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other seven are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToStaging` (the window's end of a deferred frame, and a requested headless frame's copy; next section), `readback` and `finishReadbackRequest` (readback on request, same section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
+`render_dispatch.cpp` is where "render one frame" becomes recorded Vulkan commands. It defines thirteen functions, two of which are whole-frame bodies — `renderDeferred` and `renderRTPipeline` — and `render()` picks exactly one of them per call: the RT body when the current mode has an RT pipeline, a created RT renderer and a render world that reports ray tracing available, the deferred body otherwise. The other eleven are support: `blitDeferredOutputToSwapchain` and `copyDeferredOutputToStaging` (the window's end of a deferred frame, and a requested headless frame's copy; next section), `readback`, `readbackPreview`, `recordPreview` and `finishReadbackRequest` (readback on request, same section), `framesInFlight` and `waitForSubmitted` (the frames still on the GPU), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`.
 
 {{cite ohao/gpu/vulkan/renderer.cpp "rtPipeline && getRTRenderer(m_renderMode) && isRTSupported()) {"}}
 
@@ -30,6 +30,12 @@ A deferred frame ends in one of two places, decided by whether `initialize(const
 Asking is `requestReadback()` before the `render()` call. The request belongs to that one frame: `renderDeferred` takes it with `std::exchange`. A headless frame then copies its final image into the slot's staging buffer (`copyDeferredOutputToStaging`). A windowed frame copies the same image, already a transfer source for the blit, inside `blitDeferredOutputToSwapchain`. `readback()` waits on that slot's fence and returns the bytes: the frame just rendered. The RT body copies its output only for a requested frame too. Every copy is a requested one, which `requestedReadbackCount()` counts.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "// A request belongs to this frame; a frame that is not rendered leaves no readback."}}
+
+A preview request (`requestPreviewReadback`) is taken the same way. After the deferred passes, and before the present blit or the headless copy, `recordPreview` records `capture.preview`, which writes the downscaled preview into the slot's staging buffer; the end of the frame then copies nothing (the blit gets a null staging buffer). When the pass cannot run — no pipeline, no RGBA8 final image, a rectangle outside the frame — the frame falls back to the full copy:
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "const bool previewed = wantReadback && preview && recordPreview(cmd, *preview);"}}
+
+The RT body drops a preview request and reads back in full: the path tracer has no `capture.preview`. Each body stamps its slot with the running count of submitted frames as it submits, which `waitForSubmitted(n)` uses to find the slot whose fence ends frame n.
 
 The windowed path changes the prologue in two places. Swapchain recreation runs first, before a slot is chosen, because recreating calls `resize()`, which idles the device and resets `m_currentFrame`; recreating after the slot was taken would wait on one slot's fence and reset another's.
 
@@ -172,7 +178,7 @@ The same fallback sun is what RT shadows trace when the scene has no lights. Aft
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));"}}
 
 :::why
-Both bodies pipeline instead of blocking: `render()` never waits for its own submission, only for the frame that last used its slot, three submissions back. Pixels reach the CPU only through a request, and the wait for them is the caller's choice: `readback()` blocks on that one frame's fence. A loop that never reads pays for no copy and no wait. A capture pays exactly one wait, for the frame it keeps. The ring this replaced copied every headless frame and handed back the one three calls earlier: correct pixels only after the ring had turned over, and a copy paid on every frame nobody read.
+Both bodies pipeline instead of blocking: `render()` never waits for its own submission, only for the frame that last used its slot, three submissions back. Pixels reach the CPU only through a request, and the wait for them is the caller's choice: `readback()` blocks on that one frame's fence. A loop that never reads pays for no copy and no wait. A capture pays exactly one wait, for the frame it keeps, and an inline-only capture of a deferred frame copies a preview of about 1.3 MB instead of a 3.7 MB frame. The ring this replaced copied every headless frame and handed back the one three calls earlier: correct pixels only after the ring had turned over, and a copy paid on every frame nobody read.
 :::
 
 :::key

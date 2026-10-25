@@ -89,7 +89,7 @@ $$</div>
 <p>`taa_resolve.frag` is the fourth case: it declares a depth sampler at binding 3 and never executes a single instruction that reads it.</p>
 <div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 3) uniform sampler2D depthBuffer;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/taa_resolve.frag#L12" target="_blank" rel="noopener">shaders/postprocess/taa_resolve.frag:12</a></div>
 <p>The descriptor is still written whenever the sets are rebuilt, with a fallback view for when no depth is bound.</p>
-<div class="citation-chip"><code class="citation-code">// Binding 3: Depth (fallback to current frame)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L245" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:245</a></div>
+<div class="citation-chip"><code class="citation-code">// Binding 3: Depth (fallback to current frame)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L247" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:247</a></div>
 </div>
 <div class="section-rule"><h2 id="where-a-shader-and-its-own-header-disagree">Where a shader and its own header disagree</h2></div>
 <div class="prose reveal">

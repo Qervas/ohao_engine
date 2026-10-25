@@ -35,9 +35,9 @@ A per-slot render-finished semaphore would be wrong even though per-slot acquire
 
 The ordering matters because `vkResetFences` is a promise to submit. A frame that resets the fence and then bails — an out-of-date acquire, a minimised window — leaves it unsignalled with nothing queued to signal it, and the next `waitForFrame` on that slot blocks forever. Every exit before `resetFrame` leaves the fence as it found it.
 
-From there the body records into the slot's command buffer and ends. Windowed, it blits the deferred output into the acquired swapchain image, submits waiting on `m_imageAcquired[slot]` at the transfer stage and signalling that image's render-finished semaphore, and presents. Headless, it ends with the image. Either way, only a requested frame also copies the output into the slot's staging buffer, and `readback()` reads it once the slot's fence has proved the copy finished:
+From there the body records into the slot's command buffer and ends. Windowed, it blits the deferred output into the acquired swapchain image, submits waiting on `m_imageAcquired[slot]` at the transfer stage and signalling that image's render-finished semaphore, and presents. Headless, it ends with the image. Either way, only a requested frame writes the slot's staging buffer: the whole output by a copy, or, for a preview request, the `capture.preview` compute pass's downscaled image and nothing else. `readback()` (or `readbackPreview()`) reads it once the slot's fence has proved the write finished, and `readback()` refuses a slot that holds a preview:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!m_readbackReady || m_previewWidth != 0) return {};"}}
 
 ## One constant, read everywhere
 
@@ -47,7 +47,11 @@ Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a lite
 
 ## Three allocations the engine's own allocator never sees
 
-Each slot's staging buffer is built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly: three buffers backed by three separate `VkDeviceMemory` allocations, each `width * height * 4` bytes, persistently mapped at creation and unmapped only on resize. They exist in both modes (`initializeFrameResources` always asks for them), and only a requested frame copies into one. The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
+Each slot's staging buffer is built by a private `createBuffer` calling `vkCreateBuffer`, `vkGetBufferMemoryRequirements`, `vkAllocateMemory` and `vkBindBufferMemory` directly: three buffers backed by three separate `VkDeviceMemory` allocations, each `width * height * 4` bytes, persistently mapped at creation and unmapped only on resize. They exist in both modes (`initializeFrameResources` always asks for them), and only a requested frame writes one. Their usage is `TRANSFER_DST` for the frame copy and `STORAGE_BUFFER` for the preview shader, which writes into the same mapped memory:
+
+{{cite ohao/render/frame/frame_resources.cpp "// Storage too: capture.preview writes a preview straight into it."}}
+
+ The memory type chosen is the first index that is *both* allowed by the buffer's own `memoryTypeBits` and carries every requested property; the loop tests the two conditions together.
 
 {{cite ohao/render/frame/frame_resources.cpp "if ((typeFilter & (1 << i)) &&"}}
 

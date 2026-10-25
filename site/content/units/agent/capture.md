@@ -13,9 +13,9 @@ Because the procedure is shared, a lockstep window capture and a headless captur
 
 ## Readback on request
 
-A capture asks for its last frame and gets that frame. Every reader of pixels works this way (captures, the examples, the tests, `ohao doctor`), and no frame copies anything to the CPU unless it was asked for, headless or windowed. `requestReadback()` marks the next frame:
+A capture asks for its last frame and gets that frame. Every reader of pixels works this way (captures, the examples, the tests, `ohao doctor`), and no frame copies anything to the CPU unless it was asked for, headless or windowed. `requestReadback()` marks the next frame, and cancels a preview request made before it:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "void requestReadback() noexcept { m_readbackRequested = true; }"}}
+{{cite ohao/gpu/vulkan/renderer.hpp "void requestReadback() noexcept {"}}
 
 The flag is consumed by the next frame that starts, whether or not that frame is actually rendered:
 
@@ -23,7 +23,7 @@ The flag is consumed by the next frame that starts, whether or not that frame is
 
 A frame skipped because the window is minimized or the swapchain is out of date leaves nothing to read, and `readback()` returns an empty span instead of an old frame. When the frame did copy, `readback()` waits on that frame's fence only, never on the queue or the device, and returns a view of the slot's persistently mapped buffer:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (!f.stagingBufferMapped || !m_frameResources.waitForFrame(m_readbackSlot)) return {};"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "const std::size_t bytes = static_cast<std::size_t>(m_width) * m_height * 4;"}}
 
 In a window the copy is recorded inside the swapchain blit, where the final image is already in `TRANSFER_SRC` layout, so it costs one extra copy command and no layout transitions:
 
@@ -63,11 +63,51 @@ That result is marked `deterministic: false`. A lockstep capture of the same wor
 
 `fitWithin` resamples vertically first, so each output row is a weighted sum of whole source rows, a run of contiguous multiply-adds per tap, and then horizontally over only the rows that are left. The spec measures 3 ms for 1280x720 to 768x432. The preview is a JPEG at quality 85 through `stb_image_write` (about 3.5 ms for 768x432), or a PNG when `format: "png"` asks for exact pixels.
 
+That CPU path serves a capture that writes a file, keeps the whole frame, or renders in a path-traced mode. A deferred capture that wants the inline image and nothing else gets its preview from the GPU instead (next section), filtered the same way.
+
+## capture.preview: the preview made in the frame
+
+An inline-only capture has no use for the full frame on the CPU, so it does not read it. `requestCaptureReadback` decides which request the last frame carries: the preview alone when the request is inline, names no `path`, the caller keeps no pixels, and the renderer can make it; the whole frame otherwise.
+
+{{cite ohao/runtime/frame_capture.cpp "if (!r.inlineImage || !r.path.empty() || needPixels || !renderer.previewOnGpu()) {"}}
+
+The rectangle is the `region` or the whole frame, and the long-side limit is `maxSize`. `renderDeferred` records the pass after the deferred passes and the gizmo, before the present blit or the headless copy, as `capture.preview` in the pass registry. `CapturePreviewPass` binds the final RGBA8 image as a sampled image and the frame slot's staging buffer as a storage buffer, and dispatches one thread per preview pixel. Its output goes straight into the host-cached buffer the CPU reads, packed, rows top down; the frame copies nothing else, and `readbackPreview()` returns a view of it with its width and height. `readback()` on that frame returns nothing.
+
+{{cite ohao/render/deferred/capture_preview_pass.cpp "vkCmdDispatch(cmd, (dstWidth + 63) / 64, dstHeight, 1);   // rows of 64 (the shader's workgroup)"}}
+
+The preview's size comes from one function, `render::previewExtent`, which `fitWithin` calls too, so the GPU and CPU previews of one rectangle always have the same dimensions: the long side scaled to `maxSide`, aspect kept, each side rounded and at least 1, and a source that already fits left as it is.
+
+{{cite ohao/render/frame/preview_extent.hpp "if (maxSide == 0 || longSide <= maxSide) return {width, height};"}}
+
+The shader is `fitWithin`'s filter. Each output pixel's footprint in x and y is $[i\,s/d,\,(i+1)\,s/d)$ for a source of $s$ pixels scaled to $d$; every source pixel it touches is weighted by the length of its overlap with the footprint, divided by the footprint's width, and the vertical sum is taken first. The UNORM texel is turned back into its byte before it is weighted, as the CPU filter reads bytes:
+
+{{cite shaders/compute/capture_preview.slang "const float4 texel = round(finalImage.Load(int3(int2(pc.src.xy + uint2(x, y)), 0)) * 255.0);"}}
+
+The workgroup is one row of 64 threads, so a warp's 32 four-byte writes are 128 contiguous bytes of host memory. An 8x8 tile spreads the same warp over four rows, four separate runs of 32 bytes. At 768x432 on the RTX 5070 Laptop GPU the 8x8 version took 0.49 ms and rows of 64 take 0.056 ms.
+
+{{cite shaders/compute/capture_preview.slang "[numthreads(64, 1, 1)]"}}
+
+Its push constants are `PreviewPush` in `shaders/shared/layout.json`: the source rectangle and the preview's size. One barrier orders the final image's writers (tonemap's or lighting's render pass, the gizmo) before the filter reads it, and one makes the shader's writes visible to the host, available once the frame's fence signals. `sp2b_s10_gpu_preview_matches_the_cpu_downscale` compares the GPU preview with `fitWithin` on the same frame and allows 1 for float rounding. It measured max_abs 0 at 1280x720 to 768x432, a 500x300 region to 200x120, and 1920x1080 to 768x432, and requires exact bytes at 160x120, which is not scaled. `sp2b_s10_a_preview_request_reads_back_only_the_preview` checks that the preview frame runs the pass, makes no full copy, and returns 768x432 RGBA8 (1.3 MB instead of 3.7 MB).
+
+Without the pipeline (the renderer logs a warning at start-up) or in an RT mode, `previewOnGpu()` is false and inline captures take the CPU path, with the same result.
+
+## The reset and the frames ahead
+
+A capture after the first resets the renderer's temporal state. In Deferred, `resetAccumulation` waits for nothing. It marks the next frame to start without history and returns; TAA clears its history images in that frame's command buffer, ordered after the frames still in flight by the queue (the deferred orchestrator unit covers the barrier).
+
+{{cite ohao/gpu/vulkan/renderer.cpp "the frames in flight by the queue alone. Nothing here waits for the GPU."}}
+
+So when the capture's last frame is submitted, up to two earlier frames may still be on the GPU, and the read frame waits for them anyway by queue order. `readCaptureOutputs` first waits for the frames submitted before the read frame, using the count `framesSubmitted()` gave before its `render()`, and starts the `readbackMs` clock after that. `readbackMs` is then the read frame's own fence wait and copy, not the frames queued ahead of it, which are logged at debug level instead.
+
+{{cite ohao/runtime/frame_capture.cpp "renderer.waitForSubmitted(framesBefore);"}}
+
+The window's realtime capture uses the same two functions, `requestCaptureReadback` and `readCaptureOutputs`, around its one presented frame. It checks the region against the window's size before rendering; a frame that reached no staging buffer (minimized, an out-of-date swapchain) is `E_STATE`.
+
 The encoded preview does not go into the result JSON. It travels beside it, as `api::CallOutcome::image`. Over MCP it becomes an `image` content block after the text block, which is the form a model can look at:
 
 {{cite ohao/rpc/server.cpp "if (!failed && o.image) {   // render.capture inline: the image a model looks at"}}
 
-Over native JSON-RPC, and through `Session::call(string)`, it is appended to the result as `"image"` (base64) and `"mimeType"`. The result itself reports `width`, `height`, `imageSize`, `frames`, the total `ms`, `readbackMs` (the fence wait and the copy) and `encodeMs` (crop, scale, file and preview), plus the validation message count when the layers are on.
+Over native JSON-RPC, and through `Session::call(string)`, it is appended to the result as `"image"` (base64) and `"mimeType"`. The result itself reports `width`, `height`, `imageSize`, `frames`, the total `ms`, `readbackMs` (the read frame's fence wait and copy, after the frames queued ahead of it have finished) and `encodeMs` (crop, scale, file and preview), plus the validation message count when the layers are on.
 
 ## A PNG writer of its own
 
@@ -102,12 +142,14 @@ Readback on request, rather than a ring that is always copying, makes "the frame
 :::
 
 :::key
-One capture procedure serves both hosts, so a lockstep window capture equals a headless one bit for bit in deferred. The renderer copies a frame only on request, and the capture waits for that frame's fence alone, reading host-cached staging memory. A window host captures deferred frames only, at its own size. Previews are area-downscaled JPEGs that travel beside the result. PNG files use a one-pass, four-band, run-length deflate.
+One capture procedure serves both hosts, so a lockstep window capture equals a headless one bit for bit in deferred. The renderer copies a frame only on request, and the capture waits for that frame's fence alone, reading host-cached staging memory. A window host captures deferred frames only, at its own size. Previews are area-downscaled JPEGs that travel beside the result; an inline-only deferred capture has the GPU make the preview in the frame (`capture.preview`) and reads back only that. PNG files use a one-pass, four-band, run-length deflate.
 :::
 
 ## Contracts
 
 - Call `requestReadback()` before the `render()` whose pixels you want, and `readback()` after it. The span is valid until the next `render()` or `resize()`.
-- `readback()` returns an empty span for a frame that was not rendered. Callers check the size before using it.
+- `readback()` returns an empty span for a frame that was not rendered, and for a frame that served a preview request. Callers check the size before using it.
+- The GPU and CPU previews size themselves through `render::previewExtent` alone, and filter the same way; a change to one filter is a change to both, and `sp2b_s10_gpu_preview_matches_the_cpu_downscale` holds them together.
+- Call `readCaptureOutputs` right after the read frame's `render()`, with `framesSubmitted()` as it was before that `render()`.
 - The PNG writer's output depends only on the image. Its band count must never follow the core count.
 - A window host restores its live post settings after a lockstep capture. A capture never changes what the player sees afterwards.

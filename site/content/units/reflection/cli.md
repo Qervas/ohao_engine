@@ -73,9 +73,9 @@ Without `frames`, the frame count is one per path-tracer sample, and for deferre
 {{cite ohao/runtime/frame_capture.cpp "if (r.mode != "deferred") return r.spp;   // the path tracer: one sample per frame"}}
 {{cite ohao/runtime/frame_capture.cpp "return std::find(r.post.begin(), r.post.end(), "taa") != r.post.end() ? 10 : 1;"}}
 
-A capture asks for its last frame with `requestReadback()` and takes exactly that frame from `readback()`, as every reader of pixels does. Under the CPU denoisers (OIDN, NRD), `readback()` denoises that frame's images itself.
+A capture asks for its last frame and takes exactly that frame back, as every reader of pixels does. `requestCaptureReadback` asks for the whole frame (`requestReadback()`), or for the GPU-made preview alone when an inline image of a deferred frame is all the request needs (the frame capture unit describes `capture.preview`). Under the CPU denoisers (OIDN, NRD), `readback()` denoises that frame's images itself.
 
-{{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
+{{cite ohao/runtime/frame_capture.cpp "previewOnly = requestCaptureReadback(renderer, r, settings.keepPixels != nullptr);"}}
 
 Each frame runs `world.sync()` and then `render()`: the sync phase only, so `spin` does not turn anything during a capture and the session's frame counter does not move. After the first frame's sync, any entity carrying `InstantiateError` turns the capture into an error that names the entity, before any pixel is rendered. A missing model therefore exits 2, not 3. The image is then cropped to `region` if one was given, written as a PNG if a path was given, and encoded as an inline preview if one was asked for. A path that cannot be written is `E_RENDER`, which the `render_unwritable` case uses to cover exit 3.
 
@@ -84,7 +84,7 @@ A second capture in the same process must not inherit the first one's history:
 {{cite tools/ohao/render_host.cpp "settings.reset = m_captures > 0;   // the first capture renders exactly as a fresh renderer does (the goldens)"}}
 {{cite ohao/runtime/frame_capture.cpp "if (settings.reset) renderer.resetAccumulation();"}}
 
-For the path tracers this restarts accumulation. For deferred, `resetAccumulation` idles the device and sets the frame slot (which also indexes TAA's jitter) back to 0. It then calls `DeferredRenderer::resetTemporalState()`, which zeroes the clock, sets the previous view-projection to the current one, and clears the RT GI and post-processing histories. Before that change, the step-9 record says, a deferred capture after a restore differed by up to 14 levels from a fresh render. The first capture skips the reset, so it renders exactly as a fresh renderer does. That is what the goldens need. The window's `LiveHost`, whose renderer has always been presenting, resets on every lockstep capture.
+For the path tracers this restarts accumulation. For deferred, `resetAccumulation` only calls `DeferredRenderer::resetTemporalState()`, which zeroes the clock and the frames-since-reset counter (the RT seeds and TAA's jitter index), makes the next frame use its own view-projection as the previous one, and drops the RT shadow, RT GI and TAA histories. It does not wait for the GPU: the next frame's passes start without history, and TAA clears its images in that frame's command buffer, ordered after the frames in flight by the queue. Without the reset, the step-9 record says, a deferred capture after a restore differed by up to 14 levels from a fresh render. The first capture skips the reset, so it renders exactly as a fresh renderer does. That is what the goldens need. The window's `LiveHost`, whose renderer has always been presenting, resets on every lockstep capture.
 
 ## Reproducing the examples' goldens
 

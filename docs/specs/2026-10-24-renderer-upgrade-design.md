@@ -1130,6 +1130,31 @@ improvising. Intentional image changes are separate commits inside their step.
     - The temporal reset by clears, not device idle; the GPU preview downscale; the
       preview-only readback.
     - Gates `window_capture_inline_ms`.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step10.md`):* the deferred
+      `resetAccumulation()` waits for nothing: it marks the next frame to start without
+      history (RT shadows, RT GI, TAA) and returns; TAA clears both history images in that
+      frame's command buffer, its barrier waiting on earlier frames' TAA writes and reads by
+      queue order. The idle existed because TAA's jitter was indexed by the frame-in-flight
+      slot (3 of its 16 Halton samples), so a capture had to restart the slots; the jitter is
+      now indexed by the frames since the reset, and no frame depends on its slot (the four
+      TAA goldens re-baselined for it, own commit). `capture.preview`
+      (`shaders/compute/capture_preview.slang`, `CapturePreviewPass`) box-filters the region
+      or the whole final image to `render::previewExtent` (one size rule with the CPU's
+      `fitWithin`) and writes it packed straight into the frame's host-cached staging buffer:
+      the preview readback is that write, with no copy of its own. `requestPreviewReadback`
+      / `readbackPreview`; a capture uses it when an inline image is all it needs from a
+      deferred frame. *Corrections:* (1) the preview-only path also excludes captures that
+      keep the whole frame (tests) and path-traced modes (no `capture.preview`); a capture
+      with a PNG `path` keeps the CPU preview from the full frame, so its inline image is the
+      same bytes either way (the filters match exactly in the tests). (2) "Waiting for the
+      frames already queued" is not inside the reset any more but before the read frame's
+      fence: the capture waits for the frames submitted before it (`waitForSubmitted`,
+      which queue order imposes anyway) and `readbackMs` times the read frame's fence and copy
+      alone, as `window_readback` was defined. **Budgets:** reset 0.0001 ms with 3 frames in
+      flight (0.1); `capture.preview` 0.056 ms at 768x432 (0.1, covering the 0.2 ms preview
+      readback, which is the same write); `serve_bench` `window_capture_inline` 8.78 ms (20),
+      `window_readback` 1.18 ms (2), every run at the step's end flagged noisy (outside
+      load), so the gate's verdict is open.
 11. **GPU-driven geometry.**
     - Instance culling with prefix-sum compaction, two-pass Hi-Z, indirect G-buffer and
       CSM draws, face culling.

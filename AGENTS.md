@@ -157,7 +157,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 
 - `engine_tests`: event bus, command history, assets, headless deferred and path-traced
   frames, RenderScene, per-pass GPU timing (every pass registered, timed once, in frame
-  order, within the frame; a pass turned off leaves the timings). `ecs_tests`: world, hierarchy, transforms and the render extract
+  order, within the frame; a pass turned off leaves the timings), the capture path (a reset
+  idles nothing and a capture after it is the same from any frame slot; the GPU preview is
+  the CPU box filter's bytes and is all a preview request copies). `ecs_tests`: world, hierarchy, transforms and the render extract
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
@@ -263,11 +265,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   one without keeps the bindings made in code.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
-- Readback has one form: `requestReadback()` before the `render()` you want,
+- Readback is on request only: `requestReadback()` before the `render()` you want,
   `readback()` after (that frame's fence only; a path-traced frame under OIDN or NRD is
-  denoised there). No other frame copies anything, so `readback()` after an unrequested
-  frame is empty. Buffers the CPU reads must be host-cached memory: uncached
-  host-visible memory read one 1280x720 frame in ~20 ms.
+  denoised there), or for an inline preview of a deferred frame
+  `requestPreviewReadback({rect, maxSide})` and `readbackPreview()`: the `capture.preview`
+  pass box-filters the final image straight into the staging buffer and nothing else is
+  copied. No other frame copies anything, so a read after an unrequested frame is empty.
+  Buffers the CPU reads must be host-cached memory: uncached host-visible memory read one
+  1280x720 frame in ~20 ms. A shader writing such a buffer over PCIe wants a warp's writes
+  contiguous (`capture.preview` in 8x8 groups took 0.49 ms, in rows of 64 0.056 ms).
+- `resetAccumulation()` never waits for the GPU: the next frame's passes start without
+  history and clear what they keep in their own command buffer, after the frames in flight
+  by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's
+  jitter is indexed by the frames since the reset); `engine_tests`' `sp2b_s10` captures
+  from every slot to hold it.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

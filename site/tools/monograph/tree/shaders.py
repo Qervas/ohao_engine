@@ -55,7 +55,7 @@ MODULE = {
             'compute',
             'Compute shaders',
             'BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.',
-            files=['shaders/compute/brdf_lut.comp', 'shaders/compute/prefilter_envmap.comp', 'shaders/compute/equirect_to_cubemap.comp', 'shaders/compute/hiz_generate.comp', 'shaders/compute/light_culling.comp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/skinning.comp', 'shaders/compute/composite.comp', 'shaders/compute/dof_composite.comp', 'shaders/compute/ssao.slang', 'shaders/compute/denoise_atrous.comp', 'shaders/compute/dlss_tonemap.comp'],
+            files=['shaders/compute/brdf_lut.comp', 'shaders/compute/prefilter_envmap.comp', 'shaders/compute/equirect_to_cubemap.comp', 'shaders/compute/hiz_generate.comp', 'shaders/compute/light_culling.comp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/skinning.comp', 'shaders/compute/composite.comp', 'shaders/compute/dof_composite.comp', 'shaders/compute/ssao.slang', 'shaders/compute/capture_preview.slang', 'shaders/compute/denoise_atrous.comp', 'shaders/compute/dlss_tonemap.comp'],
             design=['IBL bake: equirect→cube, prefilter, BRDF LUT (once per env change).', 'HiZ + gpu_cull + light_culling feed deferred scalability.', 'skinning.comp updates skinned VB; dof_composite for cinematic RT path.'],
         ),
         page(

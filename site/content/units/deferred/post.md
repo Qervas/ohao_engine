@@ -190,6 +190,12 @@ memory:
 
 {{cite ohao/render/deferred/taa_pass.cpp "params.blendFactor = m_historyValid ? m_blendFactor : 0.0f;"}}
 
+A temporal reset (`resetHistory()`) takes the same path. Nothing idles the device
+first, so frames still in flight may be writing one history image or sampling the
+other when the clear is recorded; the clear's barrier names their stages (colour
+attachment output, fragment shader) as its source, and queue order makes it wait
+for them.
+
 Every feature toggle defaults to off except tonemapping, and the header says why
 in a comment — "disabled by default for stability". The callers that want the full
 stack switch bloom, TAA and SSAO on themselves: `model_viewer`'s deferred branch, the
@@ -249,8 +255,10 @@ The shader tests bit 0 and nothing else — clipping is unconditional, and
 Jitter is a 16-frame Halton (2, 3) sequence centred on zero and divided by the
 render resolution. `TAAPass` generates it, but the resolve shader is never told
 what it is: `TAAParams` carries only texel size, blend factor, motion scale and
-flags. Its only live consumer is `DeferredRenderer`, which adds it straight into
-the projection's third column:
+flags. Its only live consumer is `DeferredRenderer`, which picks the sample by the
+frames since the last temporal reset (so all sixteen are reached, and frame *k* after
+a reset jitters the same way in every run) and adds it straight into the projection's
+third column:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "jitteredProj[2][0] += jitter.x;"}}
 

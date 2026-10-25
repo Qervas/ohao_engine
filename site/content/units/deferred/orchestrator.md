@@ -95,7 +95,7 @@ deferred lighting therefore covers all four cascades the lighting shader samples
 through its array view. The mip range stays hardcoded to level 0, which is all any
 imported texture has today; a mipped import would need the same treatment.
 
-## frameIndex selects a descriptor set, and a jitter sample it is wrong for
+## frameIndex selects a descriptor set; the jitter has its own index
 
 `render()` hands `frameIndex` — `VulkanRenderer`'s frame-in-flight slot, whose fence
 was waited before recording began — to every pass `execute` it calls. Its first job is
@@ -108,9 +108,18 @@ the slot's set is the one whose previous reader the fence has retired.
 {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}}
 
 CSM, sky and gizmo own no set or write theirs only at setup or when an input view changes, and
-leave the parameter commented out. Its one other consumer is
-`TAAPass::getJitterOffset`, read at the top of `render()` to perturb the projection.
-There it is the wrong number.
+leave the parameter commented out. The slot is not a frame counter: it wraps at
+`MAX_FRAMES_IN_FLIGHT` = 3, so anything that needs a sequence takes another index.
+TAA's jitter, read at the top of `render()` to perturb the projection, is the Halton
+sample of the frame's index since the last temporal reset:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "getJitterOffset(m_framesSinceReset)"}}
+
+`TAAPass` builds 16 Halton (2, 3) samples and indexes them `frameIndex % 16`, so the
+sequence walks all sixteen and repeats. The slot would reach only samples 0, 1 and 2
+(base-2 offsets $h_x \in \{0, -\tfrac14, +\tfrac14\}$), and would tie a capture's image to
+the slot its first frame happened to take. With the reset counter, frame *k* after a
+reset jitters the same way in every run.
 
 Jitter goes into the matrix, not the camera:
 
@@ -126,26 +135,12 @@ The $z_v$ cancels: the shift is a constant $-j_x$ in NDC at every depth. The fru
 sheared, not the camera translated — near and far planes stay put, no parallax appears,
 only the sample grid moves.
 
-Both the amount and the sequence are off. NDC spans two units across $W$ pixels, so a
-shift of $j_x$ is $j_x W/2$ pixels; the jitter is a Halton offset
-$h_x \in [-0.5, 0.5)$ over $W$, landing as $h_x/2$ pixels — half the nominal sub-pixel
-step:
+The amount is off. NDC spans two units across $W$ pixels, so a shift of $j_x$ is
+$j_x W/2$ pixels; the jitter is a Halton offset $h_x \in [-0.5, 0.5)$ over $W$, landing
+as $h_x/2$ pixels — half the nominal sub-pixel step. The sixteen samples sweep 0.45 px
+in x and 0.43 px in y where a full pixel footprint would take nearly 1:
 
 {{cite ohao/render/deferred/taa_pass.cpp "return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);"}}
-
-The sequence also never advances: `TAAPass` builds 16 Halton samples indexed
-`frameIndex % 16`, but the entry point passes `m_currentFrame`:
-
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
-
-which is the frame-resource ring index, wrapping at `MAX_FRAMES_IN_FLIGHT` = 3:
-
-{{cite ohao/render/frame/frame_resources.hpp "return (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;"}}
-
-Only samples 0, 1 and 2 are ever reached: base-2 offsets
-$h_x \in \{0, -\tfrac14, +\tfrac14\}$, which after the halving is three positions
-spanning 0.25 px against 0.45 px for the full sixteen (base-3, 0.28 px against
-0.43 px).
 
 The same jitter poisons motion vectors: the GBuffer gets `jitteredProj` while
 `m_prevViewProj` is stored unjittered at the end of `render()`, and `gbuffer.frag`
@@ -205,13 +200,25 @@ advances by the frame's delta on every frame, outside the particle block; the sk
 pass takes it as a star seed, and the particle pass compares it against the end of
 the last emit's longest lifetime to decide whether to run at all. The RT passes
 are seeded instead by a frame counter, `m_framesSinceReset`, taken once per
-`render()` and handed to both RT shadows and RT GI with the render seed:
+`render()` and handed to both RT shadows and RT GI with the render seed; TAA's jitter
+reads the same counter before it advances:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "const uint32_t rtFrame = m_framesSinceReset++;"}}
 
 `resetTemporalState` zeroes both clocks, keeps a pending particle lifetime by moving
-it onto the restarted clock, and drops RT GI's and TAA's history, so frame *k*
-after a reset traces the same rays in every run with the same seed.
+it onto the restarted clock, and drops RT shadows', RT GI's and TAA's history, so frame *k*
+after a reset traces the same rays and takes the same jitter in every run with the same
+seed. It records nothing and waits for nothing: it only marks state. The next frame's
+passes start without history: the RT techniques take none (each `resetHistory` drops a
+validity flag and the reference frame count), and TAA clears its images in that frame's
+own command buffer. TAA's clear of its two history images is ordered after the frames still in flight, which
+may write one (TAA's render pass) or sample one (TAA, the tonemap), by its barrier's source
+stages alone:
+
+{{cite ohao/render/deferred/taa_pass.cpp "vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,"}}
+
+Commands on one queue are ordered by submission, so a barrier in a later submission waits
+for those stages of every earlier one; no device idle is needed.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock"}}
 
@@ -228,4 +235,5 @@ Pass order, lifetimes and every barrier outside the eight graph passes are hand-
 - `frameIndex` must be the slot whose fence `VulkanRenderer` just waited: it selects the per-slot descriptor set each pass rewrites.
 - SSS blurs the lighting HDR image in place and SSR reads it, so anything drawn into it after them reaches the tonemapper but is neither blurred nor reflected. Sky and particles are recorded before both for that reason, followed by the colour-attachment-to-compute barrier; a new pass drawing into the lit image belongs in the same place.
 - `importGraphTextures()` must run after any pass reallocates its images, or the graph holds destroyed `VkImage` handles.
-- `frameIndex` is a ring index of period 3, not a monotonic counter, so `TAAPass::getJitterOffset` sees three values.
+- `frameIndex` is a ring index of period 3, not a monotonic counter. Anything that needs a sequence (TAA's jitter, the RT seeds) takes `m_framesSinceReset`.
+- `resetTemporalState` must stay free of GPU waits and recorded work. A pass that clears history images does it in its next `execute`, behind a barrier whose source stages cover every earlier frame's use of them.

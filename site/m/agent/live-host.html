@@ -86,7 +86,7 @@
 <div class="section-rule"><h2 id="captures-inside-the-poll">Captures inside the poll</h2></div>
 <div class="prose reveal">
 <p>`render.capture` runs synchronously inside the poll, on the engine thread, like any other request. The spec had planned to move the encode off-thread. As built it stays inline: it takes a few milliseconds, and the reply has to wait for it anyway. A lockstep capture runs `runtime::captureFrame`, the same procedure as the headless host (see the capture unit), saving the window&#x27;s own post settings first and restoring them afterwards. The capture&#x27;s last frame was presented and shows the current world, so the host records the change count as rendered:</p>
-<div class="citation-chip"><code class="citation-code">// The capture&#x27;s last frame was presented and shows the current world: no frame</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L215" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:215</a></div>
+<div class="citation-chip"><code class="citation-code">// The capture&#x27;s last frame was presented and shows the current world: no frame</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L224" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:224</a></div>
 <p>Without that, the loop would render one more frame right after the capture. That frame would still be in flight when the next capture&#x27;s temporal reset idles the device, and would delay it. A realtime capture returns the next presented frame as it is, and is marked `deterministic: false`.</p>
 </div>
 <div class="section-rule"><h2 id="the-game-is-a-scene-file">The game is a scene file</h2></div>

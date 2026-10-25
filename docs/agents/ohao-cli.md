@@ -239,7 +239,10 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 - **Images.** `render.capture {inline: true}` returns a preview beside the result: over
   MCP an `image` content block, natively `"image"` (base64) and `"mimeType"`. A JPEG at
   most 768 px on its long side costs ~440 tokens; `region: [x, y, w, h]` zooms first,
-  `format: "png"` gives exact pixels, `path` writes the full PNG.
+  `format: "png"` gives exact pixels, `path` writes the full PNG. A deferred capture that
+  asks for the preview and nothing else (no `path`) reads back only the preview, which the
+  GPU makes (the same box filter, the same bytes); with `path`, or path traced, the frame
+  is read in full and the preview made from it.
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"

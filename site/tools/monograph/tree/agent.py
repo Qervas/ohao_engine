@@ -37,9 +37,11 @@ MODULE = {
         page(
             'capture',
             'Frame capture',
-            'One capture procedure for both hosts, readback on request, previews beside the result, and a fast lossless PNG writer.',
+            'One capture procedure for both hosts, readback on request, previews made on the GPU or beside the result, and a fast lossless PNG writer.',
             files=['ohao/runtime/frame_capture.hpp', 'ohao/runtime/frame_capture.cpp', 'ohao/runtime/image.hpp',
-                   'ohao/runtime/image.cpp', 'ohao/gpu/vulkan/render_dispatch.cpp', 'tools/ohao/render_host.cpp'],
+                   'ohao/runtime/image.cpp', 'ohao/gpu/vulkan/render_dispatch.cpp', 'tools/ohao/render_host.cpp',
+                   'ohao/render/deferred/capture_preview_pass.hpp', 'ohao/render/deferred/capture_preview_pass.cpp',
+                   'ohao/render/frame/preview_extent.hpp', 'shaders/compute/capture_preview.slang'],
         ),
         page(
             'hash-diff',

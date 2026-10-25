@@ -8,9 +8,9 @@ figures: []
 
 ## A renderer that does not own its window
 
-`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What a frame ends with depends on which `initialize` overload ran: the headless one ends it with the final image, the windowed one, which takes a `PresentTarget`, by presenting into a swapchain. In both modes the CPU reads a frame one way only. `requestReadback()` before the `render()` whose pixels are wanted, `readback()` after it. The shared capture procedure (`runtime::captureFrame`, behind `ohao run --render` and `render.capture`), the examples, the PNG-writing tests and `ohao doctor`'s frame check all do exactly that.
+`VulkanRenderer` creates its own instance, picks its own physical device, and creates a logical device and command pool. What a frame ends with depends on which `initialize` overload ran: the headless one ends it with the final image, the windowed one, which takes a `PresentTarget`, by presenting into a swapchain. In both modes the CPU reads a frame one way only: a request before the `render()` whose pixels are wanted, a read after it. The request is `requestReadback()` for the whole frame, read by `readback()`, or `requestPreviewReadback({rect, maxSide})` for a downscaled preview made on the GPU, read by `readbackPreview()`. The shared capture procedure (`runtime::captureFrame`, behind `ohao run --render` and `render.capture`), the examples, the PNG-writing tests and `ohao doctor`'s frame check all work this way; the capture picks the form in `requestCaptureReadback`.
 
-{{cite ohao/runtime/frame_capture.cpp "if (i == frames - 1) renderer.requestReadback();"}}
+{{cite ohao/runtime/frame_capture.cpp "bool requestCaptureReadback(VulkanRenderer& renderer, const api::RenderRequest& r, bool needPixels) {"}}
 
 {{cite ohao/gpu/vulkan/renderer.hpp "[[nodiscard]] bool initialize(const PresentTarget& target);"}}
 
@@ -119,6 +119,14 @@ A request marks the next frame `render()` records. Only that frame copies its fi
 
 `readback()` then waits on that frame's fence alone, never the queue, and returns a view of its slot's buffer. So an example that renders ten frames and asks for the tenth writes the tenth, as a capture does. Path-traced loops render `spp` frames and read the last, which has accumulated `spp` samples. Until sub-project 2b step 2 every headless frame copied, a frame's copy was read three calls later, and the examples rendered `spp + 3` frames to land on the right one. `engine_tests`' `sp2b_t03` holds the line: a spinning cube's frame N read back equals a fresh renderer's single capture of step N, max_abs 0, where step N−3 differs by 243.
 
+A preview request is the same contract with less to read. In Deferred mode, when the `capture.preview` pipeline was created, the frame box-filters a rectangle of its final image down to a long side of at most `maxSide` and writes it straight into the staging buffer; it copies nothing else, and `readback()` on that frame returns an empty span. `previewOnGpu()` says whether a request will be served so; in an RT mode the request reads back the whole frame instead:
+
+{{cite ohao/gpu/vulkan/renderer.hpp "return m_previewPass != nullptr && m_renderMode == RenderMode::Deferred;"}}
+
+Three counters let a caller reason about the frames ahead of the one it reads. `framesInFlight()` asks the slot fences without waiting. `framesSubmitted()` counts frames that reached the queue, and `waitForSubmitted(n)` returns once the n-th has finished, by waiting on the slot that holds it (at once if that slot has been reused since):
+
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_slotSubmitted[s] == n) m_frameResources.waitForFrame(s);"}}
+
 ## readback() and the CPU denoisers
 
 Most denoise modes need nothing from `readback()`. None, Atrous and DLSS-RR all end with the RGBA8 beauty in `m_outputImage`, which is the image the requested frame copies. Atrous filters that image in place. DLSS-RR runs `NGX_VULKAN_EVALUATE_DLSSD_EXT` into an RGBA16F colour target and then tonemaps that target into the same beauty image, so the standard copy picks it up unchanged. The tonemap runs only when NGX feature creation succeeded; where that fails, the copy is raw beauty.
@@ -141,6 +149,7 @@ Below that sits the bulk of the translation unit, more than half of `renderer.cp
 ## Contracts
 
 - Call `requestReadback()` before the `render()` whose pixels you want and `readback()` after it. The span is that frame, valid until the next `render()` or `resize()`; it is empty when the frame was not rendered (minimized, an out-of-date swapchain) or had no RGBA8 image (tonemapping off).
+- `requestPreviewReadback()` pairs with `readbackPreview()`, and only when `previewOnGpu()` held for the frame; otherwise the frame reads back in full and `readback()` returns it. The two requests replace each other: the last one before `render()` wins.
 - `requestedReadbackCount()` counts copies, every one of them requested. A host that counts more copies than it asked for has found a bug.
 - `setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.
 - `resize()` destroys and recreates every RT image. The tracer rewrites its image bindings at the top of every `render()`, so nothing needs rebinding afterwards; a descriptor cached anywhere else would be stale.
