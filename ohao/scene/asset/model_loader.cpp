@@ -160,6 +160,9 @@ std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
                     assimpModel->materialNormalTexIndex = std::move(model->materialNormalTexIndex);
                     assimpModel->materialRoughMetalTexIndex = std::move(model->materialRoughMetalTexIndex);
                     assimpModel->materialEmissiveTexIndex = std::move(model->materialEmissiveTexIndex);
+                    // ufbx loads no occlusion map; Assimp's would not match ufbx's textures.
+                    assimpModel->occlusionTextures.clear();
+                    assimpModel->materialOcclusionTexIndex.assign(assimpModel->materialOcclusionTexIndex.size(), -1);
                     OHAO_LOG(Info, asset, "ModelLoader: kept ufbx textures ({} albedo)", assimpModel->albedoTextures.size());
                 }
                 model = assimpModel;
@@ -309,6 +312,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     model->materialNormalTexIndex.resize(numMats, -1);
     model->materialRoughMetalTexIndex.resize(numMats, -1);
     model->materialEmissiveTexIndex.resize(numMats, -1);
+    model->materialOcclusionTexIndex.resize(numMats, -1);
 
     for (unsigned m = 0; m < numMats; m++) {
         const aiMaterial* mat = scene->mMaterials[m];
@@ -360,6 +364,19 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
 
         model->materialEmissiveTexIndex[m] = loadAssimpTexture(scene, mat,
             aiTextureType_EMISSIVE, modelDir, model->emissiveTextures);
+
+        // glTF occlusionTexture: Assimp's glTF importer reports it as LIGHTMAP. A packed ORM
+        // image (the same file as metallicRoughness) is not loaded twice.
+        if (mat->GetTextureCount(aiTextureType_LIGHTMAP) > 0) {
+            aiString occPath, rmPath;
+            mat->GetTexture(aiTextureType_LIGHTMAP, 0, &occPath);
+            const bool sameAsRoughMetal = model->materialRoughMetalTexIndex[m] >= 0 &&
+                mat->GetTexture(aiTextureType_UNKNOWN, 0, &rmPath) == aiReturn_SUCCESS &&
+                std::string_view(occPath.C_Str()) == std::string_view(rmPath.C_Str());
+            model->materialOcclusionTexIndex[m] = sameAsRoughMetal
+                ? Model::kOcclusionIsRoughMetal
+                : loadAssimpTexture(scene, mat, aiTextureType_LIGHTMAP, modelDir, model->occlusionTextures);
+        }
 
         OHAO_LOG(Debug, asset, "  Material {} ({}): diffuse={} normal={} roughMetal={} rough={} metal={}",
                  m, matName.C_Str(),

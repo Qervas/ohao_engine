@@ -135,11 +135,18 @@ to R, G to G, B to B, alpha forced to 255.
 
 {{cite ohao/render/scene/model_upload.cpp "repacked[p * 4 + 1] = td.pixels[p * 4 + 1];"}}
 
-An identity copy with an opacity fix. Not wrong — the layout it documents (R=AO,
-G=roughness, B=metallic) is the one the source already has — but the loop is the only
-thing implying a conversion happens.
+An identity copy with an opacity fix. Not wrong — the layout it keeps (R unused by
+glTF, or occlusion in a packed image; G=roughness, B=metallic) is the one the source
+already has — but the loop is the only thing implying a conversion happens.
 
-Nothing deduplicates textures: each material uploads its own images, so a model
+Occlusion is the last kind uploaded. glTF's `occlusionTexture` is usually the same image
+as the metallicRoughness map (packed ORM, as FlightHelmet's); the loader marks that case
+(`Model::kOcclusionIsRoughMetal`) and the material's occlusion index is set to its
+roughness-metal texture instead of a second upload:
+
+{{cite ohao/render/scene/model_upload.cpp "if (model.materialOcclusionTexIndex[mi] == Model::kOcclusionIsRoughMetal) mats[mi].occlusionTex = mats[mi].roughMetalTex;"}}
+
+Beyond that one case nothing deduplicates textures: each material uploads its own images, so a model
 whose materials share a pooled image uploads it once per material. Each upload takes a
 slot out of the manager's fixed table of 4096, and none is released while the scene
 lives.

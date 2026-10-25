@@ -29,7 +29,7 @@ inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm
 //
 // matColors[matID * 3 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
 // matColors[matID * 3 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-// matColors[matID * 3 + 2] = vec4(roughMetalTexIdx, emissiveStrength, subsurface, unused)
+// matColors[matID * 3 + 2] = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
 
 struct MaterialGpuPack {
     static constexpr std::size_t kSlots     = kMaterialVec4s;

@@ -29,9 +29,10 @@ against each pixel's distance from the camera, only when that bit is set:
 
 It multiplies the constant ambient and IBL terms on top of the baked `ao` from the
 albedo G-buffer's alpha — which the G-buffer pass filled from the R channel of the
-material's packed occlusion/roughness/metallic texture:
+material's glTF occlusion texture (1 without one; a metallicRoughness map's R channel is
+unused by glTF and never read as occlusion):
 
-{{cite shaders/core/gbuffer.frag "ao *= rm.r;"}}
+{{cite shaders/core/gbuffer.frag "if (occlusionTexIdx < 4096u) ao = texture(textures[nonuniformEXT(occlusionTexIdx)], fragTexCoord).r;"}}
 
 — and leaves direct light and RT GI alone. The pass itself, its noise and its
 upsample are the SSAO unit's subject. Each frame `DeferredRenderer` hands the

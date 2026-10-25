@@ -58,6 +58,10 @@ struct MaterialDesc {
     uint32_t normalTex{kNoTexture};
     uint32_t roughMetalTex{kNoTexture};
     uint32_t emissiveTex{kNoTexture};
+    // glTF's occlusionTexture: ambient occlusion in its R channel (table row 2, w). Often the
+    // same image as roughMetalTex (packed ORM), never implied by it: a metallicRoughness map's
+    // R channel is unused by glTF.
+    uint32_t occlusionTex{kNoTexture};
     float emissiveStrength{0.0f};
     float subsurface{0.0f};   // > 0: the SSS blur's strength on this material's pixels (table row 2, z)
     // False: one-sided, its back faces culled in raster (glTF's doubleSided: false). Materials

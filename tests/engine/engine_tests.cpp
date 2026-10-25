@@ -2922,15 +2922,15 @@ static void runRenderSceneTests() {
         d.baseColor = {0.25f, 0.5f, 0.75f};
         d.roughness = 0.3f;
         d.metallic = 1.0f;
-        d.albedoTex = 7; d.normalTex = 8; d.roughMetalTex = 9; d.emissiveTex = 10;
+        d.albedoTex = 7; d.normalTex = 8; d.roughMetalTex = 9; d.emissiveTex = 10; d.occlusionTex = 11;
         d.emissiveStrength = 2.0f;
         const auto bits = [](float f) { return std::bit_cast<uint32_t>(f); };
         const MaterialTable::Pack p = MaterialTable::pack(d);
         EXPECT(p[0] == 0.25f && p[1] == 0.5f && p[2] == 0.75f && bits(p[3]) == 7u, "row 0: base color, albedo texture");
         EXPECT(p[4] == 0.3f && p[5] == 1.0f && bits(p[6]) == 8u && bits(p[7]) == 10u,
                "row 1: roughness, metallic, normal and emissive textures");
-        EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && p[10] == 0.0f && p[11] == 0.0f,
-               "row 2: rough/metal texture, emissive strength, then unused");
+        EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && p[10] == 0.0f && bits(p[11]) == 11u,
+               "row 2: rough/metal texture, emissive strength, subsurface, occlusion texture");
         // An edit is a new registration: the table never rewrites a live material.
         d.baseColor = {1, 0, 0};
         EXPECT(MaterialTable::pack(d)[0] == 1.0f, "the edited color is what gets packed");

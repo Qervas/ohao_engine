@@ -86,7 +86,7 @@ void main() {
     uint m = OHAO_MATERIAL_INDEX(inst, fragMaterialSlot, materialRefs);
     vec4 row0 = matRows[m * 3u + 0u];   // baseColor, albedoTex
     vec4 row1 = matRows[m * 3u + 1u];   // roughness, metallic, normalTex, emissiveTex
-    vec4 row2 = matRows[m * 3u + 2u];   // roughMetalTex, emissiveStrength
+    vec4 row2 = matRows[m * 3u + 2u];   // roughMetalTex, emissiveStrength, subsurface, occlusionTex
 
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
@@ -136,10 +136,12 @@ void main() {
     if (roughMetalTexIdx < 4096u) {
         // GLTF metallicRoughness texture — use UV0 to match RT path and standard models
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
-        ao *= rm.r;         // R channel = AO
         roughness *= rm.g;  // G channel = Roughness
         metallic *= rm.b;   // B channel = Metallic
     }
+    // Occlusion only from glTF's occlusionTexture (R); a metallicRoughness map's R is unused.
+    uint occlusionTexIdx = floatBitsToUint(row2.w);
+    if (occlusionTexIdx < 4096u) ao = texture(textures[nonuniformEXT(occlusionTexIdx)], fragTexCoord).r;
 
     // Safety: don't allow roughness to be absolute zero (causes mirror artifacts)
     roughness = max(roughness, 0.04);

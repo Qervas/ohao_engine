@@ -31,7 +31,8 @@ layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSl
 // Material table: 3 vec4s per material (layout::MaterialGpuPack)
 //   [matID*3+0] = (baseColor.rgb, albedoTexIdx as float bits)
 //   [matID*3+1] = (roughness, metallic, normalTexIdx bits, emissiveTexIdx bits)
-//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, subsurface (raster SSS only), unused)
+//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, subsurface (raster SSS only),
+//                  occlusionTexIdx bits (raster ambient only: a path tracer needs no baked AO))
 layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
 layout(set = 0, binding = 36, std430) readonly buffer Instances { InstanceGpu instances[]; };
 layout(set = 0, binding = 37, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
@@ -107,7 +108,7 @@ void main() {
     uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
     vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
     vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
-    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, unused, unused)
+    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
 
     // Decode texture indices (stored as uint bits in float)
     uint diffuseTexIdx    = boundTexture(floatBitsToUint(matColor.a));
@@ -149,10 +150,8 @@ void main() {
     // === PBR params: per-pixel from texture or scalar fallback ===
     float roughness = matParams.x;
     float metallic  = matParams.y;
-    float ao        = 1.0;
     if (roughMetalTexIdx != 0xFFFFFFFFu) {
         vec4 rm = textureLod(textures[nonuniformEXT(roughMetalTexIdx)], texUV, 0.0);
-        ao        *= rm.r;  // R channel = AO
         roughness *= rm.g;  // G channel = Roughness
         metallic  *= rm.b;  // B channel = Metallic
     }

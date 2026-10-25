@@ -155,7 +155,7 @@ is gone. A material opts in through a `subsurface` strength on `MaterialOverride
 scene-file component, and on `render::MaterialDesc`, packed into row 2, z of the
 material table:
 
-{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, 0.0f,"}}
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
 The G-buffer carries it to the screen as the negative half of the normal target's
 fourth channel (the positive half is emissive luminance; an emissive surface takes no

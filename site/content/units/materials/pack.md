@@ -99,10 +99,11 @@ so raster and RT cannot disagree about which material a triangle has.
 
 Row 2 holds the roughness/metal texture index, the emissive strength and the
 subsurface strength, which only the raster G-buffer reads (to flag SSS tiles and sign
-the normal target's fourth channel; the path tracer ignores it). The last lane `pack`
-writes as zero and no shader reads.
+the normal target's fourth channel; the path tracer ignores it). The last lane is the
+glTF occlusion texture's index, bit-cast like the others; only the G-buffer reads it (AO
+from its R channel, for the ambient terms), since a path tracer needs no baked occlusion.
 
-{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, 0.0f,"}}
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
 {{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
 

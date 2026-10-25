@@ -43,7 +43,7 @@ bool texelsPresent(const Model::TextureData& td) {
 }
 
 // Texture uploads, by kind in a fixed order (all albedo, then normal, roughness/metal,
-// emissive), one upload per material, each kind with its own format and texture type.
+// emissive, occlusion), one upload per material, each kind with its own format and texture type.
 // Fills the materials' texture indices.
 void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<MaterialDesc>& mats) {
     if (!tm) return;
@@ -59,7 +59,8 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
             if (td.pixels.empty() || !texelsPresent(td)) continue;
             BindlessTextureHandle h;
             if (repackRoughMetal) {
-                // Roughness/metal maps keep R=AO, G=roughness, B=metallic; A is forced to 255.
+                // Roughness/metal maps keep R (glTF: unused, or occlusion in a packed ORM image),
+                // G=roughness, B=metallic; A is forced to 255.
                 std::vector<uint8_t> repacked(static_cast<std::size_t>(td.width) * td.height * 4);
                 for (int p = 0; p < td.width * td.height; ++p) {
                     repacked[p * 4 + 0] = td.pixels[p * 4 + 0];
@@ -85,6 +86,11 @@ void uploadTextures(BindlessTextureManager* tm, const Model& model, std::vector<
            BindlessTextureType::Roughness, true, &MaterialDesc::roughMetalTex);
     upload(model.materialEmissiveTexIndex, model.emissiveTextures, VK_FORMAT_R8G8B8A8_SRGB,
            BindlessTextureType::Emissive, false, &MaterialDesc::emissiveTex);
+    // Occlusion (AO in R): its own image, or the roughMetal texture already uploaded (ORM).
+    upload(model.materialOcclusionTexIndex, model.occlusionTextures, VK_FORMAT_R8G8B8A8_UNORM,
+           BindlessTextureType::Roughness, false, &MaterialDesc::occlusionTex);
+    for (std::size_t mi = 0; mi < std::min(model.materialOcclusionTexIndex.size(), mats.size()); ++mi)
+        if (model.materialOcclusionTexIndex[mi] == Model::kOcclusionIsRoughMetal) mats[mi].occlusionTex = mats[mi].roughMetalTex;
     if (loaded > 0) tm->updateDescriptorSet();
 }
 

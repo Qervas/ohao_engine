@@ -93,10 +93,16 @@ public:
     std::vector<TextureData> normalTextures;
     std::vector<TextureData> roughMetalTextures;
     std::vector<TextureData> emissiveTextures;
+    std::vector<TextureData> occlusionTextures;
     std::vector<int> materialTextureIndex;
     std::vector<int> materialNormalTexIndex;
     std::vector<int> materialRoughMetalTexIndex;
     std::vector<int> materialEmissiveTexIndex;
+    // glTF occlusionTexture (AO in R): an index into occlusionTextures, -1 none, or
+    // kOcclusionIsRoughMetal when it is the same image as the material's roughMetal texture
+    // (packed ORM), which is then uploaded once and sampled for both.
+    static constexpr int kOcclusionIsRoughMetal = -2;
+    std::vector<int> materialOcclusionTexIndex;
 
     // LOD levels (index 0 = highest detail, each subsequent = lower detail)
     // Empty means no LOD support (always use main vertices/indices)

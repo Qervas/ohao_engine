@@ -178,11 +178,11 @@ actually bound.
 ## What reaches the GPU from a material
 
 The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
-roughness, metallic, four bindless texture indices (albedo, normal, roughness-metallic,
-emissive), an emissive strength and a subsurface strength — nine members packed into
-twelve floats, the last one unused.
+roughness, metallic, five bindless texture indices (albedo, normal, roughness-metallic,
+emissive, occlusion), an emissive strength and a subsurface strength — ten members packed
+into twelve floats, every lane used.
 
-{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, 0.0f,"}}
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
 The authoring struct in `material.hpp` is a different thing. `Material` carries
 thirty-one members — index of refraction, transmission, clear coat, subsurface colour
