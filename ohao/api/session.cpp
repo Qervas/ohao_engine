@@ -87,8 +87,8 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "inline image)",
          "Renders the world through its Camera and Environment: frames from a reset, the last kept, to a PNG "
          "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
-         "at its own size, deferred; in realtime it returns its next presented frame (deterministic false). post "
-         "turns on deferred effects."},
+         "at its own size, presenting each frame; in realtime it returns its next presented frame in its live mode "
+         "(deterministic false). post turns on deferred effects. Cancellable between frames, with progress."},
         {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?}",
          "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
          "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). E_STATE "
@@ -666,7 +666,12 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     r.format = p.format == ImageFormat::png ? "png" : "jpeg";
     r.maxSize = p.maxSize;
     if (p.region) r.region = std::array<int32_t, 4>{(*p.region)[0], (*p.region)[1], (*p.region)[2], (*p.region)[3]};
+    r.control = s.control;
     RenderOutcome o = s.render->capture(r);
+    if (o.cancelled) {   // between frames: no image, no answer (the host is as it was)
+        s.cancelled = true;
+        return false;
+    }
     if (!o.errors.empty()) {
         reportAll(ctx, o.errors);
         return false;

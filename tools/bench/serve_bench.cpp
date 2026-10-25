@@ -38,7 +38,9 @@
 //   window_capture_inline    render.capture inline (768 px JPEG) end to end              <= 20 ms
 //   window_capture_png       render.capture to a 1280x720 PNG file end to end            <= 30 ms
 //   reader_cpu_idle_600      the reader thread's CPU time over 600 idle realtime frames  <= 1 ms
-// Recorded: start to engine.info, the first step's present. --cpu-only skips the GPU part.
+// Recorded: start to engine.info, the first step's present, and window_capture_rt_inline_ms
+// (2b step 14: render.capture inline, rt_offline, 16 spp, denoise none, each sample pass
+// presented; a budget once Frank rules one). --cpu-only skips the GPU part.
 #include "api/session.hpp"
 #include "bench_env.hpp"
 #include "bench_world.hpp"
@@ -270,6 +272,7 @@ double cyclesPerMs() {
 struct GpuResult {
     bool ran{false};
     std::vector<double> step, readback, inlineCapture, pngCapture;
+    std::vector<double> rtInlineCapture;   // rt_offline, 16 spp, no denoiser: recorded, not gated
     double readerCpuMs{-1.0};
     uint64_t idleFrames{0};
     double startMs{0.0}, firstFrameMs{0.0};
@@ -327,6 +330,19 @@ GpuResult runGpu(const fs::path& ohaoExe, const fs::path& root, const fs::path& 
         g.pngCapture.push_back(png);
         if (rb1 >= 0) g.readback.push_back(rb1);
         if (rb2 >= 0) g.readback.push_back(rb2);
+    }
+    // A path-traced inline capture (2b spec, "Path-traced frames in a window"): 16 sample
+    // passes, each presented, the last read back and encoded. Recorded until Frank rules a
+    // budget for it.
+    const std::string rtReq =
+        request(9, "render.capture", R"({"inline":true,"mode":"rt_offline","spp":16,"denoise":"none"})");
+    for (int r = 0; r < 3 + std::max(5, rounds / 2); ++r) {
+        const auto s = Clock::now();
+        last = server.call(rtReq);
+        const double t = ms(Clock::now() - s);
+        if (r == 0 && last.find("\"mimeType\":\"image/jpeg\"") == std::string::npos)
+            g.wrong.push_back("a path-traced capture in the window host: " + last.substr(0, 300));
+        if (r >= 3) g.rtInlineCapture.push_back(t);
     }
     // The reader thread over 600 idle realtime frames: nothing arrives, so it must sleep.
     const double perMs = cyclesPerMs();
@@ -693,10 +709,15 @@ int main(int argc, char** argv) {
     std::printf("    recorded: process start to initialize %.1f ms; scene.load bench10k over stdio %.1f ms; "
                 "initialize reply %zu B (instructions %zu B)\n",
                 startMs, loadMs, init.size(), instrBytes);
-    if (gpu.ran)
+    if (gpu.ran) {
         std::printf("    recorded: window host start (Cornell loaded) to engine.info %.1f ms; first world.step to its "
                     "present %.1f ms; idle realtime steps %llu\n",
                     gpu.startMs, gpu.firstFrameMs, static_cast<unsigned long long>(gpu.idleFrames));
+        const Stats rt = stats(gpu.rtInlineCapture);
+        std::printf("    recorded: window_capture_rt_inline (rt_offline 16 spp, denoise none, 1280x720) median %.2f ms "
+                    "p95 %.2f ms over %zu captures (no budget yet)\n",
+                    rt.median, rt.p95, gpu.rtInlineCapture.size());
+    }
     failed += failures;
     const char* verdict = noisy ? "noisy" : (failed ? "over" : "pass");
     json.key("verdict"); json.string(verdict);
@@ -711,6 +732,13 @@ int main(int argc, char** argv) {
         json.key("windowStartMs"); json.float32(static_cast<float>(gpu.startMs));
         json.key("windowFirstFrameMs"); json.float32(static_cast<float>(gpu.firstFrameMs));
         json.key("windowIdleSteps"); json.uint64(gpu.idleFrames);
+        const Stats rt = stats(gpu.rtInlineCapture);
+        json.key("window_capture_rt_inline_ms");
+        json.beginObject();
+        json.key("median"); json.float32(static_cast<float>(rt.median));
+        json.key("p95"); json.float32(static_cast<float>(rt.p95));
+        json.key("captures"); json.uint64(gpu.rtInlineCapture.size());
+        json.endObject();
         json.key("windowExternalCorePct"); json.float32(static_cast<float>(gpuExternal));
     }
     json.endObject();

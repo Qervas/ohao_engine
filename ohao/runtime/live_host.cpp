@@ -24,6 +24,14 @@ reflect::Diagnostic error(std::string code, std::string message) {
     return d;
 }
 
+// render.capture's mode names (the session checked them).
+RenderMode modeOf(std::string_view name) {
+    return name == "rt_realtime" ? RenderMode::RTRealtime : name == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
+}
+std::string_view modeName(RenderMode m) {
+    return m == RenderMode::RTRealtime ? "rt_realtime" : m == RenderMode::RTOffline ? "rt_offline" : "deferred";
+}
+
 // The window's live post settings, kept across a lockstep capture (which sets its own, and
 // its own quality). A realtime capture is the next live frame, with the live settings.
 struct PostState {
@@ -46,6 +54,12 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_renderer->setRenderMode(RenderMode::Deferred);
     if (auto* deferred = m_renderer->getDeferredRenderer())
         if (auto* pp = deferred->getPostProcessing()) m_defaultExposure = pp->getExposure();
+    if (cfg.mode != RenderMode::Deferred) {
+        m_renderer->setRenderMode(cfg.mode);
+        if (m_renderer->getRenderMode() != cfg.mode)
+            OHAO_LOG(Warn, runtime, "live host: this GPU has no ray tracing; the window presents deferred frames");
+    }
+    m_liveMode = m_renderer->getRenderMode();
     m_assets = std::make_unique<ecs::FileAssetResolver>(cfg.root);
     m_world = std::make_unique<ecs::World>();
     ecs::installRenderExtract(*m_world, m_renderer->renderScene());
@@ -58,9 +72,14 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
 }
 
 void LiveHost::renderFrame() {
+    const bool changed = m_needRender || m_session->changeCount() != m_renderedChange;
     m_world->sync();   // instantiate, transforms, the render extract: never a simulation step
     for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
         OHAO_LOG(Warn, runtime, "live host: {}", w);
+    // The path tracer restarts its accumulation when the view may have moved (it notices
+    // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
+    if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
+    m_liveSamples = changed ? 1 : m_liveSamples + 1;
     m_renderer->render();
     ++m_rendered;
     m_renderedChange = m_session->changeCount();
@@ -106,7 +125,10 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
 
         const VkExtent2D ext = m_window.framebufferExtent();
-        const bool due = m_time.running() || m_needRender || m_session->changeCount() != m_renderedChange;
+        // rt_offline keeps presenting its accumulation until spp samples, while nothing steps.
+        const bool converging = m_liveMode == RenderMode::RTOffline && m_liveSamples < m_cfg.spp;
+        const bool due =
+            m_time.running() || m_needRender || m_session->changeCount() != m_renderedChange || converging;
         if (ext.width != 0 && ext.height != 0 && due) {   // minimized: simulate, don't render
             renderFrame();
             // Whole frame time (input + simulation + render submit), so fps is the real
@@ -149,9 +171,9 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         out.errors.push_back(error("E_STATE", "the window is minimized: there is no frame to capture"));
         return out;
     }
-    if (r.mode != "deferred") {
-        out.errors.push_back(error("E_COMMAND", "a window host captures deferred frames; path tracing needs a headless "
-                                                "host (ohao serve without --window, or ohao run)"));
+    const RenderMode mode = modeOf(r.mode);
+    if (mode != RenderMode::Deferred && !m_renderer->isRTSupported()) {
+        out.errors.push_back(error("E_COMMAND", "this GPU has no ray tracing: a window host captures deferred frames only"));
         return out;
     }
     if ((r.width && *r.width != ext.width) || (r.height && *r.height != ext.height)) {
@@ -160,7 +182,20 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         return out;
     }
     if (m_time.running()) {
-        // Realtime: the next frame the window presents, as is (no reset, the live settings).
+        // Realtime: the next frame the window presents, as is (no reset, the live settings),
+        // so in the window's live mode.
+        if (mode != m_liveMode) {
+            out.errors.push_back(error("E_COMMAND", "a realtime window captures the frames it presents, " +
+                                                        std::string(modeName(m_liveMode)) + "; capture " + r.mode +
+                                                        " in lockstep (time.set), or start the window with --mode " +
+                                                        r.mode));
+            return out;
+        }
+        if (mode != RenderMode::Deferred && r.denoise != "none") {
+            out.errors.push_back(error("E_COMMAND", "a realtime window's frame is captured as presented, undenoised; "
+                                                    "capture in lockstep (time.set) for a denoised frame"));
+            return out;
+        }
         const auto start = Clock::now();
         m_world->sync();
         for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
@@ -208,11 +243,13 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         auto* pp = m_renderer->getDeferredRenderer() ? m_renderer->getDeferredRenderer()->getPostProcessing() : nullptr;
         if (pp) live = {pp->getBloomEnabled(), pp->getTAAEnabled(), pp->getSSAOEnabled(), pp->getExposure()};
         const RenderQuality liveQuality = m_renderer->renderQuality();
+        const DenoiseMode liveDenoise = m_renderer->getDenoiseMode();
         CaptureSettings settings;
         settings.reset = true;
         settings.defaultExposure = m_defaultExposure;
-        ++m_readbackRequests;   // captureFrame requests its last frame (at most one)
+        // Every frame is presented: a path-traced capture's sample passes converge on screen.
         out = captureFrame(*m_renderer, *m_world, *m_assets, r, settings);
+        if (!out.cancelled) ++m_readbackRequests;   // its last frame was requested (at most one)
         m_rendered += static_cast<uint64_t>(std::max(0, out.frames));
         if (pp) {
             pp->setBloomEnabled(live.bloom);
@@ -221,9 +258,18 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
             pp->setExposure(live.exposure);
         }
         m_renderer->setRenderQuality(liveQuality);
+        if (m_renderer->getDenoiseMode() != liveDenoise) m_renderer->setDenoiseMode(liveDenoise);
+        if (m_renderer->getRenderMode() != m_liveMode) {
+            // Back to what the window presents, with no history from before the capture.
+            m_renderer->setRenderMode(m_liveMode);
+            m_renderer->resetAccumulation();
+        }
         // The capture's last frame was presented and shows the current world: no frame
-        // follows until something changes (one in flight would delay the next capture's reset).
+        // follows until something changes (one in flight would delay the next capture's
+        // reset). A capture in the live mode counts as that many samples of it.
         m_renderedChange = m_session->changeCount();
+        m_liveSamples = mode == m_liveMode ? std::max(0, out.frames) : m_cfg.spp;
+        if (out.cancelled) m_needRender = true;   // the window redraws what it shows live
     }
     if (m_renderer->validationEnabled()) out.validationMessages = m_renderer->validationMessageCount();
     return out;

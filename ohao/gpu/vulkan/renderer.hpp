@@ -440,6 +440,10 @@ private:
     [[nodiscard]] bool recreatePresentation();
     // Returns whether `staging` received the frame (a requested readback).
     bool blitDeferredOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkBuffer staging);
+    // The path tracer's RGBA8 output (in TRANSFER_SRC_OPTIMAL) into the swapchain image, and
+    // into `staging` too when one is given; returns whether it was. A headless frame's copy.
+    bool blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging);
+    void copyRTOutputToStaging(VkCommandBuffer cmd, VkImage src, VkBuffer staging);
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;

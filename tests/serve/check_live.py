@@ -6,13 +6,20 @@ check_live -- `ohao serve --window`, the live host, end to end (sub-project 4, s
            apply, step with watch, inject, input.state, captures (deterministic, post off
            and on, inline JPEG and PNG previews, a region), log.read; a lockstep capture
            equals a headless capture of the same world state bit for bit (post off and on);
-           another size or a path-traced mode is E_COMMAND; capture while minimized is
+           another size is E_COMMAND; capture while minimized is
            E_STATE; a disconnect in the middle of a long world.step exits 0; validation
            reports nothing through teardown and no frame read back unasked.
   test 17  ohao_game's scene in the window host: helmet_game.scene.json saves byte for byte
            as loaded, and its fly camera moves moveSpeed * dt * 60 along its front after 60
            steps of injected move_forward = 1. (The presentation gate is the CTest test
            ohao_game_presentation.)
+  test 11  (2b) path-traced frames in a window: lockstep rt_offline and rt_realtime captures
+           are traced and presented, then the window is deferred again; each equals a
+           headless capture of the same state to the BVH floor (max_abs 1 on at most 0.05%
+           of channels); a long capture reports progress, is cancelled with no answer, and
+           the host serves on; `--mode rt_offline --spp 24` presents 24 accumulating frames,
+           stops, and starts again after a change; a realtime `--mode rt_realtime` window's
+           capture is its next presented frame, and another mode is E_COMMAND.
   test 15  (the window host's part, Windows) `ohao serve --window --pipe NAME`: a step and
            an inline capture over the pipe; the client's disconnect ends the session with
            exit 0 and a clean teardown.
@@ -67,6 +74,7 @@ class Server:
         self.lines = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
         self.next_id = 0
+        self.notes = []   # notifications seen while waiting (progress, logs)
 
     def _pump(self):
         for line in iter(self.proc.stdout.readline, b""):
@@ -94,8 +102,15 @@ class Server:
                 msg = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(msg, dict) and "method" in msg and "id" not in msg:
+                self.notes.append(msg)
             if isinstance(msg, dict) and "method" not in msg and msg.get("id") == rid:
                 return msg
+
+    def notify(self, method, params):
+        msg = {"jsonrpc": "2.0", "method": method, "params": params}
+        self.proc.stdin.write((json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8"))
+        self.proc.stdin.flush()
 
     def call(self, method, params=None):
         return self.wait(self.send(method, params))
@@ -227,8 +242,6 @@ def test_live():
           "a region zooms: a 200x100 PNG of the frame")
     check(error_code(s.call("render.capture", {"path": out + "/x.png", "width": 640, "height": 480})) == "E_COMMAND",
           "another size than the window's is E_COMMAND")
-    check(error_code(s.call("render.capture", {"path": out + "/x.png", "mode": "rt_offline"})) == "E_COMMAND",
-          "a path-traced capture in a window host is E_COMMAND")
     # One frame: its passes' sum is at most its span (medians over several are not additive).
     stats = result(s.call("render.stats", {"frames": 1})) or {}
     names = [p[0] for p in stats.get("passes", [])]
@@ -276,6 +289,123 @@ def test_live():
     check(teardown_clean(err), "validation reported nothing through teardown and no frame was read back unasked")
     reports = [l for l in err.splitlines() if l.startswith(("W validation:", "E validation:"))]
     check(not reports, "no validation message on stderr" + (": " + reports[0] if reports else ""))
+
+
+def diff(a, b):
+    """(max_abs, fraction of channels that differ) of two same-size RGBA images, or None."""
+    try:
+        (sa, pa), (sb, pb) = pixels(a), pixels(b)
+    except OSError:
+        return None
+    if sa != sb or len(pa) != len(pb):
+        return None
+    worst, count = 0, 0
+    for x, y in zip(pa, pb):
+        if x != y:
+            count += 1
+            worst = max(worst, abs(x - y))
+    return worst, count / max(1, len(pa))
+
+
+def wait_stats(s, want, seconds=20):
+    """render.stats {frames: 120} until `want(stats)` or the deadline; the last stats."""
+    stats = {}
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        stats = result(s.call("render.stats", {"frames": 120})) or {}
+        if want(stats):
+            break
+        time.sleep(0.1)
+    return stats
+
+
+def test_path_tracer_window():
+    print("test 11 (2b): path-traced frames in a window")
+    out = out_dir("rt")
+    size = (640, 360)
+    s = Server([OHAO, "serve", "--window", "%dx%d" % size, "--hidden", "--out", out, "--seed", SEED,
+                "assets/scenes/cornell_box.scene.json"], "rt", env=validation_env())
+    _, _, _, _, hashed = drive(s)
+    offline = result(s.call("render.capture", {"path": out + "/offline.png", "mode": "rt_offline", "spp": 16})) or {}
+    check(offline.get("deterministic") is True and offline.get("frames") == 16,
+          "a lockstep rt_offline capture: 16 sample passes, deterministic (%s ms)" % offline.get("ms"))
+    stats = result(s.call("render.stats", {"frames": 1})) or {}
+    names = [p[0] for p in stats.get("passes", [])]
+    check("pt.render" in names and "pt.present" in names,
+          "its frames were traced and presented (passes %s)" % ", ".join(names))
+    realtime = result(s.call("render.capture", {"path": out + "/realtime.png", "mode": "rt_realtime", "spp": 8})) or {}
+    check(realtime.get("frames") == 8, "a lockstep rt_realtime capture: 8 frames")
+    deferred = result(s.call("render.capture", {"inline": True})) or {}
+    stats = result(s.call("render.stats", {"frames": 1})) or {}
+    names = [p[0] for p in stats.get("passes", [])]
+    check(deferred.get("mimeType") == "image/jpeg" and "lighting" in names and "present" in names,
+          "after a path-traced capture the window is deferred again (its live mode)")
+
+    # The same state headless: the same image, to the path tracer's BVH floor (1 LSB on a few
+    # pixels, AGENTS.md: the driver builds a BVH differently per process).
+    h = Server([OHAO, "serve", "--out", out_dir("rt_headless"), "--seed", SEED, "assets/scenes/cornell_box.scene.json"],
+               "rt_headless", env=validation_env())
+    _, _, _, _, hhash = drive(h)
+    hout = out_dir("rt_headless")
+    ho = h.call("render.capture", {"path": hout + "/offline.png", "mode": "rt_offline", "spp": 16,
+                                   "width": size[0], "height": size[1]})
+    hr = h.call("render.capture", {"path": hout + "/realtime.png", "mode": "rt_realtime", "spp": 8,
+                                   "width": size[0], "height": size[1]})
+    check(h.close() == 0 and result(ho) is not None and result(hr) is not None and
+          (result(hhash) or {}).get("hash") == (result(hashed) or {}).get("hash"),
+          "the headless host reaches the same world and captures")
+    for mode in ("offline", "realtime"):
+        d = diff(out + "/%s.png" % mode, hout + "/%s.png" % mode)
+        check(d is not None and d[0] <= 1 and d[1] <= 0.0005,
+              "rt_%s: the window's lockstep capture equals the headless capture (max_abs %s, %.6f of channels)"
+              % (mode, d[0] if d else "-", d[1] if d else 1.0))
+
+    # A long capture cancelled mid-way: progress arrived, no answer, the host serves on.
+    rid = s.send("render.capture", {"inline": True, "mode": "rt_offline", "spp": 60000,
+                                    "_meta": {"progressToken": "rt-progress"}})
+    time.sleep(1.5)
+    s.notify("notifications/cancelled", {"requestId": rid})
+    reply = s.wait(rid, timeout=5)
+    progress = [n for n in s.notes if n.get("method") == "notifications/progress" and
+                n.get("params", {}).get("progressToken") == "rt-progress"]
+    check(reply is None, "a cancelled capture gets no answer")
+    check(bool(progress) and progress[-1]["params"].get("total") == 60000,
+          "it reported progress meanwhile (%d notifications, last %s)"
+          % (len(progress), progress[-1]["params"] if progress else None))
+    after = result(s.call("render.capture", {"inline": True, "mode": "rt_offline", "spp": 4})) or {}
+    check(after.get("frames") == 4 and result(s.call("engine.info")) is not None,
+          "after the cancel the host serves: another capture renders")
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+    # A window presenting rt_offline (lockstep): its accumulation converges to --spp samples
+    # after a change, a frame each, then it stops presenting until the next change.
+    p = Server([OHAO, "serve", "--window", "%dx%d" % size, "--hidden", "--out", out_dir("rt_live"),
+                "--mode", "rt_offline", "--spp", "24", "assets/scenes/cornell_box.scene.json"], "rt_live",
+               env=validation_env())
+    first = wait_stats(p, lambda st: st.get("frames", 0) >= 24)
+    time.sleep(1.0)
+    again = result(p.call("render.stats", {"frames": 120})) or {}
+    names = [x[0] for x in first.get("passes", [])]
+    check(first.get("frames", 0) >= 24 and "pt.present" in names and again.get("frame") == first.get("frame"),
+          "rt_offline presents progressively: %s frames presented, then still (frame %s, %s)"
+          % (first.get("frames"), first.get("frame"), again.get("frame")))
+    p.call("world.step", {"frames": 1})
+    later = wait_stats(p, lambda st: st.get("frame", 0) >= (again.get("frame") or 0) + 24)
+    check(later.get("frame", 0) >= (again.get("frame") or 0) + 24, "a change restarts the accumulation: 24 more")
+    code = p.close()
+    check(code == 0 and teardown_clean(p.stderr()), "exit 0; validation clean through teardown")
+
+    # A realtime window presenting rt_realtime: a capture is its next presented frame.
+    r = Server([OHAO, "serve", "--window", "%dx%d" % size, "--hidden", "--realtime", "--out", out_dir("rt_rt"),
+                "--mode", "rt_realtime", "assets/scenes/cornell_box.scene.json"], "rt_rt", env=validation_env())
+    shot = result(r.call("render.capture", {"inline": True, "mode": "rt_realtime"})) or {}
+    check(shot.get("deterministic") is False and shot.get("mimeType") == "image/jpeg" and shot.get("frames") == 1,
+          "realtime rt_realtime: a capture is the next presented frame (deterministic false)")
+    check(error_code(r.call("render.capture", {"inline": True})) == "E_COMMAND",
+          "realtime: a deferred capture of an rt_realtime window is E_COMMAND (capture in lockstep)")
+    code = r.close()
+    check(code == 0 and teardown_clean(r.stderr()), "exit 0; validation clean through teardown")
 
 
 def test_game_scene():
@@ -362,8 +492,9 @@ def main():
     if not os.path.exists(OHAO):
         print("ohao is not built: " + OHAO)
         return 1
-    print("check_live (sub-project 4, tests 16 and 17)")
+    print("check_live (sub-project 4, tests 16 and 17; 2b, test 11)")
     test_live()
+    test_path_tracer_window()
     test_game_scene()
     if os.name == "nt":
         test_window_pipe()

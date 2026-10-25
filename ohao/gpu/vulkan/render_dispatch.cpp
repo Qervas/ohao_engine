@@ -309,8 +309,24 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     m_readbackReady = false;
     m_previewWidth = m_previewHeight = 0;
 
+    // A window: the swapchain as the deferred path handles it (rebuilt before the slot is
+    // taken, an image acquired before the slot's fence is reset).
+    if (m_swapchain && (m_swapchainDirty || !m_swapchain->valid())) {
+        if (!recreatePresentation()) return;   // minimized: skip the frame
+    }
+
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
+
+    uint32_t imageIndex = 0;
+    if (m_swapchain) {
+        const auto acq = m_swapchain->acquire(m_imageAcquired[m_currentFrame], imageIndex);
+        if (acq == Swapchain::Acquire::OutOfDate) { m_swapchainDirty = true; return; }
+        if (acq == Swapchain::Acquire::Error) {
+            OHAO_LOG(Error, gpu, "present: vkAcquireNextImageKHR failed");
+            return;
+        }
+    }
 
     const auto cpuStart = std::chrono::steady_clock::now();   // the frame's CPU time: record + submit
     m_renderScene->onFrameRetired();   // retire-queue tick, after the slot's fence wait
@@ -355,24 +371,20 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     rtRenderer->render(cmd, m_currentFrame, ptView, ptProj);
     m_passTimer.end(cmd);
 
-    // The path tracer's output into the staging buffer, for a requested frame only.
-    VkImage ptOutput = rtRenderer->getOutputImage();
-    if (wantReadback && ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
+    // The path tracer's output (RGBA8, tonemapped, left in TRANSFER_SRC_OPTIMAL by render()):
+    // a window blits it into the swapchain image, with the requested readback copy inside
+    // the same pass; a headless frame copies it only when asked.
+    const VkImage ptOutput = rtRenderer->getOutputImage();
+    const VkBuffer staging =
+        wantReadback && ptOutput != VK_NULL_HANDLE ? frame.stagingBuffer : VkBuffer{VK_NULL_HANDLE};
+    if (m_swapchain) {
+        m_passTimer.begin(cmd, "pt.present");
+        const bool copied = blitRTOutputToSwapchain(cmd, imageIndex, ptOutput, staging);
+        m_passTimer.end(cmd);
+        if (wantReadback) finishReadbackRequest(copied);
+    } else if (staging != VK_NULL_HANDLE) {
         m_passTimer.begin(cmd, "pt.readback");
-        // Output is already in TRANSFER_SRC_OPTIMAL from render()
-        VkBufferImageCopy copyRegion{};
-        copyRegion.bufferOffset = 0;
-        copyRegion.bufferRowLength = 0;
-        copyRegion.bufferImageHeight = 0;
-        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.imageSubresource.mipLevel = 0;
-        copyRegion.imageSubresource.baseArrayLayer = 0;
-        copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageExtent = {m_width, m_height, 1};
-
-        vkCmdCopyImageToBuffer(cmd, ptOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               frame.stagingBuffer, 1, &copyRegion);
-        stagingToHost(cmd, frame.stagingBuffer);
+        copyRTOutputToStaging(cmd, ptOutput, staging);
         m_passTimer.end(cmd);
         finishReadbackRequest(true);
     }
@@ -383,11 +395,77 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSemaphore renderFinished = VK_NULL_HANDLE;
+    if (m_swapchain) {   // the same per-slot semaphores as the deferred path
+        renderFinished = m_swapchain->renderFinished(imageIndex);
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = &m_imageAcquired[m_currentFrame];
+        submitInfo.pWaitDstStageMask = &waitStage;
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = &renderFinished;
+    }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
     m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
+    if (m_swapchain) {
+        const VkResult pr = m_swapchain->present(m_graphicsQueue, imageIndex);
+        if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) m_swapchainDirty = true;
+    }
+
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
+}
+
+void VulkanRenderer::copyRTOutputToStaging(VkCommandBuffer cmd, VkImage src, VkBuffer staging) {
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {m_width, m_height, 1};
+    vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
+    stagingToHost(cmd, staging);
+}
+
+bool VulkanRenderer::blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging) {
+    const VkImage dst = m_swapchain->image(imageIndex);
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.subresourceRange = range;
+    b.image = dst;
+    b.srcAccessMask = 0;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    // The source already waited for the tracer's writes (its own barrier to TRANSFER_SRC).
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &b);
+    bool copied = false;
+    if (src != VK_NULL_HANDLE) {
+        const VkExtent2D ext = m_swapchain->extent();
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {static_cast<int32_t>(m_width), static_cast<int32_t>(m_height), 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[1] = {static_cast<int32_t>(ext.width), static_cast<int32_t>(ext.height), 1};
+        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                       &blit, VK_FILTER_LINEAR);
+        // A requested readback: the same source, already a transfer source.
+        if (staging != VK_NULL_HANDLE) {
+            copyRTOutputToStaging(cmd, src, staging);
+            copied = true;
+        }
+    } else {
+        const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
+        vkCmdClearColorImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    }
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = 0;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &b);
+    return copied;
 }
 
 bool VulkanRenderer::copyDeferredOutputToStaging(VkCommandBuffer cmd) {

@@ -191,7 +191,15 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     const int frames = captureFrames(r);
     bool previewOnly = false;
     uint64_t framesBefore = 0;
+    const api::CallControl* control = r.control;
     for (int i = 0; i < frames; ++i) {
+        // Cancelled between whole frames: nothing is read back (the last frame's request is
+        // made only when that frame is rendered).
+        if (i > 0 && control && control->cancel && control->cancel->load(std::memory_order_relaxed)) {
+            out.cancelled = true;
+            out.frames = i;
+            return out;
+        }
         world.sync();   // derived state only: rendering never steps the simulation
         if (i == 0) {
             for (const entt::entity e : ecs::instantiateErrors(world)) {
@@ -208,6 +216,7 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
             previewOnly = requestCaptureReadback(renderer, r, settings.keepPixels != nullptr);
         }
         renderer.render();
+        if (control && control->progress) control->progress(static_cast<uint64_t>(i) + 1, static_cast<uint64_t>(frames));
     }
     // The last frame, exactly.
     readCaptureOutputs(renderer, r, previewOnly, framesBefore, out, settings.keepPixels);

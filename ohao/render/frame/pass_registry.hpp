@@ -44,7 +44,8 @@ inline constexpr PassInfo kPasses[] = {
     {"present", PassKind::Transfer, "the final image blitted to the swapchain, and a requested readback copy"},
     {"readback", PassKind::Transfer, "headless: the final image copied to the frame's staging buffer"},
     {"pt.render", PassKind::RayTracing, "the path tracer: trace, accumulate, denoise, tonemap"},
-    {"pt.readback", PassKind::Transfer, "the path tracer's output copied to the frame's staging buffer"},
+    {"pt.present", PassKind::Transfer, "a window: the path tracer's output blitted to the swapchain, and a requested readback copy"},
+    {"pt.readback", PassKind::Transfer, "headless: the path tracer's output copied to the frame's staging buffer"},
 };
 
 inline constexpr int kPassCount = static_cast<int>(sizeof(kPasses) / sizeof(kPasses[0]));

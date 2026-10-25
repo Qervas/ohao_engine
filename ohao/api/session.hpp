@@ -98,6 +98,9 @@ struct RenderRequest {
     std::string format{"jpeg"};        // the preview's format: jpeg (quality 85) | png
     int maxSize{768};                  // the preview's long side at most this, in pixels
     std::optional<std::array<int32_t, 4>> region;   // [x, y, w, h] of the frame, before scaling
+    // The call's cancel flag and progress (frames rendered of frames), checked between whole
+    // frames; null outside a protocol call.
+    const CallControl* control{nullptr};
 };
 struct RenderOutcome {
     double ms{0.0};
@@ -107,6 +110,7 @@ struct RenderOutcome {
     uint32_t width{0};        // the rendered frame
     uint32_t height{0};
     bool deterministic{true};   // false: a window's next presented frame, as is (realtime)
+    bool cancelled{false};      // stopped by the call's cancel flag between frames: no image
     std::optional<uint64_t> validationMessages;   // set when the Vulkan validation layers are on
     std::string image;          // the encoded preview (inlineImage), raw bytes
     std::string imageMime;

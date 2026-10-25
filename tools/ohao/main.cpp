@@ -16,13 +16,16 @@
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
-//                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
+//                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
+//                                [--mode deferred|rt_realtime|rt_offline] [--spp N]]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
 //                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
 //                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
 //                 disconnects. Headless and lockstep by default; --window is the live host (a
 //                 window, 1280x720 by default, lockstep unless --realtime) that renders while an
-//                 agent drives it and a human watches. Paths in params are project-relative;
+//                 agent drives it and a human watches; --mode is what it presents (rt_offline
+//                 converges to --spp samples, default 64, after each change; captures in
+//                 lockstep take any mode). Paths in params are project-relative;
 //                 writes go under --out (default <root>/agent_out). Exit 0 when the input ends (or
 //                 the window is closed); 1 if the scene does not load or the pipe cannot be
 //                 created; 3 without a window or GPU.
@@ -657,6 +660,11 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     cfg.vsync = has(a, "--vsync");
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.root = opt(a, "--root", ".");
+    const std::string mode = opt(a, "--mode", "deferred");
+    cfg.mode = mode == "rt_realtime" ? RenderMode::RTRealtime : mode == "rt_offline" ? RenderMode::RTOffline : RenderMode::Deferred;
+    long long spp = 64;
+    std::string err;
+    if (intOpt(a, "--spp", 1, 65536, spp, err)) cfg.spp = static_cast<int>(spp);
     runtime::LiveHost host;
     if (!host.initialize(cfg, engineTypes())) {
         OHAO_LOG(Error, rpc, "serve: no window or no usable GPU");
@@ -698,8 +706,16 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
     if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
     if (has(a, "--lockstep") && has(a, "--realtime")) return usage("--lockstep and --realtime exclude each other");
-    for (const char* o : {"--realtime", "--vsync", "--hidden"})
-        if (has(a, o) && !win.on) return usage(std::string(o) + " needs --window (a headless host is lockstep)");
+    for (const char* o : {"--realtime", "--vsync", "--hidden", "--mode", "--spp"})
+        if (has(a, o) && !win.on)
+            return usage(std::string(o) + " needs --window (a headless host is lockstep; its captures name their mode)");
+    if (has(a, "--mode")) {
+        const std::string m = opt(a, "--mode");
+        if (m != "deferred" && m != "rt_realtime" && m != "rt_offline")
+            return usage("--mode is one of: deferred, rt_realtime, rt_offline");
+    }
+    long long spp = 64;
+    if (!intOpt(a, "--spp", 1, 65536, spp, err)) return usage(err);
     if (has(a, "--log-level")) {
         const auto level = log::parseLevel(opt(a, "--log-level"));
         if (!level) return usage("--log-level is one of: trace, debug, info, warn, error, off");
@@ -779,7 +795,7 @@ int run(int argc, char** argv) {
         }
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden"},
-                                 {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe"});
+                                 {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {

@@ -183,7 +183,9 @@ struct Measurement {
     std::vector<SceneResult> scenes;
 };
 
-bool isCopyOut(std::string_view pass) { return pass == "present" || pass == "readback" || pass == "pt.readback"; }
+bool isCopyOut(std::string_view pass) {
+    return pass == "present" || pass == "readback" || pass == "pt.present" || pass == "pt.readback";
+}
 
 SceneResult summarize(const SceneSpec& spec, const std::vector<render::FrameTiming>& frames) {
     SceneResult r;

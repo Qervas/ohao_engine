@@ -3,9 +3,10 @@
 // data: the scene's InputActions bind the keys, its FlyController flies the camera, its
 // Spin turns the cube. No host code moves anything.
 //
-//   ohao_game [scene] [--vsync] [--frames N] [--resize-at F]
+//   ohao_game [scene] [--vsync] [--frames N] [--resize-at F] [--mode deferred|rt_realtime|rt_offline]
 //
-//   default scene: assets/scenes/helmet_game.scene.json
+//   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
+//   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
 //   WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
 //
 // --frames N runs N frames and exits non-zero if any frame did an unrequested GPU->CPU
@@ -46,7 +47,7 @@ bool argFlag(int argc, char** argv, const char* name) {
 std::string sceneArg(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--frames" || a == "--resize-at") { ++i; continue; }
+        if (a == "--frames" || a == "--resize-at" || a == "--mode") { ++i; continue; }
         if (a.rfind("--", 0) == 0) continue;
         return a;
     }
@@ -69,6 +70,16 @@ int main(int argc, char** argv) {
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--mode") != 0) continue;
+        const std::string m = argv[i + 1];
+        if (m == "rt_realtime") cfg.mode = RenderMode::RTRealtime;
+        else if (m == "rt_offline") cfg.mode = RenderMode::RTOffline;
+        else if (m != "deferred") {
+            std::cerr << "[ohao_game] --mode is one of: deferred, rt_realtime, rt_offline" << std::endl;
+            return 1;
+        }
+    }
 
     LiveHost host;
     if (!host.initialize(cfg, engineTypes())) return 1;

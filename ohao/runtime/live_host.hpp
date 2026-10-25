@@ -19,7 +19,9 @@
 // first step after stepping resumes starts with a focus loss (everything released): input
 // reaches a lockstep world only through input.inject, and a key let go meanwhile is never
 // left held. A capture in lockstep renders the world as a headless host does (the same
-// procedure, runtime::captureFrame); in realtime it returns the next presented frame.
+// procedure, runtime::captureFrame), in any mode, presenting each frame (a path-traced
+// capture's sample passes converge on screen), then restores the window's live mode and
+// settings; in realtime it returns the next presented frame, in the window's live mode.
 #include "api/session.hpp"
 #include "core/timeline.hpp"
 #include "ecs/asset_resolver.hpp"
@@ -63,6 +65,12 @@ struct LiveConfig {
     int frameLimit{0};                       // 0 = run until closed
     int resizeAtFrame{-1};                   // scripted resize, for the presentation gate
     VkExtent2D resizeTo{1280, 720};
+    // What the window presents: deferred, or the path tracer (needs ray tracing; without it
+    // the window stays deferred). rt_realtime presents every rendered frame; rt_offline its
+    // accumulation, one sample pass a frame, and in lockstep or paused it keeps presenting
+    // after a change until `spp` samples have accumulated, so a human watches it converge.
+    RenderMode mode{RenderMode::Deferred};
+    int spp{64};
 };
 
 struct RunReport {
@@ -130,6 +138,8 @@ private:
     uint64_t m_rendered{0};
     uint64_t m_readbackRequests{0};     // readbacks the host asked for (captures)
     float m_defaultExposure{0.6f};      // the renderer's own, for captures that name none
+    RenderMode m_liveMode{RenderMode::Deferred};   // what the window presents between captures
+    int m_liveSamples{0};               // rt_offline: sample passes presented since the last change
     bool m_quit{false};
     bool m_shutDown{false};
 };
