@@ -1,730 +1,453 @@
 #include "rt_gi_technique.hpp"
+#include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
-#include <fstream>
-#include <cstring>
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <numeric>
+#include <vector>
 
 namespace ohao {
+
+namespace shared = gpu::shared;
+
+// The trace reads a hit's bounce albedo straight from the instance table.
+static_assert(sizeof(render::InstanceGpu) == shared::kInstanceGpuStride);
+static_assert(offsetof(render::InstanceGpu, giAlbedoPacked) == shared::kInstanceGpuGiAlbedoOffset);
+
+namespace {
+
+using rtc::descriptorWrite;
+using rtc::layoutBinding;
+
+constexpr VkFormat kRadianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kGuideFormat = VK_FORMAT_R32_UINT;
+constexpr VkFormat kRefFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+constexpr VkPipelineStageFlags kFragment = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+std::array<float, 4> f4(glm::vec3 v, float w) { return {v.x, v.y, v.z, w}; }
+std::array<float, 4> f4(float x, float y, float z, float w) { return {x, y, z, w}; }
+std::array<uint32_t, 4> u4(uint32_t x, uint32_t y, uint32_t z, uint32_t w) { return {x, y, z, w}; }
+
+// A light as the bounce sees it (see GILight in shaders/shared/layout.json): attenuated as the
+// lighting pass attenuates it; a rect light as a point at its centre.
+shared::GILight toGpu(const render::LightDesc& d) {
+    shared::GILight g{};
+    const glm::vec3 dir = glm::length(d.direction) > 0.0f ? glm::normalize(d.direction) : glm::vec3(0, -1, 0);
+    g.radiance = f4(d.color * d.intensity, 0.0f);
+    switch (d.kind) {
+    case render::LightKind::Directional:
+        g.positionAndType = f4(d.position, 0.0f);
+        g.directionAndRange = f4(dir, 0.0f);
+        break;
+    case render::LightKind::Spot:
+        g.positionAndType = f4(d.position, 2.0f);
+        g.directionAndRange = f4(dir, d.range);
+        g.cone = f4(std::cos(glm::radians(d.innerConeDeg)), std::cos(glm::radians(d.outerConeDeg)), 0.0f, 0.0f);
+        break;
+    case render::LightKind::AreaRect:
+        g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 1.0f);
+        g.directionAndRange = f4(dir, d.range);
+        break;
+    default:   // Point
+        g.positionAndType = f4(d.position, 1.0f);
+        g.directionAndRange = f4(dir, d.range);
+        break;
+    }
+    return g;
+}
+
+// A full memory dependency between compute dispatches (and from earlier frames' readers).
+void barrier(VkCommandBuffer cmd, VkPipelineStageFlags src) {
+    VkMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, src, kCompute, 0, 1, &b, 0, nullptr, 0, nullptr);
+}
+
+} // namespace
 
 RTGITechnique::~RTGITechnique() {
     destroy();
 }
 
-bool RTGITechnique::loadFunctionPointers() {
-    vkCreateRayTracingPipelinesKHR =
-        (PFN_vkCreateRayTracingPipelinesKHR)vkGetDeviceProcAddr(m_device, "vkCreateRayTracingPipelinesKHR");
-    vkGetRayTracingShaderGroupHandlesKHR =
-        (PFN_vkGetRayTracingShaderGroupHandlesKHR)vkGetDeviceProcAddr(m_device, "vkGetRayTracingShaderGroupHandlesKHR");
-    vkCmdTraceRaysKHR =
-        (PFN_vkCmdTraceRaysKHR)vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR");
-    vkGetBufferDeviceAddressFn =
-        (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(m_device, "vkGetBufferDeviceAddress");
-
-    return vkCreateRayTracingPipelinesKHR && vkGetRayTracingShaderGroupHandlesKHR &&
-           vkCmdTraceRaysKHR && vkGetBufferDeviceAddressFn;
-}
-
-uint32_t RTGITechnique::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-            return i;
-    }
-    return UINT32_MAX;
-}
-
-VkDeviceAddress RTGITechnique::getBufferDeviceAddress(VkBuffer buffer) {
-    VkBufferDeviceAddressInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    info.buffer = buffer;
-    return vkGetBufferDeviceAddressFn(m_device, &info);
-}
-
-static std::vector<char> readFile(const std::string& path) {
-    std::vector<std::string> searchPaths = {
-        path,
-        "build/shaders/" + path.substr(path.find_last_of("/\\") + 1),
-        "build/Release/bin/shaders/" + path.substr(path.find_last_of("/\\") + 1),
-    };
-    for (const auto& p : searchPaths) {
-        std::ifstream file(p, std::ios::ate | std::ios::binary);
-        if (file.is_open()) {
-            size_t size = (size_t)file.tellg();
-            std::vector<char> buffer(size);
-            file.seekg(0);
-            file.read(buffer.data(), size);
-            return buffer;
-        }
-    }
-    return {};
-}
-
-bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
-                          uint32_t width, uint32_t height) {
+bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t width, uint32_t height) {
     m_device = device;
     m_physicalDevice = physicalDevice;
     m_width = width;
     m_height = height;
 
-    if (!loadFunctionPointers()) {
-        OHAO_LOG(Error, render, "RTGI: failed to load RT function pointers");
+    const bool dummies = rtc::createImage(device, physicalDevice, m_guideDummy, kGuideFormat, VK_IMAGE_USAGE_STORAGE_BIT, 1, 1) &&
+                         rtc::createImage(device, physicalDevice, m_refDummy, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, 1, 1) &&
+                         rtc::createImage(device, physicalDevice, m_envDummy, kRadianceFormat, VK_IMAGE_USAGE_SAMPLED_BIT, 1, 1);
+    if (!dummies || !createScreenImages()) {
+        OHAO_LOG(Error, render, "RTGI: failed to create its images");
         return false;
     }
-
-    if (!createOutputImage()) {
-        OHAO_LOG(Error, render, "RTGI: failed to create output image");
-        return false;
+    for (rtc::HostBuffer& b : m_lights) {
+        if (!rtc::createHostBuffer(device, physicalDevice, kLightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, b)) {
+            OHAO_LOG(Error, render, "RTGI: failed to create its light buffers");
+            return false;
+        }
     }
 
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;          // longitude wraps
+    si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(device, &si, nullptr, &m_envSampler) != VK_SUCCESS) {
+        OHAO_LOG(Error, render, "RTGI: failed to create its environment sampler");
+        return false;
+    }
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "RTGI: failed to create descriptor resources");
         return false;
     }
-
-    if (!createRTPipeline()) {
-        OHAO_LOG(Error, render, "RTGI: failed to create RT pipeline");
+    if (!createPipelines()) {
+        OHAO_LOG(Error, render, "RTGI: failed to create its pipelines");
         return false;
     }
-
-    if (!createShaderBindingTable()) {
-        OHAO_LOG(Error, render, "RTGI: failed to create SBT");
-        return false;
-    }
-
-    OHAO_LOG(Info, render, "RTGI: initialized ({}x{})", width, height);
+    OHAO_LOG(Info, render, "RTGI: initialized ({}x{}, traced at {}x{})", width, height, m_halfWidth, m_halfHeight);
     return true;
 }
 
-bool RTGITechnique::createOutputImage() {
-    // GI output: RGBA16F for HDR indirect light
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    imageInfo.extent = {m_width, m_height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    // TRANSFER_SRC: execute() copies this frame's GI into the history image.
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+bool RTGITechnique::createScreenImages() {
+    m_halfWidth = (m_width + 1) / 2;
+    m_halfHeight = (m_height + 1) / 2;
+    const auto half = [&](Image& img, VkFormat format) {
+        return rtc::createImage(m_device, m_physicalDevice, img, format, kUsage, m_halfWidth, m_halfHeight);
+    };
+    bool ok = half(m_noisy, kRadianceFormat) && half(m_atrous, kRadianceFormat);
+    for (uint32_t i = 0; i < 2 && ok; ++i)
+        ok = half(m_guide[i], kGuideFormat) && half(m_fast[i], kRadianceFormat) && half(m_slow[i], kRadianceFormat);
+    ok = ok && rtc::createImage(m_device, m_physicalDevice, m_output, kRadianceFormat, kUsage, m_width, m_height);
+    m_halfReady = false;
+    m_historyValid = false;
+    return ok;
+}
 
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giOutput) != VK_SUCCESS) return false;
+void RTGITechnique::destroyScreenImages() {
+    for (Image* img : {&m_noisy, &m_atrous, &m_output, &m_refMean}) rtc::destroyImage(m_device, *img);
+    for (uint32_t i = 0; i < 2; ++i) {
+        rtc::destroyImage(m_device, m_guide[i]);
+        rtc::destroyImage(m_device, m_fast[i]);
+        rtc::destroyImage(m_device, m_slow[i]);
+    }
+}
 
-    VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(m_device, m_giOutput, &memReqs);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_giOutputMemory) != VK_SUCCESS) return false;
-    vkBindImageMemory(m_device, m_giOutput, m_giOutputMemory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_giOutput;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_giOutputView) != VK_SUCCESS)
-        return false;
-
-    // History buffer (same format, used as sampler for temporal blend)
-    m_historyValid = false;   // a new image holds nothing; render() clears it before first use
-    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giHistory) != VK_SUCCESS) return false;
-    vkGetImageMemoryRequirements(m_device, m_giHistory, &memReqs);
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_giHistoryMemory) != VK_SUCCESS) return false;
-    vkBindImageMemory(m_device, m_giHistory, m_giHistoryMemory, 0);
-    viewInfo.image = m_giHistory;
-    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_giHistoryView) != VK_SUCCESS) return false;
-
-    return true;
+bool RTGITechnique::ensureReferenceImage() {
+    return m_refMean.image ||
+           rtc::createImage(m_device, m_physicalDevice, m_refMean, kRefFormat, VK_IMAGE_USAGE_STORAGE_BIT, m_width, m_height);
 }
 
 bool RTGITechnique::createDescriptorResources() {
-    // Layout: 7 bindings (5 is unused: GI traces before lighting, so there is no direct
-    // light of this frame to read)
-    //   0: TLAS (acceleration structure) — RAYGEN
-    //   1: GI output (storage image) — RAYGEN
-    //   2: GBuffer position (sampled image) — RAYGEN
-    //   3: GBuffer normal (sampled image) — RAYGEN
-    //   4: GBuffer albedo (sampled image) — RAYGEN
-    //   6: RenderScene instance table SSBO — CLOSEST_HIT
-    //   7: GI history (sampled image) — RAYGEN (temporal blend)
-    VkDescriptorSetLayoutBinding bindings[7] = {};
-
-    // 0: Acceleration structure
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 1: GI output (storage image)
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 2: GBuffer position (sampled image)
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 3: GBuffer normal (sampled image)
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 4: GBuffer albedo (sampled image)
-    bindings[4].binding = 4;
-    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[4].descriptorCount = 1;
-    bindings[4].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    // 6: RenderScene instance table (closest-hit reads giAlbedoPacked by slot)
-    bindings[5].binding = 6;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-    // 7: GI history (sampled image for temporal accumulation)
-    bindings[6].binding = 7;
-    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 7;
-    layoutInfo.pBindings = bindings;
-
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
-        return false;
-
-    // Pool
-    VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * MAX_FRAMES_IN_FLIGHT},  // 3 gbuffer + 1 history
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 * MAX_FRAMES_IN_FLIGHT},
+    constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    constexpr VkDescriptorType buffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    const std::vector<VkDescriptorSetLayoutBinding> trace = {
+        layoutBinding(0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
+        layoutBinding(1, sampled), layoutBinding(2, sampled), layoutBinding(3, sampled),   // G-buffer
+        layoutBinding(4, buffer),                                                          // instance table
+        layoutBinding(5, buffer),                                                          // lights
+        layoutBinding(6, sampled), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLER),           // environment
+        layoutBinding(8, storage), layoutBinding(9, storage), layoutBinding(10, storage),  // radiance, guide, mean
     };
+    const std::vector<VkDescriptorSetLayoutBinding> temporal = {
+        layoutBinding(0, sampled), layoutBinding(1, sampled), layoutBinding(2, sampled),
+        layoutBinding(3, sampled), layoutBinding(4, sampled), layoutBinding(5, sampled),
+        layoutBinding(6, storage), layoutBinding(7, storage),
+    };
+    const std::vector<VkDescriptorSetLayoutBinding> atrous = {
+        layoutBinding(8, sampled), layoutBinding(9, sampled), layoutBinding(10, storage),
+    };
+    const std::vector<VkDescriptorSetLayoutBinding> upsample = {
+        layoutBinding(11, sampled), layoutBinding(12, sampled), layoutBinding(13, sampled),
+        layoutBinding(14, sampled), layoutBinding(15, sampled), layoutBinding(16, storage),
+    };
+    for (auto [bindings, layout] : {std::pair{&trace, &m_traceSetLayout}, std::pair{&temporal, &m_temporalSetLayout},
+                                    std::pair{&atrous, &m_atrousSetLayout}, std::pair{&upsample, &m_upsampleSetLayout}}) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = static_cast<uint32_t>(bindings->size());
+        li.pBindings = bindings->data();
+        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
+    }
 
+    // Per frame slot: trace, temporal, 2 a-trous, upsample.
+    const VkDescriptorPoolSize poolSizes[] = {
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
+        {sampled, (4 + 6 + 2 * 2 + 5) * MAX_FRAMES_IN_FLIGHT},
+        {storage, (3 + 2 + 2 * 1 + 1) * MAX_FRAMES_IN_FLIGHT},
+        {buffer, 2 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * MAX_FRAMES_IN_FLIGHT},
+    };
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
-    poolInfo.poolSizeCount = 4;
+    poolInfo.maxSets = 5 * MAX_FRAMES_IN_FLIGHT;
+    poolInfo.poolSizeCount = 5;
     poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
 
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
-        return false;
-
-    // Allocate set
-    VkDescriptorSetAllocateInfo setInfo{};
-    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    setInfo.descriptorPool = m_descriptorPool;
-    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> layouts;
-    layouts.fill(m_descriptorSetLayout);
-    setInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-    setInfo.pSetLayouts = layouts.data();
-
-    return vkAllocateDescriptorSets(m_device, &setInfo, m_descriptorSets.data()) == VK_SUCCESS;
-}
-
-bool RTGITechnique::createRTPipeline() {
-    // Load shader SPVs
-    auto rgenCode = readFile("bin/shaders/rt_rt_gi.rgen.spv");
-    auto rmissCode = readFile("bin/shaders/rt_rt_gi.rmiss.spv");
-    auto rchitCode = readFile("bin/shaders/rt_rt_gi.rchit.spv");
-
-    if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
-        OHAO_LOG(Error, render, "RTGI: failed to load RT shader SPVs");
-        return false;
-    }
-
-    // Create shader modules
-    auto createModule = [&](const std::vector<char>& code) -> VkShaderModule {
-        VkShaderModuleCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        ci.codeSize = code.size();
-        ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        vkCreateShaderModule(m_device, &ci, nullptr, &mod);
-        return mod;
+    const auto allocate = [&](VkDescriptorSetLayout layout, VkDescriptorSet* out) {
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = m_descriptorPool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &layout;
+        return vkAllocateDescriptorSets(m_device, &ai, out) == VK_SUCCESS;
     };
-
-    VkShaderModule rgenModule = createModule(rgenCode);
-    VkShaderModule rmissModule = createModule(rmissCode);
-    VkShaderModule rchitModule = createModule(rchitCode);
-
-    // Shader stages
-    VkPipelineShaderStageCreateInfo stages[3] = {};
-
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    stages[0].module = rgenModule;
-    stages[0].pName = "main";
-
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-    stages[1].module = rmissModule;
-    stages[1].pName = "main";
-
-    stages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-    stages[2].module = rchitModule;
-    stages[2].pName = "main";
-
-    // Shader groups
-    VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
-
-    // Group 0: Ray generation (GENERAL)
-    groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[0].generalShader = 0;  // rgen stage index
-    groups[0].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[0].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Group 1: Miss (GENERAL)
-    groups[1].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-    groups[1].generalShader = 1;  // miss stage index
-    groups[1].closestHitShader = VK_SHADER_UNUSED_KHR;
-    groups[1].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Group 2: Closest-hit (TRIANGLES_HIT_GROUP)
-    groups[2].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-    groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-    groups[2].generalShader = VK_SHADER_UNUSED_KHR;
-    groups[2].closestHitShader = 2;   // rchit stage index
-    groups[2].anyHitShader = VK_SHADER_UNUSED_KHR;
-    groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
-
-    // Pipeline layout with push constants
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(GIPushConstants);
-
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
-
-    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTGI: failed to create pipeline layout");
-        return false;
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
+        if (!allocate(m_traceSetLayout, &m_traceSets[s]) || !allocate(m_temporalSetLayout, &m_temporalSets[s]) ||
+            !allocate(m_atrousSetLayout, &m_atrousSets[s][0]) || !allocate(m_atrousSetLayout, &m_atrousSets[s][1]) ||
+            !allocate(m_upsampleSetLayout, &m_upsampleSets[s]))
+            return false;
     }
-
-    // Create RT pipeline
-    VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-    pipelineInfo.stageCount = 3;
-    pipelineInfo.pStages = stages;
-    pipelineInfo.groupCount = 3;
-    pipelineInfo.pGroups = groups;
-    pipelineInfo.maxPipelineRayRecursionDepth = 1;  // 1-bounce GI
-    pipelineInfo.layout = m_pipelineLayout;
-
-    VkResult result = vkCreateRayTracingPipelinesKHR(
-        m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_rtPipeline);
-
-    // Cleanup shader modules
-    vkDestroyShaderModule(m_device, rgenModule, nullptr);
-    vkDestroyShaderModule(m_device, rmissModule, nullptr);
-    vkDestroyShaderModule(m_device, rchitModule, nullptr);
-
-    if (result != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTGI: failed to create RT pipeline (err={})", static_cast<int>(result));
-        return false;
-    }
-
-    OHAO_LOG(Debug, render, "RTGI: RT pipeline created");
     return true;
 }
 
-bool RTGITechnique::createShaderBindingTable() {
-    // Query RT pipeline properties for handle size/alignment
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps{};
-    rtProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
-    VkPhysicalDeviceProperties2 props2{};
-    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    props2.pNext = &rtProps;
-    vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
+bool RTGITechnique::createPipelines() {
+    return rtc::createComputePipeline(m_device, "rt_gi_trace.slang.spv", "trace", m_traceSetLayout,
+                                      sizeof(shared::GITracePush), m_traceLayout, m_tracePipeline) &&
+           rtc::createComputePipeline(m_device, "rt_gi_denoise.slang.temporal.spv", "temporal", m_temporalSetLayout,
+                                      sizeof(shared::GIDenoisePush), m_temporalLayout, m_temporalPipeline) &&
+           rtc::createComputePipeline(m_device, "rt_gi_denoise.slang.atrous.spv", "atrous", m_atrousSetLayout,
+                                      sizeof(shared::GIDenoisePush), m_atrousLayout, m_atrousPipeline) &&
+           rtc::createComputePipeline(m_device, "rt_gi_denoise.slang.upsample.spv", "upsample", m_upsampleSetLayout,
+                                      sizeof(shared::GIDenoisePush), m_upsampleLayout, m_upsamplePipeline);
+}
 
-    uint32_t handleSize = rtProps.shaderGroupHandleSize;
-    uint32_t handleAlignment = rtProps.shaderGroupHandleAlignment;
-    uint32_t baseAlignment = rtProps.shaderGroupBaseAlignment;
-
-    // Aligned handle size (each entry in the SBT must be aligned)
-    uint32_t handleSizeAligned = (handleSize + handleAlignment - 1) & ~(handleAlignment - 1);
-
-    // 3 groups: rgen, miss, hit
-    uint32_t groupCount = 3;
-
-    // Get shader group handles from the pipeline
-    std::vector<uint8_t> handles(groupCount * handleSize);
-    if (vkGetRayTracingShaderGroupHandlesKHR(m_device, m_rtPipeline, 0, groupCount,
-                                              handles.size(), handles.data()) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "RTGI: failed to get shader group handles");
-        return false;
-    }
-
-    // Create SBT buffer
-    // Each region must be baseAlignment-aligned
-    uint32_t rgenSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t missSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t hitSize = (handleSizeAligned + baseAlignment - 1) & ~(baseAlignment - 1);
-    uint32_t totalSize = rgenSize + missSize + hitSize;
-
-    VkBufferCreateInfo bufInfo{};
-    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = totalSize;
-    bufInfo.usage = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_sbtBuffer) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, m_sbtBuffer, &memReqs);
-
-    VkMemoryAllocateFlagsInfo allocFlags{};
-    allocFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    allocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &allocFlags;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_sbtMemory) != VK_SUCCESS) return false;
-    vkBindBufferMemory(m_device, m_sbtBuffer, m_sbtMemory, 0);
-
-    // Write handles into SBT buffer
-    void* mapped;
-    vkMapMemory(m_device, m_sbtMemory, 0, totalSize, 0, &mapped);
-    memset(mapped, 0, totalSize);
-
-    uint8_t* dst = static_cast<uint8_t*>(mapped);
-    // Rgen at offset 0
-    memcpy(dst, handles.data() + 0 * handleSize, handleSize);
-    // Miss at offset rgenSize
-    memcpy(dst + rgenSize, handles.data() + 1 * handleSize, handleSize);
-    // Hit at offset rgenSize + missSize
-    memcpy(dst + rgenSize + missSize, handles.data() + 2 * handleSize, handleSize);
-
-    vkUnmapMemory(m_device, m_sbtMemory);
-
-    // Set up strided device address regions
-    VkDeviceAddress sbtAddr = getBufferDeviceAddress(m_sbtBuffer);
-
-    m_rgenRegion.deviceAddress = sbtAddr;
-    // A raygen region holds exactly one record, and the spec requires its size
-    // to equal its stride (VUID-vkCmdTraceRaysKHR-size-04023).
-    m_rgenRegion.stride = rgenSize;
-    m_rgenRegion.size = rgenSize;
-
-    m_missRegion.deviceAddress = sbtAddr + rgenSize;
-    m_missRegion.stride = handleSizeAligned;
-    m_missRegion.size = missSize;
-
-    m_hitRegion.deviceAddress = sbtAddr + rgenSize + missSize;
-    m_hitRegion.stride = handleSizeAligned;
-    m_hitRegion.size = hitSize;
-
-    m_callRegion = {};  // not used
-
-    OHAO_LOG(Debug, render, "RTGI: SBT created (handleSize={}, aligned={})",
-             handleSize, handleSizeAligned);
-    return true;
+void RTGITechnique::prepareHalfImages(VkCommandBuffer cmd) {
+    if (m_halfReady) return;
+    for (Image* img : {&m_noisy, &m_atrous, &m_guide[0], &m_guide[1], &m_fast[0], &m_fast[1], &m_slow[0], &m_slow[1]})
+        rtc::transition(cmd, *img, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute,
+                        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, true);
+    m_halfReady = true;
+    m_historyValid = false;   // nothing written yet
 }
 
 void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_rendered = false;
-    if (!m_rtPipeline || input.tlas == VK_NULL_HANDLE || input.instances == VK_NULL_HANDLE) return;
+    if (!m_tracePipeline || input.tlas == VK_NULL_HANDLE || input.instances == VK_NULL_HANDLE) return;
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
-    const VkDescriptorSet set = m_descriptorSets[input.frameSlot];
+    const bool reference = input.quality == RenderQuality::Reference;
+    if (!reference && input.velocityBuffer == VK_NULL_HANDLE) return;
+    if (reference && !ensureReferenceImage()) return;
+    m_quality = input.quality;
+    m_slot = input.frameSlot;
+    m_velocityView = input.velocityBuffer;
+    m_positionView = input.positionBuffer;
+    m_normalView = input.normalBuffer;
+    m_albedoView = input.albedoBuffer;
+    m_cameraPos = input.cameraPos;
+    if (input.frameIndex == 0) m_historyValid = false;   // a temporal reset: no history
 
-    // Update descriptor set with current frame's data
+    // The bounce's lights: the brightest by intensity, ties by order, emissive proxies out.
+    std::vector<uint32_t> order;
+    for (uint32_t i = 0; i < input.lights.size(); ++i)
+        if (input.lights[i].kind != render::LightKind::EmissiveProxy && input.lights[i].intensity > 0.0f)
+            order.push_back(i);
+    std::stable_sort(order.begin(), order.end(),
+                     [&](uint32_t a, uint32_t b) { return input.lights[a].intensity > input.lights[b].intensity; });
+    const uint32_t lightCount = std::min<uint32_t>(static_cast<uint32_t>(order.size()), shared::kGIMaxLights);
+    auto* lights = static_cast<shared::GILight*>(m_lights[m_slot].mapped);
+    for (uint32_t i = 0; i < lightCount; ++i) lights[i] = toGpu(input.lights[order[i]]);
+
+    // Earlier frames' readers of these images (the denoiser, lighting) finish first.
+    barrier(cmd, kCompute | kFragment);
+    if (reference) {
+        m_historyValid = false;
+        m_traceExtent = {m_width, m_height};
+        m_rays = shared::kGIReferenceRays;
+        rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
+                        VK_ACCESS_SHADER_WRITE_BIT, true);
+        // The running mean reads last frame's; frame 0 after a reset (or a new image) reads none.
+        const bool keep = input.frameIndex > 0 && m_refMean.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        rtc::transition(cmd, m_refMean, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                        kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, !keep);
+    } else {
+        m_cur ^= 1u;
+        prepareHalfImages(cmd);
+        m_traceExtent = {m_halfWidth, m_halfHeight};
+        m_rays = shared::kGIRealtimeRays;
+    }
+    for (Image* d : {&m_guideDummy, &m_refDummy})
+        if (d->layout != kGeneral)
+            rtc::transition(cmd, *d, kGeneral, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, 0, true);
+    if (m_envDummy.layout != kReadOnly)
+        rtc::transition(cmd, m_envDummy, kReadOnly, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, kCompute, 0, true);
+
+    const VkDescriptorSet set = m_traceSets[m_slot];
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     asWrite.accelerationStructureCount = 1;
-    VkAccelerationStructureKHR tlas = input.tlas;
+    const VkAccelerationStructureKHR tlas = input.tlas;
     asWrite.pAccelerationStructures = &tlas;
-
-    VkDescriptorImageInfo giOutputInfo{};
-    giOutputInfo.imageView = m_giOutputView;
-    giOutputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    // Create a sampler for GBuffer reads
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (m_gbufferSampler == VK_NULL_HANDLE &&
-        vkCreateSampler(m_device, &samplerInfo, nullptr, &m_gbufferSampler) != VK_SUCCESS) {
-        return;
-    }
-    const VkSampler sampler = m_gbufferSampler;
-
-    VkDescriptorImageInfo posInfo{};
-    posInfo.imageView = input.positionBuffer;
-    posInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    posInfo.sampler = sampler;
-
-    VkDescriptorImageInfo normalInfo{};
-    normalInfo.imageView = input.normalBuffer;
-    normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    normalInfo.sampler = sampler;
-
-    VkDescriptorImageInfo albedoInfo{};
-    albedoInfo.imageView = input.albedoBuffer;
-    albedoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    albedoInfo.sampler = sampler;
-
-    // 6: the RenderScene instance table (rt_gi.rchit reads giAlbedoPacked by slot)
-    VkDescriptorBufferInfo materialBufInfo{};
-    materialBufInfo.buffer = input.instances;
-    materialBufInfo.offset = 0;
-    materialBufInfo.range = VK_WHOLE_SIZE;
-
-    VkDescriptorImageInfo historyInfo{};
-    historyInfo.imageView = m_giHistoryView;
-    historyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    historyInfo.sampler = sampler;
-
-    VkWriteDescriptorSet writes[7] = {};
-
-    // 0: Acceleration structure
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    const VkDescriptorImageInfo gbuf[3] = {{VK_NULL_HANDLE, input.positionBuffer, kReadOnly},
+                                           {VK_NULL_HANDLE, input.normalBuffer, kReadOnly},
+                                           {VK_NULL_HANDLE, input.albedoBuffer, kReadOnly}};
+    const VkDescriptorBufferInfo instancesInfo{input.instances, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo lightsInfo{m_lights[m_slot].buffer, 0, kLightBytes};
+    const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap : m_envDummy.view, kReadOnly};
+    const VkDescriptorImageInfo samplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, reference ? m_output.view : m_noisy.view, kGeneral};
+    const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};
+    const VkDescriptorImageInfo meanInfo{VK_NULL_HANDLE, reference ? m_refMean.view : m_refDummy.view, kGeneral};
+    VkWriteDescriptorSet writes[11] = {
+        descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
+        descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLER),
+        descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        descriptorWrite(set, 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+    };
     writes[0].pNext = &asWrite;
+    for (uint32_t i = 0; i < 3; ++i) writes[1 + i].pImageInfo = &gbuf[i];
+    writes[4].pBufferInfo = &instancesInfo;
+    writes[5].pBufferInfo = &lightsInfo;
+    writes[6].pImageInfo = &envInfo;
+    writes[7].pImageInfo = &samplerInfo;
+    writes[8].pImageInfo = &outInfo;
+    writes[9].pImageInfo = &guideInfo;
+    writes[10].pImageInfo = &meanInfo;
+    vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
 
-    // 1: GI output (storage image)
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = set;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].pImageInfo = &giOutputInfo;
-
-    // 2: GBuffer position
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = set;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorCount = 1;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[2].pImageInfo = &posInfo;
-
-    // 3: GBuffer normal
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = set;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[3].pImageInfo = &normalInfo;
-
-    // 4: GBuffer albedo
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = set;
-    writes[4].dstBinding = 4;
-    writes[4].descriptorCount = 1;
-    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[4].pImageInfo = &albedoInfo;
-
-    // 6: Material buffer SSBO
-    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = set;
-    writes[5].dstBinding = 6;
-    writes[5].descriptorCount = 1;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[5].pBufferInfo = &materialBufInfo;
-
-    // 7: GI history (sampled image for temporal blend)
-    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = set;
-    writes[6].dstBinding = 7;
-    writes[6].descriptorCount = 1;
-    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[6].pImageInfo = &historyInfo;
-
-    vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
-
-    // A history image that was never written is undefined memory, and the raygen blends
-    // it into the result -- a NaN there would survive every later frame. Zero it first.
-    if (!m_historyValid) {
-        VkImageMemoryBarrier toClear{};
-        toClear.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toClear.srcAccessMask = 0;
-        toClear.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toClear.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        toClear.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toClear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toClear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toClear.image = m_giHistory;
-        toClear.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &toClear);
-        const VkClearColorValue zero{};
-        vkCmdClearColorImage(cmd, m_giHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1,
-                             &toClear.subresourceRange);
-        m_historyValid = true;   // from here on the history is always left TRANSFER_DST
-    }
-
-    // Transition GI output to GENERAL, history to SHADER_READ_ONLY
-    VkImageMemoryBarrier barriers[2] = {};
-    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barriers[0].srcAccessMask = 0;
-    barriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barriers[0].image = m_giOutput;
-    barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;   // cleared above, or last frame's copy
-    barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barriers[1].image = m_giHistory;
-    barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-        0, 0, nullptr, 0, nullptr, 2, barriers);
-
-    // Bind RT pipeline and descriptors
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                            m_pipelineLayout, 0, 1, &set, 0, nullptr);
-
-    // Push constants
-    GIPushConstants pc{};
-    pc.invView = glm::inverse(input.view);
-    pc.invProj = glm::inverse(input.proj);
-    pc.lightPosAndIntensity = glm::vec4(input.lightPos, input.lightIntensity);
-    pc.params = glm::uvec4(input.width, input.height, m_sampleCount, input.frameIndex);
-    pc.seed = glm::uvec4(input.renderSeed, 0u, 0u, 0u);
-
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                       0, sizeof(GIPushConstants), &pc);
-
-    // Trace rays!
-    vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
-                      input.width, input.height, 1);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_traceLayout, 0, 1, &set, 0, nullptr);
+    shared::GITracePush pc{};
+    pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
+    pc.seed = u4(input.renderSeed, input.frameIndex, m_rays, lightCount);
+    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, 0u, 0u);
+    pc.cameraPos = f4(input.cameraPos, 0.0f);
+    vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
     m_rendered = true;
 
-    // Copy output → history for next frame's temporal blend
-    // Transition output: GENERAL → TRANSFER_SRC, history: SHADER_READ → TRANSFER_DST
-    VkImageMemoryBarrier copyBarriers[2] = {};
-    copyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    copyBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    copyBarriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    copyBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    copyBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    copyBarriers[0].image = m_giOutput;
-    copyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (reference) {
+        rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,
+                        VK_ACCESS_SHADER_READ_BIT, false);
+    } else {
+        barrier(cmd, kCompute);   // the denoiser reads the trace
+    }
+}
 
-    copyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    copyBarriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    copyBarriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    copyBarriers[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    copyBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    copyBarriers[1].image = m_giHistory;
-    copyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+void RTGITechnique::denoise(VkCommandBuffer cmd) {
+    if (!denoises()) return;
+    const uint32_t prev = m_cur ^ 1u;
+    constexpr VkDescriptorType sampled = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    constexpr VkDescriptorType storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    shared::GIDenoisePush pc{};
+    pc.extent = u4(m_halfWidth, m_halfHeight, m_width, m_height);
+    pc.params = u4(m_historyValid ? 1u : 0u, 1u, 0u, 0u);
+    pc.cameraPos = f4(m_cameraPos, 0.0f);
 
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+    // Writes `views` (binding first + i; the last one storage) into `set` and dispatches.
+    const auto run = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, uint32_t first,
+                         std::initializer_list<std::pair<VkImageView, VkImageLayout>> views, uint32_t groupsX,
+                         uint32_t groupsY) {
+        std::array<VkDescriptorImageInfo, 8> infos{};
+        std::array<VkWriteDescriptorSet, 8> writes{};
+        uint32_t n = 0;
+        for (const auto& [view, layoutOf] : views) {
+            const bool last = n + 1 == views.size();
+            infos[n] = {VK_NULL_HANDLE, view, layoutOf};
+            writes[n] = descriptorWrite(set, first + n, last ? storage : sampled);
+            writes[n].pImageInfo = &infos[n];
+            ++n;
+        }
+        vkUpdateDescriptorSets(m_device, n, writes.data(), 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, groupsX, groupsY, 1);
+    };
 
-    VkImageCopy copyRegion{};
-    copyRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copyRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copyRegion.extent = {input.width, input.height, 1};
-    vkCmdCopyImage(cmd, m_giOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   m_giHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+    // Temporal: two outputs, so its set is written by hand.
+    {
+        const VkDescriptorSet set = m_temporalSets[m_slot];
+        const VkDescriptorImageInfo infos[8] = {
+            {VK_NULL_HANDLE, m_noisy.view, kGeneral},       {VK_NULL_HANDLE, m_guide[m_cur].view, kGeneral},
+            {VK_NULL_HANDLE, m_guide[prev].view, kGeneral}, {VK_NULL_HANDLE, m_velocityView, kReadOnly},
+            {VK_NULL_HANDLE, m_fast[prev].view, kGeneral},  {VK_NULL_HANDLE, m_slow[prev].view, kGeneral},
+            {VK_NULL_HANDLE, m_fast[m_cur].view, kGeneral}, {VK_NULL_HANDLE, m_slow[m_cur].view, kGeneral},
+        };
+        VkWriteDescriptorSet writes[8];
+        for (uint32_t i = 0; i < 8; ++i) {
+            writes[i] = descriptorWrite(set, i, i < 6 ? sampled : storage);
+            writes[i].pImageInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_temporalPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_temporalLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_temporalLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        const uint32_t tile = shared::kGITile;
+        vkCmdDispatch(cmd, (m_halfWidth + tile - 1) / tile, (m_halfHeight + tile - 1) / tile, 1);
+    }
+    barrier(cmd, kCompute);
 
-    // Transition output: TRANSFER_SRC → SHADER_READ (for lighting pass)
-    VkImageMemoryBarrier toRead{};
-    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.image = m_giOutput;
-    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toRead);
+    // Two a-trous iterations over the long accumulation: steps 1 then 2. The second writes
+    // over the trace's radiance, which nothing reads any more.
+    const uint32_t gx = (m_halfWidth + 7) / 8, gy = (m_halfHeight + 7) / 8;
+    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][0], 8,
+        {{m_slow[m_cur].view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_atrous.view, kGeneral}}, gx, gy);
+    barrier(cmd, kCompute);
+    pc.params[1] = 2u;
+    run(m_atrousPipeline, m_atrousLayout, m_atrousSets[m_slot][1], 8,
+        {{m_atrous.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_noisy.view, kGeneral}}, gx, gy);
+    barrier(cmd, kCompute);
 
+    // The joint-bilateral upsample into the output lighting reads.
+    rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
+                    true);
+    run(m_upsamplePipeline, m_upsampleLayout, m_upsampleSets[m_slot], 11,
+        {{m_noisy.view, kGeneral}, {m_guide[m_cur].view, kGeneral}, {m_positionView, kReadOnly},
+         {m_normalView, kReadOnly}, {m_albedoView, kReadOnly}, {m_output.view, kGeneral}},
+        (m_width + 7) / 8, (m_height + 7) / 8);
+    rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment, VK_ACCESS_SHADER_READ_BIT,
+                    false);
+    m_historyValid = true;
 }
 
 void RTGITechnique::resize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return;
     m_width = width;
     m_height = height;
-
-    // Recreate output and history images (createOutputImage makes both)
-    if (m_giOutputView) { vkDestroyImageView(m_device, m_giOutputView, nullptr); m_giOutputView = VK_NULL_HANDLE; }
-    if (m_giOutput) { vkDestroyImage(m_device, m_giOutput, nullptr); m_giOutput = VK_NULL_HANDLE; }
-    if (m_giOutputMemory) { vkFreeMemory(m_device, m_giOutputMemory, nullptr); m_giOutputMemory = VK_NULL_HANDLE; }
-    if (m_giHistoryView) { vkDestroyImageView(m_device, m_giHistoryView, nullptr); m_giHistoryView = VK_NULL_HANDLE; }
-    if (m_giHistory) { vkDestroyImage(m_device, m_giHistory, nullptr); m_giHistory = VK_NULL_HANDLE; }
-    if (m_giHistoryMemory) { vkFreeMemory(m_device, m_giHistoryMemory, nullptr); m_giHistoryMemory = VK_NULL_HANDLE; }
-
-    createOutputImage();
+    destroyScreenImages();
+    createScreenImages();   // the reference mean comes back on first use
 }
 
 GIOutput RTGITechnique::getOutput() const {
-    return {m_giOutput, m_giOutputView};
+    return {m_output.image, m_output.view};
 }
 
 void RTGITechnique::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
-
-    if (m_gbufferSampler) { vkDestroySampler(m_device, m_gbufferSampler, nullptr); m_gbufferSampler = VK_NULL_HANDLE; }
-
-    if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
-    if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }
-    if (m_rtPipeline) { vkDestroyPipeline(m_device, m_rtPipeline, nullptr); m_rtPipeline = VK_NULL_HANDLE; }
-    if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
+    for (VkPipeline* p : {&m_tracePipeline, &m_temporalPipeline, &m_atrousPipeline, &m_upsamplePipeline})
+        if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
+    for (VkPipelineLayout* l : {&m_traceLayout, &m_temporalLayout, &m_atrousLayout, &m_upsampleLayout})
+        if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     if (m_descriptorPool) { vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); m_descriptorPool = VK_NULL_HANDLE; }
-    if (m_descriptorSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr); m_descriptorSetLayout = VK_NULL_HANDLE; }
-    if (m_giOutputView) { vkDestroyImageView(m_device, m_giOutputView, nullptr); m_giOutputView = VK_NULL_HANDLE; }
-    if (m_giOutput) { vkDestroyImage(m_device, m_giOutput, nullptr); m_giOutput = VK_NULL_HANDLE; }
-    if (m_giOutputMemory) { vkFreeMemory(m_device, m_giOutputMemory, nullptr); m_giOutputMemory = VK_NULL_HANDLE; }
-    if (m_giHistoryView) { vkDestroyImageView(m_device, m_giHistoryView, nullptr); m_giHistoryView = VK_NULL_HANDLE; }
-    if (m_giHistory) { vkDestroyImage(m_device, m_giHistory, nullptr); m_giHistory = VK_NULL_HANDLE; }
-    if (m_giHistoryMemory) { vkFreeMemory(m_device, m_giHistoryMemory, nullptr); m_giHistoryMemory = VK_NULL_HANDLE; }
-
-    m_descriptorSets = {};
+    for (VkDescriptorSetLayout* l : {&m_traceSetLayout, &m_temporalSetLayout, &m_atrousSetLayout, &m_upsampleSetLayout})
+        if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
+    if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
+    destroyScreenImages();
+    for (Image* d : {&m_guideDummy, &m_refDummy, &m_envDummy}) rtc::destroyImage(m_device, *d);
+    for (rtc::HostBuffer& b : m_lights) rtc::destroyHostBuffer(m_device, b);
+    m_traceSets = {};
+    m_temporalSets = {};
+    m_upsampleSets = {};
+    m_atrousSets = {};
+    m_device = VK_NULL_HANDLE;
 }
 
 } // namespace ohao

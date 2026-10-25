@@ -12,7 +12,8 @@
 // All three must give the same bytes, and so must a second capture by the second renderer
 // (RenderHost restarts temporal state between captures; live capture in sub-project 4
 // relies on it). Configurations: Cornell with post effects off, each effect alone and all
-// three (TAA, SSAO, bloom), and the helmet room off and on (as its golden renders it: 30
+// three (TAA, SSAO, bloom), Cornell over 8 frames and at reference quality (test 10, RT GI's
+// history and running mean), and the helmet room off and on (as its golden renders it: 30
 // frames, exposure 1). Test 12's RT part (sub-project 2b, step 5): Cornell path traced,
 // offline and realtime (16 samples, no denoiser), under the same three comparisons, held to
 // the path tracer's BVH floor (at most 16 bytes, each off by 1) instead of bit identity; the
@@ -71,6 +72,10 @@ constexpr Config kConfigs[] = {
     {"cornell_ssao", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["ssao"])"},
     {"cornell_bloom", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["bloom"])"},
     {"cornell_post", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":["taa","ssao","bloom"])"},
+    // Test 10 (sub-project 2b, step 8): RT GI, realtime (above: 8 frames of the denoiser's
+    // history) and reference (its running mean), across renderers and processes.
+    {"cornell_gi_frames8", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[],"frames":8)"},
+    {"cornell_reference", "assets/scenes/cornell_box.scene.json", "deferred", R"("post":[],"frames":4,"quality":"reference")"},
     {"helmet_plain", "assets/scenes/damaged_helmet.scene.json", "deferred", R"("post":[])"},
     {"helmet_post", "assets/scenes/damaged_helmet.scene.json", "deferred",
      R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},

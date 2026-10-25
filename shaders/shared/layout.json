@@ -24,7 +24,23 @@
     {"name": "kShadowFilterTile", "type": "uint", "value": 16,
      "doc": "RT shadows' filter: the pixels a workgroup filters, this many on a side"},
     {"name": "kShadowFilterRadius", "type": "uint", "value": 2,
-     "doc": "RT shadows' filter: the spatial kernel's radius (5x5)"}
+     "doc": "RT shadows' filter: the spatial kernel's radius (5x5)"},
+    {"name": "kGIMaxLights", "type": "uint", "value": 4,
+     "doc": "RT GI: the lights a bounce is lit by, the frame's brightest by intensity"},
+    {"name": "kGIRealtimeRays", "type": "uint", "value": 2,
+     "doc": "RT GI, realtime: cosine rays a half-resolution pixel a frame"},
+    {"name": "kGIReferenceRays", "type": "uint", "value": 32,
+     "doc": "RT GI, reference quality: cosine rays a full-resolution pixel a frame"},
+    {"name": "kGIHistoryFrames", "type": "uint", "value": 32,
+     "doc": "RT GI, realtime: the long temporal accumulation's longest history (its smallest blend weight is 1/this)"},
+    {"name": "kGIFastHistoryFrames", "type": "uint", "value": 4,
+     "doc": "RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one"},
+    {"name": "kGITile", "type": "uint", "value": 16,
+     "doc": "RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side"},
+    {"name": "kInstanceGpuStride", "type": "uint", "value": 160,
+     "doc": "render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)"},
+    {"name": "kInstanceGpuGiAlbedoOffset", "type": "uint", "value": 144,
+     "doc": "the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)"}
   ],
   "structs": [
     {"name": "CalibratePush", "doc": "the calibration kernel's push constants",
@@ -48,6 +64,26 @@
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w history frames (0: none)"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset: the output's dither"}
+     ]},
+    {"name": "GILight", "doc": "one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it",
+     "fields": [
+       {"name": "positionAndType", "type": "float4", "doc": "xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot"},
+       {"name": "directionAndRange", "type": "float4", "doc": "xyz the unit direction the light travels (directional, spot); w the range"},
+       {"name": "radiance", "type": "float4", "doc": "xyz colour times intensity; w 0"},
+       {"name": "cone", "type": "float4", "doc": "x a spot's inner-cone cosine, y its outer-cone cosine"}
+     ]},
+    {"name": "GITracePush", "doc": "RT GI's trace (rt/gi_trace.slang) push constants",
+     "fields": [
+       {"name": "extent", "type": "uint4", "doc": "x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's"},
+       {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z rays a pixel, w lights"},
+       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it)"}
+     ]},
+    {"name": "GIDenoisePush", "doc": "RT GI's denoiser (rt/gi_denoise.slang) push constants",
+     "fields": [
+       {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
+       {"name": "params", "type": "uint4", "doc": "x history frames (0: none), y the a-trous step in pixels"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the upsample's depth guide)"}
      ]}
   ]
 }

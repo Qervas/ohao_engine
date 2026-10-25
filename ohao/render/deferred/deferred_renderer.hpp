@@ -121,7 +121,7 @@ public:
     // Sky configuration
     void setSkyEnabled(bool enabled);
 
-    // RT shadows
+    // RT shadows and GI
     [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
     [[nodiscard]] bool getRTShadowsEnabled() const { return m_useRTShadows; }
@@ -169,6 +169,7 @@ private:
     bool m_rayQuery{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
     bool m_useRTGI{false};
+    VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<SSRPass> m_ssrPass;
     std::unique_ptr<SSSPass> m_sssPass;

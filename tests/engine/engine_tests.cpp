@@ -33,6 +33,7 @@
 #include "render/graph/resource_handle.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/path_tracer.hpp"
+#include "render/rt/rt_gi_technique.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/rt/gpu_light.hpp"
 #include "render/scene/render_scene.hpp"
@@ -1999,6 +2000,203 @@ static void sp2b_t09_realtime_converges_toward_the_reference() {
     TEST_PASS();
 }
 
+// ---------------------------------------------------------------------------------------
+// Test 10 (2b step 8): RT GI. The GI scene: a grey floor, a coloured wall standing on it to
+// the camera's right, a point light between them; the camera looks down at the floor beside
+// the wall, where the wall's bounce lands.
+struct GIRun {
+    std::vector<uint8_t> px;
+    bool gi{false}, denoise{false};
+    VkExtent2D extent{0, 0};
+    uint32_t rays{0};
+};
+
+// `frames` frames from a reset at `quality`, the last read back. `warmup` frames before the
+// reset look at the scene from elsewhere, so a history the reset failed to drop would show.
+static GIRun giRun(ohao::RenderQuality quality, int frames, glm::vec3 wallColor = {0.9f, 0.1f, 0.1f}, int warmup = 0) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize() || !r.isRTSupported()) return {};
+    GIRun out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, wall;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        ohao::PrimitiveMeshGenerator::generateBox(wall, {1.5f, 0.0f, -4.0f}, {1.8f, 3.0f, 4.0f}, {1, 1, 1});
+        ohao::render::MaterialDesc grey, coloured;
+        grey.baseColor = {0.7f, 0.7f, 0.7f};
+        grey.roughness = 0.9f;
+        coloured.baseColor = wallColor;
+        coloured.roughness = 0.9f;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), wall, "wall", {}, &coloured);
+        ohao::ecs::Light light = shadowLight(40.0f, 0.1f);
+        ohao::ecs::spawnLight(world, "light", light, ohao::ecs::Transform{{0.0f, 2.5f, 0.0f}});
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        r.setRenderQuality(quality);
+        r.getCamera().setPosition({-3.0f, 5.0f, 2.0f});   // elsewhere, for the warm-up
+        r.getCamera().setRotation(-60.0f, 0.0f);
+        world.sync();
+        r.render();             // the scene's first frame builds its acceleration structures
+        for (int f = 0; f < warmup; ++f) {
+            world.sync();
+            r.render();
+        }
+        r.getCamera().setPosition({-1.0f, 4.0f, 3.0f});
+        r.getCamera().setRotation(-55.0f, -70.0f);
+        r.resetAccumulation();  // the capture starts here, as a lockstep capture does
+        for (int f = 0; f < frames; ++f) {
+            world.sync();
+            if (f == frames - 1) r.requestReadback();
+            r.render();
+        }
+        const auto px = r.readback();
+        out.px.assign(px.begin(), px.end());
+        for (const auto& f : r.frameTimings(1))
+            for (uint32_t i = 0; i < f.count; ++i) {
+                out.gi = out.gi || f.pass[i] == ohao::render::passIndex("rt.gi");
+                out.denoise = out.denoise || f.pass[i] == ohao::render::passIndex("rt.gi.denoise");
+            }
+        if (auto* deferred = r.getDeferredRenderer(); deferred && deferred->getRT_GI()) {
+            out.extent = deferred->getRT_GI()->traceExtent();
+            out.rays = deferred->getRT_GI()->raysPerPixel();
+        }
+    }
+    return out;
+}
+
+// Test 10: GI is deterministic across fresh renderers (processes: deferred_determinism_gpu_test).
+static void sp2b_t10_gi_is_deterministic_across_fresh_renderers() {
+    TEST_BEGIN("sp2b_t10: an RT GI capture after a reset is exact across fresh renderers (realtime and reference)");
+    const GIRun a = giRun(ohao::RenderQuality::Realtime, 6);
+    if (a.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun b = giRun(ohao::RenderQuality::Realtime, 6);
+    EXPECT(a.gi && a.denoise, "realtime traces and denoises");
+    EXPECT_EQ(maxAbsDiff(a.px, b.px), 0, "two fresh renderers' 6-frame realtime captures are identical");
+    const GIRun c = giRun(ohao::RenderQuality::Reference, 3);
+    const GIRun d = giRun(ohao::RenderQuality::Reference, 3);
+    EXPECT_EQ(maxAbsDiff(c.px, d.px), 0, "two fresh renderers' 3-frame reference captures are identical");
+    TEST_PASS();
+}
+
+// Test 10: the history resets on capture: frames rendered before the reset, from another
+// viewpoint, leave no trace in the capture.
+static void sp2b_t10_history_resets_on_capture() {
+    TEST_BEGIN("sp2b_t10: GI history resets on capture: frames before the reset change nothing");
+    const GIRun fresh = giRun(ohao::RenderQuality::Realtime, 4);
+    if (fresh.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun warmed = giRun(ohao::RenderQuality::Realtime, 4, {0.9f, 0.1f, 0.1f}, 12);
+    EXPECT_EQ(maxAbsDiff(fresh.px, warmed.px), 0, "realtime: 12 frames from elsewhere before the reset, the same capture");
+    const GIRun refFresh = giRun(ohao::RenderQuality::Reference, 2);
+    const GIRun refWarmed = giRun(ohao::RenderQuality::Reference, 2, {0.9f, 0.1f, 0.1f}, 5);
+    EXPECT_EQ(maxAbsDiff(refFresh.px, refWarmed.px), 0, "reference: the running mean starts again at the reset");
+    TEST_PASS();
+}
+
+// Test 10: multi-frame captures converge: frame 8 to 16 changes less than frame 1 to 8.
+static void sp2b_t10_multi_frame_captures_converge() {
+    TEST_BEGIN("sp2b_t10: |frame 16 - frame 8| < |frame 8 - frame 1| (realtime GI accumulates)");
+    const GIRun f1 = giRun(ohao::RenderQuality::Realtime, 1);
+    if (f1.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun f8 = giRun(ohao::RenderQuality::Realtime, 8);
+    const GIRun f16 = giRun(ohao::RenderQuality::Realtime, 16);
+    const double d18 = meanAbsDiff(f1.px, f8.px), d816 = meanAbsDiff(f8.px, f16.px);
+    std::cout << "(mean |1-8| " << d18 << ", |8-16| " << d816 << ") ";
+    EXPECT(d18 > 0.0, "frame 8 differs from frame 1 (the accumulation does something)");
+    EXPECT(d816 < d18, "and frames 8 to 16 change less: the capture converges");
+    TEST_PASS();
+}
+
+// Test 10: reference quality traces full resolution with 32 rays and no denoiser; realtime
+// half resolution with 2 and the denoiser (render.stats' pass list, the GI image's extent).
+static void sp2b_t10_reference_is_full_resolution_32_rays() {
+    TEST_BEGIN("sp2b_t10: reference GI is 160x120 at 32 rays without rt.gi.denoise; realtime 80x60 at 2 with it");
+    const GIRun ref = giRun(ohao::RenderQuality::Reference, 1);
+    if (ref.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun rt = giRun(ohao::RenderQuality::Realtime, 1);
+    std::cout << "(reference " << ref.extent.width << "x" << ref.extent.height << " x" << ref.rays << ", realtime "
+              << rt.extent.width << "x" << rt.extent.height << " x" << rt.rays << ") ";
+    EXPECT(ref.gi && !ref.denoise, "reference: rt.gi, no rt.gi.denoise");
+    EXPECT(ref.extent.width == 160 && ref.extent.height == 120 && ref.rays == 32, "reference: full resolution, 32 rays");
+    EXPECT(rt.gi && rt.denoise, "realtime: rt.gi and rt.gi.denoise");
+    EXPECT(rt.extent.width == 80 && rt.extent.height == 60 && rt.rays == 2, "realtime: half resolution, 2 rays");
+    TEST_PASS();
+}
+
+// Test 10: the realtime GI converges toward the reference, as the shadows do in test 9.
+static void sp2b_t10_realtime_converges_toward_the_reference() {
+    TEST_BEGIN("sp2b_t10: realtime GI frame 16 is closer to a 16-frame reference than frame 1");
+    const GIRun ref = giRun(ohao::RenderQuality::Reference, 16);
+    if (ref.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun rt1 = giRun(ohao::RenderQuality::Realtime, 1);
+    const GIRun rt16 = giRun(ohao::RenderQuality::Realtime, 16);
+    const double d1 = meanAbsDiff(rt1.px, ref.px), d16 = meanAbsDiff(rt16.px, ref.px);
+    std::cout << "(mean |realtime - reference|: frame 1 " << d1 << ", frame 16 " << d16 << ") ";
+    EXPECT(d16 < d1, "the temporal accumulation converges toward the reference");
+    TEST_PASS();
+}
+
+// Test 10: the bounce carries the wall's colour: a red wall tints the floor beside it red
+// where a white one does not.
+static void sp2b_t10_a_red_wall_bleeds_onto_the_floor() {
+    TEST_BEGIN("sp2b_t10: a red wall's bounce tints the floor red (colour bleeding), a white one's does not");
+    const GIRun red = giRun(ohao::RenderQuality::Reference, 8, {0.9f, 0.1f, 0.1f});
+    if (red.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun white = giRun(ohao::RenderQuality::Reference, 8, {0.9f, 0.9f, 0.9f});
+    // Floor pixels: grey in the white-wall frame (the wall itself is excluded by being
+    // brighter than the floor would be); their red excess over green in each frame.
+    double redExcess = 0.0, whiteExcess = 0.0;
+    int n = 0;
+    for (std::size_t p = 0; p + 3 < red.px.size() && p + 3 < white.px.size(); p += 4) {
+        const int wr = white.px[p], wg = white.px[p + 1], wb = white.px[p + 2];
+        if (std::abs(wr - wg) > 2 || std::abs(wg - wb) > 2) continue;   // not grey
+        if (int(red.px[p + 1]) < wg - 10) continue;                       // the red wall itself
+        redExcess += int(red.px[p]) - int(red.px[p + 1]);
+        whiteExcess += wr - wg;
+        ++n;
+    }
+    redExcess /= std::max(n, 1);
+    whiteExcess /= std::max(n, 1);
+    std::cout << "(floor px " << n << ", mean R-G: red wall " << redExcess << ", white wall " << whiteExcess << ") ";
+    EXPECT(n > 2000, "most of the frame is floor");
+    EXPECT(redExcess > whiteExcess + 1.0, "the red wall's bounce tints the floor red");
+    TEST_PASS();
+}
+
+static void runRTGITests() {
+    std::cout << "\n=== RT GI ===" << std::endl;
+    sp2b_t10_gi_is_deterministic_across_fresh_renderers();
+    sp2b_t10_history_resets_on_capture();
+    sp2b_t10_multi_frame_captures_converge();
+    sp2b_t10_reference_is_full_resolution_32_rays();
+    sp2b_t10_realtime_converges_toward_the_reference();
+    sp2b_t10_a_red_wall_bleeds_onto_the_floor();
+}
+
 static void runRTShadowTests() {
     std::cout << "\n=== RT shadows ===" << std::endl;
     sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_not();
@@ -2496,6 +2694,7 @@ int main() {
     runPassTimingTests();
     runReadbackTests();
     runRTShadowTests();
+    runRTGITests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

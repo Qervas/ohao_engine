@@ -143,9 +143,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_rtShadow.reset();
     }
 
-    // Initialize RT GI technique
+    // Initialize RT GI technique (inline ray queries)
     m_rtGI = std::make_unique<RTGITechnique>();
-    if (m_rtGI->init(device, physicalDevice, m_width, m_height)) {
+    if (m_rayQuery && m_rtGI->init(device, physicalDevice, m_width, m_height)) {
         m_useRTGI = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTGI OK");
     } else {
@@ -357,7 +357,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // 3.8. RT GI — traces indirect rays, outputs color bleeding
+    // 3.8. RT GI — one-bounce diffuse indirect light: the trace, then (realtime) the
+    // denoiser. Lighting reads it at binding 11.
+    const auto giToLighting = [&]() {
+        if (m_lightingPass && m_rtGI->rendered())
+            m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
+    };
     if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
         m_renderGraph.addComputePass("rt.gi",
             [&](PassBuilder& builder) {
@@ -371,35 +376,29 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.positionBuffer = m_gbufferPass->getPositionView();
                 gi.normalBuffer = m_gbufferPass->getNormalView();
                 gi.albedoBuffer = m_gbufferPass->getAlbedoView();
-                gi.depthBuffer = m_gbufferPass->getDepthView();
-                gi.view = m_view;
-                gi.proj = m_proj;
+                gi.velocityBuffer = m_gbufferPass->getVelocityView();
                 gi.cameraPos = m_cameraPos;
                 gi.width = m_width;
                 gi.height = m_height;
                 gi.frameIndex = rtFrame;
                 gi.renderSeed = m_renderSeed;
                 gi.frameSlot = frameIndex;
+                gi.quality = m_quality;
                 gi.tlas = sceneTlas;
                 gi.instances = m_renderScene->instanceBuffer();
-
-                // Brightest scene light for the GI bounce: the first of the highest
-                // intensity in light order (emissive proxies excluded).
-                float bestIntensity = 0.0f;
-                for (const render::LightDesc& l : m_renderScene->lights()) {
-                    if (l.kind == render::LightKind::EmissiveProxy) continue;
-                    if (l.intensity > bestIntensity) {
-                        gi.lightPos = l.position;
-                        gi.lightIntensity = l.intensity;
-                        bestIntensity = l.intensity;
-                    }
-                }
-                m_rtGI->setSampleCount(32); // quality over speed
+                gi.lights = m_renderScene->lights();
+                gi.envMap = m_envView;
                 m_rtGI->render(c, gi);
-                // Feed GI output to lighting pass via SSGI binding (11), only if traced
-                if (m_rtGI->rendered() && m_lightingPass)
-                    m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
+                if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
             });
+        if (m_quality == RenderQuality::Realtime) {
+            m_renderGraph.addComputePass("rt.gi.denoise",
+                [&](PassBuilder&) {},
+                [&](VkCommandBuffer c) {
+                    m_rtGI->denoise(c);
+                    giToLighting();
+                });
+        }
     }
 
     // 4. Deferred lighting — reads GBuffer + shadow. Key barrier: shadow map
@@ -670,6 +669,7 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
 }
 
 void DeferredRenderer::setEnvMap(VkImageView view, VkSampler sampler) {
+    m_envView = view;
     if (m_lightingPass) {
         m_lightingPass->setEnvMap(view, sampler);
     }

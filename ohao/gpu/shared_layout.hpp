@@ -23,6 +23,22 @@ inline constexpr uint32_t kShadowHistoryFrames = 16u;
 inline constexpr uint32_t kShadowFilterTile = 16u;
 // RT shadows' filter: the spatial kernel's radius (5x5)
 inline constexpr uint32_t kShadowFilterRadius = 2u;
+// RT GI: the lights a bounce is lit by, the frame's brightest by intensity
+inline constexpr uint32_t kGIMaxLights = 4u;
+// RT GI, realtime: cosine rays a half-resolution pixel a frame
+inline constexpr uint32_t kGIRealtimeRays = 2u;
+// RT GI, reference quality: cosine rays a full-resolution pixel a frame
+inline constexpr uint32_t kGIReferenceRays = 32u;
+// RT GI, realtime: the long temporal accumulation's longest history (its smallest blend weight is 1/this)
+inline constexpr uint32_t kGIHistoryFrames = 32u;
+// RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one
+inline constexpr uint32_t kGIFastHistoryFrames = 4u;
+// RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
+inline constexpr uint32_t kGITile = 16u;
+// render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)
+inline constexpr uint32_t kInstanceGpuStride = 160u;
+// the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
+inline constexpr uint32_t kInstanceGpuGiAlbedoOffset = 144u;
 
 // the calibration kernel's push constants
 struct alignas(4) CalibratePush {
@@ -63,5 +79,42 @@ struct alignas(16) ShadowFilterPush {
 static_assert(offsetof(ShadowFilterPush, extent) == 0);
 static_assert(offsetof(ShadowFilterPush, seed) == 16);
 static_assert(sizeof(ShadowFilterPush) == 32);
+
+// one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it
+struct alignas(16) GILight {
+    alignas(16) std::array<float, 4> positionAndType{};
+    alignas(16) std::array<float, 4> directionAndRange{};
+    alignas(16) std::array<float, 4> radiance{};
+    alignas(16) std::array<float, 4> cone{};
+};
+static_assert(offsetof(GILight, positionAndType) == 0);
+static_assert(offsetof(GILight, directionAndRange) == 16);
+static_assert(offsetof(GILight, radiance) == 32);
+static_assert(offsetof(GILight, cone) == 48);
+static_assert(sizeof(GILight) == 64);
+
+// RT GI's trace (rt/gi_trace.slang) push constants
+struct alignas(16) GITracePush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> seed{};
+    alignas(16) std::array<uint32_t, 4> flags{};
+    alignas(16) std::array<float, 4> cameraPos{};
+};
+static_assert(offsetof(GITracePush, extent) == 0);
+static_assert(offsetof(GITracePush, seed) == 16);
+static_assert(offsetof(GITracePush, flags) == 32);
+static_assert(offsetof(GITracePush, cameraPos) == 48);
+static_assert(sizeof(GITracePush) == 64);
+
+// RT GI's denoiser (rt/gi_denoise.slang) push constants
+struct alignas(16) GIDenoisePush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> params{};
+    alignas(16) std::array<float, 4> cameraPos{};
+};
+static_assert(offsetof(GIDenoisePush, extent) == 0);
+static_assert(offsetof(GIDenoisePush, params) == 16);
+static_assert(offsetof(GIDenoisePush, cameraPos) == 32);
+static_assert(sizeof(GIDenoisePush) == 48);
 
 } // namespace ohao::gpu::shared

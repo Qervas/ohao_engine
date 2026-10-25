@@ -43,7 +43,7 @@ layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;
 // IBL resources
 layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
 
-// SSGI texture (binding 11) — half-res indirect lighting
+// RT GI (binding 11): full-resolution diffuse indirect light, albedo applied
 layout(set = 0, binding = 11) uniform sampler2D ssgiTexture;
 
 // Cascade shadow map data (binding 12)
@@ -263,9 +263,10 @@ void main() {
     // Ambient lighting
     vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
 
-    // Add SSGI indirect lighting when enabled (flag bit 3)
-    // Note: RTGI output already includes surface albedo modulation — don't double-multiply
-    if ((pc.flags & 8u) != 0u) {
+    // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang):
+    // full resolution, the diffuse albedo already applied.
+    const bool rtGI = (pc.flags & 8u) != 0u;
+    if (rtGI) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
         ambient += ssgiColor * ao;
     }
@@ -309,7 +310,9 @@ void main() {
             specularAmbient += surface.F0 * max(prefilteredColor, vec3(lighting.ambientIntensity * 4.0));
         }
 
-        ambient += (specularAmbient + diffuseAmbient) * ao;
+        // RT GI's rays that leave the scene bring back the environment, occluded: with it,
+        // the unoccluded diffuse term here would count that light twice.
+        ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao;
     }
 
     // Emissive — self-illuminating surfaces (glow independent of lighting)

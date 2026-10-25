@@ -8,7 +8,7 @@ struct InstanceGpu {
     uint materialRefOffset;
     uint materialRefCount;
     uint flags;
-    vec4 giAlbedoPacked;   // legacy, rt_gi.rchit only
+    vec4 giAlbedoPacked;   // rgb: RT GI's bounce albedo (rt/gi_trace.slang reads it by offset)
 };
 struct MeshGpu { uint vertexOffset; uint indexOffset; uint indexCount; uint triangleSlotOffset; };
 const uint NO_TEXTURE = 0xFFFFFFFFu;

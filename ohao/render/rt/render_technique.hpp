@@ -81,29 +81,31 @@ public:
 // ─── Global Illumination Technique ───────────────────────────────────
 
 struct GIInput {
-    VkImageView positionBuffer;
-    VkImageView normalBuffer;
-    VkImageView albedoBuffer;
-    VkImageView depthBuffer;
-    glm::mat4 view;
-    glm::mat4 proj;
-    glm::vec3 cameraPos;
+    VkImageView positionBuffer;    // GBuffer0: world position, metallic
+    VkImageView normalBuffer;      // GBuffer1: octahedral normal
+    VkImageView albedoBuffer;      // GBuffer2: albedo (the output's diffuse albedo)
+    VkImageView velocityBuffer = VK_NULL_HANDLE;   // GBuffer3: UV motion, the temporal reprojection
+    glm::vec3 cameraPos{0.0f};
     uint32_t width;
     uint32_t height;
     uint32_t frameIndex = 0;       // since the last temporal reset: seeds samples; 0 takes no history
     uint32_t renderSeed = 0;       // the render seed: with frameIndex, pixel and sample, seeds each ray
     uint32_t frameSlot = 0;        // frame-in-flight slot; selects this frame's descriptor set
+    RenderQuality quality = RenderQuality::Realtime;
 
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;   // RenderScene TLAS (custom index = slot)
     VkBuffer instances = VK_NULL_HANDLE;                // RenderScene instance table (InstanceGpu[])
 
-    // The bounce light: the scene's brightest light (no scene light: intensity 0, no bounce)
-    glm::vec3 lightPos{0.0f};
-    float lightIntensity{0.0f};
+    // The scene's lights; a bounce is lit by the kGIMaxLights brightest (emissive proxies
+    // excluded). None: hits bring back no light.
+    std::span<const render::LightDesc> lights;
+    // The environment a ray that leaves the scene sees (equirectangular, in
+    // SHADER_READ_ONLY_OPTIMAL); null: black.
+    VkImageView envMap = VK_NULL_HANDLE;
 };
 
 struct GIOutput {
-    VkImage indirectLight;         // RGB16F — indirect illumination
+    VkImage indirectLight;         // RGBA16F, full resolution: diffuse indirect light, albedo applied
     VkImageView indirectLightView;
 };
 

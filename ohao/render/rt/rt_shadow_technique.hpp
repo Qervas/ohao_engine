@@ -16,7 +16,7 @@
 // The CSM pass is the fallback when this technique does not run.
 
 #include "render_technique.hpp"
-#include "rt_acceleration_structure.hpp"
+#include "rt_compute.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/shared_layout.hpp"
@@ -68,18 +68,11 @@ public:
     [[nodiscard]] std::optional<Dropped> latestDropped() const noexcept { return m_latestDropped; }
 
 private:
-    struct Image {
-        VkImage image{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        VkImageView view{VK_NULL_HANDLE};
-        VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
-    };
+    using Image = rtc::Image;
     // A frame slot's host-visible buffer: the lights (kShadowMaxLights ShadowLights), then
     // the dropped-pixel counter at kCounterOffset.
     struct Slot {
-        VkBuffer buffer{VK_NULL_HANDLE};
-        VkDeviceMemory memory{VK_NULL_HANDLE};
-        void* mapped{nullptr};
+        rtc::HostBuffer buf{};
         bool pending{false};   // a submitted realtime frame whose counter is not read yet
         uint64_t frame{0};
     };
@@ -93,15 +86,10 @@ private:
     void destroyScreenImages();
     bool ensureReferenceImages();
     bool createSlots();
-    bool createComputePipeline(const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
-                               uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline);
     bool createTracePipeline();
     bool createFilterPipeline();
     bool createDescriptorResources();
     void collectSlot(uint32_t slot);
-    // A barrier on `img` to `layout`; an UNDEFINED old layout when `discard` (or the image is new).
-    void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
-                    VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess, bool discard);
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -145,8 +133,6 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_traceSets{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_filterSets{};
-
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 };
 
 // Compile-time check: concrete technique still models the documented concept.

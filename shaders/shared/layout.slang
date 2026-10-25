@@ -17,6 +17,22 @@ static const uint kShadowHistoryFrames = 16u;
 static const uint kShadowFilterTile = 16u;
 // RT shadows' filter: the spatial kernel's radius (5x5)
 static const uint kShadowFilterRadius = 2u;
+// RT GI: the lights a bounce is lit by, the frame's brightest by intensity
+static const uint kGIMaxLights = 4u;
+// RT GI, realtime: cosine rays a half-resolution pixel a frame
+static const uint kGIRealtimeRays = 2u;
+// RT GI, reference quality: cosine rays a full-resolution pixel a frame
+static const uint kGIReferenceRays = 32u;
+// RT GI, realtime: the long temporal accumulation's longest history (its smallest blend weight is 1/this)
+static const uint kGIHistoryFrames = 32u;
+// RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one
+static const uint kGIFastHistoryFrames = 4u;
+// RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
+static const uint kGITile = 16u;
+// render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)
+static const uint kInstanceGpuStride = 160u;
+// the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
+static const uint kInstanceGpuGiAlbedoOffset = 144u;
 
 // the calibration kernel's push constants
 struct CalibratePush
@@ -46,4 +62,30 @@ struct ShadowFilterPush
 {
     uint4 extent;   // x width, y height, z lights, w history frames (0: none)
     uint4 seed;   // x render seed, y frame index since the last temporal reset: the output's dither
+};
+
+// one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it
+struct GILight
+{
+    float4 positionAndType;   // xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot
+    float4 directionAndRange;   // xyz the unit direction the light travels (directional, spot); w the range
+    float4 radiance;   // xyz colour times intensity; w 0
+    float4 cone;   // x a spot's inner-cone cosine, y its outer-cone cosine
+};
+
+// RT GI's trace (rt/gi_trace.slang) push constants
+struct GITracePush
+{
+    uint4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's
+    uint4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
+    uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound
+    float4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
+};
+
+// RT GI's denoiser (rt/gi_denoise.slang) push constants
+struct GIDenoisePush
+{
+    uint4 extent;   // x, y the half-resolution size; z, w the frame's
+    uint4 params;   // x history frames (0: none), y the a-trous step in pixels
+    float4 cameraPos;   // xyz the camera's position (the upsample's depth guide)
 };

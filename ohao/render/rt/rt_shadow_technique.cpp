@@ -1,12 +1,10 @@
 #include "rt_shadow_technique.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
-#include <fstream>
 #include <cstring>
 #include <algorithm>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 namespace ohao {
 
@@ -14,48 +12,9 @@ namespace shared = gpu::shared;
 
 namespace {
 
-std::vector<char> readFile(const std::string& path) {
-    const std::string name = path.substr(path.find_last_of("/\\") + 1);
-    for (const std::string& p : {path, "build/shaders/" + name, "build/Release/bin/shaders/" + name}) {
-        std::ifstream file(p, std::ios::ate | std::ios::binary);
-        if (!file.is_open()) continue;
-        const auto size = static_cast<std::size_t>(file.tellg());
-        std::vector<char> buffer(size);
-        file.seekg(0);
-        file.read(buffer.data(), static_cast<std::streamsize>(size));
-        return buffer;
-    }
-    return {};
-}
-
-VkShaderModule createModule(VkDevice device, const std::vector<char>& code) {
-    VkShaderModuleCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule mod = VK_NULL_HANDLE;
-    vkCreateShaderModule(device, &ci, nullptr, &mod);
-    return mod;
-}
-
-VkDescriptorSetLayoutBinding layoutBinding(uint32_t index, VkDescriptorType type, VkShaderStageFlags stages) {
-    VkDescriptorSetLayoutBinding b{};
-    b.binding = index;
-    b.descriptorType = type;
-    b.descriptorCount = 1;
-    b.stageFlags = stages;
-    return b;
-}
-
-VkWriteDescriptorSet descriptorWrite(VkDescriptorSet set, uint32_t index, VkDescriptorType type) {
-    VkWriteDescriptorSet w{};
-    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = set;
-    w.dstBinding = index;
-    w.descriptorCount = 1;
-    w.descriptorType = type;
-    return w;
-}
+using rtc::descriptorWrite;
+using rtc::layoutBinding;
+using rtc::transition;
 
 std::array<float, 4> f4(float x, float y, float z, float w) { return {x, y, z, w}; }
 std::array<float, 4> f4(glm::vec3 v, float w) { return {v.x, v.y, v.z, w}; }
@@ -108,16 +67,6 @@ RTShadowTechnique::~RTShadowTechnique() {
     destroy();
 }
 
-uint32_t RTShadowTechnique::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & properties) == properties)
-            return i;
-    }
-    return UINT32_MAX;
-}
-
 bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
                               uint32_t width, uint32_t height) {
     m_device = device;
@@ -152,44 +101,11 @@ bool RTShadowTechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
 
 bool RTShadowTechnique::createImage(Image& img, VkFormat format, VkImageUsageFlags usage, uint32_t width,
                                     uint32_t height) {
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = format;
-    imageInfo.extent = {std::max(width, 1u), std::max(height, 1u), 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = usage;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &img.image) != VK_SUCCESS) return false;
-
-    VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(m_device, img.image, &memReqs);
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &img.memory) != VK_SUCCESS) return false;
-    vkBindImageMemory(m_device, img.image, img.memory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = img.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    img.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &img.view) == VK_SUCCESS;
+    return rtc::createImage(m_device, m_physicalDevice, img, format, usage, width, height);
 }
 
 void RTShadowTechnique::destroyImage(Image& img) {
-    if (img.view) vkDestroyImageView(m_device, img.view, nullptr);
-    if (img.image) vkDestroyImage(m_device, img.image, nullptr);
-    if (img.memory) vkFreeMemory(m_device, img.memory, nullptr);
-    img = Image{};
+    rtc::destroyImage(m_device, img);
 }
 
 bool RTShadowTechnique::createScreenImages() {
@@ -216,28 +132,10 @@ bool RTShadowTechnique::ensureReferenceImages() {
 }
 
 bool RTShadowTechnique::createSlots() {
-    for (Slot& s : m_slots) {
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size = kCounterOffset + 16;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        if (vkCreateBuffer(m_device, &bi, nullptr, &s.buffer) != VK_SUCCESS) return false;
-        VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(m_device, s.buffer, &req);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = req.size;
-        // Every pixel reads the lights: device-local memory the host can write (resizable
-        // BAR) when there is some, else system memory, which every read crosses the bus for.
-        constexpr VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (ai.memoryTypeIndex == UINT32_MAX) ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, host);
-        if (ai.memoryTypeIndex == UINT32_MAX) return false;
-        if (vkAllocateMemory(m_device, &ai, nullptr, &s.memory) != VK_SUCCESS) return false;
-        vkBindBufferMemory(m_device, s.buffer, s.memory, 0);
-        if (vkMapMemory(m_device, s.memory, 0, VK_WHOLE_SIZE, 0, &s.mapped) != VK_SUCCESS) return false;
-        std::memset(s.mapped, 0, static_cast<std::size_t>(bi.size));
-    }
+    // Every pixel reads the lights: rtc::HostBuffer prefers device-local memory the host maps.
+    for (Slot& s : m_slots)
+        if (!rtc::createHostBuffer(m_device, m_physicalDevice, kCounterOffset + 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, s.buf))
+            return false;
     return true;
 }
 
@@ -296,70 +194,21 @@ bool RTShadowTechnique::createDescriptorResources() {
     return true;
 }
 
-bool RTShadowTechnique::createComputePipeline(const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
-                                              uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline) {
-    const auto code = readFile(std::string("bin/shaders/") + spirv);
-    if (code.empty()) {
-        OHAO_LOG(Error, render, "RTShadow: failed to load {}", spirv);
-        return false;
-    }
-    const VkShaderModule module = createModule(m_device, code);
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushRange.size = pushBytes;
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &setLayout;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
-    VkResult result = vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &layout);
-    if (result == VK_SUCCESS) {
-        VkComputePipelineCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = module;
-        ci.stage.pName = entry;
-        ci.layout = layout;
-        result = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline);
-    }
-    vkDestroyShaderModule(m_device, module, nullptr);
-    if (result != VK_SUCCESS) OHAO_LOG(Error, render, "RTShadow: {} pipeline failed (err={})", entry, static_cast<int>(result));
-    return result == VK_SUCCESS;
-}
-
 bool RTShadowTechnique::createTracePipeline() {
-    return createComputePipeline("rt_shadow_trace.slang.spv", "trace", m_traceSetLayout,
-                                 sizeof(shared::ShadowTracePush), m_tracePipelineLayout, m_tracePipeline);
+    return rtc::createComputePipeline(m_device, "rt_shadow_trace.slang.spv", "trace", m_traceSetLayout,
+                                      sizeof(shared::ShadowTracePush), m_tracePipelineLayout, m_tracePipeline);
 }
 
 bool RTShadowTechnique::createFilterPipeline() {
-    return createComputePipeline("rt_shadow_filter.slang.spv", "filter", m_filterSetLayout,
-                                 sizeof(shared::ShadowFilterPush), m_filterPipelineLayout, m_filterPipeline);
-}
-
-void RTShadowTechnique::transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelineStageFlags src,
-                                   VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess,
-                                   bool discard) {
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    b.oldLayout = discard ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout;
-    b.newLayout = layout;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = img.image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 0, nullptr, 0, nullptr, 1, &b);
-    img.layout = layout;
+    return rtc::createComputePipeline(m_device, "rt_shadow_filter.slang.spv", "filter", m_filterSetLayout,
+                                      sizeof(shared::ShadowFilterPush), m_filterPipelineLayout, m_filterPipeline);
 }
 
 void RTShadowTechnique::collectSlot(uint32_t slot) {
     Slot& s = m_slots[slot];
     if (!s.pending) return;
     uint32_t pixels = 0;
-    std::memcpy(&pixels, static_cast<const uint8_t*>(s.mapped) + kCounterOffset, sizeof(pixels));
+    std::memcpy(&pixels, static_cast<const uint8_t*>(s.buf.mapped) + kCounterOffset, sizeof(pixels));
     if (!m_latestDropped || s.frame >= m_latestDropped->frame) m_latestDropped = Dropped{s.frame, pixels};
     s.pending = false;
 }
@@ -383,9 +232,9 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     // then this frame's lights and a zeroed counter.
     collectSlot(m_slot);
     Slot& slot = m_slots[m_slot];
-    auto* lights = static_cast<shared::ShadowLight*>(slot.mapped);
+    auto* lights = static_cast<shared::ShadowLight*>(slot.buf.mapped);
     for (uint32_t i = 0; i < m_lightCount; ++i) lights[i] = toGpu(input.lights[i]);
-    std::memset(static_cast<uint8_t*>(slot.mapped) + kCounterOffset, 0, sizeof(uint32_t));
+    std::memset(static_cast<uint8_t*>(slot.buf.mapped) + kCounterOffset, 0, sizeof(uint32_t));
     slot.pending = !reference;
     slot.frame = input.frameNumber;
 
@@ -418,8 +267,8 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     const VkDescriptorImageInfo metaInfo{VK_NULL_HANDLE, meta.view, VK_IMAGE_LAYOUT_GENERAL};
     const VkDescriptorImageInfo posInfo{VK_NULL_HANDLE, input.positionBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo normalInfo{VK_NULL_HANDLE, input.normalBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    const VkDescriptorBufferInfo lightsInfo{slot.buffer, 0, kLightBytes};
-    const VkDescriptorBufferInfo counterInfo{slot.buffer, kCounterOffset, 16};
+    const VkDescriptorBufferInfo lightsInfo{slot.buf.buffer, 0, kLightBytes};
+    const VkDescriptorBufferInfo counterInfo{slot.buf.buffer, kCounterOffset, 16};
     const VkDescriptorImageInfo refLoInfo{VK_NULL_HANDLE, reference ? m_refLo.view : m_refDummy.view,
                                           VK_IMAGE_LAYOUT_GENERAL};
     const VkDescriptorImageInfo refHiInfo{VK_NULL_HANDLE, reference ? m_refHi.view : m_refDummy.view,
@@ -536,8 +385,7 @@ void RTShadowTechnique::destroy() {
     destroyScreenImages();
     destroyImage(m_refDummy);
     for (Slot& s : m_slots) {
-        if (s.buffer) vkDestroyBuffer(m_device, s.buffer, nullptr);
-        if (s.memory) vkFreeMemory(m_device, s.memory, nullptr);
+        rtc::destroyHostBuffer(m_device, s.buf);
         s = Slot{};
     }
     m_traceSets = {};

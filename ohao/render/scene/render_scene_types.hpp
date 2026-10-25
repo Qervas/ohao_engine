@@ -115,9 +115,10 @@ struct InstanceGpu {
     uint32_t materialRefOffset;
     uint32_t materialRefCount;
     uint32_t flags;          // bit 0 visible
-    // LEGACY RT GI material word: rgb = albedo, read by rt_gi.rchit as the bounce
-    // albedo; a = packed: metallic>0.5 ? -(roughness+0.001) : roughness, then +/-10 when
-    // the mesh has > 100 vertices. Nothing reads .a. Delete when RT GI is reworked.
+    // RT GI's bounce albedo: rgb, read by rt/gi_trace.slang at a hit (kInstanceGpuGiAlbedoOffset
+    // in shaders/shared/layout.json). a = the legacy packed word: metallic>0.5 ?
+    // -(roughness+0.001) : roughness, then +/-10 when the mesh has > 100 vertices; nothing
+    // reads it.
     glm::vec4 giAlbedoPacked;
 };
 static_assert(sizeof(InstanceGpu) == 160);
