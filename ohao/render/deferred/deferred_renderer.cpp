@@ -442,6 +442,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.instances = m_renderScene->instanceBuffer();
                 gi.lights = m_renderScene->lights();
                 gi.envMap = m_envView;
+                gi.envIntensity = m_envIntensity;
                 m_rtGI->render(c, gi);
                 if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output
             });
@@ -731,11 +732,11 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
     }
 }
 
-void DeferredRenderer::setEnvMap(VkImageView view, VkSampler sampler) {
-    m_envView = view;
-    if (m_lightingPass) {
-        m_lightingPass->setEnvMap(view, sampler);
-    }
+void DeferredRenderer::setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance,
+                                 VkSampler iblSampler, float intensity) {
+    m_envView = source;   // RT GI's misses read the environment itself
+    m_envIntensity = intensity;
+    if (m_lightingPass) m_lightingPass->setEnvironment(prefiltered, irradiance, iblSampler, intensity);
 }
 
 void DeferredRenderer::setRenderScene(const render::RenderScene* scene) {
@@ -765,13 +766,6 @@ void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t ver
     m_lights = lights;
     m_lightsVersion = version;
     m_ambient = ambient;
-}
-
-void DeferredRenderer::setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
-                                       VkImageView brdfLUT, VkSampler iblSampler) {
-    if (m_lightingPass) {
-        m_lightingPass->setIBLTextures(irradiance, prefiltered, brdfLUT, iblSampler);
-    }
 }
 
 VkImageView DeferredRenderer::getFinalOutput() const {

@@ -141,10 +141,12 @@ neither is touched:
 
 {{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;"}}
 
-{{cite shaders/core/deferred_lighting.frag "ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "const float occlusion = ao * ssao;"}}
 
-`ao` there is the G-buffer's baked occlusion (albedo alpha: 1, or the red channel of
-an occlusion-roughness-metallic texture); `ssao` multiplies on top of it. Test 5 in
+`ao` there is the G-buffer's baked occlusion (albedo alpha: 1, or the red channel of the
+material's glTF occlusion texture); `ssao` multiplies on top of it. The diffuse IBL takes
+the product as it is, the specular IBL through `specularOcclusion`, which occludes a
+reflection's narrower lobe less. Test 5 in
 `engine_tests` checks both halves: with only ambient light, a crease frame has 3191
 pixels darker with SSAO on and none brighter; lit by a point light with zero ambient,
 the frame is unchanged (max_abs 0). A second test renders an SSAO frame from two fresh

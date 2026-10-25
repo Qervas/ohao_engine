@@ -29,14 +29,15 @@ public:
     // hands the new views back. Does not itself touch descriptors.
     void clearPerFrameInputs();
     void setShadowMap(VkImageView shadowMap, VkSampler shadowSampler);
-    void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
-                        VkImageView brdfLUT, VkSampler iblSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
     // RT shadow visibility (RG32UI, eight 8-bit channels: render/rt/render_technique.hpp's
     // ShadowOutput). Null: no RT shadows this frame (CSM, if bound, shadows the directional lights).
     void setRTShadowMask(VkImageView visibility);
-    void setEnvMap(VkImageView view, VkSampler sampler);
+    // Image-based lighting (render/deferred/env_prefilter.hpp): the environment GGX-prefiltered
+    // by roughness (binding 15, kEnvPrefilterLevels mips) and its irradiance (binding 7), with
+    // their sampler, scaled by `intensity` (Environment.intensity). Null views: no IBL.
+    void setEnvironment(VkImageView prefiltered, VkImageView irradiance, VkSampler sampler, float intensity);
 
     // Get output
     [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
@@ -109,7 +110,6 @@ private:
     VkSampler m_shadowSampler{VK_NULL_HANDLE};
     VkImageView m_irradianceView{VK_NULL_HANDLE};
     VkImageView m_prefilteredView{VK_NULL_HANDLE};
-    VkImageView m_brdfLUTView{VK_NULL_HANDLE};
     VkSampler m_iblSampler{VK_NULL_HANDLE};
     VkImageView m_ssaoView{VK_NULL_HANDLE};
     VkSampler m_ssaoSampler{VK_NULL_HANDLE};
@@ -117,8 +117,6 @@ private:
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
     VkImageView m_rtShadowView{VK_NULL_HANDLE};
-    VkImageView m_envMapView{VK_NULL_HANDLE};
-    VkSampler m_envMapSampler{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
@@ -152,7 +150,7 @@ private:
         float snowCover{0.0f};    // Default to clear
         float sliceBias{0.0f};
         float frostCover{0.0f};   // Default to no frost
-        float paddingF{0.0f};
+        float envIntensity{1.0f}; // Environment.intensity: scales the IBL terms
     };
                           // Total: 184 bytes
 

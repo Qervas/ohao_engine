@@ -33,6 +33,7 @@
 #include "render/rt/render_technique.hpp"
 #include "render/deferred/light_clusters.hpp"
 #include "render/deferred/gpu_culling.hpp"
+#include "render/deferred/env_prefilter.hpp"
 
 namespace ohao {
 
@@ -447,6 +448,9 @@ private:
     VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
     VkSampler m_envSampler{VK_NULL_HANDLE};         // the old RT texture sampler (bilinear, base level)
+    // The deferred frame's IBL: the environment GGX-prefiltered by roughness and its
+    // irradiance, rebuilt with each env upload (render/deferred/env_prefilter.hpp).
+    std::unique_ptr<render::EnvPrefilter> m_envPrefilter;
     void destroyEnvMapImage();
     uint32_t m_envMapTexIdx{0xFFFFFFFFu};           // bindless index in light header
     uint32_t m_envMapWidth{0};

@@ -144,9 +144,13 @@ void VulkanRenderer::renderDeferred() {
     // RT shadows, CSM.
     m_deferredRenderer->setRTShadowsEnabled(isRTSupported() && m_rtShadowsWanted);
 
-    // Pass env map to deferred renderer for reflections
+    // The environment: RT GI's misses read the source image; lighting's IBL its prefiltered
+    // levels and irradiance.
     if (envMapLoaded()) {
-        m_deferredRenderer->setEnvMap(m_envMapImageView, m_envSampler);
+        const bool ibl = m_envPrefilter && m_envPrefilter->ready();
+        m_deferredRenderer->setEnvMap(m_envMapImageView, ibl ? m_envPrefilter->prefilteredView() : VK_NULL_HANDLE,
+                                      ibl ? m_envPrefilter->irradianceView() : VK_NULL_HANDLE,
+                                      ibl ? m_envPrefilter->sampler() : VK_NULL_HANDLE, m_envIntensityScale);
     }
 
     // This frame's raster lights: the scene's light table, or the fallback sun (aligned with

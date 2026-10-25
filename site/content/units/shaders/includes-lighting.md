@@ -102,34 +102,16 @@ stops being exact.
 
 ## The IBL the deferred pass evaluates instead
 
-The header directory has no image-based lighting at all. What ships is split-sum
-IBL written inline in `deferred_lighting.frag`, fed from the 2D equirect
-environment map with a mip level as roughness proxy instead of a prefiltered cubemap:
+The header directory has no image-based lighting of its own beyond one function the
+deferred pass now calls: `envBRDFApprox`, Karis's analytic fit to the split sum's
+environment-BRDF scale and bias, used in place of a lookup table. The rest is inline in
+`deferred_lighting.frag`, fed by `EnvPrefilter`'s two equirectangular images (the
+environment GGX-prefiltered into one mip per roughness step, and its irradiance; the
+deferred lighting unit, "Image-based lighting"):
 
-{{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512"}}
+{{cite shaders/core/deferred_lighting.frag "const vec2 ab = envBRDFApprox(NdotV, roughness);"}}
 
-The BRDF LUT it samples is, in practice, the pass's 1×1 fallback image.
-`DeferredLightingPass::setIBLTextures` exists and `DeferredRenderer` forwards to
-it, but nothing calls the outer setter, so `m_brdfLUTView` stays null and binding
-9 resolves to the dummy view:
-
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;"}}
-
-That dummy is a 1×1 RGBA8 image created with `VK_IMAGE_USAGE_SAMPLED_BIT` and
-nothing else — it has no transfer usage, so no upload is even permitted — and it
-receives one layout transition and no writes. Its texel is Vulkan-undefined, not
-guaranteed zero.
-
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;"}}
-
-So the shader's "no real LUT bound" branch is not defensive paranoia about a
-hypothetical: it is the only thing standing between the deferred metals and
-whatever that allocation happens to contain. It fires when the sampled pair sums
-below `1e-4` and substitutes an analytic `vec2(max(1-roughness, 0.04),
-roughness*0.25)`. Whether the engine's environment-specular response today is
-that analytic curve or an undefined texel is not something the code decides.
-
-{{cite shaders/core/deferred_lighting.frag "brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);"}}
+{{cite shaders/includes/brdf/brdf_ggx.glsl "vec2 envBRDFApprox(float NdotV, float roughness) {"}}
 
 ## Where the light record lives
 

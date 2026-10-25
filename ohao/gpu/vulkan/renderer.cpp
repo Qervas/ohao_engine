@@ -207,6 +207,7 @@ void VulkanRenderer::shutdown() {
         // The env map's view is owned by the texture manager: release it first.
         destroyEnvMapImage();
         destroyEnvCDFBuffers();
+        m_envPrefilter.reset();
         if (m_envSampler) { vkDestroySampler(m_device, m_envSampler, nullptr); m_envSampler = VK_NULL_HANDLE; }
 
         // Cleanup deferred renderer

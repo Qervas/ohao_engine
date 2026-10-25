@@ -154,67 +154,60 @@ carries a `cascadeBlendWidth` the shader never reads:
 so a cascade transition is a hard switch at the split distance, visible as a
 discontinuity in filter width rather than a blend.
 
-## The IBL that never received its cubemaps
+## Image-based lighting: prefiltered, split-sum, occluded
 
-{{cite ohao/render/deferred/deferred_lighting_pass.hpp "void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,"}}
+The environment reaches lighting through two images `EnvPrefilter` builds once per HDRI
+(`shaders/ibl/env_prefilter.slang`, recorded into the environment upload's own
+submission): the environment GGX-prefiltered by roughness at binding 15,
+`kEnvPrefilterLevels` mip levels with level $i$ at roughness $i/(\text{levels}-1)$, and
+its cosine convolution (the irradiance over $\pi$) at binding 7. Both are
+equirectangular, mapped as the path tracer's miss maps a direction; the path tracer and
+RT GI keep reading the unfiltered source image.
 
-Bindings 7, 8 and 9 therefore resolve, every frame, to a 1×1 `R8G8B8A8_UNORM`
-dummy that is allocated device-local and barriered straight out of
-`VK_IMAGE_LAYOUT_UNDEFINED` without ever being cleared or uploaded — its texel
-value is undefined by specification. Only 9 is ever read: the frag declares no
-sampler for either cubemap binding, so 7 and 8 are written into the set each frame
-and never touched by any instruction.
+{{cite ohao/render/deferred/deferred_lighting_pass.hpp "void setEnvironment(VkImageView prefiltered, VkImageView irradiance, VkSampler sampler, float intensity);"}}
 
-{{figure deferred-lighting-bindings "Conceptual map of descriptor set 0, sorting its declared bindings by how the shader uses them: read with a real resource, written but with no sampler declared, or sampled with a permanently-dummy view. Read from createDescriptors()/writeDescriptorSet() and the shader's declarations — not a capture."}}
+Each level integrates Hammersley samples of the GGX lobe around the texel's direction
+(normal = view = reflection, the split sum's assumption), every sample read from a mip
+chain of the environment at the mip its solid angle covers, so a few hundred samples
+converge without fireflies from the HDRI's bright spots:
 
-The shader routes around all of it. It ignores the cubemap bindings entirely,
-samples the raw equirectangular HDR at binding 15, and when the LUT fetch comes
-back near zero substitutes an analytic pair for the split-sum scale and bias:
+{{cite shaders/ibl/env_prefilter.slang "const float lod = clamp(0.5 * log2(sampleSolidAngle / texel) + 1.0, 0.0, float(pc.size.w - 1u));"}}
 
-{{cite shaders/core/deferred_lighting.frag "brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);"}}
+Lighting evaluates the split sum
 
-The surrounding formula is the standard split-sum approximation
+$$L_{\text{spec}} \;\approx\; L_{\text{pre}}(R,\alpha)\,\big(F_0\,A + B\big)$$
 
-$$L_{\text{spec}} \;\approx\; L_{\text{pre}}(R,\alpha)\,\big(F(\theta_v,\alpha)\,A + B\big)$$
+with $L_{\text{pre}}$ read at `roughness * (kEnvPrefilterLevels - 1)` and $(A, B)$ from
+Karis's analytic fit to the environment BRDF, `envBRDFApprox`, rather than a lookup
+table:
 
-with $L_{\text{pre}}$ the roughness-filtered environment radiance along the
-reflection vector $R$, $\alpha$ roughness, and $(A,B)$ the precomputed scale/bias
-of the environment BRDF. Nothing in OHAO precomputes them. The fetch lands on the
-uninitialised dummy, so $(A,B)$ is whatever those four bytes happen to hold, and the
-analytic substitution is a guard on the sampled value, not a guarantee: it fires
-only when the two components sum to under $10^{-4}$. A dummy reading back as zeros
-takes the analytic branch; a dummy reading back as anything else is used as-is.
-Either way the shape is right and the integral is not.
+{{cite shaders/core/deferred_lighting.frag "const vec2 ab = envBRDFApprox(NdotV, roughness);"}}
 
-{{cite shaders/core/deferred_lighting.frag "if (brdf.x + brdf.y < 1e-4) {"}}
-{{cite shaders/core/deferred_lighting.frag "vec3 specularAmbient = prefilteredColor * (F * brdf.x + brdf.y);"}}
+What arrives along the reflection is not the environment alone. RT GI's cosine rays
+record the share of them that left the scene (the trace's alpha, accumulated and
+filtered with the radiance): the environment is weighted by that visibility, and the
+radiance the other rays brought back from the room stands in for the occluded part.
+Without RT GI the environment is taken as visible everywhere.
 
-$L_{\text{pre}}$ has a sharper problem. The shader asks for a mip proportional to
-roughness, on an assumption stated in its own comment:
+{{cite shaders/core/deferred_lighting.frag "const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));"}}
 
-{{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512"}}
+Occlusion finer than the GI rays resolve comes from the material's `ao` and SSAO: they
+darken the diffuse terms as measured and the reflection through Lagarde and de
+Rousiers' specular occlusion, which spares a narrow lobe seen head-on:
 
-The only producer of the view that ever reaches binding 15 creates that image with
-one mip level, and builds a single-level view over it:
+{{cite shaders/core/deferred_lighting.frag "return clamp(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);"}}
 
-{{cite ohao/gpu/vulkan/env_upload.cpp "imgInfo.mipLevels = 1;"}}
+`Environment.intensity` scales both images, as it scales the path tracer's misses and
+RT GI's. With RT GI the diffuse environment arrives through its escaping rays,
+occluded, and the irradiance term is skipped so that light is not counted twice.
 
-Every `textureLod` therefore clamps to mip 0. Roughness does not blur the
-environment reflection, and the diffuse term — a single texel fetched at LOD 9
-along the normal — is a sharp environment sample, not a cosine convolution.
-
-{{cite shaders/core/deferred_lighting.frag "vec3 irradiance = textureLod(envMap, nUV, 9.0).rgb;"}}
-
-A mirror and a chalk sphere thus receive the same environment sample here, differing
-through Fresnel, through whatever $(A,B)$ turned out to be — and through one term
-the split-sum formula does not contain. Above `metallic > 0.5` the shader adds a
-second, F0-weighted specular contribution floored at four times the ambient
-intensity, so dark metals do not crush to black when the environment sample is dim:
-a hand-tuned brightener that fires on the mirror and never on the chalk.
-
-{{cite shaders/core/deferred_lighting.frag "specularAmbient += surface.F0 * max(prefilteredColor,"}}
-
-The plumbing exists; the convolution does not.
+:::why
+Before this the IBL bindings resolved to an uncleared 1x1 dummy, the shader read the
+raw single-mip HDRI at a roughness-proportional LOD that always clamped to mip 0, and
+metals got an extra `F0 * env` term on top: every metal was a sharp mirror of the HDRI,
+inside a closed room as much as outdoors. DamagedHelmet read as white chrome where the
+path tracer shows dark teal metal.
+:::
 
 ## Weather channels with no driver
 

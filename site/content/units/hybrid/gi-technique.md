@@ -18,11 +18,11 @@ beside a white floor, so the floor stays white. `RTGITechnique` replaces that gu
 with traced rays, one bounce deep: light that leaves a lit surface, lands on another
 and is reflected once more toward the camera.
 
-The result is a full-resolution `RGBA16F` image of diffuse indirect light with the
-receiving surface's diffuse albedo already applied, which the lighting pass reads at
-binding 11:
+The result is a full-resolution `RGBA16F` image the lighting pass reads at binding 11:
+the incoming radiance over the cosine lobe in rgb (the receiver's albedo not applied)
+and the environment's visibility in alpha, the share of the rays that left the scene:
 
-{{cite ohao/render/rt/render_technique.hpp "VkImage indirectLight;         // RGBA16F, full resolution: diffuse indirect light, albedo applied"}}
+{{cite ohao/render/rt/render_technique.hpp "VkImage indirectLight;         // RGBA16F, full resolution: rgb incoming radiance (no albedo), a the environment's visibility"}}
 
 ## Two compute passes, no ray tracing pipeline
 
@@ -57,9 +57,10 @@ $$\hat{L}_o = \frac{1}{N}\sum_{k=1}^{N} \frac{(\rho/\pi)\,L_i(\omega_k)\cos\thet
 with $N$ the ray count, $\omega_k$ the $k$-th sampled direction and $\theta_k$ its
 angle to the normal. That cancellation is why the receiver's $\pi$ and its cosine
 appear nowhere in the trace: it averages the radiance its rays bring back and writes
-that mean, the irradiance over $\pi$, without multiplying by anything.
+that mean, the irradiance over $\pi$, without multiplying by anything, beside the share
+of its rays that escaped:
 
-{{cite shaders/rt/gi_trace.slang "const float3 mean = sum / float(rays);"}}
+{{cite shaders/rt/gi_trace.slang "const float4 mean = float4(sum / float(rays), escapedSum / float(rays));"}}
 
 The directions are stratified in azimuth: ray $s$ of $N$ takes its angle from the
 $s$-th of $N$ equal sectors, jittered within it, and its radius from $\sqrt{u}$,
@@ -68,12 +69,12 @@ two rays a pixel, the pair always lands in opposite halves of the hemisphere.
 
 {{cite shaders/rt/gi_trace.slang "const float phi = kTwoPi * (float(s) + rand01(key, s, 1u)) / float(rays);"}}
 
-$\rho$ is applied at the very end, at full resolution, by the pass that writes the
-output — the upsample in realtime, the trace itself in reference — and it is the
-*diffuse* albedo, the G-buffer albedo times one minus metallic, so a fully metallic
-surface receives no diffuse bounce at all:
+$\rho$ is applied at the very end, at full resolution, by the lighting pass, and it is
+the *diffuse* albedo, the G-buffer albedo times one minus metallic, so a fully metallic
+surface receives no diffuse bounce at all. The radiance itself still reaches it: the
+specular IBL reads it for what the reflection sees where the environment is occluded.
 
-{{cite shaders/rt/gi_denoise.slang "const float3 diffuse = uAlbedo.Load(int3(pixel, 0)).rgb * (1.0 - position.w);"}}
+{{cite shaders/core/deferred_lighting.frag "if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;"}}
 
 Keeping albedo out of the half-resolution chain is deliberate. Everything the
 denoiser averages is incoming light, which varies smoothly across a surface; the
@@ -121,16 +122,17 @@ the hit has no normal of its own — the trace has only the hit distance and the
 instance, not the triangle's shading normal — so it takes the negated ray direction,
 which is exact only for a ray striking the surface head-on.
 
-A ray that commits nothing samples the environment map in its direction, through
-the same equirect mapping the lighting pass uses, or brings back black when none is
-bound:
+A ray that commits nothing counts as escaped and samples the environment map in its
+direction, through the same equirect mapping the lighting pass uses, times
+`Environment.intensity` as the path tracer's miss applies it, or brings back black when
+none is bound:
 
-{{cite shaders/rt/gi_trace.slang "return envMap.SampleLevel(envSampler, uv, 0.0).rgb;"}}
+{{cite shaders/rt/gi_trace.slang "return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w;   // times Environment.intensity"}}
 
-The sample is level 0 because there is no other: the environment image the renderer
-uploads has a single mip level, so a miss reads full-resolution texels and a bright
-spot in the HDRI is as noisy a target as it is for the path tracer. A prefiltered
-environment would lower each ray's variance; none exists yet.
+The sample is level 0 of the source image, which has a single mip level, so a miss reads
+full-resolution texels and a bright spot in the HDRI is as noisy a target as it is for
+the path tracer. The prefiltered environment the lighting pass reads is a separate image;
+the trace keeps the source so its misses match the path tracer's.
 
 {{cite ohao/gpu/vulkan/env_upload.cpp "imgInfo.mipLevels = 1;"}}
 
@@ -179,18 +181,20 @@ $\cos^{-1} 0.9$. The weights of the taps that pass are renormalized, and less th
 
 Two accumulations come through that reprojection. The short one blends the new
 sample with weight $1/n$, $n$ capped at `kGIFastHistoryFrames` (four); the long one
-the same with $n$ capped at `kGIHistoryFrames` (32). Each keeps its frame count in
-alpha, so after a reset or a disocclusion the count restarts and the first frames
-average evenly.
+the same with $n$ capped at `kGIHistoryFrames` (32). The two start and reproject
+together, so one frame count serves both: the short accumulation's alpha keeps it
+(capped at 32, the short blend capping its own use at four), and after a reset or a
+disocclusion the count restarts and the first frames average evenly. That frees the long
+accumulation's alpha for the visibility, which accumulates with the long blend.
 
-{{cite shaders/rt/gi_denoise.slang "const float n = min(slowPrev.a + 1.0, float(kGIHistoryFrames));"}}
+{{cite shaders/rt/gi_denoise.slang "const float n = fast.a;   // min(frames of history + 1, kGIHistoryFrames)"}}
 
 The long accumulation is what the frame shows, and on its own it would trail any
 change in lighting by tens of frames. So before blending, its history is clamped to
 the range the short accumulation spans over the 3×3 neighbourhood — surface pixels
 only — and a moved or switched-off light drags at most a few frames behind:
 
-{{cite shaders/rt/gi_denoise.slang "const float3 slow = lerp(clamp(slowPrev.rgb, lo, hi), cur, 1.0 / n);"}}
+{{cite shaders/rt/gi_denoise.slang "const float3 slow = lerp(clamp(slowPrev.rgb, lo, hi), cur.rgb, 1.0 / n);"}}
 
 To read that neighbourhood, each 16×16 workgroup (`kGITile`) first computes the
 short accumulation for its pixels and a one-pixel apron into shared memory.
@@ -211,10 +215,10 @@ then.
 samples, weighted bilinearly and by how well each matches the pixel's own depth
 (5 % of its distance) and normal (cosine to the eighth). Where no sample is the same
 surface — a sliver the half-resolution trace never landed on — it takes the closest
-match instead of a blur across the edge. Then it applies the diffuse albedo and
-writes the output.
+match instead of a blur across the edge. The à-trous iterations and the upsample filter
+the visibility with the radiance, all four channels alike.
 
-{{cite shaders/rt/gi_denoise.slang "const float3 radiance = wsum > 1e-3 ? sum / wsum : best;"}}
+{{cite shaders/rt/gi_denoise.slang "uOutput[pixel] = wsum > 1e-3 ? sum / wsum : best;"}}
 
 Every output depends only on its inputs — no atomics, no order — so a denoised frame
 is the same in every run that traced the same rays.
@@ -227,9 +231,9 @@ no denoiser, and keeps the plain running mean of the reference frames since the 
 temporal reset in an `RGBA32F` image created on first use. The first of them takes
 its own value and reads nothing.
 
-{{cite shaders/rt/gi_trace.slang "const float3 m = prev + (mean - prev) / (float(k) + 1.0);"}}
+{{cite shaders/rt/gi_trace.slang "const float4 m = prev + (mean - prev) / (float(k) + 1.0);"}}
 
-It writes the mean times the diffuse albedo straight to the output, and the renderer
+It writes the mean (radiance and visibility) straight to the output, and the renderer
 adds no `rt.gi.denoise` pass:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (!m_rtGI->denoises()) giToLighting();   // reference: the trace is the output"}}
@@ -247,23 +251,20 @@ means follow the same rule.
 
 ## Where the bleed lands
 
-The lighting pass raises flag bit 3 when it holds a GI view and adds the image,
-times AO, to the ambient term:
-
-{{cite shaders/core/deferred_lighting.frag "ambient += ssgiColor * ao;"}}
-
-There is no `albedo` factor there: the GI pass applied the diffuse albedo already,
-and a second multiply would square the surface colour. The constant ambient term
-above still applies on top of it.
+The lighting pass raises flag bit 3 when it holds a GI view and adds the radiance,
+times the diffuse albedo and AO, to the ambient term (above). The constant ambient term
+still applies on top of it.
 
 GI and image-based lighting are not simply additive. A GI ray that leaves the scene
 already brings back the environment, occluded by everything it passed; the lighting
-pass's diffuse IBL term is that same light unoccluded. So when GI is in the frame the
-diffuse IBL term is dropped and only specular IBL remains:
+pass's diffuse IBL term is that same light unoccluded, so with GI in the frame it is
+dropped. The specular IBL stays, and GI decides what it sees: the prefiltered
+environment weighted by the visibility, and the radiance the rays that hit brought back
+for the rest (the lighting unit, "Image-based lighting"):
 
-{{cite shaders/core/deferred_lighting.frag "ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));"}}
 
-SSAO multiplies those terms and the constant ambient, never the GI image: a GI ray
+SSAO multiplies the IBL terms and the constant ambient, never the GI image: a GI ray
 already stops at the occluder SSAO would be guessing at, so occluding its result again
 would count the same crease twice.
 

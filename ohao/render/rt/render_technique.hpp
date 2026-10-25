@@ -102,10 +102,11 @@ struct GIInput {
     // The environment a ray that leaves the scene sees (equirectangular, in
     // SHADER_READ_ONLY_OPTIMAL); null: black.
     VkImageView envMap = VK_NULL_HANDLE;
+    float envIntensity = 1.0f;     // Environment.intensity, as the path tracer's miss applies it
 };
 
 struct GIOutput {
-    VkImage indirectLight;         // RGBA16F, full resolution: diffuse indirect light, albedo applied
+    VkImage indirectLight;         // RGBA16F, full resolution: rgb incoming radiance (no albedo), a the environment's visibility
     VkImageView indirectLightView;
 };
 

@@ -171,11 +171,9 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     m_params.screenSize = glm::vec2(m_width, m_height);
     m_params.lightCount = m_lightCount;
     m_params.flags = 0;
-    // IBL path samples equirect envMap (binding 15). Enable when either a full
-    // irradiance cube is bound OR the raw HDR env is present — previously only
-    // irradiance gated the flag, so setEnvMap() alone left metals pure black.
-    if (m_irradianceView != VK_NULL_HANDLE || m_envMapView != VK_NULL_HANDLE)
-        m_params.flags |= 1; // IBL
+    // IBL (bit 0): the prefiltered environment and its irradiance are both bound.
+    if (m_prefilteredView != VK_NULL_HANDLE && m_irradianceView != VK_NULL_HANDLE)
+        m_params.flags |= 1;
     if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
     if (m_rtShadowView != VK_NULL_HANDLE)
         m_params.flags |= 32;  // RT shadows (bit 5)
@@ -215,12 +213,12 @@ void DeferredLightingPass::setShadowMap(VkImageView shadowMap, VkSampler shadowS
     m_shadowSampler = shadowSampler;
 }
 
-void DeferredLightingPass::setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
-                                          VkImageView brdfLUT, VkSampler iblSampler) {
-    m_irradianceView = irradiance;
+void DeferredLightingPass::setEnvironment(VkImageView prefiltered, VkImageView irradiance, VkSampler sampler,
+                                          float intensity) {
     m_prefilteredView = prefiltered;
-    m_brdfLUTView = brdfLUT;
-    m_iblSampler = iblSampler;
+    m_irradianceView = irradiance;
+    m_iblSampler = sampler;
+    m_params.envIntensity = intensity;
 }
 
 void DeferredLightingPass::setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler) {
@@ -231,11 +229,6 @@ void DeferredLightingPass::setSSAOTexture(VkImageView ssao, VkSampler ssaoSample
 void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler) {
     m_ssgiView = ssgi;
     m_ssgiSampler = ssgiSampler;
-}
-
-void DeferredLightingPass::setEnvMap(VkImageView view, VkSampler sampler) {
-    m_envMapView = view;
-    m_envMapSampler = sampler;
 }
 
 void DeferredLightingPass::setRTShadowMask(VkImageView visibility) {
@@ -265,13 +258,13 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     const VkDescriptorSet set = m_descriptorSets[slot];
     if (!m_gbufferPass || set == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write ALL 15 bindings. Use dummy resources as fallback for unbound bindings.
-    // Vulkan requires all declared bindings to be written before the descriptor set is used.
+    // Always write all 14 bindings, dummy resources for the unbound ones: Vulkan requires every
+    // declared binding written before the set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 14> imageInfos{};
-    std::array<VkWriteDescriptorSet, 16> writes{};
+    std::array<VkDescriptorImageInfo, 11> imageInfos{};
+    std::array<VkWriteDescriptorSet, 14> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
     VkDescriptorBufferInfo clusterInfo{};
@@ -320,12 +313,12 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     clusterInfo.buffer = m_clusterBuffer != VK_NULL_HANDLE ? m_clusterBuffer : m_dummyBuffer;
     clusterInfo.offset = 0;
     clusterInfo.range = VK_WHOLE_SIZE;
-    writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[15].dstSet = set;
-    writes[15].dstBinding = 16;
-    writes[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[15].descriptorCount = 1;
-    writes[15].pBufferInfo = &clusterInfo;
+    writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[13].dstSet = set;
+    writes[13].dstBinding = 16;
+    writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[13].descriptorCount = 1;
+    writes[13].pBufferInfo = &clusterInfo;
 
     // Shadow map (binding 6) — use fallback if not set
     imageInfos[5].sampler = m_shadowSampler != VK_NULL_HANDLE ? m_shadowSampler : fallbackSampler;
@@ -339,104 +332,40 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     writes[6].descriptorCount = 1;
     writes[6].pImageInfo = &imageInfos[5];
 
-    // IBL textures (bindings 7-9) — use fallback if not set
-    VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
-
-    imageInfos[6].sampler = iblSampler;
-    imageInfos[6].imageView = m_irradianceView != VK_NULL_HANDLE ? m_irradianceView : fallbackView;
-    imageInfos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = set;
-    writes[7].dstBinding = 7;
-    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[7].descriptorCount = 1;
-    writes[7].pImageInfo = &imageInfos[6];
-
-    imageInfos[7].sampler = iblSampler;
-    imageInfos[7].imageView = m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView;
-    imageInfos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[8].dstSet = set;
-    writes[8].dstBinding = 8;
-    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[8].descriptorCount = 1;
-    writes[8].pImageInfo = &imageInfos[7];
-
-    imageInfos[8].sampler = iblSampler;
-    imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;
-    imageInfos[8].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[9].dstSet = set;
-    writes[9].dstBinding = 9;
-    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[9].descriptorCount = 1;
-    writes[9].pImageInfo = &imageInfos[8];
-
-    // SSAO (binding 10) — use fallback if not set or sampler is null
-    imageInfos[9].sampler = m_ssaoSampler != VK_NULL_HANDLE ? m_ssaoSampler : fallbackSampler;
-    imageInfos[9].imageView = m_ssaoView != VK_NULL_HANDLE ? m_ssaoView : fallbackView;
-    imageInfos[9].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[10].dstSet = set;
-    writes[10].dstBinding = 10;
-    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[10].descriptorCount = 1;
-    writes[10].pImageInfo = &imageInfos[9];
-
-    // SSGI (binding 11) — use fallback if not set
-    imageInfos[10].sampler = m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler;
-    imageInfos[10].imageView = m_ssgiView != VK_NULL_HANDLE ? m_ssgiView : fallbackView;
-    imageInfos[10].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[11].dstSet = set;
-    writes[11].dstBinding = 11;
-    writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[11].descriptorCount = 1;
-    writes[11].pImageInfo = &imageInfos[10];
+    const auto imageWrite = [&](uint32_t w, uint32_t binding, uint32_t info, VkImageView view, VkSampler sampler) {
+        imageInfos[info].sampler = sampler;
+        imageInfos[info].imageView = view;
+        imageInfos[info].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[w].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[w].dstSet = set;
+        writes[w].dstBinding = binding;
+        writes[w].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[w].descriptorCount = 1;
+        writes[w].pImageInfo = &imageInfos[info];
+    };
+    // Image-based lighting: the environment's irradiance (binding 7) and its GGX-prefiltered
+    // levels (binding 15); the dummy view without an environment (flag bit 0 stays clear).
+    const VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
+    imageWrite(7, 7, 6, m_irradianceView != VK_NULL_HANDLE ? m_irradianceView : fallbackView, iblSampler);
+    imageWrite(8, 10, 7, m_ssaoView != VK_NULL_HANDLE ? m_ssaoView : fallbackView,
+               m_ssaoSampler != VK_NULL_HANDLE ? m_ssaoSampler : fallbackSampler);
+    imageWrite(9, 11, 8, m_ssgiView != VK_NULL_HANDLE ? m_ssgiView : fallbackView,
+               m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler);
 
     // CascadeData UBO (binding 12) — use dummy buffer if not yet set
     cascadeBufferInfo.buffer = m_cascadeBuffer != VK_NULL_HANDLE ? m_cascadeBuffer : m_dummyBuffer;
     cascadeBufferInfo.offset = 0;
     cascadeBufferInfo.range = VK_WHOLE_SIZE;
-
-    writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[12].dstSet = set;
-    writes[12].dstBinding = 12;
-    writes[12].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[12].descriptorCount = 1;
-    writes[12].pBufferInfo = &cascadeBufferInfo;
+    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[10].dstSet = set;
+    writes[10].dstBinding = 12;
+    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[10].descriptorCount = 1;
+    writes[10].pBufferInfo = &cascadeBufferInfo;
 
     // RT shadow visibility (binding 14): an RG32UI view, or the RG32UI stand-in
-    imageInfos[11].sampler = fallbackSampler;
-    imageInfos[11].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : m_dummyUintView;
-    imageInfos[11].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[13].dstSet = set;
-    writes[13].dstBinding = 14;
-    writes[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[13].descriptorCount = 1;
-    writes[13].pImageInfo = &imageInfos[11];
-
-    // Binding 15: HDR environment map
-    imageInfos[12].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    // Env map: use actual env map if available, else 1x1 dummy so shader skips IBL.
-    // CRITICAL: previously fell back to GBuffer position texture which was sampled
-    // as a fake env map, producing garbage specular on ALL surfaces!
-    imageInfos[12].imageView = m_envMapView ? m_envMapView : m_dummyView;
-    imageInfos[12].sampler = m_envMapSampler ? m_envMapSampler : m_gbufferSampler;
-
-    writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[14].dstSet = set;
-    writes[14].dstBinding = 15;
-    writes[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[14].descriptorCount = 1;
-    writes[14].pImageInfo = &imageInfos[12];
+    imageWrite(11, 14, 9, m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : m_dummyUintView, fallbackSampler);
+    imageWrite(12, 15, 10, m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView, iblSampler);
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -548,85 +477,33 @@ bool DeferredLightingPass::createFramebuffer() {
 }
 
 bool DeferredLightingPass::createDescriptors() {
-    // Bindings:
+    // Bindings (every one read by the fragment stage):
     // 0-4: G-Buffer (position, normal, albedo, velocity, depth)
     // 5: The light table (SSBO, LightGpu records)
     // 6: Shadow map array (sampler2DArray, 4 cascades)
-    // 7: Irradiance cubemap
-    // 8: Prefiltered cubemap
-    // 9: BRDF LUT
+    // 7: The environment's irradiance (EnvPrefilter)
     // 10: SSAO texture
     // 11: SSGI texture
     // 12: CascadeData UBO
     // 14: RT shadow visibility (RG32UI)
-    // 15: HDR environment map
+    // 15: The GGX-prefiltered environment (EnvPrefilter, kEnvPrefilterLevels mips)
     // 16: The froxel light lists (SSBO, lights.cluster)
-
-    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
-
-    // G-Buffer samplers (0-4)
-    for (uint32_t i = 0; i < 5; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    constexpr struct { uint32_t binding; VkDescriptorType type; } kBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {12, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},         {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    };
+    std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        bindings[i].binding = kBindings[i].binding;
+        bindings[i].descriptorType = kBindings[i].type;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-
-    // The light table (5)
-    bindings[5].binding = 5;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // Shadow map (6)
-    bindings[6].binding = 6;
-    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // IBL textures (7-9)
-    for (uint32_t i = 7; i <= 9; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
-
-    // SSAO (10)
-    bindings[10].binding = 10;
-    bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[10].descriptorCount = 1;
-    bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // SSGI (11)
-    bindings[11].binding = 11;
-    bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[11].descriptorCount = 1;
-    bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // CascadeData UBO (12)
-    bindings[12].binding = 12;
-    bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[12].descriptorCount = 1;
-    bindings[12].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // RT shadow mask (14)
-    bindings[13].binding = 14;
-    bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[13].descriptorCount = 1;
-    bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // HDR environment map (15)
-    bindings[14].binding = 15;
-    bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[14].descriptorCount = 1;
-    bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // The froxel light lists (16)
-    bindings[15].binding = 16;
-    bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[15].descriptorCount = 1;
-    bindings[15].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -637,10 +514,10 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 13 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
+    // Descriptor pool — 11 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 13 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 11 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;

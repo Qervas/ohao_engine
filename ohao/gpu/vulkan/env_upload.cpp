@@ -158,6 +158,29 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &toShader);
 
+                VkImageViewCreateInfo viewInfo{};
+                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                viewInfo.image = envImage;
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+                viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageView envView = VK_NULL_HANDLE;
+                vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
+                m_envMapImageView = envView;
+
+                // The deferred frame's IBL from the same image, in the same submission (the
+                // queue was idled above, so an earlier prefilter's images are free to replace).
+                if (!m_envPrefilter) {
+                    m_envPrefilter = std::make_unique<render::EnvPrefilter>();
+                    if (!m_envPrefilter->initialize(m_device, m_physicalDevice)) {
+                        OHAO_LOG(Error, gpu, "env map: the IBL prefilter could not start; deferred IBL is off");
+                        m_envPrefilter.reset();
+                    }
+                }
+                if (m_envPrefilter && !m_envPrefilter->build(uploadCmd, envView, static_cast<uint32_t>(ew),
+                                                              static_cast<uint32_t>(eh)))
+                    OHAO_LOG(Error, gpu, "env map: prefiltering {} failed; deferred IBL is off", m_envMapPath);
+
                 vkEndCommandBuffer(uploadCmd);
                 VkSubmitInfo submitInfo{};
                 submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -168,16 +191,6 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 vkDestroyBuffer(m_device, stagingBuf, nullptr);
                 vkFreeMemory(m_device, stagingMem, nullptr);
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
-
-                VkImageViewCreateInfo viewInfo{};
-                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                viewInfo.image = envImage;
-                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-                viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkImageView envView = VK_NULL_HANDLE;
-                vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
-                m_envMapImageView = envView;
 
                 // Env CDF for MIS. Replaced buffers: the queue is idle (above).
                 EnvCDF envCDF;

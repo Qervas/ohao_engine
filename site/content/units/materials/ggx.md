@@ -293,10 +293,11 @@ under `shaders/`.
 {{cite shaders/includes/brdf/brdf_common.glsl "float smithG(float NdotV, float NdotL, float roughness) {"}}
 
 The last two are one-line compositions the fragment shaders open-code rather than
-call: `getRoughnessMipLevel` as a literal `roughness * 9.0`,
-`evaluateBRDFWithShadow` as a multiply by `1 - shadow`.
+call: `getRoughnessMipLevel` as `roughness * float(kEnvPrefilterLevels - 1u)`, the
+prefiltered environment's level, `evaluateBRDFWithShadow` as a multiply by
+`1 - shadow`.
 
-{{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0;"}}
+{{cite shaders/core/deferred_lighting.frag "textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;"}}
 
 Prune by grepping the formula, not only the name: a copy written with different
 temporaries is invisible to a search for the usual identifiers.

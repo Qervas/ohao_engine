@@ -247,7 +247,7 @@ the cinematic composite both land on $0.5 - \theta/\pi$. What matters is not the
 census but which pair shares a texture — and the two that disagree here are the
 sampler that picks the direction and the miss shader that shades it.
 
-{{cite shaders/core/deferred_lighting.frag "vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);"}}
+{{cite shaders/core/deferred_lighting.frag "return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415926 + 0.5);"}}
 {{cite shaders/rt/cinematic_composite.comp "vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);"}}
 
 MIS still combines two well-formed weights, but the estimator underneath is not

@@ -84,11 +84,11 @@ Roughness is floored before storage:
 {{cite shaders/includes/brdf/brdf_common.glsl "surface.roughness = max(roughness, 0.04);"}}
 
 Deferred lighting keeps the raw local value alongside that surface and uses it
-for everything image-based — the environment-map mip selection, the
-roughness-aware Fresnel term, and the split-sum BRDF-LUT lookup all read the
-unclamped local, not `surface.roughness`:
+for everything image-based — the prefiltered environment's level, the
+roughness-aware Fresnel term, and the split-sum fit all read the unclamped local, not
+`surface.roughness`:
 
-{{cite shaders/core/deferred_lighting.frag "float lod = roughness * 9.0;"}}
+{{cite shaders/core/deferred_lighting.frag "textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;"}}
 
 For those uses the G-buffer clamp is the only floor there is, so it is not
 redundant. It is also not sufficient, because the weather modifiers run before

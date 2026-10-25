@@ -103,6 +103,10 @@ const uint kSSSRadiusTiles = 2u;
 const uint kInstanceGpuStride = 160u;
 // the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
 const uint kInstanceGpuGiAlbedoOffset = 144u;
+// the prefiltered environment (ibl/env_prefilter.slang): mip levels, level i GGX-convolved at roughness i / (kEnvPrefilterLevels - 1); level 0 is the environment itself
+const uint kEnvPrefilterLevels = 6u;
+// the cosine-convolved environment (mean incoming radiance, diffuse irradiance over pi), equirectangular, this wide and half as tall
+const uint kEnvIrradianceWidth = 64u;
 
 // the calibration kernel's push constants
 struct CalibratePush {
@@ -144,7 +148,7 @@ struct GITracePush {
     uvec4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's
     uvec4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
     uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)
-    vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
+    vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)
 };
 
 // SSAO (compute/ssao.slang) push constants, both entries
@@ -234,6 +238,12 @@ struct ClusterPush {
 struct PreviewPush {
     uvec4 src;   // the source rectangle of the final image: x, y its origin, z, w its size
     uvec4 dst;   // x, y the preview's size (each at most the source's)
+};
+
+// ibl/env_prefilter.slang push constants
+struct EnvPrefilterPush {
+    uvec4 size;   // x, y the output level's size; z samples a texel; w the source chain's mip count
+    vec4 params;   // x the level's GGX roughness (prefilter); y, z the source chain's base size; w unused
 };
 
 #endif

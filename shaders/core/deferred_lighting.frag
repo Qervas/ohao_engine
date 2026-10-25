@@ -28,14 +28,19 @@ layout(set = 0, binding = 16, std430) readonly buffer Clusters { uint clusterDat
 // a lookup returns 1 where the reference depth is at or in front of the stored one.
 layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;
 
-// IBL resources
-layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
+// Image-based lighting (render/deferred/env_prefilter, shaders/ibl/env_prefilter.slang), both
+// equirectangular: the environment's irradiance over pi (binding 7) and the environment GGX-
+// prefiltered by roughness, level i at roughness i / (kEnvPrefilterLevels - 1) (binding 15).
+layout(set = 0, binding = 7) uniform sampler2D envIrradiance;
+layout(set = 0, binding = 15) uniform sampler2D envPrefiltered;
 
 // SSAO (binding 10, flag bit 1): half resolution, (ao, distance from the camera; 0 for sky),
 // written by compute/ssao.slang; sample q sits on full-resolution pixel 2q.
 layout(set = 0, binding = 10) uniform sampler2D ssaoTexture;
 
-// RT GI (binding 11): full-resolution diffuse indirect light, albedo applied
+// RT GI (binding 11), full resolution: rgb the mean incoming radiance over the cosine lobe (the
+// diffuse irradiance over pi, the environment through the rays that escaped, the room's bounce
+// light through those that hit), a the environment's visibility (the share that escaped).
 layout(set = 0, binding = 11) uniform sampler2D ssgiTexture;
 
 // Cascade shadow map data (binding 12)
@@ -54,9 +59,6 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
 // (reference).
 layout(set = 0, binding = 14) uniform usampler2D rtShadowVisibility;
 
-// HDR environment map (binding 15) — kept for descriptor layout compatibility
-layout(set = 0, binding = 15) uniform sampler2D envMap;
-
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
@@ -71,7 +73,7 @@ layout(push_constant) uniform PushConstants {
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
     float sliceBias;
     float frostCover;    // 0=bare, 1=fully frost/ice coated
-    float paddingF;
+    float envIntensity;  // Environment.intensity: scales the prefiltered environment and its irradiance
 } pc;                   // Total: 184 bytes
 
 // BRDF functions provided by #include "includes/brdf/brdf_ggx.glsl"
@@ -114,6 +116,19 @@ float ssaoAt(ivec2 pixel, float dist) {
         wsum += w;
     }
     return wsum > 1e-3 ? sum / wsum : best;
+}
+
+// A direction's texel coordinate in the equirectangular environment images.
+vec2 equirectUV(vec3 d) {
+    return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415926 + 0.5);
+}
+
+// How much of the environment's specular reflection survives the occlusion `ao` of the
+// diffuse terms (Lagarde and de Rousiers 2014, "Moving Frostbite to PBR"): the reflection
+// cone narrows with smoothness and at grazing angles, so it is occluded less than the
+// cosine-weighted hemisphere ao measures, and fully at ao 0.
+float specularOcclusion(float NdotV, float ao, float roughness) {
+    return clamp(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
 // Select CSM cascade based on positive view-space depth
@@ -296,56 +311,41 @@ void main() {
     // Ambient lighting
     vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;
 
-    // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang):
-    // full resolution, the diffuse albedo already applied.
+    // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang): the
+    // incoming radiance times the diffuse albedo.
     const bool rtGI = (pc.flags & 8u) != 0u;
-    if (rtGI) {
-        vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
-        ambient += ssgiColor * ao;
-    }
+    const vec4 gi = rtGI ? texture(ssgiTexture, inTexCoord) : vec4(0.0, 0.0, 0.0, 1.0);
+    if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;
 
-    // Image-based lighting — only when env map is loaded.
-    // No env map = no IBL (direct lights + RTGI handle ambient instead).
-    if ((pc.flags & 1u) != 0u && textureSize(envMap, 0).x > 1) {
-        vec3 V = normalize(pc.cameraPos - fragPos);
-        vec3 R = reflect(-V, N);
-        float NdotV = max(dot(N, V), 0.0);
+    // Image-based lighting (flag bit 0: an environment is loaded and prefiltered). The split
+    // sum: the radiance arriving around the reflection at this roughness, times the GGX BRDF's
+    // directional albedo F0 * A + B (Karis's analytic fit, envBRDFApprox).
+    if ((pc.flags & 1u) != 0u) {
+        const vec3 R = reflect(-V, N);
+        const float NdotV = max(dot(N, V), 1e-4);
+        const vec3 prefiltered = pc.envIntensity *
+            textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;
+        const vec3 irradiance = pc.envIntensity * textureLod(envIrradiance, equirectUV(N), 0.0).rgb;   // over pi
+        // What arrives: the environment where it is visible, and with RT GI, what the rays that
+        // hit something brought back (the incoming radiance less the escaped rays' share,
+        // which is the visibility times the environment's own mean) in place of the rest.
+        // Without RT GI the environment is taken as unoccluded (visibility 1).
+        const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));
+        const vec2 ab = envBRDFApprox(NdotV, roughness);
+        const vec3 specularAmbient = incoming * (surface.F0 * ab.x + ab.y);
 
-        float phi = atan(R.z, R.x);
-        float theta = asin(clamp(R.y, -1.0, 1.0));
-        vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
+        // Occlusion below what the GI rays resolve: ao (the material's) and SSAO darken the
+        // diffuse term as they measure; the reflection, a narrower cone, through
+        // specularOcclusion.
+        const float occlusion = ao * ssao;
+        ambient += specularAmbient * specularOcclusion(NdotV, occlusion, roughness);
 
-        // Approximate IBL from the equirect environment map (no prefiltered
-        // cubemap when only setEnvMap was used). LOD is a rough roughness proxy.
-        float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512
-        vec3 prefilteredColor = textureLod(envMap, envUV, lod).rgb;
-        // Diffuse irradiance: average a few directions around N (equirect has no
-        // pre-convolved low mips unless generated). Single sample at N is a floor.
-        vec2 nUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
-        vec3 irradiance = textureLod(envMap, nUV, 9.0).rgb;
-
-        vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);
-        vec3 kS = F;
-        vec3 kD = 1.0 - kS;
-        kD *= 1.0 - metallic;
-        vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
-        // When no real BRDF LUT is bound (1×1 dummy / black), split-sum goes to
-        // zero and metals read pure black. Fall back to a rough analytical scale.
-        if (brdf.x + brdf.y < 1e-4) {
-            brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);
+        // RT GI's rays that leave the scene bring back the environment, occluded: with it, the
+        // unoccluded diffuse term here would count that light twice.
+        if (!rtGI) {
+            const vec3 kD = (1.0 - fresnelSchlickRoughness(NdotV, surface.F0, roughness)) * (1.0 - metallic);
+            ambient += kD * albedo * irradiance * occlusion;
         }
-
-        vec3 specularAmbient = prefilteredColor * (F * brdf.x + brdf.y);
-        vec3 diffuseAmbient = kD * albedo * irradiance;
-        // Metals with dark baseColor need an extra F0-weighted ambient floor so
-        // they don't crush to pure black when the env sample is dim.
-        if (metallic > 0.5) {
-            specularAmbient += surface.F0 * max(prefilteredColor, vec3(pc.ambientIntensity * 4.0));
-        }
-
-        // RT GI's rays that leave the scene bring back the environment, occluded: with it,
-        // the unoccluded diffuse term here would count that light twice.
-        ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;
     }
 
     // Emissive — self-illuminating surfaces (glow independent of lighting)

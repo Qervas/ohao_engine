@@ -107,6 +107,10 @@ inline constexpr uint32_t kSSSRadiusTiles = 2u;
 inline constexpr uint32_t kInstanceGpuStride = 160u;
 // the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
 inline constexpr uint32_t kInstanceGpuGiAlbedoOffset = 144u;
+// the prefiltered environment (ibl/env_prefilter.slang): mip levels, level i GGX-convolved at roughness i / (kEnvPrefilterLevels - 1); level 0 is the environment itself
+inline constexpr uint32_t kEnvPrefilterLevels = 6u;
+// the cosine-convolved environment (mean incoming radiance, diffuse irradiance over pi), equirectangular, this wide and half as tall
+inline constexpr uint32_t kEnvIrradianceWidth = 64u;
 
 // the calibration kernel's push constants
 struct alignas(4) CalibratePush {
@@ -317,5 +321,14 @@ struct alignas(16) PreviewPush {
 static_assert(offsetof(PreviewPush, src) == 0);
 static_assert(offsetof(PreviewPush, dst) == 16);
 static_assert(sizeof(PreviewPush) == 32);
+
+// ibl/env_prefilter.slang push constants
+struct alignas(16) EnvPrefilterPush {
+    alignas(16) std::array<uint32_t, 4> size{};
+    alignas(16) std::array<float, 4> params{};
+};
+static_assert(offsetof(EnvPrefilterPush, size) == 0);
+static_assert(offsetof(EnvPrefilterPush, params) == 16);
+static_assert(sizeof(EnvPrefilterPush) == 32);
 
 } // namespace ohao::gpu::shared

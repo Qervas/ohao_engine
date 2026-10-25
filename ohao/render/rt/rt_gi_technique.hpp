@@ -12,8 +12,10 @@
 // reference  render() traces full resolution, kGIReferenceRays rays a pixel, and keeps the
 //            running mean of the frames since the last temporal reset; denoise() does nothing.
 //
-// The output is diffuse indirect light with the receiver's diffuse albedo applied:
-// lighting adds it, times AO, to the ambient term.
+// The output is the incoming radiance over the cosine lobe (rgb, the receiver's albedo not
+// applied) and the environment's visibility (a, the share of the rays that left the scene):
+// lighting adds rgb times the diffuse albedo and AO to the ambient term, and lights the
+// specular IBL with the environment where it is visible and with the bounce light elsewhere.
 
 #include "render_technique.hpp"
 #include "rt_compute.hpp"

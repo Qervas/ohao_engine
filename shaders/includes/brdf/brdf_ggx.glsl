@@ -170,7 +170,7 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
 }
 
 // =============================================================================
-// IBL Support Functions (for future Image-Based Lighting)
+// IBL Support Functions (deferred_lighting.frag's split-sum IBL)
 // =============================================================================
 
 // Pre-filtered environment map sampling parameters
@@ -179,8 +179,7 @@ float getRoughnessMipLevel(float roughness, float maxMipLevel) {
     return roughness * maxMipLevel;
 }
 
-// Split-sum approximation for IBL specular
-// Precomputed BRDF LUT lookup
+// Split-sum approximation for IBL specular: the environment BRDF, analytic in place of a LUT
 // Returns: (scale, bias) for F0 * scale + bias
 vec2 envBRDFApprox(float NdotV, float roughness) {
     // Karis approximation (avoids LUT texture lookup)

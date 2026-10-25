@@ -101,6 +101,10 @@ static const uint kSSSRadiusTiles = 2u;
 static const uint kInstanceGpuStride = 160u;
 // the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
 static const uint kInstanceGpuGiAlbedoOffset = 144u;
+// the prefiltered environment (ibl/env_prefilter.slang): mip levels, level i GGX-convolved at roughness i / (kEnvPrefilterLevels - 1); level 0 is the environment itself
+static const uint kEnvPrefilterLevels = 6u;
+// the cosine-convolved environment (mean incoming radiance, diffuse irradiance over pi), equirectangular, this wide and half as tall
+static const uint kEnvIrradianceWidth = 64u;
 
 // the calibration kernel's push constants
 struct CalibratePush
@@ -148,7 +152,7 @@ struct GITracePush
     uint4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up, or the frame's at full resolution); z, w the frame's
     uint4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
     uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again), w realtime: the trace is the frame >> w (1 half resolution, 0 full; render.settings rtGI.resolution)
-    float4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
+    float4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it); w the environment's intensity (Environment.intensity: a miss brings back the environment times it)
 };
 
 // SSAO (compute/ssao.slang) push constants, both entries
@@ -250,4 +254,11 @@ struct PreviewPush
 {
     uint4 src;   // the source rectangle of the final image: x, y its origin, z, w its size
     uint4 dst;   // x, y the preview's size (each at most the source's)
+};
+
+// ibl/env_prefilter.slang push constants
+struct EnvPrefilterPush
+{
+    uint4 size;   // x, y the output level's size; z samples a texel; w the source chain's mip count
+    float4 params;   // x the level's GGX roughness (prefilter); y, z the source chain's base size; w unused
 };

@@ -156,10 +156,10 @@ The `Output` doc comments say what the implementations allocate.
 
 {{cite ohao/render/rt/rt_shadow_technique.cpp "constexpr VkFormat kVisFormat = VK_FORMAT_R32G32_UINT;"}}
 
-— and `GIOutput::indirectLight` is a full-resolution RGBA16F image of diffuse
-indirect light with the receiver's albedo already applied:
+— and `GIOutput::indirectLight` is a full-resolution RGBA16F image of the incoming
+radiance (the receiver's albedo not applied) with the environment's visibility in alpha:
 
-{{cite ohao/render/rt/render_technique.hpp "VkImage indirectLight;         // RGBA16F, full resolution: diffuse indirect light, albedo applied"}}
+{{cite ohao/render/rt/render_technique.hpp "VkImage indirectLight;         // RGBA16F, full resolution: rgb incoming radiance (no albedo), a the environment's visibility"}}
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "constexpr VkFormat kRadianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
 

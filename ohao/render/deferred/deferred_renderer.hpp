@@ -120,10 +120,6 @@ public:
     [[nodiscard]] float getNightFactor() const { return m_nightFactor; }
     [[nodiscard]] glm::vec3 getMoonDirection() const { return m_moonDirection; }
 
-    // IBL configuration (optional)
-    void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
-                        VkImageView brdfLUT, VkSampler iblSampler);
-
     // Texture manager (forwarded to GBufferPass)
     void setTextureManager(BindlessTextureManager* texManager);
 
@@ -159,7 +155,11 @@ public:
     [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
     [[nodiscard]] bool getRTShadowsEnabled() const { return m_useRTShadows; }
-    void setEnvMap(VkImageView view, VkSampler sampler);
+    // The environment: `source` (RGBA32F, one level) for RT GI's misses; the prefiltered levels
+    // and irradiance (EnvPrefilter) for lighting's IBL, null without them; `intensity`
+    // (Environment.intensity) scales both, as the path tracer's miss does.
+    void setEnvMap(VkImageView source, VkImageView prefiltered, VkImageView irradiance, VkSampler iblSampler,
+                   float intensity);
 
     [[nodiscard]] bool getSkyEnabled() const { return m_skyEnabled; }
     void setSunDirection(const glm::vec3& dir);
@@ -211,6 +211,7 @@ private:
     bool m_ssrWanted{true};
     bool m_sssWanted{true};
     VkImageView m_envView{VK_NULL_HANDLE};   // setEnvMap: what RT GI's escaping rays see
+    float m_envIntensity{1.0f};              // setEnvMap: Environment.intensity
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<SSRPass> m_ssrPass;
     std::unique_ptr<SSSPass> m_sssPass;

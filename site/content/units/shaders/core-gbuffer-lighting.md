@@ -245,50 +245,27 @@ the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that. I
 also runs only for `lightType == 0` with a non-negative slot: point and spot lights
 cast no shadow without RT.
 
-Ambient is defensive because every input can legitimately be absent. IBL is gated
-not only on its flag but on the env map being larger than 1×1 — how the shader
-tells a real environment from the dummy image the descriptor writer substitutes
-when none is loaded:
+Ambient is defensive because every input can legitimately be absent. IBL runs under
+flag bit 0, which the pass raises only when both of `EnvPrefilter`'s images are bound:
+the environment GGX-prefiltered into `kEnvPrefilterLevels` mips (binding 15) and its
+irradiance (binding 7). Without an environment both bindings hold the dummy view and the
+branch never runs.
 
-{{cite shaders/core/deferred_lighting.frag "if ((pc.flags & 1u) != 0u && textureSize(envMap, 0).x > 1) {"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_prefilteredView != VK_NULL_HANDLE && m_irradianceView != VK_NULL_HANDLE)"}}
 
-Inside the branch the defensiveness stops being defensive and becomes the
-pipeline. Bindings 7 and 8 (irradiance and prefiltered cubemaps) and binding 9
-(the split-sum BRDF LUT) are all fed by a single setter, and that setter has zero
-callers repo-wide:
+Inside the branch the split sum reads the prefiltered level for the pixel's roughness
+along the reflection, weighted by RT GI's environment visibility with GI's bounce
+radiance for the occluded rest, times Karis's analytic environment BRDF, and occludes
+the result by the material's `ao` and SSAO through a specular-occlusion term (the
+deferred lighting unit, "Image-based lighting"):
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_lightingPass->setIBLTextures(irradiance, prefiltered, brdfLUT, iblSampler);"}}
+{{cite shaders/core/deferred_lighting.frag "ambient += specularAmbient * specularOcclusion(NdotV, occlusion, roughness);"}}
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;"}}
-
-The shader declares no samplers for 7 and 8 at all, so those two are pure
-descriptor-layout ballast. Binding 9 it does declare — which makes the
-"unpopulated BRDF LUT" branch not a contingency but the only split-sum the
-deferred path ever evaluates:
-
-{{cite shaders/core/deferred_lighting.frag "brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);"}}
-
-Nor is there prefiltering to fall back *from*. The env image the deferred pass
-receives is created with a single mip level and viewed with `levelCount = 1`:
+The prefiltered images are the deferred frame's own; the env image the path tracer and
+RT GI sample keeps its single mip level and its base-level sampler, so nothing here can
+move a path-traced pixel:
 
 {{cite ohao/gpu/vulkan/env_upload.cpp "imgInfo.mipLevels = 1;"}}
-
-and the sampler handed over beside it is a zero-initialised
-`VkSamplerCreateInfo` that never assigns `maxLod`, leaving it 0.0:
-
-{{cite ohao/gpu/vulkan/env_upload.cpp "VkSamplerCreateInfo info{};"}}
-
-Both `textureLod` calls therefore clamp to mip 0 — and their third argument is an
-absolute LOD, not a bias. The `roughness * 9.0` specular tap and the fixed `9.0`
-irradiance tap read the same full-resolution equirect texels: env reflections are
-mirror-sharp at every roughness, and the diffuse "irradiance" is one texel of the
-raw HDR in the direction of `N`.
-
-{{cite shaders/core/deferred_lighting.frag "vec3 irradiance = textureLod(envMap, nUV, 9.0).rgb;"}}
-
-Which leaves the third fallback — an `F0`-weighted ambient floor for
-`metallic > 0.5` — as the thing standing between a dark metal and black when that
-single texel comes back dim.
 
 Screen-space AO does reach these terms. When the effect is on, the render graph runs
 `executeSSAO`, hands the half-resolution view to the lighting pass, and announces it

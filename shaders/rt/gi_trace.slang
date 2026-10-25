@@ -2,13 +2,16 @@
 // indirect light, a compute pass of inline ray queries. Two qualities, one pass:
 //
 // realtime   Half resolution: trace pixel q shades full-resolution pixel 2q with
-//            kGIRealtimeRays cosine rays. It writes the mean incoming radiance (not yet
-//            multiplied by the receiver's albedo) and the denoiser's guide (distance from the
-//            camera, normal); gi_denoise.slang accumulates, filters and upsamples it.
+//            kGIRealtimeRays cosine rays. It writes the mean incoming radiance (rgb, not
+//            multiplied by the receiver's albedo) and the environment's visibility (a, the
+//            share of the rays that left the scene), and the denoiser's guide (distance from
+//            the camera, normal); gi_denoise.slang accumulates, filters and upsamples them.
 // reference  Full resolution, kGIReferenceRays rays a pixel, no denoiser: refMean keeps the
 //            plain running mean of the reference frames since the last temporal reset (a
-//            realtime frame starts it again), and radianceOut gets mean x diffuse albedo, what
-//            lighting adds.
+//            realtime frame starts it again), and radianceOut gets it, what lighting reads.
+//
+// Lighting multiplies the radiance by the diffuse albedo, and lights the specular IBL with the
+// environment where the rays escaped and with what they hit elsewhere.
 //
 // A ray that hits a surface brings back that surface's bounce albedo (the instance table's
 // giAlbedoPacked.rgb) over pi, times the direct light the hit receives from the frame's
@@ -110,9 +113,11 @@ float3 directAt(float3 p, float3 n)
     return sum;
 }
 
-// The radiance arriving at `origin` from direction `dir`.
-float3 incoming(float3 origin, float3 dir)
+// The radiance arriving at `origin` from direction `dir`; `escaped` is 1 when the ray left the
+// scene (it then brings back the environment).
+float3 incoming(float3 origin, float3 dir, out float escaped)
 {
+    escaped = 0.0;
     RayDesc ray;
     ray.Origin = origin;
     ray.TMin = 0.001;
@@ -128,11 +133,12 @@ float3 incoming(float3 origin, float3 dir)
         const float3 hit = origin + dir * q.CommittedRayT();
         return albedo * (1.0 / kPi) * directAt(hit, -dir);
     }
+    escaped = 1.0;
     if (pc.flags.y == 0u) return float3(0.0);
     // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
     // full-resolution texels.
     const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, asin(clamp(dir.y, -1.0, 1.0)) / kPi + 0.5);
-    return envMap.SampleLevel(envSampler, uv, 0.0).rgb;
+    return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w;   // times Environment.intensity
 }
 
 [shader("compute")]
@@ -164,15 +170,20 @@ void trace(uint3 id : SV_DispatchThreadID)
     const uint key = pixelHash(pixel);
     const uint rays = max(pc.seed.z, 1u);
     float3 sum = float3(0.0);
+    float escapedSum = 0.0;
     for (uint s = 0u; s < rays; ++s)
     {
         const float u = rand01(key, s, 0u);
         const float phi = kTwoPi * (float(s) + rand01(key, s, 1u)) / float(rays);
         const float r = sqrt(u);
         const float3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
-        sum += incoming(origin, dir);
+        float escaped;
+        sum += incoming(origin, dir, escaped);
+        escapedSum += escaped;
     }
-    const float3 mean = sum / float(rays);
+    // The mean incoming radiance, and the environment's visibility: the share of the
+    // cosine-weighted rays that left the scene (lighting occludes the specular IBL by it).
+    const float4 mean = float4(sum / float(rays), escapedSum / float(rays));
 
     if (reference)
     {
@@ -180,15 +191,14 @@ void trace(uint3 id : SV_DispatchThreadID)
         // fresh image, realtime frames in between) this frame takes its own value and nothing
         // stale or undefined is read.
         const uint k = pc.flags.z;
-        const float3 prev = k == 0u ? float3(0.0) : refMean[pixel].xyz;
-        const float3 m = prev + (mean - prev) / (float(k) + 1.0);
-        refMean[pixel] = float4(m, 1.0);
-        const float3 diffuse = gAlbedo.Load(int3(full, 0)).rgb * (1.0 - position.w);
-        radianceOut[pixel] = float4(m * diffuse, 1.0);
+        const float4 prev = k == 0u ? float4(0.0) : refMean[pixel];
+        const float4 m = prev + (mean - prev) / (float(k) + 1.0);
+        refMean[pixel] = m;
+        radianceOut[pixel] = m;
         return;
     }
 
-    radianceOut[pixel] = float4(mean, 1.0);
+    radianceOut[pixel] = mean;
     // The denoiser's guide, as RT shadows pack theirs: the distance from the camera
     // (bfloat16, never 0 on a surface) and the octahedral normal (8 + 8 bits). 0 is sky.
     const uint dist = max(asuint(distance(p, pc.cameraPos.xyz)) >> 16u, 1u);

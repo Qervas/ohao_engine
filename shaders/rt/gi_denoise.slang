@@ -7,13 +7,16 @@
 //           weight down to 1/kGIFastHistoryFrames) and a long one (down to
 //           1/kGIHistoryFrames). The long history is clamped to the range of the short one
 //           over the 3x3 neighbourhood first, so a light that moves or changes drags at most
-//           a few frames behind instead of kGIHistoryFrames. Alpha holds each history's
-//           frame count: none after a temporal reset or a disocclusion.
+//           a few frames behind instead of kGIHistoryFrames. The short accumulation's alpha
+//           holds the frames of history (none after a temporal reset or a disocclusion; the
+//           two start and reproject together, so one count serves both); the long one's alpha
+//           the environment's visibility, accumulated as its radiance is.
 // atrous    Twice (steps 1 and 2), at half resolution: a 5x5 B3-spline a-trous kernel over
-//           the long accumulation, edge-stopped by depth and normal.
+//           the long accumulation (radiance and visibility), edge-stopped by depth and normal.
 // upsample  To full resolution, joint-bilateral: the 4 nearest half-resolution samples
-//           weighted bilinearly and by how well their depth and normal match the pixel's,
-//           times the pixel's diffuse albedo (albedo x (1 - metallic)): what lighting adds.
+//           weighted bilinearly and by how well their depth and normal match the pixel's.
+//           Lighting multiplies the radiance by the diffuse albedo and occludes the specular
+//           IBL by the visibility.
 //
 // Every output depends only on its inputs: no atomics, no order. Each entry point has its own
 // binding numbers (temporal 0-7, atrous 8-10, upsample 11-16) and its own descriptor set layout.
@@ -101,8 +104,7 @@ void reproject(int2 q, float4 gc, out float4 fast, out float4 slow)
     }
     fast /= wsum;
     slow /= wsum;
-    fast.a = floor(fast.a + 0.5);
-    slow.a = floor(slow.a + 0.5);
+    fast.a = floor(fast.a + 0.5);   // a frame count; slow.a (the visibility) stays a mean
 }
 
 [shader("compute")]
@@ -122,8 +124,10 @@ void temporal(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
         {
             const float3 cur = tNoisy.Load(int3(q, 0)).rgb;
             if (history) reproject(q, decodeGuide(g), fast, slow);
+            // fast.a is the frames of history (both accumulations have the same: they start and
+            // are reprojected together); the short one blends over at most kGIFastHistoryFrames.
             const float n = min(fast.a + 1.0, float(kGIFastHistoryFrames));
-            fast = float4(lerp(fast.rgb, cur, 1.0 / n), n);
+            fast = float4(lerp(fast.rgb, cur, 1.0 / n), min(fast.a + 1.0, float(kGIHistoryFrames)));
         }
         gFast[i] = fast;
         gSlow[i] = slow;
@@ -154,12 +158,13 @@ void temporal(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID)
             hi = max(hi, v.rgb);
         }
     }
-    const float3 cur = tNoisy.Load(int3(pixel, 0)).rgb;
+    const float4 cur = tNoisy.Load(int3(pixel, 0));
     const float4 slowPrev = gSlow[ci];
-    const float n = min(slowPrev.a + 1.0, float(kGIHistoryFrames));
-    const float3 slow = lerp(clamp(slowPrev.rgb, lo, hi), cur, 1.0 / n);
+    const float n = fast.a;   // min(frames of history + 1, kGIHistoryFrames)
+    const float3 slow = lerp(clamp(slowPrev.rgb, lo, hi), cur.rgb, 1.0 / n);
+    const float visibility = lerp(slowPrev.a, cur.a, 1.0 / n);
     tFastOut[pixel] = fast;
-    tSlowOut[pixel] = float4(slow, n);
+    tSlowOut[pixel] = float4(slow, visibility);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -188,7 +193,7 @@ void atrous(uint3 id : SV_DispatchThreadID)
     // 80 degrees at 720p) keeps its neighbours.
     const float invTol = 1.0 / (0.03 * gc.w * float(step));
     const float kH[3] = {0.375, 0.25, 0.0625};   // B3 spline: centre, 1, 2
-    float3 sum = float3(0.0);
+    float4 sum = float4(0.0);
     float wsum = 0.0;
     [unroll]
     for (int dy = -2; dy <= 2; ++dy)
@@ -213,11 +218,11 @@ void atrous(uint3 id : SV_DispatchThreadID)
                     w *= nd4 * nd4 * nd4 * nd4;   // cos^16
                 }
             }
-            sum += w * aInput.Load(int3(q, 0)).rgb;
+            sum += w * aInput.Load(int3(q, 0));
             wsum += w;
         }
     }
-    aOutput[pixel] = float4(sum / wsum, 1.0);   // the centre is in: wsum >= 0.14
+    aOutput[pixel] = sum / wsum;   // the centre is in: wsum >= 0.14
 }
 
 // ---------------------------------------------------------------------------------------
@@ -252,7 +257,7 @@ void upsample(uint3 id : SV_DispatchThreadID)
     const int2 base = pixel >> int(shift);
     const float2 f = shift != 0u ? float2(pixel & 1) * 0.5 : float2(0.0);
     const float invTol = 1.0 / (0.05 * dc);
-    float3 sum = float3(0.0), best = float3(0.0);
+    float4 sum = float4(0.0), best = float4(0.0);
     float wsum = 0.0, bestW = -1.0;
     [unroll]
     for (uint i = 0u; i < 4u; ++i)
@@ -265,7 +270,7 @@ void upsample(uint3 id : SV_DispatchThreadID)
         const float nd = saturate(dot(gq.xyz, nc));
         const float nd2 = nd * nd;
         const float match = exp(-abs(gq.w - dc) * invTol) * (nd2 * nd2 * nd2 * nd2);   // cos^8
-        const float3 v = uInput.Load(int3(tap, 0)).rgb;
+        const float4 v = uInput.Load(int3(tap, 0));
         if (match > bestW)
         {
             bestW = match;
@@ -276,7 +281,5 @@ void upsample(uint3 id : SV_DispatchThreadID)
         wsum += w;
     }
     // No tap is this surface (a sliver the half-resolution trace missed): the closest match.
-    const float3 radiance = wsum > 1e-3 ? sum / wsum : best;
-    const float3 diffuse = uAlbedo.Load(int3(pixel, 0)).rgb * (1.0 - position.w);
-    uOutput[pixel] = float4(radiance * diffuse, 1.0);
+    uOutput[pixel] = wsum > 1e-3 ? sum / wsum : best;
 }
