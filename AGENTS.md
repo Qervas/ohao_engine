@@ -345,10 +345,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   environment's visibility (escaped rays) in alpha: specular weights the prefiltered
   environment by it and takes GI's radiance for the rest, so a closed room does not
   mirror the sky; AO and SSAO occlude specular through `specularOcclusion`. The path
-  tracer's environment keeps one mip and is untouched. SSR is still added on top of the
-  IBL in tonemapping (a double count, small), and RT GI's half-resolution noise shows as
-  low-frequency blotches on flat walls; compare a metal against the path tracer before
-  trusting its look.
+  tracer's environment keeps one mip and is untouched. RT GI's half-resolution noise
+  shows as low-frequency blotches on flat walls; compare a metal against the path tracer
+  before trusting its look.
+- Reflected light is counted once. Lighting writes, beside the lit image, the
+  environment/GI specular it added (`envSpecular`, E) and its weight (`specularWeight`,
+  W: split sum times specular occlusion, computed for every pixel, environment or not);
+  SSR's resolve (`postprocess/ssr_resolve.slang`) rewrites the lit image in place,
+  `lit += W·(c·L) − c·E`, before bloom and TAA. A new reflection source must go through
+  E/W, never be added on top in post. The constant ambient is diffuse only
+  (`albedo·(1−metallic)`): on metals it was a flat F0-tinted glow.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

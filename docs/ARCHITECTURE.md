@@ -124,10 +124,10 @@ rt.shadows          a ray to each of a pixel's most important lights   [rtShadow
 rt.shadows.filter   5x5 filter + temporal (realtime quality)
 rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
 rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
-lighting            froxel list + IBL + shadows + GI into the HDR image
+lighting            froxel list + IBL + shadows + GI into the HDR image (+ env specular, its weight)
 sky, particles      into the HDR image
 sss                 subsurface blur on classified tiles   [sss]
-ssr                 half-res reflections   [ssr]
+ssr                 half-res trace; resolve replaces env specular in place   [ssr]
 post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]
 gizmo               transform handles
 capture.preview     only for an inline capture: box filter into staging
