@@ -13,8 +13,9 @@
 //            noise texels exactly once, so the interleaving averages out. Writes the same
 //            (ao, distance) pair lighting reads.
 //
-// The noise is 16 rotations from the render seed (SSAOPass::noise), in the push constants:
-// deterministic, and reseeding uploads nothing.
+// The noise is 16 rotations from the render seed (SSAOPass::noise), packed 4 bits a texel in
+// the push constants (128 bytes, the size Vulkan guarantees): deterministic, and reseeding
+// uploads nothing.
 import shared.layout;
 
 [[vk::push_constant]] ConstantBuffer<SSAOPush> pc;
@@ -38,11 +39,12 @@ void basis(float3 n, out float3 t, out float3 b)
     b = cross(n, t);
 }
 
+// The rotation of noise texel (q.x mod 4, q.y mod 4): its stratum, 4 bits in config.z/w.
 float noiseTexel(uint2 q)
 {
     const uint k = (q.x & 3u) | ((q.y & 3u) << 2u);
-    const float4 row = k < 4u ? pc.noise0 : k < 8u ? pc.noise1 : k < 12u ? pc.noise2 : pc.noise3;
-    return row[k & 3u];
+    const uint word = k < 8u ? pc.config.z : pc.config.w;
+    return (float((word >> ((k & 7u) * 4u)) & 15u) + 0.5) / 16.0;
 }
 
 // ---------------------------------------------------------------------------------------

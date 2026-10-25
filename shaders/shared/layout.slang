@@ -98,11 +98,7 @@ struct SSAOPush
     float4 cameraPosRadius;   // xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres
     float4 params;   // x bias (metres along the normal), y intensity, z, w the distance falloff's start and end
     uint4 extent;   // x, y the half-resolution size; z, w the frame's
-    uint4 config;   // x directions a pixel, y steps a direction
-    float4 noise0;   // the 4x4 interleaved rotations, texels 0-3 (x + 4y), each a fraction of the angle between two directions
-    float4 noise1;   // texels 4-7
-    float4 noise2;   // texels 8-11
-    float4 noise3;   // texels 12-15
+    uint4 config;   // x directions a pixel, y steps a direction; z, w the 4x4 interleaved noise: 4 bits a texel (x + 4y; z texels 0-7, w 8-15), the stratum k of rotation (k + 0.5) / 16 of the angle between two directions
 };
 
 // SSR (postprocess/ssr.slang) push constants

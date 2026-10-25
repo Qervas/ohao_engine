@@ -10,6 +10,9 @@ namespace ohao {
 
 namespace shared = gpu::shared;
 
+// maxPushConstantsSize is at least 128 on every Vulkan device.
+static_assert(sizeof(shared::SSAOPush) <= 128);
+
 namespace {
 
 constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -114,14 +117,11 @@ void SSAOPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     pc.cameraPosRadius = f4(m_cameraPos, m_radius);
     pc.params = {m_bias, m_intensity, m_falloffStart, m_falloffEnd};
     pc.extent = {m_occlusion.width, m_occlusion.height, m_width, m_height};
-    pc.config = {m_directions, m_steps, 0u, 0u};
+    // The 16 rotations are strata (k + 0.5) / 16: k, 4 bits a texel.
     const auto n = noise(m_noiseSeed);
-    for (uint32_t i = 0; i < 4; ++i) {
-        pc.noise0[i] = n[i];
-        pc.noise1[i] = n[4 + i];
-        pc.noise2[i] = n[8 + i];
-        pc.noise3[i] = n[12 + i];
-    }
+    uint32_t packed[2] = {0u, 0u};
+    for (uint32_t i = 0; i < 16; ++i) packed[i / 8] |= static_cast<uint32_t>(n[i] * 16.0f) << ((i % 8) * 4);
+    pc.config = {m_directions, m_steps, packed[0], packed[1]};
     const uint32_t gx = (m_occlusion.width + 7) / 8, gy = (m_occlusion.height + 7) / 8;
 
     // Occlusion: G-buffer -> m_occlusion

@@ -123,21 +123,13 @@ struct alignas(16) SSAOPush {
     alignas(16) std::array<float, 4> params{};
     alignas(16) std::array<uint32_t, 4> extent{};
     alignas(16) std::array<uint32_t, 4> config{};
-    alignas(16) std::array<float, 4> noise0{};
-    alignas(16) std::array<float, 4> noise1{};
-    alignas(16) std::array<float, 4> noise2{};
-    alignas(16) std::array<float, 4> noise3{};
 };
 static_assert(offsetof(SSAOPush, viewProj) == 0);
 static_assert(offsetof(SSAOPush, cameraPosRadius) == 64);
 static_assert(offsetof(SSAOPush, params) == 80);
 static_assert(offsetof(SSAOPush, extent) == 96);
 static_assert(offsetof(SSAOPush, config) == 112);
-static_assert(offsetof(SSAOPush, noise0) == 128);
-static_assert(offsetof(SSAOPush, noise1) == 144);
-static_assert(offsetof(SSAOPush, noise2) == 160);
-static_assert(offsetof(SSAOPush, noise3) == 176);
-static_assert(sizeof(SSAOPush) == 192);
+static_assert(sizeof(SSAOPush) == 128);
 
 // SSR (postprocess/ssr.slang) push constants
 struct alignas(16) SSRPush {

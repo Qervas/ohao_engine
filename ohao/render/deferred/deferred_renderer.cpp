@@ -285,10 +285,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); });
     }
 
-    // 3. SSAO — reads normal buffer (already at SHADER_READ_ONLY after GBuffer).
-    //    SSAO self-manages its output transitions internally (UNDEFINED→GENERAL→SHADER_READ_ONLY).
-    //    Only when the effect is on, so a frame without it has no ssao pass (or timing);
-    //    lighting then binds its fallback view.
+    // 3. SSAO — reads the G-buffer's position and normal (SHADER_READ_ONLY after the
+    //    G-buffer pass, whose render pass makes its writes visible to later shaders) and
+    //    manages its own images' layouts. Only when the effect is on, so a frame without it
+    //    has no ssao pass (or timing); lighting then binds its fallback view.
     const bool ssaoOn = m_postProcessing && m_postProcessing->getSSAOEnabled();
     if (!ssaoOn && m_lightingPass) m_lightingPass->setSSAOTexture(VK_NULL_HANDLE, VK_NULL_HANDLE);
     if (ssaoOn && m_gbufferPass) {
@@ -441,8 +441,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_passTimer) m_passTimer->end(cmd);
     };
 
-    // Sky and particles write into the lighting output, so they run before SSS copies it:
-    // post reads SSS's copy, and anything drawn into the lit image after it was lost.
+    // Sky and particles draw into the lighting output before SSS blurs it in place and SSR
+    // and post read it.
 
     // 4.5. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {

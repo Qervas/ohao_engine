@@ -1752,9 +1752,9 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
     TEST_PASS();
 }
 
-// Sky and particles draw into the lit image before SSS copies it (2b step 4): the sky is in
-// the final image of a frame that runs SSS. It used to be drawn after SSS's copy, which
-// post reads, so every SSS frame lost it: the open sky came out black.
+// Sky and particles draw into the lit image before SSS (2b step 4): the sky is in the final
+// image of a frame that runs SSS. It used to be drawn after SSS copied the image for post,
+// so every SSS frame lost it: the open sky came out black.
 static void sp2b_s4_the_sky_reaches_the_final_image_through_sss() {
     TEST_BEGIN("sp2b step 4: the sky reaches the final image in a frame that runs SSS");
     ohao::VulkanRenderer r(160, 120);

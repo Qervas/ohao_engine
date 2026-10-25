@@ -94,11 +94,7 @@
        {"name": "cameraPosRadius", "type": "float4", "doc": "xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres"},
        {"name": "params", "type": "float4", "doc": "x bias (metres along the normal), y intensity, z, w the distance falloff's start and end"},
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
-       {"name": "config", "type": "uint4", "doc": "x directions a pixel, y steps a direction"},
-       {"name": "noise0", "type": "float4", "doc": "the 4x4 interleaved rotations, texels 0-3 (x + 4y), each a fraction of the angle between two directions"},
-       {"name": "noise1", "type": "float4", "doc": "texels 4-7"},
-       {"name": "noise2", "type": "float4", "doc": "texels 8-11"},
-       {"name": "noise3", "type": "float4", "doc": "texels 12-15"}
+       {"name": "config", "type": "uint4", "doc": "x directions a pixel, y steps a direction; z, w the 4x4 interleaved noise: 4 bits a texel (x + 4y; z texels 0-7, w 8-15), the stratum k of rotation (k + 0.5) / 16 of the angle between two directions"}
      ]},
     {"name": "SSRPush", "doc": "SSR (postprocess/ssr.slang) push constants",
      "fields": [
