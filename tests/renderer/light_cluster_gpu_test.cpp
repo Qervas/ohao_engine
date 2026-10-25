@@ -5,7 +5,9 @@
 //   t08 exact      every pixel summing every light (the pre-2b loop, as a switch) and the froxel
 //                  lists give identical PNGs, byte for byte: Cornell (12 lights, RT shadows),
 //                  the helmet room (<= 8 lights, post effects) and the bench scene's 1,000 point
-//                  lights (4 shadowed) and sun. The <= 8-light scenes against images made before
+//                  lights (4 shadowed) and sun, a wall lit 1,500 m away under a 3,000 m far plane
+//                  (the slices reach the camera's far plane), and an orthographic camera (no
+//                  froxels: every light). The <= 8-light scenes against images made before
 //                  the step are the deferred goldens (render_golden.py, max_abs 0).
 //   t08 lists      the bench scene's froxels hold fewer lights than the table: the lists cull.
 //   t08 overflow   1,000 lights packed into a 3 m cube: froxels past 256 lights keep their first
@@ -20,15 +22,21 @@
 #include "bench/bench_world.hpp"
 #include "common/harness.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/render_extract.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/spawn.hpp"
 #include "ecs/world.hpp"
 #include "gpu/shared_layout.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "ohao/render_host.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/light_clusters.hpp"
+#include "render/camera/camera.hpp"
 #include "render/scene/render_scene.hpp"
+#include "runtime/image.hpp"
+#include "scene/asset/model.hpp"
+#include "scene/asset/primitive_mesh_generator.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -44,6 +52,7 @@ namespace shared = gpu::shared;
 
 namespace {
 
+bool g_keep = false;   // --keep: leave the compared PNGs in build/ to look at
 int g_passed = 0, g_failed = 0;
 std::vector<std::string> g_failures;
 
@@ -133,6 +142,35 @@ std::string packedLightsScene() {
     return ok ? rel : std::string{};
 }
 
+// A wall 1,500 m away under a camera whose far plane is 3,000 m, lit by a light 20 m in front
+// of it: the froxel slices must reach the camera's far plane, not a fixed distance.
+std::string farWallScene() {
+    static const std::string rel = scratch("far") + ".scene.json";
+    static const bool ok = [] {
+        using namespace ecs;
+        World w;
+        w.seedIds(9);
+        Transform wallT;
+        wallT.position = {0.0f, 0.0f, -1500.0f};
+        const auto wall = w.create("Wall", wallT);
+        w.registry().emplace<MeshSource>(
+            wall, MeshSource{BoxPrim{glm::vec3(-400.0f, -400.0f, -1.0f), glm::vec3(400.0f, 400.0f, 1.0f), glm::vec3(0.7f)}});
+        w.registry().emplace<MaterialOverride>(wall, MaterialOverride{{0.7f, 0.7f, 0.7f}, 0.8f, 0.0f, 0.0f});
+        Transform lt;
+        lt.position = {0.0f, 0.0f, -1480.0f};
+        const auto l = w.create("Light", lt);
+        Light light;
+        light.intensity = 5000.0f;
+        light.range = 150.0f;
+        light.castShadows = false;
+        w.registry().emplace<Light>(l, light);
+        const auto c = w.create("MainCamera", Transform{});
+        w.registry().emplace<ecs::Camera>(c, ecs::Camera{20.0f, 0.1f, 3000.0f, true});
+        return writeScene(w, rel);
+    }();
+    return ok ? rel : std::string{};
+}
+
 struct Capture {
     std::vector<uint8_t> png;
     std::vector<uint32_t> lists;        // the last frame's froxel buffer: counts, then indices
@@ -199,7 +237,7 @@ Capture capture(const std::string& scenePath, bool clustered, int frames, bool p
 }
 
 void removeIf(bool cond, const std::string& p) {
-    if (cond) std::remove(p.c_str());
+    if (cond && !g_keep) std::remove(p.c_str());
 }
 
 void t08_clustered_lighting_equals_the_full_loop() {
@@ -209,6 +247,7 @@ void t08_clustered_lighting_equals_the_full_loop() {
         {"cornell (12 lights, RT shadows), 10 frames", "cornell", "assets/scenes/cornell_box.scene.json", 10, false},
         {"helmet room (<= 8 lights), 30 frames with post", "helmet", "assets/scenes/helmet_game.scene.json", 30, true},
         {"bench lights (1,000 point + sun), 10 frames", "bench", benchLightsScene(), 10, false},
+        {"a wall lit 1,500 m away (far plane 3,000 m), 2 frames", "far", farWallScene(), 2, false},
     };
     for (const Case& c : cases) {
         if (c.path.empty()) {
@@ -345,15 +384,85 @@ void t08_casters_past_the_shadow_channels_render_unshadowed() {
     check(never == 4 && run.castersWithoutChannel == 4, "t08: channels: the other 4 are unshadowed, and counted");
 }
 
+// An orthographic camera over a floor lit by 16 small lights, through VulkanRenderer directly
+// (scene cameras are perspective): froxels are slices of a perspective frustum, so lighting
+// sums every light instead, and the image is the full loop's.
+std::vector<uint8_t> orthographicRun(bool clustered) {
+    std::vector<uint8_t> out;
+    VulkanRenderer r(320, 180);
+    if (!r.initialize()) return out;
+    {
+        ecs::World world;   // after the renderer: released first
+        ecs::installRenderExtract(world, r.renderScene());
+        Model floor;
+        PrimitiveMeshGenerator::generateBox(floor, {-10.0f, -0.1f, -10.0f}, {10.0f, 0.0f, 10.0f}, {1, 1, 1});
+        render::MaterialDesc grey;
+        grey.baseColor = {0.7f, 0.7f, 0.7f};
+        ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+        for (int i = 0; i < 16; ++i) {
+            ecs::Light light;
+            light.color = {0.4f + 0.04f * static_cast<float>(i), 0.8f, 1.0f - 0.04f * static_cast<float>(i)};
+            light.intensity = 3.0f;
+            light.range = 1.0f;
+            light.castShadows = false;
+            ecs::spawnLight(world, "light", light,
+                            ecs::Transform{{-7.5f + 5.0f * static_cast<float>(i % 4), 0.05f, -3.75f + 2.5f * static_cast<float>(i / 4)}});
+        }
+        // 40 m above the floor, looking down (glm::ortho keeps GL's -1..1 depth, so geometry
+        // nearer than the planes' midpoint is clipped): perspective froxels at that depth would
+        // sit 40 times farther from the view's centre than the pixels they hold, and miss
+        // every light away from the centre.
+        r.getCamera().setPosition({0.0f, 40.0f, 0.0f});
+        r.getCamera().setRotation(-89.0f, -90.0f);
+        r.getCamera().setOrthographicProjection(-9.0f, 9.0f, -5.0f, 5.0f, 0.1f, 50.0f);
+        r.setRenderMode(RenderMode::Deferred);
+        r.getDeferredRenderer()->setClusteredLighting(clustered);
+        world.sync();
+        r.resetAccumulation();
+        for (int f = 0; f < 2; ++f) {
+            world.sync();
+            if (f == 1) r.requestReadback();
+            r.render();
+            r.waitForSubmitted(r.framesSubmitted());
+        }
+        const auto px = r.readback();
+        out.assign(px.begin(), px.end());
+    }
+    return out;
+}
+
+void t08_orthographic_camera_lights_every_pixel_fully() {
+    std::printf("t08: an orthographic camera renders the full loop's image\n");
+    const auto clustered = orthographicRun(true), full = orthographicRun(false);
+    if (clustered.empty() || full.empty()) {
+        check(false, "t08: orthographic: the frames rendered");
+        return;
+    }
+    int m = 0;
+    for (std::size_t i = 0; i < clustered.size() && i < full.size(); ++i)
+        m = std::max(m, std::abs(int(clustered[i]) - int(full[i])));
+    double mean = 0.0;
+    for (const uint8_t v : full) mean += v;
+    mean /= static_cast<double>(full.size());
+    std::printf("  clustered switch on vs off: max_abs %d (mean %.1f of %zu bytes)\n", m, mean, full.size());
+    if (g_keep) {
+        (void)runtime::writePng(std::string(OHAO_SOURCE_DIR) + "/" + scratch("ortho_full") + ".png", full, 320, 180);
+        (void)runtime::writePng(std::string(OHAO_SOURCE_DIR) + "/" + scratch("ortho_clustered") + ".png", clustered, 320, 180);
+    }
+    check(clustered.size() == full.size() && m == 0, "t08: orthographic: the same image as every light");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    g_keep = argc > 1 && std::strcmp(argv[1], "--keep") == 0;
     t08_clustered_lighting_equals_the_full_loop();
     t08_bench_lights_froxels_cull_and_never_overflow();
     t08_thousand_packed_lights_overflow_is_reported();
     t08_twin_runs_build_identical_froxel_lists();
     t08_casters_past_the_shadow_channels_render_unshadowed();
-    for (const std::string& s : {benchLightsScene(), packedLightsScene()})
+    t08_orthographic_camera_lights_every_pixel_fully();
+    for (const std::string& s : {benchLightsScene(), packedLightsScene(), farWallScene()})
         if (!s.empty()) std::remove((std::string(OHAO_SOURCE_DIR) + "/" + s).c_str());
     return test::finish("light_cluster_gpu_test", g_passed, g_failed, g_failures);
 }

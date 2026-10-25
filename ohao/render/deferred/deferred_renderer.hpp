@@ -91,6 +91,9 @@ public:
     // Clustered lighting on (the default) or every pixel summing every light (tests: the same
     // image when no froxel overflows).
     void setClusteredLighting(bool on) noexcept { m_clusteredLighting = on; }
+    // The farthest view distance the froxel slices cover: the camera's far plane (a pixel past
+    // the last slice's box would miss the lights there).
+    void setClusterFarPlane(float farPlane) noexcept { m_clusterFar = farPlane; }
     [[nodiscard]] LightClusters* lightClusters() noexcept { return m_lightClusters.get(); }
     // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into visibility
     // channel i (the light UBO's params.w points each raster light at its channel).
@@ -222,6 +225,7 @@ private:
     uint64_t m_lightsVersion{0};
     float m_ambient{0.35f};
     bool m_clusteredLighting{true};
+    float m_clusterFar{1000.0f};
     std::unique_ptr<LightClusters> m_lightClusters;   // the light table and the froxel lists
     std::vector<render::LightDesc> m_shadowLights;
 

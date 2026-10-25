@@ -347,9 +347,11 @@ vec3 moonDisc(vec3 viewDir, vec3 moonDir, vec3 sunDir) {
 
 // ---------------------------------------------------------------------------
 void main() {
-    // Skip geometry pixels (depth < 1.0 means geometry was written by GBuffer)
+    // Skip geometry pixels: the G-buffer clears depth to exactly 1.0, so anything less was
+    // written by geometry, however far (a threshold below 1.0 painted sky over everything
+    // past ~1,000 m at a 0.1 m near plane).
     float depth = texture(depthBuffer, inTexCoord).r;
-    if (depth < 0.9999) {
+    if (depth < 1.0) {
         discard;
     }
 

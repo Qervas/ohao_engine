@@ -136,6 +136,7 @@ void VulkanRenderer::renderDeferred() {
 
     m_deferredRenderer->setRenderScene(m_renderScene.get());
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
+    m_deferredRenderer->setClusterFarPlane(m_camera->getFarPlane());
     m_deferredRenderer->setFrameNumber(m_framesStarted);
     m_deferredRenderer->setQuality(m_renderQuality);
 

@@ -320,8 +320,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 2.5. lights.cluster — every froxel's light list, for the camera lighting shades with (the
     //      jittered projection the G-buffer used, so a pixel's froxel holds its surface point).
-    //      Without clusters (a test switch) lighting sums every light and nothing is built.
-    const bool clustered = m_clusteredLighting && m_lightClusters && m_lightClusters->clusterBuffer() != VK_NULL_HANDLE;
+    //      Without clusters (a test switch, or an orthographic projection: froxels are view
+    //      frusta slices) lighting sums every light and nothing is built.
+    const bool perspective = m_proj[2][3] != 0.0f;
+    const bool clustered = m_clusteredLighting && perspective && m_lightClusters &&
+                           m_lightClusters->clusterBuffer() != VK_NULL_HANDLE;
     if (m_lightingPass) {
         m_lightingPass->setClusters(clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE,
                                     m_lightClusters ? m_lightClusters->sliceScale() : 0.0f,
@@ -330,7 +333,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (clustered) {
         m_renderGraph.addComputePass("lights.cluster", [&](PassBuilder&) {},
             [&, jitteredProj](VkCommandBuffer c) {
-                m_lightClusters->build(c, frameIndex, m_view, jitteredProj, m_width, m_height, m_farPlane, m_frameNumber);
+                m_lightClusters->build(c, frameIndex, m_view, jitteredProj, m_width, m_height, m_clusterFar, m_frameNumber);
                 if (m_lightingPass)
                     m_lightingPass->setClusters(m_lightClusters->clusterBuffer(), m_lightClusters->sliceScale(),
                                                 m_lightClusters->sliceBias());
