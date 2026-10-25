@@ -77,9 +77,11 @@ different region and the depth samples landed on different texels. OHAO kills th
 in the standard two steps. It bounds each slice with a sphere rather than a box,
 then quantises the light view's translation to whole shadow texels — computing
 texels-per-world-unit from the sphere and rounding the light-space origin onto that
-grid.
+grid. The map's size and the number of cascades are settings (`render.settings`'
+`csm`: 1–4 cascades of 512–4096 texels, default 4 of 2048); a size change rebuilds the
+map once, and unused split distances sit at the far plane.
 
-{{cite ohao/render/deferred/csm_pass.cpp "float texelsPerUnit = static_cast<float>(SHADOW_MAP_SIZE) / (radius * 2.0f);"}}
+{{cite ohao/render/deferred/csm_pass.cpp "float texelsPerUnit = static_cast<float>(m_size) / (radius * 2.0f);"}}
 
 :::why
 A tight AABB wastes fewer texels, but its extents change as the camera yaws, so the

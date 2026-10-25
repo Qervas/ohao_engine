@@ -542,6 +542,11 @@ window.OHAO_NAV_TREE = [
         "id": "graph/meshlets",
         "title": "Meshlets and mesh shaders",
         "href": "m/graph/meshlets.html"
+      },
+      {
+        "id": "graph/frame-and-settings",
+        "title": "The frame, measured and set",
+        "href": "m/graph/frame-and-settings.html"
       }
     ]
   },

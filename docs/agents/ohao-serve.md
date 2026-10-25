@@ -135,6 +135,40 @@ lights worth an RT shadow than the 4 they trace) and `lightsOverflow` (lights le
 froxels that held more than 256; those pixels miss them). Seeing `lightsOverflow` means the
 scene packs too many lights' ranges into one place: shorten the ranges.
 
+A capture measures itself: every `render_capture` result carries `gpuMs`, its last frame's
+GPU time, and `timings: true` adds that frame's passes as `[[name, ms], ...]`, the numbers
+`render_stats {frames: 1}` would give for it, without the second call. `engine_info` names
+the device once the host has one (`gpu: {name, driver, rayTracing, meshShaders}`): always
+in a window, after the first capture headless.
+
+`render_settings` reads the knobs that decide what a frame runs, and `set` changes them:
+`quality`, `rtShadows {enabled, maxLights 0–4}`, `rtGI {enabled, resolution half | full,
+rays 1–32}`, `ssao`, `ssr`, `sss`, `geometry` (`auto`, `meshlets`, `instances`),
+`occlusionCulling`, `csm {cascades 1–4, size 512–4096}`, `exposure`. A `set` merges (what
+it leaves out keeps its value), is checked against the limits before anything applies
+(`E_RANGE` with the member's path), and counts as a change. The defaults are the frame the
+budgets were set for. A pass turned off is not run, so it leaves the timings; captures take
+`post` (`ssao`), `exposure` and `quality` from the settings unless they name their own.
+Changing the GI resolution or the CSM size rebuilds those images (the device idles once);
+everything else applies on the next frame. `ohao run` scripts have no settings
+(`E_STATE`): its host renders nothing between captures.
+
+```console
+$ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"render.settings\",\"params\":{\"set\":{\"rtGI\":{\"rays\":4}}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"render.settings\",\"params\":{\"set\":{\"csm\":{\"size\":100}}}}\n'); p.stdin.flush(); a = json.loads(p.stdout.readline())['result']; b = json.loads(p.stdout.readline())['error']['data'][0]; p.stdin.close(); print(p.wait(), a['rtGI'], a['csm'], b['code'], b['path'], b['expected'])"
+0 {'enabled': True, 'resolution': 'half', 'rays': 4} {'cascades': 4, 'size': 2048} E_RANGE /set/csm/size in [512, 4096]
+```
+
+To see what a knob costs, set it, capture with `timings`, and compare against the same
+capture before. `docs/agents/examples/measure_frame.py` is that loop in 40 lines of stdlib
+Python: SSR off, a 640x360 capture with timings, `render.stats` for the same frame.
+
+```console
+$ python docs/agents/examples/measure_frame.py   # gpu
+exit 0 | ssr False | gpu named: True
+passes: scene.upload ... readback | ssr ran: False
+capture gpuMs == render.stats gpuMs: True | passes sum within it: True
+```
+
 ## Read logs
 
 `log_read {level, channel, since, limit}` pages the engine's log (`next` is the `since`

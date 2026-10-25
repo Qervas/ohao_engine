@@ -697,6 +697,12 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["meshlet_builder (greedy, oldest candidate first, normal-coherent) into MeshRegistry's three meshlet arenas; cull/meshlets.slang task + mesh shaders under VK_EXT_mesh_shader, else classifyMeshlets/scatterMeshlets per-meshlet indirect draws and the pull vertex shader; one culling module, cull/common.slang."],
         "why": "Large draws stop rasterizing their hidden, off-screen and back-facing parts; both paths render the instance path's image exactly (test 7).",
     },
+    "graph/frame-and-settings": {
+        "what": ["The frame as an agent sees it: the pass registry (every pass, in frame order), what a capture's frame cost (gpuMs, per-pass timings), and the renderer settings as host state (render.settings)."],
+        "how": ["pass_registry.hpp kPasses; frame_capture.cpp captureTimings after the read frame's fence; VulkanRenderer::setRenderSettings/renderSettings to the owning subsystems; session.cpp render.settings merges a partial set onto the current settings."],
+        "why": "One list of names ties the timer, render.stats, captures and the budgets together; settings as host state keep the window, the stats and the captures on the same configuration.",
+        "workflow": ["render.settings set", "frame registers only enabled passes", "capture reads back after the fence", "gpuMs and timings"],
+    },
     "physics/backend": {
         "what": ["IPhysicsBackend plugin: factory picks Jolt or null; helpers convert shapes without leaking Jolt into scene headers."],
         "how": ["backend_factory.cpp; jolt_backend.*; jolt_helpers.hpp."],

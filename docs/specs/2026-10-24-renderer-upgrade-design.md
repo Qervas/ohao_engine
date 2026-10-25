@@ -721,6 +721,13 @@ Spec 4's contract holds and extends to everything 2b adds.
   `lightsOverflow` (step 13) and `shadowLightsDropped` (step 7).
 - `over` lists the passes over their `render_budgets.json` budget for the current scene
   class, when the host knows it (the bench scenes and any scene with a `budget` hint).
+  *Corrected (step 15): not built.* A budget is a median over 100 frames of a fixed bench
+  scene after warm-up, judged against a calibrated, quiet machine; a live host's median
+  over 1–120 frames of whatever scene is loaded, judged against a bench scene's numbers,
+  would name passes "over" for reasons that are not regressions. The verdict lives where
+  the budget's conditions hold: `render_bench --check` and `build/render_bench.json`
+  (each budget's `measured`, `budget`, `status`) and `check.json` (a gated miss named by
+  pass). An agent compares `render.stats` against those numbers itself.
 - Over MCP it is `render_stats`. GPU hosts only; the CLI host is `E_STATE`.
 
 **`render.settings`** `{set?: RenderSettings}` → the current `RenderSettings`. One reflected
@@ -1295,6 +1302,34 @@ improvising. Intentional image changes are separate commits inside their step.
       adding a pass to the registry with its budget); the monograph's renderer units.
     - Five consecutive clean runs of every budget; the roadmap row done.
     - Tests 14–16.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step15.md`):*
+      `VulkanRenderer::RenderSettings` hands each knob to the subsystem that owns it and
+      reads them back from there; a switched-off pass is not registered in the frame's
+      graph. RT GI's resolution is a shift pushed to the trace and denoise shaders (1 at
+      half, 0 at full); the half-resolution expressions stay literal behind a branch,
+      because folding the shift into a multiply changed FMA contraction and moved five
+      deferred goldens by 1. CSM keeps its 4-cascade arrays and draws `cascades` of them;
+      unused split distances sit at the far plane. Captures report `gpuMs` and, with
+      `timings`, the read frame's passes (after its fence). *Corrections:* (1) `over` is
+      not built ("The agent-facing surface", above). (2) `set` merges: members left out
+      keep their values, and the limits are checked before anything applies. (3) The
+      defaults include `ssr` and `sss` on, `ssao` off, exposure 0.6 (the renderer's own; the
+      api struct had 1.0, which made headless captures brighter than the window's until
+      `check_live` caught it). (4) The CLI host has no settings (`E_STATE`); a headless
+      `ohao serve` keeps settings set before its first capture and applies them when its
+      renderer starts; `engine.info.gpu` appears once the host has a device. (5) A GI
+      resolution or CSM size change idles the device once to rebuild those images. Test 14:
+      `engine_tests` `sp2b_t14_*` (4 tests), `api_tests`
+      `sp2b_t14_render_settings_reads_changes_and_defaults_captures`, the serve native
+      session (ids 30–32), `check_serve` (171 checks; `tools/list` 18,238 B, budget 24 KB),
+      `e2e_mcp` (25). Test 15: every `render_bench` and `serve_bench` run of the day was
+      flagged noisy by outside load (other processes 1.2–2.9 cores; CPU calibration up to
+      1.8x its reference); every budget measured within its value, but noisy runs are no
+      verdict, so the five consecutive clean runs remain to be made on a quiet machine.
+      Test 16: `check_docs` runs "Measure the frame" (a settings one-liner and
+      `docs/agents/examples/measure_frame.py`) and the pass-and-budget recipe's name check;
+      the monograph's new unit `graph/frame-and-settings` and the CSM, GI and render-graph
+      units cite the changed code.
 
 The order follows the money. Measurement first (Frank's instruction). Then the defects
 that change images, so later steps re-baseline once against correct images. Then the

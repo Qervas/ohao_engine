@@ -161,7 +161,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   frames, RenderScene, per-pass GPU timing (every pass registered, timed once, in frame
   order, within the frame; a pass turned off leaves the timings), the capture path (a reset
   idles nothing and a capture after it is the same from any frame slot; the GPU preview is
-  the CPU box filter's bytes and is all a preview request copies). `ecs_tests`: world, hierarchy, transforms and the render extract
+  the CPU box filter's bytes and is all a preview request copies), the render settings
+  (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
+  SSR, SSS, SSAO, RT GI and RT shadow switches drop their passes; GI resolution and rays
+  reach the trace; CSM cascades and size rebuild the map). `ecs_tests`: world, hierarchy, transforms and the render extract
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
@@ -322,6 +325,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's
   jitter is indexed by the frames since the reset); `engine_tests`' `sp2b_s10` captures
   from every slot to hold it.
+- Render settings (`VulkanRenderer::RenderSettings`, `render.settings`) are read back from
+  the subsystems that own them, never cached, and both structs' defaults (the api one in
+  `ohao/api/params.hpp` too) must equal what a fresh renderer starts with: a headless host
+  reports them before its renderer exists and captures pass them explicitly (exposure 0.6:
+  a 1.0 there once made headless captures brighter than the window's). A GI resolution or
+  CSM size change rebuilds images after `vkDeviceWaitIdle`; nothing else idles. The GI
+  shift (`flags.w`, 1 at half resolution) keeps the half-resolution expressions literally
+  behind a branch: folding it into a multiply changed FMA contraction and moved goldens.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

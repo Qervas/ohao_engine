@@ -138,9 +138,18 @@ environment would lower each ray's variance; none exists yet.
 
 In realtime the trace runs at half resolution, rounded up, two rays a pixel: trace
 pixel $q$ shades full-resolution pixel $2q$, reading its position, normal and
-albedo from the G-buffer.
+albedo from the G-buffer. Both are settings (`render.settings`' `rtGI`: resolution
+`half | full`, 1–32 rays); the shift that maps $q$ to its full-resolution pixel is
+pushed as a constant (1 at half, 0 at full), and the denoiser's reprojection and
+upsample take the same shift.
 
-{{cite shaders/rt/gi_trace.slang "const uint2 full = min(reference ? pixel : pixel * 2u, pc.extent.zw - 1u);"}}
+{{cite shaders/rt/gi_trace.slang "const uint2 full = min(reference ? pixel : pixel << pc.flags.w, pc.extent.zw - 1u);"}}
+
+:::why
+The half-resolution reprojection keeps its original expression literally behind a
+branch instead of folding the shift into a multiply by 0.5 or 1.0: the folded form let
+the compiler contract differently and moved five deferred goldens by one LSB.
+:::
 
 Alongside the noisy radiance it writes a guide word for the denoiser, packed as RT
 shadows pack theirs: the distance from the camera as a bfloat16 (a float's top 16

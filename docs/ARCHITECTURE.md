@@ -105,6 +105,39 @@ VulkanRenderer::render()
   render.stats, render_bench, never a stall
 ```
 
+The deferred frame, pass by pass, under its registry names (`render/frame/pass_registry.hpp`,
+the order `render.stats`, a capture's `timings` and `render_budgets.json` use). Brackets
+name the `render.settings` member that turns a pass off or reshapes it; a pass that is off
+is not registered in the frame's graph and costs nothing:
+
+```
+scene.upload        table rows, BLAS builds, TLAS build/refit, the draw table
+csm                 shadow cascades, only when rt.shadows does not run   [csm.cascades, csm.size]
+cull.instances      early lists: last frame's visible draws in the frustum   [occlusionCulling]
+gbuffer.early       G-buffer cleared, early lists drawn (instances; meshlets [geometry])
+hiz.build           max-depth pyramid of the early depth
+cull.late           every draw vs frustum and pyramid: the newly visible
+gbuffer.late        late lists drawn
+lights.cluster      froxel light lists (16x9x24, up to 256 each)
+ssao                half-res horizon AO, blurred   [ssao, or post "ssao"]
+rt.shadows          a ray to each of a pixel's most important lights   [rtShadows.enabled, .maxLights]
+rt.shadows.filter   5x5 filter + temporal (realtime quality)
+rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
+rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
+lighting            froxel list + IBL + shadows + GI into the HDR image
+sky, particles      into the HDR image
+sss                 subsurface blur on classified tiles   [sss]
+ssr                 half-res reflections   [ssr]
+post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]
+gizmo               transform handles
+capture.preview     only for an inline capture: box filter into staging
+present | readback  window: blit to the swapchain (+ requested copy); headless: copy to staging
+```
+
+`quality: reference` swaps the realtime shadow and GI passes for their converging forms
+(8 shadow rays to every light, 32 GI rays at full resolution, averaged over the frames).
+A path-traced frame is `scene.upload`, `pt.render`, then `pt.present` or `pt.readback`.
+
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
 frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
 to 16 ms while nothing steps); the timeline's steps (`Session::step` each, then the
@@ -335,6 +368,47 @@ the fullscreen raster one.
 ```console
 $ python tests/validation/check_validation.py > /dev/null
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null
+```
+
+## Recipe: register a pass and give it a budget
+
+Followed for every pass sub-project 2b added (`cull.*`, `hiz.build`, `lights.cluster`,
+`capture.preview`, `pt.present`, …). A pass is not done when it renders: it is done when
+it is measured under its name and gated by a budget.
+
+1. **The registry entry** in `kPasses` (`ohao/render/frame/pass_registry.hpp`): name, kind
+   (`Transfer`, `Raster`, `Compute`, `RayTracing`) and one line saying what it does and
+   what it costs at the defaults, at its place in frame order. The name is lowercase and
+   dotted, with a family prefix when it has siblings (`rt.gi`, `rt.gi.denoise`), so a
+   budget can cover a family with a pattern (`"cull.*"`).
+2. **Time it**: `timerBegin("name") … timerEnd()` around its commands (`DeferredRenderer`),
+   or its `addPass` name if it is a graph pass. `engine_tests`' `sp2b_t01` fails on a pass
+   recorded out of registry order or timed twice; an unregistered name is logged once as
+   an error and not timed.
+3. **If a setting turns it off** (`render.settings`), the switch belongs in
+   `VulkanRenderer::RenderSettings`, `setRenderSettings` and `renderSettings` (read back
+   from the subsystem, never cached), its reflected twin in `ohao/api/params.{hpp,cpp}`
+   (`RenderSettings`, with limits), and the two conversions in `runtime/frame_capture.cpp`.
+   Turn it off by not registering it in the frame's graph, so it costs nothing and leaves
+   the timings; `sp2b_t14_switches_turn_their_passes_off` is the test to extend.
+4. **The budget** in `tests/bench/render_budgets.json`, one entry per scene it runs in:
+   `{"scene": "cornell_720p", "name": "lights.cluster", "passes": ["lights.cluster"],
+   "budgetMs": 0.03, "gatedFrom": 13}`. A budget's time is the sum of its passes' medians
+   over 100 frames (`"x.*"` is every pass named `x.<something>`). `gatedFrom` is the build
+   step that delivers the pass: `render_bench --check` gates budgets with `gatedFrom` ≤
+   `currentStep` and reports the rest as `pending` with their measurement. Measure first
+   (`render_bench --only SCENE`), set the budget from the spec's frame budget, never from
+   the measurement alone. A pass budget may be moved between passes of the same scene by
+   the step that measures them (record it in `"moved"`); a frame, capture or total budget
+   rises only by Frank's ruling.
+5. **Check it**: the names below must all match registered passes, and `render_bench
+   --check` must pass five consecutive clean runs (a run flagged `noisy` is no verdict;
+   `python tools/bench/wait_quiet.py` first).
+
+```console
+$ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
+28 passes registered; budget names matching none: []
+$ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 
 ## Recipe: add a golden scene

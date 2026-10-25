@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Render graph · The frame, measured and set — OHAO Monograph</title>
+  <meta name="description" content="The pass registry in frame order, per-pass GPU timings in captures, and render.settings." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="graph/frame-and-settings" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · The frame, measured and set</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">graph</p>
+          <h1>The frame, measured and set</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>The pass registry in frame order, per-pass GPU timings in captures, and render.settings.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-list-of-passes">One list of passes</a></li><li><a href="#what-a-capture-says-it-cost">What a capture says it cost</a></li><li><a href="#settings-the-frame-s-knobs-as-host-state">Settings: the frame&#x27;s knobs as host state</a></li><li><a href="#over-the-api">Over the API</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-list-of-passes">One list of passes</h2></div>
+<div class="prose reveal">
+<p>Every GPU pass a frame can run is one entry of `kPasses` in `render/frame/pass_registry.hpp`, in frame order: a name, a kind (transfer, raster, compute, ray tracing) and a line saying what it does. The pass timer records only passes named there, so nothing runs unmeasured and nothing is measured under two names; the same names are what `render.stats` and a capture&#x27;s `timings` report and what `tests/bench/render_budgets.json` budgets.</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr PassInfo kPasses[] = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/pass_registry.hpp#L20" target="_blank" rel="noopener">ohao/render/frame/pass_registry.hpp:20</a></div>
+<p>A deferred frame runs `scene.upload`, then the culling and G-buffer pairs (`cull.instances`, `gbuffer.early`, `hiz.build`, `cull.late`, `gbuffer.late`), `lights.cluster`, the screen-space and ray-traced inputs to lighting (`ssao`, `rt.shadows` and `rt.shadows.filter` or else `csm`, `rt.gi` and `rt.gi.denoise`), `lighting`, `sky`, `particles`, `sss`, `ssr`, the post stack (`post.bloom`, `post.taa`, `post.tonemap`), `gizmo`, and the way out: `capture.preview` during an inline capture, then `present` in a window or `readback` headless. A path-traced frame is `scene.upload`, `pt.render` and `pt.present` or `pt.readback`.</p>
+<div class="citation-chip"><code class="citation-code">{&quot;present&quot;, PassKind::Transfer, &quot;the final image blitted to the swapchain, and a requested readback copy&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/pass_registry.hpp#L44" target="_blank" rel="noopener">ohao/render/frame/pass_registry.hpp:44</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The registry is the order as well as the names because the timer&#x27;s query pairs are written in the order passes record, and a pass recorded out of registry order is a bug that `engine_tests` catches. A budget file keyed by the same strings means a renamed pass fails its budget instead of quietly escaping it.</p></div>
+</div>
+<div class="section-rule"><h2 id="what-a-capture-says-it-cost">What a capture says it cost</h2></div>
+<div class="prose reveal">
+<p>A capture reads its last frame back after that frame&#x27;s fence has signalled, so the frame&#x27;s timestamps are already resolved when the pixels are. The capture reports the frame&#x27;s GPU span as `gpuMs`, and with `timings` each pass in frame order: the same numbers `render.stats {frames: 1}` would give for that frame, without a second round trip.</p>
+<div class="citation-chip"><code class="citation-code">out.timings.emplace_back(std::string(render::kPasses[f.pass[i]].name), f.ms[i]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/frame_capture.cpp#L103" target="_blank" rel="noopener">ohao/runtime/frame_capture.cpp:103</a></div>
+<p>The record runs from a destructor at the end of `readCaptureOutputs`, so every return path out of the readback, an early error included, still fills in what was measured.</p>
+</div>
+<div class="section-rule"><h2 id="settings-the-frame-s-knobs-as-host-state">Settings: the frame&#x27;s knobs as host state</h2></div>
+<div class="prose reveal">
+<p>`VulkanRenderer::RenderSettings` gathers the knobs that change what a frame runs: the quality (realtime or reference), RT shadows (on, at most 0–4 lights a pixel), RT GI (on, half or full resolution, 1–32 rays), SSAO, SSR, SSS, the geometry path (auto, meshlets, instances), occlusion culling, the CSM fallback&#x27;s cascades (1–4) and map size (512–4096), and exposure. Its defaults are the frame the budgets were set for. Setting them hands each value to the subsystem that owns it; a pass turned off is simply not registered in the frame&#x27;s graph, so it costs nothing and disappears from the timings.</p>
+<div class="citation-chip"><code class="citation-code">if (s.csmCascades != d.csmCascades() || s.csmSize != d.csmSize()) d.configureCSM(s.csmCascades, s.csmSize);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L362" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:362</a></div>
+<p>Reading them back asks the same subsystems, never a cached copy, so what `render.settings` answers is what the next frame will do.</p>
+<div class="citation-chip"><code class="citation-code">s.csmCascades = d.csmCascades();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L387" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:387</a></div>
+<p>Two changes rebuild images: the GI resolution (its trace and history images change size) and the CSM map size. Both idle the device once, because the images being replaced may still be read by frames in flight; every other change applies on the next frame.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Settings are host state rather than per-capture parameters so a window shows what a capture will render, `render.stats` measures the configuration an agent is about to judge, and a session&#x27;s captures stay comparable. A capture still overrides the three that matter for a single image (`post`, `exposure`, `quality`) and otherwise takes them from the settings.</p></div>
+</div>
+<div class="section-rule"><h2 id="over-the-api">Over the API</h2></div>
+<div class="prose reveal">
+<p>`render.settings {set?}` reads the settings, or merges a partial `set` into them: the reflected params struct is decoded onto the current values, so members left out keep theirs, and the limits are checked before anything is applied (`E_RANGE`, nothing changed). A set counts as a change of the session. The CLI host renders nothing between captures and has no settings (`E_STATE`); a headless `ohao serve` keeps settings set before its first capture and applies them when the renderer starts.</p>
+<div class="citation-chip"><code class="citation-code">{&quot;render.stats&quot;, renderStats},   {&quot;render.settings&quot;, renderSettings}, {&quot;log.read&quot;, logRead},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L835" target="_blank" rel="noopener">ohao/api/session.cpp:835</a></div>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/frame/pass_registry.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_capture.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/session.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="meshlets.html"><div class="label">← Prev</div><div class="title">Meshlets and mesh shaders</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

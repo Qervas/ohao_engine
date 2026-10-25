@@ -41,9 +41,11 @@ before the first build), which on ray-tracing hardware with geometry in the scen
 the ordinary case, not an opt-in; `rt.shadows` also needs a shadow-casting light, and
 `rt.shadows.filter` runs only after it in realtime quality, as `rt.gi.denoise` runs
 after `rt.gi`. `csm` is the other side of
-the same switch: it is registered only in frames where `rt.shadows` is not.
+the same switch: it is registered only in frames where `rt.shadows` is not. The
+settings (`render.settings`) turn passes off the same way, by not registering them:
+`rtGI.enabled`, `ssr`, `sss` and `rtShadows.enabled` each gate their passes here.
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {"}}
 
 ## The graph owns nothing it schedules
 

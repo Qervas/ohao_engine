@@ -45,5 +45,13 @@ MODULE = {
             'The greedy meshlet builder, its arenas, task/mesh shaders and the vertex-pulling fallback.',
             files=['ohao/render/scene/meshlet_builder.hpp', 'ohao/render/scene/meshlet_builder.cpp', 'shaders/cull/meshlets.slang', 'shaders/cull/common.slang'],
         ),
+        page(
+            'frame-and-settings',
+            'The frame, measured and set',
+            'The pass registry in frame order, per-pass GPU timings in captures, and render.settings.',
+            files=['ohao/render/frame/pass_registry.hpp', 'ohao/runtime/frame_capture.cpp', 'ohao/gpu/vulkan/renderer.cpp', 'ohao/api/session.cpp'],
+            design=['kPasses: every pass a frame can run, in frame order; the timer, render.stats, capture timings and render_budgets.json share its names.', 'RenderSettings: quality, RT shadows and GI, SSAO/SSR/SSS, geometry, occlusion culling, CSM, exposure; a pass turned off is not registered.', 'render.settings: set merges onto the current settings, limits checked first, counts as a change; captures default to them.'],
+            workflow=['render.settings set', 'frame (passes registered by settings)', 'capture reads back after the fence', 'gpuMs and timings'],
+        ),
     ],
 }
