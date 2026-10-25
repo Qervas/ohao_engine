@@ -238,9 +238,15 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     slot.pending = !reference;
     slot.frame = input.frameNumber;
 
-    // Realtime: this frame writes the other half of each pair; reference keeps none of it.
-    if (!reference) m_cur ^= 1u;
-    else m_historyValid = false;
+    // Realtime: this frame writes the other half of each pair, and breaks a reference run;
+    // reference keeps none of the realtime history.
+    if (input.frameIndex == 0) m_refFrames = 0;   // a temporal reset
+    if (!reference) {
+        m_cur ^= 1u;
+        m_refFrames = 0;
+    } else {
+        m_historyValid = false;
+    }
     Image& meta = m_meta[m_cur];
     Image& vis = m_vis[m_cur];   // written by this frame's trace (reference) or filter (realtime)
     for (Image* img : {&meta, &vis})
@@ -250,12 +256,13 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
         transition(cmd, m_refDummy, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, true);
     if (reference) {
-        // The running mean reads last frame's; frame 0 after a reset (or a new image) reads none.
-        const bool keep = input.frameIndex > 0 && m_refLo.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        // The running means read last frame's while the reference frames run unbroken; new
+        // images hold none of them.
+        if (m_refLo.layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
         for (Image* ref : {&m_refLo, &m_refHi})
             transition(cmd, *ref, VK_IMAGE_LAYOUT_GENERAL, kReaders, VK_ACCESS_SHADER_READ_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, !keep);
+                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
     }
 
     const VkDescriptorSet set = m_traceSets[m_slot];
@@ -300,9 +307,11 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     pc.seed = u4(input.renderSeed, input.frameIndex, reference ? 1u : 0u,
                          reference ? shared::kShadowReferenceRays : 1u);
     pc.cameraPos = f4(input.cameraPos, 0.0f);
+    pc.history = u4(reference ? m_refFrames : 0u, 0u, 0u, 0u);
     vkCmdPushConstants(cmd, m_tracePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (input.width + 7) / 8, (input.height + 7) / 8, 1);
     m_rendered = true;
+    if (reference) ++m_refFrames;
 
     if (reference) {
         // The means stay in GENERAL for the next frame's trace; lighting reads the packed copy.

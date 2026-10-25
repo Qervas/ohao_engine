@@ -58,7 +58,8 @@
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w lights a pixel at most (realtime)"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light"},
-       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the filter's depth guide is the distance from it)"}
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the filter's depth guide is the distance from it)"},
+       {"name": "history", "type": "uint4", "doc": "x reference: the frames already in the running means (0: start them again)"}
      ]},
     {"name": "ShadowFilterPush", "doc": "RT shadows' filter (rt/shadow_filter.slang) push constants",
      "fields": [
@@ -76,7 +77,7 @@
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z rays a pixel, w lights"},
-       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound"},
+       {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it)"}
      ]},
     {"name": "GIDenoisePush", "doc": "RT GI's denoiser (rt/gi_denoise.slang) push constants",

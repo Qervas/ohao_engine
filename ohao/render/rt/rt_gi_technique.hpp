@@ -51,8 +51,12 @@ public:
     // up; reference: the frame's) and its rays a pixel (test 10).
     [[nodiscard]] VkExtent2D traceExtent() const noexcept { return m_traceExtent; }
     [[nodiscard]] uint32_t raysPerPixel() const noexcept { return m_rays; }
-    // Forget the temporal history: the next realtime frame takes none.
-    void resetHistory() noexcept { m_historyValid = false; }
+    // Forget the temporal history: the next realtime frame takes none, and the reference
+    // running mean starts again.
+    void resetHistory() noexcept {
+        m_historyValid = false;
+        m_refFrames = 0;
+    }
     void destroy() override;
 
 private:
@@ -89,6 +93,7 @@ private:
 
     uint32_t m_cur = 0;            // this frame's half of each pair
     bool m_historyValid = false;   // the other half holds the previous realtime frame
+    uint32_t m_refFrames = 0;      // the reference frames in m_refMean; 0 after a reset, a new image or a realtime frame
 
     // This frame (render() to denoise()).
     bool m_rendered = false;

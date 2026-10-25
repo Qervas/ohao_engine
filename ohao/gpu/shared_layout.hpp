@@ -65,11 +65,13 @@ struct alignas(16) ShadowTracePush {
     alignas(16) std::array<uint32_t, 4> extent{};
     alignas(16) std::array<uint32_t, 4> seed{};
     alignas(16) std::array<float, 4> cameraPos{};
+    alignas(16) std::array<uint32_t, 4> history{};
 };
 static_assert(offsetof(ShadowTracePush, extent) == 0);
 static_assert(offsetof(ShadowTracePush, seed) == 16);
 static_assert(offsetof(ShadowTracePush, cameraPos) == 32);
-static_assert(sizeof(ShadowTracePush) == 48);
+static_assert(offsetof(ShadowTracePush, history) == 48);
+static_assert(sizeof(ShadowTracePush) == 64);
 
 // RT shadows' filter (rt/shadow_filter.slang) push constants
 struct alignas(16) ShadowFilterPush {

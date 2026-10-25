@@ -5,9 +5,10 @@
 //            kGIRealtimeRays cosine rays. It writes the mean incoming radiance (not yet
 //            multiplied by the receiver's albedo) and the denoiser's guide (distance from the
 //            camera, normal); gi_denoise.slang accumulates, filters and upsamples it.
-// reference  Full resolution, kGIReferenceRays rays a pixel, no denoiser: frame k after a
-//            temporal reset keeps the plain running mean of frames 0..k in refMean and writes
-//            mean x diffuse albedo, what lighting adds, to radianceOut.
+// reference  Full resolution, kGIReferenceRays rays a pixel, no denoiser: refMean keeps the
+//            plain running mean of the reference frames since the last temporal reset (a
+//            realtime frame starts it again), and radianceOut gets mean x diffuse albedo, what
+//            lighting adds.
 //
 // A ray that hits a surface brings back that surface's bounce albedo (the instance table's
 // giAlbedoPacked.rgb) over pi, times the direct light the hit receives from the frame's
@@ -37,7 +38,6 @@ static const float kPi = 3.14159265;
 static const float kTwoPi = 6.2831853;
 static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)
 static const float kRayLength = 100.0;
-static const float kEnvLod = 4.0;           // a miss reads a blurred mip: less variance a ray
 
 uint pcg(uint v)
 {
@@ -129,8 +129,10 @@ float3 incoming(float3 origin, float3 dir)
         return albedo * (1.0 / kPi) * directAt(hit, -dir);
     }
     if (pc.flags.y == 0u) return float3(0.0);
+    // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
+    // full-resolution texels.
     const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, asin(clamp(dir.y, -1.0, 1.0)) / kPi + 0.5);
-    return envMap.SampleLevel(envSampler, uv, kEnvLod).rgb;
+    return envMap.SampleLevel(envSampler, uv, 0.0).rgb;
 }
 
 [shader("compute")]
@@ -173,10 +175,12 @@ void trace(uint3 id : SV_DispatchThreadID)
 
     if (reference)
     {
-        // The running mean of frames 0..k: frame 0 takes its own value, so nothing before
-        // the reset (or in a fresh image) is read.
-        const float3 prev = pc.seed.y == 0u ? float3(0.0) : refMean[pixel].xyz;
-        const float3 m = prev + (mean - prev) / (float(pc.seed.y) + 1.0);
+        // The running mean of the reference frames in a row: with none before (a reset, a
+        // fresh image, realtime frames in between) this frame takes its own value and nothing
+        // stale or undefined is read.
+        const uint k = pc.flags.z;
+        const float3 prev = k == 0u ? float3(0.0) : refMean[pixel].xyz;
+        const float3 m = prev + (mean - prev) / (float(k) + 1.0);
         refMean[pixel] = float4(m, 1.0);
         const float3 diffuse = gAlbedo.Load(int3(full, 0)).rgb * (1.0 - position.w);
         radianceOut[pixel] = float4(m * diffuse, 1.0);

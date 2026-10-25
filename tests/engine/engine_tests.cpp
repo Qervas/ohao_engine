@@ -2012,8 +2012,10 @@ struct GIRun {
 };
 
 // `frames` frames from a reset at `quality`, the last read back. `warmup` frames before the
-// reset look at the scene from elsewhere, so a history the reset failed to drop would show.
-static GIRun giRun(ohao::RenderQuality quality, int frames, glm::vec3 wallColor = {0.9f, 0.1f, 0.1f}, int warmup = 0) {
+// reset look at the scene from elsewhere, so a history the reset failed to drop would show;
+// `prefix` frames after the reset, at their own qualities, come before the `frames`.
+static GIRun giRun(ohao::RenderQuality quality, int frames, glm::vec3 wallColor = {0.9f, 0.1f, 0.1f}, int warmup = 0,
+                   const std::vector<ohao::RenderQuality>& prefix = {}) {
     ohao::VulkanRenderer r(160, 120);
     if (!r.initialize() || !r.isRTSupported()) return {};
     GIRun out;
@@ -2045,6 +2047,12 @@ static GIRun giRun(ohao::RenderQuality quality, int frames, glm::vec3 wallColor 
         r.getCamera().setPosition({-1.0f, 4.0f, 3.0f});
         r.getCamera().setRotation(-55.0f, -70.0f);
         r.resetAccumulation();  // the capture starts here, as a lockstep capture does
+        for (const ohao::RenderQuality q : prefix) {
+            r.setRenderQuality(q);
+            world.sync();
+            r.render();
+        }
+        r.setRenderQuality(quality);
         for (int f = 0; f < frames; ++f) {
             world.sync();
             if (f == frames - 1) r.requestReadback();
@@ -2187,8 +2195,31 @@ static void sp2b_t10_a_red_wall_bleeds_onto_the_floor() {
     TEST_PASS();
 }
 
+// Test 10: a reference running mean (RT GI's and RT shadows') holds only the reference frames
+// in a row: realtime frames in between start it again, as a fresh image does. Two captures
+// whose last frame is the same reference frame (index 5 since the reset) are identical,
+// whatever came before it: two reference frames then three realtime ones (a stale mean), or
+// five realtime ones (a reference image created at frame 5, its contents undefined).
+static void sp2b_t10_a_reference_mean_restarts_after_realtime_frames() {
+    TEST_BEGIN("sp2b_t10: reference GI and shadow means start again after realtime frames");
+    using Q = ohao::RenderQuality;
+    const GIRun stale = giRun(Q::Reference, 1, {0.9f, 0.1f, 0.1f}, 0,
+                              {Q::Reference, Q::Reference, Q::Realtime, Q::Realtime, Q::Realtime});
+    if (stale.px.empty()) {
+        std::cout << "(no ray tracing device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const GIRun fresh = giRun(Q::Reference, 1, {0.9f, 0.1f, 0.1f}, 0,
+                              {Q::Realtime, Q::Realtime, Q::Realtime, Q::Realtime, Q::Realtime});
+    std::cout << "(max |stale - fresh| " << maxAbsDiff(stale.px, fresh.px) << ") ";
+    EXPECT_EQ(maxAbsDiff(stale.px, fresh.px), 0, "frame 5 at reference is the same after either history");
+    TEST_PASS();
+}
+
 static void runRTGITests() {
     std::cout << "\n=== RT GI ===" << std::endl;
+    sp2b_t10_a_reference_mean_restarts_after_realtime_frames();
     sp2b_t10_gi_is_deterministic_across_fresh_renderers();
     sp2b_t10_history_resets_on_capture();
     sp2b_t10_multi_frame_captures_converge();

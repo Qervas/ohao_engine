@@ -248,7 +248,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_normalView = input.normalBuffer;
     m_albedoView = input.albedoBuffer;
     m_cameraPos = input.cameraPos;
-    if (input.frameIndex == 0) m_historyValid = false;   // a temporal reset: no history
+    if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
 
     // The bounce's lights: the brightest by intensity, ties by order, emissive proxies out.
     std::vector<uint32_t> order;
@@ -269,11 +269,13 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         m_rays = shared::kGIReferenceRays;
         rtc::transition(cmd, m_output, kGeneral, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,
                         VK_ACCESS_SHADER_WRITE_BIT, true);
-        // The running mean reads last frame's; frame 0 after a reset (or a new image) reads none.
-        const bool keep = input.frameIndex > 0 && m_refMean.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        // The running mean reads last frame's while the reference frames run unbroken; a new
+        // image holds none of them.
+        if (m_refMean.layout == VK_IMAGE_LAYOUT_UNDEFINED) m_refFrames = 0;
         rtc::transition(cmd, m_refMean, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                        kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, !keep);
+                        kCompute, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, m_refFrames == 0);
     } else {
+        m_refFrames = 0;   // a realtime frame breaks the reference run
         m_cur ^= 1u;
         prepareHalfImages(cmd);
         m_traceExtent = {m_halfWidth, m_halfHeight};
@@ -326,11 +328,12 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     shared::GITracePush pc{};
     pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
     pc.seed = u4(input.renderSeed, input.frameIndex, m_rays, lightCount);
-    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, 0u, 0u);
+    pc.flags = u4(reference ? 1u : 0u, input.envMap ? 1u : 0u, reference ? m_refFrames : 0u, 0u);
     pc.cameraPos = f4(input.cameraPos, 0.0f);
     vkCmdPushConstants(cmd, m_traceLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (m_traceExtent.width + 7) / 8, (m_traceExtent.height + 7) / 8, 1);
     m_rendered = true;
+    if (reference) ++m_refFrames;
 
     if (reference) {
         rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kFragment,

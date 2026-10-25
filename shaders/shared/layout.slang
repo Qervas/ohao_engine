@@ -55,6 +55,7 @@ struct ShadowTracePush
     uint4 extent;   // x width, y height, z lights, w lights a pixel at most (realtime)
     uint4 seed;   // x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light
     float4 cameraPos;   // xyz the camera's position (the filter's depth guide is the distance from it)
+    uint4 history;   // x reference: the frames already in the running means (0: start them again)
 };
 
 // RT shadows' filter (rt/shadow_filter.slang) push constants
@@ -78,7 +79,7 @@ struct GITracePush
 {
     uint4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's
     uint4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
-    uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound
+    uint4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)
     float4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
 };
 

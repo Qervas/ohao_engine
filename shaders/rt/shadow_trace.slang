@@ -9,9 +9,10 @@
 //            normal) with one traced bit and one visible bit a light, which the filter
 //            (shadow_filter.slang) denoises spatially and temporally. A pixel with more
 //            lights that matter than it may trace counts once in `dropped`.
-// reference  Every light, kShadowReferenceRays rays each, no cap, no filter: frame k after a
-//            temporal reset keeps the plain running mean of frames 0..k in refLo/refHi
-//            (lights 0-3 and 4-7, 32-bit floats) and writes it, 8 bits a light, to outVis.
+// reference  Every light, kShadowReferenceRays rays each, no cap, no filter: refLo/refHi keep
+//            the plain running mean of the reference frames since the last temporal reset (a
+//            realtime frame starts it again; lights 0-3 and 4-7, 32-bit floats) and outVis
+//            gets it, 8 bits a light.
 //
 // Every sample hashes (render seed, frame index since the reset, pixel, light, ray,
 // dimension): it changes per frame so the accumulation converges, and repeats exactly after
@@ -189,11 +190,12 @@ void trace(uint3 id : SV_DispatchThreadID)
     // index (a register, not local memory).
     if (reference)
     {
-        // The running mean of frames 0..k: frame 0 takes its own value, so nothing before
-        // the reset (or in a fresh image) is read.
-        const float k = float(pc.seed.y);
-        const float4 prevLo = pc.seed.y == 0u ? float4(0.0) : refLo[pixel];
-        const float4 prevHi = pc.seed.y == 0u ? float4(0.0) : refHi[pixel];
+        // The running mean of the reference frames in a row: with none before (a reset, fresh
+        // images, realtime frames in between) this frame takes its own value and nothing stale
+        // or undefined is read.
+        const float k = float(pc.history.x);
+        const float4 prevLo = pc.history.x == 0u ? float4(0.0) : refLo[pixel];
+        const float4 prevHi = pc.history.x == 0u ? float4(0.0) : refHi[pixel];
         float4 lo = float4(1.0), hi = float4(1.0);
         [unroll]
         for (uint l = 0u; l < kShadowMaxLights; ++l)

@@ -54,6 +54,7 @@ struct ShadowTracePush {
     uvec4 extent;   // x width, y height, z lights, w lights a pixel at most (realtime)
     uvec4 seed;   // x render seed, y frame index since the last temporal reset, z quality (0 realtime, 1 reference), w rays a light
     vec4 cameraPos;   // xyz the camera's position (the filter's depth guide is the distance from it)
+    uvec4 history;   // x reference: the frames already in the running means (0: start them again)
 };
 
 // RT shadows' filter (rt/shadow_filter.slang) push constants
@@ -74,7 +75,7 @@ struct GILight {
 struct GITracePush {
     uvec4 extent;   // x, y the trace's size (realtime: half the frame's, rounded up); z, w the frame's
     uvec4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
-    uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound
+    uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)
     vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
 };
 

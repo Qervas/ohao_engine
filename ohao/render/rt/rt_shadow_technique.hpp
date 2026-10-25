@@ -49,8 +49,12 @@ public:
     // pipeline) and nothing was written this frame: don't sample the output.
     [[nodiscard]] bool rendered() const { return m_rendered; }
     [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }
-    // Forget the temporal history: the next realtime frame takes none.
-    void resetHistory() noexcept { m_historyValid = false; }
+    // Forget the temporal history: the next realtime frame takes none, and the reference
+    // running means start again.
+    void resetHistory() noexcept {
+        m_historyValid = false;
+        m_refFrames = 0;
+    }
     void destroy() override;
 
     // Pixels of a finished frame that had more lights worth tracing than they may trace
@@ -106,6 +110,7 @@ private:
     uint32_t m_cur = 0;            // this frame's half of each pair
     bool m_historyValid = false;   // the other half holds the previous frame's realtime output
     uint32_t m_historyFrames = 0;  // the frames that output averages (the filter's blend weight)
+    uint32_t m_refFrames = 0;      // the reference frames in the means; 0 after a reset, new images or a realtime frame
 
     // This frame (render() to filter()).
     bool m_rendered = false;
