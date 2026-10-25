@@ -57,12 +57,13 @@ the caller's retire list rather than destroyed.
 
 The indices in the arena stay *mesh-local*: they are not biased by the running vertex
 offset as they are appended. The bias is applied by whoever reads them, and there are
-three readers that must agree. The rasteriser passes the mesh's `vertexOffset` as
-`vkCmdDrawIndexed`'s base-vertex argument and the instance slot as `firstInstance`;
-the cascaded shadow pass draws the same list with the same arguments but a 64-byte push
-constant, the cascade's view-projection, in place of the G-buffer's material slot.
+three readers that must agree. The rasteriser's draws are indirect: GPU culling copies
+the mesh's `vertexOffset` from the draw record into each command's base-vertex field,
+beside the index range, with `firstInstance` the draw's index in the draw table. The
+G-buffer and the cascaded shadow pass both draw such lists; the shadow pass adds a
+64-byte push constant, the cascade's view-projection.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
+{{cite shaders/cull/instances.slang "commands[at + 3u] = d.draw.z;"}}
 {{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 64);"}}
 
 The BLAS build gets the same offset as its `firstVertex`, with the buffer base and a
@@ -227,7 +228,7 @@ no-texture sentinel when nothing loaded:
 
 ## Contracts
 
-- Mesh indices are arena-local. Every reader applies `MeshInfo::vertexOffset` itself — as `vkCmdDrawIndexed`'s base vertex, as the BLAS `firstVertex`, and as an addend in the hit shaders. Change how one reads them and the other two silently break.
+- Mesh indices are arena-local. Every reader applies `MeshInfo::vertexOffset` itself — as the indirect draw command's base vertex, as the BLAS `firstVertex`, and as an addend in the hit shaders. Change how one reads them and the other two silently break.
 - Offsets in `MeshInfo` and `MeshGpu` are element counts, not bytes; byte offsets are computed at the point of use.
 - `registerMesh` blocks on the queue and belongs to load time. Per-frame changes go through `createInstance`/`updateInstance`/`destroyInstance`/`setLights` and reach the device in `recordUpdates`.
 - A replaced arena or table buffer is retired, not destroyed; it is freed `MAX_FRAMES_IN_FLIGHT` frames later by `onFrameRetired`. Calling that tick more or less often than once per submitted frame breaks the lifetime guarantee.

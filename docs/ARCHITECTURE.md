@@ -77,7 +77,12 @@ World::sync()
                   and the light list                                    a renderer (addSyncAfter)
 host: applySceneView (Camera, Environment -> renderer camera, HDRI)   runtime/scene_view_apply.hpp
 VulkanRenderer::render()
-  RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit
+  RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit;
+                               the draw table (one DrawRecord an instance's submesh) when
+                               the instances change
+  GpuCulling                   the draw table to indirect lists on the GPU: early (last
+                               frame's visible), Hi-Z of that depth, late (newly visible);
+                               the G-buffer and CSM draw only those
   deferred passes or a path tracer, then present (window); any frame, headless or
   windowed, copies to the CPU only when asked (requestReadback, then readback(): that
   frame's fence, never the queue); an inline capture of a deferred frame asks for the

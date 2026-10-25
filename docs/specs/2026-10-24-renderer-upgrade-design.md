@@ -166,12 +166,11 @@ the protocol and the window capture path.
 
 ```
 per frame (GPU; every pass named, timed, budgeted)
-  cull.instances      compute  frustum + previous-frame Hi-Z per instance -> visible list   (scan-compacted, deterministic order)
+  cull.instances      compute  frustum + last frame's visibility per draw -> early list   (scan-compacted, deterministic order)
   gbuffer.early       mesh/indirect  draw last frame's visible set
   hiz.build           compute  depth pyramid of the early pass
-  cull.late           compute  instances (and meshlets) occluded early but visible now
+  cull.late           compute  draws (and meshlets) not drawn early but visible now; visibility for the next frame
   gbuffer.late        mesh/indirect  draw the newly visible
-  hiz.final           compute  pyramid for the next frame
   lights.cluster      compute  froxel light lists (16x9 tiles x 24 slices)
   rt.shadows          RT       1 ray per shadowed light (<= 4 a pixel), full res
   rt.shadows.filter   compute  depth/normal-aware spatial filter
@@ -1162,6 +1161,35 @@ improvising. Intentional image changes are separate commits inside their step.
       capped until step 13: they use 8).
     - Gates the CPU-submission budgets.
     - Test 6.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step11.md`):* `GpuCulling`
+      (`ohao/render/deferred/gpu_culling.*`, `shaders/cull/instances.slang`,
+      `shaders/cull/hiz.slang`); passes `cull.instances`, `gbuffer.early`, `hiz.build`,
+      `cull.late`, `gbuffer.late` replace `gbuffer` (the graph's G-buffer pass times its own
+      parts). Every G-buffer and CSM draw is `vkCmdDrawIndexedIndirectCount`; the CPU records
+      the same commands whatever the instance count. *Corrections:* (1) culling works per
+      **draw** (an instance's submesh), not per instance: `RenderScene` keeps its draw list on
+      the GPU (`DrawRecord`, 64 bytes: indices, slot, material slot, sidedness, the mesh's
+      box), firstInstance is the draw's index, and the vertex shaders read the instance through
+      it. (2) The compaction is a Hillis-Steele scan of 256 draws in shared memory and a
+      one-workgroup scan of the block totals, integer and in draw order; no subgroup operations.
+      (3) No `hiz.final`: the early pass draws last frame's visible set (frustum-tested, no
+      occlusion test), so no pyramid is carried between frames; `cull.instances` tests the
+      frustum and last frame's visibility, not a previous-frame pyramid. (4) The pyramid's
+      level 0 is the frame halved and padded to powers of two: Vulkan halves mip levels
+      rounding down, so only power-of-two levels keep each texel's footprint exact (the first
+      build, rounding up, read past the levels and culled visible walls). (5) Face culling needs
+      sidedness the tree did not have: `MaterialDesc::doubleSided`, from glTF's `doubleSided`
+      (Assimp's `TWOSIDED`); scene-file, OBJ and FBX materials stay double-sided. Front faces
+      are counter-clockwise as rasterized. (6) CSM cascades cull only their frustum's sides
+      (the pass clamps depth). (7) The early and late render passes share a framebuffer and
+      pipelines, so their subpass dependencies are identical (render-pass compatibility).
+      (8) The bench scenes (`bench_world.hpp`, `buildRenderBenchWorld`): 20 meshes (5 shapes x
+      4 sizes) on a 400 m grid, a ground, 7 point lights (4 shadowed) and a sun, post on.
+      Test 6 is `cull_parity_gpu_test`. **Budgets:** `cornell_720p` `cull+hiz` 0.039 ms (0.10),
+      `gbuffer` 0.068 (0.10); `bench100k_1080p` CPU 0.123 ms (0.5), 0.95x `bench10k_1080p`
+      (1.2) measured alone; in the full run, where it renders last after the other scenes'
+      sustained load, 0.289 ms and 2.37x. Every run was flagged noisy, so the gate's verdict
+      is open (the change record has the final runs).
 12. **Meshlets.**
     - The builder; the meshlet arenas; task/mesh shaders with the fallback; `geometry`
       setting.

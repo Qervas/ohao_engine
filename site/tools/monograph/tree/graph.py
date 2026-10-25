@@ -35,9 +35,9 @@ MODULE = {
         ),
         page(
             'culling',
-            'Culling',
-            'CPU/GPU cull helpers (HiZ / light cull compute).',
-            files=['ohao/render/culling.hpp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/hiz_generate.comp'],
+            'GPU culling',
+            'The draw table to indirect lists: early/late two-pass occlusion, Hi-Z, cascades.',
+            files=['ohao/render/deferred/gpu_culling.hpp', 'ohao/render/deferred/gpu_culling.cpp', 'shaders/cull/instances.slang', 'shaders/cull/hiz.slang'],
         ),
     ],
 }

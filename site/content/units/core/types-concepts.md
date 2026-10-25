@@ -175,8 +175,8 @@ the only place that converts:
 
 {{cite ohao/render/scene/mesh_registry.cpp "static_cast<VkDeviceSize>(mesh.vertexOffset) * kVertexStride,"}}
 
-The raster path never multiplies, because `vkCmdDrawIndexed` takes element offsets
-directly, and the hit shaders add them to element indices. Changing either convention
+The raster path never multiplies, because an indexed indirect draw command takes element
+offsets directly, and the hit shaders add them to element indices. Changing either convention
 yields a BLAS built over the wrong triangles — a wrong picture, not a validation error.
 
 ## What did not land

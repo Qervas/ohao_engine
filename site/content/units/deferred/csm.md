@@ -185,21 +185,32 @@ framebuffer:
 
 {{cite ohao/render/deferred/csm_pass.cpp "framebufferInfo.layers = 1;"}}
 
-`CSMPass::execute` loops over the four cascades, begins the depth-only render pass on
-that cascade's framebuffer, and redraws every `RenderScene` draw. Nothing routes
+`CSMPass::execute` first culls the draw table once per cascade, on the GPU, before any
+render pass begins (compute cannot run inside one). The shadow phase of GPU culling
+tests each draw's box against the cascade's four side planes only: the pipeline clamps
+depth, so a caster in front of the cascade's near plane still lands in the map and must
+not be culled for it.
+
+{{cite ohao/render/deferred/csm_pass.cpp "m_culling->cull(cmd, gpu::shared::kCullPhaseShadow, GpuCulling::kPairCascade0 + cascade,"}}
+
+It then loops over the four cascades, begins the depth-only render pass on that
+cascade's framebuffer, and draws the cascade's list with one
+`vkCmdDrawIndexedIndirectCount`. The shadow phase puts one-sided and double-sided draws
+in the same list, since the shadow pipeline's face culling is its own. Nothing routes
 primitives to a layer: the framebuffer already *is* the layer. The pipeline therefore
 has a vertex stage and nothing else — no geometry shader, no fragment shader — and
 the vertex shader projects straight into the cascade being rendered. The object's
-world matrix is not pushed per draw; it is read from `RenderScene`'s instance table,
-indexed by the draw's `firstInstance`, which the pass sets to the instance slot:
+world matrix is not pushed per draw. Each command's `firstInstance` is the draw's index
+in `RenderScene`'s draw table, and the shader reads the instance slot from that record,
+then the world matrix from the instance table:
 
-{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[gl_InstanceIndex].world * vec4(inPosition, 1.0);"}}
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[draws[gl_InstanceIndex].draw.w].world * vec4(inPosition, 1.0);"}}
 
-The instance table is the pipeline's only descriptor set: one set per frame slot,
-holding the storage buffer, rewritten each `execute` because the table buffer can be
-replaced when it grows. The cascade's matrix travels as a single push constant,
-pushed once per cascade rather than once per draw, from the `m_cascadeData` the same
-`execute` just recomputed:
+The two tables are the pipeline's only descriptor set (binding 0 the instance table,
+binding 1 the draw table): one set per frame slot, rewritten each `execute` because
+either buffer can be replaced when it grows. The cascade's matrix travels as a single
+push constant, pushed once per cascade rather than once per draw, from the
+`m_cascadeData` the same `execute` just recomputed:
 
 {{cite ohao/render/deferred/csm_pass.cpp "const ShadowPushConstant push{m_cascadeData.viewProj[cascade]};"}}
 
@@ -231,7 +242,8 @@ all four array layers rather than layer 0 alone.
 
 - `setCameraData` must receive the **unjittered** projection. `DeferredRenderer` passes `m_proj` while the GBuffer pass gets `jitteredProj`; a jittered matrix would nudge every cascade sphere each frame and defeat the texel snapping.
 - The lighting shader applies CSM only to lights of type 0 (directional) and only when flag bit 2 is set. Point and spot lights are unshadowed on this path.
-- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from a push constant recorded into its own command buffer, and its instance-table set is per frame slot.
+- The cascade UBO is a single persistently-mapped allocation written from `execute()` with no per-frame ring buffer, so the *lighting* read of an earlier frame still in flight can see the matrices the CPU wrote for a later one. The shadow raster is immune: it takes its matrix from a push constant recorded into its own command buffer, its culling takes the same matrix as a push constant, and its table set is per frame slot.
+- A cascade culls against its side planes only. Turning depth clamping off would make that cull too generous rather than wrong; turning on a near/far test while clamping stays on would delete casters in front of the cascade.
 - The shadow sampler is created with `compareEnable = VK_TRUE` and `VK_COMPARE_OP_LESS_OR_EQUAL`, and binding 6 must stay a `sampler2DArrayShadow` sampled with a reference depth: Vulkan requires a compare-enabled sampler to be used only with depth-compare instructions.
 - The light projection must keep producing depth in $[0, 1]$ (`orthoRH_ZO`); a $[-1, 1]$ matrix leaves the near half of every cascade unshadowed with no error anywhere.
 - The `csm` pass is recorded only in frames where RT shadows do not run; anything that wants the map in an RT frame gets one that was not drawn this frame.

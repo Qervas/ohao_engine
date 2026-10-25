@@ -133,9 +133,16 @@ throughout.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "features13.shaderDemoteToHelperInvocation = VK_TRUE;"}}
 
-The Vulkan 1.2 bits do the descriptor work. Of eight assigned fields, seven are
-descriptor-indexing features; the eighth, `bufferDeviceAddress`, is required by
-acceleration structure builds. `runtimeDescriptorArray` plus
+The Vulkan 1.2 bits do the descriptor work. Of nine assigned fields, seven are
+descriptor-indexing features; `bufferDeviceAddress` is required by acceleration
+structure builds, and `drawIndirectCount` by GPU culling, whose G-buffer and shadow
+draws take their count from a GPU buffer through `vkCmdDrawIndexedIndirectCount`. Its
+commands set `firstInstance` to a draw-table index, which is why the core features
+also enable `drawIndirectFirstInstance` beside `multiDrawIndirect`:
+
+{{cite ohao/gpu/vulkan/device_setup.cpp "deviceFeatures2.features.drawIndirectFirstInstance = VK_TRUE;"}}
+
+Of the descriptor-indexing seven, `runtimeDescriptorArray` plus
 `shaderSampledImageArrayNonUniformIndexing` let shaders declare an unsized
 `uniform sampler2D textures[]` and index it with `nonuniformEXT(...)`, which
 `gbuffer.frag`, `pt_closesthit.rchit`, `pt_anyhit.rahit` and `pt_miss.rmiss` all do.

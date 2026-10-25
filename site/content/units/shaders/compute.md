@@ -5,7 +5,7 @@ title: Compute shaders
 standard: v2
 ---
 
-## Two compute shaders under compute/, and the target that builds them
+## Compute shaders, and the target that builds them
 
 `add_custom_target(shaders ...)` is declared without `ALL`, so building some other
 target alone compiles no SPIR-V. Every target that loads SPIR-V depends on it — the
@@ -61,9 +61,27 @@ The kernel — a horizon search in the surface's tangent plane, eight directions
 steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its
 effect on the frame are the deferred SSAO unit's subject.
 
+## cull/: the draw lists and the depth pyramid
+
+GPU culling's two modules sit in their own directory, `shaders/cull/`, and compile by
+the same Slang glob. `instances.slang` has three entry points, so three files, which
+`GpuCulling` loads by entry name with one shared set layout and push range:
+
+{{cite ohao/render/deferred/gpu_culling.cpp "rtc::createComputePipeline(m_device, "cull_instances.slang.classify.spv", "classify", m_setLayout,"}}
+
+`classify` and `scatter` run one thread per draw in workgroups of `kCullGroupSize`
+(256), and `scanBlocks` a single workgroup of the same size; the host dispatches
+`(draws + 255) / 256` groups. `hiz.slang`'s `fromDepth` and `downsample` build the
+max-depth pyramid in 8×8 workgroups, one dispatch per level. Their push blocks,
+`CullPush` and `HiZPush`, and the `DrawRecord` they read come from
+`shaders/shared/layout.json`. The algorithm — phases, prefix-sum compaction and the
+occlusion test — is the GPU culling unit's subject.
+
+{{cite shaders/cull/instances.slang "[[vk::push_constant]] ConstantBuffer<CullPush> pc;"}}
+
 ## dlss_tonemap: display space, behind a build gate
 
-The fifth pipeline is the DLSS Ray Reconstruction display pass, dispatched after
+The last is the DLSS Ray Reconstruction display pass, dispatched after
 RR writes its denoised HDR image:
 
 {{cite ohao/render/rt/path_tracer_render.cpp "m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);"}}
@@ -103,4 +121,4 @@ writes the RGBA8 beauty — so the tracer stays unbiased.
 ## Contracts
 
 - The `shaders` target is not in `ALL`; only the targets that declare `add_dependencies(... shaders)` rebuild SPIR-V before they build, and a new target that loads SPIR-V must declare it too. Compilation is by glob, so adding a `.comp` or `.slang` yields SPIR-V and no wiring: a loader must ask for the path-flattened name, `compute/<name>.comp` → `compute_<name>.comp.spv`, and a Slang module with several entry points `compute_<name>.slang.<entry>.spv`.
-- `compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.
+- `compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that it reaches a frame is a claim about a machine with the NGX SDK vendored in.

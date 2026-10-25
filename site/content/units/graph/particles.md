@@ -251,7 +251,7 @@ declares for it, and the one TAA samples it in after this pass. Flipping it to a
 attachment layout here would leave TAA reading depth in a layout its descriptor
 does not declare; read-only depth testing needs no transition at all.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "a.finalLayout = late ? (depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL"}}
 
 The framebuffer holds the lighting output view and the GBuffer depth view
 directly, so it is rebuilt on every resize. Failure is handled unevenly. Only a

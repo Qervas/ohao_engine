@@ -42,6 +42,10 @@ A fixed array of 4096 packs, each three `vec4`s: base color and albedo texture i
 
 The table is append-only and never grows. Uploading a model registers one material per `materialColors` row whether or not an identical pack already exists, so 4096 is a budget on materials *loaded*, not materials distinct.
 
+Beside each pack the table keeps one host-only byte, the material's sidedness, which never reaches the GPU pack: `MaterialDesc::doubleSided` defaults to true, and only glTF materials can be one-sided — the loader reads Assimp's `TWOSIDED` key, which its glTF importer always sets from glTF's `doubleSided`, into `Model::materialDoubleSided`. Scene-file, OBJ and FBX materials stay double-sided. An index the table does not hold reads as double-sided:
+
+{{cite ohao/render/scene/material_table.hpp "return index >= m_doubleSided.size() || m_doubleSided[index] != 0;"}}
+
 ## Instance table: slots, free list, material references
 
 An instance is one 160-byte `InstanceGpu` — `world`, `prevWorld`, mesh index, material-reference offset and count, a visibility flag, and the legacy RT GI albedo word — plus a fixed block of 64 material indices at `slot * 64` in a second buffer. Submesh $k$ of instance $s$ shades with
@@ -56,7 +60,17 @@ Material handles are bounds-checked when written: an index at or past the table'
 
 Slots come from a free list that always returns the lowest released slot, and the table grows by doubling from 1024. Every write builds the new `InstanceGpu` and compares it with the current bytes; only a difference marks the slot dirty, and the material block is compared and marked separately. Uploads coalesce dirty slots into contiguous runs, one copy per run. Destroying an instance clears its flags, so the GPU copy reads as invisible until the slot is reused.
 
-`draws()` — the raster draw list, one entry per visible instance × submesh — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates.
+## The draw table
+
+`draws()` — the raster draw list, one entry per visible instance × submesh, in slot order — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates. Each `Draw` also records whether its submesh's material is one-sided, resolved through the instance's material list the way the shader resolves it.
+
+Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot and the one-sided flag; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
+
+{{cite ohao/render/scene/render_scene.cpp "r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, 0u, 0u};"}}
+
+It is what GPU culling reads, and what the G-buffer and CSM vertex shaders index with `firstInstance`. `drawCount()` reports the uploaded list's length, and zero while the current version has not been uploaded yet, so no pass draws from a table that does not match the list:
+
+{{cite ohao/render/scene/render_scene.cpp "return m->uploadedVersion == m->drawsVersion ? static_cast<uint32_t>(m->draws.size()) : 0u;"}}
 
 ## Lights: one list, two layouts
 
@@ -96,3 +110,4 @@ The RenderScene's correctness rests on one discipline: no device-local table is 
 - `registerMesh` is blocking and idles the queue. It belongs at load time; calling it per frame stalls the GPU.
 - The custom index keeps 24 bits of the slot; slots at or above $2^{24}$ alias. Nothing enforces that bound.
 - `materialIndexFor(slot, k)` mirrors the shader's fallback on the host, so CPU-side code resolves a submesh's material exactly as the GPU will.
+- Draw $i$ of one draw-table version is not draw $i$ of another. Anything that keys per-draw state by index — GPU culling's visibility history — must drop it when `drawsVersion()` changes.

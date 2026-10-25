@@ -90,7 +90,7 @@
 <div class="citation-chip"><code class="citation-code">using ObjectId = std::uint64_t;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/common_types.hpp#L15" target="_blank" rel="noopener">ohao/core/common_types.hpp:15</a></div>
 <p>Its docstring promises POD types that cross CPU/GPU edges; none is left. The mesh slice that does cross is owned by the renderer, not by `core/`: `render::MeshGpu`, four `uint32_t`s in the mesh table that the hit shaders index, asserted at 16 bytes beside its definition. Its offsets are *element* counts, not bytes, and the BLAS builder is the only place that converts:</p>
 <div class="citation-chip"><code class="citation-code">static_cast&lt;VkDeviceSize&gt;(mesh.vertexOffset) * kVertexStride,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L123" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:123</a></div>
-<p>The raster path never multiplies, because `vkCmdDrawIndexed` takes element offsets directly, and the hit shaders add them to element indices. Changing either convention yields a BLAS built over the wrong triangles — a wrong picture, not a validation error.</p>
+<p>The raster path never multiplies, because an indexed indirect draw command takes element offsets directly, and the hit shaders add them to element indices. Changing either convention yields a BLAS built over the wrong triangles — a wrong picture, not a validation error.</p>
 </div>
 <div class="section-rule"><h2 id="what-did-not-land">What did not land</h2></div>
 <div class="prose reveal">
@@ -98,7 +98,7 @@
 <li>`as_span` has zero callers anywhere, the test binary included. Its two neighbours</li>
 </ul>
 <p>`as_const_span` and `span_covers_image` are reached only from one test block — the one whose label still advertises `as_span`:</p>
-<div class="citation-chip"><code class="citation-code">auto s = as_const_span&lt;float&gt;(v);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L442" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:442</a></div>
+<div class="citation-chip"><code class="citation-code">auto s = as_const_span&lt;float&gt;(v);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L441" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:441</a></div>
 <p>`ContiguousRangeOf` exists only to constrain the first two. This is the *range*-to-span family, distinct from the *pointer*-to-span chain in `vk_utils.hpp` above: different functions, the same concept guarding them, and neither reached from engine code.</p>
 <ul>
 <li>`GpuLayoutBytes`, the `Predicate` concept, and `layout::gpu_sizeof` have no users</li>

@@ -120,11 +120,12 @@ inverted.
 The depth-write side is a single vertex stage with no fragment shader: depth arrives
 straight from the rasteriser into one 2048² layer per cascade. Each cascade is its own
 render pass into its own array-layer view, so the vertex shader needs no layer
-routing — it takes that cascade's view-projection as a push constant, reads the
-object's world matrix from `RenderScene`'s instance table at `gl_InstanceIndex` (the
-draw's `firstInstance` is the instance slot), and projects directly:
+routing — it takes that cascade's view-projection as a push constant, reads the draw
+record at `gl_InstanceIndex` from `RenderScene`'s draw table (the indirect command's
+`firstInstance` is the draw's index, written by GPU culling), takes the object's world
+matrix from the instance table at the slot the record names, and projects directly:
 
-{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[gl_InstanceIndex].world * vec4(inPosition, 1.0);"}}
+{{cite shaders/shadow/shadow_csm.vert "gl_Position = pc.viewProj * instances[draws[gl_InstanceIndex].draw.w].world * vec4(inPosition, 1.0);"}}
 
 The push block is a single `mat4`, 64 bytes, half the push-constant size every Vulkan
 device guarantees, and the C++ mirror pins that size:

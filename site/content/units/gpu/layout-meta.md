@@ -84,27 +84,34 @@ The base and offline raygens mask the high bits off; the realtime raygen loops o
 them. A size contract that is exactly satisfied has stopped being a check and
 become a design constraint.
 
-## The per-draw block that shrank to a slot
+## The per-draw block that became a record
 
-The raster per-draw contract is four `uint`s, 16 bytes. Per-object state lives in
-tables the shaders index, and the push constant names which submesh material slot the
-draw uses, plus the frame's SSS tile grid across and down — per frame, not per draw,
-but pushed with each draw because the fragment stage that flags tiles has no other
-per-pass data at hand:
+The raster draws carry no per-draw push constant. Indirect commands cannot change one
+between draws, so everything a draw needs is in `RenderScene`'s draw table, one
+`DrawRecord` per draw, which the vertex shaders index with `firstInstance`. The record
+is declared once, in `shaders/shared/layout.json`, and generated into GLSL, Slang and
+C++; the C++ side pins its size:
+
+{{cite ohao/render/deferred/gpu_culling.cpp "static_assert(sizeof(shared::DrawRecord) == 64);"}}
+
+Four `uint4`/`float4` rows: the index range, vertex offset and instance slot; the
+material slot and the one-sided flag; the local box's two corners. The material slot is
+not a material: the fragment shader resolves it through the instance's reference list,
+so the contract that matters is the table layout below. What is left in the G-buffer's
+push block is per frame — the SSS tile grid across and down, and two words of padding
+that keep the range at 16 bytes:
 
 {{cite ohao/render/deferred/gbuffer_pass.hpp "static_assert(sizeof(DrawPushConstant) == 16);"}}
 
 `gbuffer.frag` declares the same four words in the same order:
 
-{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint materialSlot; uint tilesX; uint tilesY; uint pad; } pc;"}}
+{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint tilesX; uint tilesY; uint pad0; uint pad1; } pc;"}}
 
-The size assertion pins the C++ struct, not the GLSL block; the two match by hand, and
-the last word is padding that keeps the range at a 16-byte multiple. The material slot
-is not a material: the shader resolves it through the instance's reference list, so
-the contract that matters is the table layout below, not the push block. The SSS
-constants the shader also needs — the tile size, the header length, the list capacity —
-come from `shaders/shared/layout.json` through the generated `shared/layout.glsl`, the
-same file the C++ side reads as `gpu/shared_layout.hpp`, so those cannot drift.
+The size assertion pins the C++ struct, not the GLSL block; those two match by hand.
+The SSS constants the shader also needs — the tile size, the header length, the list
+capacity — come from `shaders/shared/layout.json` through the generated
+`shared/layout.glsl`, the same file the C++ side reads as `gpu/shared_layout.hpp`, so
+those cannot drift.
 
 The instance table is the boundary that carries the weight. `InstanceGpu` is declared
 once in C++ and once in `scene_data.glsl`, whose header names its twin:

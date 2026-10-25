@@ -1,212 +1,214 @@
 ---
 module: graph
 id: culling
-title: Culling
+title: GPU culling
 standard: v2
 ---
 
-## One frustum, one call site
+## A draw table in, indirect lists out
 
-This unit is three files — `render/culling.hpp`, `shaders/compute/gpu_cull.comp`,
-`shaders/compute/hiz_generate.comp` — and only the header runs. The CPU frustum in
-`culling.hpp` is built once per frame inside the GBuffer pass's command recording, from
-the same view-projection that pass is about to rasterize with:
+`GpuCulling` (`render/deferred/gpu_culling.{hpp,cpp}`) decides on the GPU which draws
+a frame rasterizes. Its input is `RenderScene`'s draw table, one 64-byte `DrawRecord`
+per visible instance's submesh: the index range and vertex offset, the instance-table
+slot, the material slot, a one-sided flag and the mesh's local bounding box. Its output
+is lists of `VkDrawIndexedIndirectCommand` that the G-buffer and CSM passes draw with
+`vkCmdDrawIndexedIndirectCount`, the count read from a GPU buffer:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "frustum.extractFromViewProj(m_projection * m_view);"}}
+{{cite ohao/render/deferred/gpu_culling.cpp "vkCmdDrawIndexedIndirectCount(cmd, m_commands.buffer"}}
 
-That is the only construction of a `Frustum` in the tree, and `isAABBVisible` its only
-test with a caller — `isSphereVisible`, `isPointVisible` and `getPlane` have none. Both
-compute shaders compile anyway (`shaders/CMakeLists.txt` globs every `.comp` recursively)
-but nothing in the C++ tree loads either `.spv`. Their histories differ, and that
-difference is the substance of this unit: `gpu_cull.comp` never had a working dispatcher,
-`hiz_generate.comp` lost one. `shaders/compute/light_culling.comp` sits in the same
-limbo, compiled and unreferenced, but it is a tile-lighting design rather than part of
-this one.
+So the CPU records the same handful of commands whatever the instance count: three
+dispatches per culling phase, a pyramid build, and two indirect draws per render pass.
+The work is all in two Slang modules under `shaders/cull/`: `instances.slang`, with the
+entry points `classify`, `scanBlocks` and `scatter`, and `hiz.slang`, with `fromDepth`
+and `downsample`. `DeferredRenderer` owns the one `GpuCulling`, hands it to both passes,
+and exposes it through `culling()` for its settings and for tests.
 
-Hardware face culling is a separate mechanism, and the GBuffer pipeline turns it off:
+## Three phases
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_NONE;  // No culling: imported meshes are not guaranteed consistently wound"}}
+A culling call names a phase, a list pair and the view-projection the draws will be
+rasterized with:
 
-so the GBuffer pass rasterizes every back-facing triangle in the scene. The one pipeline
-in the deferred path that culls faces is the cascade shadow pass, and it culls the *front*
-ones:
+{{cite ohao/render/deferred/gpu_culling.hpp "void cull(VkCommandBuffer cmd, uint32_t phase, uint32_t pair, const glm::mat4& viewProj);"}}
 
-{{cite ohao/render/deferred/csm_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT; // Front-face culling for shadow"}}
+The phases are the constants `kCullPhaseEarly`, `kCullPhaseLate` and `kCullPhaseShadow`
+in `shaders/shared/layout.json`, generated into Slang and C++ alike. Their roles follow
+the two-pass occlusion scheme. A per-draw visibility buffer remembers what the last late
+phase saw. The early phase lists the draws that were visible then and are inside the
+frustum now:
 
-recording shadow depth on the back surface of each caster — the usual trade of acne for
-peter-panning, on top of the depth bias the same pipeline enables. A single-sided mesh
-that rasterizes correctly into the GBuffer can therefore vanish from the shadow map.
+{{cite shaders/cull/instances.slang "member = frustum && visibility[i] != 0u && inFrustum;"}}
 
-## Where the six planes come from
+The early G-buffer pass draws them, and its depth is a good guess at this frame's
+occluders. The late phase then tests every draw against the frustum and a Hi-Z pyramid
+of that depth, records the result for the next frame, and lists only what is visible now
+and was not drawn early:
 
-The extraction is Gribb-Hartmann, worth deriving because the code looks transposed. A
-point $\mathbf{p}$ is inside the left clip boundary when its clip-space $x$ satisfies
-$-w \le x$. Writing $M = P V$ with rows $\mathbf{m}_0 \ldots \mathbf{m}_3$, so that
-$x_{clip} = \mathbf{m}_0 \cdot \mathbf{p}$ and $w = \mathbf{m}_3 \cdot \mathbf{p}$, that
-inequality is:
+{{cite shaders/cull/instances.slang "member = visible && !drawnEarly;"}}
 
-$$(\mathbf{m}_3 + \mathbf{m}_0)\cdot \mathbf{p} \ \ge\ 0$$
+A draw drawn early is never drawn again, and a draw that came into view this frame (or
+was disoccluded) is drawn late, so every visible draw is drawn exactly once. The G-buffer
+records the whole sequence itself, between its two render passes:
 
-The left plane's $(\mathbf{n}, d)$ is thus a sum of two *rows* of the view-projection —
-no inverse, no decomposition, six adds. GLM stores column-major, so row 3 is
-`m[0][3], m[1][3], m[2][3], m[3][3]`, which is why the indices look swapped:
+{{cite ohao/render/deferred/gbuffer_pass.cpp "if (haveScene) m_culling->cull(cmd, shared::kCullPhaseEarly, GpuCulling::kPairEarly, viewProj);"}}
 
-{{cite ohao/render/culling.hpp "m_planes[LEFT].normal = glm::vec3(m[0][3] + m[0][0]"}}
+The shadow phase is for a CSM cascade: frustum only, no history, no pyramid. It tests
+only the four side planes, because the cascade pipeline clamps depth and a caster in
+front of the cascade's near plane still lands in the map:
 
-Near and far are $\mathbf{m}_3 \pm \mathbf{m}_2$, and that is the line with a fuse in it.
-$\mathbf{m}_3 + \mathbf{m}_2$ is the near plane only when clip-space $z$ runs
-$-w \ldots w$ — the OpenGL convention. OHAO's camera builds its projection with plain
-`glm::perspective`, and the tree never defines `GLM_FORCE_DEPTH_ZERO_TO_ONE`, so the extraction is correct as written. Define that macro — the obvious "make GLM
-Vulkan-native" cleanup — and exactly one plane changes. Far survives, since $z_{clip} \le
-w$ is the far boundary in both conventions; left, right, top and bottom never involved
-$z$. Near does not. Under zero-to-one depth the near boundary is $z_{clip} \ge 0$, i.e.
-$\mathbf{m}_2$ alone, whose zero set for `glm::perspective(fovy, aspect, n, f)` is
-$z = -n$. The row *sum* the code computes is
-$(0,\,0,\,-1-\tfrac{f}{f-n},\ -\tfrac{fn}{f-n})$, whose zero set is:
+{{cite shaders/cull/instances.slang "if (pc.config.y == kCullPhaseShadow) allOut &= 15u;"}}
 
-$$z \;=\; -\frac{fn}{2f-n} \;\approx\; -\frac{n}{2}$$
+Each phase writes a pair of lists. The G-buffer phases split one-sided draws (the first
+list, drawn with back faces culled) from double-sided ones (the second, drawn with no
+face culling); the shadow phase puts everything in the first:
 
-That is a plane at half the near distance — *closer* to the camera than the true one, not
-behind it. Everything nearer than $n/2$ is still rejected; only the shell between $n/2$
-and $n$ stops being. Nothing renders wrong, since the rasterizer still clips; the cull
-just quietly gets weaker in a region nobody puts geometry in.
+{{cite shaders/cull/instances.slang "const bool second = (flags & kCullSplitSided) != 0u && (d.info.y & kDrawOneSided) == 0u;"}}
 
-One perturbation reaches the matrix before extraction. `DeferredRenderer::setCameraData`
-negates a single element for Vulkan's Y-down NDC:
+Six phases a frame — early, late and four cascades — make `kCullLists`, twelve lists,
+each with room for every draw.
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_proj[1][1] *= -1;"}}
+## Compaction without atomics
 
-which is a negation of all of row 1, because every other entry of that row in a
-`glm::perspective` matrix is zero. `BOTTOM` is extracted as $\mathbf{m}_3 + \mathbf{m}_1$,
-the $y_{clip} \ge -w$ boundary — the bottom of the image in OpenGL's Y-up NDC, the *top*
-of it in the Y-down NDC this matrix now targets. Both tests loop over all six planes
-without caring which is which, so only the labels lie: `getPlane(Frustum::TOP)` hands back
-the plane bounding the bottom of the image, and the only reason that is harmless is that
-nothing calls it.
+An atomic append is the obvious way to build a list on the GPU, and it orders the list
+by whichever thread won each race. These lists are built by prefix sum instead, so a
+list holds its draws in draw-table order on every run. `classify` runs 256 threads a
+workgroup (`kCullGroupSize`), one per draw: it decides the draw's membership in the
+pair's two lists, then a Hillis-Steele scan in shared memory gives each member its
+offset within its workgroup:
 
-The matrix the GBuffer pass receives is `jitteredProj`, not `m_proj`:
+{{cite shaders/cull/instances.slang "const uint2 exclusive = gScan[tid.x] - c;"}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_gbufferPass->setViewProjection(m_view, jitteredProj, m_prevViewProj);"}}
+`scanBlocks` is a single workgroup that turns the workgroups' totals into their first
+output slots. Each of its threads sums a contiguous chunk of the totals, the threads
+scan those sums, and each walks its chunk again writing offsets, so one workgroup covers
+any number of blocks; its last thread writes the two list counts the indirect draws
+read:
 
-Usually those are the same matrix. TAA is off by default, and `getJitterOffset`
-short-circuits to `glm::vec2(0.0f)` while it stays off:
+{{cite shaders/cull/instances.slang "const uint chunk = (blocks + kCullGroupSize - 1u) / kCullGroupSize;"}}
 
-{{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_taaEnabled{false};"}}
+`scatter` writes each member's command at its block offset plus its local offset. The
+command's `firstInstance` is the draw's index in the draw table:
 
-The sites in the tree that enable it are `examples/model_viewer.cpp` on the
-`deferred` path, the `ohao_game` windowed host, one resize test in `engine_tests`, and the shared capture procedure (`ohao/runtime/frame_capture.cpp`) when a request's `post` names `taa`; `cornell_box`, `interactive`,
-`env_demo` and `turntable` never touch it. When jitter *is* live it is added to two
-entries of the projection's third column:
+{{cite shaders/cull/instances.slang "commands[at + 4u] = i;"}}
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "jitteredProj[2][1] += jitter.y;"}}
+That is how the vertex shaders find their data: `gbuffer.vert` and `shadow_csm.vert`
+read `draws[gl_InstanceIndex]` for the instance slot (and the G-buffer the material
+slot), which needs the device's `drawIndirectFirstInstance` feature, as the GPU count
+needs `drawIndirectCount`. `cull_parity_gpu_test` checks the determinism directly: two
+fresh renderers produce byte-identical counts, visibility and commands.
 
-shearing the cull frustum sub-pixel each frame. That is right — it then matches the
-geometry actually rasterized — and worth knowing before someone "fixes" it by passing
-`m_proj`. It also costs the Y-flip its symmetry: `[2][1]` is a row-1 entry, so under
-active jitter `TOP` and `BOTTOM` are still interchanged but no longer exact mirrors.
+## The Hi-Z pyramid
 
-## Rejecting eight corners with one dot product
+`buildHiZ` reduces the early pass's depth to a pyramid of maxima, an `R32_SFLOAT` image
+whose texels each hold the farthest depth over their footprint. Level 0 is the frame
+halved, rounded up, then padded to powers of two:
 
-The box test never touches a corner. For a plane $(\mathbf{n}, d)$ and a box with centre
-$\mathbf{c}$ and half-extents $\mathbf{e}$:
+{{cite ohao/render/deferred/gpu_culling.cpp "uint32_t w = pow2((width + 1) / 2), h = pow2((height + 1) / 2);"}}
 
-$$r = e_x|n_x| + e_y|n_y| + e_z|n_z|, \qquad \text{reject iff } \ \mathbf{n}\cdot\mathbf{c} + d < -r$$
+The padding is the correctness of the whole test. Vulkan sizes each mip level by halving
+the one above, rounding down. Unpadded, a 1280×720 frame's half-size level of 640×360
+would halve to 320×180, 160×90, 80×45 and then 40×22: an odd level's last row of texels
+is dropped by the next. With power-of-two levels, texel $t$ of level $L$ covers exactly the
+pixels
 
-$r$ is the projected radius — the half-width of the box's shadow on the plane normal.
-For an axis-aligned box it is exact: the extreme corner along $\mathbf{n}$ is the one
-whose sign pattern matches $\mathbf{n}$ componentwise, so the $|n_k|$-weighted sum of
-extents *is* that corner's offset.
+$$\left[\, t \cdot 2^{L+1},\ (t+1) \cdot 2^{L+1} \right)$$
 
-{{cite ohao/render/culling.hpp "const float r = e.x * std::abs(plane.normal.x) +"}}
+in each axis, so a rectangle of pixels maps to texels by a shift. Here $L$ counts from
+the half-resolution level 0, which is why the exponent is $L + 1$. The first build
+assumed levels rounded up, read past the levels that existed, and culled visible walls.
+`fromDepth` takes the maximum of a 2×2 block of the depth buffer, clamping reads to its
+edge, so the padding repeats the frame's edge depth and no footprint over the frame
+loses a pixel:
 
-The test is invariant to plane scale — both $\mathbf{n}\cdot\mathbf{c}+d$ and $r$ scale
-linearly with the plane vector — so `normalize()` is not needed by `isAABBVisible` at
-all. It is needed by `isSphereVisible`, whose radius arrives in world units, and that
-function has no callers. The normalization is paid for a consumer that does not exist.
+{{cite shaders/cull/hiz.slang "const float a = depth.Load(int3(min(s, last), 0));"}}
 
-The world-space box comes from Arvo's transform: transformed centre, plus half-extents
-pushed through the absolute value of the upper 3×3.
+`downsample` does the same from one level to the next, one dispatch of 8×8 workgroups a
+level, down to 1×1.
 
-{{cite ohao/render/culling.hpp "newExtents[i] += std::abs(model[j][i]) * halfExt[j];"}}
+## The tests
 
-Under rotation that is conservative rather than tight — the safe direction for a
-rejection test.
+`bounds` projects the draw's eight local box corners through the instance's world matrix
+(the first four `float4`s of its instance-table entry, the matrix's columns) and the phase's view-projection. A
+draw is outside the frustum only when all eight corners are outside one clip plane,
+which is conservative: a box that misses the frustum across a corner, outside no single
+plane, is kept. A corner behind the near plane leaves the box with no screen rectangle,
+and such a box is never occluded:
 
-## What the cull costs to run
+{{cite shaders/cull/instances.slang "if (clip.w <= 1e-6 || clip.z < 0.0)"}}
 
-The bounding box is not rebuilt per frame. `RenderScene` computes a mesh's local AABB
-once, when the mesh is registered, by walking its vertices:
+Otherwise the corners give an NDC rectangle and the nearest depth. `occluded` widens the
+rectangle by a pixel on each side, for jitter and rounding:
 
-{{cite ohao/render/scene/mesh_registry.cpp "mn = glm::min(mn, v.position);"}}
+{{cite shaders/cull/instances.slang "const int2 r0 = clamp(int2(floor(pmin)) - 1, int2(0), size - 1);"}}
 
-and every `Draw` it hands the pass carries those bounds plus a pointer to its
-instance's world matrix. Per frame, per draw, the pass pushes the box through Arvo's
-transform and tests it:
+and picks the finest level at which it spans at most two texels in each axis:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);"}}
+{{cite shaders/cull/instances.slang "if ((r1.x >> s) - (r0.x >> s) <= 1 && (r1.y >> s) - (r0.y >> s) <= 1) break;"}}
 
-That is a constant amount of CPU work per draw, independent of vertex count, and it
-saves the draw's single `vkCmdDrawIndexed`. The granularity is the draw, not the
-instance: an instance whose mesh has several material runs yields one `Draw` per run,
-each carrying the same box, so the same transform and test repeat once per run and
-a culled instance saves as many calls as it has runs.
+The maximum of those at most four texels is the farthest depth drawn anywhere over the
+rectangle. If the draw's nearest point is farther still, every pixel it could cover
+already holds something nearer, and it is culled:
 
-`RenderScene::draws()` lists only instances flagged visible, so an invisible instance
-never reaches the cull at all, and the list is rebuilt only when the instance table
-changes: the loop the cull runs in is a plain walk of a vector.
+{{cite shaders/cull/instances.slang "return b.minDepth - 1e-6 > far;"}}
 
-At a handful of instances that is invisible; it is still a serial CPU loop over every
-draw, which is what `gpu_cull.comp` was drafted to replace.
+The depth tested is the depth the early pass wrote, and the view-projection is the
+jittered one the G-buffer rasterizes with, so the test and the raster agree to the
+pixel.
 
-The shadow pass makes the opposite call and does not cull at all. It draws the same
-`RenderScene` list into every cascade, in full:
+## History and settings
 
-{{cite ohao/render/deferred/csm_pass.cpp "// Every visible draw into this cascade (no culling, as before)"}}
+The visibility history belongs to one version of the draw table: draw $i$ of another
+version is another draw. `beginFrame`, called by `DeferredRenderer` before the graph
+runs, clears it when the table's version has changed or a reset was asked for:
 
-That is correct rather than an oversight: an object outside the camera frustum can still
-cast a shadow into it, so camera-frustum culling of shadow casters deletes shadows.
-Culling for CSM needs the *light's* frustum per cascade, which is not implemented.
+{{cite ohao/render/deferred/gpu_culling.cpp "if (m_historyReset || m_historyVersion != scene.drawsVersion()) {"}}
+
+`DeferredRenderer::resetTemporalState` asks, so the first frame after a reset draws
+nothing early and everything late, and a capture depends only on the frames since its
+reset, never on what the renderer drew before:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_culling) m_culling->resetHistory();"}}
+
+`beginFrame` also rewrites the frame slot's descriptor set (the scene's tables can be
+replaced when they grow) and grows the culling buffers to the draw count, doubling from
+1024; growth waits for the device once, since frames in flight still read the old
+buffers. `Settings` holds two switches: `frustum` (off, every draw is drawn late, in
+draw order) and `occlusion` (the late phase's pyramid test, applied only with
+`frustum`):
+
+{{cite ohao/render/deferred/gpu_culling.cpp "if (m_settings.frustum && m_settings.occlusion && phase == shared::kCullPhaseLate) flags |= shared::kCullOcclusion;"}}
+
+`setCapture(true)` copies every frame's counts, visibility and commands to a host buffer
+after its late phase, and `capture()` returns the last one; that is what the parity test
+reads.
+
+## What it costs
+
+Measured with `render_bench` on an RTX 5070 Laptop GPU in runs flagged noisy by outside
+load: on `cornell_720p`, `cull.instances`, `hiz.build` and `cull.late` took 0.039 ms
+together and the two G-buffer passes 0.068 ms. On `bench100k_1080p`, 100,000 instances
+of 20 meshes on a 400 m grid (`buildRenderBenchWorld` in `tools/bench/bench_world.hpp`),
+`cull.instances` took 0.056 ms, `hiz.build` 0.025 ms and `cull.late` 0.058 ms, against
+1.69 ms for `gbuffer.early`; the CPU recorded and submitted the frame in 0.123 ms, as
+against 0.130 ms for 10,000 instances. Culling and the pyramid together are budgeted at
+0.10 ms on `cornell_720p`:
+
+{{cite tests/bench/render_budgets.json ""name": "cull+hiz""}}
 
 :::why
-Culling on the CPU keeps the draw loop ordinary — one `vkCmdDrawIndexed` per draw, the
-material slot in a push constant and the instance slot in `firstInstance`. The rejected alternative,
-dispatch `gpu_cull.comp` and draw indirectly, is not blocked by the render graph, which
-hands each pass a raw `VkCommandBuffer` to record plain Vulkan into.
-
-{{cite ohao/render/deferred/deferred_renderer.cpp "[&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); }"}}
-
-`vkCmdDrawIndexedIndirect` is therefore as reachable as `vkCmdDrawIndexed` — the particle
-system already issues a live `vkCmdDrawIndirect` into the same frame command buffer a few
-passes later. `render_pass.hpp` does define a `PassCommandBuffer` wrapper whose indirect
-helper takes the draw count as a *host* value, but nothing in the tree ever constructs
-one, so it constrains nothing.
-
-{{cite ohao/render/graph/render_pass.hpp "void drawIndexedIndirect(VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) {"}}
-
-Nor is the device-side count the obstacle. `vkCmdDrawIndexedIndirectCount` would read it
-directly and nothing in the tree calls that entry point, but the standard workaround needs
-no extension: a fixed `maxDrawCount` of command slots, with `instanceCount = 0` written
-for the culled ones.
-
-What is missing is plumbing, not a primitive: `GBufferPass` has no indirect path, though its inputs (instance table, mesh bounds) now live in device buffers a cull shader could read. A
-GPU cull shader and a foliage cull shader both existed and were deleted with the
-rest of the unreferenced shader tree, because neither had any C++ to fill the
-mesh-descriptor and instance buffers they read.
+The early list comes from last frame's visibility rather than from a depth pre-pass so
+that the occluders cost nothing extra: they are drawn once, into the G-buffer, and their
+depth is the pyramid's source. The price is the late pass. A draw that disappears from
+view is still drawn early for one frame (it was visible last frame), and a draw that
+appears is drawn late, after the pyramid, so the image never depends on the guess: test
+6 renders the same frames with culling on and off and requires identical images.
 :::
 
 ## Contracts
 
-- `extractFromViewProj` assumes OpenGL clip space ($-w \le z \le w$). Defining
-  `GLM_FORCE_DEPTH_ZERO_TO_ONE` anywhere in the build moves the near plane from $n$ to
-  about $n/2$, weakening the cull with no error and no visual artifact. The other five
-  planes are unaffected.
-- The frustum must come from the *same* matrix the pass rasterizes with, jitter included.
-- Plane labels (`TOP`/`BOTTOM`) are inverted relative to the screen after the Vulkan
-  Y-flip. Future code reading `getPlane(index)` by name — cascade fitting, portal tests —
-  inherits the swap.
-- The GBuffer cull trusts the mesh bounds captured at registration. A mesh whose vertices
-  are edited on the GPU afterwards keeps its old box, and its draws are culled against that.
-- `ohao::AABB` (`render/culling.hpp`) is constructed from `(min, max)`;
-  `ohao::physics::math::AABB` (`physics/utils/physics_math.hpp`) has identical fields and
-  an identical two-`vec3` signature but takes `(center, halfExtents)`. Confusing them
-  compiles cleanly and yields a wrong-sized box.
+- Culling changes what is drawn, never what is seen. `cull_parity_gpu_test` (test 6) holds it: a built occlusion scene over 1, 2 and 4 frames, Cornell at 10 frames and the helmet room at 30 frames with post render identically (max_abs 0, identical PNGs) with culling on and off; the boxes behind the wall and off screen are in no list and every box in view is in exactly one.
+- The view-projection passed to `cull` must be the one the draws are rasterized with, jitter included, or the occlusion test and the raster disagree by the jitter.
+- `firstInstance` in every command is a draw-table index, not an instance slot. A vertex shader drawing from these lists must read its draw record first.
+- The pyramid's levels must stay powers of two. Sized from the frame directly, Vulkan's round-down halving drops texels at odd levels and the test reads past them.
+- `resize` takes the G-buffer's depth view and must run after the G-buffer is recreated; `DeferredRenderer::onResize` calls it after `GBufferPass::onResize`.
+- The visibility history is valid only for the draw-table version it was recorded against and only since the last temporal reset; anything that reorders the draw table must bump its version.
+- The culling bounds are the mesh bounds captured at registration. A mesh whose vertices change on the GPU afterwards keeps its old box, and is culled against it.

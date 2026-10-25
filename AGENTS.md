@@ -142,6 +142,7 @@ $ build/Release/instantiate_gpu_test.exe > /dev/null   # gpu
 $ build/Release/scene_view_gpu_test.exe > /dev/null   # gpu
 $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
+$ build/Release/cull_parity_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -164,7 +165,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
   captures, and path-traced Cornell (offline and realtime) the same within the BVH floor
-  (below). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  (below). `cull_parity_gpu_test`: GPU culling on and off render the same image (a built scene
+  with occluded and off-screen boxes, Cornell, the helmet room), two runs build byte-identical
+  lists, occluded and off-screen draws are in no list, face culling changes no pixel of
+  closed meshes. `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size and a path-traced mode refused), log.read; a lockstep
   window capture equals a headless capture of the same world bit for bit (post off and
@@ -251,8 +255,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - `GLM_ENABLE_EXPERIMENTAL` before any `<glm/gtx/...>` include.
 - Jolt: `dynamic_cast` on Jolt types crashes (no RTTI); `SetMotionQuality` lives on
   `BodyInterface`. `PhysicsWorld(cfg)`, `stepOnce()` not `step(dt)`; bodies need a shape.
-- Two `AABB` types with the same signatures: `ohao::AABB` is (min, max),
-  `ohao::physics::math::AABB` is (center, halfExtents). Both compile; one is the wrong box.
+- `ohao::physics::math::AABB` is (center, halfExtents); render bounds (`MeshInfo`,
+  `DrawRecord`) are (min, max). A box passed between them needs converting.
 - ECS writes: `Transform`, `MeshRenderer`, `Light`, `EmissiveProxyLight` and
   `GiMaterialLegacy` reach the renderer only through `registry.patch<T>()` /
   `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
@@ -274,6 +278,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   Buffers the CPU reads must be host-cached memory: uncached host-visible memory read one
   1280x720 frame in ~20 ms. A shader writing such a buffer over PCIe wants a warp's writes
   contiguous (`capture.preview` in 8x8 groups took 0.49 ms, in rows of 64 0.056 ms).
+- G-buffer and CSM draws are GPU-culled indirect draws (`GpuCulling`): firstInstance is the
+  draw's index in `RenderScene::drawTable()` (`DrawRecord`), not the instance slot; a vertex
+  shader reads `draws[gl_InstanceIndex].draw.w` for the slot. A draw the culling never lists
+  is never drawn, so a culling bug hides geometry: `cull_parity_gpu_test` compares culling on
+  and off exactly. A mip chain halves rounding down: a pyramid whose levels assume rounding
+  up reads past them (the Hi-Z is padded to powers of two for that reason).
 - `resetAccumulation()` never waits for the GPU: the next frame's passes start without
   history and clear what they keep in their own command buffer, after the frames in flight
   by queue order. Nothing a frame renders may depend on its frame-in-flight slot (TAA's

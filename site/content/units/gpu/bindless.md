@@ -50,14 +50,15 @@ indices: one table, one numbering, read by both pipelines.
 
 The manager's set has exactly one raster consumer: the G-buffer pass. Its pipeline
 layout has two sets — the bindless table at index 0 and, at index 1, the "scene" set
-holding RenderScene's instance, material and material-reference buffers plus the
-frame slot's camera UBO. The pass binds both once, on the first visible draw:
+holding RenderScene's instance, material and material-reference buffers, the frame
+slot's camera UBO, the SSS tile buffer and the draw table. The pass binds both in each
+of its two render passes, when the frame has draws:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "// Set 0: bindless textures; set 1: the scene."}}
 
-The bind sits behind a `bound` flag, not inside the draw loop proper, so the sets are
-bound once per pass rather than once per draw — every submesh is a draw of the shared
-vertex and index arenas, and the sets do not change between them.
+The sets are bound once per render pass, before its two indirect draws (one-sided and
+double-sided lists) — every submesh is a draw of the shared vertex and index arenas,
+and the sets do not change between them.
 
 Vulkan lets a set layout sit at any index — it carries no index of its own — but the
 GLSL does not: `gbuffer.frag` names `layout(set = 0, binding = 0)` for the textures
@@ -68,14 +69,14 @@ silent one is the `< 4096u` guard in the next section.
 
 {{cite shaders/core/gbuffer.frag "layout(set = 0, binding = 0) uniform sampler2D textures[];"}}
 
-The push constant does not carry the indices. The pass pushes a 16-byte
-block carrying one `uint`, the draw's submesh material slot, and the fragment shader
-resolves it through the instance's reference list into a row of the material buffer;
-the four texture indices come out of that row, not out of the push block. The draw's
-instance rides in `firstInstance`, so the vertex stage indexes the same instance table
-with `gl_InstanceIndex`.
+No push constant carries the indices, and none carries the material either: the draws
+are indirect, and a command's `firstInstance` is the draw's index in `RenderScene`'s
+draw table. The vertex stage reads that record for the instance slot and the submesh's
+material slot and hands the slot on as a flat varying; the fragment shader resolves it
+through the instance's reference list into a row of the material buffer, and the four
+texture indices come out of that row.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
+{{cite shaders/core/gbuffer.vert "fragMaterialSlot = d.info.x;"}}
 
 Startup order is load-bearing: the manager must be handed to `DeferredRenderer`
 before the G-buffer pass builds its pipeline, because the layout at index 0 is the
@@ -299,7 +300,7 @@ bound here", never as "the texture I asked for is bound here".
 
 - The manager must be set on `DeferredRenderer` before the G-buffer pass initialises, or set 0 of the G-buffer pipeline layout is an empty stand-in while `gbuffer.frag` still samples it.
 - The bindless layout is set **0** and the scene set is set **1** in the G-buffer pipeline; reordering them requires editing the `layout(set = …)` lines in `gbuffer.frag`, or pipeline creation fails validation on the descriptor-type mismatch.
-- The pass's push constant is the draw's material slot only; texture indices come from the material row. Adding a per-draw texture lane means editing `DrawPushConstant` and the fragment shader's block together.
+- The pass has no per-draw push constant: the draw record gives the material slot, and texture indices come from the material row. A per-draw texture lane belongs in `DrawRecord` (`shaders/shared/layout.json`), which the vertex shader reads through `firstInstance`.
 - `updateDescriptorSet()` never needs an external call — every load path runs it before returning. After an **unload** it is not just unnecessary but ineffective: the loop skips null-view slots, so the freed element still names a destroyed `VkImageView` until a load reuses that slot. An unloaded index must not be sampled.
 - `unloadTexture` issues its own `vkDeviceWaitIdle` before destroying the image and view: nothing else in the manager tracks whether an in-flight submission may still sample them. Dropping that stall to speed up a texture-swapping loop reintroduces a use-after-free.
 - The `< 4096u` guards in `gbuffer.frag` hard-code the `maxTextures` argument. Raising capacity without editing those two lines silently drops rough-metal and emissive textures above slot 4095.

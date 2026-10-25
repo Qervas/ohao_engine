@@ -530,7 +530,7 @@ window.OHAO_NAV_TREE = [
       },
       {
         "id": "graph/culling",
-        "title": "Culling",
+        "title": "GPU culling",
         "href": "m/graph/culling.html"
       }
     ]

@@ -137,12 +137,14 @@ the rest of that archive; `git log -- shaders/_disabled/ssr.comp` has it if the 
 algorithm is ever wanted.
 
 :::why
-The Hi-Z tracer needs a depth mip pyramid nothing in the deferred pipeline builds. The
-64-step linear march was kept because it needs only the G-buffer that already exists,
+The Hi-Z tracer needs a pyramid of the nearest depth over the whole frame. The one
+pyramid the deferred frame builds is GPU culling's, and it holds the *farthest* depth
+of the early G-buffer pass only — the reduction an occlusion test wants, built before
+the late draws land — so it cannot serve a ray march. The 64-step linear march was kept because it needs only the G-buffer that already exists,
 and halving its resolution cut its cost by four without changing the algorithm. The
 price is exactly the artefact class above: distance-dependent thickness and
-non-uniform screen sampling. Reviving the Hi-Z path is a pyramid-generation problem,
-not a shader problem.
+non-uniform screen sampling. Reviving the Hi-Z path is a pyramid-generation problem (a
+min-depth pyramid of the final depth, after the late pass), not a shader problem.
 :::
 
 ## Skin is a material property now

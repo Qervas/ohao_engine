@@ -48,7 +48,7 @@
 <div class="prose reveal">
 <p>Background pixels are detected by an exact float comparison against the value the G-Buffer pass clears GBuffer0 to — all four channels zero.</p>
 <div class="citation-chip"><code class="citation-code">if (gBuffer0Sample.rgb == vec3(0.0) &amp;&amp; gBuffer0Sample.a == 0.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L178" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:178</a></div>
-<div class="citation-chip"><code class="citation-code">clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L85" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:85</a></div>
+<div class="citation-chip"><code class="citation-code">clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L122" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:122</a></div>
 <p>Those two lines are one contract split across two files. Change the clear colour to anything else — a far-plane position, a debug magenta — and every background pixel falls through into the full lighting loop. The sentinel also has a real, if narrow, false positive: a non-metallic fragment sitting exactly on the world origin is classified as sky and written as transparent black.</p>
 </div>
 <div class="section-rule"><h2 id="eight-lights-one-loop-72-dead-bytes-per-record">Eight lights, one loop, 72 dead bytes per record</h2></div>

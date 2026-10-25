@@ -14,7 +14,7 @@ MODULE = {
             'Pass ownership, resize, setScene, graph execute.',
             files=['ohao/render/deferred/deferred_renderer.hpp', 'ohao/render/deferred/deferred_renderer.cpp'],
             design=['Owns GBuffer, CSM, lighting, SSAO, SSR/SSS, sky, post, gizmo, optional RT shadow/GI techniques.', 'render(cmd, frameIndex) is the per-frame entry; RenderGraph inserts barriers between passes.', 'setScene + geometry buffers come from VulkanRenderer after upload.', 'Hybrid: RTShadowTechnique / RTGITechnique inject visibility and bounce GI into lighting.'],
-            workflow=['CSM', 'GBuffer', 'SSAO', 'Lighting (+ RT)', 'Sky', 'Post (bloom/TAA/tonemap)', 'Gizmo'],
+            workflow=['Culling begins', 'CSM', 'GBuffer (early, Hi-Z, late)', 'SSAO', 'Lighting (+ RT)', 'Sky', 'Post (bloom/TAA/tonemap)', 'Gizmo'],
         ),
         page(
             'pass-base',
@@ -26,16 +26,16 @@ MODULE = {
         page(
             'gbuffer',
             'GBuffer pass',
-            'MRT packing, bindless, velocity, push constants.',
-            files=['ohao/render/deferred/gbuffer_pass.hpp', 'shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag'],
-            design=['Vertex: world pos, normal, tangent, dual UV, current+prev clip for velocity.', 'Fragment MRT: albedo, packed normal, material params, motion vectors.', 'Bindless textures via nonuniformEXT; material push constants carry indices.'],
+            'GPU-culled early/late passes, MRT packing, bindless, velocity.',
+            files=['ohao/render/deferred/gbuffer_pass.hpp', 'ohao/render/deferred/gbuffer_pass.cpp', 'shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag'],
+            design=['Five timed parts: cull.instances, gbuffer.early, hiz.build, cull.late, gbuffer.late; indirect draws, one-sided materials back-face culled.', 'Vertex: the draw record at firstInstance gives the instance and material slots; world pos, normal, tangent, dual UV, current+prev clip for velocity.', 'Fragment MRT: position, packed normal, albedo, motion vectors; bindless textures via nonuniformEXT, indices from the material row.'],
         ),
         page(
             'csm',
             'CSM shadows',
             'Cascade split, depth array, unjittered camera.',
             files=['ohao/render/deferred/csm_pass.hpp', 'shaders/shadow/shadow_csm.vert', 'shaders/includes/shadow/shadow_csm.glsl'],
-            design=['Cascaded shadow maps into depth array; splits from camera frustum.', 'Unjittered camera for stable cascades when TAA is on.'],
+            design=['Cascaded shadow maps into depth array; splits from camera frustum.', 'Each cascade GPU-culled to its side planes, drawn indirectly.', 'Unjittered camera for stable cascades when TAA is on.'],
         ),
         page(
             'lighting',

@@ -70,8 +70,15 @@ The pair that must stay in
 lockstep is `gbuffer.frag`'s encoder against the header's *decoder*; the header's
 encoder is dead weight.
 
-Where the material comes from is part of the same story. The fragment shader reads the
-draw's submesh material slot from a push constant, resolves it through the instance's
+Where the material comes from is part of the same story. The draws are indirect, and a
+command's `firstInstance` is the draw's index in `RenderScene`'s draw table, so
+`gbuffer.vert` begins by reading the draw record at `gl_InstanceIndex` (set 1, binding
+5): its instance slot selects the instance, and its material slot goes to the fragment
+shader as a flat varying.
+
+{{cite shaders/core/gbuffer.vert "const uint slot = d.draw.w;"}}
+
+The fragment shader takes that submesh material slot, resolves it through the instance's
 material-reference list into a row of `RenderScene`'s material table, and loads three
 `vec4`s from it: base colour and albedo texture, roughness, metallic, normal and emissive
 textures, and the rough/metal texture with the emissive and subsurface strengths. The same table feeds the
@@ -309,4 +316,4 @@ the material the path tracer receives.
 - Background is detected by exact float equality — `gBuffer0.rgb == vec3(0)` **and** `.a == 0`, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is discarded as sky.
 - `gbuffer.frag`'s local `encodeNormalOctahedron` and `encoding.glsl`'s `decodeNormalOctahedron` are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. The header's own `encodeNormalOctahedron` is not part of that contract — it has no callers, and editing it changes nothing.
 - `LightingParams` (C++) and the GLSL push-constant block must stay byte-identical at 184 bytes, including the unread `invViewProj` and `screenSize` fields.
-- The pipeline rasterises with `VK_CULL_MODE_NONE` and the shader has no `gl_FrontFacing` flip, so back faces store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.
+- Double-sided materials rasterise with `VK_CULL_MODE_NONE` (one-sided ones cull back faces) and the shader has no `gl_FrontFacing` flip, so the visible back faces of a double-sided material store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.

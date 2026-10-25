@@ -136,7 +136,7 @@ which is the only self-consistent $[0,1]$ pair in the tree and has zero callers.
 :::why
 The header comment justifies the packing by the GBuffer format, naming
 `A2R10G10B10`. The attachment is actually `VK_FORMAT_R16G16B16A16_SFLOAT`
-{{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface"}}
 so the precision argument for octahedral encoding does not apply — fp16 would
 hold a raw xyz normal comfortably. What the packing still buys is the *channel*:
 two components for the normal leaves `.b` for roughness and `.a` for emissive

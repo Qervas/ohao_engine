@@ -259,7 +259,7 @@ a mesh:
 {{cite examples/example_scenes.hpp "out.model = world.create("Model", out.modelTransform);"}}
 
 Both render paths the driver can select read that one description. The G-buffer pass
-draws one call per submesh, and the path tracer finds a triangle's material through
+draws one indirect command per visible submesh, and the path tracer finds a triangle's material through
 the per-triangle slot stream. Neither needs the model pre-split. `render()` runs the
 RT pipeline when the mode has one, its renderer exists and the render world reports
 ray tracing, and `renderDeferred()` otherwise — including on a device without ray

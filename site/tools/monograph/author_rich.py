@@ -162,7 +162,7 @@ KNOWLEDGE: dict[str, dict] = {
         ],
         "how": [
             "registerMesh uploads and builds the BLAS synchronously at load time; arenas grow by copy and retire the old buffer.",
-            "recordUpdates copies dirty table bytes from the frame slot's staging buffer, then builds or refits the TLAS in the frame.",
+            "recordUpdates copies dirty table bytes from the frame slot's staging buffer, uploads the draw table when its version changes, then builds or refits the TLAS in the frame.",
             "onFrameRetired destroys buffers retired MAX_FRAMES_IN_FLIGHT frames ago.",
         ],
         "why": "Per-frame work scales with what changed, and no host write can race a frame in flight.",
@@ -341,7 +341,8 @@ KNOWLEDGE: dict[str, dict] = {
             "GBuffer pass rasterizes scene into MRT: albedo, normals, material params, motion vectors, depth — fuel for deferred lighting and denoisers.",
         ],
         "how": [
-            "gbuffer.vert: world pos, normal, tangent, dual UV, current+prev clip for velocity.",
+            "GPU culling's indirect lists, drawn in an early and a late render pass around the Hi-Z build; one-sided materials back-face culled.",
+            "gbuffer.vert: the draw record at firstInstance, world pos, normal, tangent, dual UV, current+prev clip for velocity.",
             "gbuffer.frag: bindless textures, material packing, nonuniformEXT indices.",
         ],
         "why": "Decouple geometry bandwidth from light count; motion vectors unlock TAA and DLSS.",
@@ -351,7 +352,7 @@ KNOWLEDGE: dict[str, dict] = {
             "Cascaded shadow maps into a depth array; splits from the camera frustum. Uses unjittered camera when TAA is active for stable cascades.",
         ],
         "how": [
-            "csm_pass records depth from light's view per cascade; shadow_csm.glsl samples with PCF.",
+            "csm_pass culls each cascade on the GPU and records depth from the light's view with indirect draws; shadow_csm.glsl samples with PCF.",
         ],
         "why": "Single shadow map cannot cover large outdoor views without swimming or acne.",
     },
@@ -616,8 +617,8 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Wrong NRD pack is a one-line bug with a magenta symptom — keep pack code centralized.",
     },
     "shaders/compute": {
-        "what": ["Compute suite: IBL bake, HiZ, light cull, skinning, composite, DoF, SSAO, denoise helpers."],
-        "how": ["Dispatched from IBL processor, deferred passes, or PT post."],
+        "what": ["Compute shaders: SSAO, the capture preview, the DLSS display pass, and GPU culling's cull/ modules."],
+        "how": ["Glob-compiled GLSL and Slang; dispatched from deferred passes, the capture path, GpuCulling, or PT post."],
         "why": "GPU prep work that is not full-screen fragment shading.",
     },
     "shaders/core-gbuffer-lighting": {
@@ -677,9 +678,9 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Effects without mesh component spam.",
     },
     "graph/culling": {
-        "what": ["CPU/GPU cull helpers (HiZ, light cull compute)."],
-        "how": ["culling.hpp + gpu_cull.comp / hiz_generate.comp."],
-        "why": "Scale deferred to denser scenes.",
+        "what": ["GpuCulling: RenderScene's draw table to indirect draw lists on the GPU (early, late and cascade phases; one-sided and double-sided lists)."],
+        "how": ["gpu_culling.hpp/cpp + cull/instances.slang (classify, scanBlocks, scatter: prefix-sum compaction, no atomics) / cull/hiz.slang (fromDepth, downsample: the max-depth pyramid)."],
+        "why": "The CPU records the same few commands at any instance count; two-pass occlusion keeps the image identical to drawing everything.",
     },
     "physics/backend": {
         "what": ["IPhysicsBackend plugin: factory picks Jolt or null; helpers convert shapes without leaking Jolt into scene headers."],

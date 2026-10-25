@@ -36,7 +36,7 @@ The same write rule as `Transform` follows: a `MeshRenderer` change must go thro
 
 {{cite ohao/ecs/render_extract.cpp "// Slots in creation order, independent of pool iteration order."}}
 
-Slot numbers are not cosmetic. A slot is the instance's index in the instance buffer, its `firstInstance` in raster draws and its `instanceCustomIndex` in the TLAS, so the order in which entities receive slots fixes the order of everything downstream. EnTT's `view<RenderDirty>()` iterates the tag's pool, whose order depends on the history of insertions and swap-and-pop removals; sorting by the never-recycled creation sequence makes a scene built by the same code get the same slots on every run.
+Slot numbers are not cosmetic. A slot is the instance's index in the instance buffer, the slot its raster draws' records name (and so the order of the draw table) and its `instanceCustomIndex` in the TLAS, so the order in which entities receive slots fixes the order of everything downstream. EnTT's `view<RenderDirty>()` iterates the tag's pool, whose order depends on the history of insertions and swap-and-pop removals; sorting by the never-recycled creation sequence makes a scene built by the same code get the same slots on every run.
 
 Because releases run before creations, a slot freed this update is the first one handed to this update's first new entity — the instance table reuses the lowest free slot. The `RenderScene` treats that as a structural change and rebuilds the TLAS rather than refitting it, so the reused slot never inherits the old instance's BLAS reference.
 

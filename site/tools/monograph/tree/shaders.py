@@ -54,9 +54,9 @@ MODULE = {
         page(
             'compute',
             'Compute shaders',
-            'BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.',
-            files=['shaders/compute/brdf_lut.comp', 'shaders/compute/prefilter_envmap.comp', 'shaders/compute/equirect_to_cubemap.comp', 'shaders/compute/hiz_generate.comp', 'shaders/compute/light_culling.comp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/skinning.comp', 'shaders/compute/composite.comp', 'shaders/compute/dof_composite.comp', 'shaders/compute/ssao.slang', 'shaders/compute/capture_preview.slang', 'shaders/compute/denoise_atrous.comp', 'shaders/compute/dlss_tonemap.comp'],
-            design=['IBL bake: equirect→cube, prefilter, BRDF LUT (once per env change).', 'HiZ + gpu_cull + light_culling feed deferred scalability.', 'skinning.comp updates skinned VB; dof_composite for cinematic RT path.'],
+            'SSAO, capture preview, DLSS display pass, GPU culling and Hi-Z.',
+            files=['shaders/compute/ssao.slang', 'shaders/compute/capture_preview.slang', 'shaders/compute/dlss_tonemap.comp', 'shaders/cull/instances.slang', 'shaders/cull/hiz.slang'],
+            design=['ssao.slang: half-resolution horizon search and blur for the deferred frame.', 'cull/instances.slang + cull/hiz.slang: GpuCulling\'s indirect lists and max-depth pyramid.', 'dlss_tonemap.comp: the DLSS-RR display pass, behind OHAO_DLSS_ENABLED.'],
         ),
         page(
             'core-gbuffer-lighting',

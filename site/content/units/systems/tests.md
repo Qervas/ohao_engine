@@ -258,7 +258,7 @@ not a claim about the image.
 
 {{cite tests/renderer/renderer_test.cpp "check(pixels.size() == std::size_t{W} * H * 4, "a frame renders to pixels");"}}
 
-Three more binaries in the same directory do inspect pixels, by comparing renders
+Five more binaries in the same directory do inspect pixels, by comparing renders
 with each other rather than with a committed image, and each ends with a one-line
 JSON summary. The first two build a fresh renderer per render. `instantiate_gpu_test` renders the
 deferred Cornell box once from hand-spawned meshes and once from `MeshSource`
@@ -277,6 +277,14 @@ and realtime) in two fresh renderers, in a fresh renderer in a child process of
 itself, and twice in one renderer, and requires the same bytes every time — for the
 path-traced ones, the same up to the BVH floor (at most 16 bytes, each off by 1).
 Validation is on for every run, path-traced ones included, and must report nothing.
+`cull_parity_gpu_test` (the 2b spec's test 6) renders the same frames with GPU culling
+on and off — a built scene with a wall hiding a row of boxes over 1, 2 and 4 frames,
+Cornell at 10 frames, the helmet room at 30 frames with post — and requires identical
+images; it also requires two fresh renderers to build byte-identical draw lists, the
+hidden and off-screen boxes to be in no list, and one-sided materials to render closed
+boxes exactly as double-sided ones.
+
+{{cite tests/renderer/cull_parity_gpu_test.cpp "check(a.lists.commands == b.lists.commands, "t06: twin runs: the same indirect commands, byte for byte");"}}
 
 {{cite tests/renderer/deferred_determinism_gpu_test.cpp "checks.push_back({p + "a fresh renderer in another process is bit-identical", hc == ha});"}}
 
@@ -290,7 +298,7 @@ fourteen cases covering RT profile traits (offline four bounces, realtime two),
 `DenoiseModeTraits` against their runtime mirrors, `RTFeatureFlags` and
 `makeFeatureSettings`, `applyDenoisePolicy` and the jitter / fresh-sample /
 AOV-accumulation predicates, `as_span` and `span_covers_image`, `Result` and
-`VoidResult`, render-graph handles with culling AABBs and the camera, physics
+`VoidResult`, render-graph handles and the camera, physics
 handles with `ShapeInfo`, and a rigid body that exists and carries a name with no
 scene component behind it.
 

@@ -233,14 +233,14 @@ deferred cascade pass, and the matrix half of the bug cannot recur in it: each
 cascade's view-projection reaches the vertex shader in a push constant recorded
 beside the draws that use it.
 
-{{cite shaders/shadow/shadow_csm.vert "the cascade's view-projection rides in a 64-byte"}}
+{{cite shaders/shadow/shadow_csm.vert "the cascade's view-projection rides in a"}}
 
 The descriptor half survives in a different shape. The pass owns one set per frame
-slot, holding the render world's instance table, and rewrites only the current slot's
-set after that slot's fence wait — the per-frame-set discipline the bug's conclusion
-asks for, held by construction rather than by a parameter.
+slot, holding the render world's instance and draw tables, and rewrites only the
+current slot's set after that slot's fence wait — the per-frame-set discipline the
+bug's conclusion asks for, held by construction rather than by a parameter.
 
-{{cite ohao/render/deferred/csm_pass.cpp "// The slot's instance-table set, rewritten every frame: the table buffer can be"}}
+{{cite ohao/render/deferred/csm_pass.cpp "// The slot's set (instance table, draw table), rewritten every frame: the buffers can be"}}
 
 So the archive holds one invariant that still governs live code and one whose code is
 gone though its lesson is kept, and the pointers of both have rotted. That is the general shape

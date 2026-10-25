@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Render graph · Culling — OHAO Monograph</title>
-  <meta name="description" content="CPU/GPU cull helpers (HiZ / light cull compute)." />
+  <title>Render graph · GPU culling — OHAO Monograph</title>
+  <meta name="description" content="The draw table to indirect lists: early/late two-pass occlusion, Hi-Z, cascades." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
@@ -20,114 +20,115 @@
 
       <p class="crumb"><a href="../../index.html">Monograph</a> ·
         <a href="../sitemap.html">Tree</a> ·
-        <a href="../sitemap.html">← Sitemap</a> · Culling</p>
+        <a href="../sitemap.html">← Sitemap</a> · GPU culling</p>
       <header class="chapter-head reveal">
         <div class="chapter-num">§</div>
         <div>
           <p class="chapter-kicker">graph</p>
-          <h1>Culling</h1>
+          <h1>GPU culling</h1>
         </div>
       </header>
       <div class="thesis-box reveal">
         <div class="label">Design unit</div>
-        <p>CPU/GPU cull helpers (HiZ / light cull compute).</p>
+        <p>The draw table to indirect lists: early/late two-pass occlusion, Hi-Z, cascades.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#one-frustum-one-call-site">One frustum, one call site</a></li><li><a href="#where-the-six-planes-come-from">Where the six planes come from</a></li><li><a href="#rejecting-eight-corners-with-one-dot-product">Rejecting eight corners with one dot product</a></li><li><a href="#what-the-cull-costs-to-run">What the cull costs to run</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-draw-table-in-indirect-lists-out">A draw table in, indirect lists out</a></li><li><a href="#three-phases">Three phases</a></li><li><a href="#compaction-without-atomics">Compaction without atomics</a></li><li><a href="#the-hi-z-pyramid">The Hi-Z pyramid</a></li><li><a href="#the-tests">The tests</a></li><li><a href="#history-and-settings">History and settings</a></li><li><a href="#what-it-costs">What it costs</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="one-frustum-one-call-site">One frustum, one call site</h2></div>
+<div class="section-rule"><h2 id="a-draw-table-in-indirect-lists-out">A draw table in, indirect lists out</h2></div>
 <div class="prose reveal">
-<p>This unit is three files — `render/culling.hpp`, `shaders/compute/gpu_cull.comp`, `shaders/compute/hiz_generate.comp` — and only the header runs. The CPU frustum in `culling.hpp` is built once per frame inside the GBuffer pass&#x27;s command recording, from the same view-projection that pass is about to rasterize with:</p>
-<div class="citation-chip"><code class="citation-code">frustum.extractFromViewProj(m_projection * m_view);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L120" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:120</a></div>
-<p>That is the only construction of a `Frustum` in the tree, and `isAABBVisible` its only test with a caller — `isSphereVisible`, `isPointVisible` and `getPlane` have none. Both compute shaders compile anyway (`shaders/CMakeLists.txt` globs every `.comp` recursively) but nothing in the C++ tree loads either `.spv`. Their histories differ, and that difference is the substance of this unit: `gpu_cull.comp` never had a working dispatcher, `hiz_generate.comp` lost one. `shaders/compute/light_culling.comp` sits in the same limbo, compiled and unreferenced, but it is a tile-lighting design rather than part of this one.</p>
-<p>Hardware face culling is a separate mechanism, and the GBuffer pipeline turns it off:</p>
-<div class="citation-chip"><code class="citation-code">rasterizer.cullMode = VK_CULL_MODE_NONE;  // No culling: imported meshes are not guaranteed consistently wound</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L701" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:701</a></div>
-<p>so the GBuffer pass rasterizes every back-facing triangle in the scene. The one pipeline in the deferred path that culls faces is the cascade shadow pass, and it culls the *front* ones:</p>
-<div class="citation-chip"><code class="citation-code">rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT; // Front-face culling for shadow</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L409" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:409</a></div>
-<p>recording shadow depth on the back surface of each caster — the usual trade of acne for peter-panning, on top of the depth bias the same pipeline enables. A single-sided mesh that rasterizes correctly into the GBuffer can therefore vanish from the shadow map.</p>
+<p>`GpuCulling` (`render/deferred/gpu_culling.{hpp,cpp}`) decides on the GPU which draws a frame rasterizes. Its input is `RenderScene`&#x27;s draw table, one 64-byte `DrawRecord` per visible instance&#x27;s submesh: the index range and vertex offset, the instance-table slot, the material slot, a one-sided flag and the mesh&#x27;s local bounding box. Its output is lists of `VkDrawIndexedIndirectCommand` that the G-buffer and CSM passes draw with `vkCmdDrawIndexedIndirectCount`, the count read from a GPU buffer:</p>
+<div class="citation-chip"><code class="citation-code">vkCmdDrawIndexedIndirectCount(cmd, m_commands.buffer, VkDeviceSize{list} * m_drawCount * kCommandBytes,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.cpp#L413" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.cpp:413</a></div>
+<p>So the CPU records the same handful of commands whatever the instance count: three dispatches per culling phase, a pyramid build, and two indirect draws per render pass. The work is all in two Slang modules under `shaders/cull/`: `instances.slang`, with the entry points `classify`, `scanBlocks` and `scatter`, and `hiz.slang`, with `fromDepth` and `downsample`. `DeferredRenderer` owns the one `GpuCulling`, hands it to both passes, and exposes it through `culling()` for its settings and for tests.</p>
 </div>
-<div class="section-rule"><h2 id="where-the-six-planes-come-from">Where the six planes come from</h2></div>
+<div class="section-rule"><h2 id="three-phases">Three phases</h2></div>
 <div class="prose reveal">
-<p>The extraction is Gribb-Hartmann, worth deriving because the code looks transposed. A point $\mathbf{p}$ is inside the left clip boundary when its clip-space $x$ satisfies $-w \le x$. Writing $M = P V$ with rows $\mathbf{m}_0 \ldots \mathbf{m}_3$, so that $x_{clip} = \mathbf{m}_0 \cdot \mathbf{p}$ and $w = \mathbf{m}_3 \cdot \mathbf{p}$, that inequality is:</p>
-<div class="math-block">$$
-(\mathbf{m}_3 + \mathbf{m}_0)\cdot \mathbf{p} \ \ge\ 0
-$$</div>
-<p>The left plane&#x27;s $(\mathbf{n}, d)$ is thus a sum of two *rows* of the view-projection — no inverse, no decomposition, six adds. GLM stores column-major, so row 3 is `m[0][3], m[1][3], m[2][3], m[3][3]`, which is why the indices look swapped:</p>
-<div class="citation-chip"><code class="citation-code">m_planes[LEFT].normal = glm::vec3(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/culling.hpp#L83" target="_blank" rel="noopener">ohao/render/culling.hpp:83</a></div>
-<p>Near and far are $\mathbf{m}_3 \pm \mathbf{m}_2$, and that is the line with a fuse in it. $\mathbf{m}_3 + \mathbf{m}_2$ is the near plane only when clip-space $z$ runs $-w \ldots w$ — the OpenGL convention. OHAO&#x27;s camera builds its projection with plain `glm::perspective`, and the tree never defines `GLM_FORCE_DEPTH_ZERO_TO_ONE`, so the extraction is correct as written. Define that macro — the obvious &quot;make GLM Vulkan-native&quot; cleanup — and exactly one plane changes. Far survives, since $z_{clip} \le w$ is the far boundary in both conventions; left, right, top and bottom never involved $z$. Near does not. Under zero-to-one depth the near boundary is $z_{clip} \ge 0$, i.e. $\mathbf{m}_2$ alone, whose zero set for `glm::perspective(fovy, aspect, n, f)` is $z = -n$. The row *sum* the code computes is $(0,\,0,\,-1-\tfrac{f}{f-n},\ -\tfrac{fn}{f-n})$, whose zero set is:</p>
-<div class="math-block">$$
-z \;=\; -\frac{fn}{2f-n} \;\approx\; -\frac{n}{2}
-$$</div>
-<p>That is a plane at half the near distance — *closer* to the camera than the true one, not behind it. Everything nearer than $n/2$ is still rejected; only the shell between $n/2$ and $n$ stops being. Nothing renders wrong, since the rasterizer still clips; the cull just quietly gets weaker in a region nobody puts geometry in.</p>
-<p>One perturbation reaches the matrix before extraction. `DeferredRenderer::setCameraData` negates a single element for Vulkan&#x27;s Y-down NDC:</p>
-<div class="citation-chip"><code class="citation-code">m_proj[1][1] *= -1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L690" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:690</a></div>
-<p>which is a negation of all of row 1, because every other entry of that row in a `glm::perspective` matrix is zero. `BOTTOM` is extracted as $\mathbf{m}_3 + \mathbf{m}_1$, the $y_{clip} \ge -w$ boundary — the bottom of the image in OpenGL&#x27;s Y-up NDC, the *top* of it in the Y-down NDC this matrix now targets. Both tests loop over all six planes without caring which is which, so only the labels lie: `getPlane(Frustum::TOP)` hands back the plane bounding the bottom of the image, and the only reason that is harmless is that nothing calls it.</p>
-<p>The matrix the GBuffer pass receives is `jitteredProj`, not `m_proj`:</p>
-<div class="citation-chip"><code class="citation-code">m_gbufferPass-&gt;setViewProjection(m_view, jitteredProj, m_prevViewProj);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L222" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:222</a></div>
-<p>Usually those are the same matrix. TAA is off by default, and `getJitterOffset` short-circuits to `glm::vec2(0.0f)` while it stays off:</p>
-<div class="citation-chip"><code class="citation-code">bool m_taaEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.hpp#L159" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.hpp:159</a></div>
-<p>The sites in the tree that enable it are `examples/model_viewer.cpp` on the `deferred` path, the `ohao_game` windowed host, one resize test in `engine_tests`, and the shared capture procedure (`ohao/runtime/frame_capture.cpp`) when a request&#x27;s `post` names `taa`; `cornell_box`, `interactive`, `env_demo` and `turntable` never touch it. When jitter *is* live it is added to two entries of the projection&#x27;s third column:</p>
-<div class="citation-chip"><code class="citation-code">jitteredProj[2][1] += jitter.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L213" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:213</a></div>
-<p>shearing the cull frustum sub-pixel each frame. That is right — it then matches the geometry actually rasterized — and worth knowing before someone &quot;fixes&quot; it by passing `m_proj`. It also costs the Y-flip its symmetry: `[2][1]` is a row-1 entry, so under active jitter `TOP` and `BOTTOM` are still interchanged but no longer exact mirrors.</p>
+<p>A culling call names a phase, a list pair and the view-projection the draws will be rasterized with:</p>
+<div class="citation-chip"><code class="citation-code">void cull(VkCommandBuffer cmd, uint32_t phase, uint32_t pair, const glm::mat4&amp; viewProj);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.hpp#L70" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.hpp:70</a></div>
+<p>The phases are the constants `kCullPhaseEarly`, `kCullPhaseLate` and `kCullPhaseShadow` in `shaders/shared/layout.json`, generated into Slang and C++ alike. Their roles follow the two-pass occlusion scheme. A per-draw visibility buffer remembers what the last late phase saw. The early phase lists the draws that were visible then and are inside the frustum now:</p>
+<div class="citation-chip"><code class="citation-code">member = frustum &amp;&amp; visibility[i] != 0u &amp;&amp; inFrustum;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L122" target="_blank" rel="noopener">shaders/cull/instances.slang:122</a></div>
+<p>The early G-buffer pass draws them, and its depth is a good guess at this frame&#x27;s occluders. The late phase then tests every draw against the frustum and a Hi-Z pyramid of that depth, records the result for the next frame, and lists only what is visible now and was not drawn early:</p>
+<div class="citation-chip"><code class="citation-code">member = visible &amp;&amp; !drawnEarly;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L128" target="_blank" rel="noopener">shaders/cull/instances.slang:128</a></div>
+<p>A draw drawn early is never drawn again, and a draw that came into view this frame (or was disoccluded) is drawn late, so every visible draw is drawn exactly once. The G-buffer records the whole sequence itself, between its two render passes:</p>
+<div class="citation-chip"><code class="citation-code">if (haveScene) m_culling-&gt;cull(cmd, shared::kCullPhaseEarly, GpuCulling::kPairEarly, viewProj);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L100" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:100</a></div>
+<p>The shadow phase is for a CSM cascade: frustum only, no history, no pyramid. It tests only the four side planes, because the cascade pipeline clamps depth and a caster in front of the cascade&#x27;s near plane still lands in the map:</p>
+<div class="citation-chip"><code class="citation-code">if (pc.config.y == kCullPhaseShadow) allOut &amp;= 15u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L74" target="_blank" rel="noopener">shaders/cull/instances.slang:74</a></div>
+<p>Each phase writes a pair of lists. The G-buffer phases split one-sided draws (the first list, drawn with back faces culled) from double-sided ones (the second, drawn with no face culling); the shadow phase puts everything in the first:</p>
+<div class="citation-chip"><code class="citation-code">const bool second = (flags &amp; kCullSplitSided) != 0u &amp;&amp; (d.info.y &amp; kDrawOneSided) == 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L135" target="_blank" rel="noopener">shaders/cull/instances.slang:135</a></div>
+<p>Six phases a frame — early, late and four cascades — make `kCullLists`, twelve lists, each with room for every draw.</p>
 </div>
-<div class="section-rule"><h2 id="rejecting-eight-corners-with-one-dot-product">Rejecting eight corners with one dot product</h2></div>
+<div class="section-rule"><h2 id="compaction-without-atomics">Compaction without atomics</h2></div>
 <div class="prose reveal">
-<p>The box test never touches a corner. For a plane $(\mathbf{n}, d)$ and a box with centre $\mathbf{c}$ and half-extents $\mathbf{e}$:</p>
-<div class="math-block">$$
-r = e_x|n_x| + e_y|n_y| + e_z|n_z|, \qquad \text{reject iff } \ \mathbf{n}\cdot\mathbf{c} + d < -r
-$$</div>
-<p>$r$ is the projected radius — the half-width of the box&#x27;s shadow on the plane normal. For an axis-aligned box it is exact: the extreme corner along $\mathbf{n}$ is the one whose sign pattern matches $\mathbf{n}$ componentwise, so the $|n_k|$-weighted sum of extents *is* that corner&#x27;s offset.</p>
-<div class="citation-chip"><code class="citation-code">const float r = e.x * std::abs(plane.normal.x) +</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/culling.hpp#L111" target="_blank" rel="noopener">ohao/render/culling.hpp:111</a></div>
-<p>The test is invariant to plane scale — both $\mathbf{n}\cdot\mathbf{c}+d$ and $r$ scale linearly with the plane vector — so `normalize()` is not needed by `isAABBVisible` at all. It is needed by `isSphereVisible`, whose radius arrives in world units, and that function has no callers. The normalization is paid for a consumer that does not exist.</p>
-<p>The world-space box comes from Arvo&#x27;s transform: transformed centre, plus half-extents pushed through the absolute value of the upper 3×3.</p>
-<div class="citation-chip"><code class="citation-code">newExtents[i] += std::abs(model[j][i]) * halfExt[j];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/culling.hpp#L63" target="_blank" rel="noopener">ohao/render/culling.hpp:63</a></div>
-<p>Under rotation that is conservative rather than tight — the safe direction for a rejection test.</p>
+<p>An atomic append is the obvious way to build a list on the GPU, and it orders the list by whichever thread won each race. These lists are built by prefix sum instead, so a list holds its draws in draw-table order on every run. `classify` runs 256 threads a workgroup (`kCullGroupSize`), one per draw: it decides the draw&#x27;s membership in the pair&#x27;s two lists, then a Hillis-Steele scan in shared memory gives each member its offset within its workgroup:</p>
+<div class="citation-chip"><code class="citation-code">const uint2 exclusive = gScan[tid.x] - c;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L148" target="_blank" rel="noopener">shaders/cull/instances.slang:148</a></div>
+<p>`scanBlocks` is a single workgroup that turns the workgroups&#x27; totals into their first output slots. Each of its threads sums a contiguous chunk of the totals, the threads scan those sums, and each walks its chunk again writing offsets, so one workgroup covers any number of blocks; its last thread writes the two list counts the indirect draws read:</p>
+<div class="citation-chip"><code class="citation-code">const uint chunk = (blocks + kCullGroupSize - 1u) / kCullGroupSize;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L158" target="_blank" rel="noopener">shaders/cull/instances.slang:158</a></div>
+<p>`scatter` writes each member&#x27;s command at its block offset plus its local offset. The command&#x27;s `firstInstance` is the draw&#x27;s index in the draw table:</p>
+<div class="citation-chip"><code class="citation-code">commands[at + 4u] = i;          // firstInstance: the draw record</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L205" target="_blank" rel="noopener">shaders/cull/instances.slang:205</a></div>
+<p>That is how the vertex shaders find their data: `gbuffer.vert` and `shadow_csm.vert` read `draws[gl_InstanceIndex]` for the instance slot (and the G-buffer the material slot), which needs the device&#x27;s `drawIndirectFirstInstance` feature, as the GPU count needs `drawIndirectCount`. `cull_parity_gpu_test` checks the determinism directly: two fresh renderers produce byte-identical counts, visibility and commands.</p>
 </div>
-<div class="section-rule"><h2 id="what-the-cull-costs-to-run">What the cull costs to run</h2></div>
+<div class="section-rule"><h2 id="the-hi-z-pyramid">The Hi-Z pyramid</h2></div>
 <div class="prose reveal">
-<p>The bounding box is not rebuilt per frame. `RenderScene` computes a mesh&#x27;s local AABB once, when the mesh is registered, by walking its vertices:</p>
-<div class="citation-chip"><code class="citation-code">mn = glm::min(mn, v.position);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.cpp#L175" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.cpp:175</a></div>
-<p>and every `Draw` it hands the pass carries those bounds plus a pointer to its instance&#x27;s world matrix. Per frame, per draw, the pass pushes the box through Arvo&#x27;s transform and tests it:</p>
-<div class="citation-chip"><code class="citation-code">const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L128" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:128</a></div>
-<p>That is a constant amount of CPU work per draw, independent of vertex count, and it saves the draw&#x27;s single `vkCmdDrawIndexed`. The granularity is the draw, not the instance: an instance whose mesh has several material runs yields one `Draw` per run, each carrying the same box, so the same transform and test repeat once per run and a culled instance saves as many calls as it has runs.</p>
-<p>`RenderScene::draws()` lists only instances flagged visible, so an invisible instance never reaches the cull at all, and the list is rebuilt only when the instance table changes: the loop the cull runs in is a plain walk of a vector.</p>
-<p>At a handful of instances that is invisible; it is still a serial CPU loop over every draw, which is what `gpu_cull.comp` was drafted to replace.</p>
-<p>The shadow pass makes the opposite call and does not cull at all. It draws the same `RenderScene` list into every cascade, in full:</p>
-<div class="citation-chip"><code class="citation-code">// Every visible draw into this cascade (no culling, as before)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L153" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:153</a></div>
-<p>That is correct rather than an oversight: an object outside the camera frustum can still cast a shadow into it, so camera-frustum culling of shadow casters deletes shadows. Culling for CSM needs the *light&#x27;s* frustum per cascade, which is not implemented.</p>
-<div class="why-callout reveal"><div class="why-label">Why</div><p>Culling on the CPU keeps the draw loop ordinary — one `vkCmdDrawIndexed` per draw, the material slot in a push constant and the instance slot in `firstInstance`. The rejected alternative, dispatch `gpu_cull.comp` and draw indirectly, is not blocked by the render graph, which hands each pass a raw `VkCommandBuffer` to record plain Vulkan into.  {{cite ohao/render/deferred/deferred_renderer.cpp &quot;[&amp;](VkCommandBuffer c) { m_gbufferPass-&gt;execute(c, frameIndex); }&quot;}}  `vkCmdDrawIndexedIndirect` is therefore as reachable as `vkCmdDrawIndexed` — the particle system already issues a live `vkCmdDrawIndirect` into the same frame command buffer a few passes later. `render_pass.hpp` does define a `PassCommandBuffer` wrapper whose indirect helper takes the draw count as a *host* value, but nothing in the tree ever constructs one, so it constrains nothing.  {{cite ohao/render/graph/render_pass.hpp &quot;void drawIndexedIndirect(VkBuffer buffer, VkDeviceSize offset, uint32_t drawCount, uint32_t stride) {&quot;}}  Nor is the device-side count the obstacle. `vkCmdDrawIndexedIndirectCount` would read it directly and nothing in the tree calls that entry point, but the standard workaround needs no extension: a fixed `maxDrawCount` of command slots, with `instanceCount = 0` written for the culled ones.  What is missing is plumbing, not a primitive: `GBufferPass` has no indirect path, though its inputs (instance table, mesh bounds) now live in device buffers a cull shader could read. A GPU cull shader and a foliage cull shader both existed and were deleted with the rest of the unreferenced shader tree, because neither had any C++ to fill the mesh-descriptor and instance buffers they read.</p></div>
+<p>`buildHiZ` reduces the early pass&#x27;s depth to a pyramid of maxima, an `R32_SFLOAT` image whose texels each hold the farthest depth over their footprint. Level 0 is the frame halved, rounded up, then padded to powers of two:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t w = pow2((width + 1) / 2), h = pow2((height + 1) / 2);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.cpp#L206" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.cpp:206</a></div>
+<p>The padding is the correctness of the whole test. Vulkan sizes each mip level by halving the one above, rounding down. Unpadded, a 1280×720 frame&#x27;s half-size level of 640×360 would halve to 320×180, 160×90, 80×45 and then 40×22: an odd level&#x27;s last row of texels is dropped by the next. With power-of-two levels, texel $t$ of level $L$ covers exactly the pixels</p>
+<div class="math-block">$$
+\left[\, t \cdot 2^{L+1},\ (t+1) \cdot 2^{L+1} \right)
+$$</div>
+<p>in each axis, so a rectangle of pixels maps to texels by a shift. Here $L$ counts from the half-resolution level 0, which is why the exponent is $L + 1$. The first build assumed levels rounded up, read past the levels that existed, and culled visible walls. `fromDepth` takes the maximum of a 2×2 block of the depth buffer, clamping reads to its edge, so the padding repeats the frame&#x27;s edge depth and no footprint over the frame loses a pixel:</p>
+<div class="citation-chip"><code class="citation-code">const float a = depth.Load(int3(min(s, last), 0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/hiz.slang#L21" target="_blank" rel="noopener">shaders/cull/hiz.slang:21</a></div>
+<p>`downsample` does the same from one level to the next, one dispatch of 8×8 workgroups a level, down to 1×1.</p>
+</div>
+<div class="section-rule"><h2 id="the-tests">The tests</h2></div>
+<div class="prose reveal">
+<p>`bounds` projects the draw&#x27;s eight local box corners through the instance&#x27;s world matrix (the first four `float4`s of its instance-table entry, the matrix&#x27;s columns) and the phase&#x27;s view-projection. A draw is outside the frustum only when all eight corners are outside one clip plane, which is conservative: a box that misses the frustum across a corner, outside no single plane, is kept. A corner behind the near plane leaves the box with no screen rectangle, and such a box is never occluded:</p>
+<div class="citation-chip"><code class="citation-code">if (clip.w &lt;= 1e-6 || clip.z &lt; 0.0)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L60" target="_blank" rel="noopener">shaders/cull/instances.slang:60</a></div>
+<p>Otherwise the corners give an NDC rectangle and the nearest depth. `occluded` widens the rectangle by a pixel on each side, for jitter and rounding:</p>
+<div class="citation-chip"><code class="citation-code">const int2 r0 = clamp(int2(floor(pmin)) - 1, int2(0), size - 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L88" target="_blank" rel="noopener">shaders/cull/instances.slang:88</a></div>
+<p>and picks the finest level at which it spans at most two texels in each axis:</p>
+<div class="citation-chip"><code class="citation-code">if ((r1.x &gt;&gt; s) - (r0.x &gt;&gt; s) &lt;= 1 &amp;&amp; (r1.y &gt;&gt; s) - (r0.y &gt;&gt; s) &lt;= 1) break;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L94" target="_blank" rel="noopener">shaders/cull/instances.slang:94</a></div>
+<p>The maximum of those at most four texels is the farthest depth drawn anywhere over the rectangle. If the draw&#x27;s nearest point is farther still, every pixel it could cover already holds something nearer, and it is culled:</p>
+<div class="citation-chip"><code class="citation-code">return b.minDepth - 1e-6 &gt; far;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L103" target="_blank" rel="noopener">shaders/cull/instances.slang:103</a></div>
+<p>The depth tested is the depth the early pass wrote, and the view-projection is the jittered one the G-buffer rasterizes with, so the test and the raster agree to the pixel.</p>
+</div>
+<div class="section-rule"><h2 id="history-and-settings">History and settings</h2></div>
+<div class="prose reveal">
+<p>The visibility history belongs to one version of the draw table: draw $i$ of another version is another draw. `beginFrame`, called by `DeferredRenderer` before the graph runs, clears it when the table&#x27;s version has changed or a reset was asked for:</p>
+<div class="citation-chip"><code class="citation-code">if (m_historyReset || m_historyVersion != scene.drawsVersion()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.cpp#L306" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.cpp:306</a></div>
+<p>`DeferredRenderer::resetTemporalState` asks, so the first frame after a reset draws nothing early and everything late, and a capture depends only on the frames since its reset, never on what the renderer drew before:</p>
+<div class="citation-chip"><code class="citation-code">if (m_culling) m_culling-&gt;resetHistory();   // the first frame draws in its late pass</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L688" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:688</a></div>
+<p>`beginFrame` also rewrites the frame slot&#x27;s descriptor set (the scene&#x27;s tables can be replaced when they grow) and grows the culling buffers to the draw count, doubling from 1024; growth waits for the device once, since frames in flight still read the old buffers. `Settings` holds two switches: `frustum` (off, every draw is drawn late, in draw order) and `occlusion` (the late phase&#x27;s pyramid test, applied only with `frustum`):</p>
+<div class="citation-chip"><code class="citation-code">if (m_settings.frustum &amp;&amp; m_settings.occlusion &amp;&amp; phase == shared::kCullPhaseLate) flags |= shared::kCullOcclusion;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gpu_culling.cpp#L363" target="_blank" rel="noopener">ohao/render/deferred/gpu_culling.cpp:363</a></div>
+<p>`setCapture(true)` copies every frame&#x27;s counts, visibility and commands to a host buffer after its late phase, and `capture()` returns the last one; that is what the parity test reads.</p>
+</div>
+<div class="section-rule"><h2 id="what-it-costs">What it costs</h2></div>
+<div class="prose reveal">
+<p>Measured with `render_bench` on an RTX 5070 Laptop GPU in runs flagged noisy by outside load: on `cornell_720p`, `cull.instances`, `hiz.build` and `cull.late` took 0.039 ms together and the two G-buffer passes 0.068 ms. On `bench100k_1080p`, 100,000 instances of 20 meshes on a 400 m grid (`buildRenderBenchWorld` in `tools/bench/bench_world.hpp`), `cull.instances` took 0.056 ms, `hiz.build` 0.025 ms and `cull.late` 0.058 ms, against 1.69 ms for `gbuffer.early`; the CPU recorded and submitted the frame in 0.123 ms, as against 0.130 ms for 10,000 instances. Culling and the pyramid together are budgeted at 0.10 ms on `cornell_720p`:</p>
+<div class="citation-chip"><code class="citation-code">{&quot;scene&quot;: &quot;cornell_720p&quot;, &quot;name&quot;: &quot;cull+hiz&quot;, &quot;passes&quot;: [&quot;cull.*&quot;, &quot;hiz.*&quot;], &quot;budgetMs&quot;: 0.10, &quot;gatedFrom&quot;: 11},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/bench/render_budgets.json#L9" target="_blank" rel="noopener">tests/bench/render_budgets.json:9</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The early list comes from last frame&#x27;s visibility rather than from a depth pre-pass so that the occluders cost nothing extra: they are drawn once, into the G-buffer, and their depth is the pyramid&#x27;s source. The price is the late pass. A draw that disappears from view is still drawn early for one frame (it was visible last frame), and a draw that appears is drawn late, after the pyramid, so the image never depends on the guess: test 6 renders the same frames with culling on and off and requires identical images.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>`extractFromViewProj` assumes OpenGL clip space ($-w \le z \le w$). Defining</li>
+<li>Culling changes what is drawn, never what is seen. `cull_parity_gpu_test` (test 6) holds it: a built occlusion scene over 1, 2 and 4 frames, Cornell at 10 frames and the helmet room at 30 frames with post render identically (max_abs 0, identical PNGs) with culling on and off; the boxes behind the wall and off screen are in no list and every box in view is in exactly one.</li>
+<li>The view-projection passed to `cull` must be the one the draws are rasterized with, jitter included, or the occlusion test and the raster disagree by the jitter.</li>
+<li>`firstInstance` in every command is a draw-table index, not an instance slot. A vertex shader drawing from these lists must read its draw record first.</li>
+<li>The pyramid&#x27;s levels must stay powers of two. Sized from the frame directly, Vulkan&#x27;s round-down halving drops texels at odd levels and the test reads past them.</li>
+<li>`resize` takes the G-buffer&#x27;s depth view and must run after the G-buffer is recreated; `DeferredRenderer::onResize` calls it after `GBufferPass::onResize`.</li>
+<li>The visibility history is valid only for the draw-table version it was recorded against and only since the last temporal reset; anything that reorders the draw table must bump its version.</li>
+<li>The culling bounds are the mesh bounds captured at registration. A mesh whose vertices change on the GPU afterwards keeps its old box, and is culled against it.</li>
 </ul>
-<p>`GLM_FORCE_DEPTH_ZERO_TO_ONE` anywhere in the build moves the near plane from $n$ to about $n/2$, weakening the cull with no error and no visual artifact. The other five planes are unaffected.</p>
-<ul>
-<li>The frustum must come from the *same* matrix the pass rasterizes with, jitter included.</li>
-<li>Plane labels (`TOP`/`BOTTOM`) are inverted relative to the screen after the Vulkan</li>
-</ul>
-<p>Y-flip. Future code reading `getPlane(index)` by name — cascade fitting, portal tests — inherits the swap.</p>
-<ul>
-<li>The GBuffer cull trusts the mesh bounds captured at registration. A mesh whose vertices</li>
-</ul>
-<p>are edited on the GPU afterwards keeps its old box, and its draws are culled against that.</p>
-<ul>
-<li>`ohao::AABB` (`render/culling.hpp`) is constructed from `(min, max)`;</li>
-</ul>
-<p>`ohao::physics::math::AABB` (`physics/utils/physics_math.hpp`) has identical fields and an identical two-`vec3` signature but takes `(center, halfExtents)`. Confusing them compiles cleanly and yields a wrong-sized box.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>ohao/render/deferred/gpu_culling.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gpu_culling.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/cull/instances.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/culling.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/cull/hiz.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/scene/mesh_registry.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/gpu_cull.comp</code><span class="desc">path note</span></div>
-        <div class="row"><code>shaders/compute/hiz_generate.comp</code><span class="desc">path note</span></div>
+        <div class="row"><code>tests/bench/render_budgets.json</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

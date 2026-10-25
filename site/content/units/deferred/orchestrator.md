@@ -19,7 +19,9 @@ It does not schedule. `topologicalSort` copies passes into the execution list in
 {{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now"}}
 
 So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.shadows.filter` → `rt.gi` → `rt.gi.denoise`
-→ `lighting` (the pass registry's names, each timed under it; `csm` only in frames where RT
+→ `lighting` (the pass registry's names, each timed under it except `gbuffer`, which the
+graph does not time: it times its own five parts, `cull.instances`, `gbuffer.early`,
+`hiz.build`, `cull.late` and `gbuffer.late`; `csm` only in frames where RT
 shadows do not run, `rt.shadows.filter` and `rt.gi.denoise` only in realtime quality, `ssao`
 only while the effect is on)
 is a decision made by hand
@@ -43,10 +45,10 @@ begin its own inside.
 
 The price is an invariant nothing checks: the layout handed to `declare*Write` must be
 the `finalLayout` of the render pass the graph never sees. GBuffer declares
-`DEPTH_STENCIL_READ_ONLY_OPTIMAL` for depth, which has to match attachment 4 of its
-five-attachment render pass:
+`DEPTH_STENCIL_READ_ONLY_OPTIMAL` for depth, which has to match the depth attachment's
+final layout in the later of its two render passes:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "a.finalLayout = late ? (depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL"}}
 
 Change it, forget the declaration, and nothing fails to build — the next barrier carries
 an `oldLayout` the image is not in. Of those five attachments only
@@ -101,13 +103,14 @@ imported texture has today; a mipped import would need the same treatment.
 was waited before recording began — to every pass `execute` it calls. Its first job is
 to pick descriptor sets. Every pass whose inputs change between frames owns one set
 per slot and rewrites only that slot's set at record time: the G-buffer's scene set,
+GPU culling's set, CSM's table set,
 lighting, SSAO, SSS, SSR, TAA, bloom's input set and the tonemap. A single shared set rewritten every
 frame would be modified while up to two already-submitted frames still read it;
 the slot's set is the one whose previous reader the fence has retired.
 
 {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}}
 
-CSM, sky and gizmo own no set or write theirs only at setup or when an input view changes, and
+Sky and gizmo own no set or write theirs only at setup or when an input view changes, and
 leave the parameter commented out. The slot is not a frame counter: it wraps at
 `MAX_FRAMES_IN_FLIGHT` = 3, so anything that needs a sequence takes another index.
 TAA's jitter, read at the top of `render()` to perturb the projection, is the Halton
@@ -176,7 +179,21 @@ lighting, post, gizmo, sky, SSS, SSR and both RT techniques.
 
 ## Ordering constraints that are not obvious
 
-Before compiling the graph, `render()` clears the RT shadow visibility and the GI view
+GPU culling has to begin the frame before any graph pass culls. `render()` calls
+`GpuCulling::beginFrame` just before compiling the graph: it binds `RenderScene`'s draw
+table to the slot's culling set, clears a stale visibility history, and makes sure the
+culling buffers hold every draw. Inside the graph, `csm` culls its four cascades before
+its render passes, and `gbuffer` culls its early and late phases around its two render
+passes; both draw indirectly from the lists that leaves.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_culling && m_renderScene) (void)m_culling->beginFrame(cmd, frameIndex, *m_renderScene);"}}
+
+The culling's Hi-Z pyramid is sized from the G-buffer's depth, so `onResize` resizes it
+right after the G-buffer, handing it the new depth view. The draw table it reads was
+uploaded by `RenderScene::recordUpdates` earlier in the same command buffer, as
+`scene.upload`.
+
+Before compiling the graph, `render()` also clears the RT shadow visibility and the GI view
 out of the lighting pass. They come back only from inside the RT pass lambdas — the
 shadow visibility from `rt.shadows.filter` in realtime quality or from `rt.shadows`
 in reference, the GI view likewise from `rt.gi.denoise` in realtime or from `rt.gi` in
@@ -206,9 +223,10 @@ reads the same counter before it advances:
 {{cite ohao/render/deferred/deferred_renderer.cpp "const uint32_t rtFrame = m_framesSinceReset++;"}}
 
 `resetTemporalState` zeroes both clocks, keeps a pending particle lifetime by moving
-it onto the restarted clock, and drops RT shadows', RT GI's and TAA's history, so frame *k*
-after a reset traces the same rays and takes the same jitter in every run with the same
-seed. It records nothing and waits for nothing: it only marks state. The next frame's
+it onto the restarted clock, and drops RT shadows', RT GI's, TAA's and GPU culling's
+history, so frame *k* after a reset traces the same rays, takes the same jitter and draws
+the same lists in every run with the same seed (the first frame's early pass draws
+nothing, its late pass everything visible). It records nothing and waits for nothing: it only marks state. The next frame's
 passes start without history: the RT techniques take none (each `resetHistory` drops a
 validity flag and the reference frame count), and TAA clears its images in that frame's
 own command buffer. TAA's clear of its two history images is ordered after the frames still in flight, which

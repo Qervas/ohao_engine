@@ -14,7 +14,7 @@ scaling with geometry × lights. The interesting part is never the bet; it is th
 record — what fits, what was dropped to make it fit, and which downstream pass
 finds out.
 
-OHAO writes five attachments in one subpass: world position + metallic, an
+OHAO writes five attachments, in two render passes over one framebuffer (below): world position + metallic, an
 encoded normal + roughness + emissive luminance (or subsurface strength), albedo + AO, a two-component
 velocity vector, and depth. That is 28 bytes per pixel, roughly 55 MiB resident
 at the 1920×1080 default the pass initialises to.
@@ -24,7 +24,7 @@ at the 1920×1080 default the pass initialises to.
 Check one thing before trusting anything else written about this buffer: the
 normal target is `R16G16B16A16_SFLOAT`, not a packed 10-bit format.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface"}}
 
 Comments in five files still name a packed 10-bit format for this attachment,
 including the header of the shared octahedral decoder:
@@ -206,12 +206,12 @@ The recorded delta therefore carries this frame's sub-pixel jitter. Anything
 consuming the buffer for other than `historyUV = uv - velocity` — an optical-flow
 metric, motion blur, a DLSS motion input — must account for that term.
 
-## The per-draw path
+## What a draw is
 
 Draw granularity is one material run of one instance, not one mesh. When a model is
 uploaded, `materialRuns` run-length-encodes its per-triangle material IDs into
 submeshes; `RenderScene` expands every visible instance into one `Draw` per submesh,
-and the pass issues a push-constant update plus a `vkCmdDrawIndexed` per draw. A mesh
+and each is one indirect command when it is drawn. A mesh
 whose triangles already arrive grouped by material costs a handful of draws and one
 with interleaved materials costs one draw per group. Nothing in the engine does the
 grouping: the loaders append `materialPerTriangle` in traversal order, one Assimp mesh
@@ -222,18 +222,20 @@ exists anywhere in the asset pipeline. Runs are grouped by construction or not a
 
 {{cite ohao/scene/asset/model_loader.cpp "model->materialPerTriangle.push_back(matIdx);"}}
 
-The draw carries almost nothing. The push constant is the submesh's material *slot*
-plus the frame's SSS tile grid (below), 16 bytes in the fragment stage, and
-`firstInstance` is set to the instance's slot:
+The pass issues no per-draw command at all. `RenderScene` uploads the draw list as its
+draw table, GPU culling turns the table into indirect command lists, and the pass
+binds a pipeline and draws a list with `vkCmdDrawIndexedIndirectCount`, the count read
+on the GPU. Each command's `firstInstance` is the draw's index in the draw table, so
+the vertex shader starts from the draw record (set 1, binding 5), which names the
+instance slot and the submesh's material slot:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
+{{cite shaders/core/gbuffer.vert "const DrawRecord d = draws[gl_InstanceIndex];"}}
 
-The vertex shader reads the instance (world and previous world matrices) from the
-storage buffer at `gl_InstanceIndex`; the fragment shader reads it again through a
-flat varying and turns the pair (instance, material slot) into a row of the material
-table. The instance owns a list of material references; a slot past the end of the
-list falls back to material 0, the default material, rather than reading out of
-bounds:
+It reads the instance (world and previous world matrices) at that slot and passes the
+slot and the material slot to the fragment shader as flat varyings; the fragment shader
+turns the pair into a row of the material table. The instance owns a list of material
+references; a slot past the end of the list falls back to material 0, the default
+material, rather than reading out of bounds:
 
 {{cite shaders/includes/scene/scene_data.glsl "((slot) < (inst).materialRefCount ? (refs)[(inst).materialRefOffset + (slot)] : 0u)"}}
 
@@ -244,19 +246,54 @@ strength. Texture indices are bindless slots stored as float bits and recovered 
 rewriting the slot's scene set, since the table buffers can be replaced when they
 grow.
 
-Frustum culling is a per-draw AABB test. The mesh's local bounds are computed once,
-at registration, by a single pass over its vertices:
+## Two render passes, five timed parts
+
+The pass is GPU-driven, and `execute()` records five parts, each timed under its own
+name in the pass registry: `cull.instances` (the draws visible last frame and in the
+frustum), `gbuffer.early` (draws them), `hiz.build` (the max-depth pyramid of that
+depth), `cull.late` (every draw against the frustum and the pyramid) and
+`gbuffer.late` (draws what is newly visible):
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "timerBegin(cmd, "hiz.build");"}}
+
+The render graph does not time the pass — it is registered self-timed, since the
+timer keeps one query open at a time — so `render.stats` reports these five names and
+no `gbuffer`. The culling itself (phases, compaction, the Hi-Z test) is the GPU culling
+unit's subject; the mesh bounds it tests are computed once, at registration, by a
+single pass over the vertices:
 
 {{cite ohao/render/scene/mesh_registry.cpp "mn = glm::min(mn, v.position);"}}
 
-Each `Draw` carries those bounds and a pointer to its instance's world matrix, so the
-pass only transforms the box and tests it against the frustum:
+The two draws need two render passes over the same targets. The early one clears all
+five and leaves the colours as attachments and the depth in
+`DEPTH_STENCIL_READ_ONLY_OPTIMAL`, where the Hi-Z build samples it; the late one loads
+them and leaves them for the readers, the colours shader-readable:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "const AABB worldAABB = AABB(draw.aabbMin, draw.aabbMax).transformed(*draw.world);"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "a.loadOp = late ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;"}}
 
-The CPU cost of skipping a draw is therefore constant in the vertex count. The test
-runs per submesh draw, so a mesh with many material runs repeats the same AABB
-transform once per run.
+They share one framebuffer and one set of pipelines, which Vulkan allows only between
+compatible render passes, and compatibility includes the subpass dependencies. So both
+passes carry the same two dependencies, each the union of what either needs: in, the
+previous frame's readers, the early pass's writes and the Hi-Z build's reads; out, the
+late pass's attachments and every later reader.
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "// Identical in both passes (render pass compatibility includes the dependencies: one"}}
+
+Each render pass draws its phase's two lists. The first holds one-sided draws and is
+drawn with back faces culled; the second holds double-sided draws, drawn with no face
+culling:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "const VkPipeline pipeline = wire ? m_wireframePipeline : (k == 0 ? m_cullBackPipeline : m_pipeline);"}}
+
+Sidedness is the material's. `MaterialDesc::doubleSided` defaults to true, and only the
+glTF loader says otherwise, from Assimp's `TWOSIDED` key (glTF's `doubleSided`, false
+unless set); scene-file, OBJ and FBX materials stay double-sided. The culled pipeline
+takes counter-clockwise triangles as front faces, glTF's convention:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;"}}
+
+`cull_parity_gpu_test` renders closed boxes with one-sided and with double-sided
+materials and finds the images identical: the faces culled were hidden anyway.
 
 ## Flagging tiles for subsurface
 
@@ -287,9 +324,9 @@ behind a barrier against the previous frame's indirect and shader reads of it:
 The buffer is host-mapped, and `sssTilesFlagged()` reads the vertical list's count
 from it: the tiles the last frame whose fence has been waited on flagged.
 
-The push-constant block is 16 bytes, an eighth of the 128-byte floor Vulkan
-guarantees, so the pass has no device-limit hazard to check for. The per-pass data
-that is not per-draw — the camera's current and previous view-projection — lives in a
+The push-constant block is 16 bytes, the SSS tile grid and padding, an eighth of the
+128-byte floor Vulkan guarantees, so the pass has no device-limit hazard to check for.
+The per-pass data — the camera's current and previous view-projection — lives in a
 128-byte uniform buffer, one per frame slot, host-visible and persistently mapped,
 written in `execute` after that slot's fence wait.
 
@@ -319,8 +356,9 @@ and nobody holds a stale one only because nobody holds one at all.
 - Velocity encodes camera and object motion (through `prevWorld`) and includes the current frame's TAA jitter.
 - The normal target's `w` is signed: emissive luminance when positive, minus the subsurface strength when negative. Every reader must clamp it to the half it means (`max(w, 0)` in lighting, `max(-w, 0)` in SSS).
 - The SSS tile buffer is one buffer shared by every frame in flight, reset by a transfer each frame; the barrier in `resetSSSTiles` orders that reset after the previous frame's SSS reads only because both are recorded on the same queue.
-- The only per-draw state is a 16-byte fragment push constant (the material slot and the SSS tile grid) plus `firstInstance` = the instance slot; the instance and its material list come from `RenderScene`, so the pass is only as correct as `RenderScene::draws()`.
+- The only per-draw state is `firstInstance`, the draw's index in `RenderScene`'s draw table; the draw record gives the instance slot and the material slot, and the instance gives its material list, so the pass is only as correct as the draw table `RenderScene` uploads.
 - Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
-- Backface culling is disabled (`VK_CULL_MODE_NONE`), so every closed mesh rasterises both faces and the depth test alone resolves them.
-- `execute()` begins the render pass, and so performs all five clears, every frame — with no scene bound only the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run the render pass, scene or not: its clears are what every later pass"}}
+- Back faces are culled only for one-sided materials, with counter-clockwise front faces. A one-sided material on a mesh wound the other way renders inside out; materials that never state their sidedness stay double-sided (`VK_CULL_MODE_NONE`).
+- The early and late render passes must stay compatible — the same attachments, formats, sample counts and subpass dependencies — because they share the framebuffer and the pipelines. A dependency added to one must be added to both.
+- `execute()` begins both render passes, and so performs all five clears, every frame — with no scene bound only the culling and the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run both render passes, scene or not: the early one's clears are what every"}}
 - The vertex shader declares bone index and weight inputs it never reads; skinning was removed from this pass and the slots remain only to match the shared `Vertex` layout.

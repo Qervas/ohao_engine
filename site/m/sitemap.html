@@ -84,7 +84,7 @@
 <li><a href="deferred.html"><strong>Hub</strong> — deferred.html</a></li>
 <li><a href="deferred/orchestrator.html">DeferredRenderer orchestrator</a> — Pass ownership, resize, setScene, graph execute.</li>
 <li><a href="deferred/pass-base.html">RenderPassBase</a> — Shared init/cleanup/shader path helpers for passes.</li>
-<li><a href="deferred/gbuffer.html">GBuffer pass</a> — MRT packing, bindless, velocity, push constants.</li>
+<li><a href="deferred/gbuffer.html">GBuffer pass</a> — GPU-culled early/late passes, MRT packing, bindless, velocity.</li>
 <li><a href="deferred/csm.html">CSM shadows</a> — Cascade split, depth array, unjittered camera.</li>
 <li><a href="deferred/lighting.html">Deferred lighting</a> — Light loop, IBL, SSAO bind, BRDF eval.</li>
 <li><a href="deferred/ssao.html">SSAO</a> — Half-resolution horizon AO, blurred, upsampled into the ambient terms.</li>
@@ -134,7 +134,7 @@
 <li><a href="shaders/includes-shadow.html">Shadow includes</a> — CSM sampling, PCF, shadow types.</li>
 <li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
 <li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack, rt_masks, NRD frontend used by raygen.</li>
-<li><a href="shaders/compute.html">Compute shaders</a> — BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</li>
+<li><a href="shaders/compute.html">Compute shaders</a> — SSAO, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
 <li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.frag MRT contract.</li>
 <li><a href="shaders/particles-sh.html">Particle shaders</a> — Emit, update, render.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
@@ -151,7 +151,7 @@
 <li><a href="graph/frame-resources.html">Frame resources ring</a> — MAX_FRAMES_IN_FLIGHT=3, fences, staging, per-frame UBOs.</li>
 <li><a href="graph/async-compute.html">Async compute queue</a> — Optional async compute path.</li>
 <li><a href="graph/particles.html">Particle system</a> — CPU/GPU particle orchestration.</li>
-<li><a href="graph/culling.html">Culling</a> — CPU/GPU cull helpers (HiZ / light cull compute).</li>
+<li><a href="graph/culling.html">GPU culling</a> — The draw table to indirect lists: early/late two-pass occlusion, Hi-Z, cascades.</li>
 </ul>
 <h2 class="gloss-group">11 · Physics</h2><ul class="prose">
 <li><a href="physics.html"><strong>Hub</strong> — physics.html</a></li>
