@@ -543,6 +543,8 @@ change, and are re-baselined in their own commit.
   This fixes the lost sky and particles.
 - **SSS** runs only on 16x16 tiles that contain skin-flagged materials. A classification
   pass from the G-buffer's material IDs writes an indirect dispatch. No skin, no work.
+  *As built (step 9):* the flag is a material's `subsurface` strength, and the G-buffer
+  pass itself flags the tiles (no classification pass; the G-buffer has no material IDs).
 - **SSR** runs at half resolution with a depth-aware upsample.
 - `render.settings` can turn each of the two off.
 
@@ -1099,6 +1101,31 @@ improvising. Intentional image changes are separate commits inside their step.
    - Gates the `cornell_720p` and `helmet_game_*` frame budgets, and `serve_bench`'s
      `window_readback_ms`.
    - Test 5.
+   - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step9.md`):* SSAO, SSR and SSS
+     are Slang compute (`shaders/compute/ssao.slang`, `postprocess/ssr.slang`,
+     `postprocess/sss.slang`); their GLSL shaders are deleted. SSAO had never reached a pixel
+     (the lighting shader declared no binding 10); it now does, half resolution, horizon
+     search in the tangent plane from the G-buffer's world position and normal, the 16
+     rotations a seeded permutation of 16 strata packed in the push constants, a 4x4
+     depth-aware blur, and lighting's depth-aware upsample multiplying the constant ambient
+     and IBL terms. SSR's depth-aware upsample happens where post adds it (the tonemap).
+     *Corrections:* (1) "SSS from the G-buffer's material IDs": the G-buffer has none. A
+     material gets a `subsurface` strength (MaterialOverride, MaterialDesc, the material
+     table's row 2 z, the G-buffer normal's w as a negative), and the G-buffer pass flags a
+     fragment's 16x16 tile with atomics into an indirect-dispatch buffer (early fragment
+     tests on); no classification pass. The old full-screen SSS keyed on an albedo heuristic
+     that took Cornell's red wall for skin. SSS writes the lit image in place. (2) "The
+     noise covers 16 distinct texels" is checked on the generator (16 strata, permuted)
+     and by the shader's (x mod 4, y mod 4) lookup. (3) Test 5's scenes set the ambient
+     with a new `VulkanRenderer::setAmbientIntensity`. The `render.settings` switches for
+     SSR and SSS stay in step 15. Test 5: `engine_tests` `sp2b_t05_*` (ambient-only frame
+     3191 px darker with SSAO, none brighter; point-lit frame unchanged, max_abs 0; twin
+     renders identical) and `deferred_determinism_gpu_test` (`t5` strata, the noise pin);
+     an SSS test (0 tiles without `subsurface`, 16 with). **Budgets:** `cornell_720p`
+     frame 0.85-0.87 ms (1.50), `sss` 0.004 (0.02), `ssr` 0.008 (0.04), `sky`+`particles`
+     0.011 (0.03), `post` 0.030 (0.05), `ssao` not run (0); `helmet_game_720p` 0.94 (3.0),
+     `_1080p` 2.06 (5.0); `serve_bench` `window_readback` 1.32 ms (2.0). Every run at the
+     step's end was flagged noisy (outside load), so the gate's verdict is open.
 10. **The capture path.**
     - The temporal reset by clears, not device idle; the GPU preview downscale; the
       preview-only readback.

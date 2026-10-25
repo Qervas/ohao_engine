@@ -169,11 +169,12 @@ unrelated C++ function in the physics module.
 
 ## Reconstruction and depth linearization: one live overload
 
-`reconstruction.glsl` has one live entry point: the `mat4` overload of
-`reconstructViewPos`, called twice by `ssao.comp`. The compact overload that
-takes `(1/proj[0][0], 1/proj[1][1], near, far)` to save 48 bytes of push
-constants has no callers; nor do `reconstructWorldPos` and
-`reconstructWorldDir`. The header's usage comments name consumers —
+`reconstruction.glsl` has no live entry point left and no includer. Its last caller
+was the GLSL SSAO shader, which called the `mat4` overload of `reconstructViewPos`
+twice; the Slang SSAO that replaced it reads world positions from the G-buffer
+instead. The compact overload that takes `(1/proj[0][0], 1/proj[1][1], near, far)`
+to save 48 bytes of push constants never had a caller, nor did
+`reconstructWorldPos` and `reconstructWorldDir`. The header's usage comments name consumers —
 `volumetric_scatter`, `cloud.comp`, `water.frag` — that do not exist anywhere in
 `shaders/`.
 
@@ -181,10 +182,11 @@ constants has no callers; nor do `reconstructWorldPos` and
 
 Both depth linearizers in `encoding.glsl` are in the same position: their
 comments name `ssgi`, `volumetric_scatter` and `dof_coc`, none of which is in the
-tree, and nothing calls either function. They are not unchecked, though: the
-whole of `encoding.glsl` is spliced into five live shaders and
-`reconstruction.glsl` into `ssao.comp`, so the uncalled functions are still
-parsed on every shader build — they simply never reach a call site.
+tree, and nothing calls either function. They are not entirely unchecked: the
+whole of `encoding.glsl` is spliced into `deferred_lighting.frag`, its one remaining
+includer, so its uncalled functions are still parsed on every shader build — they
+simply never reach a call site. `reconstruction.glsl` is not even parsed: the shader
+glob compiles only stage files, and no stage file includes it.
 
 {{cite shaders/includes/common/encoding.glsl "// Used by: ssgi, volumetric_scatter"}}
 

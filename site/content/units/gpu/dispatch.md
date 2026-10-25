@@ -93,7 +93,7 @@ The windowed end is format-tolerant where the copy is not (its requested-readbac
 
 What the blit shows on the fallback is linear, un-tonemapped HDR clamped into eight bits — the wrong picture, but a valid command: the lighting pass creates its HDR image with transfer-source usage precisely so it can be the blit's source.
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "VK_IMAGE_USAGE_TRANSFER_SRC_BIT;   // final image when post-processing is off: readback copy / swapchain blit"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "VK_IMAGE_USAGE_TRANSFER_SRC_BIT |   // final image when post-processing is off: readback copy / swapchain blit"}}
 
 The fallback is reachable from more than one switch. The tonemap step that produces the four-byte image is skipped when `m_tonemappingEnabled` is false, when the HDR input view is null, and when `m_tonemapPipeline`, `m_tonemapFramebuffer` or this frame's entry of `m_tonemapDescSets` is null; `getFinalOutputImage` additionally falls back when `m_postProcessing` itself is null. The one flag that reaches it deliberately is public — it is bound into the `ohao_renderer` Python module as `set_tonemapping_enabled`.
 

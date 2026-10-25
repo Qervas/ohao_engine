@@ -276,11 +276,12 @@ deferred lighting fragment shader reaches nine. Four of the eleven unreachable
 ones still have their math shipping under no name at all. `geometrySchlickGGX`
 and `geometrySmith`, its sole caller, are the `(roughness+1)²/8` remap inlined in
 every NEE branch of all three raygens. `fresnelSchlick` — textbook Schlick with
-F90 = 1 — is written out by hand in those same branches and in `ssr.comp`, minus
-the `saturate`. `lambertianDiffuse` is the `albedo/π` sitting a few lines under
-each of those Fresnels.
+F90 = 1 — is written out by hand in those same branches and, in Slang, in
+`postprocess/ssr.slang`, whose cosine is clamped only from below rather than
+saturated. `lambertianDiffuse` is the `albedo/π` sitting a few lines under each of
+those Fresnels.
 
-{{cite shaders/postprocess/ssr.comp "vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);"}}
+{{cite shaders/postprocess/ssr.slang "const float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - nDotV, 5.0);"}}
 
 {{cite shaders/rt/pt_raygen.rgen "vec3 diff = kD * albedo / 3.14159;"}}
 

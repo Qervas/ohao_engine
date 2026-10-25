@@ -4,7 +4,7 @@
 
 <!-- source -->
 <rect x="16" y="118" width="132" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
-<text x="82" y="140" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">lighting / SSS</text>
+<text x="82" y="140" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">lit image (+SSS)</text>
 <text x="82" y="157" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">HDR RGBA16F</text>
 
 <!-- bloom branch -->
@@ -29,7 +29,7 @@
 
 <rect x="440" y="106" width="164" height="72" rx="4" fill="#1a222c" stroke="#3d4a58"/>
 <text x="522" y="126" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">tonemapping.frag</text>
-<text x="522" y="145" text-anchor="middle" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">b0 hdr  b1 bloom  b2 ssr</text>
+<text x="522" y="145" text-anchor="middle" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="9">b0 hdr b1 bloom b2 ssr b3 depth</text>
 <text x="522" y="163" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">composite + exposure + curve</text>
 
 <path d="M604 142 L634 142" fill="none" stroke="#3d4a58" stroke-width="1.5"/>

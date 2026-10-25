@@ -248,13 +248,14 @@ Followed once in sub-project 4, step 11, with a throwaway compute pass (the mean
 luminance of each 8x8 tile of the lit HDR image): it built, ran validation-clean through
 a resize and teardown, left every golden exact, and was then removed, since nothing read
 its output. Deferred passes live in `ohao/render/deferred/`; `SSRPass` is the compute
-model to copy, `SkyPass` the fullscreen raster one.
+model to copy (Slang, on the `rtc` helpers of `ohao/render/rt/rt_compute.hpp`), `SkyPass`
+the fullscreen raster one.
 
 1. **The shader** under `shaders/<area>/<name>.<stage>` (`.comp`, `.vert`, `.frag`,
    `.rgen`, … — the glob in `shaders/CMakeLists.txt`). The next build picks it up and
    compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
-   SPIR-V is named by flattening the path: `postprocess/ssr.comp` →
-   `postprocess_ssr.comp.spv`. Include shared code by its path under `shaders/`
+   SPIR-V is named by flattening the path: `postprocess/bloom_threshold.frag` →
+   `postprocess_bloom_threshold.frag.spv`. Include shared code by its path under `shaders/`
    (`#include "includes/common/color.glsl"`); every `.spv` is rebuilt when any file under
    `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
    transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
@@ -272,9 +273,11 @@ model to copy, `SkyPass` the fullscreen raster one.
 2. **The class** `<Name>Pass : RenderPassBase` (`render_pass_base.hpp`): `initialize`
    (set `m_device`/`m_physicalDevice`, then create everything; return false on any
    failure), `cleanup`, `execute(cmd, frameIndex)`, `onResize`, `getName`. Use the base
-   helpers: `createRenderTarget`, `createSampler`, `createComputePipeline(spvName, layout,
-   pushSize, …)` (it loads the SPIR-V by its flattened name through `loadShaderModule`),
-   `transitionImage`, `safeDestroy`. The destructor calls `cleanup()`.
+   helpers (`createSampler`, `safeDestroy`; `createRenderTarget`, `transitionImage` for
+   GLSL-era passes) or, for a Slang compute pass, `rtc::createImage`, `rtc::transition` and
+   `rtc::createComputePipeline(device, spvName, entry, setLayout, pushBytes, …)` (it loads
+   the SPIR-V by its flattened name). Push constants stay within 128 bytes, the size every
+   device guarantees. The destructor calls `cleanup()`.
 3. **Descriptors written at record time need one set per frame in flight**: a
    `std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>`, a pool sized ×
    `MAX_FRAMES_IN_FLIGHT`, and `execute` writing only `m_descriptorSets[frameIndex]`
@@ -290,7 +293,7 @@ model to copy, `SkyPass` the fullscreen raster one.
 5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
    and `reset()` on failure, as SSR does); record it in `render()` at its place in the
-   frame (after lighting: SSS, SSR, sky, particles, post, gizmo) inside
+   frame (after lighting: sky, particles, SSS, SSR, post, gizmo) inside
    `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
    of another pass that a resize recreates. A pass left at its creation size is invisible
    to validation and wrong on screen. A graph pass is timed under its `addPass` name.

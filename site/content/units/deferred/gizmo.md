@@ -45,9 +45,9 @@ framebuffer from the same view:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = m_lightingPass->getOutputView();"}}
 
-What is *not* in it is the subsurface blur — post-processing prefers
-`m_sssPass->getOutputView()` whenever the SSS pass has one, and this image is the
-unblurred alternative. The choice is not arbitrary, though: it mirrors
+The subsurface blur is in it too: SSS writes this image in place, over the tiles
+the G-buffer flagged for subsurface materials, so it is the same image
+post-processing takes as its input. The choice is not arbitrary, though: it mirrors
 `DeferredRenderer::getFinalOutputImage` exactly, so the handles land on whatever
 image the frame is actually going to hand out.
 

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Dataflow of the deferred SSS and SSR passes: DeferredLighting, then SkyPass and particles, write the HDR lit image; a barrier; SSS reads it, SSS output feeds SSR and tonemap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Dataflow of the deferred SSS and SSR passes: DeferredLighting, then SkyPass and particles, write the HDR lit image; a barrier; SSS blurs flagged tiles through a scratch image and writes the lit image back in place; SSR reads the lit image at half resolution; tonemap reads the lit image and the upsampled SSR">
 <rect width="100%" height="100%" fill="#0f1419"/>
 <defs>
 <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
@@ -17,60 +17,63 @@
 
 <rect x="215" y="52" width="140" height="38" fill="#1a222c" stroke="#3d4a58"/>
 <text x="285" y="70" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SSSPass</text>
-<text x="285" y="83" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">H -&gt; temp -&gt; V</text>
+<text x="285" y="83" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">flagged tiles, indirect</text>
 
 <rect x="400" y="52" width="125" height="38" fill="#1a222c" stroke="#3d4a58"/>
-<text x="462" y="76" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SSRPass</text>
+<text x="462" y="70" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SSRPass</text>
+<text x="462" y="83" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">half resolution</text>
 
 <!-- image boxes -->
 <rect x="30" y="130" width="140" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
 <text x="100" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">HDR lit image</text>
-<text x="100" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+<text x="100" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F, + STORAGE</text>
 
 <rect x="215" y="130" width="140" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
-<text x="285" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">sssOut</text>
-<text x="285" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+<text x="285" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">scratch</text>
+<text x="285" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">blurH output</text>
 
 <rect x="400" y="130" width="125" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
 <text x="462" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">ssrOut</text>
-<text x="462" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+<text x="462" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">rgb refl, a view depth</text>
 
 <rect x="560" y="130" width="140" height="38" fill="#1a222c" stroke="#7dba8a"/>
 <text x="630" y="148" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">tonemapping.frag</text>
-<text x="630" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">hdr + ssr</text>
+<text x="630" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">hdr + upsampled ssr</text>
 
 <!-- late writers -->
-<rect x="215" y="228" width="125" height="34" fill="#1a222c" stroke="#3d4a58"/>
-<text x="277" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SkyPass</text>
-<rect x="380" y="228" width="125" height="34" fill="#1a222c" stroke="#3d4a58"/>
-<text x="442" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">Particles</text>
+<rect x="215" y="244" width="125" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="277" y="264" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SkyPass</text>
+<rect x="380" y="244" width="125" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="442" y="264" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">Particles</text>
 
 <!-- edges -->
 <line x1="100" y1="90" x2="100" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
 <text x="108" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">writes</text>
 
-<polyline points="170,149 192,149 192,71 211,71" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
-<text x="176" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">reads</text>
+<polyline points="170,142 192,142 192,66 211,66" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<polyline points="215,80 200,80 200,156 174,156" fill="none" stroke="#c4784a" stroke-width="1.4" marker-end="url(#ahw)"/>
+<text x="178" y="186" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="9">blurV writes back, in place</text>
 
 <line x1="285" y1="90" x2="285" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="292" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">blurH</text>
 
-<polyline points="355,149 377,149 377,71 396,71" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
-<text x="361" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">reads</text>
+<polyline points="60,168 60,204 380,204 380,71 396,71" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="386" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">reads</text>
 
 <line x1="462" y1="90" x2="462" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
 
 <line x1="525" y1="149" x2="556" y2="149" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
 <text x="519" y="140" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 2</text>
 
-<polyline points="285,168 285,196 630,196 630,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
-<text x="404" y="208" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 0 — post-FX HDR input</text>
+<polyline points="140,168 140,196 630,196 630,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="540" y="190" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 0</text>
 
-<!-- sky and particles write the lit image before SSS reads it -->
-<polyline points="442,228 442,214 100,214 100,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
-<line x1="277" y1="228" x2="277" y2="214" stroke="#3d4a58" stroke-width="1.4"/>
-<text x="120" y="228" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">write, before SSS</text>
+<!-- sky and particles write the lit image before SSS and SSR read it -->
+<polyline points="442,244 442,228 100,228 100,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="277" y1="244" x2="277" y2="228" stroke="#3d4a58" stroke-width="1.4"/>
+<text x="108" y="242" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">write, before SSS and SSR</text>
 
-<text x="28" y="290" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SkyPass and the particle pass render into the HDR lit image right after lighting, then a memory barrier.</text>
-<text x="28" y="305" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SSSPass copies the image with sky and particles in it; tonemap reads sssOut, so they reach the frame.</text>
-<text x="28" y="322" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">Conceptual — read from the pass ordering in DeferredRenderer::render(). Not a captured frame or a profile.</text>
+<text x="28" y="298" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SkyPass and the particle pass render into the HDR lit image right after lighting, then a memory barrier.</text>
+<text x="28" y="313" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">SSS blurs the flagged tiles in place; SSR traces the same image; tonemap reads it and adds the SSR.</text>
+<text x="28" y="330" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">Conceptual — read from the pass ordering in DeferredRenderer::render(). Not a captured frame or a profile.</text>
 </svg>

@@ -5,74 +5,61 @@ title: Compute shaders
 standard: v2
 ---
 
-## Two compute shaders, and a build that ignores them
+## Two compute shaders under compute/, and the target that builds them
 
-Nothing in the build depends on the shaders. `add_custom_target(shaders ...)` is
-declared without `ALL`, and no `add_dependencies` call anywhere in the tree names
-it, so a default `cmake --build build` compiles no SPIR-V at all — `--target
-shaders` is a second, manual step.
+`add_custom_target(shaders ...)` is declared without `ALL`, so building some other
+target alone compiles no SPIR-V. Every target that loads SPIR-V depends on it — the
+`ohao` CLI, the examples, `render_bench` and the rendering tests — so building any of
+those builds the shaders first.
 
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
+{{cite examples/CMakeLists.txt "add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V"}}
+
+GLSL compute files are compiled by a glob; Slang files by a second one, one SPIR-V per
+`[shader(...)]` entry point:
+
 {{cite shaders/CMakeLists.txt "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"}}
+
+{{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.slang")"}}
 
 ## SSAO: the one on the raster path
 
-`compute_ssao.comp.spv` is loaded by `SSAOPass` and dispatched from the deferred
-render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of
-an `R16G16B16A16_SFLOAT` target — through `decodeNormalOctahedron` in
-`includes/common/encoding.glsl`, which opens by undoing a [0,1] remap:
+SSAO is now Slang, `compute/ssao.slang`, with two entry points, so it compiles to two
+files, `compute_ssao.slang.occlusion.spv` and `compute_ssao.slang.blur.spv`, which
+`SSAOPass` loads by entry name:
 
-{{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "!rtc::createComputePipeline(m_device, "compute_ssao.slang.blur.spv", "blur", m_blurSetLayout,"}}
 
-The matching `* 0.5 + 0.5` is not in that include: it is applied at the call site
-in `gbuffer.frag`, against an `encodeNormalOctahedron` that file redefines
-locally. The shared encoder of the same name returns [-1,1] — its doc comment
-claiming [0,1] is wrong — so the round trip survives only because `gbuffer.frag`
-does not use the include. "De-duplicating" it onto the shared helper breaks the
-pairing silently.
+Both run 8×8 workgroups over the half-resolution image, and the host's
+`(N + 7) / 8` group count agrees. Its push block is `SSAOPush`, generated from
+`shaders/shared/layout.json` into Slang and C++ alike, and its sixteen noise rotations
+travel in that block rather than in a texture. The occlusion entry decodes the
+G-buffer's octahedral normal with its own copy of the decoder, which undoes the
+`* 0.5 + 0.5` remap `gbuffer.frag` applies at its call site:
+
+{{cite shaders/compute/ssao.slang "const float2 f = e * 2.0 - 1.0;"}}
 
 {{cite shaders/core/gbuffer.frag "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
+
+The shared GLSL encoder of the same name in `includes/common/encoding.glsl` returns
+[-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only
+because `gbuffer.frag` redefines it locally. "De-duplicating" it onto the shared
+helper breaks the pairing silently, for SSAO, SSR and lighting at once.
 
 It is off unless asked for:
 
 {{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_ssaoEnabled{false};"}}
 
-Three call sites ask — the model viewer, the renderer pipeline test, and the
-Python bindings, which expose the setter by name.
+The model viewer, the `ohao_game` host, a live window session and a capture whose
+`post` list names `ssao` ask; the Python bindings expose the setter by name.
 
 {{cite examples/model_viewer.cpp "pp->setSSAOEnabled(true);"}}
 {{cite tests/python/renderer_bindings.cpp "set_ssao_enabled"}}
 
-The kernel is GTAO-shaped: eight slice directions — `m_sampleCount` defaults to 8
-and nothing calls `setSampleCount` on this pass — each swept both ways for four
-steps, so 64 depth taps per pixel.
-
-{{cite ohao/render/deferred/ssao_pass.hpp "uint32_t m_sampleCount{8};"}}
-{{cite shaders/compute/ssao.comp "int stepsPerDirection = 4;"}}
-
-Each slice closes with Jimenez's analytic arc integral, which gives the visible
-cosine-weighted solid angle between two horizons in closed form instead of
-counting occluded samples:
-
-$$a(h) = \tfrac{1}{4}\bigl(-\cos(2h - n) + \cos n + 2h\sin n\bigr)$$
-
-$h$ is a horizon angle, $n$ the angle of the projected normal, both measured
-inside the slice plane; the slice's occlusion is $a(h_1) + a(h_2)$.
-
-{{cite shaders/compute/ssao.comp "float a = (-cos(2.0 * h1 - n) + cos(n) + 2.0 * h1 * sin(n)) / 4.0;"}}
-
-The derivation requires $h_1$, $h_2$ and $n$ to share a frame anchored on the view
-vector. This implementation does not: `n` is taken against `normalize(-viewPos)`,
-but the horizon search maxes its cosine against the in-plane sweep direction
-passed in as `viewDir`, and the back-sweep references the same `+dir` axis rather
-than its negation.
-
-{{cite shaders/compute/ssao.comp "float h = dot(normalize(diff), viewDir);"}}
-
-What ships is a horizon-based heuristic with GTAO's closed form bolted on, not the
-ground-truth integral the file header claims. The `bias` push-constant field is
-declared and never read.
+The kernel — a horizon search in the surface's tangent plane, eight directions of four
+steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its
+effect on the frame are the deferred SSAO unit's subject.
 
 ## dlss_tonemap: display space, behind a build gate
 
@@ -115,5 +102,5 @@ writes the RGBA8 beauty — so the tracer stays unbiased.
 
 ## Contracts
 
-- Nothing depends on the `shaders` target, so `cmake --build build` never recompiles SPIR-V and a stale `.spv` loads without complaint. `--target shaders` is a separate step. Compilation is then by glob, so adding a `.comp` yields a `.spv` and no wiring: a loader must ask for the path-flattened name, `compute/<name>.comp` → `compute_<name>.comp.spv`.
+- The `shaders` target is not in `ALL`; only the targets that declare `add_dependencies(... shaders)` rebuild SPIR-V before they build, and a new target that loads SPIR-V must declare it too. Compilation is by glob, so adding a `.comp` or `.slang` yields SPIR-V and no wiring: a loader must ask for the path-flattened name, `compute/<name>.comp` → `compute_<name>.comp.spv`, and a Slang module with several entry points `compute_<name>.slang.<entry>.spv`.
 - `compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.

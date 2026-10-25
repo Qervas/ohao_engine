@@ -216,14 +216,13 @@ attachment is the deferred lighting pass's HDR output:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = m_lightingPass->getOutputView();"}}
 
-and post-processing — which owns bloom, TAA and tonemapping — prefers the SSS pass's
-output whenever `SSSPass` initialised:
+and post-processing — which owns bloom, TAA and tonemapping — reads that same image:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_sssPass->getOutputView() : m_lightingPass->getOutputView();"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());"}}
 
 Particles draw at step 4.6 of `DeferredRenderer::render`, after the sky and before
-SSS, which runs at 4.7 and blurs the lit scene — billboards included — into an
-image of its own. Without a queued emit or a particle still within its emitter's
+SSS, which runs at 4.7 and blurs the skin tiles of the lit image in place — billboards
+included where they cross one — and before SSR, which can reflect them. Without a queued emit or a particle still within its emitter's
 `maxLifetime`, the renderer skips the pass entirely: no update dispatch and no
 draw.
 

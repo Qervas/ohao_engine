@@ -47,16 +47,16 @@ MODULE = {
         page(
             'ssao',
             'SSAO',
-            'Screen-space AO pass + compute path.',
-            files=['ohao/render/deferred/ssao_pass.hpp', 'shaders/compute/ssao.comp'],
-            design=['Hemisphere samples in view space; blurred AO bound into lighting.'],
+            'Half-resolution horizon AO, blurred, upsampled into the ambient terms.',
+            files=['ohao/render/deferred/ssao_pass.hpp', 'ohao/render/deferred/ssao_pass.cpp', 'shaders/compute/ssao.slang'],
+            design=['Horizon search in the tangent plane from G-buffer world position and normal, at half resolution, 4x4 seeded noise in push constants.', '4x4 depth-aware blur; lighting upsamples (binding 10, flag bit 1) and multiplies only ambient and IBL.'],
         ),
         page(
             'ssr-sss',
             'SSR & SSS',
-            'Experimental reflections and subsurface blur.',
-            files=['ohao/render/deferred/ssr_pass.hpp', 'ohao/render/deferred/sss_pass.hpp', 'shaders/postprocess/ssr.comp', 'shaders/postprocess/sss_blur.comp'],
-            design=['SSR ray-marches HiZ for glossy reflections; SSS blur for skin-like materials — quality flags on hub.'],
+            'Half-resolution reflections; subsurface blur on classified tiles.',
+            files=['ohao/render/deferred/ssr_pass.hpp', 'ohao/render/deferred/sss_pass.hpp', 'shaders/postprocess/ssr.slang', 'shaders/postprocess/sss.slang'],
+            design=['SSR: 64-step world-space march at half resolution; tonemap upsamples it against depth.', 'SSS: separable blur in place on the lit image over 16x16 tiles the G-buffer flags for materials with subsurface > 0, indirect dispatches.'],
         ),
         page(
             'sky',

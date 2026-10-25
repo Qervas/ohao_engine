@@ -132,50 +132,36 @@ leaving the half-built renderer alive until `VulkanRenderer` itself is destroyed
 ## The helpers most passes route around
 
 `createRenderTarget` bundles image, memory, and view creation into one call and
-returns a `RenderTarget` aggregate. It has exactly two callers, both inside
-`SSAOPass`:
+returns a `RenderTarget` aggregate. It has no callers. Its last two were inside
+`SSAOPass`, which now builds its half-resolution images with the RT techniques'
+shared helper instead — an image that carries its own layout and size, so the
+barriers that follow know where it stands:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "RenderTarget rt = createRenderTarget(kOutputFormat, m_width, m_height,"}}
-
-`kOutputFormat` is `R16_SFLOAT`, a public constant so the render graph imports the
-AO image with the format it was created with.
-
-{{cite ohao/render/deferred/ssao_pass.hpp "static constexpr VkFormat kOutputFormat = VK_FORMAT_R16_SFLOAT;"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "return rtc::createImage(m_device, m_physicalDevice, m_occlusion, kOutputFormat, kUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,"}}
 
 `GBufferPass` builds all five of its targets with the same image → memory → view
 sequence written out by hand, driven by its own local `{format, usage, aspect}`
 table; `DeferredLightingPass` does the same for its `R16G16B16A16_SFLOAT` HDR
 output. Both then call `RenderTarget::destroy` for teardown, which frees in the
-one order that is safe — view, image, memory last. So the aggregate is adopted as
-a lifetime bundle far more widely than as a factory result. Its convenience
-members go the other way: both factory callers immediately split the returned
-struct into three loose members and test `.image == VK_NULL_HANDLE` directly,
-leaving `valid()`, `explicit operator bool`, and `extent()` with no callers in the
-tree.
+one order that is safe — view, image, memory last. So the aggregate survives as a
+lifetime bundle, not as a factory result, and its convenience members —
+`valid()`, `explicit operator bool`, and `extent()` — have no callers in the tree.
 
-There is a mechanical reason the compute-pipeline helper is under-used, and it is
-a C++ one. `SSRPass` and `SSSPass` each declare a private zero-argument member
-with the same name as the base's five-argument helper:
+The compute-pipeline helper has gone the same way. SSAO, SSR and SSS are Slang
+modules with named entry points, and all three build their pipelines through
+`rtc::createComputePipeline`, which takes the entry point the base's
+five-argument `createComputePipeline` cannot name:
 
-{{cite ohao/render/deferred/ssr_pass.hpp "[[nodiscard]] bool createComputePipeline();"}}
+{{cite ohao/render/rt/rt_compute.hpp "bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,"}}
 
-Name lookup stops at the first scope that contains the name, so inside those two
-classes the base overload is hidden outright — an unqualified call cannot reach
-it, and there is no `using RenderPassBase::createComputePipeline;` anywhere in the
-tree to bring it back. `SkyPass::createSampler()` hides the base's sampler helper
-the same way. Each of the three then re-implements what it hid.
-
-Only the sampler case would rebind silently if the derived member were renamed.
-The base's `createSampler` defaults both of its parameters, so a bare
-`createSampler()` inside `SkyPass` would still compile and would quietly mean the
-base helper instead:
+The call is namespace-qualified, so nothing in those passes hides the base member
+any more; it simply has no caller. One hiding case is left: `SkyPass::createSampler()`
+hides the base's sampler helper, and it is the dangerous kind. The base's
+`createSampler` defaults both of its parameters, so if the derived member were
+renamed, a bare `createSampler()` inside `SkyPass` would still compile and would
+quietly mean the base helper instead:
 
 {{cite ohao/render/deferred/render_pass_base.hpp "VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);"}}
-
-The base's `createComputePipeline` takes five parameters and defaults none of them,
-so renaming `SSRPass::createComputePipeline` or `SSSPass::createComputePipeline`
-turns their zero-argument call sites into a hard compile error instead. Two of the
-three hiding cases fail loudly; one does not.
 
 ## transitionImage only speaks colour
 
@@ -187,9 +173,9 @@ parameters — but not the subresource range, which it hardcodes:
 with `levelCount` and `layerCount` both fixed at 1. That excludes most of the
 deferred pipeline's interesting images: the G-Buffer's `D32_SFLOAT` depth target
 needs `VK_IMAGE_ASPECT_DEPTH_BIT`, and the CSM shadow map is created with
-`arrayLayers = CASCADE_COUNT` (4), so a correct barrier for it needs four layers. Its
-only callers are `SSAOPass`'s four transitions, on a single-layer `R16_SFLOAT` AO
-target and a 4×4 noise image — both colour, both mip- and layer-count one.
+`arrayLayers = CASCADE_COUNT` (4), so a correct barrier for it needs four layers. It
+has no callers left: `SSAOPass`, the last, now transitions its images with
+`rtc::transition`, which reads the old layout from the image it is given.
 
 ## The hot-reload wire that is not connected
 
@@ -209,15 +195,16 @@ table and forwards to it:
 The table lists GBuffer, CSM, DeferredLighting, and SkyPass. None of those four
 override `reloadShader`, so every one of them returns the base's `false` and the
 dispatcher prints a hot-reload-failed message. The only pass in the tree that does
-override it is `SSAOPass`, which forwards to the base's `reloadComputeShader`:
+override it is `SSAOPass`, and its override is a refusal with a reason: two entry
+points in one module do not fit a one-pipeline reload.
 
-{{cite ohao/render/deferred/ssao_pass.cpp "return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SSAOParams),"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "OHAO_LOG(Warn, render, "SSAOPass: {} not reloaded (two entry points: rebuild the shaders)", spvPath);"}}
 
-and `SSAOPass` is not in the table — it is owned by `PostProcessingPipeline`, one
-level below the passes `DeferredRenderer` holds directly, so a name lookup on
-`DeferredRenderer` cannot reach it. `reloadShaderForPass` itself has no callers in
-the tree. So the feature is unreachable end to end — and the machinery behind it
-is not ready to be reached. `reloadComputeShader` gets two things right: it opens
+`SSAOPass` is not in the table either — it is owned by `PostProcessingPipeline`,
+one level below the passes `DeferredRenderer` holds directly — and
+`reloadShaderForPass` itself has no callers in the tree. So the feature is
+unreachable end to end, and the base's `reloadComputeShader` now has no caller at
+all. Nor is that machinery ready to be reached. `reloadComputeShader` gets two things right: it opens
 the SPV by absolute path with no root prepended, and it calls `vkDeviceWaitIdle`
 before touching the live pipeline. Then it destroys the live pipeline and layout
 *before* the replacement exists:
@@ -257,11 +244,11 @@ roughness in alpha:
 {{cite ohao/render/deferred/render_pass_base.hpp "Normal = 1,      // RGB: Encoded normal, A: Roughness"}}
 
 The shader packs an octahedral pair into `rg` — which the comment still describes
-correctly — and then roughness into `b` and emissive luminance into `a`. Two of the
-four channels have moved out from under their documentation, and nothing failed to
-compile when they did:
+correctly — and then roughness into `b` and, in `a`, emissive luminance or minus the
+subsurface strength. Two of the four channels have moved out from under their
+documentation, and nothing failed to compile when they did:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, emissiveLuminance);"}}
+{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
 
 And the `RenderPassLike` concept restates the virtual interface:
 

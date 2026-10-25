@@ -22,7 +22,7 @@
 <g font-family="IBM Plex Mono,monospace" font-size="11">
   <text x="386" y="66" fill="#6e685c">8</text><text x="418" y="66" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">prefiltered cube (no sampler)</text><rect x="670" y="59" width="8" height="8" fill="#6e685c"/>
   <text x="386" y="90" fill="#6e685c">9</text><text x="418" y="90" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">BRDF LUT (split-sum A,B)</text><rect x="670" y="83" width="8" height="8" fill="#c4784a"/>
-  <text x="386" y="114" fill="#6e685c">10</text><text x="418" y="114" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">SSAO (written, no sampler)</text><rect x="670" y="107" width="8" height="8" fill="#6e685c"/>
+  <text x="386" y="114" fill="#6e685c">10</text><text x="418" y="114" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">SSAO — half-res (ao, dist)</text><rect x="670" y="107" width="8" height="8" fill="#7dba8a"/>
   <text x="386" y="138" fill="#6e685c">11</text><text x="418" y="138" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">SSGI — half-res indirect</text><rect x="670" y="131" width="8" height="8" fill="#7dba8a"/>
   <text x="386" y="162" fill="#6e685c">12</text><text x="418" y="162" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">CascadeUBO — viewProj[4]</text><rect x="670" y="155" width="8" height="8" fill="#7dba8a"/>
   <text x="386" y="186" fill="#6e685c">14</text><text x="418" y="186" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">RT shadow mask (R8)</text><rect x="670" y="203" width="8" height="8" fill="#7dba8a"/>

@@ -50,9 +50,9 @@ Each cache entry counts its users. An entity switched to a source that already h
 
 ## Materials by value, for a reason
 
-`MaterialTable` has a fixed capacity of 4096 entries and no way to free one. When it is full it logs once and returns the default material. Registering a material per entity would fill it in a 10k-entity scene, and every edit would use up another slot. So override materials are deduplicated on the bit patterns of their six floats, in a map that lives as long as the system:
+`MaterialTable` has a fixed capacity of 4096 entries and no way to free one. When it is full it logs once and returns the default material. Registering a material per entity would fill it in a 10k-entity scene, and every edit would use up another slot. So override materials are deduplicated on the bit patterns of their seven floats (base colour, roughness, metallic, emissive strength and subsurface strength), in a map that lives as long as the system:
 
-{{cite ohao/ecs/instantiate.cpp "const std::array<uint32_t, 6> key{std::bit_cast<uint32_t>(d.baseColor.r)"}}
+{{cite ohao/ecs/instantiate.cpp "const std::array<uint32_t, 7> key{std::bit_cast<uint32_t>(d.baseColor.r)"}}
 
 A model that has its own materials always uses them. For such a model the override only feeds the legacy GI word, which is what `spawnModel` does too (t11 checks both). Model materials are cached in the mesh entry, not in that map. If a model's last user goes and the model is instantiated again later, its materials are registered a second time and take more table slots.
 

@@ -192,16 +192,18 @@ stream rather than a second engine — and would need rewriting as release/acqui
 pairs the day a real compute family is used.
 
 Nothing in the tree calls them, and no single shipping pattern matches them. Three
-passes do end on the COMPUTE→FRAGMENT transition the image helper encodes; SSAO
-gets there through `RenderPassBase::transitionImage`, the shared deferred helper
-that fills in the same ignored families, so the call site names only stages:
+passes do end on a transition from COMPUTE to the fragment stage. SSAO and SSR get
+there through `rtc::transition`, the helper the RT techniques share, which fills in
+the same ignored families and tracks the image's layout, so the call site names only
+stages and accesses — SSAO widening the destination to `COMPUTE | FRAGMENT`, since
+its readers are compute and lighting's fragment shader:
 
-{{cite ohao/render/deferred/ssao_pass.cpp "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,"}}
+{{cite ohao/render/deferred/ssao_pass.cpp "rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kReaders, VK_ACCESS_SHADER_READ_BIT, false);"}}
 
-SSR and SSS build the `VkImageMemoryBarrier` inline instead, SSS widening the
-destination to `COMPUTE | FRAGMENT` because one helper closes both of its blur
-passes — the horizontal one, whose output the vertical pass reads in COMPUTE, and
-the vertical, whose output leaves for post-processing. The rest of the compute work
+SSS builds the `VkImageMemoryBarrier` for the lit image inline, because that image is
+the lighting pass's, not an `rtc::Image`; it hands the image back to
+`COMPUTE | FRAGMENT` once the vertical blur has written it in place, for SSR's compute
+read and post's fragment reads. The rest of the compute work
 ends elsewhere: the particle update publishes to
 `VERTEX_SHADER | DRAW_INDIRECT` so the indirect draw can read what it wrote, the
 à-trous passes chain COMPUTE→COMPUTE, and `nrd_compose.cpp` and `dlss_rr.cpp`

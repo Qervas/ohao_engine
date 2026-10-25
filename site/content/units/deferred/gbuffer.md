@@ -15,7 +15,7 @@ record — what fits, what was dropped to make it fit, and which downstream pass
 finds out.
 
 OHAO writes five attachments in one subpass: world position + metallic, an
-encoded normal + roughness + emissive luminance, albedo + AO, a two-component
+encoded normal + roughness + emissive luminance (or subsurface strength), albedo + AO, a two-component
 velocity vector, and depth. That is 28 bytes per pixel, roughly 55 MiB resident
 at the 1920×1080 default the pass initialises to.
 
@@ -47,7 +47,7 @@ hemisphere outward, turning any direction on the sphere into two numbers in
 [-1, 1] with no seam and near-uniform angular density. The G-buffer writes it
 biased into [0, 1] alongside two unrelated scalars:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, emissiveLuminance);"}}
+{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
 
 At 16 bits per channel the encoding buys almost no precision over storing
 `N.xyz` directly — half-float already resolves a normal component far below the
@@ -55,6 +55,17 @@ visible threshold. What it buys is one *channel*. The normal costs two slots
 instead of three; roughness would have fitted in the fourth slot of an `N.xyz`
 layout anyway, so the one slot the encoding actually liberates is the last, and
 it carries the emissive intensity that would otherwise need its own attachment.
+
+That slot is shared by sign. Emissive luminance is never negative, so a material
+with a `subsurface` strength (row 2, z of the material table) stores *minus* that
+strength there instead, and an emissive surface takes no subsurface at all:
+
+{{cite shaders/core/gbuffer.frag "const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;"}}
+
+Lighting reads the slot through `max(w, 0)`, so a subsurface pixel emits nothing;
+the SSS blur reads `max(-w, 0)` as the pixel's blur strength.
+
+{{cite shaders/core/deferred_lighting.frag "float emissiveLuminance = max(gBuffer1Sample.a, 0.0);"}}
 
 The price is colour. Only luminance survives the write, so deferred lighting
 reconstructs the emitted colour by tinting albedo with it:
@@ -92,7 +103,7 @@ either direction. It uses the channel exactly twice: a `roughness > 0.7`
 rejection branch, which a 0.04 floor can never flip, and a `1.0 - roughness` hit
 fade, which it can move by at most 4%.
 
-{{cite shaders/postprocess/ssr.comp "if (roughness > 0.7 && metallic < 0.5) {"}}
+{{cite shaders/postprocess/ssr.slang "if (roughness > 0.7 && metallic < 0.5)"}}
 
 ## World position, and the fp16 tax on it
 
@@ -104,12 +115,12 @@ consumers reconstruct it from depth:
 :::why
 Reconstruction from `D32_SFLOAT` plus an inverse view-projection is the standard
 alternative, and it is cheaper: 8 bytes per pixel saved, full float precision
-kept. OHAO rejects it because six consumers read this target directly —
-deferred lighting, SSR, the subsurface-scattering blur, the RT shadow trace, the
-RT GI trace and RT GI's upsample — and two of them launch rays from the value. Storing it once
-removes a class of per-consumer reconstruction bugs. The rejection is not
-total: SSAO reconstructs view-space position from depth instead, so the engine
-already pays for both approaches.
+kept. OHAO rejects it because seven consumers read this target directly —
+deferred lighting, SSAO, SSR, the subsurface-scattering blur, the RT shadow trace,
+the RT GI trace and RT GI's upsample — and two of them launch rays from the value.
+Storing it once removes a class of per-consumer reconstruction bugs. Depth is still
+read where only a depth comparison is wanted: SSR's hit test and the tonemap's SSR
+upsample.
 :::
 
 The precision cost is worth quantifying, because it is not uniform. A binary16
@@ -142,22 +153,22 @@ rasterised here" by testing GBuffer0 against its clear value of `(0,0,0,0)`:
 {{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
 
 The same exact-equality test is duplicated in `rt/shadow_trace.slang`,
-`rt/gi_trace.slang` and `rt/gi_denoise.slang`'s upsample (each as
-`all(position == float4(0.0))`), and in `postprocess/ssr.comp`. The sixth reader opts out entirely:
-the subsurface blur has no coverage test, gates on a skin heuristic over albedo
-and metallic instead, and then treats `length(position)` as an edge-aware depth
-proxy — so a sky tap arrives as a legal coordinate of magnitude zero rather than
-as an absence:
+`rt/gi_trace.slang`, `rt/gi_denoise.slang`'s upsample, `compute/ssao.slang` and
+`postprocess/ssr.slang` (each as `all(position == float4(0.0))`). The seventh reader
+opts out: the subsurface blur runs only on pixels whose normal `w` is negative, so
+its centre is never sky, but its taps are not tested. It weights a tap by its
+distance from the camera against the centre's, and a sky tap arrives as the world
+origin, at the camera's own distance from it, rather than as an absence:
 
-{{cite shaders/postprocess/sss_blur.comp "float sampleDepth = length(texture(gBufferPosition, sampleUV).rgb);"}}
+{{cite shaders/postprocess/sss.slang "float distanceAt(int2 p) { return distance(gPosition.Load(int3(p, 0)).xyz, pc.cameraPos.xyz); }"}}
 
-The Gaussian depth weight rejects those taps only because a skin pixel is
-normally far from the world origin; on skin that passes near it, sky taps get
-real weight in the blur.
+The Gaussian depth weight rejects those taps only because a skin pixel's distance
+is normally far from the camera's distance to the origin; where the two agree, sky
+taps get real weight in the blur.
 
 :::key
 GBuffer0's clear value is load-bearing. Change it or renumber the attachments and
-four independent shaders silently begin treating geometry as sky — no validation
+six independent shaders silently begin treating geometry as sky — no validation
 error, because each is still reading a legal float. Storing view-space instead of
 world-space position breaks the buffer differently and just as quietly: the
 coverage test still fires correctly on unwritten pixels, because the clear value
@@ -211,8 +222,9 @@ exists anywhere in the asset pipeline. Runs are grouped by construction or not a
 
 {{cite ohao/scene/asset/model_loader.cpp "model->materialPerTriangle.push_back(matIdx);"}}
 
-The draw carries almost nothing. The push constant is the submesh's material *slot*,
-16 bytes in the fragment stage, and `firstInstance` is set to the instance's slot:
+The draw carries almost nothing. The push constant is the submesh's material *slot*
+plus the frame's SSS tile grid (below), 16 bytes in the fragment stage, and
+`firstInstance` is set to the instance's slot:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, draw.slot);"}}
 
@@ -246,6 +258,35 @@ The CPU cost of skipping a draw is therefore constant in the vertex count. The t
 runs per submesh draw, so a mesh with many material runs repeats the same AABB
 transform once per run.
 
+## Flagging tiles for subsurface
+
+The pass also classifies the frame for the SSS blur. A fragment of a subsurface
+material flags its 16×16 tile (`kSSSTile`) in a storage buffer at set 1, binding 4,
+owned by the pass, and appends the tile to the vertical blur's list the first time;
+it also flags the `kSSSRadiusTiles` (two) tile rows above and below for the
+horizontal blur, whose output the vertical one reads:
+
+{{cite shaders/core/gbuffer.frag "void flagSkin(uvec2 pixel) {"}}
+
+A plain read comes before the atomic, so most fragments of a tile already flagged
+take no atomic at all. Hidden fragments should not flag, so the shader declares early
+fragment tests: depth is tested before it runs, and a skin fragment behind what the
+depth buffer already holds never writes the buffer. That is the depth buffer *so far*:
+a skin fragment drawn before the surface that later covers it still flags its tile,
+which costs the blur a tile of work and changes no pixel, since the blur only acts
+where the final normal `w` is negative.
+
+{{cite shaders/core/gbuffer.frag "layout(early_fragment_tests) in;"}}
+
+`execute()` resets the buffer before the render pass every frame — two empty
+indirect dispatches in the header, the tile mask zeroed for the frame's tile count —
+behind a barrier against the previous frame's indirect and shader reads of it:
+
+{{cite ohao/render/deferred/gbuffer_pass.cpp "const uint32_t header[shared::kSSSHeaderWords] = {0u, 1u, 1u, 0u, 0u, 1u, 1u, 0u};"}}
+
+The buffer is host-mapped, and `sssTilesFlagged()` reads the vertical list's count
+from it: the tiles the last frame whose fence has been waited on flagged.
+
 The push-constant block is 16 bytes, an eighth of the 128-byte floor Vulkan
 guarantees, so the pass has no device-limit hazard to check for. The per-pass data
 that is not per-draw — the camera's current and previous view-projection — lives in a
@@ -273,10 +314,12 @@ and nobody holds a stale one only because nobody holds one at all.
 
 ## Contracts
 
-- GBuffer0's clear value `(0,0,0,0)` *is* the coverage bit, tested by exact float equality in four of its five readers. Changing the clear colour or the attachment order breaks all four with no diagnostic; changing the position's space leaves the test intact and breaks the two ray-tracing readers instead.
+- GBuffer0's clear value `(0,0,0,0)` *is* the coverage bit, tested by exact float equality in six of its seven readers. Changing the clear colour or the attachment order breaks all four with no diagnostic; changing the position's space leaves the test intact and breaks the two ray-tracing readers instead.
 - `m_prevViewProj` must still hold last frame's value when `setViewProjection` runs, and must not be refreshed until the frame ends. Refresh it first and the previous clip position is built from this frame's *unjittered* `m_proj * m_view` while the current one uses the *jittered* projection, so camera-induced velocity collapses to the sub-pixel jitter delta rather than to zero — TAA keeps reprojecting, onto itself.
 - Velocity encodes camera and object motion (through `prevWorld`) and includes the current frame's TAA jitter.
-- The only per-draw state is a 16-byte fragment push constant (the material slot) plus `firstInstance` = the instance slot; the instance and its material list come from `RenderScene`, so the pass is only as correct as `RenderScene::draws()`.
+- The normal target's `w` is signed: emissive luminance when positive, minus the subsurface strength when negative. Every reader must clamp it to the half it means (`max(w, 0)` in lighting, `max(-w, 0)` in SSS).
+- The SSS tile buffer is one buffer shared by every frame in flight, reset by a transfer each frame; the barrier in `resetSSSTiles` orders that reset after the previous frame's SSS reads only because both are recorded on the same queue.
+- The only per-draw state is a 16-byte fragment push constant (the material slot and the SSS tile grid) plus `firstInstance` = the instance slot; the instance and its material list come from `RenderScene`, so the pass is only as correct as `RenderScene::draws()`.
 - Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
 - Backface culling is disabled (`VK_CULL_MODE_NONE`), so every closed mesh rasterises both faces and the depth test alone resolves them.
 - `execute()` begins the render pass, and so performs all five clears, every frame — with no scene bound only the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run the render pass, scene or not: its clears are what every later pass"}}

@@ -202,7 +202,7 @@ Real smoke needs a second pipeline with `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA` and a
 sort.
 :::
 
-## Drawn into the lit image before SSS copies it
+## Drawn into the lit image before SSS and SSR read it
 
 Particles are stage 4.6: after lighting and sky, before SSS, SSR and
 post-processing. Their framebuffer's colour attachment is the lighting pass's
@@ -210,19 +210,17 @@ output view:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = m_lightingPass->getOutputView();"}}
 
-That is not the view post-processing samples. The one call to
-`setHDRInputWithImage` prefers the SSS pass's own output whenever an SSS pass
-exists, falling back to the lighting view only when it does not:
+That is also the view post-processing samples: SSS blurs its skin tiles in place, so
+the one call to `setHDRInputWithImage` passes the lighting output itself:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_sssPass->getOutputView() : m_lightingPass->getOutputView();"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());"}}
 
-And it always exists: `SSSPass` is constructed unconditionally and reset only if
-`initialize()` fails. The order is what makes the billboards reach the frame. The
-SSS blur reads the lighting image *after* the particle pass has drawn into it, and
-writes its result into its own allocation, which everything downstream, bloom and
-tonemapping included, works from. Between the two sits a memory barrier from
-colour-attachment writes to compute and fragment reads, since the particle render
-pass's own dependencies do not reach the SSS compute dispatch:
+The billboards therefore reach the frame whatever runs after them. The order still
+matters for the two passes that *read* the lit image: SSS's taps and SSR's hits see
+the particles only because they run after the particle pass has drawn. Between the two
+sits a memory barrier from colour-attachment writes to compute and fragment reads,
+since the particle render pass's own dependencies do not reach the compute
+dispatches:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;"}}
 

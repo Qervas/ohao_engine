@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 392" class="unit-diagram" role="img"
-     aria-label="Frame schedule of DeferredRenderer::render: six passes recorded through the render graph, six recorded directly onto the command buffer, and the HDR image dataflow in which sky and particles are rasterized into the lighting image before subsurface scattering copies out of it.">
+     aria-label="Frame schedule of DeferredRenderer::render: six passes recorded through the render graph, six recorded directly onto the command buffer, and the HDR image dataflow in which sky and particles are rasterized into the lighting image before subsurface scattering blurs it in place and SSR traces it at half resolution.">
   <defs>
     <marker id="dor-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#3d4a58"/>
@@ -73,8 +73,8 @@
   <text class="mut" x="110" y="283" text-anchor="middle">R16G16B16A16_SFLOAT</text>
 
   <rect class="box" x="272" y="248" width="180" height="46" rx="2"/>
-  <text class="lblx" x="362" y="268" text-anchor="middle">SSS output image</text>
-  <text class="mut" x="362" y="283" text-anchor="middle">separate allocation</text>
+  <text class="lblx" x="362" y="268" text-anchor="middle">SSR image</text>
+  <text class="mut" x="362" y="283" text-anchor="middle">half resolution</text>
 
   <rect class="box" x="524" y="248" width="176" height="46" rx="2"/>
   <text class="lblx" x="612" y="268" text-anchor="middle">tonemapped output</text>
@@ -85,14 +85,14 @@
   <text class="mut" x="400" y="220" text-anchor="middle">DeferredLighting writes here; SkyPass fills background pixels in place</text>
 
   <path class="ln" d="M202 271 L270 271" marker-end="url(#dor-arw)"/>
-  <text class="mut" x="236" y="263" text-anchor="middle">SSS</text>
+  <text class="mut" x="236" y="263" text-anchor="middle">SSR</text>
   <path class="ln" d="M454 271 L522 271" marker-end="url(#dor-arw)"/>
   <text class="mut" x="488" y="263" text-anchor="middle">PostFX</text>
 
-  <!-- particles write the lighting image before SSS copies it -->
+  <!-- particles write the lighting image before SSS blurs it in place -->
   <path class="ln" d="M181 186 L181 202 L140 202 L140 246" marker-end="url(#dor-arw)"/>
-  <text class="mut" x="20" y="322">Sky and particles rasterize into the HDR lighting image first; a memory barrier follows, then SSS copies it,</text>
-  <text class="mut" x="20" y="338">and PostFX consumes the SSS output. Everything drawn into the lit image reaches the tonemapper.</text>
+  <text class="mut" x="20" y="322">Sky and particles rasterize into the HDR lighting image first; a memory barrier follows, then SSS blurs skin tiles</text>
+  <text class="mut" x="20" y="338">in place and SSR traces it. PostFX reads the lit image and adds the upsampled SSR in tonemap.</text>
 
   <text class="mut" x="20" y="366">DeferredRenderer::onResize() forwards the extent to every screen-sized target, SSS and SSR included.</text>
 </svg>

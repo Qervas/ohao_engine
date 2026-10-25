@@ -366,17 +366,17 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "deferred/ssao": {
         "what": [
-            "Screen-space ambient occlusion: hemisphere samples in view space, blurred AO bound into lighting.",
+            "Screen-space ambient occlusion: a half-resolution horizon search in the surface's tangent plane, a 4x4 depth-aware blur, upsampled by lighting into the ambient and IBL terms only.",
         ],
-        "how": ["ssao_pass + ssao.comp compute path."],
-        "why": "Cheap contact darkening without full GI — complements hybrid RT and IBL.",
+        "how": ["ssao_pass on the rtc compute helpers; compute/ssao.slang entries occlusion and blur; noise is a seeded permutation of 16 strata in push constants."],
+        "why": "Cheap contact darkening for the ambient light RT shadows and RT GI do not cover.",
     },
     "deferred/ssr-sss": {
         "what": [
-            "Experimental SSR (HiZ ray march) and SSS blur for skin-like materials — quality gated on the deferred hub.",
+            "SSR: a half-resolution world-space march, upsampled against depth in tonemap. SSS: a separable blur in place on the lit image, only over tiles the G-buffer flags for subsurface materials.",
         ],
-        "how": ["ssr.comp / sss_blur.comp with pass wrappers."],
-        "why": "Optional quality; not required for cornell golden path.",
+        "how": ["postprocess/ssr.slang (trace) and postprocess/sss.slang (blurH, blurV, indirect over tiles) with pass wrappers."],
+        "why": "Glossy reflections and skin softening from the frame's own buffers, at a cost that falls to nothing where neither applies.",
     },
     "deferred/sky": {
         "what": [
@@ -606,7 +606,7 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "shaders/postprocess-chain": {
         "what": ["Fullscreen post chain: bloom, TAA, tonemap, sky, SSR, SSS shaders."],
-        "how": ["fullscreen.vert feeds fragment posts; compute for SSR/SSS."],
+        "how": ["fullscreen.vert feeds fragment posts; SSR (ssr.slang) and SSS (sss.slang) are Slang compute."],
         "why": "Pass ownership in deferred post pipeline; shaders stay dumb.",
         "workflow": ["threshold", "downsample", "upsample", "TAA", "tonemap"],
     },

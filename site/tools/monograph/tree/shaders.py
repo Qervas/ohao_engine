@@ -20,7 +20,7 @@ MODULE = {
             'Common includes',
             'math, color, encoding, reconstruction, constants, types.',
             files=['shaders/includes/common/math.glsl', 'shaders/includes/common/color.glsl', 'shaders/includes/common/encoding.glsl', 'shaders/includes/common/reconstruction.glsl', 'shaders/includes/common/constants.glsl', 'shaders/includes/common/types.glsl', 'shaders/includes/common/common.glsl', 'shaders/includes/noise.glsl'],
-            design=['Shared helpers for both raster and RT — keep one definition of luminance, safe normalize, etc.', 'encoding.glsl: octahedral / pack conventions used by GBuffer and AOVs.', 'noise.glsl: procedural hash for SSAO, particles, cloud density.'],
+            design=['Shared helpers for both raster and RT — keep one definition of luminance, safe normalize, etc.', 'encoding.glsl: octahedral / pack conventions used by GBuffer and AOVs.', 'noise.glsl: procedural hash for particles, cloud density.'],
         ),
         page(
             'includes-lighting',
@@ -40,8 +40,8 @@ MODULE = {
             'postprocess-chain',
             'Postprocess shader chain',
             'Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.',
-            files=['shaders/postprocess/fullscreen.vert', 'shaders/postprocess/bloom_threshold.frag', 'shaders/postprocess/bloom_downsample.frag', 'shaders/postprocess/bloom_upsample.frag', 'shaders/postprocess/taa_resolve.frag', 'shaders/postprocess/tonemapping.frag', 'shaders/postprocess/sky.frag', 'shaders/postprocess/ssr.comp', 'shaders/postprocess/sss_blur.comp'],
-            design=['fullscreen.vert feeds every post fragment pass.', 'Bloom: threshold → hierarchical down → up; TAA before final tonemap.', 'SSR/SSS are compute; optional quality knobs on DeferredRenderer.'],
+            files=['shaders/postprocess/fullscreen.vert', 'shaders/postprocess/bloom_threshold.frag', 'shaders/postprocess/bloom_downsample.frag', 'shaders/postprocess/bloom_upsample.frag', 'shaders/postprocess/taa_resolve.frag', 'shaders/postprocess/tonemapping.frag', 'shaders/postprocess/sky.frag', 'shaders/postprocess/ssr.slang', 'shaders/postprocess/sss.slang'],
+            design=['fullscreen.vert feeds every post fragment pass.', 'Bloom: threshold → hierarchical down → up; TAA before final tonemap.', 'SSR (half resolution) and SSS (classified tiles) are Slang compute; tonemap upsamples the SSR.'],
             workflow=['threshold', 'downsample mips', 'upsample combine', 'TAA history', 'ACES/tonemap'],
         ),
         page(
@@ -55,7 +55,7 @@ MODULE = {
             'compute',
             'Compute shaders',
             'BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.',
-            files=['shaders/compute/brdf_lut.comp', 'shaders/compute/prefilter_envmap.comp', 'shaders/compute/equirect_to_cubemap.comp', 'shaders/compute/hiz_generate.comp', 'shaders/compute/light_culling.comp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/skinning.comp', 'shaders/compute/composite.comp', 'shaders/compute/dof_composite.comp', 'shaders/compute/ssao.comp', 'shaders/compute/denoise_atrous.comp', 'shaders/compute/dlss_tonemap.comp'],
+            files=['shaders/compute/brdf_lut.comp', 'shaders/compute/prefilter_envmap.comp', 'shaders/compute/equirect_to_cubemap.comp', 'shaders/compute/hiz_generate.comp', 'shaders/compute/light_culling.comp', 'shaders/compute/gpu_cull.comp', 'shaders/compute/skinning.comp', 'shaders/compute/composite.comp', 'shaders/compute/dof_composite.comp', 'shaders/compute/ssao.slang', 'shaders/compute/denoise_atrous.comp', 'shaders/compute/dlss_tonemap.comp'],
             design=['IBL bake: equirect→cube, prefilter, BRDF LUT (once per env change).', 'HiZ + gpu_cull + light_culling feed deferred scalability.', 'skinning.comp updates skinned VB; dof_composite for cinematic RT path.'],
         ),
         page(

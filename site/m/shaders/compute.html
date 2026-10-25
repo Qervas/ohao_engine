@@ -33,38 +33,32 @@
         <p>BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#two-compute-shaders-and-a-build-that-ignores-them">Two compute shaders, and a build that ignores them</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-compute-shaders-under-compute-and-the-target-that-builds-them">Two compute shaders under compute/, and the target that builds them</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="two-compute-shaders-and-a-build-that-ignores-them">Two compute shaders, and a build that ignores them</h2></div>
+<div class="section-rule"><h2 id="two-compute-shaders-under-compute-and-the-target-that-builds-them">Two compute shaders under compute/, and the target that builds them</h2></div>
 <div class="prose reveal">
-<p>Nothing in the build depends on the shaders. `add_custom_target(shaders ...)` is declared without `ALL`, and no `add_dependencies` call anywhere in the tree names it, so a default `cmake --build build` compiles no SPIR-V at all — `--target shaders` is a second, manual step.</p>
+<p>`add_custom_target(shaders ...)` is declared without `ALL`, so building some other target alone compiles no SPIR-V. Every target that loads SPIR-V depends on it — the `ohao` CLI, the examples, `render_bench` and the rendering tests — so building any of those builds the shaders first.</p>
 <div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L122" target="_blank" rel="noopener">shaders/CMakeLists.txt:122</a></div>
+<div class="citation-chip"><code class="citation-code">add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/CMakeLists.txt#L25" target="_blank" rel="noopener">examples/CMakeLists.txt:25</a></div>
+<p>GLSL compute files are compiled by a glob; Slang files by a second one, one SPIR-V per `[shader(...)]` entry point:</p>
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/*.comp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L12" target="_blank" rel="noopener">shaders/CMakeLists.txt:12</a></div>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS &quot;${CMAKE_CURRENT_SOURCE_DIR}/*.slang&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L83" target="_blank" rel="noopener">shaders/CMakeLists.txt:83</a></div>
 </div>
 <div class="section-rule"><h2 id="ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</h2></div>
 <div class="prose reveal">
-<p>`compute_ssao.comp.spv` is loaded by `SSAOPass` and dispatched from the deferred render graph. Its `local_size 8×8` and `(N + 7) / 8` group count agree. It reads the GBuffer normal attachment — an octahedral pair in `.rg` of an `R16G16B16A16_SFLOAT` target — through `decodeNormalOctahedron` in `includes/common/encoding.glsl`, which opens by undoing a [0,1] remap:</p>
-<div class="citation-chip"><code class="citation-code">vec2 f = encoded * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:16</a></div>
-<p>The matching `* 0.5 + 0.5` is not in that include: it is applied at the call site in `gbuffer.frag`, against an `encodeNormalOctahedron` that file redefines locally. The shared encoder of the same name returns [-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only because `gbuffer.frag` does not use the include. &quot;De-duplicating&quot; it onto the shared helper breaks the pairing silently.</p>
-<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L131" target="_blank" rel="noopener">shaders/core/gbuffer.frag:131</a></div>
+<p>SSAO is now Slang, `compute/ssao.slang`, with two entry points, so it compiles to two files, `compute_ssao.slang.occlusion.spv` and `compute_ssao.slang.blur.spv`, which `SSAOPass` loads by entry name:</p>
+<div class="citation-chip"><code class="citation-code">!rtc::createComputePipeline(m_device, &quot;compute_ssao.slang.blur.spv&quot;, &quot;blur&quot;, m_blurSetLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssao_pass.cpp#L74" target="_blank" rel="noopener">ohao/render/deferred/ssao_pass.cpp:74</a></div>
+<p>Both run 8×8 workgroups over the half-resolution image, and the host&#x27;s `(N + 7) / 8` group count agrees. Its push block is `SSAOPush`, generated from `shaders/shared/layout.json` into Slang and C++ alike, and its sixteen noise rotations travel in that block rather than in a texture. The occlusion entry decodes the G-buffer&#x27;s octahedral normal with its own copy of the decoder, which undoes the `* 0.5 + 0.5` remap `gbuffer.frag` applies at its call site:</p>
+<div class="citation-chip"><code class="citation-code">const float2 f = e * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.slang#L27" target="_blank" rel="noopener">shaders/compute/ssao.slang:27</a></div>
+<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L160" target="_blank" rel="noopener">shaders/core/gbuffer.frag:160</a></div>
+<p>The shared GLSL encoder of the same name in `includes/common/encoding.glsl` returns [-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only because `gbuffer.frag` redefines it locally. &quot;De-duplicating&quot; it onto the shared helper breaks the pairing silently, for SSAO, SSR and lighting at once.</p>
 <p>It is off unless asked for:</p>
-<div class="citation-chip"><code class="citation-code">bool m_ssaoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.hpp#L151" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.hpp:151</a></div>
-<p>Three call sites ask — the model viewer, the renderer pipeline test, and the Python bindings, which expose the setter by name.</p>
+<div class="citation-chip"><code class="citation-code">bool m_ssaoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.hpp#L160" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.hpp:160</a></div>
+<p>The model viewer, the `ohao_game` host, a live window session and a capture whose `post` list names `ssao` ask; the Python bindings expose the setter by name.</p>
 <div class="citation-chip"><code class="citation-code">pp-&gt;setSSAOEnabled(true);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L186" target="_blank" rel="noopener">examples/model_viewer.cpp:186</a></div>
 <div class="citation-chip"><code class="citation-code">.def(&quot;set_ssao_enabled&quot;, &amp;PostProcessingPipeline::setSSAOEnabled)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/python/renderer_bindings.cpp#L304" target="_blank" rel="noopener">tests/python/renderer_bindings.cpp:304</a></div>
-<p>The kernel is GTAO-shaped: eight slice directions — `m_sampleCount` defaults to 8 and nothing calls `setSampleCount` on this pass — each swept both ways for four steps, so 64 depth taps per pixel.</p>
-<div class="citation-chip"><code class="citation-code">uint32_t m_sampleCount{8};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssao_pass.hpp#L100" target="_blank" rel="noopener">ohao/render/deferred/ssao_pass.hpp:100</a></div>
-<div class="citation-chip"><code class="citation-code">int stepsPerDirection = 4;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.comp#L106" target="_blank" rel="noopener">shaders/compute/ssao.comp:106</a></div>
-<p>Each slice closes with Jimenez&#x27;s analytic arc integral, which gives the visible cosine-weighted solid angle between two horizons in closed form instead of counting occluded samples:</p>
-<div class="math-block">$$
-a(h) = \tfrac{1}{4}\bigl(-\cos(2h - n) + \cos n + 2h\sin n\bigr)
-$$</div>
-<p>$h$ is a horizon angle, $n$ the angle of the projected normal, both measured inside the slice plane; the slice&#x27;s occlusion is $a(h_1) + a(h_2)$.</p>
-<div class="citation-chip"><code class="citation-code">float a = (-cos(2.0 * h1 - n) + cos(n) + 2.0 * h1 * sin(n)) / 4.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.comp#L36" target="_blank" rel="noopener">shaders/compute/ssao.comp:36</a></div>
-<p>The derivation requires $h_1$, $h_2$ and $n$ to share a frame anchored on the view vector. This implementation does not: `n` is taken against `normalize(-viewPos)`, but the horizon search maxes its cosine against the in-plane sweep direction passed in as `viewDir`, and the back-sweep references the same `+dir` axis rather than its negation.</p>
-<div class="citation-chip"><code class="citation-code">float h = dot(normalize(diff), viewDir);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.comp#L65" target="_blank" rel="noopener">shaders/compute/ssao.comp:65</a></div>
-<p>What ships is a horizon-based heuristic with GTAO&#x27;s closed form bolted on, not the ground-truth integral the file header claims. The `bias` push-constant field is declared and never read.</p>
+<p>The kernel — a horizon search in the surface&#x27;s tangent plane, eight directions of four steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its effect on the frame are the deferred SSAO unit&#x27;s subject.</p>
 </div>
 <div class="section-rule"><h2 id="dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</h2></div>
 <div class="prose reveal">
@@ -85,20 +79,20 @@ $$</div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>Nothing depends on the `shaders` target, so `cmake --build build` never recompiles SPIR-V and a stale `.spv` loads without complaint. `--target shaders` is a separate step. Compilation is then by glob, so adding a `.comp` yields a `.spv` and no wiring: a loader must ask for the path-flattened name, `compute/&lt;name&gt;.comp` → `compute_&lt;name&gt;.comp.spv`.</li>
+<li>The `shaders` target is not in `ALL`; only the targets that declare `add_dependencies(... shaders)` rebuild SPIR-V before they build, and a new target that loads SPIR-V must declare it too. Compilation is by glob, so adding a `.comp` or `.slang` yields SPIR-V and no wiring: a loader must ask for the path-flattened name, `compute/&lt;name&gt;.comp` → `compute_&lt;name&gt;.comp.spv`, and a Slang module with several entry points `compute_&lt;name&gt;.slang.&lt;entry&gt;.spv`.</li>
 <li>`compute_dlss_tonemap.comp.spv` is named only from inside `#ifdef OHAO_DLSS_ENABLED`. Without `external/DLSS/` at configure time the pipeline is never created, so any claim that two compute shaders reach a frame is a claim about a machine with the NGX SDK vendored in.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>examples/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssao_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/ssao.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/python/renderer_bindings.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/ssao_pass.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/ssao.comp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoise/dlss_rr.cpp</code><span class="desc"></span></div>
         <div class="row"><code>CMakeLists.txt</code><span class="desc"></span></div>

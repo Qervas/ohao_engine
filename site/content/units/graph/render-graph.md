@@ -39,8 +39,8 @@ the same switch: it is registered only in frames where `rt.shadows` is not.
 
 ## The graph owns nothing it schedules
 
-All six textures the deferred frame tracks — G-buffer normal, albedo and depth,
-the CSM shadow array, the SSAO target, the lighting output — enter through
+All five textures the deferred frame tracks — G-buffer normal, albedo and depth,
+the CSM shadow array, the lighting output — enter through
 `importTexture`, which marks them external with `ownsMemory = false`. Allocation
 then skips them, and so does teardown.
 
@@ -226,7 +226,7 @@ Knowing how much of this class is inert is part of reading it safely.
 - `buildDependencyGraph` runs a four-deep loop nest — passes × reads-per-pass × earlier passes × writes-per-pass, O(P²·R·W) — to compute a per-pass `refCount` that nothing anywhere reads. {{cite ohao/render/graph/render_graph.cpp "pass.refCount = 0;"}}
 - `getOptimalLayout` has no callers — but the usage-to-layout mapping it encodes is very much alive, hand-inlined into each `PassBuilder` method instead (`readTexture` sets `SHADER_READ_ONLY_OPTIMAL`, `writeStorageTexture` sets `GENERAL`). Unused function, used mapping. {{cite ohao/render/graph/render_graph.cpp "access.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;"}}
 - Buffer accesses are recorded by `readBuffer`/`writeBuffer` and then dropped: `computeBarriers` only inspects textures, and `execute` only walks barriers whose texture handle is valid. Buffer hazards are the caller's problem.
-- `setOutput` stores a handle nothing reads, `PassCommandBuffer` has no users, and `ssao_output` is imported into the graph and then declared by no pass at all.
+- `setOutput` stores a handle nothing reads and `PassCommandBuffer` has no users. The SSAO images are not imported at all: the `ssao` pass transitions them itself, so the graph's ledger knows nothing of them.
 
 :::key
 This is a barrier scheduler wearing a frame graph's API. One of its two jobs it

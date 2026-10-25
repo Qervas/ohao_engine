@@ -17,27 +17,27 @@ darken direct light and emissives too.
 
 {{cite ohao/render/deferred/post_processing_pipeline.cpp "// SSAO runs before lighting so its output can modulate ambient occlusion"}}
 
-The ordering is real and the C++ plumbing is complete: the SSAO view reaches
-`DeferredLightingPass`, is written into set 0 binding 10, and raises flag bit 1.
+The SSAO view reaches `DeferredLightingPass`, is written into set 0 binding 10, and
+raises flag bit 1:
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;"}}
 
-`deferred_lighting.frag` declares no binding 10 — its samplers jump from
-`brdfLUT` at 9 to `ssgiTexture` at 11 — and never masks the flag word against
-bit 1; only 1, 4, 8 and 32 are tested. The `ao` that multiplies the ambient
-term is the alpha channel of the albedo G-buffer:
+and `deferred_lighting.frag` samples it there, upsampling the half-resolution image
+against each pixel's distance from the camera, only when that bit is set:
 
-{{cite shaders/core/deferred_lighting.frag "float ao = gBuffer2Sample.a;"}}
+{{cite shaders/core/deferred_lighting.frag "const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;"}}
 
-which the G-buffer pass filled at rasterisation time from the R channel of the
+It multiplies the constant ambient and IBL terms on top of the baked `ao` from the
+albedo G-buffer's alpha — which the G-buffer pass filled from the R channel of the
 material's packed occlusion/roughness/metallic texture:
 
 {{cite shaders/core/gbuffer.frag "ao *= rm.r;"}}
 
-The screen-space term is dispatched and bound every frame and nothing samples it:
-the only occlusion in the deferred image is the artist-authored kind baked into
-the material. Closing the gap is a binding declaration and one `& 2u` — but as
-shipped, `setSSAOEnabled(true)` buys a compute dispatch and no pixels.
+— and leaves direct light and RT GI alone. The pass itself, its noise and its
+upsample are the SSAO unit's subject. Each frame `DeferredRenderer` hands the
+pipeline SSAO's inputs, the G-buffer's position and normal and the unjittered camera:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setSSAOInputs(m_gbufferPass->getPositionView(), m_gbufferPass->getNormalView(),"}}
 
 The three passes that do run inside `execute()` form a chain with one asymmetry
 worth spotting up front: TAA rebinds the working image for whatever comes next,
@@ -300,20 +300,33 @@ double-encodes all five operators — and the branch above means the Filmic path
 would break in a subtly different way from the other four.
 :::
 
-The SSR tap is the sharpest edge here. It is added unconditionally, with no
-strength multiplier:
+The SSR tap is added only when the frame has one. SSR is traced at half resolution,
+so the tonemap upsamples it: the four nearest half-resolution samples, weighted
+bilinearly and by how close the view depth each was traced for (SSR's alpha) is to
+this pixel's, read from the G-buffer depth at binding 3 and linearized with the
+projection's `[2][2]` and `[3][2]`:
 
-{{cite shaders/postprocess/tonemapping.frag "hdrColor += ssr.rgb;"}}
+{{cite shaders/postprocess/tonemapping.frag "if (params.ssrOn != 0u) hdrColor += ssrAt(ivec2(gl_FragCoord.xy));"}}
 
-while binding 2 falls back to the HDR input itself when no SSR view has been set:
+{{cite shaders/postprocess/tonemapping.frag "const float z = params.depthB / (d + params.depthA);"}}
 
-{{cite ohao/render/deferred/post_processing_pipeline.cpp "imageInfos[2].imageView = m_ssrView != VK_NULL_HANDLE ? m_ssrView : m_hdrInputView;"}}
+`ssrOn` is raised only when both the SSR view and the depth view are set; without
+them bindings 2 and 3 are filled with the HDR input, which the shader never reads:
 
-Bloom's binding has the same fallback and survives it because `bloomStrength` is
-zero when bloom is off. SSR has no such guard, so a live fallback adds the scene
-to itself — one stop brighter, everywhere. In practice `DeferredRenderer` hands
-`setSSRView()` the SSR output every frame before post-processing records, and the
-tonemap's per-slot set is written inside `execute()`, so the real view wins; the fallback goes live only if `SSRPass` failed to initialise.
+{{cite ohao/render/deferred/post_processing_pipeline.cpp "imageInfos[2].imageView = ssr ? m_ssrView : m_hdrInputView;"}}
+
+The flag closes the old hazard, a fallback binding that added the HDR input to itself
+under an additive composite. `DeferredRenderer` clears the SSR view at the start of
+the frame's tail and sets it again only after `SSRPass` executed, and hands over the
+*jittered* projection — the one the depth buffer was drawn with — for the
+linearization; jitter moves only the projection's third column, so the two depth
+terms are the unjittered ones either way:
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setSSRProjection(jitteredProj);"}}
+
+The composite is still a bare `+=`. SSR already weights its colour by Fresnel and a
+hit fade, but the lighting pass's own specular for that pixel stays at full strength,
+so a reflected surface carries both.
 
 The `flashIntensity` push constant — an additive warm-white HDR spike for
 lightning, placed before the tonemap so the curve compresses it — is wired end to
@@ -321,9 +334,9 @@ end and has no producer anywhere in the tree.
 
 ## Contracts
 
-- `setSSRView()` and `setHDRInput*()` only store handles; `execute()` writes all three tonemap bindings into the set for `frameIndex` at record time, so both must be set before `execute()` that frame. If no SSR view is ever set, the tonemap adds the HDR input to itself.
+- `setSSRView()`, `setSSRProjection()`, the depth view and `setHDRInput*()` only store handles and values; `execute()` writes all four tonemap bindings into the set for `frameIndex` at record time, so all must be set before `execute()` that frame. A null SSR view or depth view turns the SSR term off (`ssrOn` 0).
 - `setTonemappingEnabled(false)` does not yield an untonemapped LDR image. Bloom and TAA still run, but `m_didExecute` stays false and `DeferredRenderer::getFinalOutput()` falls back to the HDR lighting attachment, discarding both.
 - The output image is `R8G8B8A8_UNORM` on purpose. Moving to `_SRGB` must be paired with removing the `pow` in `tonemapping.frag`, and reconciled with the operator-4 branch that already skips it.
 - `setBloomIntensity()` and `setUseVarianceClipping()` are stored but never reach the image: bloom strength is a literal in `execute()`, and clipping is unconditional in the shader.
-- `setSSAOEnabled(true)` produces an image nothing reads. Anyone adding `binding = 10` to `deferred_lighting.frag` must also gate it on flag bit 1 — the C++ side already raises that bit, and the ambient term already multiplies by a *different* `ao` from the G-buffer alpha, so a naive addition applies occlusion twice.
+- `setSSAOEnabled(true)` adds the `ssao` compute pass ahead of lighting, which reads it at binding 10 under flag bit 1 and applies it to the ambient and IBL terms only. `setSSAOInputs` must run each frame before the graph executes, or the pass keeps last frame's camera.
 - TAA's history is sound — the render target and the sampled history are always different images, and the output is this frame's — but its inputs are not: motion vectors carry the current frame's jitter because `m_prevViewProj` is stored unjittered, and the jitter sweep spans half a pixel. Treat TAA's reprojection as approximate.

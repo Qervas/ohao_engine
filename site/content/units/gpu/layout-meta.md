@@ -86,22 +86,25 @@ become a design constraint.
 
 ## The per-draw block that shrank to a slot
 
-The raster per-draw contract is a single `uint`, padded to a 16-byte multiple.
-Per-object state lives in tables the shaders index, and the push constant only names
-which submesh material slot the draw uses:
+The raster per-draw contract is four `uint`s, 16 bytes. Per-object state lives in
+tables the shaders index, and the push constant names which submesh material slot the
+draw uses, plus the frame's SSS tile grid across and down — per frame, not per draw,
+but pushed with each draw because the fragment stage that flags tiles has no other
+per-pass data at hand:
 
 {{cite ohao/render/deferred/gbuffer_pass.hpp "static_assert(sizeof(DrawPushConstant) == 16);"}}
 
-`gbuffer.frag` declares only the four bytes it reads, so the block it declares is
-shorter than the range the pass pushes:
+`gbuffer.frag` declares the same four words in the same order:
 
-{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint materialSlot; } pc;"}}
+{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint materialSlot; uint tilesX; uint tilesY; uint pad; } pc;"}}
 
-That is legal — a shader may declare a prefix of the pushed range — but it means the
-size assertion pins the C++ struct, not the GLSL block, and the three padding words
-exist only to keep the range at a 16-byte multiple. The material slot is not a
-material: the shader resolves it through the instance's reference list, so the
-contract that matters is the table layout below, not the push block.
+The size assertion pins the C++ struct, not the GLSL block; the two match by hand, and
+the last word is padding that keeps the range at a 16-byte multiple. The material slot
+is not a material: the shader resolves it through the instance's reference list, so
+the contract that matters is the table layout below, not the push block. The SSS
+constants the shader also needs — the tile size, the header length, the list capacity —
+come from `shaders/shared/layout.json` through the generated `shared/layout.glsl`, the
+same file the C++ side reads as `gpu/shared_layout.hpp`, so those cannot drift.
 
 The instance table is the boundary that carries the weight. `InstanceGpu` is declared
 once in C++ and once in `scene_data.glsl`, whose header names its twin:
@@ -168,10 +171,10 @@ actually bound.
 
 The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
 roughness, metallic, four bindless texture indices (albedo, normal, roughness-metallic,
-emissive) and an emissive strength — eight members packed into twelve floats, the
-last two of them unused.
+emissive), an emissive strength and a subsurface strength — nine members packed into
+twelve floats, the last one unused.
 
-{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, 0.0f, 0.0f,"}}
+{{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, 0.0f,"}}
 
 The authoring struct in `material.hpp` is a different thing. `Material` carries
 thirty-one members — index of refraction, transmission, clear coat, subsurface colour

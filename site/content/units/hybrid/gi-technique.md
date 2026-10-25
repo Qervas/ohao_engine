@@ -7,9 +7,10 @@ standard: v2
 
 ## The bounce the ambient term cannot know
 
-The deferred pipeline's ambient term is one uniform scalar times albedo times AO —
+The deferred pipeline's ambient term is one uniform scalar times albedo times AO
+(the baked AO, and SSAO when it is on) —
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;"}}
+{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ssao;"}}
 
 plus, when an environment map is bound, two equirect samples of it, one standing in
 for diffuse irradiance and one for specular. Neither can know that a red wall stands
@@ -251,7 +252,11 @@ already brings back the environment, occluded by everything it passed; the light
 pass's diffuse IBL term is that same light unoccluded. So when GI is in the frame the
 diffuse IBL term is dropped and only specular IBL remains:
 
-{{cite shaders/core/deferred_lighting.frag "ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao;"}}
+{{cite shaders/core/deferred_lighting.frag "ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;"}}
+
+SSAO multiplies those terms and the constant ambient, never the GI image: a GI ray
+already stops at the occluder SSAO would be guessing at, so occluding its result again
+would count the same crease twice.
 
 The handover is per frame and conditional on rays having been traced. Before the
 graph executes, the renderer clears the lighting pass's GI view; one lambda hands

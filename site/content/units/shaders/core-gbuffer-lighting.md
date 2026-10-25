@@ -39,8 +39,9 @@ appears exactly once in the file, in its own declaration.
 {{cite shaders/core/deferred_lighting.frag "    mat4 invViewProj;"}}
 
 Storing position buys simplicity — no matrix, no NDC bookkeeping, no near/far
-dependence — for 6 bytes per pixel plus the precision above. Other passes made
-the opposite call: `reconstruction.glsl` exists and `ssao.comp` uses it.
+dependence — for 6 bytes per pixel plus the precision above. Every other reader made
+the same call: SSAO, SSR, SSS and both RT techniques read the stored position too,
+and `reconstruction.glsl`, the depth-to-position helper, now has no includer at all.
 :::
 
 ## What the fragment shader packs
@@ -54,18 +55,18 @@ That remap is a UNORM convention, left from when the target was
 says `RGB10A2` and the shared header still calls itself the `A2R10G10B10`
 encoder, but the image is half-float now; the remap survives only because
 `decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder
-lives in `includes/common/encoding.glsl` and is the one every GLSL consumer runs —
-`deferred_lighting.frag`, `ssao.comp`, `ssr.comp`; the Slang RT shadow and RT GI
-passes carry their own `decodeOctahedron` with the same remap.
+lives in `includes/common/encoding.glsl`, and `deferred_lighting.frag` is now its only
+consumer; the Slang passes — SSAO, SSR, RT shadows and RT GI — each carry their own
+`decodeOctahedron` with the same remap.
 
 {{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}
 
 The header also carries an `encodeNormalOctahedron` with the same math as the one
 `gbuffer.frag` defines locally, and it has zero callers anywhere in `shaders/`:
 the only encode in the tree is the local one. Nothing structural forces that
-duplication — `gbuffer.frag` simply never enables `GL_GOOGLE_include_directive`,
-which `deferred_lighting.frag` does one line into the file, in the same directory,
-under the same shader build. The pair that must stay in
+duplication — `gbuffer.frag` enables `GL_GOOGLE_include_directive` and includes
+`scene_data.glsl` and the generated `shared/layout.glsl`, just not `encoding.glsl`.
+The pair that must stay in
 lockstep is `gbuffer.frag`'s encoder against the header's *decoder*; the header's
 encoder is dead weight.
 
@@ -73,7 +74,7 @@ Where the material comes from is part of the same story. The fragment shader rea
 draw's submesh material slot from a push constant, resolves it through the instance's
 material-reference list into a row of `RenderScene`'s material table, and loads three
 `vec4`s from it: base colour and albedo texture, roughness, metallic, normal and emissive
-textures, and the rough/metal texture and emissive strength. The same table feeds the
+textures, and the rough/metal texture with the emissive and subsurface strengths. The same table feeds the
 path tracer, so the two renderers cannot disagree about which material a triangle has.
 A slot the instance has no reference for falls back to material 0.
 
@@ -107,7 +108,13 @@ luminance scalar and hidden in the alpha of the normal target:
 
 {{cite shaders/core/gbuffer.frag "emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;"}}
 
-and the lighting pass re-tints that scalar with the surface albedo:
+It shares that alpha with the subsurface strength, by sign: a non-emissive material
+with `subsurface` > 0 stores minus its strength there, for the SSS blur, so the
+lighting pass clamps the channel at zero before it reads emission:
+
+{{cite shaders/core/deferred_lighting.frag "float emissiveLuminance = max(gBuffer1Sample.a, 0.0);  // stored by GBuffer pass (negative: subsurface)"}}
+
+and then re-tints that scalar with the surface albedo:
 
 {{cite shaders/core/deferred_lighting.frag "vec3 emissive = albedo * emissiveLuminance;"}}
 
@@ -273,15 +280,21 @@ Which leaves the third fallback — an `F0`-weighted ambient floor for
 `metallic > 0.5` — as the thing standing between a dark metal and black when that
 single texel comes back dim.
 
-Screen-space AO is the mirror image of that gap. Here the C++ side really does
-the work — the render graph runs `executeSSAO`, hands the view to the lighting
-pass, and announces it via flag bit 1:
+Screen-space AO does reach these terms. When the effect is on, the render graph runs
+`executeSSAO`, hands the half-resolution view to the lighting pass, and announces it
+via flag bit 1:
 
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO"}}
 
-but the shader declares no binding 10 and never tests `flags & 2u`. The `ao` that
-reaches the BRDF comes entirely from the material occlusion channel in GBuffer2's
-alpha. SSAO is currently computed and discarded.
+and the shader samples binding 10 under that bit, upsampling the (occlusion, distance)
+pairs against its own distance from the camera — the four nearest samples weighted
+bilinearly and by a 5 % distance match, the closest one where none matches:
+
+{{cite shaders/core/deferred_lighting.frag "float ssaoAt(ivec2 pixel, float dist) {"}}
+
+The result multiplies the constant ambient and the IBL terms, on top of the material
+occlusion channel in GBuffer2's alpha; direct light and RT GI never see it. The deferred
+SSAO unit covers the pass that produces it.
 
 :::key
 This GBuffer is not a compressed encoding of a surface but a lossy
