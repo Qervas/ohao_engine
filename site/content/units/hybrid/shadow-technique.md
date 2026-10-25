@@ -319,9 +319,11 @@ the seeds, the quality and the rays per light:
 {{cite ohao/render/rt/rt_shadow_technique.cpp "pc.extent = u4(input.width, input.height, m_lightCount,"}}
 
 Measured on `cornell_720p` (1280×720, RTX 5070 Laptop, 2026-10-24), with eight
-shadowed lights and four traced a pixel: `rt.shadows` 0.255 ms and
-`rt.shadows.filter` 0.062 ms, against budgets of 0.20 and 0.05 — both over, awaiting
-a ruling. On `helmet_game_720p`, four lights: 0.094 ms and 0.046 ms.
+shadowed lights and four traced a pixel: `rt.shadows` 0.252 ms and
+`rt.shadows.filter` 0.061 ms, within budgets of 0.30 and 0.08 — moved there from
+SSR, the G-buffer and sky + particles by Frank's ruling of 2026-10-25, the frame's
+1.50 ms unchanged, after the original 0.20 and 0.05 proved out of reach with four rays
+a pixel. On `helmet_game_720p`, four lights: 0.092 ms and 0.045 ms.
 
 Every random number is an integer PCG hash of the render seed, the frame index
 since the last temporal reset and the pixel, hashed once per pixel, then of the

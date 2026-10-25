@@ -257,21 +257,26 @@ budget:
 | Pass | Budget | Today | How it gets there |
 |---|---|---|---|
 | `cull.*` + `hiz.*` (all four) | 0.10 | — (CPU) | One dispatch per pass over a few hundred instances |
-| `gbuffer.early` + `gbuffer.late` | 0.15 | in "RenderGraph" | Indirect / mesh draws, face culling on |
+| `gbuffer.early` + `gbuffer.late` | 0.10 (was 0.15) | in "RenderGraph" | Indirect / mesh draws, face culling on |
 | `csm` | 0.00 | in "RenderGraph" | Not rendered when RT shadows are on |
-| `rt.shadows` | 0.20 | in "RenderGraph" | 1 ray per shadowed light, not 8; scene lights, not a hard-coded one |
-| `rt.shadows.filter` | 0.05 | — | 5x5 depth/normal-aware, one pass |
+| `rt.shadows` | 0.30 (was 0.20) | in "RenderGraph" | 1 ray per shadowed light, not 8; scene lights, not a hard-coded one; Cornell's 8 shadowed lights trace 4 a pixel |
+| `rt.shadows.filter` | 0.08 (was 0.05) | — | 5x5 depth/normal-aware, one pass; memory-bound over 8 light channels |
 | `rt.gi` | 0.30 | in "RenderGraph" | Half resolution (1/4 the pixels), 2 rays, not 32 (1/64 of the rays) |
 | `rt.gi.denoise` | 0.20 | — | Temporal (reprojected), 2 à-trous iterations at half res, joint-bilateral upsample |
 | `ssao` | 0.00 (off) / 0.08 (on) | in "RenderGraph" | Half res; off in this configuration |
 | `lights.cluster` | 0.03 | — | 3,456 froxels, brute force over few lights |
 | `lighting` | 0.12 | in "RenderGraph" | Cluster lookup instead of a capped loop |
 | `sss` | 0.02 | timed | Classified tiles; Cornell has no skin, so zero tiles |
-| `ssr` | 0.10 | timed | Half resolution |
-| `sky` + `particles` | 0.05 | timed | Unchanged work |
+| `ssr` | 0.04 (was 0.10) | timed | Half resolution |
+| `sky` + `particles` | 0.03 (was 0.05) | timed | Unchanged work |
 | `post` (tonemap only here) | 0.05 | timed | Unchanged |
 | reserve (barriers, clears, timestamps) | 0.13 | — | |
 | **frame** | **1.50** | 5.0–5.6 | |
+
+*Frank's ruling, 2026-10-25 02:40 (2b step 7):* `rt.shadows` 0.20 → 0.30 and
+`rt.shadows.filter` 0.05 → 0.08, taken from `ssr` (0.10 → 0.04), the G-buffer
+(0.15 → 0.10) and sky + particles (0.05 → 0.03). The frame stays 1.50 ms; no light cut,
+no half-resolution shadows. Step 7 measured `cornell_720p` at 0.252 and 0.061 ms.
 
 Other scenes (frame median GPU ms):
 
@@ -1049,11 +1054,11 @@ improvising. Intentional image changes are separate commits inside their step.
      was treated as the fallback sun. Test 9: `engine_tests` `sp2b_t09_*` (exact after a
      reset, CSM fallback, reference past the cap with `shadowLightsDropped`, a spot outside
      its cone, convergence toward the reference); goldens `cornell_box_reference`,
-     `cli_cornell_box_reference`, `cli_helmet_game_reference`. **Budgets:** `csm` passes;
-     `cornell_720p` `rt.shadows` measured 0.255 ms (budget 0.20) and `rt.shadows.filter`
-     0.062 ms (budget 0.05): Cornell's 8 shadow-casting lights make every pixel trace 4
-     rays at about 0.048 ms each, plus 0.06 ms of fixed work. Not moved: awaiting Frank's
-     ruling (the change record lists the options).
+     `cli_cornell_box_reference`, `cli_helmet_game_reference`. **Budgets:** Cornell's 8
+     shadow-casting lights make every pixel trace 4 rays at about 0.048 ms each, plus
+     0.06 ms of fixed work, over the original 0.20 / 0.05 ms. Frank's ruling (2026-10-25)
+     moved budget inside `cornell_720p` (see "Frame cost"): `rt.shadows` 0.30,
+     `rt.shadows.filter` 0.08. A clean run: 0.252 and 0.061 ms, `csm` not run (0): pass.
 8. **RT GI rebuilt.**
    - Half resolution, 2 rays, the reprojected temporal and à-trous denoiser, the upsample.
    - Reference quality, GI half: full resolution, 32 rays, the plain running mean; the
