@@ -203,8 +203,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 14 scenes: 6 examples, 8 through
-  `ohao run`; three at the deferred frame's `reference` quality): `--only NAME`, `--update` after a deliberate change (look at what drifted
+- **Render goldens** (`tests/golden/manifest.json`, 22 scenes: 8 examples, 14 through
+  `ohao run`; six at the deferred frame's `reference` quality; eight of them the Khronos
+  validation pack, `assets/khronos/README.md`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
   `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
@@ -221,8 +222,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
   round trips, transport overhead, apply, step, hash, diff, the logger's per-call costs, the
   `tools/list` size; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
-  its frame is presented, a frame's readback, inline and PNG captures, the reader thread's
-  CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
+  its frame is presented, a frame's readback, inline and PNG captures, an inline `rt_offline`
+  capture at 16 spp (150 ms, Frank's ruling), the reader thread's CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
   `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
   `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
   (gated once `currentStep` reaches it, else reported `pending` with its measurement);
@@ -333,6 +334,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   CSM size change rebuilds images after `vkDeviceWaitIdle`; nothing else idles. The GI
   shift (`flags.w`, 1 at half resolution) keeps the half-resolution expressions literally
   behind a branch: folding it into a multiply changed FMA contraction and moved goldens.
+- Ambient occlusion comes only from glTF's `occlusionTexture` (`MaterialDesc::occlusionTex`,
+  material row 2, w), never from a metallicRoughness map's R channel, which glTF leaves
+  unused (reading it blacked out MetalRoughSpheres and had kept DamagedHelmet out of all
+  ambient light). A packed ORM image is uploaded once and serves both. The deferred
+  frame's specular IBL is still unoccluded and unprefiltered (one mip): metal in a closed
+  room mirrors the HDRI; compare against the path tracer before trusting a metal's look.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

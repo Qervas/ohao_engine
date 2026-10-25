@@ -85,6 +85,24 @@ $ build/Release/ohao validate build/doc_tmp/typos.scene.json   # exit 1
 
 Both mistakes are reported at once, each with where it is and what was expected.
 
+### Validation scenes
+
+Three standard glTF scenes from the Khronos sample models ship with the repo
+(`assets/khronos/`, licenses and credits in its README): `khronos_metal_rough_spheres`,
+`khronos_flight_helmet` and `khronos_sponza` under `assets/scenes/`, each with a live and a
+reference golden. Load one to check a material or lighting change against scenes other
+renderers are judged by; core metallic-roughness only (no alpha, no `KHR_materials_*`).
+
+```console
+$ build/Release/ohao validate assets/scenes/khronos_metal_rough_spheres.scene.json --check-assets
+{"result":{"ok":true}}
+$ build/Release/ohao validate assets/scenes/khronos_flight_helmet.scene.json --check-assets
+{"result":{"ok":true}}
+$ build/Release/ohao validate assets/scenes/khronos_sponza.scene.json --check-assets
+{"result":{"ok":true}}
+$ build/Release/ohao run assets/scenes/khronos_sponza.scene.json --render build/doc_tmp/sponza.png --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 > /dev/null   # gpu
+```
+
 ### Edit with commands, not by rewriting the file
 
 `apply` runs one atomic batch of commands (see "Edit commands" below) and saves the
