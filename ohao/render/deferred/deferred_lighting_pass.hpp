@@ -43,9 +43,19 @@ public:
     [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
     [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
 
-    // Light management
-    void setLightBuffer(VkBuffer lightBuffer) { m_lightBuffer = lightBuffer; }
-    void setLightCount(uint32_t count) { m_lightCount = count; }
+    // The light table (LightGpu records, binding 5), its light count and the ambient intensity.
+    void setLights(VkBuffer lightBuffer, uint32_t count, float ambient) {
+        m_lightBuffer = lightBuffer;
+        m_lightCount = count;
+        m_params.ambientIntensity = ambient;
+    }
+    // The froxel lists (binding 16) and the slice mapping they were built with; a null buffer
+    // makes every pixel sum every light.
+    void setClusters(VkBuffer clusters, float sliceScale, float sliceBias) {
+        m_clusterBuffer = clusters;
+        m_params.sliceScale = sliceScale;
+        m_params.sliceBias = sliceBias;
+    }
 
     // Camera data
     void setCameraData(const glm::vec3& position, const glm::mat4& view, const glm::mat4& invViewProj);
@@ -94,6 +104,7 @@ private:
     // External resources
     VkBuffer m_lightBuffer{VK_NULL_HANDLE};
     uint32_t m_lightCount{0};
+    VkBuffer m_clusterBuffer{VK_NULL_HANDLE};
     VkImageView m_shadowMapView{VK_NULL_HANDLE};
     VkSampler m_shadowSampler{VK_NULL_HANDLE};
     VkImageView m_irradianceView{VK_NULL_HANDLE};
@@ -132,14 +143,14 @@ private:
         glm::mat4 invViewProj{1.0f};
         glm::mat4 view{1.0f};
         glm::vec3 cameraPos{0.0f};
-        float padding1{0.0f};
+        float ambientIntensity{0.35f};
         glm::vec2 screenSize{0.0f};
         uint32_t lightCount{0};
         uint32_t flags{0};
         float wetness{0.0f};      // Default to dry
-        float paddingW{0.0f};
+        float sliceScale{0.0f};   // the froxel slice of a distance d: floor(log(d) * sliceScale + sliceBias)
         float snowCover{0.0f};    // Default to clear
-        float paddingS{0.0f};
+        float sliceBias{0.0f};
         float frostCover{0.0f};   // Default to no frost
         float paddingF{0.0f};
     };

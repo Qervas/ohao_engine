@@ -55,6 +55,22 @@ inline constexpr uint32_t kGeometryAuto = 1u;
 inline constexpr uint32_t kGeometryMeshlets = 2u;
 // the calibration buffer's uint count (1 MiB)
 inline constexpr uint32_t kCalibrateElements = 262144u;
+// the raster light table's capacity (LightGpu records): lights past it are dropped, with a warning
+inline constexpr uint32_t kLightCapacity = 65536u;
+// clustered lighting: screen tiles across (froxel columns), at any resolution
+inline constexpr uint32_t kClusterTilesX = 16u;
+// clustered lighting: screen tiles down
+inline constexpr uint32_t kClusterTilesY = 9u;
+// clustered lighting: exponential depth slices from kClusterNear to the camera's far plane
+inline constexpr uint32_t kClusterSlices = 24u;
+// kClusterTilesX * kClusterTilesY * kClusterSlices; froxel f = (slice * kClusterTilesY + y) * kClusterTilesX + x
+inline constexpr uint32_t kClusterCount = 3456u;
+// a froxel's light list holds at most this many (the first, in light order); the rest are counted as overflow
+inline constexpr uint32_t kClusterMaxLights = 256u;
+// lights.cluster (compute/light_cluster.slang): threads a froxel's workgroup, lights tested a round
+inline constexpr uint32_t kClusterGroupSize = 64u;
+// clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)
+inline constexpr float kClusterNear = 0.1f;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
 inline constexpr uint32_t kShadowMaxLights = 8u;
 // RT shadows, realtime: the lights a pixel traces at most, the most important first
@@ -266,6 +282,32 @@ struct alignas(16) HiZPush {
 };
 static_assert(offsetof(HiZPush, size) == 0);
 static_assert(sizeof(HiZPush) == 16);
+
+// one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)
+struct alignas(16) LightGpu {
+    alignas(16) std::array<float, 4> position{};
+    alignas(16) std::array<float, 4> direction{};
+    alignas(16) std::array<float, 4> color{};
+    alignas(16) std::array<float, 4> params{};
+};
+static_assert(offsetof(LightGpu, position) == 0);
+static_assert(offsetof(LightGpu, direction) == 16);
+static_assert(offsetof(LightGpu, color) == 32);
+static_assert(offsetof(LightGpu, params) == 48);
+static_assert(sizeof(LightGpu) == 64);
+
+// lights.cluster (compute/light_cluster.slang) push constants
+struct alignas(16) ClusterPush {
+    alignas(16) std::array<float, 16> view{};
+    alignas(16) std::array<float, 4> proj{};
+    alignas(16) std::array<float, 4> screen{};
+    alignas(16) std::array<uint32_t, 4> config{};
+};
+static_assert(offsetof(ClusterPush, view) == 0);
+static_assert(offsetof(ClusterPush, proj) == 64);
+static_assert(offsetof(ClusterPush, screen) == 80);
+static_assert(offsetof(ClusterPush, config) == 96);
+static_assert(sizeof(ClusterPush) == 112);
 
 // capture.preview (capture/preview.slang) push constants
 struct alignas(16) PreviewPush {

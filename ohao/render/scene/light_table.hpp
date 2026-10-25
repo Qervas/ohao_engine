@@ -11,8 +11,9 @@ namespace ohao::render {
 [[nodiscard]] glm::mat4 lightSpaceMatrix(const LightData& light);
 
 // Light table: the light list resolved once per setLights into both consumers'
-// layouts -- the raster LightData array (host copy, <= MAX_LIGHTS, for the light
-// UBO) and the RT GPULight buffer (device-local, 16-byte header + <= 64 lights).
+// layouts -- the raster LightData array (host copy, <= MAX_LIGHTS = 65,536, for clustered
+// lighting's light buffers) and the RT GPULight buffer (device-local, 16-byte header + <= 64
+// lights).
 class LightTable {
 public:
     static constexpr VkDeviceSize kHeaderBytes = 16;
@@ -25,6 +26,10 @@ public:
     void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
+    // Changes whenever raster() does (from 1: 0 means "always upload" to LightClusters).
+    [[nodiscard]] uint64_t rasterVersion() const noexcept { return m_rasterVersion; }
+    // Shadow-casting raster lights past the kMaxShadowLights channels: lit unshadowed.
+    [[nodiscard]] uint32_t shadowCastersWithoutChannel() const noexcept { return m_shadowCastersWithoutChannel; }
     // The last set() list, sorted by order (host copy).
     [[nodiscard]] std::span<const LightDesc> descs() const noexcept { return m_descs; }
     // The lights RT shadows trace, <= kMaxShadowLights: element i is shadow-mask channel i.
@@ -40,6 +45,9 @@ private:
     GpuBuffer m_rtBuffer;
     std::vector<LightDesc> m_descs;
     std::vector<LightData> m_raster;
+    uint64_t m_rasterVersion{1};
+    uint32_t m_shadowCastersWithoutChannel{0};
+    bool m_capLogged{false};
     std::vector<LightDesc> m_shadowLights;
     std::vector<GPULight> m_rt;
     uint32_t m_envMapTexIdx{kNoTexture};

@@ -14,10 +14,6 @@
 // Lighting Constants
 // =============================================================================
 
-// Maximum number of lights (must match C++ MAX_LIGHTS in offscreen_types.hpp)
-#ifndef MAX_LIGHTS
-#define MAX_LIGHTS 8
-#endif
 
 // Light type identifiers
 #define LIGHT_TYPE_DIRECTIONAL 0

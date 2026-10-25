@@ -501,6 +501,8 @@ VkBuffer RenderScene::materialRefBuffer() const { return m->instances.materialRe
 VkBuffer RenderScene::instanceBuffer() const { return m->instances.instanceBuffer(); }
 std::span<const LightDesc> RenderScene::lights() const { return m->lights.descs(); }
 std::span<const LightData> RenderScene::rasterLights() const { return m->lights.raster(); }
+uint64_t RenderScene::rasterLightsVersion() const { return m->lights.rasterVersion(); }
+uint32_t RenderScene::shadowCastersWithoutChannel() const { return m->lights.shadowCastersWithoutChannel(); }
 std::span<const LightDesc> RenderScene::shadowLights() const { return m->lights.shadowLights(); }
 VkBuffer RenderScene::rtLightBuffer() const { return m->lights.rtBuffer(); }
 uint32_t RenderScene::rtLightCount() const { return m->lights.rtCount(); }

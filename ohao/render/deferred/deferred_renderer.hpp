@@ -3,6 +3,7 @@
 // Core passes only — stripped to essentials
 #include "gbuffer_pass.hpp"
 #include "gpu_culling.hpp"
+#include "light_clusters.hpp"
 #include "deferred_lighting_pass.hpp"
 #include "csm_pass.hpp"
 #include "post_processing_pipeline.hpp"
@@ -83,8 +84,14 @@ public:
 
     // Light configuration
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
-    void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
-    [[nodiscard]] VkBuffer lightBuffer() const noexcept { return m_lightBuffer; }
+    // This frame's raster lights (the light table, in order; the caller keeps them alive until
+    // render() returns), their version (unchanged lights are not uploaded again; 0: always) and
+    // the ambient intensity.
+    void setLights(std::span<const LightData> lights, uint64_t version, float ambient);
+    // Clustered lighting on (the default) or every pixel summing every light (tests: the same
+    // image when no froxel overflows).
+    void setClusteredLighting(bool on) noexcept { m_clusteredLighting = on; }
+    [[nodiscard]] LightClusters* lightClusters() noexcept { return m_lightClusters.get(); }
     // The lights RT shadows trace this frame, <= kMaxShadowLights, light i into visibility
     // channel i (the light UBO's params.w points each raster light at its channel).
     void setShadowLights(std::span<const render::LightDesc> lights) { m_shadowLights.assign(lights.begin(), lights.end()); }
@@ -211,8 +218,11 @@ private:
 
     // Light data
     glm::vec3 m_lightDirection{0.0f, -1.0f, 0.0f};
-    VkBuffer m_lightBuffer{VK_NULL_HANDLE};
-    uint32_t m_lightCount{0};
+    std::span<const LightData> m_lights;
+    uint64_t m_lightsVersion{0};
+    float m_ambient{0.35f};
+    bool m_clusteredLighting{true};
+    std::unique_ptr<LightClusters> m_lightClusters;   // the light table and the froxel lists
     std::vector<render::LightDesc> m_shadowLights;
 
     // Debug modes

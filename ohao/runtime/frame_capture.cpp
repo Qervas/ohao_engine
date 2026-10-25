@@ -260,6 +260,10 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
         const auto dropped = renderer.shadowLightsDropped();
         if (dropped && dropped->frame >= frames.front().frame && dropped->frame <= frames.back().frame)
             st->shadowLightsDropped = dropped->pixels;
+        const auto overflow = renderer.lightsOverflow();
+        if (overflow && overflow->lights > 0 && overflow->frame >= frames.front().frame &&
+            overflow->frame <= frames.back().frame)
+            st->lightsOverflow = overflow->lights;
     }
     return st;
 }

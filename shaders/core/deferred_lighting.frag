@@ -7,6 +7,7 @@
 
 #include "includes/common/encoding.glsl"
 #include "includes/brdf/brdf_ggx.glsl"
+#include "shared/layout.glsl"
 
 layout(location = 0) in vec2 inTexCoord;
 
@@ -17,24 +18,11 @@ layout(set = 0, binding = 0) uniform sampler2D gBuffer0; // Position + Metallic
 layout(set = 0, binding = 1) uniform sampler2D gBuffer1; // Normal + Roughness
 layout(set = 0, binding = 2) uniform sampler2D gBuffer2; // Albedo + AO
 
-// Light data — uniform buffer (C++ descriptor matches: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-struct Light {
-    vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
-    vec4 direction;     // xyz = direction, w = range
-    vec4 color;         // xyz = color, w = intensity
-    vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex, w = shadow slot (-1 never, 0..7 its RT visibility channel)
-    mat4 lightSpaceMatrix;
-};
-
-#define MAX_LIGHTS 8  // Must match C++ MAX_LIGHTS in ohao/render/scene/render_scene_types.hpp
-
-layout(set = 0, binding = 5) uniform LightingUBO {
-    Light lights[MAX_LIGHTS];
-    int numLights;
-    float ambientIntensity;
-    float shadowBias;
-    float shadowStrength;
-} lighting;
+// The light table (binding 5, shared/layout.json's LightGpu), and the froxels' light lists
+// (binding 16, compute/light_cluster.slang: kClusterCount counts, then kClusterMaxLights light
+// indices a froxel, in light order).
+layout(set = 0, binding = 5, std430) readonly buffer Lights { LightGpu lights[]; };
+layout(set = 0, binding = 16, std430) readonly buffer Clusters { uint clusterData[]; };
 
 // Shadow map — CSM array (4 cascades), through the pass's comparison sampler (LESS_OR_EQUAL):
 // a lookup returns 1 where the reference depth is at or in front of the stored one.
@@ -72,16 +60,16 @@ layout(set = 0, binding = 15) uniform sampler2D envMap;
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
-    mat4 view;           // for cascade depth selection
+    mat4 view;           // for cascade depth selection and the froxel's slice
     vec3 cameraPos;
-    float padding1;
+    float ambientIntensity;
     vec2 screenSize;
-    uint lightCount;
-    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: CSM shadows, Bit 3: SSGI, Bit 5: RT shadows
+    uint lightCount;     // the light table's (every light, without clusters)
+    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: CSM shadows, Bit 3: SSGI, Bit 5: RT shadows, Bit 6: every light (no clusters)
     float wetness;       // 0=dry, 1=fully wet — drives surface material modulation
-    float paddingW;
+    float sliceScale;    // the froxel slice: floor(log(distance) * sliceScale + sliceBias) (ClusterPush.screen.zw)
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
-    float paddingS;
+    float sliceBias;
     float frostCover;    // 0=bare, 1=fully frost/ice coated
     float paddingF;
 } pc;                   // Total: 184 bytes
@@ -241,12 +229,25 @@ void main() {
     // Accumulate lighting from SSBO data
     vec3 Lo = vec3(0.0);
 
-    // Use light count from push constants (avoids SSBO layout issues with numLights offset)
-    int lightCount = int(min(pc.lightCount, uint(MAX_LIGHTS)));
+    // The lights that can reach this pixel: its froxel's list (in light order), or with flag
+    // bit 6 every light. A light left out contributes exactly zero here (past its range), and
+    // so does one skipped below (no attenuation, fully shadowed): the sum is the same either way.
+    uint lightCount = pc.lightCount;
+    uint listBase = 0u;
+    const bool clustered = (pc.flags & 64u) == 0u;
+    if (clustered) {
+        const uint tx = min(uint(gl_FragCoord.x * float(kClusterTilesX) / pc.screenSize.x), kClusterTilesX - 1u);
+        const uint ty = min(uint(gl_FragCoord.y * float(kClusterTilesY) / pc.screenSize.y), kClusterTilesY - 1u);
+        const float s = viewDepth > 0.0 ? floor(log(viewDepth) * pc.sliceScale + pc.sliceBias) : 0.0;
+        const uint slice = uint(clamp(s, 0.0, float(kClusterSlices - 1u)));
+        const uint cluster = (slice * kClusterTilesY + ty) * kClusterTilesX + tx;
+        lightCount = clusterData[cluster];
+        listBase = kClusterCount + cluster * kClusterMaxLights;
+    }
     const bool rtShadows = (pc.flags & 32u) != 0u;
     const uvec2 rtShadow = rtShadows ? texelFetch(rtShadowVisibility, ivec2(gl_FragCoord.xy), 0).xy : uvec2(0u);
-    for (int i = 0; i < lightCount; ++i) {
-        Light light = lighting.lights[i];
+    for (uint k = 0u; k < lightCount; ++k) {
+        const LightGpu light = lights[clustered ? clusterData[listBase + k] : k];
         int lightType = int(light.position.w);
 
         vec3 L;
@@ -266,6 +267,7 @@ void main() {
                                                      light.params.x, light.params.y);
         }
 
+        if (attenuation == 0.0) continue;   // adds exactly zero: past its range or its cone
         vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
         // Shadow determination — RT shadows (bit 5) override CSM (bit 2). A light that
@@ -281,6 +283,7 @@ void main() {
                 shadow = calculateShadowCSM(fragPos, viewDepth);
             }
         }
+        if (shadow == 0.0) continue;   // fully occluded: adds exactly zero
 
         // Cook-Torrance BRDF via include (height-correlated Smith-GGX)
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
@@ -291,7 +294,7 @@ void main() {
     const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;
 
     // Ambient lighting
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ssao;
+    vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;
 
     // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang):
     // full resolution, the diffuse albedo already applied.
@@ -337,7 +340,7 @@ void main() {
         // Metals with dark baseColor need an extra F0-weighted ambient floor so
         // they don't crush to pure black when the env sample is dim.
         if (metallic > 0.5) {
-            specularAmbient += surface.F0 * max(prefilteredColor, vec3(lighting.ambientIntensity * 4.0));
+            specularAmbient += surface.F0 * max(prefilteredColor, vec3(pc.ambientIntensity * 4.0));
         }
 
         // RT GI's rays that leave the scene bring back the environment, occluded: with it,

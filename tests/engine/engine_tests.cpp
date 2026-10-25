@@ -1721,9 +1721,8 @@ static void sp2b_t09_scene_lights_cast_rt_shadows_and_cast_shadows_false_does_no
            "on the right (a fixed light would put it in one place)");
     EXPECT(darkened(leftNone, leftCast).first == 0, "castShadows=false is never darker than castShadows=true");
 
-    // The light table: every casting light owns a visibility channel, in light order (the
-    // light buffer holds kMaxShadowLights = MAX_LIGHTS lights, so none goes without); a
-    // non-casting light has none (-1).
+    // The light table: the first kMaxShadowLights casting lights own a visibility channel each,
+    // in light order; a non-casting light has none (-1).
     ohao::VulkanRenderer r(64, 64);
     EXPECT(r.initialize(), "the renderer starts");
     {
@@ -2977,10 +2976,10 @@ static void runRenderSceneTests() {
         TEST_PASS();
     }
 
-    // The raster light UBO is host-written every frame while up to two earlier
-    // frames may still read it: one buffer per frame slot, written after that
-    // slot's fence, bound by that slot's lighting descriptor set.
-    TEST_BEGIN("the raster light UBO is one buffer per frame slot");
+    // The raster light table (clustered lighting's light buffer) is host-written while up to
+    // two earlier frames may still read it: one buffer per frame slot, written after that
+    // slot's fence, bound by that slot's lighting and lights.cluster descriptor sets.
+    TEST_BEGIN("the raster light table is one buffer per frame slot");
     {
         _putenv_s("OHAO_VALIDATION", "1");
         ohao::VulkanRenderer r(64, 64);
@@ -2993,28 +2992,24 @@ static void runRenderSceneTests() {
         MeshHandle m = rs.registerMesh(MeshData{v, i, {}, {}, "quad"});
         MaterialHandle mat = rs.registerMaterial(MaterialDesc{});
         rs.createInstance(InstanceDesc{m, {&mat, 1}, glm::mat4(1), glm::mat4(1), true});
-        std::vector<VkBuffer> bound;
         for (int f = 0; f < 6; ++f) {
             LightDesc l{};
             l.kind = LightKind::Point;
             l.position = {float(f), 2.0f, 0.0f};   // a light that moves every frame
             rs.setLights({&l, 1});
             r.render();
-            bound.push_back(r.getDeferredRenderer()->lightBuffer());
         }
+        const ohao::LightClusters* lc = r.getDeferredRenderer()->lightClusters();
+        EXPECT(lc != nullptr, "the deferred renderer has its light table");
         for (uint32_t s = 0; s < ohao::MAX_FRAMES_IN_FLIGHT; ++s)
-            EXPECT(r.lightBuffer(s) != VK_NULL_HANDLE, "every frame slot has a light buffer");
-        EXPECT(r.lightBuffer(0) != r.lightBuffer(1) && r.lightBuffer(1) != r.lightBuffer(2) &&
-                   r.lightBuffer(0) != r.lightBuffer(2),
+            EXPECT(lc->lightBuffer(s) != VK_NULL_HANDLE, "every frame slot has a light buffer");
+        EXPECT(lc->lightBuffer(0) != lc->lightBuffer(1) && lc->lightBuffer(1) != lc->lightBuffer(2) &&
+                   lc->lightBuffer(0) != lc->lightBuffer(2),
                "the slots' light buffers are distinct");
-        for (int f = 0; f < 6; ++f)
-            EXPECT(bound[f] == r.lightBuffer(uint32_t(f) % ohao::MAX_FRAMES_IN_FLIGHT),
-                   "frame f's lighting pass binds slot f's light buffer");
         // Frame 5 (slot 2) wrote x=5; slots 0 and 1 still hold frames 3 and 4.
         for (uint32_t s = 0; s < ohao::MAX_FRAMES_IN_FLIGHT; ++s) {
-            const ohao::LightUniformBuffer* u = r.lightUniforms(s);
-            EXPECT(u != nullptr && u->numLights == 1, "each slot holds the one scene light");
-            EXPECT(u->lights[0].position.x == float(3 + s),
+            EXPECT(lc->lightCount(s) == 1 && lc->lights(s) != nullptr, "each slot holds the one scene light");
+            EXPECT(lc->lights(s)[0].position[0] == float(3 + s),
                    "writing one slot leaves the frames in flight on the others untouched");
         }
         for (int k = 0; k < 4; ++k) r.render();

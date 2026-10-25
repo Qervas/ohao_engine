@@ -57,6 +57,22 @@
      "doc": "CullPush.extra.z: every draw with meshlets on the meshlet path"},
     {"name": "kCalibrateElements", "type": "uint", "value": 262144,
      "doc": "the calibration buffer's uint count (1 MiB)"},
+    {"name": "kLightCapacity", "type": "uint", "value": 65536,
+     "doc": "the raster light table's capacity (LightGpu records): lights past it are dropped, with a warning"},
+    {"name": "kClusterTilesX", "type": "uint", "value": 16,
+     "doc": "clustered lighting: screen tiles across (froxel columns), at any resolution"},
+    {"name": "kClusterTilesY", "type": "uint", "value": 9,
+     "doc": "clustered lighting: screen tiles down"},
+    {"name": "kClusterSlices", "type": "uint", "value": 24,
+     "doc": "clustered lighting: exponential depth slices from kClusterNear to the camera's far plane"},
+    {"name": "kClusterCount", "type": "uint", "value": 3456,
+     "doc": "kClusterTilesX * kClusterTilesY * kClusterSlices; froxel f = (slice * kClusterTilesY + y) * kClusterTilesX + x"},
+    {"name": "kClusterMaxLights", "type": "uint", "value": 256,
+     "doc": "a froxel's light list holds at most this many (the first, in light order); the rest are counted as overflow"},
+    {"name": "kClusterGroupSize", "type": "uint", "value": 64,
+     "doc": "lights.cluster (compute/light_cluster.slang): threads a froxel's workgroup, lights tested a round"},
+    {"name": "kClusterNear", "type": "float", "value": 0.1,
+     "doc": "clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)"},
     {"name": "kShadowMaxLights", "type": "uint", "value": 8,
      "doc": "RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each"},
     {"name": "kShadowLightsPerPixel", "type": "uint", "value": 4,
@@ -189,6 +205,20 @@
     {"name": "HiZPush", "doc": "the Hi-Z build (cull/hiz.slang) push constants",
      "fields": [
        {"name": "size", "type": "uint4", "doc": "x, y the level written; z, w the level (or depth buffer) read"}
+     ]},
+    {"name": "LightGpu", "doc": "one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)",
+     "fields": [
+       {"name": "position", "type": "float4", "doc": "xyz position (world), w type: 0 directional, 1 point, 2 spot"},
+       {"name": "direction", "type": "float4", "doc": "xyz direction, w range: point and spot light contributes nothing past it"},
+       {"name": "color", "type": "float4", "doc": "xyz colour, w intensity"},
+       {"name": "params", "type": "float4", "doc": "x cos inner cone, y cos outer cone, z shadow-map index (-1 none), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)"}
+     ]},
+    {"name": "ClusterPush", "doc": "lights.cluster (compute/light_cluster.slang) push constants",
+     "fields": [
+       {"name": "view", "type": "float4x4", "doc": "the view matrix the lighting pass picks froxels with"},
+       {"name": "proj", "type": "float4", "doc": "the projection the G-buffer was rasterized with (jitter included): x proj[0][0], y proj[1][1], z proj[2][0], w proj[2][1]"},
+       {"name": "screen", "type": "float4", "doc": "x, y the frame's size in pixels; z the slice scale (kClusterSlices / log(far / kClusterNear)); w the slice bias (-log(kClusterNear) * scale): slice = floor(log(distance) * z + w)"},
+       {"name": "config", "type": "uint4", "doc": "x the light count"}
      ]},
     {"name": "PreviewPush", "doc": "capture.preview (capture/preview.slang) push constants",
      "fields": [

@@ -129,6 +129,9 @@ struct RenderStats {
     // RT shadows: pixels of the newest frame covered that had more lights worth tracing than
     // they may trace (those shade unshadowed); absent when no covered frame traced shadows.
     std::optional<uint32_t> shadowLightsDropped;
+    // Clustered lighting: lights the newest frame covered left out of full froxels (a froxel
+    // keeps its first 256); absent when none was.
+    std::optional<uint32_t> lightsOverflow;
 };
 
 // What a session runs inside, beyond its kind: render.capture's renderer.

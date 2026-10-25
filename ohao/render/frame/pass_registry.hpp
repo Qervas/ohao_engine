@@ -25,6 +25,7 @@ inline constexpr PassInfo kPasses[] = {
     {"hiz.build", PassKind::Compute, "the max-depth pyramid of the early pass's depth"},
     {"cull.late", PassKind::Compute, "GPU culling, late phase: every draw against the frustum and the pyramid; the newly visible listed, visibility recorded"},
     {"gbuffer.late", PassKind::Raster, "the late lists drawn into the G-buffer"},
+    {"lights.cluster", PassKind::Compute, "clustered lighting: every froxel's (16x9 tiles x 24 slices) list of the lights that reach it"},
     {"ssao", PassKind::Compute, "screen-space ambient occlusion (the ssao post effect)"},
     {"rt.shadows", PassKind::RayTracing, "ray-traced shadows: one ray to each of a pixel's most important lights (reference: 8 to every light)"},
     {"rt.shadows.filter", PassKind::Compute, "RT shadows' 5x5 depth- and normal-aware filter and temporal accumulation (realtime)"},

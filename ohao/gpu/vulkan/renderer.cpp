@@ -132,11 +132,6 @@ bool VulkanRenderer::initialize() {
             OHAO_LOG(Debug, gpu, "BindlessTextureManager initialized");
         }
 
-if (!createLightBuffer()) {
-            OHAO_LOG(Error, gpu, "Failed to create light buffer");
-            return false;
-        }
-
         // Initialize multi-frame resources for pipelined rendering
         if (!initializeFrameResources()) {
             OHAO_LOG(Error, gpu, "Failed to initialize frame resources");
@@ -238,8 +233,6 @@ void VulkanRenderer::shutdown() {
         // Cleanup multi-frame resources
         m_passTimer.destroy();
         m_frameResources.shutdown();
-
-        destroyLightBuffers();
 
         // Cleanup command pool
         if (m_commandPool != VK_NULL_HANDLE) {
@@ -626,6 +619,16 @@ std::optional<VulkanRenderer::ShadowLightsDropped> VulkanRenderer::shadowLightsD
     const auto d = shadows->latestDropped();
     if (!d) return std::nullopt;
     return ShadowLightsDropped{d->frame, d->pixels};
+}
+
+std::optional<LightClusters::Overflow> VulkanRenderer::lightsOverflow() {
+    if (!m_deferredRenderer || !m_frameResources.isInitialized()) return std::nullopt;
+    LightClusters* clusters = m_deferredRenderer->lightClusters();
+    if (!clusters) return std::nullopt;
+    clusters->collect([&](uint32_t slot) {
+        return vkGetFenceStatus(m_device, m_frameResources.getFrame(slot).renderFence) == VK_SUCCESS;
+    });
+    return clusters->latestOverflow();
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {

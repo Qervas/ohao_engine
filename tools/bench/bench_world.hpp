@@ -88,10 +88,10 @@ inline void buildBenchWorld(ecs::World& w, int n, uint64_t seed) {
 
 // render_bench's bench10k_1080p / bench100k_1080p (sub-project 2b spec, "Profiling first"): n
 // renderables on a square grid 400 m across, each one of 20 primitive meshes (5 shapes x 4
-// sizes, so the RenderScene holds 20 meshes instanced n times) with one of 8 materials; point
-// lights above the grid (4 of them shadowed) and a sun; the camera at the grid's edge, looking
-// across it. Lights are capped at 8 until clustered lighting (2b step 13): 7 points and the
-// sun. Built from a fixed seed, so every build is the same world.
+// sizes, so the RenderScene holds 20 meshes instanced n times) with one of 8 materials; 1,000
+// point lights over the grid (40 x 25, 15 m range, 4 of them shadowed: clustered lighting's
+// scene, 2b step 13) and a sun; the camera at the grid's edge, looking across it. Built from a
+// fixed seed, so every build is the same world.
 inline void buildRenderBenchWorld(ecs::World& w, int n, uint64_t seed) {
     using namespace ohao::ecs;
     w.seedIds(seed);
@@ -124,14 +124,15 @@ inline void buildRenderBenchWorld(ecs::World& w, int n, uint64_t seed) {
     const auto g = w.create("Ground", ground);
     w.registry().emplace<MeshSource>(g, MeshSource{PlatformPrim{420.0f, 0.2f, 420.0f}});
     w.registry().emplace<MaterialOverride>(g, MaterialOverride{{0.5f, 0.5f, 0.5f}, 0.9f, 0.0f, 0.0f});
-    for (int i = 0; i < 7; ++i) {
+    static constexpr glm::vec3 kLightColors[] = {{1.0f, 0.9f, 0.8f}, {0.8f, 0.9f, 1.0f}, {1.0f, 0.7f, 0.5f}, {0.7f, 1.0f, 0.8f}};
+    for (int i = 0; i < 1000; ++i) {
         Transform lt;
-        lt.position = {-150.0f + 50.0f * static_cast<float>(i), 12.0f, 120.0f - 40.0f * static_cast<float>(i % 3)};
+        lt.position = {-195.0f + 10.0f * static_cast<float>(i % 40), 6.0f, -192.0f + 16.0f * static_cast<float>(i / 40)};
         const auto l = w.create("Light_" + std::to_string(i), lt);
         Light light;
-        light.color = {1.0f, 0.9f, 0.8f};
-        light.intensity = 400.0f;
-        light.range = 60.0f;
+        light.color = kLightColors[i % std::size(kLightColors)];
+        light.intensity = 60.0f;
+        light.range = 15.0f;
         light.castShadows = i < 4;
         w.registry().emplace<Light>(l, light);
     }

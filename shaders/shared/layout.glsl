@@ -51,6 +51,22 @@ const uint kGeometryAuto = 1u;
 const uint kGeometryMeshlets = 2u;
 // the calibration buffer's uint count (1 MiB)
 const uint kCalibrateElements = 262144u;
+// the raster light table's capacity (LightGpu records): lights past it are dropped, with a warning
+const uint kLightCapacity = 65536u;
+// clustered lighting: screen tiles across (froxel columns), at any resolution
+const uint kClusterTilesX = 16u;
+// clustered lighting: screen tiles down
+const uint kClusterTilesY = 9u;
+// clustered lighting: exponential depth slices from kClusterNear to the camera's far plane
+const uint kClusterSlices = 24u;
+// kClusterTilesX * kClusterTilesY * kClusterSlices; froxel f = (slice * kClusterTilesY + y) * kClusterTilesX + x
+const uint kClusterCount = 3456u;
+// a froxel's light list holds at most this many (the first, in light order); the rest are counted as overflow
+const uint kClusterMaxLights = 256u;
+// lights.cluster (compute/light_cluster.slang): threads a froxel's workgroup, lights tested a round
+const uint kClusterGroupSize = 64u;
+// clustered lighting: the first slice's near distance in metres (nearer pixels use slice 0)
+const float kClusterNear = 0.1;
 // RT shadows: the shadow-casting lights a frame traces at most (the lighting pass's light table), one visibility channel each
 const uint kShadowMaxLights = 8u;
 // RT shadows, realtime: the lights a pixel traces at most, the most important first
@@ -196,6 +212,22 @@ struct MeshletPush {
 // the Hi-Z build (cull/hiz.slang) push constants
 struct HiZPush {
     uvec4 size;   // x, y the level written; z, w the level (or depth buffer) read
+};
+
+// one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)
+struct LightGpu {
+    vec4 position;   // xyz position (world), w type: 0 directional, 1 point, 2 spot
+    vec4 direction;   // xyz direction, w range: point and spot light contributes nothing past it
+    vec4 color;   // xyz colour, w intensity
+    vec4 params;   // x cos inner cone, y cos outer cone, z shadow-map index (-1 none), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
+};
+
+// lights.cluster (compute/light_cluster.slang) push constants
+struct ClusterPush {
+    mat4 view;   // the view matrix the lighting pass picks froxels with
+    vec4 proj;   // the projection the G-buffer was rasterized with (jitter included): x proj[0][0], y proj[1][1], z proj[2][0], w proj[2][1]
+    vec4 screen;   // x, y the frame's size in pixels; z the slice scale (kClusterSlices / log(far / kClusterNear)); w the slice bias (-log(kClusterNear) * scale): slice = floor(log(distance) * z + w)
+    uvec4 config;   // x the light count
 };
 
 // capture.preview (capture/preview.slang) push constants

@@ -182,6 +182,7 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     else if (m_shadowMapView != VK_NULL_HANDLE)
         m_params.flags |= 4;   // CSM fallback (bit 2)
     if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
+    if (m_clusterBuffer == VK_NULL_HANDLE) m_params.flags |= 64; // every light (no froxel lists)
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LightingParams), &m_params);
@@ -270,9 +271,10 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     VkSampler fallbackSampler = m_gbufferSampler;
 
     std::array<VkDescriptorImageInfo, 14> imageInfos{};
-    std::array<VkWriteDescriptorSet, 15> writes{};
+    std::array<VkWriteDescriptorSet, 16> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
+    VkDescriptorBufferInfo clusterInfo{};
 
     // G-Buffer textures (bindings 0-4) — always available after GBuffer init
     std::array<VkImageView, 5> gbufferViews = {
@@ -301,17 +303,29 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
         writes[i].pImageInfo = &imageInfos[i];
     }
 
-    // Light buffer (binding 5) — use dummy buffer as fallback
+    // The light table (binding 5) and the froxel lists (binding 16) — the dummy buffer as
+    // fallback (no lights drawn: the count is 0 then)
     bufferInfo.buffer = m_lightBuffer != VK_NULL_HANDLE ? m_lightBuffer : m_dummyBuffer;
     bufferInfo.offset = 0;
     bufferInfo.range = VK_WHOLE_SIZE;
+    if (m_lightBuffer == VK_NULL_HANDLE) m_lightCount = 0;
 
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[5].dstSet = set;
     writes[5].dstBinding = 5;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[5].descriptorCount = 1;
     writes[5].pBufferInfo = &bufferInfo;
+
+    clusterInfo.buffer = m_clusterBuffer != VK_NULL_HANDLE ? m_clusterBuffer : m_dummyBuffer;
+    clusterInfo.offset = 0;
+    clusterInfo.range = VK_WHOLE_SIZE;
+    writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[15].dstSet = set;
+    writes[15].dstBinding = 16;
+    writes[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[15].descriptorCount = 1;
+    writes[15].pBufferInfo = &clusterInfo;
 
     // Shadow map (binding 6) — use fallback if not set
     imageInfos[5].sampler = m_shadowSampler != VK_NULL_HANDLE ? m_shadowSampler : fallbackSampler;
@@ -536,7 +550,7 @@ bool DeferredLightingPass::createFramebuffer() {
 bool DeferredLightingPass::createDescriptors() {
     // Bindings:
     // 0-4: G-Buffer (position, normal, albedo, velocity, depth)
-    // 5: Light buffer (SSBO)
+    // 5: The light table (SSBO, LightGpu records)
     // 6: Shadow map array (sampler2DArray, 4 cascades)
     // 7: Irradiance cubemap
     // 8: Prefiltered cubemap
@@ -546,8 +560,9 @@ bool DeferredLightingPass::createDescriptors() {
     // 12: CascadeData UBO
     // 14: RT shadow visibility (RG32UI)
     // 15: HDR environment map
+    // 16: The froxel light lists (SSBO, lights.cluster)
 
-    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -557,9 +572,9 @@ bool DeferredLightingPass::createDescriptors() {
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
 
-    // Light buffer (5) — matches shader's "uniform LightingUBO" declaration
+    // The light table (5)
     bindings[5].binding = 5;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
@@ -607,6 +622,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[14].descriptorCount = 1;
     bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // The froxel light lists (16)
+    bindings[15].binding = 16;
+    bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[15].descriptorCount = 1;
+    bindings[15].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -616,12 +637,14 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 13 image samplers + 2 UBOs (light buffer + cascade data)
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    // Descriptor pool — 13 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 13 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

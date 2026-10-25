@@ -115,12 +115,13 @@ void LightTable::set(std::span<const LightDesc> lights) {
                      [](const LightDesc& a, const LightDesc& b) { return a.order < b.order; });
     m_descs = sorted;
 
-    // ---- Raster (ported from VulkanRenderer::updateLightBuffer) ----------------
-    // RT shadow slots: every raster light that casts shadows owns one visibility channel
-    // (params.w), in light order. The buffer holds MAX_LIGHTS = kMaxShadowLights lights, so
-    // none is left without one.
+    // ---- Raster: every light, up to the table's capacity (clustered lighting) -----
+    // RT shadow slots: the first kMaxShadowLights raster lights that cast shadows own one
+    // visibility channel each (params.w), in light order; a casting light past them is lit
+    // unshadowed (kShadowNever), and counted in shadowCastersWithoutChannel().
     std::vector<LightData> raster;
     m_shadowLights.clear();
+    m_shadowCastersWithoutChannel = 0;
     int shadowCasterIndex = -1;  // Index of first shadow-casting light
     for (const LightDesc& d : sorted) {
         if (d.kind == LightKind::EmissiveProxy) continue;
@@ -144,9 +145,12 @@ void LightTable::set(std::span<const LightDesc> lights) {
 
         float shadowSlot = kShadowNever;
         if (d.castShadows) {
-            static_assert(kMaxShadowLights >= MAX_LIGHTS, "a channel for every raster light");
-            shadowSlot = static_cast<float>(m_shadowLights.size());
-            m_shadowLights.push_back(d);
+            if (m_shadowLights.size() < kMaxShadowLights) {
+                shadowSlot = static_cast<float>(m_shadowLights.size());
+                m_shadowLights.push_back(d);
+            } else {
+                ++m_shadowCastersWithoutChannel;
+            }
         }
         light.params = glm::vec4(
             glm::cos(glm::radians(d.innerConeDeg)),
@@ -174,6 +178,13 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }
+    if (sorted.size() > MAX_LIGHTS && !m_capLogged) {
+        OHAO_LOG(Warn, render, "RenderScene: {} lights: the raster table holds {}", sorted.size(), MAX_LIGHTS);
+        m_capLogged = true;
+    }
+    if (raster.size() != m_raster.size() ||
+        (!raster.empty() && std::memcmp(raster.data(), m_raster.data(), raster.size() * sizeof(LightData)) != 0))
+        ++m_rasterVersion;
     m_raster = std::move(raster);
 
     // ---- RT (ported from VulkanRenderer::uploadLightBuffer) --------------------

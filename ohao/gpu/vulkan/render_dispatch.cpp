@@ -148,64 +148,19 @@ void VulkanRenderer::renderDeferred() {
         m_deferredRenderer->setEnvMap(m_envMapImageView, m_envSampler);
     }
 
-    // This slot's light UBO (its fence was waited on above): scene lights, or the
-    // default sun when the scene has none.
-    LightUniformBuffer* ld = updateLightBuffer(m_currentFrame);
-
-    // Sync fallback directional light with sky sun direction so deferred lighting matches the sky
-    if (ld) {
-        // Only the fallback sun: a scene with exactly one light of its own keeps it (and its
-        // ambient) as the scene set them.
-        if (m_renderScene->rasterLights().empty()) {
-            // No explicit scene lights — align the fallback sun with sky
-            glm::vec3 skyLightDir = m_deferredRenderer->getLightDirection(); // points DOWN toward scene
-            float nightFactor = m_deferredRenderer->getNightFactor();
-
-            if (glm::length(skyLightDir) > 0.001f) {
-                if (nightFactor > 0.01f) {
-                    // Blend light direction from sun toward moon at night
-                    glm::vec3 moonDir = -m_deferredRenderer->getMoonDirection();
-                    glm::vec3 blendedDir = glm::normalize(glm::mix(
-                        glm::normalize(skyLightDir), moonDir, nightFactor));
-                    ld->lights[0].direction = glm::vec4(blendedDir, 100.0f);
-
-                    // Blend color from warm white (sun) to cool blue (moon)
-                    glm::vec3 sunColor  = glm::vec3(1.0f, 0.98f, 0.95f);
-                    glm::vec3 moonColor = glm::vec3(0.6f, 0.7f, 0.85f);
-                    glm::vec3 blendedColor = glm::mix(sunColor, moonColor, nightFactor);
-
-                    // Blend intensity from full (PI) to ~8% moonlight
-                    float sunIntensity  = glm::pi<float>();
-                    float moonIntensity = glm::pi<float>() * 0.08f;
-                    float blendedIntensity = glm::mix(sunIntensity, moonIntensity, nightFactor);
-
-                    ld->lights[0].color = glm::vec4(blendedColor, blendedIntensity);
-                } else {
-                    ld->lights[0].direction = glm::vec4(glm::normalize(skyLightDir), 100.0f);
-                }
-                ld->lights[0].lightSpaceMatrix = calculateLightSpaceMatrix(ld->lights[0]);
-            }
-            // Ambient: moderate during day, lower at night
-            ld->ambientIntensity = glm::mix(0.12f, 0.04f, nightFactor);
-        }
-    }
-
-    if (ld && m_ambientOverride) ld->ambientIntensity = *m_ambientOverride;
-
-    // The lighting pass binds this slot's buffer in this slot's descriptor set.
-    if (ld) {
-        const uint32_t lightCount = static_cast<uint32_t>(std::max(1, ld->numLights));
-        m_deferredRenderer->setLightBuffer(m_lightBuffers[m_currentFrame], lightCount);
-    }
+    // This frame's raster lights: the scene's light table, or the fallback sun (aligned with
+    // the sky) when the scene has none. The deferred renderer writes them into this slot's
+    // light buffer (its fence was waited on above), only when they changed.
+    setFrameLights();
 
     // The lights RT shadows trace: the scene's shadow casters, or the fallback sun (its
     // params.w names channel 0) when the scene has no lights.
     if (!m_renderScene->rasterLights().empty()) {
         m_deferredRenderer->setShadowLights(m_renderScene->shadowLights());
-    } else if (ld && ld->lights[0].params.w == 0.0f) {
+    } else if (m_fallbackSun.params.w == 0.0f) {
         render::LightDesc sun{};
         sun.kind = render::LightKind::Directional;
-        sun.direction = glm::vec3(ld->lights[0].direction);
+        sun.direction = glm::vec3(m_fallbackSun.direction);
         sun.radius = kSunAngularRadius;
         m_deferredRenderer->setShadowLights(std::span<const render::LightDesc>(&sun, 1));
     } else {

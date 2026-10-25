@@ -31,6 +31,7 @@
 #include "render/scene/render_scene_types.hpp"
 #include "render/scene/model_upload.hpp"
 #include "render/rt/render_technique.hpp"
+#include "render/deferred/light_clusters.hpp"
 
 namespace ohao {
 
@@ -75,14 +76,6 @@ static_assert(GpuPod<CameraUniformBuffer>, "CameraUniformBuffer must be GPU POD"
 // Shadow map configuration
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
-// Light uniform buffer
-struct LightUniformBuffer {
-    LightData lights[MAX_LIGHTS];
-    alignas(4) int numLights;
-    alignas(4) float ambientIntensity;
-    alignas(4) float shadowBias;
-    alignas(4) float shadowStrength;
-};
 
 /**
  * VulkanRenderer - Renders OHAO scenes headless into a pixel buffer, or to a window
@@ -188,14 +181,6 @@ public:
     };
     [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
 
-    // Raster light UBO of a frame slot, and its host mapping (tests).
-    [[nodiscard]] VkBuffer lightBuffer(uint32_t slot) const noexcept {
-        return slot < MAX_FRAMES_IN_FLIGHT ? m_lightBuffers[slot] : VK_NULL_HANDLE;
-    }
-    [[nodiscard]] const LightUniformBuffer* lightUniforms(uint32_t slot) const noexcept {
-        return slot < MAX_FRAMES_IN_FLIGHT ? static_cast<const LightUniformBuffer*>(m_lightBufferMapped[slot])
-                                           : nullptr;
-    }
 
     // Vulkan handles for out-of-tree consumers (render_bench's GPU calibration kernel). Work
     // submitted on the queue must finish before the next render() (the renderer does not
@@ -251,6 +236,10 @@ public:
         uint32_t pixels{0};
     };
     [[nodiscard]] std::optional<ShadowLightsDropped> shadowLightsDropped();
+    // Clustered lighting: the newest finished frame's froxel overflow (lights left out of
+    // froxels past 256, the froxels that left any out, the largest froxel count).
+    // Collects finished frames first.
+    [[nodiscard]] std::optional<LightClusters::Overflow> lightsOverflow();
 
     // Read back HDR buffers for OIDN denoising
     [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
@@ -362,16 +351,12 @@ private:
     [[nodiscard]] bool createLogicalDevice();
     [[nodiscard]] bool createCommandPool();
 
-    glm::mat4 calculateLightSpaceMatrix(const LightData& light);
-
     // Phase 1: Rendering pipeline setup
-    [[nodiscard]] bool createLightBuffer();   // one light UBO per frame slot
-    void destroyLightBuffers();
     [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
     [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
-    // Writes `slot`'s light UBO from m_renderScene's raster lights (+ default sun) and
-    // returns its mapping. Call only after that slot's fence wait.
-    LightUniformBuffer* updateLightBuffer(uint32_t slot);
+    // This frame's raster lights for the deferred renderer: the scene's light table, or with
+    // none the fallback sun (m_fallbackSun, aligned with the sky); sets the ambient intensity.
+    void setFrameLights();
 
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline);
 
@@ -406,10 +391,8 @@ private:
     uint64_t m_framesSubmitted{0};
     std::array<uint64_t, MAX_FRAMES_IN_FLIGHT> m_slotSubmitted{};   // the submitted frame each slot holds
 
-    // Light uniform buffers, one per frame slot (host-visible, persistently mapped)
-    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_lightBuffers{};
-    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> m_lightBufferMemory{};
-    std::array<void*, MAX_FRAMES_IN_FLIGHT> m_lightBufferMapped{};
+    // The fallback sun a scene without lights is lit by (setFrameLights)
+    LightData m_fallbackSun{};
 
     // Path tracer profiles (the acceleration structures belong to m_renderScene)
     RTRealtimePipeline m_rtRealtimePipeline;

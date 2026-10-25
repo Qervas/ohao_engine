@@ -54,6 +54,13 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_gbufferPass->setCulling(m_culling.get());
     m_csmPass->setCulling(m_culling.get());
 
+    // Clustered lighting: the light table and the froxel lists
+    m_lightClusters = std::make_unique<LightClusters>();
+    if (!m_lightClusters->initialize(device, physicalDevice)) {
+        OHAO_LOG(Error, render, "DeferredRenderer: LightClusters failed");
+        return false;
+    }
+
     // Initialize deferred lighting pass
     m_lightingPass = std::make_unique<DeferredLightingPass>();
     if (!m_lightingPass->initialize(device, physicalDevice)) {
@@ -213,6 +220,10 @@ void DeferredRenderer::cleanup() {
         m_culling->cleanup();
         m_culling.reset();
     }
+    if (m_lightClusters) {
+        m_lightClusters->cleanup();
+        m_lightClusters.reset();
+    }
     if (m_gbufferPass) {
         m_gbufferPass->cleanup();
         m_gbufferPass.reset();
@@ -246,11 +257,13 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // Update lighting pass
+    // This slot's light table (its fence was waited on): unchanged lights are not rewritten.
+    if (m_lightClusters) m_lightClusters->setLights(frameIndex, m_lights, m_lightsVersion);
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
-        m_lightingPass->setLightBuffer(m_lightBuffer);
-        m_lightingPass->setLightCount(m_lightCount);
+        m_lightingPass->setLights(m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE,
+                                  m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u, m_ambient);
 
         // SSAO texture is set after executeSSAO() call below
     }
@@ -303,6 +316,25 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             },
             [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); }, /*selfTimed=*/true);
+    }
+
+    // 2.5. lights.cluster — every froxel's light list, for the camera lighting shades with (the
+    //      jittered projection the G-buffer used, so a pixel's froxel holds its surface point).
+    //      Without clusters (a test switch) lighting sums every light and nothing is built.
+    const bool clustered = m_clusteredLighting && m_lightClusters && m_lightClusters->clusterBuffer() != VK_NULL_HANDLE;
+    if (m_lightingPass) {
+        m_lightingPass->setClusters(clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE,
+                                    m_lightClusters ? m_lightClusters->sliceScale() : 0.0f,
+                                    m_lightClusters ? m_lightClusters->sliceBias() : 0.0f);
+    }
+    if (clustered) {
+        m_renderGraph.addComputePass("lights.cluster", [&](PassBuilder&) {},
+            [&, jitteredProj](VkCommandBuffer c) {
+                m_lightClusters->build(c, frameIndex, m_view, jitteredProj, m_width, m_height, m_farPlane, m_frameNumber);
+                if (m_lightingPass)
+                    m_lightingPass->setClusters(m_lightClusters->clusterBuffer(), m_lightClusters->sliceScale(),
+                                                m_lightClusters->sliceBias());
+            });
     }
 
     // 3. SSAO — reads the G-buffer's position and normal (SHADER_READ_ONLY after the
@@ -726,9 +758,10 @@ void DeferredRenderer::setDirectionalLight(const glm::vec3& direction,
     }
 }
 
-void DeferredRenderer::setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount) {
-    m_lightBuffer = lightBuffer;
-    m_lightCount = lightCount;
+void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t version, float ambient) {
+    m_lights = lights;
+    m_lightsVersion = version;
+    m_ambient = ambient;
 }
 
 void DeferredRenderer::setIBLTextures(VkImageView irradiance, VkImageView prefiltered,

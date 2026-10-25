@@ -75,7 +75,11 @@ public:
     [[nodiscard]] VkBuffer instanceBuffer() const;
     // The light list last given to setLights, sorted by order (host copy).
     [[nodiscard]] std::span<const LightDesc> lights() const;
-    [[nodiscard]] std::span<const LightData> rasterLights() const;   // <= MAX_LIGHTS, host copy for the light UBO
+    [[nodiscard]] std::span<const LightData> rasterLights() const;   // <= MAX_LIGHTS, host copy for the light table
+    // Changes whenever rasterLights() does (clustered lighting uploads only then).
+    [[nodiscard]] uint64_t rasterLightsVersion() const;
+    // Shadow-casting raster lights past the kMaxShadowLights RT channels (lit unshadowed).
+    [[nodiscard]] uint32_t shadowCastersWithoutChannel() const;
     // The lights RT shadows trace (<= kMaxShadowLights, element i = shadow-mask channel i).
     [[nodiscard]] std::span<const LightDesc> shadowLights() const;
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]

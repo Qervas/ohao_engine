@@ -1,102 +1,56 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
-#include "render/scene/light_table.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 #include "render/scene/render_scene.hpp"
-#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/constants.hpp>
 
 namespace ohao {
 
-// One light UBO per frame slot: the host rewrites it every frame while up to
-// MAX_FRAMES_IN_FLIGHT - 1 earlier frames may still read theirs.
-bool VulkanRenderer::createLightBuffer() {
-    const VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
-
-    for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot) {
-        VkBufferCreateInfo bufferInfo{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .size = bufferSize,
-            .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        };
-        if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_lightBuffers[slot]) != VK_SUCCESS) {
-            return false;
-        }
-
-        VkMemoryRequirements memRequirements;
-        vkGetBufferMemoryRequirements(m_device, m_lightBuffers[slot], &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .allocationSize = memRequirements.size,
-            .memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
-                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-        };
-        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_lightBufferMemory[slot]) != VK_SUCCESS) {
-            return false;
-        }
-        vkBindBufferMemory(m_device, m_lightBuffers[slot], m_lightBufferMemory[slot], 0);
-        vkMapMemory(m_device, m_lightBufferMemory[slot], 0, bufferSize, 0, &m_lightBufferMapped[slot]);
-
-        // No frame is in flight yet: every slot starts with the default light.
-        updateLightBuffer(slot);
-    }
-    return true;
-}
-
-void VulkanRenderer::destroyLightBuffers() {
-    for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot) {
-        if (m_lightBuffers[slot] != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_lightBuffers[slot], nullptr);
-        if (m_lightBufferMemory[slot] != VK_NULL_HANDLE) vkFreeMemory(m_device, m_lightBufferMemory[slot], nullptr);
-        m_lightBuffers[slot] = VK_NULL_HANDLE;
-        m_lightBufferMemory[slot] = VK_NULL_HANDLE;
-        m_lightBufferMapped[slot] = nullptr;
-    }
-}
-
-glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
-    return render::lightSpaceMatrix(light);
-}
-
-LightUniformBuffer* VulkanRenderer::updateLightBuffer(uint32_t slot) {
-    if (slot >= MAX_FRAMES_IN_FLIGHT || !m_lightBufferMapped[slot]) return nullptr;
-
-    LightUniformBuffer lightUbo{};
-    lightUbo.numLights = 0;
-    lightUbo.ambientIntensity = 0.35f;
-    lightUbo.shadowBias = 0.005f;
-    lightUbo.shadowStrength = 0.7f;
-
-    // Scene lights, resolved by the RenderScene's light table (regular lights in
-    // order, the first point/spot light as shadow caster, then emissive proxies).
-    if (m_renderScene) {
-        for (const LightData& light : m_renderScene->rasterLights()) {
-            if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
-            lightUbo.lights[lightUbo.numLights++] = light;
-        }
-    }
-
-    // If no lights in scene, add a default directional light (direction synced by renderDeferred)
-    if (lightUbo.numLights == 0) {
-        LightData& defaultLight = lightUbo.lights[0];
-        defaultLight.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);  // type 0 = directional
-        defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
+// The frame's raster lights: the scene's light table (clustered lighting uploads it to the
+// frame slot only when its version changed), or the fallback sun when the scene has none,
+// aligned with the sky's sun (or blended to the moon at night).
+void VulkanRenderer::setFrameLights() {
+    if (!m_deferredRenderer) return;
+    float ambient = 0.35f;
+    std::span<const LightData> lights;
+    uint64_t version = 0;
+    if (m_renderScene && !m_renderScene->rasterLights().empty()) {
+        lights = m_renderScene->rasterLights();
+        version = m_renderScene->rasterLightsVersion();
+    } else {
+        LightData& sun = m_fallbackSun;
+        sun = LightData{};
+        sun.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);   // type 0 = directional
+        sun.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
         // Intensity = PI compensates for PBR energy-conserving divide-by-PI in diffuse BRDF
-        defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
+        sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
         // Shadowed through RT shadow channel 0 (render_dispatch traces the sun into it).
-        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f,
-                                        m_shadowsEnabled ? 0.0f : render::kShadowNever);
+        sun.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f,
+                               m_shadowsEnabled ? 0.0f : render::kShadowNever);
+        sun.lightSpaceMatrix = glm::mat4(1.0f);
 
-        if (m_shadowsEnabled) {
-            defaultLight.lightSpaceMatrix = calculateLightSpaceMatrix(defaultLight);
-        } else {
-            defaultLight.lightSpaceMatrix = glm::mat4(1.0f);
+        const glm::vec3 skyLightDir = m_deferredRenderer->getLightDirection();   // points DOWN toward the scene
+        const float nightFactor = m_deferredRenderer->getNightFactor();
+        if (glm::length(skyLightDir) > 0.001f) {
+            if (nightFactor > 0.01f) {
+                // Blend the direction from the sun toward the moon, the colour from warm white
+                // to cool blue, the intensity from full (PI) to ~8% moonlight.
+                const glm::vec3 moonDir = -m_deferredRenderer->getMoonDirection();
+                const glm::vec3 blendedDir = glm::normalize(glm::mix(glm::normalize(skyLightDir), moonDir, nightFactor));
+                sun.direction = glm::vec4(blendedDir, 100.0f);
+                const glm::vec3 blendedColor = glm::mix(glm::vec3(1.0f, 0.98f, 0.95f), glm::vec3(0.6f, 0.7f, 0.85f), nightFactor);
+                const float blendedIntensity = glm::mix(glm::pi<float>(), glm::pi<float>() * 0.08f, nightFactor);
+                sun.color = glm::vec4(blendedColor, blendedIntensity);
+            } else {
+                sun.direction = glm::vec4(glm::normalize(skyLightDir), 100.0f);
+            }
         }
-
-        lightUbo.numLights = 1;
+        // Ambient: moderate during day, lower at night
+        ambient = glm::mix(0.12f, 0.04f, nightFactor);
+        lights = std::span<const LightData>(&sun, 1);
     }
-
-    memcpy(m_lightBufferMapped[slot], &lightUbo, sizeof(lightUbo));
-    return static_cast<LightUniformBuffer*>(m_lightBufferMapped[slot]);
+    if (m_ambientOverride) ambient = *m_ambientOverride;
+    m_deferredRenderer->setLights(lights, version, ambient);
 }
 
 } // namespace ohao
