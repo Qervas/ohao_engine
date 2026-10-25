@@ -143,6 +143,7 @@ $ build/Release/scene_view_gpu_test.exe > /dev/null   # gpu
 $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ build/Release/cull_parity_gpu_test.exe > /dev/null   # gpu
+$ build/Release/light_cluster_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -171,7 +172,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   closed meshes (test 6); the meshlet path through task and mesh shaders and through their
   compute fallback render the same image as each other and as the instance path (the
   occlusion scene, a one-sided sphere whose back-facing meshlets the cones drop, Cornell, the
-  helmet room), and the fallback's lists are byte-identical run to run (test 7). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  helmet room), and the fallback's lists are byte-identical run to run (test 7).
+  `light_cluster_gpu_test` (test 8): the froxel lists light every pixel exactly as summing
+  every light does (PNGs byte for byte: Cornell's 12 lights, the helmet room with post, the
+  bench scenes' 1,000 point lights and sun, a wall 1,500 m out under a 3,000 m far plane, an
+  orthographic camera); 1,000 lights packed together overflow and `render.stats` reports
+  `lightsOverflow`; twin runs build identical lists; casters past the 8 shadow channels
+  render unshadowed (`--keep` leaves the compared PNGs in `build/`). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size and a path-traced mode refused), log.read; a lockstep
   window capture equals a headless capture of the same world bit for bit (post off and
@@ -313,10 +320,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   diffuse IBL term: GI rays that leave the scene bring the environment back, occluded.
 - RT shadows are compute with inline ray queries (`VK_KHR_ray_query`; without it the
   frame keeps CSM, which renders only when RT shadows do not). They keep a history too: the
-  filter averages the frames since the last reset, so frame 1 is the noisiest. Every
-  shadow-casting raster light (up to 8) owns a visibility channel (`params.w`), but a pixel
-  traces only its 4 most important; `render.stats`' `shadowLightsDropped` counts the pixels
-  that had more.
+  filter averages the frames since the last reset, so frame 1 is the noisiest. The first 8
+  shadow-casting raster lights own a visibility channel each (`params.w`); casters past them
+  render unshadowed (`RenderScene::shadowCastersWithoutChannel()`). A pixel traces only its 4
+  most important; `render.stats`' `shadowLightsDropped` counts the pixels that had more.
+- Lighting is clustered (`lights.cluster`, `LightClusters`): raster lights are uncapped (up
+  to 65,536) in a `LightGpu` storage buffer per frame slot, and each 16x9x24 froxel lists up
+  to 256 of them. The lists equal summing every light only because a light's attenuation is
+  exactly 0 past its range and the loop skips exact zeros: keep both, and keep the lists in
+  light order, or `light_cluster_gpu_test` fails. A froxel past 256 drops lights and
+  `render.stats` reports `lightsOverflow`. The slices run to the camera's far plane; the
+  sky is only the cleared depth (1.0), so geometry at any distance keeps its pixel.
 - The validation layer stops at 10 reports per VUID; set
   `VK_LAYER_DUPLICATE_MESSAGE_LIMIT=10000` to see them all. The engine names no Vulkan
   objects: find a handle's creation site by temporarily printing handles at `vkCreate*`.

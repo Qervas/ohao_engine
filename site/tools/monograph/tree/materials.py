@@ -32,9 +32,9 @@ MODULE = {
         page(
             'lights',
             'Lights dual packing',
-            'GPULight SSBO (64) vs deferred LightData UBO (8).',
-            files=['ohao/render/rt/gpu_light.hpp', 'ohao/gpu/vulkan/light_upload.cpp', 'shaders/includes/lighting/light_types.glsl'],
-            design=['Path tracer: GPULight 64-byte SSBO (position, type, color, dir, spot/area extras).', 'Deferred: compact LightData UBO for the forward-compatible light loop.', 'light_upload.cpp packs scene LightComponents into both layouts as needed.', 'Sphere lights use radius in dirAndParam.w; NEE must use distance for shadow Tmax, not radius.'],
+            'GPULight SSBO (64 lights) vs the deferred LightGpu table (65,536).',
+            files=['ohao/render/rt/gpu_light.hpp', 'ohao/render/scene/light_table.cpp', 'shaders/shared/layout.json'],
+            design=['Path tracer: GPULight, 80 bytes, std430 SSBO behind a 16-byte header (position, type, color, dir, spot/area extras).', 'Deferred: LightGpu, 64 bytes, a storage buffer per frame slot read through the froxel lists.', 'LightTable::set packs the scene\'s LightDescs into both layouts.', 'Sphere lights use radius in dirAndParam.w; NEE must use distance for shadow Tmax, not radius.'],
         ),
     ],
 }

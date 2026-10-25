@@ -139,7 +139,7 @@ constant ambient term and, with an environment map, the IBL terms. Direct light 
 occluded by RT shadows or CSM, and RT GI's rays already see what is in the way, so
 neither is touched:
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;"}}
 
 {{cite shaders/core/deferred_lighting.frag "ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;"}}
 

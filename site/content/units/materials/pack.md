@@ -184,10 +184,13 @@ The same header carries a constant that reads like a hard limit and is not one:
 It is referenced: the light table sizes the
 device buffer as the header plus 64 lights and truncates a longer list with a
 one-time log. The shaders clamp their light choice against `lightBuf.lightCount`,
-which is already post-truncation. The deferred side is the same kind of bound — its
-cap is a fixed array length, so it genuinely bounds the loop:
+which is already post-truncation. The deferred side bounds its table the same way but
+at a different scale: up to `kLightCapacity` 65,536 `LightGpu` records, generated from
+`shaders/shared/layout.json` into the C++, GLSL and Slang copies at once, so its shader
+struct, unlike `GPULight`, cannot drift from the C++ one without `gen_layout.py --check`
+failing. The deferred loop is bounded by the pixel's froxel list, not by the table:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "LightData lights[MAX_LIGHTS];"}}
+{{cite shaders/shared/layout.json "{"name": "kLightCapacity", "type": "uint", "value": 65536,"}}
 
 ## The bill for an overloaded lane
 

@@ -107,11 +107,18 @@ world, grown when a frame's dirty bytes exceed it:
 
 {{cite ohao/render/scene/render_scene.cpp "AllocationUsage::CpuToGpu, true);"}}
 
-and the light uniform buffers the deferred lighting pass binds, one per frame slot, are
-raw `vkAllocateMemory` memory, host-visible and coherent, mapped once at init and never
-unmapped. The host writes a slot's buffer only after that slot's fence wait:
+and the raster light tables the deferred lighting pass reads, one storage buffer per
+frame slot, are raw `vkAllocateMemory` memory through `rtc::createHostBuffer`:
+host-visible and coherent, device-local as well where the GPU exposes such a heap,
+mapped once and replaced only when a slot's light count outgrows it:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "vkMapMemory(m_device, m_lightBufferMemory[slot], 0, bufferSize, 0, &m_lightBufferMapped[slot]);"}}
+{{cite ohao/render/rt/rt_compute.cpp "// Device-local memory the host can write (resizable BAR) when there is some, else"}}
+
+`LightClusters` writes a slot's table only after that slot's fence wait, and only when
+the light list's version differs from the one the slot already holds, so a still scene
+uploads nothing:
+
+{{cite ohao/render/deferred/light_clusters.cpp "if (version != 0 && s.version == version && s.count == count && s.lights.buffer) return;"}}
 
 A mesh is therefore resident once, in device memory, whether it is drawn, traced or
 used as a BLAS input; there is no host-visible twin. In exchange every change to the
@@ -150,18 +157,23 @@ the 100-unit frustum, actually covers depth 1.4 to 3.5. The three near cascades 
 compressed into the first ~13 world units of a 100-unit view, and most of what is
 routed to them falls outside their shadow maps.
 
-## Eight slots, two type encodings
+## A table of any size, two type encodings
 
-Lights are a fixed array, not a growable list. `LightData` is four `vec4`s plus a
-`mat4` light-space matrix — 128 bytes — and the uniform block holds eight:
+`LightData` is four `vec4`s plus a `mat4` light-space matrix, 128 bytes, and the raster
+array holds up to 65,536 of them, the GPU table's capacity:
 
-{{cite ohao/render/scene/render_scene_types.hpp "constexpr uint32_t MAX_LIGHTS = 8;"}}
+{{cite ohao/render/scene/render_scene_types.hpp "constexpr uint32_t MAX_LIGHTS = 65536;"}}
 
 `LightTable::set` builds the array once per light-list change: regular lights in
-creation order first, then the emissive-mesh proxies appended, both capped at eight,
-so a scene with eight explicit lights drops every emissive light without a warning.
-Exactly one light in the buffer may cast a shadow — a latch takes the first qualifying
-one and every later light gets a shadow index of −1 and an identity light-space matrix:
+creation order first, then the emissive-mesh proxies appended, both under the one cap,
+with a warning logged once when the list exceeds it. The GPU copy is not `LightData`:
+`LightClusters` writes 64-byte `LightGpu` records, the four `vec4`s without the matrix.
+
+{{cite ohao/render/scene/light_table.cpp "OHAO_LOG(Warn, render, "RenderScene: {} lights: the raster table holds {}", sorted.size(), MAX_LIGHTS);"}}
+
+Exactly one light in the array may carry a shadow-map index — a latch takes the first
+qualifying one and every later light gets an index of −1 and an identity light-space
+matrix:
 
 {{cite ohao/render/scene/light_table.cpp "int shadowCasterIndex = -1;  // Index of first shadow-casting light"}}
 
@@ -177,12 +189,13 @@ only point and spot:
 
 {{cite ohao/render/scene/light_table.cpp "if (d.kind == LightKind::Point || d.kind == LightKind::Spot) {"}}
 
-An authored directional light therefore never claims the shadow slot, while a point
-light does — and `lightSpaceMatrix`, dispatching on the already-remapped
+An authored directional light therefore never claims the shadow-map index, while a
+point light does — and `lightSpaceMatrix`, dispatching on the already-remapped
 `position.w = 1`, matches neither its directional nor its spot branch and returns
-identity. The synthesized fallback sun is unaffected: it is written directly as shader
-type 0 and takes the orthographic branch. That is why the defect hides — shadows look
-right until someone adds a light to the scene.
+identity. The collision has no visible effect: the matrix never reaches the GPU, and
+the lighting shader never reads `params.z`. Shadows come from the RT visibility
+channels in `params.w`, or from the cascades for directional lights. The latch and the
+matrix are host-side bookkeeping that only a single-shadow-map renderer would read.
 
 The ternary's "anything else" arm hides a second collision. `LightType` has a fourth
 enumerator, `AreaRect`, with no branch of its own, so the raster light buffer emits
@@ -202,10 +215,11 @@ tracer, a cone to the rasteriser.
 
 ## The default light and its $\pi$
 
-If the scene contributed nothing, a default directional light is synthesized with
-intensity $\pi$ and a warm tint:
+If the scene contributed no lights, `setFrameLights` lights it with a fallback sun, a
+directional light of intensity $\pi$ and a warm tint (blended toward a dimmer, bluer
+moon at night):
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
 
 The $\pi$ is not decoration; it calibrates against the $1/\pi$ in an
 energy-conserving diffuse lobe. Take the Lambertian idealisation first: a BRDF of
@@ -287,7 +301,7 @@ counts would be wrong on top of that.
 The allocation model is split along who owns the lifetime. The render world's geometry,
 tables and staging go through `GpuAllocator`, device-local and written only by copies;
 everything else — render targets, texture images, acceleration-structure storage,
-binding tables, the light uniform buffer — is one hand-rolled `vkAllocateMemory` per
+binding tables, the raster light tables — is one hand-rolled `vkAllocateMemory` per
 resource, host-visible and permanently mapped for what the CPU rewrites each frame.
 Judge a change against whichever side of that line the resource sits on.
 :::
@@ -296,8 +310,8 @@ Judge a change against whichever side of that line the resource sits on.
 
 - Emissive proxies travel in the same light list as every other light and are appended after the regular ones; the raster array holds at most `MAX_LIGHTS`, so a full list drops proxies first. Setting the list again rebuilds both consumers' arrays.
 - Two light-type encodings coexist inside one loop: the source `LightKind` (Point, Directional, Spot, AreaRect, EmissiveProxy) and the shader type packed into `position.w` (directional 0, point 1, spot 2). The remap is right for the first three and silently folds AreaRect into spot; the shadow-caster test reads the source encoding where the rest of the loop reads the packed one. Any edit here must state which encoding it is in.
-- `MAX_LIGHTS` is 8 in four places: `render_scene_types.hpp` for the C++ side, the `#define` hard-coded into `deferred_lighting.frag` — the one shader that reads the buffer, whose comment points at `offscreen_renderer.hpp`, a file that does not exist — an `#ifndef`-guarded copy in `includes/common/constants.glsl`, and `includes/common/types.glsl`, which no shader includes. Change the C++ value without the lighting shader's and the uniform block silently truncates or overruns.
-- The light uniform buffer is one host-visible allocation per frame slot. `renderDeferred` writes only the current slot's buffer, after that slot's fence wait, and hands that buffer to the lighting pass, which binds it in the same slot's descriptor set. Writing any other slot's buffer races the frames still in flight.
+- `MAX_LIGHTS` (`render_scene_types.hpp`) and `kLightCapacity` (`shaders/shared/layout.json`) are both 65,536 and must stay equal: the light table caps its array at the first, `LightClusters` its GPU table at the second, with its own warning.
+- The raster light table is one host-visible allocation per frame slot. `DeferredRenderer::render` has `LightClusters` write only the current slot's buffer, after that slot's fence wait, and hands that buffer to the lighting pass, which binds it in the same slot's descriptor set. Writing any other slot's buffer races the frames still in flight; skipping the write when the version matches is safe only because each slot remembers the version it holds.
 - Every buffer the render world holds is created `GpuOnly` or as a mapped staging buffer through its own `GpuAllocator`; anything it replaces goes through the retire queue, never an immediate `destroyBuffer`.
 - `GpuAllocator::createBuffer` and `destroyBuffer` must both account `allocation.getSize()`; crediting requested bytes on one side drifts unsigned `currentUsage` downward until a debit underflows it, and `shutdown()` reports the wrapped value as a leak.
 - The device-address flag on the VMA allocator requires the device to have enabled `bufferDeviceAddress`; an allocator built against a device without it tags every block with a flag the device cannot honour.

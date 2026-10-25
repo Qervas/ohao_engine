@@ -46,8 +46,9 @@ statements about C++ types, evaluated by the C++ compiler, and no build step
 reflects the SPIR-V. The macro catches *someone added a float to the struct* and
 is blind to *someone reordered the GLSL block*. Three structs carry it:
 `LightData` at 128 bytes, `GPULight` at 80 and `PTPushConstants` at 256. The first
-rides in the deferred light UBO, the second in the path tracer's light SSBO; only
-the third crosses a push-constant boundary.
+is the light table's host array, which reaches the GPU only as the 64-byte `LightGpu`
+records `LightClusters` copies out of it; the second rides in the path tracer's light
+SSBO; only the third crosses a push-constant boundary.
 
 The structs that make up the render world's tables are guarded by plain
 `static_assert(sizeof(...) == N)` instead, which proves the size and nothing about
@@ -218,16 +219,18 @@ Sizes are pinned from a constants header rather than derived from the shaders. T
 alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
 not just totals. The toolchain already supports the include half, and the render
-world uses it: `scene_data.glsl` is included by six shaders. But
-`shaders/includes/common/types.glsl` declares the 128-byte `Light` struct once,
-and no shader includes it — `deferred_lighting.frag`, the one shader that reads
-`LightData`, includes only `encoding.glsl` and `brdf_ggx.glsl` and re-declares the
-same struct by hand. Shared declaration is therefore in use where the scene tables
-are new and routed around where the light block is old. Its cost is that
-every C++ struct becomes downstream of shader preprocessing and layout questions
-become runtime failures. OHAO took the cheap half — one place to edit a size,
-review for everything else.
+world uses it: `scene_data.glsl` is included by six shaders. A third route goes
+further: `shaders/shared/layout.json` describes a struct once and `tools/gen_layout.py`
+generates its GLSL, Slang and C++ copies, the C++ one with an assert on every
+field's offset. The deferred light record, `LightGpu`, is declared there, and both
+its readers, `deferred_lighting.frag` and `light_cluster.slang`, take it from the
+generated headers. The cost of sharing declarations is that every C++ struct becomes
+downstream of shader preprocessing or a generator, and layout questions become
+build-step failures. The older structs on this page took the cheap half — one place to
+edit a size, review for everything else.
 :::
+
+{{cite ohao/gpu/shared_layout.hpp "static_assert(offsetof(LightGpu, direction) == 16);"}}
 
 :::key
 `OHAO_ASSERT_GPU_LAYOUT` proves two things about a C++ type: that it can be

@@ -6,7 +6,7 @@ standard: v2
 figures: [shaders-includes-common-oct-path]
 ---
 
-## Eight headers, one preprocessor, no module system
+## Six headers, one preprocessor, no module system
 
 `glslc` has no modules. `GL_GOOGLE_include_directive` splices text, and OHAO's
 shader build hands the compiler two search roots — the `shaders/` tree and
@@ -21,15 +21,14 @@ fire for nobody — but the graph is one include away from needing them:
 `math.glsl` is pulled in by both `brdf_common.glsl` and `light_attenuation.glsl`,
 so a shader that took the BRDF and the attenuation header together would reach it
 twice, and without the guard `saturate` would be redefined and the shader would
-fail to compile. Macros behave differently. `types.glsl` and `constants.glsl`
-both `#define MAX_LIGHTS 8`, and `glslc` rejects a redefinition only when the
-substitution *differs* — so the `#ifndef MAX_LIGHTS` wrapper in `constants.glsl`
-is not what keeps copies compatible; agreeing on `8` is. `deferred_lighting.frag`
-proves it, spelling the macro out unconditionally after `brdf_ggx.glsl` has
-already dragged `constants.glsl` in, and compiling anyway. What breaks the build
-is a copy drifting to `16`.
+fail to compile.
 
-{{cite shaders/core/deferred_lighting.frag "#define MAX_LIGHTS 8"}}
+`includes/common/` holds no constant the C++ side also needs. Those live in
+`shaders/shared/layout.json` and reach GLSL through the generated
+`shared/layout.glsl`, guarded the same way, which `deferred_lighting.frag` includes
+right after its two `includes/` headers:
+
+{{cite shaders/core/deferred_lighting.frag "#include "shared/layout.glsl""}}
 
 The absence of a module system has a second consequence that shapes everything
 below: nothing *obliges* a shader to use these headers. `common.glsl` declares
@@ -67,34 +66,28 @@ lobes — before the cascade reaches `brdf_ggx.glsl` at all. An undefined macro 
 GLSL stays an identifier rather than becoming zero, so there is no `inf` to
 observe: the build simply stops.
 
-## The Light struct is the one hard ABI here
+## The light struct is not here
 
-`types.glsl` is not a utility header; it is a GPU-side mirror of a C++ struct.
-Its `Light` is four `vec4`s plus a `mat4` — 128 bytes in std140 — matching the
-`LightData` the renderer uploads every frame.
+No header in `includes/common/` declares a light. The raster light record the
+deferred lighting pass and the clustering kernel read is `LightGpu`, four `vec4`s,
+declared once in `shaders/shared/layout.json` and generated into GLSL, Slang and C++
+by `tools/gen_layout.py`:
 
-{{cite shaders/includes/common/types.glsl "mat4 lightSpaceMatrix;  // Transform to light space"}}
+{{cite shaders/shared/layout.glsl "struct LightGpu {"}}
 
-No shader includes it. The one raster stage that reads that buffer,
-`deferred_lighting.frag`, declares its own field-for-field copy of the struct
-inline, so this header is a second copy of the ABI with no consumer, and the copy
-that matters lives in a shader body.
+The C++ copy asserts every field's offset and the 64-byte size, and the three copies
+come from one description, so the GLSL side of the boundary is checked too: editing
+`layout.glsl` by hand makes `gen_layout.py --check` fail, and editing the JSON without
+regenerating does the same.
 
-{{cite shaders/core/deferred_lighting.frag "Light lights[MAX_LIGHTS];"}}
+{{cite ohao/gpu/shared_layout.hpp "static_assert(offsetof(LightGpu, params) == 48);"}}
 
-The C++ side pins the size at compile time; the GLSL side has no equivalent
-check, so the assert protects only half the boundary.
+`constants.glsl` still carries three light-type macros, `LIGHT_TYPE_DIRECTIONAL` 0,
+`LIGHT_TYPE_POINT` 1 and `LIGHT_TYPE_SPOT` 2, matching the raster codes in
+`LightGpu.position.w`. The lighting shader compares bare integers and uses none of
+them.
 
-{{cite ohao/render/scene/render_scene_types.hpp "OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);"}}
-
-The headers that would consume `types.glsl` carry a naming contract only a
-comment enforces: `shadow_pcf.glsl` and `blinn_phong.glsl` read the light UBO by
-the bare global name `lighting` without ever declaring it, so an includer has to
-declare the block under that exact name *above* the include line.
-`deferred_lighting.frag` happens to name its block `lighting`, but includes
-neither header; `light_attenuation.glsl` takes everything by parameter.
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!"}}
+{{cite shaders/includes/common/constants.glsl "#define LIGHT_TYPE_DIRECTIONAL 0"}}
 
 ## Octahedral normals: three encoders, two decoders, one of each ships
 
@@ -202,8 +195,7 @@ bit-mixer, `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familia
 ## Contracts
 
 - `gbuffer.frag`'s private encoder returns $[-1,1]$ and the `×0.5+0.5` remap lives at its call site; `decodeNormalOctahedron` assumes $[0,1]$. Change either half alone and every consumer's lower-hemisphere normals flip.
-- `types.glsl`'s `Light` must stay field-for-field and 128 bytes aligned with C++ `LightData`. Only the C++ side is statically asserted.
-- `deferred_lighting.frag`'s inline `Light` is the struct that must stay field-for-field with C++ `LightData`; `types.glsl` is a duplicate no shader compiles. Any shader that adopts `shadow_pcf.glsl` or `blinn_phong.glsl` must declare its light UBO as `lighting` above the include, because both read that global without declaring it.
+- The raster light record is `LightGpu` in `shaders/shared/layout.json`; a field changes there and is regenerated, never edited in `layout.glsl`, `layout.slang` or `shared_layout.hpp`.
 - `brdf_ggx.glsl` gets `EPSILON` transitively through `brdf_common.glsl` → `math.glsl` → `constants.glsl` and declares none of it. That chain is required by the deferred lighting pass.
-- `constants.glsl`'s `MAX_LIGHTS 8` must match `render_scene_types.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree.
+- `constants.glsl`'s header says its values must match the C++ engine and points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree; nothing checks any of them.
 {{cite shaders/includes/common/constants.glsl "// See: src/renderer/offscreen/offscreen_types.hpp"}}

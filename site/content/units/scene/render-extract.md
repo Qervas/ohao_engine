@@ -67,7 +67,7 @@ so scaling an area light's entity scales its emitting area, and with it the area
 {{cite ohao/ecs/render_extract.cpp "d.direction = glm::normalize(basis * glm::vec3(0.0f, 0.0f, -1.0f));"}}
 {{cite ohao/ecs/render_extract.cpp "d.position = glm::vec3(wt.world * glm::vec4(p.localCenter, 1.0f));"}}
 
-Each `LightDesc` carries its entity's creation sequence as `order`, and the light table stable-sorts on it. The order is load-bearing, not tidiness: the raster light buffer holds eight lights, and the first point or spot light in it is the one that gets the shadow map. With pool order instead, destroying an unrelated light could change which lights are in the eight and which one casts shadows.
+Each `LightDesc` carries its entity's creation sequence as `order`, and the light table stable-sorts on it. The order is load-bearing, not tidiness: the first eight shadow-casting lights in it own the RT shadow channels, the froxel lists and the lighting loop add lights in table order, and a table past its 65,536-light capacity drops its tail. With pool order instead, destroying an unrelated light could change which lights cast shadows and the order a pixel's lights are summed in, and with it the image's low bits.
 
 {{cite ohao/render/scene/light_table.cpp "std::stable_sort(sorted.begin(), sorted.end(),"}}
 

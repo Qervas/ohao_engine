@@ -265,6 +265,11 @@ window.OHAO_NAV_TREE = [
         "href": "m/deferred/lighting.html"
       },
       {
+        "id": "deferred/clustered-lighting",
+        "title": "Clustered lighting",
+        "href": "m/deferred/clustered-lighting.html"
+      },
+      {
         "id": "deferred/ssao",
         "title": "SSAO",
         "href": "m/deferred/ssao.html"
@@ -446,7 +451,7 @@ window.OHAO_NAV_TREE = [
       },
       {
         "id": "shaders/includes-shadow",
-        "title": "Shadow includes",
+        "title": "Shadow sampling in lighting",
         "href": "m/shaders/includes-shadow.html"
       },
       {

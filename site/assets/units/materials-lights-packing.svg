@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" class="unit-diagram" role="img" aria-label="Byte layout of the path tracer's GPULight SSBO and the deferred pipeline's LightData UBO, and the light type-code remap between them.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" class="unit-diagram" role="img" aria-label="Byte layout of the path tracer's GPULight SSBO and the deferred pipeline's LightGpu light table, and the light type-code remap between them.">
   <defs>
     <marker id="ml-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
       <path d="M0,0 L6,3 L0,6 Z" fill="#6e685c"/>
@@ -49,28 +49,25 @@
   <text x="190" y="84" font-family="IBM Plex Mono,monospace" font-size="8" fill="#c4a574">16 — array base forced here by std430 vec4 alignment</text>
   <text x="520" y="84" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">96</text>
 
-  <!-- ============ Row B: deferred UBO ============ -->
-  <text x="14" y="122" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Deferred — uniform buffer, set 0 binding 5, std140</text>
+  <!-- ============ Row B: deferred light table ============ -->
+  <text x="14" y="122" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Deferred — storage buffer per frame slot, set 0 binding 5, std430</text>
 
-  <rect x="14" y="134" width="440" height="36" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <rect x="14" y="134" width="264" height="36" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
   <line x1="80"  y1="134" x2="80"  y2="170" stroke="#3d4a58"/>
   <line x1="146" y1="134" x2="146" y2="170" stroke="#3d4a58"/>
   <line x1="212" y1="134" x2="212" y2="170" stroke="#3d4a58"/>
-  <line x1="278" y1="134" x2="278" y2="170" stroke="#3d4a58"/>
   <text x="47"  y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">pos + type</text>
   <text x="113" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">dir + range</text>
   <text x="179" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">rgb + I</text>
-  <text x="245" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">cones + smIdx</text>
-  <text x="366" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#c4a574">lightSpaceMatrix — 64 B</text>
-  <text x="234" y="163" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">LightData[0] — 128 B</text>
+  <text x="245" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">cones, sm, slot</text>
+  <text x="146" y="163" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">LightGpu[0] — 64 B</text>
 
-  <rect x="454" y="134" width="132" height="36" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
-  <text x="520" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#6e685c">LightData[1]</text>
-  <text x="600" y="155" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">…</text>
-  <rect x="622" y="134" width="84" height="36" fill="#1a222c" stroke="#3d4a58"/>
-  <text x="664" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">numLights,</text>
-  <text x="664" y="161" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">ambient…</text>
-  <text x="14"  y="184" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">0 — fixed array of 8, no header</text>
+  <rect x="278" y="134" width="132" height="36" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <text x="344" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#6e685c">LightGpu[1]</text>
+  <text x="424" y="155" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">…</text>
+  <text x="460" y="150" font-family="IBM Plex Mono,monospace" font-size="8" fill="#c4a574">host LightData: + lightSpaceMatrix,</text>
+  <text x="460" y="161" font-family="IBM Plex Mono,monospace" font-size="8" fill="#c4a574">128 B, never uploaded</text>
+  <text x="14"  y="184" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">0 — no header, up to 65,536 records (kLightCapacity)</text>
 
   <!-- ============ type-code remap ============ -->
   <line x1="14" y1="208" x2="706" y2="208" stroke="#3d4a58" stroke-dasharray="2 4"/>

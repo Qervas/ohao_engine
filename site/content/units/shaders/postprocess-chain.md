@@ -128,11 +128,11 @@ is correct, and in `blurH`, whose non-skin pixels are later read, it is not:
 The G-buffer's `D32_SFLOAT` depth is sampled by four shaders in this unit, and
 each treats it differently.
 
-`sky.frag` uses it as a stencil: anything the G-buffer wrote is discarded. The
-threshold is a hair under one, so a surface landing exactly on the far plane is
-treated as sky.
+`sky.frag` uses it as a stencil: anything the G-buffer wrote is discarded. Only the
+cleared value, exactly 1.0, is sky, so a surface at any distance short of the far
+plane keeps its pixel.
 
-{{cite shaders/postprocess/sky.frag "if (depth < 0.9999) {"}}
+{{cite shaders/postprocess/sky.frag "if (depth < 1.0) {"}}
 
 `ssr.slang` compares against it numerically. Its ray march is uniform in *world*
 space — 64 steps over the push block's march length — and each step is projected to

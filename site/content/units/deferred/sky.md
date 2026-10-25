@@ -26,9 +26,9 @@ That render pass has no depth attachment, so it cannot express "only where depth
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[4].depthStencil = {1.0f, 0};"}}
 
-Instead the GBuffer depth image arrives as a `NEAREST`-filtered texture at set 0 binding 0 and the fragment shader kills every covered pixel itself, discarding below a 0.9999 threshold.
+Instead the GBuffer depth image arrives as a `NEAREST`-filtered texture at set 0 binding 0 and the fragment shader kills every covered pixel itself, discarding every depth below the 1.0 the G-buffer clears to, however far the surface (a threshold under 1.0 would paint sky over every surface beyond about 1,000 m at a 0.1 m near plane).
 
-{{cite shaders/postprocess/sky.frag "if (depth < 0.9999) {"}}
+{{cite shaders/postprocess/sky.frag "if (depth < 1.0) {"}}
 
 Geometry is one oversized triangle generated from `gl_VertexIndex`, no vertex buffer bound — the whole pass is three vertices and a 128-byte push-constant block.
 

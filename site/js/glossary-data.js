@@ -207,7 +207,7 @@ window.OHAO_GLOSSARY = {
   },
   UBO: {
     expand: "Uniform Buffer Object",
-    def: "Small, frequently updated GPU buffer for constants (camera, few lights). Deferred uses a tight light UBO budget.",
+    def: "Small, frequently updated GPU buffer for constants (camera, cascades). Deferred lights live in a storage buffer instead, read through clustered lighting's froxel lists.",
     group: "Vulkan",
   },
   Bindless: {

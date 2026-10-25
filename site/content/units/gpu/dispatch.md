@@ -161,17 +161,21 @@ The path tracer is therefore lit by exactly the lights the scene holds; there is
 
 ## The fallback sun that follows the sky
 
-`renderDeferred` does something no other body does: it edits the frame slot's light buffer after filling it. A scene with no lights gets one fabricated directional light where the buffer is filled, and the comment there says its direction is synced by `renderDeferred`:
+`renderDeferred` does something no other body does: it decides, every frame, which lights the deferred renderer sees. `setFrameLights` hands over the render world's raster light table and its version when the table is non-empty:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "// If no lights in scene, add a default directional light (direction synced by renderDeferred)"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "if (m_renderScene && !m_renderScene->rasterLights().empty()) {"}}
 
-That sync runs only when the render world holds no raster lights, so it can touch nothing but the fabricated light. It replaces `lights[0].direction` with the sky pass's sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.
+and otherwise a fabricated directional light, `m_fallbackSun`, rebuilt each frame and aligned with the sky pass's sun direction. As `nightFactor` rises it blends that direction toward the moon, the colour toward a cool blue and the intensity from $\pi$ down to 8% of it, and the ambient intensity lerps from 0.12 down to 0.04:
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_renderScene->rasterLights().empty()) {"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "const float blendedIntensity = glm::mix(glm::pi<float>(), glm::pi<float>() * 0.08f, nightFactor);"}}
 
-The test is the render world's own light list, not the buffer's count: a scene with exactly one light of its own — the ordinary outdoor case — keeps its authored direction, colour and ambient, because a count of one cannot tell a fabricated light from an authored one.
+Either way the lights reach the deferred renderer as a span, a version and the ambient intensity. The fallback travels with version 0, which the light table's upload reads as "always write", so a sun that moves with the time of day reaches every frame slot:
 
-The same fallback sun is what RT shadows trace when the scene has no lights. After the sky sync, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names visibility channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `lights[0].direction` with the real sun's angular radius, 0.00465 rad.
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "m_deferredRenderer->setLights(lights, version, ambient);"}}
+
+The test is the render world's own light list, not a count: a scene with exactly one light of its own — the ordinary outdoor case — keeps its authored direction, colour and ambient, because a count of one cannot tell a fabricated light from an authored one.
+
+The same fallback sun is what RT shadows trace when the scene has no lights. After `setFrameLights`, `renderDeferred` hands the deferred renderer the scene's shadow-casting lights; when the scene has no lights at all, and the fallback names visibility channel 0 in its `params.w` (shadows on), it builds a directional `LightDesc` from `m_fallbackSun.direction` with the real sun's angular radius, 0.00465 rad.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "constexpr float kSunAngularRadius = 0.00465f;"}}
 

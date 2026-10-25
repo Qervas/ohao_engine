@@ -312,13 +312,13 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "materials/lights": {
         "what": [
-            "Dual light packing: GPULight 64-byte SSBO for path tracer (sphere/dir/spot/area) vs compact deferred LightData UBO.",
+            "Dual light packing: GPULight (80 bytes, up to 64) SSBO for the path tracer (sphere/dir/spot/area) vs the deferred LightGpu table (64 bytes, up to 65,536).",
         ],
         "how": [
-            "gpu_light.hpp defines GPULight; light_upload.cpp packs from LightComponents.",
+            "gpu_light.hpp defines GPULight, shared/layout.json LightGpu; LightTable::set packs both from the scene's LightDescs.",
             "Sphere lights store radius in dirAndParam.w; NEE must use distance for shadow Tmax, not radius.",
         ],
-        "why": "PT needs analytic area sampling; deferred needs a tight multi-light loop — one component model, two packs.",
+        "why": "PT needs analytic area sampling; deferred needs a small record its froxel loop reads per light — one component model, two packs.",
         "contracts": [
             "NEE shadow ray uses lightDist for Tmax, not light radius",
             "lightCount heads the SSBO",
@@ -334,7 +334,7 @@ KNOWLEDGE: dict[str, dict] = {
             "onResize reallocates targets.",
         ],
         "why": "Orchestrator pattern keeps each pass small; hybrid RT plugs in without rewriting lighting.",
-        "workflow": ["CSM", "GBuffer", "SSAO", "Lighting (+ optional RT)", "Sky", "Bloom/TAA/Tonemap", "Gizmo"],
+        "workflow": ["CSM", "GBuffer", "Light clusters", "SSAO", "Lighting (+ optional RT)", "Sky", "Bloom/TAA/Tonemap", "Gizmo"],
     },
     "deferred/gbuffer": {
         "what": [
@@ -352,18 +352,28 @@ KNOWLEDGE: dict[str, dict] = {
             "Cascaded shadow maps into a depth array; splits from the camera frustum. Uses unjittered camera when TAA is active for stable cascades.",
         ],
         "how": [
-            "csm_pass culls each cascade on the GPU and records depth from the light's view with indirect draws; shadow_csm.glsl samples with PCF.",
+            "csm_pass culls each cascade on the GPU and records depth from the light's view with indirect draws; deferred_lighting.frag samples with a 3x3 PCF.",
         ],
         "why": "Single shadow map cannot cover large outdoor views without swimming or acne.",
     },
     "deferred/lighting": {
         "what": [
-            "Fullscreen deferred lighting reconstructs world position from depth, evaluates GGX + IBL + CSM, multiplies SSAO, optionally samples RT shadow/GI textures.",
+            "Fullscreen deferred lighting reads world position from the G-buffer, sums its froxel's lights (GGX), adds IBL, SSAO on the ambient terms, RT shadow visibility or CSM, RT GI.",
         ],
         "how": [
-            "deferred_lighting.frag + deferred_lighting_pass.hpp; ibl.glsl for prefiltered env.",
+            "deferred_lighting.frag + deferred_lighting_pass.hpp; the light table (binding 5) and froxel lists (binding 16) from LightClusters.",
         ],
-        "why": "All shading in one pass over screen-sized buffers — light count scales better than forward.",
+        "why": "All shading in one pass over screen-sized buffers; with clustered lighting a pixel pays for the lights that reach it.",
+    },
+    "deferred/clustered-lighting": {
+        "what": [
+            "Clustered lighting: 16x9 screen tiles x 24 exponential depth slices, each froxel's list of the lights whose range sphere reaches it, rebuilt every frame by lights.cluster.",
+        ],
+        "how": [
+            "LightClusters: a LightGpu storage buffer per frame slot rewritten only when the light table's version changes; compute/light_cluster.slang, one 64-thread workgroup per froxel, ordered groupshared compaction, at most 256 a froxel, overflow stats into render.stats lightsOverflow.",
+        ],
+        "why": "The image equals summing every light byte for byte (the window is exactly zero past range, skipped terms add +0, same order), at a cost set by the lights that reach each pixel (test 8).",
+        "workflow": ["setLights (slot, version)", "lights.cluster after gbuffer.late", "lighting reads its froxel's list", "collect overflow after the fence"],
     },
     "deferred/ssao": {
         "what": [
@@ -591,19 +601,19 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Predictable layout beats hunting random .spv copies.",
     },
     "shaders/includes-common": {
-        "what": ["Shared math, color, encoding, reconstruction, constants, noise."],
-        "how": ["Used by both raster and RT; encoding holds octahedral pack conventions."],
+        "what": ["Shared math, color, encoding, reconstruction, constants."],
+        "how": ["Used by both raster and RT; encoding holds octahedral pack conventions; constants shared with C++ live in shared/layout.json instead."],
         "why": "One luminance/normalize definition everywhere.",
     },
     "shaders/includes-lighting": {
-        "what": ["IBL, attenuation, light types, phase, blinn_phong helpers."],
-        "how": ["ibl.glsl samples prefiltered specular + irradiance + BRDF LUT."],
-        "why": "Deferred and hybrid share light math with CPU packs.",
+        "what": ["light_attenuation.glsl, which no stage includes, against the falloff, IBL and LightGpu record the deferred pass actually uses."],
+        "how": ["deferred_lighting.frag declares its own windowed inverse square (exactly zero past the range) and split-sum IBL; LightGpu comes from shared/layout.json."],
+        "why": "The two falloff laws have different units; the deferred one's hard zero is what clustered lighting relies on.",
     },
     "shaders/includes-shadow": {
-        "what": ["CSM/PCF sampling includes plus depth write shaders."],
-        "how": ["shadow_csm.glsl, shadow_pcf.glsl, shadow_depth.*, shadow_csm.vert."],
-        "why": "Sampling math must match cascade construction on the host.",
+        "what": ["How shadows reach deferred lighting: RT visibility channels, or the CSM fallback for directional lights."],
+        "how": ["deferred_lighting.frag reads an RG32UI image of eight 8-bit channels by params.w, else a 3x3 hardware-compare PCF on the cascade array; shadow_csm.vert writes the cascades."],
+        "why": "One visibility per light from whichever technique the frame runs, exclusive per frame.",
     },
     "shaders/postprocess-chain": {
         "what": ["Fullscreen post chain: bloom, TAA, tonemap, sky, SSR, SSS shaders."],
@@ -617,7 +627,7 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Wrong NRD pack is a one-line bug with a magenta symptom — keep pack code centralized.",
     },
     "shaders/compute": {
-        "what": ["Compute shaders: SSAO, the capture preview, the DLSS display pass, and GPU culling's cull/ modules."],
+        "what": ["Compute shaders: SSAO, light clustering, the capture preview, the DLSS display pass, and GPU culling's cull/ modules."],
         "how": ["Glob-compiled GLSL and Slang; dispatched from deferred passes, the capture path, GpuCulling, or PT post."],
         "why": "GPU prep work that is not full-screen fragment shading.",
     },

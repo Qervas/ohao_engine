@@ -63,12 +63,17 @@ light whose `castShadows` is set the next channel and records it in `params.w`:
 
 {{cite ohao/render/scene/light_table.cpp "shadowSlot = static_cast<float>(m_shadowLights.size());"}}
 
-There are as many channels as the deferred light buffer has lights, eight, so every
-caster gets one — the table asserts it:
+There are eight channels and the raster light table holds up to 65,536 lights, so
+only the first eight casters get one:
 
-{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kMaxShadowLights = MAX_LIGHTS;"}}
+{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kMaxShadowLights = 8;"}}
 
-{{cite ohao/render/scene/light_table.cpp "static_assert(kMaxShadowLights >= MAX_LIGHTS"}}
+A caster past the eighth keeps `kShadowNever` and renders unshadowed. The table counts
+those, and `RenderScene::shadowCastersWithoutChannel()` reports the count; test 8
+checks that Cornell's twelve casting lights give eight channels and four unshadowed
+lights.
+
+{{cite ohao/render/scene/light_table.cpp "++m_shadowCastersWithoutChannel;"}}
 
 A light with `castShadows` off gets `kShadowNever` (-1), and so does every emissive
 proxy, which sits inside its own mesh.

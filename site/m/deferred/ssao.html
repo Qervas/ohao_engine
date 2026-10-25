@@ -42,7 +42,7 @@
 <p>It is not, in this engine, the occlusion a frame leans on for direct light. RT shadows occlude direct light (CSM where they cannot trace), and RT GI&#x27;s rays already see the occluders between a surface and its bounce light. What neither touches is the constant ambient term and the image-based environment terms: those are lit from every direction with nothing in the way, and that is the light SSAO darkens. It is opt-in — the pipeline gate defaults false:</p>
 <div class="citation-chip"><code class="citation-code">if (m_ssaoEnabled &amp;&amp; m_ssaoPass) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.cpp#L74" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.cpp:74</a></div>
 <p>and the callers that open it are `model_viewer`&#x27;s deferred path, the `ohao_game` host, a live window session that turned it on, and a capture whose `post` list names `ssao`. When it is off the renderer registers no `ssao` pass and clears the lighting pass&#x27;s SSAO view, so the frame has neither the cost nor the timing:</p>
-<div class="citation-chip"><code class="citation-code">if (!ssaoOn &amp;&amp; m_lightingPass) m_lightingPass-&gt;setSSAOTexture(VK_NULL_HANDLE, VK_NULL_HANDLE);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L313" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:313</a></div>
+<div class="citation-chip"><code class="citation-code">if (!ssaoOn &amp;&amp; m_lightingPass) m_lightingPass-&gt;setSSAOTexture(VK_NULL_HANDLE, VK_NULL_HANDLE);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L348" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:348</a></div>
 </div>
 <div class="section-rule"><h2 id="two-dispatches-at-half-resolution">Two dispatches at half resolution</h2></div>
 <div class="prose reveal">
@@ -82,13 +82,13 @@ $$</div>
 <p>The `blur` entry averages a 4×4 window, offsets −1 to 2: exactly one period of the noise, so each window holds each of the sixteen rotations once and the interleaving averages out. A tap&#x27;s weight falls linearly with its distance difference from the centre, to zero at 5 % of the centre&#x27;s distance; sky taps are skipped, and the centre always counts, so the sum is never empty:</p>
 <div class="citation-chip"><code class="citation-code">const float w = saturate(1.0 - abs(v.y - c.y) * invTol);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.slang#L143" target="_blank" rel="noopener">shaders/compute/ssao.slang:143</a></div>
 <p>The lighting pass reads the blurred image at binding 10 and raises flag bit 1 (the value 2) when it holds one. Each full-resolution pixel takes the four nearest half-resolution samples, weighted bilinearly and by the same 5 % distance match; where none is the same surface it takes the closest instead of blurring across the edge:</p>
-<div class="citation-chip"><code class="citation-code">return wsum &gt; 1e-3 ? sum / wsum : best;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L128" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:128</a></div>
+<div class="citation-chip"><code class="citation-code">return wsum &gt; 1e-3 ? sum / wsum : best;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L116" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:116</a></div>
 </div>
 <div class="section-rule"><h2 id="what-it-darkens">What it darkens</h2></div>
 <div class="prose reveal">
 <p>The upsampled value multiplies only the light that arrives from everywhere: the constant ambient term and, with an environment map, the IBL terms. Direct light is occluded by RT shadows or CSM, and RT GI&#x27;s rays already see what is in the way, so neither is touched:</p>
-<div class="citation-chip"><code class="citation-code">vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ssao;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L294" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:294</a></div>
-<div class="citation-chip"><code class="citation-code">ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L345" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:345</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L297" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:297</a></div>
+<div class="citation-chip"><code class="citation-code">ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L348" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:348</a></div>
 <p>`ao` there is the G-buffer&#x27;s baked occlusion (albedo alpha: 1, or the red channel of an occlusion-roughness-metallic texture); `ssao` multiplies on top of it. Test 5 in `engine_tests` checks both halves: with only ambient light, a crease frame has 3191 pixels darker with SSAO on and none brighter; lit by a point light with zero ambient, the frame is unchanged (max_abs 0). A second test renders an SSAO frame from two fresh renderers and finds them bit-identical.</p>
 </div>
 <div class="section-rule"><h2 id="cost">Cost</h2></div>
@@ -130,7 +130,7 @@ $$</div>
         <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
       </div>
 
-<nav class="pager"><a href="lighting.html"><div class="label">← Prev</div><div class="title">Deferred lighting</div></a><a class="next" href="ssr-sss.html"><div class="label">Next →</div><div class="title">SSR &amp; SSS</div></a></nav>
+<nav class="pager"><a href="clustered-lighting.html"><div class="label">← Prev</div><div class="title">Clustered lighting</div></a><a class="next" href="ssr-sss.html"><div class="label">Next →</div><div class="title">SSR &amp; SSS</div></a></nav>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

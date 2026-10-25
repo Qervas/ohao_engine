@@ -47,31 +47,28 @@ falls through into the full lighting loop. The sentinel also has a real, if narr
 false positive: a non-metallic fragment sitting exactly on the world origin is
 classified as sky and written as transparent black.
 
-## Eight lights, one loop, 72 dead bytes per record
+## Any number of lights, the froxel's few per pixel
 
-The light array is a uniform buffer of eight fixed-size records, and the loop bound
-comes from the push constant rather than the `numLights` field inside the UBO.
+The lights are a storage buffer of 64-byte `LightGpu` records at binding 5, with no
+size in the declaration, and the froxel lists the `lights.cluster` pass builds sit
+beside it at binding 16:
 
-{{cite shaders/core/deferred_lighting.frag "int lightCount = int(min(pc.lightCount, uint(MAX_LIGHTS)));"}}
+{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 5, std430) readonly buffer Lights { LightGpu lights[]; };"}}
 
-That field is unread by the shader but it is not dead data: the host keeps each frame
-slot's buffer mapped, reads `numLights` back out of it, floors it at 1, and *that* is the
-push constant. The count round-trips through GPU-visible memory before the loop
-sees it.
+A pixel finds its froxel from its screen tile and the logarithm of its view depth,
+and loops over that froxel's list, which holds light indices in ascending order; with
+push flag bit 6 it loops over every light in the table instead. The clustered-lighting
+unit covers the lists, how they are built and why the two loops give the same image.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "std::max(1, ld->numLights)"}}
+{{cite shaders/core/deferred_lighting.frag "const LightGpu light = lights[clustered ? clusterData[listBase + k] : k];"}}
 
-Each record is 128 bytes and 68 of them are dead here. Sixty-four are the per-light
-`lightSpaceMatrix`, never read because cascade shadows resolve through
-`cascades.viewProj[]` from a separate UBO instead.
+The record is the host's `LightData` without its `lightSpaceMatrix`: `LightClusters`
+copies the four `vec4`s across when it writes a frame slot's table, so the matrix the
+light table computes for its one legacy shadow-map caster never reaches the GPU.
+`params.z`, the shadow-map index, does, and the shader never reads it. It reads `.x`
+and `.y`, the two spot-cone cosines, and `.w`, the light's RT shadow slot (below).
 
-{{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)"}}
-
-The other four are `params.z`: `RenderScene`'s light table packs a shadow-map
-index into it (and a `lightSpaceMatrix` for the one light it picks as shadow
-caster, identity for the rest), and the shader never reads it. It reads `.x` and
-`.y`, the two spot-cone cosines, and `.w`, the light's RT shadow slot (below).
-
+{{cite ohao/render/deferred/light_clusters.cpp "std::memcpy(g.params.data(), &l.params, sizeof(g.params));"}}
 {{cite shaders/core/deferred_lighting.frag "light.params.x, light.params.y);"}}
 
 The `BRDFSurface` — metallic sharpening, F0 derivation, normalised N and V — is
@@ -99,10 +96,13 @@ influence ends without a visible edge.
 
 {{cite shaders/core/deferred_lighting.frag "return invSq * windowing * windowing;"}}
 
-That vanishing derivative is the property a range cull would need, and OHAO never
-cashes it in. The loop has no early-out and no attenuation threshold, and the CPU
-side that packs the buffer applies no range test either — it stops at `MAX_LIGHTS`
-and nothing else. Every light is evaluated at every lit pixel, window and all.
+The window is also what makes a range cull exact. Past $d = r$ the clamp returns
+exactly 0, so the term a light adds there is exactly zero, not merely small. The loop
+skips a light whose attenuation is exactly 0 before any BRDF work, and the froxel
+lists leave out lights whose range sphere cannot reach the froxel: both drop only
+terms that would have added $+0$.
+
+{{cite shaders/core/deferred_lighting.frag "if (attenuation == 0.0) continue;   // adds exactly zero: past its range or its cone"}}
 
 Where OHAO departs from UE4 is the denominator. UE4 divides by $d^2 + 1$, softening
 the near field everywhere; OHAO keeps the true $1/d^2$ and clamps only the
@@ -131,15 +131,17 @@ write it at the lighting pass's resolution:
 
 Each light names its channel in `params.w`, which the light table fills: -1 for a
 light that never casts (its `castShadows` off, or an emissive proxy), otherwise 0 to
-7, the caster's position among the casters in light order. The UBO holds eight
-lights and there are eight channels, so every caster has one.
+7, the caster's position among the first eight casters in light order. A caster past
+the eighth gets -1 too and renders unshadowed; the light table counts those.
 
 {{cite shaders/core/deferred_lighting.frag "int slot = int(round(light.params.w));"}}
 
 A negative slot is never occluded. With RT shadows on, a light's shadow is its byte
-of the word divided by 255:
+of the word divided by 255, and a light whose byte is 0 is skipped, another term
+that would have added exactly zero:
 
 {{cite shaders/core/deferred_lighting.frag "shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);"}}
+{{cite shaders/core/deferred_lighting.frag "if (shadow == 0.0) continue;   // fully occluded: adds exactly zero"}}
 
 With them off, the slot only says whether the light casts at all, and the CSM path
 decides the rest. That path is gated on `lightType == 0`, so point and spot lights
@@ -163,7 +165,7 @@ value is undefined by specification. Only 9 is ever read: the frag declares no
 sampler for either cubemap binding, so 7 and 8 are written into the set each frame
 and never touched by any instruction.
 
-{{figure deferred-lighting-bindings "Conceptual map of descriptor set 0, sorting its declared bindings by how the shader uses them: sampled with a real resource, written but with no sampler declared, or sampled with a permanently-dummy view. Read from createDescriptors()/writeDescriptorSet() and the shader's declarations — not a capture."}}
+{{figure deferred-lighting-bindings "Conceptual map of descriptor set 0, sorting its declared bindings by how the shader uses them: read with a real resource, written but with no sampler declared, or sampled with a permanently-dummy view. Read from createDescriptors()/writeDescriptorSet() and the shader's declarations — not a capture."}}
 
 The shader routes around all of it. It ignores the cubemap bindings entirely,
 samples the raw equirectangular HDR at binding 15, and when the LUT fetch comes
@@ -243,7 +245,8 @@ shipped feature.
 ## Contracts
 
 - GBuffer0's clear colour and the shader's sky test are one invariant in two files. Changing either alone sends background pixels through the lighting loop.
-- The pass owns one descriptor set per frame in flight (`maxSets = MAX_FRAMES_IN_FLIGHT`, three today), and `execute(cmd, frameIndex)` rewrites all 15 bindings of `m_descriptorSets[frameIndex]` only, at record time. Its inputs — light buffer, SSAO, RT shadow mask, GI, env map — can change between frames, so the set has to be rewritten; a single shared set would be rewritten while up to two already-submitted frames still read it. The per-slot set is safe because `VulkanRenderer::renderDeferred` waits the fence of `m_currentFrame` and then records the deferred renderer with that same slot, so the set's previous use is retired. The contract is on the caller: `frameIndex` must be the slot whose fence was waited. {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}} {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
-- `LightingParams` is 184 bytes, all scalar after `screenSize`; the explicit `padding*` floats after `wetness`, `snowCover` and `frostCover` are unread spacers that keep the C++ struct byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
+- The pass owns one descriptor set per frame in flight (`maxSets = MAX_FRAMES_IN_FLIGHT`, three today), and `execute(cmd, frameIndex)` rewrites all 16 bindings of `m_descriptorSets[frameIndex]` only, at record time. Its inputs — the slot's light table, the froxel lists, SSAO, RT shadow mask, GI, env map — can change between frames, so the set has to be rewritten; a single shared set would be rewritten while up to two already-submitted frames still read it. The per-slot set is safe because `VulkanRenderer::renderDeferred` waits the fence of `m_currentFrame` and then records the deferred renderer with that same slot, so the set's previous use is retired. The contract is on the caller: `frameIndex` must be the slot whose fence was waited. {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}} {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
+- `LightingParams` is 184 bytes, all scalar after `screenSize`; `ambientIntensity`, `sliceScale` and `sliceBias` sit after `cameraPos`, `wetness` and `snowCover`, and the one `paddingF` after `frostCover` keeps the C++ struct byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
+- Every skipped term must be exactly zero: the `attenuation == 0.0` and `shadow == 0.0` tests, and the froxel lists, are what make clustered lighting equal the every-light loop byte for byte. An attenuation law without a hard zero past `direction.w` breaks both.
 - Binding an RT visibility view disables CSM for that frame outright. A light's `params.w` and the visibility's channels are one contract with the light table and the RT shadow passes (`rt/shadow_trace.slang`, `rt/shadow_filter.slang`): the table hands out slots 0 to 7 in the same order it lists `shadowLights()`, and the RT passes write light *i* into channel *i*. The visibility image must stay the lighting pass's size, since it is fetched at `gl_FragCoord`.
-- Declared and never read by this shader: `lighting.numLights` (the host reads it back off the mapped buffer instead), `lighting.shadowBias`, `lighting.shadowStrength`, each light's `lightSpaceMatrix`, `params.z`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3, 4, 7, 8 and 10. Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow visibility at 14.
+- Declared or carried and never read by this shader: `params.z`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3 and 4 (written, no sampler declared) and 7 and 8 (likewise). Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow visibility at 14.

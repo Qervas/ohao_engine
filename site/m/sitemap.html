@@ -78,7 +78,7 @@
 <li><a href="materials/pbr-model.html">PBR metallic-roughness</a> — F0, ORM convention, roughness floors.</li>
 <li><a href="materials/ggx.html">GGX implementation</a> — D/F/G terms, Smith correlated, energy helpers.</li>
 <li><a href="materials/pack.html">GPU material pack</a> — 3×vec4 matColors, texture bit-cast indices.</li>
-<li><a href="materials/lights.html">Lights dual packing</a> — GPULight SSBO (64) vs deferred LightData UBO (8).</li>
+<li><a href="materials/lights.html">Lights dual packing</a> — GPULight SSBO (64 lights) vs the deferred LightGpu table (65,536).</li>
 </ul>
 <h2 class="gloss-group">05 · Deferred</h2><ul class="prose">
 <li><a href="deferred.html"><strong>Hub</strong> — deferred.html</a></li>
@@ -86,7 +86,8 @@
 <li><a href="deferred/pass-base.html">RenderPassBase</a> — Shared init/cleanup/shader path helpers for passes.</li>
 <li><a href="deferred/gbuffer.html">GBuffer pass</a> — GPU-culled early/late passes, MRT packing, bindless, velocity.</li>
 <li><a href="deferred/csm.html">CSM shadows</a> — Cascade split, depth array, unjittered camera.</li>
-<li><a href="deferred/lighting.html">Deferred lighting</a> — Light loop, IBL, SSAO bind, BRDF eval.</li>
+<li><a href="deferred/lighting.html">Deferred lighting</a> — The froxel&#x27;s light loop, IBL, SSAO, shadows, BRDF eval.</li>
+<li><a href="deferred/clustered-lighting.html">Clustered lighting</a> — Froxel light lists, built every frame, exact against summing every light.</li>
 <li><a href="deferred/ssao.html">SSAO</a> — Half-resolution horizon AO, blurred, upsampled into the ambient terms.</li>
 <li><a href="deferred/ssr-sss.html">SSR &amp; SSS</a> — Half-resolution reflections; subsurface blur on classified tiles.</li>
 <li><a href="deferred/sky.html">Sky pass</a> — HDR sky / atmosphere composite into lighting output.</li>
@@ -129,12 +130,12 @@
 <h2 class="gloss-group">Shaders</h2><ul class="prose">
 <li><a href="shaders/index.html"><strong>Hub</strong></a></li>
 <li><a href="shaders/layout.html">Shader tree layout</a> — core / rt / postprocess / compute / includes / shadow / particles.</li>
-<li><a href="shaders/includes-common.html">Common includes</a> — math, color, encoding, reconstruction, constants, types.</li>
-<li><a href="shaders/includes-lighting.html">Lighting includes</a> — IBL, attenuation, light types, phase, blinn_phong.</li>
-<li><a href="shaders/includes-shadow.html">Shadow includes</a> — CSM sampling, PCF, shadow types.</li>
+<li><a href="shaders/includes-common.html">Common includes</a> — math, color, encoding, reconstruction, constants.</li>
+<li><a href="shaders/includes-lighting.html">Lighting includes</a> — One uncompiled attenuation header; the falloff, IBL and light record that ship.</li>
+<li><a href="shaders/includes-shadow.html">Shadow sampling in lighting</a> — RT visibility channels, the CSM fallback, the cascade depth write.</li>
 <li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
 <li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack, rt_masks, NRD frontend used by raygen.</li>
-<li><a href="shaders/compute.html">Compute shaders</a> — SSAO, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
+<li><a href="shaders/compute.html">Compute shaders</a> — SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z.</li>
 <li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.frag MRT contract.</li>
 <li><a href="shaders/particles-sh.html">Particle shaders</a> — Emit, update, render.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
@@ -175,7 +176,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">99 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">100 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

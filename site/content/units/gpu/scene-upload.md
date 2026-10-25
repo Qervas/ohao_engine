@@ -25,12 +25,19 @@ contiguous run.
 So moving a mesh uploads one 160-byte `InstanceGpu` and refits the TLAS; it stalls
 nothing, because the slot's fence has been waited and the device-local table is only
 ever written by copies recorded in the same command buffer that will read it. The
-deferred light UBO is the one exception: `updateLightBuffer` re-reads the light table's
-host copy once per deferred frame into that frame slot's persistently mapped buffer,
-with no staging at all. One buffer per slot, written after the slot's fence wait, is
-what makes the direct write safe.
+raster light table is the one exception: `LightClusters::setLights` copies the light
+table's host array straight into that frame slot's persistently mapped storage buffer,
+with no staging at all, and only when the table's version differs from the one the slot
+holds. One buffer per slot, written after the slot's fence wait, is what makes the
+direct write safe.
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "LightUniformBuffer* VulkanRenderer::updateLightBuffer(uint32_t slot) {"}}
+{{cite ohao/render/deferred/light_clusters.cpp "void LightClusters::setLights(uint32_t slot, std::span<const LightData> lights, uint64_t version) {"}}
+
+The version is the light table's own counter, raised whenever `set` produces a raster
+array that differs from the last one byte for byte, so re-sending an unchanged light
+list each frame uploads nothing:
+
+{{cite ohao/render/scene/light_table.cpp "++m_rasterVersion;"}}
 
 :::key
 Nothing in the render world is torn down and rebuilt. Growth is the only thing that

@@ -124,6 +124,10 @@ names of `ohao/render/frame/pass_registry.hpp`. A window host answers for the fr
 presented; a headless host for its captures' frames (`E_STATE` before the first). One
 frame's passes sum to at most its `gpuMs`. To judge a renderer change, compare against the
 baseline `render_bench` records (`build/render_bench.json`, below in AGENTS.md's gates).
+Two fields appear only when something was cut: `shadowLightsDropped` (pixels with more
+lights worth an RT shadow than the 4 they trace) and `lightsOverflow` (lights left out of
+froxels that held more than 256; those pixels miss them). Seeing `lightsOverflow` means the
+scene packs too many lights' ranges into one place: shorten the ranges.
 
 ## Read logs
 

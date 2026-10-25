@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shaders · Compute shaders — OHAO Monograph</title>
-  <meta name="description" content="SSAO, capture preview, DLSS display pass, GPU culling and Hi-Z." />
+  <meta name="description" content="SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
@@ -30,10 +30,10 @@
       </header>
       <div class="thesis-box reveal">
         <div class="label">Design unit</div>
-        <p>SSAO, capture preview, DLSS display pass, GPU culling and Hi-Z.</p>
+        <p>SSAO, light clustering, capture preview, DLSS display pass, GPU culling and Hi-Z.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#compute-shaders-and-the-target-that-builds-them">Compute shaders, and the target that builds them</a></li><li><a href="#ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</a></li><li><a href="#cull-the-draw-lists-and-the-depth-pyramid">cull/: the draw lists and the depth pyramid</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#compute-shaders-and-the-target-that-builds-them">Compute shaders, and the target that builds them</a></li><li><a href="#ssao-on-the-raster-path">SSAO on the raster path</a></li><li><a href="#light-cluster-the-froxel-light-lists">light_cluster: the froxel light lists</a></li><li><a href="#cull-the-draw-lists-and-the-depth-pyramid">cull/: the draw lists and the depth pyramid</a></li><li><a href="#dlss-tonemap-display-space-behind-a-build-gate">dlss_tonemap: display space, behind a build gate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="compute-shaders-and-the-target-that-builds-them">Compute shaders, and the target that builds them</h2></div>
@@ -45,7 +45,7 @@
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/*.comp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L12" target="_blank" rel="noopener">shaders/CMakeLists.txt:12</a></div>
 <div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS &quot;${CMAKE_CURRENT_SOURCE_DIR}/*.slang&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L83" target="_blank" rel="noopener">shaders/CMakeLists.txt:83</a></div>
 </div>
-<div class="section-rule"><h2 id="ssao-the-one-on-the-raster-path">SSAO: the one on the raster path</h2></div>
+<div class="section-rule"><h2 id="ssao-on-the-raster-path">SSAO on the raster path</h2></div>
 <div class="prose reveal">
 <p>SSAO is now Slang, `compute/ssao.slang`, with two entry points, so it compiles to two files, `compute_ssao.slang.occlusion.spv` and `compute_ssao.slang.blur.spv`, which `SSAOPass` loads by entry name:</p>
 <div class="citation-chip"><code class="citation-code">!rtc::createComputePipeline(m_device, &quot;compute_ssao.slang.blur.spv&quot;, &quot;blur&quot;, m_blurSetLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssao_pass.cpp#L74" target="_blank" rel="noopener">ohao/render/deferred/ssao_pass.cpp:74</a></div>
@@ -59,6 +59,13 @@
 <div class="citation-chip"><code class="citation-code">pp-&gt;setSSAOEnabled(true);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L186" target="_blank" rel="noopener">examples/model_viewer.cpp:186</a></div>
 <div class="citation-chip"><code class="citation-code">.def(&quot;set_ssao_enabled&quot;, &amp;PostProcessingPipeline::setSSAOEnabled)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/python/renderer_bindings.cpp#L304" target="_blank" rel="noopener">tests/python/renderer_bindings.cpp:304</a></div>
 <p>The kernel — a horizon search in the surface&#x27;s tangent plane, eight directions of four steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its effect on the frame are the deferred SSAO unit&#x27;s subject.</p>
+</div>
+<div class="section-rule"><h2 id="light-cluster-the-froxel-light-lists">light_cluster: the froxel light lists</h2></div>
+<div class="prose reveal">
+<p>`compute/light_cluster.slang` has one entry point, `build`, so it compiles to `compute_light_cluster.slang.spv`, which `LightClusters` loads by that name:</p>
+<div class="citation-chip"><code class="citation-code">if (!rtc::createComputePipeline(m_device, &quot;compute_light_cluster.slang.spv&quot;, &quot;build&quot;, m_setLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L73" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:73</a></div>
+<p>It runs one 64-thread workgroup per froxel, 3,456 workgroups in a one-dimensional dispatch, and imports its `LightGpu` record, its `ClusterPush` block and every `kCluster*` constant from the generated `shared.layout` module, the same description `deferred_lighting.frag` reads through `shared/layout.glsl`. The kernel and why its lists leave the lit image unchanged are the deferred clustered-lighting unit&#x27;s subject.</p>
+<div class="citation-chip"><code class="citation-code">[numthreads(kClusterGroupSize, 1, 1)]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L33" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:33</a></div>
 </div>
 <div class="section-rule"><h2 id="cull-the-draw-lists-and-the-depth-pyramid">cull/: the draw lists and the depth pyramid</h2></div>
 <div class="prose reveal">
@@ -100,6 +107,8 @@
         <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/python/renderer_bindings.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/light_clusters.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/light_cluster.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gpu_culling.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/cull/instances.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>

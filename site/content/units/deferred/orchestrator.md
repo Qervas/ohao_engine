@@ -166,7 +166,7 @@ and SSR's reflections should see what they drew: an SSS pass recorded before the
 would blur skin edges against a black background, and SSR would reflect none. Since
 `deferred_lighting.frag` sets `outColor = vec4(0.0)` wherever the GBuffer position
 sample is exactly zero, and `sky.frag` fills whatever the GBuffer left at far depth
-(it discards below 0.9999), the sky pass is the whole sky, and until it runs the
+(it discards every depth below the cleared 1.0), the sky pass is the whole sky, and until it runs the
 background those taps and hits would read is black. Both write through render passes as colour
 attachments, which no compute read is ordered against, so when either ran a memory
 barrier from colour-attachment output to the compute and fragment stages comes

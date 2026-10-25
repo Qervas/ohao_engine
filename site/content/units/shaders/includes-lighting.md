@@ -8,10 +8,9 @@ figures: [shaders-includes-lighting-falloff]
 
 ## What the include graph actually says
 
-`shaders/includes/lighting/` holds two headers, `light_attenuation.glsl` and
-`blinn_phong.glsl`. Grep the include directive across `shaders/` and neither is
-named by any stage; the only `#include` either file takes part in is
-`light_attenuation.glsl` pulling `math.glsl` for itself.
+`shaders/includes/lighting/` holds one header, `light_attenuation.glsl`. Grep the
+include directive across `shaders/` and no stage names it; the only `#include` it
+takes part in is its own pull of `math.glsl`.
 
 {{cite shaders/includes/lighting/light_attenuation.glsl "includes/common/math.glsl"}}
 
@@ -22,11 +21,11 @@ inline — the same algebra, none of it included from here. The one thing it doe
 *not* re-derive is the distance law this header calls its default.
 
 :::key
-Treat this directory as a proposal, not an implementation. No shader includes any
-of it, and the CMake source glob compiles only stages, so neither header is even
-parsed by a shader build. Everything that ships is in `deferred_lighting.frag`,
-which copied some of this math and rejected the rest. The interesting failures
-are where the copy and the original disagree.
+Treat this directory as a proposal, not an implementation. No shader includes it,
+and the CMake source glob compiles only stages, so the header is not even parsed by
+a shader build. Everything that ships is in `deferred_lighting.frag`, which copied
+some of this math and rejected the rest. The interesting failures are where the
+copy and the original disagree.
 :::
 
 ## The falloff the header calls its default
@@ -71,6 +70,14 @@ zero at $d = r$ while staying near 1 over most of the light's useful volume.
 
 {{cite shaders/core/deferred_lighting.frag "float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);"}}
 
+That exact zero is load-bearing. Clustered lighting lists, for each froxel, only the
+lights whose range sphere reaches it, and the lighting loop skips a light whose
+attenuation is exactly 0; both are exact only because past $d = r$ the clamp returns
+0, not a small number. The `LightGpu` record states the same contract in its field
+documentation:
+
+{{cite shaders/shared/layout.json "xyz direction, w range: point and spot light contributes nothing past it"}}
+
 The header already contains the near-match — `attenuationUE4` — with zero
 callers. It also differs from the deferred version in a way that changes units:
 it normalises distance by range *before* squaring, so its core is dimensionless
@@ -81,7 +88,7 @@ and bounded by 1.
 {{figure shaders-includes-lighting-falloff "Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and deferred_lighting.frag, each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range."}}
 
 :::why
-One `LightData`, two incompatible falloff laws. The header's default is
+One light record, two incompatible falloff laws. The header's default is
 dimensionless and peaks at 1; the deferred law carries 1/length² units and peaks
 at 100. They are not related by any constant — the ratio between them varies
 with both distance and range — so an intensity tuned against one is simply wrong
@@ -89,7 +96,8 @@ under the other. That is the reason not to "tidy" `deferred_lighting.frag` onto
 this header: including it is free, but switching the law re-authors every light
 intensity in every scene. If a shared include is wanted, the function to share
 is the deferred one, and the header's `attenuationUE4` is the closest starting
-point.
+point. Any replacement must keep a hard zero at the range, or clustered lighting
+stops being exact.
 :::
 
 ## The IBL the deferred pass evaluates instead
@@ -123,50 +131,23 @@ that analytic curve or an undefined texel is not something the code decides.
 
 {{cite shaders/core/deferred_lighting.frag "brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);"}}
 
-## blinn_phong.glsl and the scar it documents
+## Where the light record lives
 
-This header is a legacy Blinn-Phong shading entry point that no stage includes.
-Its `calculateAttenuation` is a line-for-line copy of `attenuationSmooth` with
-`clamp(x, 0.0, 1.0)` substituted for `saturate` — the file includes nothing, so
-it cannot reach the helper in `math.glsl`, and it states its own prerequisite as
-a comment instead:
+The light record the lighting pass reads is not in this directory either. It is
+`LightGpu` in `shaders/shared/layout.json`, generated into `shared/layout.glsl`,
+`layout.slang` and `ohao/gpu/shared_layout.hpp`: type, range, intensity, the cone
+cosines, the shadow-map index and the RT shadow channel ride in the `w` and `params`
+channels of four `vec4`s, 64 bytes, std430.
 
-{{cite shaders/includes/lighting/blinn_phong.glsl "// Requires: includes/common/types.glsl"}}
+{{cite shaders/shared/layout.json "x cos inner cone, y cos outer cone, z shadow-map index (-1 none), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)"}}
 
-The comment above its entry point is worth more than the code beneath it:
+The channel is -1 for a light that never casts, else the light's RT visibility
+channel, 0 to 7: the first eight shadow-casting lights in light order own one each,
+and a caster past them gets -1 and renders unshadowed.
 
-{{cite shaders/includes/lighting/blinn_phong.glsl "// CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!"}}
-
-So it takes an `int lightIndex` and reads every field by indexing the UBO
-directly, which is what forces the caller's block to be declared under the name
-`lighting`. `deferred_lighting.frag` copies `Light` out of its buffer freely, one
-whole struct per loop iteration, so whatever produced the original corruption is
-not something the shipping pass guards against.
-
-{{cite shaders/core/deferred_lighting.frag "Light light = lighting.lights[i];"}}
-
-The packing these headers assume is real, and is the contract the deferred
-pipeline depends on: type, range, intensity, shadow-map index and RT shadow slot
-ride in the `w` and `params` channels of four `vec4`s, followed by a 64-byte
-light-space matrix — 128 bytes per light, `std140`-compatible by construction.
-
-{{cite ohao/render/scene/render_scene_types.hpp "w = shadow slot (kShadowNever, 0..7)"}}
-
-The slot is -1 for a light that never casts, else the light's RT visibility channel,
-0 to 7: the buffer holds eight lights and the visibility eight channels, so every
-caster has one.
-
-{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kMaxShadowLights = MAX_LIGHTS;"}}
-
-The header's own copy of the struct has the same layout and the same 0..7 range in its
-comment. Nothing includes `types.glsl`, so nothing compiles that copy; the shader that
-reads the slot, `deferred_lighting.frag`, declares its own `Light`.
-
-{{cite shaders/includes/common/types.glsl "w = shadow slot (-1 never, 0..7 its RT visibility channel)"}}
-
-{{cite shaders/core/deferred_lighting.frag "w = shadow slot (-1 never, 0..7 its RT visibility channel)"}}
+{{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kMaxShadowLights = 8;"}}
 
 ## Contracts
 
-- `light_attenuation.glsl` and `blinn_phong.glsl` hold two copies of the same smooth falloff. Editing one without the other desynchronises them, and nothing catches it: no shader includes either file, so neither is compiled.
-- The header's default falloff and `deferred_lighting.frag`'s windowed inverse-square have different units, so intensities tuned against the deferred pass are not portable to anything that adopts the header law.
+- `light_attenuation.glsl` is compiled by nothing; editing it changes no image. Its default falloff and `deferred_lighting.frag`'s windowed inverse-square have different units, so intensities tuned against the deferred pass are not portable to anything that adopts the header law.
+- Whatever attenuation law the lighting pass uses must be exactly 0 at and past `direction.w`: the froxel lists and the `attenuation == 0.0` skip both depend on it.

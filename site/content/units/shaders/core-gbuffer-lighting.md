@@ -198,14 +198,16 @@ shaders: the path tracer reads its material from the SSBO and never sees wetness
 or snow. Only after the stack runs is `initBRDFSurface` called, where the
 metallic slider gets its `smoothstep(0.35, 0.65)` sharpening.
 
-## Eight lights, and a falloff engineered not to pop
+## The froxel's lights, and a falloff engineered not to pop
 
-The loop runs `min(pc.lightCount, MAX_LIGHTS)` times, and `MAX_LIGHTS` is 8, so
-the deferred path shades at most eight lights per pixel however many the scene
-holds. (The shader's comment sources that constant from `offscreen_renderer.hpp`,
-a file that is not in the tree; the matching C++ value lives in
-`ohao/render/scene/render_scene_types.hpp`.) Point and spot lights use a windowed
-inverse-square:
+The loop runs over the pixel's froxel's light list, the indices the `lights.cluster`
+pass wrote for the froxel the pixel's screen tile and view depth fall in (the
+clustered-lighting unit), so a pixel shades the lights that can reach it out of a table
+of up to 65,536:
+
+{{cite shaders/core/deferred_lighting.frag "lightCount = clusterData[cluster];"}}
+
+Point and spot lights use a windowed inverse-square:
 
 $$\mathrm{atten}(d) = \frac{\big[\mathrm{clamp}\!\left(1 - (d/r)^4,\ 0,\ 1\right)\big]^{2}}{\max(d^{2},\ 0.01)}$$
 
@@ -214,7 +216,9 @@ range, packed in `direction.w`. The denominator is the physical term, floored so
 the gain saturates at $100\times$ rather than diverging as $d \to 0$. The
 numerator is the windowing factor, and it is *squared* on purpose: both the
 window and its first derivative vanish at $d = r$, making the whole attenuation
-$C^1$ there, so a light does not visibly snap off at its range boundary.
+$C^1$ there, so a light does not visibly snap off at its range boundary. Past
+$d = r$ the clamp makes it exactly 0, and the loop skips such a light; that hard zero
+is why the froxel lists, which leave out lights out of range, change no pixel.
 
 {{cite shaders/core/deferred_lighting.frag "return invSq * windowing * windowing;"}}
 
@@ -231,14 +235,13 @@ picks its own byte by the slot the light table wrote into its `params.w`:
 
 {{cite shaders/core/deferred_lighting.frag "const uint word = slot < 4 ? rtShadow.x : rtShadow.y;"}}
 
-A slot of -1 (the light casts no shadows, or is an emissive proxy) is never
-occluded; slots 0 to 7 cover every light the eight-entry buffer can hold, so under
-RT every caster has a channel.
+A slot of -1 (the light casts no shadows, is an emissive proxy, or is a caster past
+the first eight) is never occluded; slots 0 to 7 go to the first eight casters in
+light order.
 
 CSM picks a cascade by positive view-space depth and takes a 3×3 PCF of hardware
 depth comparisons (a `sampler2DArrayShadow`); it neither blends between cascades nor applies a normal-offset bias, though
-the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that,
-and `shadowStrength` and the lighting UBO's `shadowBias` are equally inert. It
+the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that. It
 also runs only for `lightType == 0` with a non-negative slot: point and spot lights
 cast no shadow without RT.
 

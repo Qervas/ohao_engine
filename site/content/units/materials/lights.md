@@ -55,13 +55,13 @@ unchanged through `LightDesc` (same defaults) into `params.x` and `params.y` as 
 {{cite ohao/ecs/components.hpp "float innerConeDeg{30.0f};"}}
 
 The renderer decides what an unlit scene looks like. With no light in the raster list —
-no authored light and no emissive stand-in — `updateLightBuffer` installs a warm default
-sun whose intensity is $\pi$, cancelling the diffuse BRDF's $1/\pi$ so that a white
-Lambertian surface facing it reflects its colour at unit scale:
+no authored light and no emissive stand-in — `setFrameLights` lights the frame with a warm
+fallback sun whose intensity is $\pi$, cancelling the diffuse BRDF's $1/\pi$ so that a
+white Lambertian surface facing it reflects its colour at unit scale:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
+{{cite ohao/gpu/vulkan/buffer_setup.cpp "sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());"}}
 
-{{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, render_scene_types.hpp and light_table.cpp; the diagram is conceptual, not a memory dump."}}
+{{figure materials-lights-packing "Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, shaders/shared/layout.json and light_table.cpp; the diagram is conceptual, not a memory dump."}}
 
 :::key
 `positionAndType.w` carries the `LightKind` enum; `LightData.position.w` does not.
@@ -69,7 +69,7 @@ Read either code with the other table in hand and every point light becomes a su
 Area lights exist only on the ray-traced side.
 :::
 
-## Eighty bytes and one hundred twenty-eight
+## Eighty bytes and sixty-four
 
 The ray-traced pack is the small one. `GPULight` is five `vec4`s, std430, with a static
 assert pinning the size so a stray member cannot silently desynchronise it from the GLSL
@@ -77,19 +77,23 @@ mirror:
 
 {{cite ohao/render/rt/gpu_light.hpp "// 5 vec4s = 80 bytes per light, std430 layout"}}
 
-`LightData` is 128 bytes, and 64 of those are a per-light shadow matrix the path tracer has
-no use for — it traces the shadow ray instead of projecting into a map. The light table
-fills the matrix only for the one light it picks as shadow caster (the first Point or
-Spot) and writes identity into every other slot:
+`LightData` is 128 bytes on the host, and 64 of those are a per-light shadow matrix that
+no shader reads: the light table fills it only for the one light it picks as shadow-map
+caster (the first Point or Spot) and writes identity into every other slot, and the GPU
+copy drops it. `LightClusters` uploads each light as a 64-byte `LightGpu`, the four
+`vec4`s alone:
 
 {{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)"}}
+{{cite shaders/shared/layout.json "{"name": "LightGpu", "doc": "one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)","}}
 
-Both buffers are capped, and the caps are different kinds of number. The deferred UBO is a
-fixed array of `MAX_LIGHTS = 8`, and both loops that fill it — authored lights first, then
-the emissive stand-ins — `break` once it is full, so light nine is silently dropped and an
-emissive mesh can eat the slot a hand-placed light wanted:
+Both buffers are capped, and the caps are different kinds of number. The raster table
+holds `MAX_LIGHTS = 65536`, and both loops that fill it — authored lights first, then the
+emissive stand-ins — `break` once it is full, with a warning logged once. It is a storage
+buffer per frame slot, and the lighting pass reads only the lights in a pixel's froxel
+(the clustered-lighting unit), so the count costs per pixel what reaches the pixel, not
+what the scene holds:
 
-{{cite ohao/gpu/vulkan/renderer.hpp "LightData lights[MAX_LIGHTS];"}}
+{{cite ohao/render/scene/render_scene_types.hpp "constexpr uint32_t MAX_LIGHTS = 65536;"}}
 
 The RT side has a real cap too. The device buffer is sized as the 16-byte header plus
 `MAX_GPU_LIGHTS = 64` lights, and a longer list is truncated with a one-time log, so the
@@ -102,8 +106,9 @@ estimator's light count never exceeds what the buffer holds:
 The obvious alternative is one union struct feeding both pipelines, and the byte counts say
 why it was not taken: a shared layout drags the 64-byte shadow matrix into a buffer the
 raygen re-reads once per next-event sample, and drags area edges and a sampling radius into
-a uniform buffer whose eight slots are the scarcest resource in the deferred pass. Two packs
-cost a remap function. One pack costs bandwidth in the hot loop of both pipelines.
+the record every lit pixel reads once per light in its froxel, and the clustering kernel
+once per light per froxel. Two packs cost a remap function. One pack costs bandwidth in the
+hot loop of both pipelines.
 :::
 
 ## The sixteen bytes std430 hands over
@@ -225,19 +230,25 @@ geometry; the origin is pushed 0.01 along the shading normal and `Tmin` is 0.001
 Directional lights get a hard-coded `Tmax` of 10000 instead, which is a scene-scale
 assumption rather than a computed bound.
 
-## The include that nothing includes
+## The constants that name only one table
 
-The header is not merely redundant, it is a trap: its `LIGHT_POINT` is 1, and 1 is
-*directional* in the `GPULight` table this page opened with.
+`constants.glsl` defines three light-type macros, and they are the raster codes:
+directional 0, point 1, spot 2. The deferred lighting shader reaches the header through
+its BRDF includes but compares `position.w` against bare integers, and no ray-tracing
+stage includes it.
 
-Including it into a ray-tracing stage to avoid retyping three constants inverts the two most
-common light types in the engine.
+{{cite shaders/includes/common/constants.glsl "#define LIGHT_TYPE_POINT       1"}}
+
+The macros are not merely unused, they are a trap: `LIGHT_TYPE_POINT` is 1, and 1 is
+*directional* in the `GPULight` table this page opened with. Including the header into a
+ray-tracing stage to avoid retyping three constants inverts the two most common light
+types in the engine.
 
 ## Contracts
 
 - `positionAndType.w` is the raw `LightKind`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.
 - `dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot. Every spot branch in all three raygens reads both meanings; only the angle reading is correct.
-- Both buffers are filled from authored `Light`s *and* from emissive stand-ins. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the deferred eight-slot budget is shared between them.
-- The deferred UBO holds exactly eight lights and drops the rest without warning; the RT SSBO holds 64 and truncates with a one-time log.
+- Both buffers are filled from authored `Light`s *and* from emissive stand-ins. `lightCount` — and therefore the estimator's $N_\ell$ — counts both, and the raster table's capacity is shared between them.
+- The raster table holds 65,536 lights and the RT SSBO 64; both truncate with a one-time log. Past the eighth shadow caster a raster light renders unshadowed (no RT channel), and a froxel keeps at most 256 lights, the overflow reported as `lightsOverflow` in `render.stats`.
 - The environment-map index and intensity scale are members of the light table, and the 16-byte header is rewritten whole whenever any of them, or the light list, changes. Code that writes binding 11 by any other route would have to reproduce that header.
 - The estimator multiplies by `lightCount` because it selects one light uniformly. Replacing uniform selection with importance sampling means replacing that factor with the real inverse density.

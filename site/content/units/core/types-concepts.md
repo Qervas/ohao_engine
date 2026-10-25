@@ -35,15 +35,19 @@ carry a bare assertion directly under their own fields:
 and the three `OHAO_ASSERT_GPU_LAYOUT` sites — `LightData`, `GPULight`,
 `PTPushConstants` — expand to the same check plus a size check. Three of the
 bare-asserted structs — `SimpleVertex`, `CameraUniformBuffer`, `FrameCameraUBO` — are
-declared and used by nothing; the assertion that matters guards a type that is written
-every frame. Without it, someone adds a `std::string` to `LightData`, the write below
-still compiles, and the failure is a garbage light on the GPU plus a heap pointer
-sitting in device memory where the shader expects a float:
+declared and used by nothing; the assertion that matters guards a type whose bytes the
+renderer reads raw. The light table decides whether the GPU copy of the raster lights
+must be rewritten by comparing the new `LightData` array against the last one byte for
+byte:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "memcpy(m_lightBufferMapped[slot], &lightUbo, sizeof(lightUbo));"}}
+{{cite ohao/render/scene/light_table.cpp "std::memcmp(raster.data(), m_raster.data(), raster.size() * sizeof(LightData)) != 0"}}
 
-With the assertion, the failure is a compile error in the header that declares the
-struct.
+Without the assertion, someone adds a `std::string` to `LightData`, that comparison
+still compiles, and it compares heap pointers: two identical light lists read as
+changed, or a changed name reads as unchanged. With it, the failure is a compile error
+in the header that declares the struct. The size half of the macro matters here too:
+128 bytes is exactly four `vec4`s and a `mat4`, so there is no padding whose
+indeterminate bytes `memcmp` could trip on.
 
 ## The typed-view layer that nothing calls
 
@@ -63,17 +67,24 @@ Nothing in `ohao/`, `examples/` or `tests/` calls either of those two — nor
 `GpuAllocator::createBufferFromSpan`, the remaining `GpuPod`-constrained entry
 point. The chain is dead end to end, even though the render world's buffers do come
 out of that allocator: it reads their mapped staging memory through the raw pointer
-from `getMappedData()` and `memcpy`s into it. The light buffer is not even a VMA
-allocation: each frame slot's buffer comes from `vkAllocateMemory`, is persistently
-mapped with `vkMapMemory`, and is handed back through an unguarded cast:
+from `getMappedData()` and `memcpy`s into it. The raster light table is not even a VMA
+allocation: each frame slot's buffer is an `rtc::HostBuffer`, from `vkAllocateMemory`,
+persistently mapped with `vkMapMemory`:
 
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "return static_cast<LightUniformBuffer*>(m_lightBufferMapped[slot]);"}}
+{{cite ohao/render/rt/rt_compute.cpp "if (vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &out.mapped) != VK_SUCCESS) return false;"}}
+
+and `LightClusters` writes its records through an unguarded cast of that mapping:
+
+{{cite ohao/render/deferred/light_clusters.cpp "auto* dst = static_cast<shared::LightGpu*>(s.lights.mapped);"}}
 
 The shader-binding-table writers cast their mapped pointer to bytes the same way. The
 concept therefore holds on these paths only because the structs declared it
-themselves — and `LightUniformBuffer`, the type in that cast, is one that never did.
-Its `LightData` members carry the layout assertion; the enclosing struct carries
-nothing.
+themselves, and `LightGpu`, the type in that cast, does not. It is generated from
+`shaders/shared/layout.json` with a `static_assert` on every field's offset and on its
+64-byte size, which pins the layout the shaders read; nothing in the generated header
+names `GpuPod`.
+
+{{cite ohao/gpu/shared_layout.hpp "static_assert(sizeof(LightGpu) == 64);"}}
 
 ## Why a concept is not a layout
 
@@ -205,7 +216,8 @@ yields a BLAS built over the wrong triangles — a wrong picture, not a validati
 
 ## Contracts
 
-- Any struct written into mapped device memory must assert `GpuPod` at its own declaration. Nothing checks at the cast — `buffer_setup.cpp` `memcpy`s onto the raw `void*` and `render_dispatch.cpp` casts it back unguarded — so a struct that skips the assertion and later gains a `std::string`, a virtual function, or mixed-access data members compiles and corrupts silently. `LightUniformBuffer` is already in that position.
+- Any struct written into mapped device memory must assert `GpuPod` at its own declaration. Nothing checks at the cast — `LightClusters::setLights` casts the raw `void*` mapping to `LightGpu*` unguarded — so a struct that skips the assertion and later gains a `std::string`, a virtual function, or mixed-access data members compiles and corrupts silently. The generated `LightGpu` relies on `gen_layout.py` only ever emitting scalars and fixed-size arrays of floats and integers.
+- `LightData` must stay padding-free and trivially copyable: the light table's version check is a `memcmp` over the array.
 - `GpuPod` does not imply the shader layout matches. Structs with a GLSL counterpart must also carry `OHAO_ASSERT_GPU_LAYOUT`: against a `layout::` constant if the owning header may include `gpu/layout_meta.hpp`, against a literal if it may not, as in `core/`. Adding a field without updating the number is a compile error; updating the number without updating the GLSL is not caught by anything.
 - `PTPushConstants` sits at the 256-byte ceiling. New per-frame path-tracer state has to be packed into an existing field or moved into a descriptor-bound buffer.
 - Mesh offsets (`MeshInfo`, `MeshGpu`) are in elements. Only the BLAS build converts them to bytes.

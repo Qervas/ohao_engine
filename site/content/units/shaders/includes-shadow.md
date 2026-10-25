@@ -1,121 +1,94 @@
 ---
 module: shaders
 id: includes-shadow
-title: Shadow includes
+title: Shadow sampling in lighting
 standard: v2
-figures: [shaders-includes-shadow-slope-bias-clamp]
 ---
 
-## One header, and nothing includes it
+## No shadow header, two shadow sources
 
-`shaders/includes/shadow/` holds a single file, `shadow_pcf.glsl`: a per-light PCF
-sampler written against a single 2D shadow map. Grep the include directive across
-`shaders/` and it is named by no stage, and the CMake source glob compiles stages
-only, so the header is not even parsed by a shader build.
+There is no shadow include directory. Every shadow lookup the raster frame makes is
+written inline in `deferred_lighting.frag`, and it takes one of two forms per frame:
+a ray-traced visibility image, or, where the frame cannot trace, a cascaded shadow map
+for directional lights. The host picks one when the lighting pass records: the RT bit
+and the CSM bit are the two arms of one if/else on whether an RT visibility view is
+bound.
 
-{{cite shaders/includes/shadow/shadow_pcf.glsl "float calculateShadowForLightIndex(int lightIndex, vec3 worldPos, vec3 normal,"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 4;   // CSM fallback (bit 2)"}}
 
-The shadowing that runs lives elsewhere, written inline. `deferred_lighting.frag`
-samples a four-layer cascade array, selecting the cascade by positive view-space
-depth:
-
-{{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
-
-and its PCF taps accumulate *visibility* — 1.0 where the fragment is lit. Each tap is
-a hardware depth comparison: the map is bound as a `sampler2DArrayShadow` through the
-pass's `LESS_OR_EQUAL` comparison sampler, and the fourth coordinate is the biased
-reference depth:
-
-{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
-
-{{cite shaders/core/deferred_lighting.frag "float(cascadeIdx), reference));"}}
-
-## The include that has to come last
-
-`shadow_pcf.glsl` takes the shadow map as a parameter but not the lights. It reaches
-into a uniform block named `lighting` that the *calling* file must already have
-declared, under that exact name, with those exact members:
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!"}}
-
-GLSL has no forward declaration for an interface block, so this is a purely textual
-ordering constraint that the compiler reports only as an undefined identifier. Any
-adopter has to declare the block first and include the header below it; hoisting
-the includes to the top of the file — the reflex tidy-up — stops it compiling. It
-also needs `LIGHT_DIRECTIONAL` from `types.glsl` in scope, which it names in a
-comment rather than an include.
-
-:::why
-Passing the light data in as a parameter is what the same signature already does for
-`shadowMap`, and it was rejected here for a stated reason. The sampler takes an
-`int lightIndex`, never a `Light`, because — according to the header's own comment —
-copying the 128-byte struct (four `vec4`s plus a `mat4`) out of the UBO comes back
-corrupted on some drivers:
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "Some GPU drivers corrupt large struct copies (the 128-byte Light struct)"}}
-
-That comment is the only evidence in the tree — no driver named, no repro, no test —
-so read it as the author's recorded rationale rather than a reproduced finding. The
-shipping lighting pass does the opposite and copies a whole `Light` per loop
-iteration. The header follows its own rule regardless: every field is read by
-indexing the UBO directly, which is what forces the block to be visible by name, and
-the fragile include order is the price paid for it.
-:::
-
-The first thing the function does with that index is read `params.z`, the shadow-map
-index the host writes, and return zero occlusion for any light whose value is
-negative — so a caller can invoke it once per light in its loop and let non-casters
-cost a single compare.
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "float shadowMapIndex = lighting.lights[lightIndex].params.z;"}}
-
-## Bias by the tangent of the incidence angle
-
-A depth map records the occluder distance at texel centres. A receiver shaded
-anywhere else inside that texel is compared against a depth belonging to a point up
-to half a texel away, and on a surface tilted relative to the light that lateral
-offset turns into a depth error proportional to the surface slope. The constant
-subtracted before the comparison therefore has to grow with incidence angle:
-
-$$b(\theta) \;=\; \min\!\left(b_0 \tan\theta,\; 0.01\right), \qquad \cos\theta = \max(N\cdot L,\, 0)$$
-
-Here $b_0$ is the host-supplied `shadowBias`, $N$ the shading normal, $L$ the unit
-direction from the surface to the light, and $\theta$ the incidence angle. The header
-computes it in exactly that form, through `acos` then `tan`, rather than the
-algebraically equal $\sqrt{1-c^2}/c$:
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "float bias = lighting.shadowBias * tan(acos(cosTheta));"}}
-
-{{figure shaders-includes-shadow-slope-bias-clamp "Conceptual, computed from the expression rather than captured. The 0.01 ceiling is the clamp shadow_pcf.glsl applies; the curve with a ceiling five times higher is a comparison line only, and has no counterpart in the current tree. The two agree below 63 degrees and diverge sharply above it."}}
-
-The deferred cascade path does none of this. Its bias is the cascade UBO's
-`shadowBias`, a constant 0.012 subtracted at every incidence angle, and the
-`normalBias` beside it in the same struct is never read by the shader:
-
-{{cite ohao/render/deferred/render_pass_base.hpp "float shadowBias{0.012f};"}}
-
-## Occlusion here, visibility there
-
-The header filters with a 5×5 grid at one-texel spacing — twenty-five taps, all
-weighted equally — and returns *occlusion*, pre-multiplied by the global strength:
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "return shadow * lighting.shadowStrength;"}}
-
-{{cite shaders/includes/shadow/shadow_pcf.glsl "const int pcfRadius = 2;"}}
-
-A caller would consume it as `1 - shadow`, so with the host's strength of 0.7 a fully
-occluded fragment would keep 30 % of that light's direct contribution.
-
-{{cite ohao/gpu/vulkan/buffer_setup.cpp "lightUbo.shadowStrength = 0.7f;"}}
-
-The cascade path returns the opposite quantity — visibility, 3×3 taps, no strength
-term — and multiplies it straight into the light's BRDF result. A shader that
-mixed the two samplers would compile cleanly and shade one of the two results
-inverted.
+The only shadow stage file left is the cascade depth write, `shadow/shadow_csm.vert`
+(below). Both consumers live in the lighting loop, after the light's attenuation and
+before its BRDF, and both produce *visibility*: 1 lit, 0 occluded, multiplied straight
+into that light's contribution.
 
 {{cite shaders/core/deferred_lighting.frag "Lo += evaluateBRDF(surface, L, radiance) * shadow;"}}
 
-## Four cascades, one light type, resolved per pass
+## Eight channels, one byte each
+
+The RT image is `R32G32_UINT` at the lighting pass's size, bound at binding 14 as a
+`usampler2D`: eight 8-bit channels, x holding lights 0 to 3 and y lights 4 to 7, lowest
+byte first. It is fetched once per pixel before the loop, by integer coordinate:
+
+{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 14) uniform usampler2D rtShadowVisibility;"}}
+
+A light finds its channel in `params.w`. The light table hands channels out in light
+order to the first eight lights that cast shadows, and writes -1 into every other
+light, which is then never occluded:
+
+{{cite shaders/core/deferred_lighting.frag "const uint word = slot < 4 ? rtShadow.x : rtShadow.y;"}}
+
+Eight is the image's width in bytes, not the light table's size: the raster table holds
+up to 65,536 lights, so a scene with a ninth caster renders it unshadowed. The light
+table counts those lights (`RenderScene::shadowCastersWithoutChannel()`), and test 8
+checks the case on Cornell, whose twelve casting lights give eight channels and four
+unshadowed lights.
+
+{{cite ohao/render/scene/light_table.cpp "if (m_shadowLights.size() < kMaxShadowLights) {"}}
+
+A channel that reads 0 makes the light's term exactly zero, and the loop skips it
+before the BRDF. That skip matters to clustered lighting, which is exact only if every
+term it leaves out or skips would have added $+0$:
+
+{{cite shaders/core/deferred_lighting.frag "if (shadow == 0.0) continue;   // fully occluded: adds exactly zero"}}
+
+## The cascade fallback
+
+Without RT shadows, a light with a channel is shadowed by the cascades if it is
+directional, and only then: the CSM branch tests `lightType == 0`, so point and spot
+lights cast no shadow in a frame that cannot trace.
+
+{{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
+
+The cascade is chosen by positive view-space depth against the cascade UBO's split
+distances:
+
+{{cite shaders/core/deferred_lighting.frag "if (viewDepth < cascades.splitDepths[i]) return i;"}}
+
+and the lookup is a 3×3 PCF whose nine taps are hardware depth comparisons: the map is
+bound as a `sampler2DArrayShadow` through the pass's `LESS_OR_EQUAL` comparison sampler,
+the fourth coordinate the biased reference depth:
+
+{{cite shaders/core/deferred_lighting.frag "layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;"}}
+{{cite shaders/core/deferred_lighting.frag "float(cascadeIdx), reference));"}}
+
+The bias is the cascade UBO's `shadowBias`, a constant 0.012 subtracted at every
+incidence angle. A depth map's error grows with the tangent of the angle between the
+surface and the light, so a constant is too much at normal incidence (light leaks at
+contact) or too little at grazing angles (acne); the `normalBias` beside it in the same
+struct, the usual remedy, is never read by the shader.
+
+{{cite ohao/render/deferred/render_pass_base.hpp "float shadowBias{0.012f};"}}
+
+`calculateShadowCSM` takes the fragment position and view depth and nothing about the
+light, so a second directional light recomputes the same nine taps and gets the same
+value. The cascades are rendered from a single direction, the deferred renderer's own
+sun direction (the sky's, or `setDirectionalLight`'s), whichever directional light the
+loop is shading:
+
+{{cite shaders/core/deferred_lighting.frag "shadow = calculateShadowCSM(fragPos, viewDepth);"}}
+{{cite ohao/render/deferred/csm_pass.cpp "glm::mat4 lightView = glm::lookAt(center - m_lightDirection * radius, center, up);"}}
+
+## Four cascades, one vertex stage
 
 The depth-write side is a single vertex stage with no fragment shader: depth arrives
 straight from the rasteriser into one 2048² layer per cascade. Each cascade is its own
@@ -132,30 +105,25 @@ device guarantees, and the C++ mirror pins that size:
 
 {{cite ohao/render/deferred/csm_pass.hpp "static_assert(sizeof(ShadowPushConstant) == 64);"}}
 
-On the consuming side, the cascade map shadows directional lights only — the
-`lightType == 0` test in the deferred loop — and only when flag bit 2 is set, which
-the host sets only when no RT shadow mask is bound:
+The renderer does not draw the cascades at all in a frame that traces: the `csm` pass
+is added to the graph only when RT shadows do not run.
 
-{{cite shaders/core/deferred_lighting.frag "} else if ((pc.flags & 4u) != 0u && lightType == 0) {"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_csmPass && !rtShadows) {"}}
 
-That leaves the light UBO's own shadow fields with no reader. The light table
-still tags the first light whose kind is Point or Spot with `params.z = 0` — the legacy
-rule, kept as is, and in the engine's enum the first kind is a point light:
+## The host's shadow fields no shader reads
 
-{{cite ohao/render/scene/render_scene_types.hpp "enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };"}}
+The light table still tags the first point or spot light with a shadow-map index in
+`params.z` and computes a `lightSpaceMatrix` for it — identity for a point light, which
+has no cube-map path. Neither reaches a shader: the GPU record, `LightGpu`, carries
+`params.z` but the lighting loop reads only `params.x`, `.y` and `.w`, and the matrix is
+dropped when `LightClusters` copies `LightData` into `LightGpu`.
 
-So the host marks point-or-spot lights as casters and computes a
-`lightSpaceMatrix` for them — identity for a point light, since
-`lightSpaceMatrix` has no cube-map path — while the only shader that
-shadows anything ignores `params.z` and `lightSpaceMatrix` and shadows the
-directional lights instead. Only `shadow_pcf.glsl`, which nothing compiles, would
-read the tagged values.
-
-{{cite ohao/render/scene/light_table.cpp "// Point lights don't use a single matrix (need cube maps)"}}
+{{cite ohao/render/scene/light_table.cpp "// The legacy rule, kept as is: old LightType 0/2 = Sphere(point)/Spot."}}
 
 ## Contracts
 
-- `shadow_pcf.glsl` must be included *after* the caller declares a uniform block named `lighting` containing `lights[]`, `shadowBias` and `shadowStrength`, with `types.glsl` already in scope. Reordering the includes is a compile error, and renaming the block is a compile error in a file that does not mention it.
-- The function must keep taking a light *index*. The header states that binding a `Light` to a local corrupts on some drivers, and the whole naming coupling above exists to avoid it; the claim is unreproduced in this tree, and the shipping deferred pass does not observe it.
-- `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay a single `mat4 viewProj` at 64 bytes; the C++ side is statically asserted, the GLSL side is not. The vertex shader's instance-table binding (set 0, binding 0) must stay in step with `CSMPass`'s scene layout.
-- Cascade shadows apply to directional lights only, and RT shadows (bit 5) replace them outright. The host's `params.z` caster tag and per-light `lightSpaceMatrix` are read by no compiled shader.
+- RT shadows (bit 5) and CSM (bit 2) are exclusive per frame, decided by whether an RT visibility view is bound when the lighting pass records. The `csm` pass runs only in frames that do not trace.
+- `params.w` and the visibility's channels are one contract with the light table and the RT shadow passes: the table hands out channels 0 to 7 in the order it lists `shadowLights()`, and the passes write light *i* into channel *i*. Casters past the eighth must keep -1.
+- A zero visibility must stay an exact zero term: the `shadow == 0.0` skip is part of what makes clustered lighting equal the every-light loop.
+- `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay a single `mat4 viewProj` at 64 bytes; the C++ side is statically asserted, the GLSL side is not.
+- Cascade shadows apply to directional lights only, with a constant bias; `cascades.normalBias`, `params.z` and the host's `lightSpaceMatrix` are read by no shader.

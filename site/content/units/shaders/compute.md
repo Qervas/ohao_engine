@@ -23,7 +23,7 @@ GLSL compute files are compiled by a glob; Slang files by a second one, one SPIR
 
 {{cite shaders/CMakeLists.txt "file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.slang")"}}
 
-## SSAO: the one on the raster path
+## SSAO on the raster path
 
 SSAO is now Slang, `compute/ssao.slang`, with two entry points, so it compiles to two
 files, `compute_ssao.slang.occlusion.spv` and `compute_ssao.slang.blur.spv`, which
@@ -60,6 +60,21 @@ The model viewer, the `ohao_game` host, a live window session and a capture whos
 The kernel — a horizon search in the surface's tangent plane, eight directions of four
 steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its
 effect on the frame are the deferred SSAO unit's subject.
+
+## light_cluster: the froxel light lists
+
+`compute/light_cluster.slang` has one entry point, `build`, so it compiles to
+`compute_light_cluster.slang.spv`, which `LightClusters` loads by that name:
+
+{{cite ohao/render/deferred/light_clusters.cpp "if (!rtc::createComputePipeline(m_device, "compute_light_cluster.slang.spv", "build", m_setLayout,"}}
+
+It runs one 64-thread workgroup per froxel, 3,456 workgroups in a one-dimensional
+dispatch, and imports its `LightGpu` record, its `ClusterPush` block and every
+`kCluster*` constant from the generated `shared.layout` module, the same description
+`deferred_lighting.frag` reads through `shared/layout.glsl`. The kernel and why its lists
+leave the lit image unchanged are the deferred clustered-lighting unit's subject.
+
+{{cite shaders/compute/light_cluster.slang "[numthreads(kClusterGroupSize, 1, 1)]"}}
 
 ## cull/: the draw lists and the depth pyramid
 

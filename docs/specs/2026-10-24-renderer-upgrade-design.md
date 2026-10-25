@@ -260,11 +260,11 @@ budget:
 | `csm` | 0.00 | in "RenderGraph" | Not rendered when RT shadows are on |
 | `rt.shadows` | 0.30 (was 0.20) | in "RenderGraph" | 1 ray per shadowed light, not 8; scene lights, not a hard-coded one; Cornell's 8 shadowed lights trace 4 a pixel |
 | `rt.shadows.filter` | 0.08 (was 0.05) | — | 5x5 depth/normal-aware, one pass; memory-bound over 8 light channels |
-| `rt.gi` | 0.30 | in "RenderGraph" | Half resolution (1/4 the pixels), 2 rays, not 32 (1/64 of the rays) |
+| `rt.gi` | 0.10 (0.30 until step 13 moved 0.20 to `lighting`) | in "RenderGraph" | Half resolution (1/4 the pixels), 2 rays, not 32 (1/64 of the rays) |
 | `rt.gi.denoise` | 0.20 | — | Temporal (reprojected), 2 à-trous iterations at half res, joint-bilateral upsample |
 | `ssao` | 0.00 (off) / 0.08 (on) | in "RenderGraph" | Half res; off in this configuration |
 | `lights.cluster` | 0.03 | — | 3,456 froxels, brute force over few lights |
-| `lighting` | 0.12 | in "RenderGraph" | Cluster lookup instead of a capped loop |
+| `lighting` | 0.32 (0.12 planned; step 13 measured 12 uncapped lights at 0.27) | in "RenderGraph" | Cluster lookup instead of a capped loop |
 | `sss` | 0.02 | timed | Classified tiles; Cornell has no skin, so zero tiles |
 | `ssr` | 0.04 (was 0.10) | timed | Half resolution |
 | `sky` + `particles` | 0.03 (was 0.05) | timed | Unchanged work |
@@ -404,13 +404,21 @@ deterministic. Brute force up to 4,096 lights, measured inside the 0.03 ms budge
 `cornell_720p` and gated at 1,000 lights in `bench100k_1080p`. A hierarchical pre-pass for
 larger counts is later work.
 
-**Lighting.** Lighting, particles and the RT GI hit shading read the lists. The light table
-loses its 8-light cap: `MAX_LIGHTS` becomes the table's capacity, 65,536, in a storage
-buffer. A cluster that overflows 256 lights keeps the first 256 and counts the overflow in
-`render.stats`, so it is visible, not silent.
+**Lighting.** Deferred lighting reads the lists. (As built, step 13: particles shade with
+no lights, and RT GI keeps its own 4 brightest lights, because its hits lie outside the
+camera's froxels; neither reads the lists.) The light table loses its 8-light cap:
+`MAX_LIGHTS` becomes the table's capacity, 65,536, in a storage buffer, one per frame slot,
+rewritten only when the lights change. A cluster that overflows 256 lights keeps the first
+256 and counts the overflow in `render.stats` (`lightsOverflow`), so it is visible, not
+silent. The slices run to the camera's far plane; an orthographic projection builds no
+lists and sums every light. RT shadows keep 8 channels: the first 8 shadow-casting lights
+own one each, and casters past them render unshadowed (counted by the RenderScene).
 
 **Exactness.** A scene with ≤ 8 lights renders identically to today's loop (`max_abs` 0),
-because each pixel sums the same lights in the same order.
+because each pixel sums the same lights in the same order. As built, the lists equal
+summing every light for any scene whose froxels do not overflow: the attenuation window is
+exactly 0 past a light's range, and the loop skips a light whose attenuation or shadow is
+exactly 0, so the lights a froxel leaves out would have added +0.
 
 ## RT shadows
 
@@ -1232,6 +1240,31 @@ improvising. Intentional image changes are separate commits inside their step.
     - The 1,000-light `bench100k_1080p`.
     - Gates `lights.cluster` and the `bench100k_1080p` frame.
     - Test 8.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step13.md`):*
+      `LightClusters` (`ohao/render/deferred/light_clusters.*`) owns the light table (a
+      host-visible `LightGpu` storage buffer per frame slot, 64 bytes a light, skipped when
+      the RenderScene's `rasterLightsVersion()` is unchanged) and the froxel lists (one
+      device-local buffer: 3,456 counts, then 256 indices a froxel); `lights.cluster`
+      (`shaders/compute/light_cluster.slang`) runs after `gbuffer.late`, one 64-thread
+      workgroup a froxel, the froxel's box built from the jittered projection and padded
+      (1.5 px, slices ×0.999/×1.001, light range ×1.0001 + 1e-4), indices compacted in
+      light order through a groupshared mask. `deferred_lighting.frag` reads `LightGpu`
+      (binding 5) and the lists (binding 16). The light UBO, its 8-light cap and three dead
+      GLSL includes are gone. *Corrections:* (1) particles and RT GI do not read the lists
+      ("Lighting", above). (2) RT shadow channels stay 8, for the first 8 casters; casters
+      past them render unshadowed. (3) The slices take the camera's far plane
+      (`setClusterFarPlane`), not the fixed 1,000 m the renderer passes for CSM; an
+      orthographic projection builds no lists. (4) `sky.frag` treated depth ≥ 0.9999 as sky,
+      painting over every surface past ~1,000 m; only the cleared 1.0 is sky now.
+      (5) `cornell_720p`'s `lighting` budget of 0.12 ms is infeasible with all 12 lights:
+      the pass costs about 0.027 ms plus 0.022 ms a light (0.188 ms for the 8 it drew before
+      this step, 0.27 ms for 12), and test 8 holds the BRDF exact. Under the "Frame cost"
+      rule 0.20 ms moved from `rt.gi` (0.30 → 0.10, measures 0.065) to `lighting`
+      (0.12 → 0.32); the frame budget and the total are unchanged. The bench scenes carry
+      1,000 point lights (range 15 m, 4 shadowed) and the sun; no froxel overflows there
+      (the largest holds 97). Measured (GPU calibration ×1.06, the run flagged noisy by CPU
+      load): `cornell_720p` frame 0.969 ms, `lights.cluster` 0.010, `lighting` 0.271;
+      `bench100k_1080p` frame 4.155 ms, `lights.cluster` 0.061.
 14. **Path-traced frames in a window.**
     - The RT present path; RT captures in the window host; `window_capture_rt_inline_ms`
       recorded.

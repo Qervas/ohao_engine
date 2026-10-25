@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>05 · Deferred · Clustered lighting — OHAO Monograph</title>
+  <meta name="description" content="Froxel light lists, built every frame, exact against summing every light." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="deferred/clustered-lighting" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../deferred.html">← Module hub</a> · Clustered lighting</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">deferred</p>
+          <h1>Clustered lighting</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Froxel light lists, built every frame, exact against summing every light.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#a-light-list-per-froxel">A light list per froxel</a></li><li><a href="#exponential-slices">Exponential slices</a></li><li><a href="#the-froxel-s-box-made-conservative">The froxel&#x27;s box, made conservative</a></li><li><a href="#the-sphere-test-in-light-order">The sphere test, in light order</a></li><li><a href="#the-cap-and-the-overflow">The cap and the overflow</a></li><li><a href="#how-lighting-reads-the-lists">How lighting reads the lists</a></li><li><a href="#why-the-two-loops-give-the-same-image">Why the two loops give the same image</a></li><li><a href="#the-light-table-per-frame-slot">The light table per frame slot</a></li><li><a href="#what-does-not-read-the-lists">What does not read the lists</a></li><li><a href="#cost">Cost</a></li><li><a href="#test-8">Test 8</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="a-light-list-per-froxel">A light list per froxel</h2></div>
+<div class="prose reveal">
+<p>A deferred lighting pass that loops over every light pays, at every pixel, for lights whose range ends metres away. Clustered lighting cuts the view frustum into cells and gives each cell the list of lights that can reach it; a pixel then loops over its cell&#x27;s list. OHAO&#x27;s cells are froxels: 16 screen tiles across, 9 down and 24 depth slices, the same 3,456 at any resolution, numbered slice-major:</p>
+<div class="citation-chip"><code class="citation-code">&quot;doc&quot;: &quot;kClusterTilesX * kClusterTilesY * kClusterSlices; froxel f = (slice * kClusterTilesY + y) * kClusterTilesX + x&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L69" target="_blank" rel="noopener">shaders/shared/layout.json:69</a></div>
+<p>The lists are rebuilt every frame by a compute pass, `lights.cluster`, which the pass registry places right after the G-buffer&#x27;s late phase:</p>
+<div class="citation-chip"><code class="citation-code">{&quot;lights.cluster&quot;, PassKind::Compute, &quot;clustered lighting: every froxel&#x27;s (16x9 tiles x 24 slices) list of the lights that reach it&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/pass_registry.hpp#L28" target="_blank" rel="noopener">ohao/render/frame/pass_registry.hpp:28</a></div>
+<p>The lists live in one device-local buffer: 3,456 counts, then 256 light indices per froxel, about 3.4 MiB. A froxel lists at most `kClusterMaxLights` (256) lights.</p>
+</div>
+<div class="section-rule"><h2 id="exponential-slices">Exponential slices</h2></div>
+<div class="prose reveal">
+<p>Tiles are uniform in screen space; slices are uniform in the logarithm of view depth, from `kClusterNear` (0.1 m) to the far plane the deferred renderer was given. With $N$ slices, near distance $n$ and far distance $f$, a point at view depth $d$ falls in slice</p>
+<div class="math-block">$$
+k(d) \;=\; \Big\lfloor N\,\frac{\ln(d/n)}{\ln(f/n)} \Big\rfloor \;=\; \big\lfloor S \ln d + B \big\rfloor,\qquad S = \frac{N}{\ln(f/n)},\; B = -S\ln n
+$$</div>
+<p>so every slice spans the same depth *ratio*, $(f/n)^{1/N}$. A froxel&#x27;s depth extent then grows with distance as its screen footprint does, which keeps froxels roughly the same shape near and far; uniform slices would waste most of them on distant depth and leave the near field, where lights crowd the screen, coarse. `LightClusters::build` computes $S$ and $B$ once per frame and hands the same two numbers to the kernel and to the lighting pass:</p>
+<div class="citation-chip"><code class="citation-code">m_sliceScale = static_cast&lt;float&gt;(shared::kClusterSlices) / std::log(farD / shared::kClusterNear);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L168" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:168</a></div>
+<p>$f$ is the camera&#x27;s own far plane, handed over every frame, so the last slice ends where the projection clips: a surface the G-buffer kept always lies inside some slice&#x27;s box. (The lighting shader clamps a pixel&#x27;s slice to the last one; with a shorter $f$ than the camera&#x27;s, pixels past it would land in a box that stops short of them and miss their lights.) With $n = 0.1$ and $f = 1000$, each slice is about 1.47 times deeper than the one before it.</p>
+<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;setClusterFarPlane(m_camera-&gt;getFarPlane());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L139" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:139</a></div>
+<p>The froxels are slices of a perspective frustum. An orthographic projection (its `[2][3]` is 0) builds no lists: lighting sums every light instead, the same image.</p>
+<div class="citation-chip"><code class="citation-code">const bool perspective = m_proj[2][3] != 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L325" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:325</a></div>
+</div>
+<div class="section-rule"><h2 id="the-froxel-s-box-made-conservative">The froxel&#x27;s box, made conservative</h2></div>
+<div class="prose reveal">
+<p>One workgroup of 64 threads builds one froxel&#x27;s list. It first bounds the froxel in view space: the tile&#x27;s four screen corners at the slice&#x27;s near and far depths, eight points, and their axis-aligned box. A corner is the point at depth $d$ on the ray through an NDC position, inverted through the projection&#x27;s four non-trivial terms:</p>
+<div class="citation-chip"><code class="citation-code">return float3(d * (ndc.x + pc.proj.z) / pc.proj.x, d * (ndc.y + pc.proj.w) / pc.proj.y, -d);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L29" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:29</a></div>
+<p>`proj.z` and `proj.w` are the projection&#x27;s `[2][0]` and `[2][1]`, where TAA&#x27;s sub-pixel jitter sits, and the renderer builds the lists with the jittered projection the G-buffer was rasterized with. A pixel&#x27;s G-buffer position lies on the jittered ray through its centre, so it lies inside its own tile&#x27;s frustum, not the unjittered one&#x27;s:</p>
+<div class="citation-chip"><code class="citation-code">m_lightClusters-&gt;build(c, frameIndex, m_view, jitteredProj, m_width, m_height, m_clusterFar, m_frameNumber);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L336" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:336</a></div>
+<p>Then the box is padded. The tile grows by 1.5 pixels on every side, the slice by 0.1% in each direction (the first slice reaches back to the eye, so geometry nearer than 0.1 m is still covered), and each light&#x27;s range by 0.01% plus $10^{-4}$:</p>
+<div class="citation-chip"><code class="citation-code">const float2 p0 = float2(tx, ty) * tile - 1.5, p1 = float2(tx + 1u, ty + 1u) * tile + 1.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L46" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:46</a></div>
+<div class="citation-chip"><code class="citation-code">const float dFar = exp((float(slice + 1u) - pc.screen.w) / pc.screen.z) * 1.001;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L49" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:49</a></div>
+<div class="citation-chip"><code class="citation-code">const float r = l.direction.w * 1.0001 + 1e-4;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L76" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:76</a></div>
+<p>The padding is what the exactness argument below needs. The kernel decides membership in view space with its own float arithmetic, and the lighting shader picks a pixel&#x27;s froxel and measures its distance to a light with different arithmetic (world space, a logarithm, a division); a light sitting on a froxel boundary must never be dropped by one side and counted by the other. Padding only ever adds lights to a list.</p>
+</div>
+<div class="section-rule"><h2 id="the-sphere-test-in-light-order">The sphere test, in light order</h2></div>
+<div class="prose reveal">
+<p>Each thread tests one light a round, 64 lights per round, until the table is exhausted. A directional light reaches everywhere; a point or spot light is its range sphere, and the test is the closest point of the box to the sphere&#x27;s centre:</p>
+<div class="citation-chip"><code class="citation-code">hit = dot(q, q) &lt;= r * r;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L78" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:78</a></div>
+<p>where `q = clamp(c, lo, hi) - c`, the vector from the centre to the nearest point of the box. A spot light is tested as its full sphere, not its cone: a spot facing away from a froxel still enters the list and costs the lighting loop one cone test there, never a wrong pixel.</p>
+<p>The hits must be written in light-index order, because the lighting loop must add the same terms in the same order as a loop over every light. The workgroup compacts them through a 64-bit mask in shared memory: each hitting thread sets its bit, then counts the set bits of the threads below it, and that count is its place in the list:</p>
+<div class="citation-chip"><code class="citation-code">if (hit) InterlockedOr(gMask[t &gt;&gt; 5u], 1u &lt;&lt; (t &amp; 31u));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L84" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:84</a></div>
+<div class="citation-chip"><code class="citation-code">if (hit &amp;&amp; written + before &lt; kClusterMaxLights) clusters[listBase + written + before] = i;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L94" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:94</a></div>
+<p>The `InterlockedOr` is an atomic on shared memory within one workgroup, and OR commutes, so the mask does not depend on which thread got there first. No workgroup writes another froxel&#x27;s list, so there are no atomics across workgroups on the lists, and two runs build them word for word identically.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The usual light-binning kernels let threads append with a global atomic counter: one pass, any order. The order would then depend on scheduling, and a floating-point sum in a different order is a different sum, so the image would change run to run and could not equal the every-light loop. The ordered compaction costs two barriers and a few `countbits` per round of 64 lights; it buys bit-identical lists and images.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-cap-and-the-overflow">The cap and the overflow</h2></div>
+<div class="prose reveal">
+<p>A froxel keeps its first 256 hits, in light order, and thread 0 writes the count. It also records what the cap cut into a three-word stats buffer: the lights dropped, the froxels that dropped any, and the largest count before the cut. Those integer atomics do cross workgroups, but integer addition and maximum commute, so the totals are exact.</p>
+<div class="citation-chip"><code class="citation-code">InterlockedAdd(stats[0], written - kClusterMaxLights);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/light_cluster.slang#L104" target="_blank" rel="noopener">shaders/compute/light_cluster.slang:104</a></div>
+<p>Each frame slot has its own host-visible stats buffer, cleared when the slot is built and read once that slot&#x27;s fence has signalled; the newest finished frame&#x27;s values are kept:</p>
+<div class="citation-chip"><code class="citation-code">if (!m_latest || s.frame &gt;= m_latest-&gt;frame) m_latest = Overflow{s.frame, words[0], words[1], words[2]};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L223" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:223</a></div>
+<p>`render.stats` reports the dropped-light count as `lightsOverflow` when it is nonzero and the frame it came from is among the frames the call summarises; absent otherwise:</p>
+<div class="citation-chip"><code class="citation-code">if (overflow &amp;&amp; overflow-&gt;lights &gt; 0 &amp;&amp; overflow-&gt;frame &gt;= frames.front().frame &amp;&amp;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/frame_capture.cpp#L264" target="_blank" rel="noopener">ohao/runtime/frame_capture.cpp:264</a></div>
+<p>An overflowing froxel is the one case where the clustered image differs from summing every light: the lights past the 256th are dropped whatever their brightness, because the list keeps the lowest indices. The overflow is reported rather than hidden.</p>
+</div>
+<div class="section-rule"><h2 id="how-lighting-reads-the-lists">How lighting reads the lists</h2></div>
+<div class="prose reveal">
+<p>The lighting fragment shader finds its pixel&#x27;s tile from `gl_FragCoord` and its slice from the logarithm of its view depth, with the same $S$ and $B$:</p>
+<div class="citation-chip"><code class="citation-code">const float s = viewDepth &gt; 0.0 ? floor(log(viewDepth) * pc.sliceScale + pc.sliceBias) : 0.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L241" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:241</a></div>
+<p>clamps the slice to 0..23 (a pixel nearer than 0.1 m uses slice 0; none lies past the far plane, which clips it), reads the froxel&#x27;s count and loops over its indices into the light table:</p>
+<div class="citation-chip"><code class="citation-code">const LightGpu light = lights[clustered ? clusterData[listBase + k] : k];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L250" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:250</a></div>
+<p>With push flag bit 6 the same loop runs over every light in the table instead. The pass sets the bit when it has no froxel buffer, which is what `setClusteredLighting(false)` arranges: the deferred renderer then hands the lighting pass a null buffer and does not add `lights.cluster` to the graph at all.</p>
+<div class="citation-chip"><code class="citation-code">if (m_clusterBuffer == VK_NULL_HANDLE) m_params.flags |= 64; // every light (no froxel lists)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L185" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:185</a></div>
+</div>
+<div class="section-rule"><h2 id="why-the-two-loops-give-the-same-image">Why the two loops give the same image</h2></div>
+<div class="prose reveal">
+<p>The every-light loop adds, for each light $i$ in index order, a term $t_i$, and skips the light when its attenuation or its shadow is exactly zero:</p>
+<div class="citation-chip"><code class="citation-code">if (attenuation == 0.0) continue;   // adds exactly zero: past its range or its cone</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L270" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:270</a></div>
+<p>A light left out of a pixel&#x27;s froxel has its range sphere entirely outside the froxel&#x27;s padded box, so at that pixel $d &gt; r$ and the attenuation&#x27;s window is $\mathrm{clamp}(1 - (d/r)^4, 0, 1) = 0$ exactly: the every-light loop skips that light too. The clustered loop therefore visits exactly the lights the every-light loop does not skip, plus some it does skip, in the same ascending order, and the two compute the same floating-point sum operation for operation.</p>
+<div class="citation-chip"><code class="citation-code">float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L87" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:87</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Exactness rests on three things: the attenuation is exactly 0, not small, past the range; a light left out would have been skipped anyway, so nothing that adds a nonzero term is removed; and the lists keep light-index order. Change the falloff to one without a hard zero, reorder the lists, or let a froxel overflow, and the image moves.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-light-table-per-frame-slot">The light table per frame slot</h2></div>
+<div class="prose reveal">
+<p>The lists index a light table, which `LightClusters` also owns: one host-visible storage buffer of 64-byte `LightGpu` records per frame slot, at most `kLightCapacity` (65,536), grown by doubling from 64 records. The host writes it, so it must be per slot: a GPU barrier cannot order a host write against a frame still in flight. The slot is written after its fence wait, and only when the light list&#x27;s version differs from the version the slot holds:</p>
+<div class="citation-chip"><code class="citation-code">if (version != 0 &amp;&amp; s.version == version &amp;&amp; s.count == count &amp;&amp; s.lights.buffer) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L139" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:139</a></div>
+<p>The version is the light table&#x27;s counter, raised whenever the raster lights change; the fallback sun passes 0, which always writes. A still scene of a thousand lights therefore uploads nothing per frame.</p>
+<p>The froxel lists, by contrast, are one buffer shared by every frame slot. Only the GPU writes them, so a pipeline barrier at the start of the build, which orders this frame&#x27;s writes after the previous frame&#x27;s fragment reads in queue order, is enough:</p>
+<div class="citation-chip"><code class="citation-code">// The last frame&#x27;s lighting read the lists before this rewrite (queue order).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L190" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:190</a></div>
+</div>
+<div class="section-rule"><h2 id="what-does-not-read-the-lists">What does not read the lists</h2></div>
+<div class="prose reveal">
+<p>The deferred lighting pass is the lists&#x27; only reader. RT GI shades its bounce with its own selection, the four brightest lights by intensity, and particles are not lit by scene lights at all:</p>
+<div class="citation-chip"><code class="citation-code">// The bounce&#x27;s lights: the brightest by intensity, ties by order, emissive proxies out.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_gi_technique.cpp#L253" target="_blank" rel="noopener">ohao/render/rt/rt_gi_technique.cpp:253</a></div>
+<p>Shadows are separate as well: only the first eight shadow-casting lights own an RT visibility channel (the shadow unit), however many lights the froxels hold.</p>
+</div>
+<div class="section-rule"><h2 id="cost">Cost</h2></div>
+<div class="prose reveal">
+<p>The build is brute force: every froxel tests every light, 3,456 sphere tests per light, 64 lights a round per workgroup. `render_bench` gates it at 0.03 ms on `cornell_720p` and at 0.10 ms on `bench100k_1080p`, whose scene carries 1,000 point lights and a sun:</p>
+<div class="citation-chip"><code class="citation-code">{&quot;scene&quot;: &quot;bench100k_1080p&quot;, &quot;name&quot;: &quot;lights.cluster&quot;, &quot;passes&quot;: [&quot;lights.cluster&quot;], &quot;budgetMs&quot;: 0.10, &quot;gatedFrom&quot;: 13},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/bench/render_budgets.json#L28" target="_blank" rel="noopener">tests/bench/render_budgets.json:28</a></div>
+<p>Past a few thousand lights the per-froxel loop over the whole table is the cost to replace; the spec leaves a hierarchical pre-pass for later:</p>
+<div class="citation-chip"><code class="citation-code">larger counts is later work.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/specs/2026-10-24-renderer-upgrade-design.md#L405" target="_blank" rel="noopener">docs/specs/2026-10-24-renderer-upgrade-design.md:405</a></div>
+</div>
+<div class="section-rule"><h2 id="test-8">Test 8</h2></div>
+<div class="prose reveal">
+<p>`light_cluster_gpu_test` holds the pass to its promises. Cornell (12 lights, RT shadows), the helmet room with post effects, and a scene with the bench&#x27;s 1,000 point lights and sun each render to byte-identical PNGs with the froxel lists and with every light:</p>
+<div class="citation-chip"><code class="citation-code">check(same, std::string(&quot;t08: &quot;) + c.name + &quot;: clustered = every light, byte for byte&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/light_cluster_gpu_test.cpp#L267" target="_blank" rel="noopener">tests/renderer/light_cluster_gpu_test.cpp:267</a></div>
+<p>On the bench lights the froxels hold some of the lights but not all, none overflows, `render.stats` carries no `lightsOverflow`, and every list holds valid indices in ascending order:</p>
+<div class="citation-chip"><code class="citation-code">check(ordered, &quot;t08: bench lights: every list holds valid light indices, ascending&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/light_cluster_gpu_test.cpp#L311" target="_blank" rel="noopener">tests/renderer/light_cluster_gpu_test.cpp:311</a></div>
+<p>A thousand lights packed into a 3 m cube overflow on purpose: full froxels keep 256, the frame renders, the stats count the dropped lights and the largest froxel (all 1,000), and `render.stats` reports `lightsOverflow`:</p>
+<div class="citation-chip"><code class="citation-code">check(reported, &quot;t08: packed lights: render.stats reports lightsOverflow&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/light_cluster_gpu_test.cpp#L344" target="_blank" rel="noopener">tests/renderer/light_cluster_gpu_test.cpp:344</a></div>
+<p>Two fresh renderers build the same lists word for word:</p>
+<div class="citation-chip"><code class="citation-code">check(a.lists == b.lists, &quot;t08: twin runs: the same froxel counts and indices, word for word&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/light_cluster_gpu_test.cpp#L361" target="_blank" rel="noopener">tests/renderer/light_cluster_gpu_test.cpp:361</a></div>
+<p>On Cornell the first eight casters own shadow channels while the other four render unshadowed and are counted. Two cases guard the slicing itself: a wall 1,500 m away under a 3,000 m far plane, lit by a light 20 m in front of it (slices cut off at a fixed 1,000 m would leave it unlit), and an orthographic camera 40 m above a floor of small lights (perspective froxels there sit far from the pixels they hold). Both render the every-light image.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The attenuation must be exactly 0 at and past `direction.w`, and the lighting loop must skip zero terms; both the froxel lists and the every-light loop rely on it to agree.</li>
+<li>Lists must stay in ascending light-index order. Any change to the compaction (a global atomic append, a sort by distance) breaks the byte-for-byte equality with the every-light loop.</li>
+<li>The lists must be built with the projection the G-buffer was rasterized with, jitter included, and the slice mapping the lighting pass uses must be the one the build computed (`sliceScale()`, `sliceBias()`).</li>
+<li>The far plane given to `build` must be at least the farthest depth lighting shades (the renderer passes the camera&#x27;s): pixels past it are clamped into the last slice, whose box ends at 1.001 times the far plane.</li>
+<li>A froxel past 256 lights drops the highest-indexed ones; the image is then not the every-light image, and `render.stats`&#x27; `lightsOverflow` says so.</li>
+<li>The light table is written by the host and must stay one buffer per frame slot, written after that slot&#x27;s fence; the froxel lists are written only by the GPU and are one buffer, ordered by the barrier at the start of the build.</li>
+<li>`kLightCapacity` and `MAX_LIGHTS` are both 65,536; `kClusterCount` must equal tiles × tiles × slices, which `light_clusters.cpp` asserts.</li>
+<li>Froxels exist only for a perspective projection; an orthographic one must keep lighting on the every-light loop.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/shared/layout.json</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/pass_registry.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/light_clusters.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/light_cluster.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_capture.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_gi_technique.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/bench/render_budgets.json</code><span class="desc"></span></div>
+        <div class="row"><code>docs/specs/2026-10-24-renderer-upgrade-design.md</code><span class="desc"></span></div>
+        <div class="row"><code>tests/renderer/light_cluster_gpu_test.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/light_clusters.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="lighting.html"><div class="label">← Prev</div><div class="title">Deferred lighting</div></a><a class="next" href="ssao.html"><div class="label">Next →</div><div class="title">SSAO</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -78,7 +78,9 @@ It is what GPU culling reads, and what the G-buffer and CSM vertex shaders index
 
 ## Lights: one list, two layouts
 
-`setLights` stable-sorts the list by `order` and resolves it once into both consumers' formats. The raster array keeps at most eight `LightData` entries in a host copy for the light uniform buffer; the RT buffer holds a 16-byte header — count, environment-map texture index, environment intensity — and up to 64 `GPULight`s. In both, emissive proxies are placed after all regular lights, so a scene with many emissive models cannot crowd its authored lights out of the eight raster slots. The RT bytes are compared with the previous upload and only re-uploaded when they differ.
+`setLights` stable-sorts the list by `order` and resolves it once into both consumers' formats. The raster array keeps up to 65,536 `LightData` entries in a host copy, which the deferred renderer's `LightClusters` uploads into each frame slot's light table, and a version (`rasterLightsVersion()`) that changes only when the array's bytes do, so an unchanged list is not uploaded again. The first eight shadow-casting raster lights get RT shadow channels; casters past them render unshadowed and are counted (`shadowCastersWithoutChannel()`). The RT buffer holds a 16-byte header — count, environment-map texture index, environment intensity — and up to 64 `GPULight`s. In both, emissive proxies are placed after all regular lights, so emissive models cannot crowd authored lights out of either cap. The RT bytes are compared with the previous upload and only re-uploaded when they differ.
+
+{{cite ohao/render/scene/render_scene.hpp "// Changes whenever rasterLights() does (clustered lighting uploads only then)."}}
 
 ## Staging per frame slot, and the retire queue
 

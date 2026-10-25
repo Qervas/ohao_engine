@@ -331,7 +331,7 @@ references falling back to the default; instance-table and mesh-arena growth wit
 destroying a buffer a frame still reads; the raster shadow-caster rule; a material edit
 reaching the packed table row; the path tracer tracing the render world; texture slots
 past 1024 reaching the tracer; a moved instance refitting the TLAS; a slot released and
-reused in one frame forcing a rebuild; the raster light UBO being one buffer per frame
+reused in one frame forcing a rebuild; the raster light table being one buffer per frame
 slot; and RT accumulation restarting when an instance moves or a light changes.
 
 Its `EXPECT` macro `return`s from the enclosing section function, so the first

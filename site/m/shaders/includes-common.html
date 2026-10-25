@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shaders · Common includes — OHAO Monograph</title>
-  <meta name="description" content="math, color, encoding, reconstruction, constants, types." />
+  <meta name="description" content="math, color, encoding, reconstruction, constants." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
@@ -30,18 +30,19 @@
       </header>
       <div class="thesis-box reveal">
         <div class="label">Design unit</div>
-        <p>math, color, encoding, reconstruction, constants, types.</p>
+        <p>math, color, encoding, reconstruction, constants.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#eight-headers-one-preprocessor-no-module-system">Eight headers, one preprocessor, no module system</a></li><li><a href="#the-transitive-chain-deferred-lighting-depends-on-without-naming">The transitive chain deferred lighting depends on without naming</a></li><li><a href="#the-light-struct-is-the-one-hard-abi-here">The Light struct is the one hard ABI here</a></li><li><a href="#octahedral-normals-three-encoders-two-decoders-one-of-each-ships">Octahedral normals: three encoders, two decoders, one of each ships</a></li><li><a href="#what-the-math-and-color-headers-actually-deliver">What the math and color headers actually deliver</a></li><li><a href="#reconstruction-and-depth-linearization-one-live-overload">Reconstruction and depth linearization: one live overload</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#six-headers-one-preprocessor-no-module-system">Six headers, one preprocessor, no module system</a></li><li><a href="#the-transitive-chain-deferred-lighting-depends-on-without-naming">The transitive chain deferred lighting depends on without naming</a></li><li><a href="#the-light-struct-is-not-here">The light struct is not here</a></li><li><a href="#octahedral-normals-three-encoders-two-decoders-one-of-each-ships">Octahedral normals: three encoders, two decoders, one of each ships</a></li><li><a href="#what-the-math-and-color-headers-actually-deliver">What the math and color headers actually deliver</a></li><li><a href="#reconstruction-and-depth-linearization-one-live-overload">Reconstruction and depth linearization: one live overload</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="eight-headers-one-preprocessor-no-module-system">Eight headers, one preprocessor, no module system</h2></div>
+<div class="section-rule"><h2 id="six-headers-one-preprocessor-no-module-system">Six headers, one preprocessor, no module system</h2></div>
 <div class="prose reveal">
 <p>`glslc` has no modules. `GL_GOOGLE_include_directive` splices text, and OHAO&#x27;s shader build hands the compiler two search roots — the `shaders/` tree and `shaders/includes/` — so one header can be reached under more than one spelling and more than once per translation unit.</p>
 <div class="citation-chip"><code class="citation-code">COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes ${SHADER} -o ${SPIRV}</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L47" target="_blank" rel="noopener">shaders/CMakeLists.txt:47</a></div>
-<p>That is why every file here opens with an `#ifndef OHAO_..._GLSL` guard. No shader in the tree currently reaches the same header twice, so today the guards fire for nobody — but the graph is one include away from needing them: `math.glsl` is pulled in by both `brdf_common.glsl` and `light_attenuation.glsl`, so a shader that took the BRDF and the attenuation header together would reach it twice, and without the guard `saturate` would be redefined and the shader would fail to compile. Macros behave differently. `types.glsl` and `constants.glsl` both `#define MAX_LIGHTS 8`, and `glslc` rejects a redefinition only when the substitution *differs* — so the `#ifndef MAX_LIGHTS` wrapper in `constants.glsl` is not what keeps copies compatible; agreeing on `8` is. `deferred_lighting.frag` proves it, spelling the macro out unconditionally after `brdf_ggx.glsl` has already dragged `constants.glsl` in, and compiling anyway. What breaks the build is a copy drifting to `16`.</p>
-<div class="citation-chip"><code class="citation-code">#define MAX_LIGHTS 8  // Must match C++ MAX_LIGHTS in ohao/render/scene/render_scene_types.hpp</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L29" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:29</a></div>
+<p>That is why every file here opens with an `#ifndef OHAO_..._GLSL` guard. No shader in the tree currently reaches the same header twice, so today the guards fire for nobody — but the graph is one include away from needing them: `math.glsl` is pulled in by both `brdf_common.glsl` and `light_attenuation.glsl`, so a shader that took the BRDF and the attenuation header together would reach it twice, and without the guard `saturate` would be redefined and the shader would fail to compile.</p>
+<p>`includes/common/` holds no constant the C++ side also needs. Those live in `shaders/shared/layout.json` and reach GLSL through the generated `shared/layout.glsl`, guarded the same way, which `deferred_lighting.frag` includes right after its two `includes/` headers:</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;shared/layout.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L10" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:10</a></div>
 <p>The absence of a module system has a second consequence that shapes everything below: nothing *obliges* a shader to use these headers. `common.glsl` declares itself the bootstrap every shader should include first. No shader includes it.</p>
 <div class="citation-chip"><code class="citation-code">// This file should be included first in all shaders to establish</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/common.glsl#L7" target="_blank" rel="noopener">shaders/includes/common/common.glsl:7</a></div>
 </div>
@@ -54,16 +55,14 @@
 <div class="citation-chip"><code class="citation-code">#include &quot;includes/common/math.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L12" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:12</a></div>
 <p>Every link on that chain is declared, then, except the last consumer: `brdf_ggx.glsl` reads `EPSILON`, `PI` and `INV_PI` while naming no file that defines any of them. Dropping `math.glsl` from `brdf_common.glsl` because &quot;it only uses saturate, let&#x27;s inline it&quot; is a hard compile error, and it fires at the edit site first — `saturate` in both Fresnel functions, `INV_PI` in both diffuse lobes — before the cascade reaches `brdf_ggx.glsl` at all. An undefined macro in GLSL stays an identifier rather than becoming zero, so there is no `inf` to observe: the build simply stops.</p>
 </div>
-<div class="section-rule"><h2 id="the-light-struct-is-the-one-hard-abi-here">The Light struct is the one hard ABI here</h2></div>
+<div class="section-rule"><h2 id="the-light-struct-is-not-here">The light struct is not here</h2></div>
 <div class="prose reveal">
-<p>`types.glsl` is not a utility header; it is a GPU-side mirror of a C++ struct. Its `Light` is four `vec4`s plus a `mat4` — 128 bytes in std140 — matching the `LightData` the renderer uploads every frame.</p>
-<div class="citation-chip"><code class="citation-code">mat4 lightSpaceMatrix;  // Transform to light space for shadow mapping (64 bytes)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/types.glsl#L24" target="_blank" rel="noopener">shaders/includes/common/types.glsl:24</a></div>
-<p>No shader includes it. The one raster stage that reads that buffer, `deferred_lighting.frag`, declares its own field-for-field copy of the struct inline, so this header is a second copy of the ABI with no consumer, and the copy that matters lives in a shader body.</p>
-<div class="citation-chip"><code class="citation-code">Light lights[MAX_LIGHTS];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L32" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:32</a></div>
-<p>The C++ side pins the size at compile time; the GLSL side has no equivalent check, so the assert protects only half the boundary.</p>
-<div class="citation-chip"><code class="citation-code">OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene_types.hpp#L30" target="_blank" rel="noopener">ohao/render/scene/render_scene_types.hpp:30</a></div>
-<p>The headers that would consume `types.glsl` carry a naming contract only a comment enforces: `shadow_pcf.glsl` and `blinn_phong.glsl` read the light UBO by the bare global name `lighting` without ever declaring it, so an includer has to declare the block under that exact name *above* the include line. `deferred_lighting.frag` happens to name its block `lighting`, but includes neither header; `light_attenuation.glsl` takes everything by parameter.</p>
-<div class="citation-chip"><code class="citation-code">// IMPORTANT: Caller must define LightUBO named &#x27;lighting&#x27; before including this file!</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/shadow/shadow_pcf.glsl#L8" target="_blank" rel="noopener">shaders/includes/shadow/shadow_pcf.glsl:8</a></div>
+<p>No header in `includes/common/` declares a light. The raster light record the deferred lighting pass and the clustering kernel read is `LightGpu`, four `vec4`s, declared once in `shaders/shared/layout.json` and generated into GLSL, Slang and C++ by `tools/gen_layout.py`:</p>
+<div class="citation-chip"><code class="citation-code">struct LightGpu {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.glsl#L218" target="_blank" rel="noopener">shaders/shared/layout.glsl:218</a></div>
+<p>The C++ copy asserts every field&#x27;s offset and the 64-byte size, and the three copies come from one description, so the GLSL side of the boundary is checked too: editing `layout.glsl` by hand makes `gen_layout.py --check` fail, and editing the JSON without regenerating does the same.</p>
+<div class="citation-chip"><code class="citation-code">static_assert(offsetof(LightGpu, params) == 48);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/shared_layout.hpp#L296" target="_blank" rel="noopener">ohao/gpu/shared_layout.hpp:296</a></div>
+<p>`constants.glsl` still carries three light-type macros, `LIGHT_TYPE_DIRECTIONAL` 0, `LIGHT_TYPE_POINT` 1 and `LIGHT_TYPE_SPOT` 2, matching the raster codes in `LightGpu.position.w`. The lighting shader compares bare integers and uses none of them.</p>
+<div class="citation-chip"><code class="citation-code">#define LIGHT_TYPE_DIRECTIONAL 0</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L19" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:19</a></div>
 </div>
 <div class="section-rule"><h2 id="octahedral-normals-three-encoders-two-decoders-one-of-each-ships">Octahedral normals: three encoders, two decoders, one of each ships</h2></div>
 <div class="prose reveal">
@@ -106,10 +105,9 @@ $$</div>
 <div class="prose reveal">
 <ul>
 <li>`gbuffer.frag`&#x27;s private encoder returns $[-1,1]$ and the `×0.5+0.5` remap lives at its call site; `decodeNormalOctahedron` assumes $[0,1]$. Change either half alone and every consumer&#x27;s lower-hemisphere normals flip.</li>
-<li>`types.glsl`&#x27;s `Light` must stay field-for-field and 128 bytes aligned with C++ `LightData`. Only the C++ side is statically asserted.</li>
-<li>`deferred_lighting.frag`&#x27;s inline `Light` is the struct that must stay field-for-field with C++ `LightData`; `types.glsl` is a duplicate no shader compiles. Any shader that adopts `shadow_pcf.glsl` or `blinn_phong.glsl` must declare its light UBO as `lighting` above the include, because both read that global without declaring it.</li>
+<li>The raster light record is `LightGpu` in `shaders/shared/layout.json`; a field changes there and is regenerated, never edited in `layout.glsl`, `layout.slang` or `shared_layout.hpp`.</li>
 <li>`brdf_ggx.glsl` gets `EPSILON` transitively through `brdf_common.glsl` → `math.glsl` → `constants.glsl` and declares none of it. That chain is required by the deferred lighting pass.</li>
-<li>`constants.glsl`&#x27;s `MAX_LIGHTS 8` must match `render_scene_types.hpp`; its comment points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree.</li>
+<li>`constants.glsl`&#x27;s header says its values must match the C++ engine and points at `src/renderer/offscreen/offscreen_types.hpp`, a path that is not in the tree; nothing checks any of them.</li>
 </ul>
 <div class="citation-chip"><code class="citation-code">// See: src/renderer/offscreen/offscreen_types.hpp</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L8" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:8</a></div>
 </div>
@@ -120,9 +118,9 @@ $$</div>
         <div class="row"><code>shaders/includes/common/common.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/common/types.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/scene/render_scene_types.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/shadow/shadow_pcf.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/shared/layout.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/shared_layout.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/math.glsl</code><span class="desc"></span></div>
@@ -131,8 +129,6 @@ $$</div>
         <div class="row"><code>shaders/includes/common/reconstruction.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/particles/particle_emit.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/sky.frag</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/noise.glsl</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

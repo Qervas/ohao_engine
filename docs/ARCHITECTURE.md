@@ -88,6 +88,11 @@ VulkanRenderer::render()
                                the rest (without VK_EXT_mesh_shader: a compute pass and
                                per-meshlet draws, the same image). The meshlets are built
                                at registerMesh (render/scene/meshlet_builder)
+  LightClusters                the raster lights (uncapped) into the frame slot's light
+                               buffer when they changed; lights.cluster lists, for each of
+                               16x9x24 froxels out to the camera's far plane, up to 256
+                               lights that reach it; lighting sums a pixel's froxel's list
+                               (render/deferred/light_clusters)
   deferred passes or a path tracer, then present (window); any frame, headless or
   windowed, copies to the CPU only when asked (requestReadback, then readback(): that
   frame's fence, never the queue); an inline capture of a deferred frame asks for the
