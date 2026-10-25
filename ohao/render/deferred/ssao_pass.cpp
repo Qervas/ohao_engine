@@ -1,9 +1,26 @@
 #include "ssao_pass.hpp"
-#include <array>
+#include "gpu/shared_layout.hpp"
+#include "core/log.hpp"
 #include <cstring>
-#include <cmath>
+#include <numeric>
+#include <tuple>
+#include <utility>
 
 namespace ohao {
+
+namespace shared = gpu::shared;
+
+namespace {
+
+constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+constexpr VkPipelineStageFlags kReaders = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+std::array<float, 4> f4(glm::vec3 v, float w) { return {v.x, v.y, v.z, w}; }
+
+} // namespace
 
 SSAOPass::~SSAOPass() {
     cleanup();
@@ -12,252 +29,157 @@ SSAOPass::~SSAOPass() {
 bool SSAOPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
-
     m_width = 1920;
     m_height = 1080;
+    if (!createImages()) return false;
+    m_sampler = createSampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    if (m_sampler == VK_NULL_HANDLE) return false;
 
-    if (!createOutputImage()) return false;
-    if (!createNoiseTexture()) return false;
-    if (!createDescriptors()) return false;
-    if (!createPipeline()) return false;
-
+    using rtc::layoutBinding;
+    const VkDescriptorSetLayoutBinding occlusion[] = {
+        layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    const VkDescriptorSetLayoutBinding blur[] = {layoutBinding(3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+                                                 layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    for (auto [bindings, count, layout] : {std::tuple{occlusion, 3u, &m_occlusionSetLayout}, std::tuple{blur, 2u, &m_blurSetLayout}}) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = count;
+        li.pBindings = bindings;
+        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
+    }
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3 * MAX_FRAMES_IN_FLIGHT},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 2 * MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sizes;
+    if (vkCreateDescriptorPool(m_device, &pi, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
+        for (auto [layout, set] : {std::pair{m_occlusionSetLayout, &m_occlusionSets[s]}, std::pair{m_blurSetLayout, &m_blurSets[s]}}) {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = m_descriptorPool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &layout;
+            if (vkAllocateDescriptorSets(m_device, &ai, set) != VK_SUCCESS) return false;
+        }
+    }
+    if (!rtc::createComputePipeline(m_device, "compute_ssao.slang.occlusion.spv", "occlusion", m_occlusionSetLayout,
+                                    sizeof(shared::SSAOPush), m_occlusionLayout, m_occlusionPipeline) ||
+        !rtc::createComputePipeline(m_device, "compute_ssao.slang.blur.spv", "blur", m_blurSetLayout,
+                                    sizeof(shared::SSAOPush), m_blurLayout, m_blurPipeline)) {
+        OHAO_LOG(Error, render, "SSAOPass: pipelines failed");
+        return false;
+    }
     return true;
+}
+
+bool SSAOPass::createImages() {
+    const uint32_t w = (m_width + 1) / 2, h = (m_height + 1) / 2;
+    return rtc::createImage(m_device, m_physicalDevice, m_occlusion, kOutputFormat, kUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            w, h) &&
+           rtc::createImage(m_device, m_physicalDevice, m_output, kOutputFormat, kUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            w, h);
+}
+
+void SSAOPass::destroyImages() {
+    rtc::destroyImage(m_device, m_occlusion);
+    rtc::destroyImage(m_device, m_output);
 }
 
 void SSAOPass::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
-
     vkDeviceWaitIdle(m_device);
-
-    safeDestroy(m_pipeline);
-    safeDestroy(m_pipelineLayout);
+    safeDestroy(m_occlusionPipeline);
+    safeDestroy(m_blurPipeline);
+    safeDestroy(m_occlusionLayout);
+    safeDestroy(m_blurLayout);
     safeDestroy(m_descriptorPool);
-    safeDestroy(m_descriptorLayout);
+    safeDestroy(m_occlusionSetLayout);
+    safeDestroy(m_blurSetLayout);
     safeDestroy(m_sampler);
-    safeDestroy(m_noiseSampler);
-
-    safeDestroy(m_noiseView);
-    safeDestroy(m_noiseImage);
-    safeFree(m_noiseMemory);
-
-    safeDestroy(m_noiseStagingBuffer);
-    safeFree(m_noiseStagingMemory);
-
-    destroyOutputImage();
-
-    m_descriptorSet = VK_NULL_HANDLE;
-    m_noiseUploaded = false;
+    destroyImages();
+    m_occlusionSets = {};
+    m_blurSets = {};
 }
 
-void SSAOPass::uploadNoiseTexture(VkCommandBuffer cmd) {
-    if (m_noiseStagingBuffer == VK_NULL_HANDLE || m_noiseImage == VK_NULL_HANDLE) {
-        m_noiseUploaded = true;
-        return;
+void SSAOPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (m_positionView == VK_NULL_HANDLE || m_normalView == VK_NULL_HANDLE) return;
+    if (!m_occlusionPipeline || !m_blurPipeline || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+
+    shared::SSAOPush pc{};
+    std::memcpy(pc.viewProj.data(), &m_viewProj[0][0], sizeof(float) * 16);
+    pc.cameraPosRadius = f4(m_cameraPos, m_radius);
+    pc.params = {m_bias, m_intensity, m_falloffStart, m_falloffEnd};
+    pc.extent = {m_occlusion.width, m_occlusion.height, m_width, m_height};
+    pc.config = {m_directions, m_steps, 0u, 0u};
+    const auto n = noise(m_noiseSeed);
+    for (uint32_t i = 0; i < 4; ++i) {
+        pc.noise0[i] = n[i];
+        pc.noise1[i] = n[4 + i];
+        pc.noise2[i] = n[8 + i];
+        pc.noise3[i] = n[12 + i];
+    }
+    const uint32_t gx = (m_occlusion.width + 7) / 8, gy = (m_occlusion.height + 7) / 8;
+
+    // Occlusion: G-buffer -> m_occlusion
+    rtc::transition(cmd, m_occlusion, kGeneral, kReaders, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT, true);
+    {
+        const VkDescriptorSet set = m_occlusionSets[frameIndex];
+        const VkDescriptorImageInfo infos[3] = {{VK_NULL_HANDLE, m_positionView, kReadOnly},
+                                                {VK_NULL_HANDLE, m_normalView, kReadOnly},
+                                                {VK_NULL_HANDLE, m_occlusion.view, kGeneral}};
+        VkWriteDescriptorSet writes[3];
+        for (uint32_t i = 0; i < 3; ++i) {
+            writes[i] = rtc::descriptorWrite(set, i, i < 2 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            writes[i].pImageInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_occlusionPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_occlusionLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_occlusionLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, gx, gy, 1);
     }
 
-    // Transition noise image from UNDEFINED to TRANSFER_DST
-    transitionImage(cmd, m_noiseImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, VK_ACCESS_TRANSFER_WRITE_BIT);
-
-    // Copy staging buffer to image
-    VkBufferImageCopy region{};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageExtent = {4, 4, 1};
-
-    vkCmdCopyBufferToImage(cmd, m_noiseStagingBuffer, m_noiseImage,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    // Transition noise image to SHADER_READ_ONLY
-    transitionImage(cmd, m_noiseImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-
-    m_noiseUploaded = true;
-}
-
-void SSAOPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
-    if (m_depthView == VK_NULL_HANDLE || m_normalView == VK_NULL_HANDLE) return;
-    if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
-        m_descriptorSet == VK_NULL_HANDLE) return;
-
-    if (!m_noiseUploaded) {
-        uploadNoiseTexture(cmd);
+    // Blur: m_occlusion -> m_output
+    rtc::transition(cmd, m_occlusion, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kCompute, VK_ACCESS_SHADER_READ_BIT, false);
+    rtc::transition(cmd, m_output, kGeneral, kReaders, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT, true);
+    {
+        const VkDescriptorSet set = m_blurSets[frameIndex];
+        const VkDescriptorImageInfo infos[2] = {{VK_NULL_HANDLE, m_occlusion.view, kReadOnly},
+                                                {VK_NULL_HANDLE, m_output.view, kGeneral}};
+        VkWriteDescriptorSet writes[2] = {rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+                                          rtc::descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        writes[0].pImageInfo = &infos[0];
+        writes[1].pImageInfo = &infos[1];
+        vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_blurPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_blurLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_blurLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, gx, gy, 1);
     }
-
-    // Transition AO output to general for compute write
-    transitionImage(cmd, m_aoOutput,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, VK_ACCESS_SHADER_WRITE_BIT);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
-                            0, 1, &m_descriptorSet, 0, nullptr);
-
-    SSAOParams params{};
-    params.projection = m_projection;
-    params.invProjection = m_invProjection;
-    params.noiseScale = glm::vec4(
-        static_cast<float>(m_width) / 4.0f,
-        static_cast<float>(m_height) / 4.0f,
-        static_cast<float>(m_width),
-        static_cast<float>(m_height)
-    );
-    params.radius = m_radius;
-    params.bias = m_bias;
-    params.intensity = m_intensity;
-    params.sampleCount = m_sampleCount;
-    params.texelSize = glm::vec2(1.0f / m_width, 1.0f / m_height);
-    params.falloffStart = m_falloffStart;
-    params.falloffEnd = m_falloffEnd;
-
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(params), &params);
-
-    uint32_t groupsX = (m_width + 7) / 8;
-    uint32_t groupsY = (m_height + 7) / 8;
-    vkCmdDispatch(cmd, groupsX, groupsY, 1);
-
-    // Transition AO output to shader read
-    transitionImage(cmd, m_aoOutput,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    rtc::transition(cmd, m_output, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kReaders, VK_ACCESS_SHADER_READ_BIT, false);
 }
 
 void SSAOPass::onResize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return;
-
     m_width = width;
     m_height = height;
-
     vkDeviceWaitIdle(m_device);
-
-    destroyOutputImage();
-    createOutputImage();
-    createDescriptors();
-    // The set is new and the AO output is new: write it now. The G-buffer inputs are
-    // already the resized ones (DeferredRenderer hands them over before this runs).
-    updateDescriptorSet();
+    destroyImages();
+    if (!createImages()) OHAO_LOG(Error, render, "SSAOPass: failed to recreate its images at {}x{}", width, height);
 }
 
-void SSAOPass::setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj) {
-    m_projection = proj;
-    m_invProjection = invProj;
+bool SSAOPass::reloadShader(std::string_view spvPath) {
+    OHAO_LOG(Warn, render, "SSAOPass: {} not reloaded (two entry points: rebuild the shaders)", spvPath);
+    return false;
 }
 
-void SSAOPass::setDepthBuffer(VkImageView depth) {
-    m_depthView = depth;
-    updateDescriptorSet();
-}
-
-void SSAOPass::setNormalBuffer(VkImageView normal) {
-    m_normalView = normal;
-    updateDescriptorSet();
-}
-
-void SSAOPass::setGBufferInputs(VkImageView depth, VkImageView normal) {
-    m_depthView = depth;
-    m_normalView = normal;
-    updateDescriptorSet();
-}
-
-void SSAOPass::updateDescriptorSet() {
-    if (m_descriptorSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
-
-    VkImageView fallbackView = m_noiseView != VK_NULL_HANDLE ? m_noiseView : m_aoOutputView;
-    VkSampler fallbackSampler = m_noiseSampler != VK_NULL_HANDLE ? m_noiseSampler : m_sampler;
-    if (fallbackView == VK_NULL_HANDLE) return;
-
-    std::array<VkDescriptorImageInfo, 4> imageInfos{};
-    std::array<VkWriteDescriptorSet, 4> writes{};
-
-    // Binding 0: Depth buffer
-    imageInfos[0].sampler = m_sampler;
-    imageInfos[0].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
-    // G-buffer depth stays DEPTH_STENCIL_READ_ONLY from the G-buffer pass to frame end.
-    imageInfos[0].imageLayout = m_depthView != VK_NULL_HANDLE
-        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfos[0];
-
-    // Binding 1: Normal buffer
-    imageInfos[1].sampler = m_sampler;
-    imageInfos[1].imageView = m_normalView != VK_NULL_HANDLE ? m_normalView : fallbackView;
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &imageInfos[1];
-
-    // Binding 2: AO output (storage image)
-    imageInfos[2].sampler = VK_NULL_HANDLE;
-    imageInfos[2].imageView = m_aoOutputView;
-    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSet;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[2].descriptorCount = 1;
-    writes[2].pImageInfo = &imageInfos[2];
-
-    // Binding 3: Noise texture
-    imageInfos[3].sampler = fallbackSampler;
-    imageInfos[3].imageView = m_noiseView != VK_NULL_HANDLE ? m_noiseView : fallbackView;
-    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descriptorSet;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[3].descriptorCount = 1;
-    writes[3].pImageInfo = &imageInfos[3];
-
-    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
-}
-
-bool SSAOPass::createOutputImage() {
-    // Create AO render target using helper
-    RenderTarget rt = createRenderTarget(kOutputFormat, m_width, m_height,
-                                          VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    if (rt.image == VK_NULL_HANDLE) return false;
-
-    m_aoOutput = rt.image;
-    m_aoMemory = rt.memory;
-    m_aoOutputView = rt.view;
-
-    // Create sampler (only once)
-    if (m_sampler == VK_NULL_HANDLE) {
-        m_sampler = createSampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-        if (m_sampler == VK_NULL_HANDLE) return false;
-    }
-
-    return true;
-}
-
-void SSAOPass::destroyOutputImage() {
-    safeDestroy(m_aoOutputView);
-    safeDestroy(m_aoOutput);
-    safeFree(m_aoMemory);
-}
-
-// 16 unit vectors in the XY plane, from `seed` alone. A counter hash (splitmix32-style)
-// and exact float arithmetic instead of <random> distributions, whose output differs
-// between standard libraries.
-std::array<glm::vec4, 16> SSAOPass::noise(uint32_t seed) {
+// A seeded permutation of the 16 strata (k + 0.5) / 16: a counter hash (splitmix32-style)
+// drives a Fisher-Yates shuffle, so the rotations are the same on every compiler and machine.
+std::array<float, 16> SSAOPass::noise(uint32_t seed) {
     uint32_t state = seed;
     const auto next = [&state]() {
         uint32_t z = (state += 0x9E3779B9u);
@@ -265,155 +187,12 @@ std::array<glm::vec4, 16> SSAOPass::noise(uint32_t seed) {
         z = (z ^ (z >> 13)) * 0xC2B2AE35u;
         return z ^ (z >> 16);
     };
-    // 24 random bits scaled to [-1, 1): every step is exact in float.
-    const auto unit = [&next]() { return static_cast<float>(next() >> 8) * (2.0f / 16777216.0f) - 1.0f; };
-
-    std::array<glm::vec4, 16> noise;
-    for (auto& v : noise) {
-        v = glm::vec4(unit(), unit(), 0.0f, 0.0f);
-        const float len = std::sqrt(v.x * v.x + v.y * v.y);
-        if (len > 0.0001f) { v.x /= len; v.y /= len; }
-    }
-    return noise;
-}
-
-void SSAOPass::setNoiseSeed(uint32_t seed) {
-    if (seed == m_noiseSeed) return;
-    m_noiseSeed = seed;
-    if (m_noiseStagingMemory == VK_NULL_HANDLE) return;   // not created yet: initialize() uses the seed
-
-    // Earlier frames may still read the noise image (and an upload may still read the
-    // staging buffer); reseeding is a setup-time call, so idle rather than track them.
-    vkDeviceWaitIdle(m_device);
-    const auto noiseData = noise(m_noiseSeed);
-    void* data = nullptr;
-    if (vkMapMemory(m_device, m_noiseStagingMemory, 0, sizeof(noiseData), 0, &data) != VK_SUCCESS) return;
-    std::memcpy(data, noiseData.data(), sizeof(noiseData));
-    vkUnmapMemory(m_device, m_noiseStagingMemory);
-    m_noiseUploaded = false;   // the next execute() copies it into the image
-}
-
-bool SSAOPass::createNoiseTexture() {
-    const auto noiseData = noise(m_noiseSeed);
-
-    // Create staging buffer
-    VkDeviceSize bufferSize = sizeof(noiseData);
-
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = bufferSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-
-    VkBuffer stagingBuffer;
-    vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer);
-
-    VkMemoryRequirements memReq;
-    vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memReq);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReq.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    VkDeviceMemory stagingMemory;
-    vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingMemory);
-    vkBindBufferMemory(m_device, stagingBuffer, stagingMemory, 0);
-
-    void* data;
-    vkMapMemory(m_device, stagingMemory, 0, bufferSize, 0, &data);
-    memcpy(data, noiseData.data(), bufferSize);
-    vkUnmapMemory(m_device, stagingMemory);
-
-    // Create noise image + view using helper
-    RenderTarget noiseRT = createRenderTarget(VK_FORMAT_R32G32B32A32_SFLOAT, 4, 4,
-                                               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    if (noiseRT.image == VK_NULL_HANDLE) return false;
-
-    m_noiseImage = noiseRT.image;
-    m_noiseMemory = noiseRT.memory;
-    m_noiseView = noiseRT.view;
-
-    // Repeating sampler for noise
-    m_noiseSampler = createSampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
-
-    // Keep staging buffer alive for deferred upload in first execute() call
-    m_noiseStagingBuffer = stagingBuffer;
-    m_noiseStagingMemory = stagingMemory;
-    m_noiseUploaded = false;
-
-    return true;
-}
-
-bool SSAOPass::createDescriptors() {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-
-    if (m_descriptorLayout == VK_NULL_HANDLE) {
-        if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorLayout) != VK_SUCCESS) {
-            return false;
-        }
-    }
-
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 3;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 1;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 1;
-
-    safeDestroy(m_descriptorPool);
-
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkDescriptorSetAllocateInfo dsAllocInfo{};
-    dsAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsAllocInfo.descriptorPool = m_descriptorPool;
-    dsAllocInfo.descriptorSetCount = 1;
-    dsAllocInfo.pSetLayouts = &m_descriptorLayout;
-
-    return vkAllocateDescriptorSets(m_device, &dsAllocInfo, &m_descriptorSet) == VK_SUCCESS;
-}
-
-bool SSAOPass::createPipeline() {
-    return createComputePipeline("compute_ssao.comp.spv", m_descriptorLayout,
-                                  sizeof(SSAOParams), m_pipeline, m_pipelineLayout);
-}
-
-bool SSAOPass::reloadShader(std::string_view spvPath) {
-    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SSAOParams),
-                               m_pipeline, m_pipelineLayout);
+    std::array<uint32_t, 16> order;
+    std::iota(order.begin(), order.end(), 0u);
+    for (uint32_t i = 15; i > 0; --i) std::swap(order[i], order[next() % (i + 1)]);
+    std::array<float, 16> out;
+    for (uint32_t i = 0; i < 16; ++i) out[i] = (static_cast<float>(order[i]) + 0.5f) / 16.0f;
+    return out;
 }
 
 } // namespace ohao

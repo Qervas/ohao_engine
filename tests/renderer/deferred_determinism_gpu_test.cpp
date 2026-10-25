@@ -116,7 +116,7 @@ std::vector<uint8_t> readBytes(const fs::path& p) {
 
 // FNV-1a 64 of SSAOPass::noise(0)'s bytes. The generator is integer hashing and exact float
 // arithmetic, so this holds on every compiler and machine; a change to it shows here.
-constexpr const char* kSeed0NoiseHash = "63fe119f530d173f";
+constexpr const char* kSeed0NoiseHash = "fa4bd56a0ec70335";
 
 bool ok(const std::string& reply) { return reply.rfind("{\"result\":", 0) == 0; }
 
@@ -295,23 +295,25 @@ int main(int argc, char** argv) {
     }
 
     // t1: the SSAO noise is a function of the render seed alone, and the seed reaches the
-    // pass. (Not checked through the image: deferred_lighting.frag never samples the SSAO
-    // output, so SSAO does not reach any pixel today; see the step 1 change record.)
+    // pass. Test 5 (2b step 9): it covers 16 distinct texels, a permutation of the 16 strata.
     {
-        const auto bytesOf = [](const std::array<glm::vec4, 16>& n) {
+        const auto bytesOf = [](const std::array<float, 16>& n) {
             std::vector<uint8_t> b(sizeof(n));
             std::memcpy(b.data(), n.data(), sizeof(n));
             return b;
         };
         const auto n0 = SSAOPass::noise(0), n7 = SSAOPass::noise(7);
-        bool unit = true;
-        for (const auto* n : {&n0, &n7})
-            for (const glm::vec4& v : *n) unit = unit && std::abs(v.x * v.x + v.y * v.y - 1.0f) < 1e-5f && v.z == 0.0f && v.w == 0.0f;
+        bool strata = true;
+        for (const auto* n : {&n0, &n7}) {
+            std::array<float, 16> sorted = *n;
+            std::sort(sorted.begin(), sorted.end());
+            for (int k = 0; k < 16; ++k) strata = strata && sorted[k] == (float(k) + 0.5f) / 16.0f;
+        }
         const std::string h0 = hex(fnv1a(bytesOf(n0)));
         checks.push_back({"t1 the SSAO noise for a seed is the same every time", bytesOf(SSAOPass::noise(0)) == bytesOf(n0)});
         checks.push_back({"t1 the SSAO noise for seed 0 is the pinned one (" + h0 + ")", h0 == kSeed0NoiseHash});
         checks.push_back({"t1 another seed gives other noise", bytesOf(n7) != bytesOf(n0)});
-        checks.push_back({"t1 the noise vectors are unit vectors in XY", unit});
+        checks.push_back({"t5 the noise covers 16 distinct texels: the 16 strata (k + 0.5) / 16, permuted", strata});
 
         const Config& c = kConfigs[std::size(kConfigs) - 1];   // helmet_post: SSAO on
         host::RenderHost h(assets);

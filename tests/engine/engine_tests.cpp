@@ -2217,6 +2217,162 @@ static void sp2b_t10_a_reference_mean_restarts_after_realtime_frames() {
     TEST_PASS();
 }
 
+// ---------------------------------------------------------------------------------------
+// Test 5 (2b step 9): SSAO. A floor meeting a wall, one point light of `light` intensity and
+// a constant ambient of `ambient`; one frame after a reset, SSAO on or off. Empty without a
+// device.
+struct AORun {
+    std::vector<uint8_t> px;
+    bool ssaoPass{false};
+};
+
+static AORun aoRun(bool ssao, float light, float ambient) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return {};
+    AORun out;
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, wall;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        ohao::PrimitiveMeshGenerator::generateBox(wall, {-8.0f, 0.0f, -1.3f}, {8.0f, 3.0f, -1.0f}, {1, 1, 1});
+        ohao::render::MaterialDesc grey;
+        grey.baseColor = {0.7f, 0.7f, 0.7f};
+        grey.roughness = 0.9f;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), wall, "wall", {}, &grey);
+        ohao::ecs::Light l = shadowLight(light, 0.1f);
+        ohao::ecs::spawnLight(world, "light", l, ohao::ecs::Transform{{0.0f, 2.0f, 1.0f}});
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        r.setAmbientIntensity(ambient);
+        r.getDeferredRenderer()->getPostProcessing()->setSSAOEnabled(ssao);
+        r.getCamera().setPosition({0.0f, 1.5f, 2.5f});
+        r.getCamera().setRotation(-30.0f, -90.0f);   // down at the crease where the floor meets the wall
+        world.sync();
+        r.render();
+        r.resetAccumulation();
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.px.assign(px.begin(), px.end());
+        for (const auto& f : r.frameTimings(1))
+            for (uint32_t i = 0; i < f.count; ++i) out.ssaoPass = out.ssaoPass || f.pass[i] == ohao::render::passIndex("ssao");
+    }
+    return out;
+}
+
+// Test 5: SSAO darkens the ambient term where it is occluded, and nothing else: with only
+// ambient light, AO on darkens the crease and brightens nothing; with only a point light (and
+// RT GI), AO on changes no pixel.
+static void sp2b_t05_ssao_darkens_only_the_ambient_term() {
+    TEST_BEGIN("sp2b_t05: SSAO darkens ambient light in the crease; a point-lit frame is unchanged");
+    const AORun ambOff = aoRun(false, 0.0f, 0.6f);
+    if (ambOff.px.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const AORun ambOn = aoRun(true, 0.0f, 0.6f);
+    const AORun litOff = aoRun(false, 30.0f, 0.0f);
+    const AORun litOn = aoRun(true, 30.0f, 0.0f);
+    int darker = 0, brighter = 0;
+    for (std::size_t p = 0; p + 3 < ambOn.px.size() && p + 3 < ambOff.px.size(); p += 4) {
+        const int d = int(ambOff.px[p + 1]) - int(ambOn.px[p + 1]);
+        darker += d >= 2;
+        brighter += d <= -1;
+    }
+    std::cout << "(ambient only: " << darker << " px darker, " << brighter << " brighter; point light: max_abs "
+              << maxAbsDiff(litOn.px, litOff.px) << ") ";
+    EXPECT(ambOn.ssaoPass && !ambOff.ssaoPass, "the ssao pass runs when the effect is on, and only then");
+    EXPECT(darker > 200, "ambient light is occluded along the crease (>= 1% of the frame darker)");
+    EXPECT_EQ(brighter, 0, "occlusion never brightens");
+    EXPECT_EQ(maxAbsDiff(litOn.px, litOff.px), 0, "direct and RT GI light are not occluded by SSAO");
+    TEST_PASS();
+}
+
+// Test 5: SSAO frames are the same from fresh renderers.
+static void sp2b_t05_ssao_twin_renders_are_identical() {
+    TEST_BEGIN("sp2b_t05: two fresh renderers' SSAO frames are identical");
+    const AORun a = aoRun(true, 10.0f, 0.6f);
+    if (a.px.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const AORun b = aoRun(true, 10.0f, 0.6f);
+    EXPECT_EQ(maxAbsDiff(a.px, b.px), 0, "bit-identical");
+    TEST_PASS();
+}
+
+// 2b step 9: SSS runs on the 16x16 tiles the G-buffer pass flagged for subsurface materials,
+// and nowhere else. A box with `subsurface` on a floor: its tiles are flagged and blurred,
+// every pixel more than the kernel's reach outside them is untouched; the same box without
+// subsurface flags none and changes nothing.
+struct SSSRun {
+    std::vector<uint8_t> px;
+    uint32_t tiles{0};
+};
+
+static SSSRun sssRun(float subsurface) {
+    ohao::VulkanRenderer r(160, 120);
+    if (!r.initialize()) return {};
+    SSSRun out;
+    {
+        ohao::ecs::World world;
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        ohao::Model floor, box;
+        ohao::PrimitiveMeshGenerator::generateBox(floor, {-8.0f, -0.1f, -8.0f}, {8.0f, 0.0f, 8.0f}, {1, 1, 1});
+        ohao::PrimitiveMeshGenerator::generateBox(box, {-0.5f, 0.0f, -0.5f}, {0.5f, 1.0f, 0.5f}, {1, 1, 1});
+        ohao::render::MaterialDesc grey, skin;
+        grey.baseColor = {0.7f, 0.7f, 0.7f};
+        skin.baseColor = {0.8f, 0.5f, 0.4f};
+        skin.subsurface = subsurface;
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), floor, "floor", {}, &grey);
+        ohao::ecs::spawnModel(world, r.renderScene(), r.getTextureManager(), box, "box", {}, &skin);
+        // A spot of light across the box: a hard gradient the blur visibly softens.
+        ohao::ecs::spawnLight(world, "light", shadowLight(20.0f, 0.05f), ohao::ecs::Transform{{1.5f, 2.0f, 1.5f}});
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        r.getCamera().setPosition({0.0f, 1.5f, 3.5f});
+        r.getCamera().setRotation(-20.0f, -90.0f);
+        world.sync();
+        r.render();
+        r.resetAccumulation();
+        world.sync();
+        r.requestReadback();
+        r.render();
+        const auto px = r.readback();
+        out.px.assign(px.begin(), px.end());
+        out.tiles = r.getDeferredRenderer()->getGBufferPass()->sssTilesFlagged();
+    }
+    return out;
+}
+
+static void sp2b_s9_sss_runs_only_on_flagged_tiles() {
+    TEST_BEGIN("sp2b step 9: SSS blurs the subsurface material's tiles and nothing else");
+    const SSSRun none = sssRun(0.0f);
+    if (none.px.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const SSSRun skin = sssRun(1.0f);
+    int changed = 0;
+    for (std::size_t i = 0; i < skin.px.size() && i < none.px.size(); ++i) changed += skin.px[i] != none.px[i];
+    std::cout << "(tiles flagged: none " << none.tiles << ", skin " << skin.tiles << "; bytes changed " << changed << ") ";
+    EXPECT_EQ(none.tiles, 0u, "no subsurface material: no tile flagged");
+    EXPECT(skin.tiles > 0u && skin.tiles <= 80u, "the box's tiles are flagged, not the frame's 80");
+    EXPECT(changed > 0, "the blur changes the box");
+    TEST_PASS();
+}
+
+static void runSSAOTests() {
+    std::cout << "\n=== SSAO, SSS ===" << std::endl;
+    sp2b_t05_ssao_darkens_only_the_ambient_term();
+    sp2b_t05_ssao_twin_renders_are_identical();
+    sp2b_s9_sss_runs_only_on_flagged_tiles();
+}
+
 static void runRTGITests() {
     std::cout << "\n=== RT GI ===" << std::endl;
     sp2b_t10_a_reference_mean_restarts_after_realtime_frames();
@@ -2726,6 +2882,7 @@ int main() {
     runReadbackTests();
     runRTShadowTests();
     runRTGITests();
+    runSSAOTests();
     runOrphanedEntryPointTests();
     runRenderSceneTests();
 

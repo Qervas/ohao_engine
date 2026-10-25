@@ -82,6 +82,7 @@ render::MaterialDesc describe(const MaterialOverride& o) {
     d.roughness = o.roughness;
     d.metallic = o.metallic;
     d.emissiveStrength = o.emissiveStrength;
+    d.subsurface = o.subsurface;
     return d;
 }
 
@@ -218,9 +219,10 @@ private:
     }
 
     render::MaterialHandle material(const render::MaterialDesc& d) {
-        const std::array<uint32_t, 6> key{std::bit_cast<uint32_t>(d.baseColor.r), std::bit_cast<uint32_t>(d.baseColor.g),
+        const std::array<uint32_t, 7> key{std::bit_cast<uint32_t>(d.baseColor.r), std::bit_cast<uint32_t>(d.baseColor.g),
                                           std::bit_cast<uint32_t>(d.baseColor.b), std::bit_cast<uint32_t>(d.roughness),
-                                          std::bit_cast<uint32_t>(d.metallic), std::bit_cast<uint32_t>(d.emissiveStrength)};
+                                          std::bit_cast<uint32_t>(d.metallic), std::bit_cast<uint32_t>(d.emissiveStrength),
+                                          std::bit_cast<uint32_t>(d.subsurface)};
         if (const auto it = m_materials.find(key); it != m_materials.end()) return it->second;
         const render::MaterialHandle h = m_backend->material(d);
         m_materials.emplace(key, h);
@@ -265,7 +267,7 @@ private:
     AssetResolver& m_assets;
     std::map<std::string, MeshEntry> m_meshes;   // by meshKey
     ankerl::unordered_dense::map<entt::entity, std::string> m_userOf;
-    std::map<std::array<uint32_t, 6>, render::MaterialHandle> m_materials;
+    std::map<std::array<uint32_t, 7>, render::MaterialHandle> m_materials;
     std::vector<entt::entity> m_sourceGone, m_overrideGone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;
     std::unordered_set<std::string> m_logged;

@@ -1,10 +1,17 @@
 #pragma once
 
+// SSAO (sub-project 2b spec, "SSAO"): horizon-based ambient occlusion at half resolution,
+// then a 4x4 depth-aware blur (compute/ssao.slang, timed together as `ssao`). The lighting
+// pass upsamples the blurred image with depth awareness (binding 10, flag bit 1) and
+// multiplies only the ambient and environment terms by it.
+
 #include "render_pass_base.hpp"
+#include "render/rt/rt_compute.hpp"
+#include "render/frame/frame_resources.hpp"
+#include <array>
 
 namespace ohao {
 
-// Screen-Space Ambient Occlusion (GTAO) compute pass
 class SSAOPass : public RenderPassBase {
 public:
     SSAOPass() = default;
@@ -12,112 +19,78 @@ public:
 
     [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
+    // Both dispatches; the outputs end in SHADER_READ_ONLY_OPTIMAL. Does nothing until
+    // setInputs() has the G-buffer.
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
     [[nodiscard]] const char* getName() const override { return "SSAOPass"; }
+    // Two entry points in one module: not hot-reloadable.
     [[nodiscard]] bool reloadShader(std::string_view spvPath) override;
 
-    // Configuration
-    void setDepthBuffer(VkImageView depth);
-    void setNormalBuffer(VkImageView normal);
-    // Both G-buffer inputs at once, one descriptor rewrite. Use this whenever the
-    // G-buffer was recreated: setting them one at a time rewrites the set with the
-    // other input still pointing at a destroyed view.
-    void setGBufferInputs(VkImageView depth, VkImageView normal);
-    [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
-    [[nodiscard]] VkImageView normalInput() const noexcept { return m_normalView; }
-    void setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj);
-    void updateDescriptorSet();
+    // The G-buffer's world position and normal (SHADER_READ_ONLY_OPTIMAL when executed).
+    void setInputs(VkImageView position, VkImageView normal) noexcept {
+        m_positionView = position;
+        m_normalView = normal;
+    }
+    // The unjittered view-projection and the camera position of the frame.
+    void setCamera(const glm::mat4& viewProj, const glm::vec3& cameraPos) noexcept {
+        m_viewProj = viewProj;
+        m_cameraPos = cameraPos;
+    }
 
     void setRadius(float radius) { m_radius = radius; }
     void setBias(float bias) { m_bias = bias; }
     void setIntensity(float intensity) { m_intensity = intensity; }
-    void setSampleCount(uint32_t count) { m_sampleCount = count; }
-    // The 4x4 rotation-noise texture is a function of this seed alone (default 0, the
-    // renderer's default seed), so SSAO is the same in every process. Before initialize()
-    // it only records the seed; after, a different seed idles the device, rewrites the
-    // staging data and uploads it on the next execute().
-    void setNoiseSeed(uint32_t seed);
+    void setSampleCount(uint32_t directions) { m_directions = directions; }
+    // The 4x4 interleaved rotations are a function of this seed alone (default 0, the
+    // renderer's default seed), so SSAO is the same in every process. They travel in the
+    // push constants: reseeding takes effect on the next frame and uploads nothing.
+    void setNoiseSeed(uint32_t seed) noexcept { m_noiseSeed = seed; }
     [[nodiscard]] uint32_t noiseSeed() const noexcept { return m_noiseSeed; }
-    // The 16 texels of the noise texture for `seed` (unit vectors in XY).
-    [[nodiscard]] static std::array<glm::vec4, 16> noise(uint32_t seed);
+    // The 16 rotations for `seed`, texel x + 4y: a seeded permutation of (k + 0.5) / 16,
+    // each a fraction of the angle between two sampling directions, so a 4x4 window holds
+    // 16 evenly spaced rotations.
+    [[nodiscard]] static std::array<float, 16> noise(uint32_t seed);
 
-    // Get output: one AO value a pixel, in this format (the render graph imports it so)
-    static constexpr VkFormat kOutputFormat = VK_FORMAT_R16_SFLOAT;
-    [[nodiscard]] VkImageView getOutputView() const { return m_aoOutputView; }
-    [[nodiscard]] VkImage getOutputImage() const { return m_aoOutput; }
+    // The blurred output lighting reads: (ao, distance from the camera; 0 for sky), half
+    // resolution rounded up.
+    static constexpr VkFormat kOutputFormat = VK_FORMAT_R16G16_SFLOAT;
+    [[nodiscard]] VkImageView getOutputView() const { return m_output.view; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_output.image; }
+    // The occlusion before the blur, same format and size (for tests and debugging).
+    [[nodiscard]] VkImage occlusionImage() const { return m_occlusion.image; }
+    [[nodiscard]] VkExtent2D outputExtent() const { return {m_output.width, m_output.height}; }
     [[nodiscard]] VkSampler getSampler() const { return m_sampler; }
 
 private:
-    [[nodiscard]] bool createOutputImage();
-    [[nodiscard]] bool createNoiseTexture();
-    [[nodiscard]] bool createDescriptors();
-    [[nodiscard]] bool createPipeline();
-    void destroyOutputImage();
+    [[nodiscard]] bool createImages();
+    void destroyImages();
 
-    // Input buffers
-    VkImageView m_depthView{VK_NULL_HANDLE};
+    VkImageView m_positionView{VK_NULL_HANDLE};
     VkImageView m_normalView{VK_NULL_HANDLE};
+    glm::mat4 m_viewProj{1.0f};
+    glm::vec3 m_cameraPos{0.0f};
 
-    // AO output
-    VkImage m_aoOutput{VK_NULL_HANDLE};
-    VkDeviceMemory m_aoMemory{VK_NULL_HANDLE};
-    VkImageView m_aoOutputView{VK_NULL_HANDLE};
+    rtc::Image m_occlusion{}, m_output{};
 
-    // Noise texture (4x4 for randomization)
-    VkImage m_noiseImage{VK_NULL_HANDLE};
-    VkDeviceMemory m_noiseMemory{VK_NULL_HANDLE};
-    VkImageView m_noiseView{VK_NULL_HANDLE};
-
-    // Staging buffer for deferred noise upload
-    VkBuffer m_noiseStagingBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_noiseStagingMemory{VK_NULL_HANDLE};
-    bool m_noiseUploaded{false};
-    uint32_t m_noiseSeed{0};
-    void uploadNoiseTexture(VkCommandBuffer cmd);
-
-    // Compute pipeline
-    VkPipeline m_pipeline{VK_NULL_HANDLE};
-    VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
-
-    // Descriptors
-    VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
+    VkPipeline m_occlusionPipeline{VK_NULL_HANDLE}, m_blurPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_occlusionLayout{VK_NULL_HANDLE}, m_blurLayout{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_occlusionSetLayout{VK_NULL_HANDLE}, m_blurSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_descriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_descriptorSet{VK_NULL_HANDLE};
-
-    // Samplers
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_occlusionSets{}, m_blurSets{};
     VkSampler m_sampler{VK_NULL_HANDLE};
-    VkSampler m_noiseSampler{VK_NULL_HANDLE};
 
-    // Dimensions
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Parameters
     float m_radius{0.5f};
     float m_bias{0.025f};
     float m_intensity{1.0f};
-    uint32_t m_sampleCount{8};
+    uint32_t m_directions{8};
+    uint32_t m_steps{4};
     float m_falloffStart{50.0f};
     float m_falloffEnd{300.0f};
-
-    // Matrices
-    glm::mat4 m_projection;
-    glm::mat4 m_invProjection;
-
-    // Push constants (must match shader)
-    struct SSAOParams {
-        glm::mat4 projection;
-        glm::mat4 invProjection;
-        glm::vec4 noiseScale;  // xy = noise scale, zw = screen size
-        float radius;
-        float bias;
-        float intensity;
-        uint32_t sampleCount;
-        glm::vec2 texelSize;
-        float falloffStart;
-        float falloffEnd;
-    };
+    uint32_t m_noiseSeed{0};
 };
 
 } // namespace ohao

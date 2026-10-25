@@ -4,6 +4,7 @@
 #include "render/culling.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "render/rt/rt_compute.hpp"
 #include <array>
 
 namespace ohao::render { class RenderScene; }
@@ -66,6 +67,14 @@ public:
     [[nodiscard]] VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
     [[nodiscard]] VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
 
+    // SSS classification (layout.json, kSSSHeaderWords): the pass resets it before drawing and
+    // every visible fragment of a subsurface material flags its 16x16 tile; SSSPass dispatches
+    // over the lists (indirect). Host-mapped: the tiles flagged by the last frame whose fence
+    // has been waited on.
+    [[nodiscard]] VkBuffer sssTileBuffer() const { return m_sssTiles.buffer; }
+    [[nodiscard]] VkExtent2D sssTiles() const;
+    [[nodiscard]] uint32_t sssTilesFlagged() const;
+
 private:
     [[nodiscard]] bool createRenderPass();
     [[nodiscard]] bool createFramebuffer();
@@ -118,15 +127,19 @@ private:
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> m_cameraBuffers{};
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> m_cameraMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> m_cameraMapped{};
+    rtc::HostBuffer m_sssTiles{};   // set 1, binding 4
+    void resetSSSTiles(VkCommandBuffer cmd);
 
     // Dimensions
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constant: the draw's submesh material slot (matches gbuffer.frag).
+    // Push constant: the draw's submesh material slot, the SSS tiles across and down
+    // (matches gbuffer.frag).
     struct DrawPushConstant {
         uint32_t materialSlot;
-        uint32_t pad[3];
+        uint32_t tilesX, tilesY;
+        uint32_t pad;
     };
     static_assert(sizeof(DrawPushConstant) == 16);
 

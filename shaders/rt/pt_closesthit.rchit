@@ -31,7 +31,7 @@ layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSl
 // Material table: 3 vec4s per material (layout::MaterialGpuPack)
 //   [matID*3+0] = (baseColor.rgb, albedoTexIdx as float bits)
 //   [matID*3+1] = (roughness, metallic, normalTexIdx bits, emissiveTexIdx bits)
-//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, unused, unused)
+//   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, subsurface (raster SSS only), unused)
 layout(set = 0, binding = 10, std430) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
 layout(set = 0, binding = 36, std430) readonly buffer Instances { InstanceGpu instances[]; };
 layout(set = 0, binding = 37, std430) readonly buffer MaterialRefs { uint materialRefs[]; };

@@ -2,9 +2,13 @@
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_GOOGLE_include_directive : require
 #include "includes/scene/scene_data.glsl"
+#include "shared/layout.glsl"
 
 // G-Buffer Fragment Shader
-// Outputs to multiple render targets for deferred shading
+// Outputs to multiple render targets for deferred shading. A fragment of a subsurface
+// material also flags its 16x16 tile for the SSS pass (postprocess/sss.slang), so depth is
+// tested before the shader runs: only visible fragments flag.
+layout(early_fragment_tests) in;
 
 layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
@@ -37,9 +41,33 @@ layout(location = 8) flat in uint fragInstance;
 layout(set = 1, binding = 0, std430) readonly buffer Instances { InstanceGpu instances[]; };
 layout(set = 1, binding = 1, std430) readonly buffer Materials { vec4 matRows[]; };
 layout(set = 1, binding = 2, std430) readonly buffer MaterialRefs { uint materialRefs[]; };
+// SSS classification (kSSSHeaderWords header: two indirect dispatches; then the per-tile mask,
+// bit 0 skin, bit 1 under the horizontal blur; then the vertical and horizontal tile lists).
+layout(set = 1, binding = 4, std430) buffer SSSTiles { uint sssTiles[]; };
 
-// The draw's submesh material slot (16 bytes, fragment stage).
-layout(push_constant) uniform PushConstants { uint materialSlot; } pc;
+// The draw's submesh material slot and the frame's SSS tiles across and down (16 bytes,
+// fragment stage).
+layout(push_constant) uniform PushConstants { uint materialSlot; uint tilesX; uint tilesY; uint pad; } pc;
+
+// Flags `tile` with `bit` and, the first time, appends it to the list whose count is
+// header word `countWord` (the indirect dispatch's x). A plain read first: most fragments of a
+// skin tile find it already flagged and take no atomic.
+void flagTile(uint tile, uint bit, uint countWord, uint listBase) {
+    if ((sssTiles[kSSSHeaderWords + tile] & bit) != 0u) return;
+    if ((atomicOr(sssTiles[kSSSHeaderWords + tile], bit) & bit) != 0u) return;
+    sssTiles[listBase + atomicAdd(sssTiles[countWord], 1u)] = tile;
+}
+
+void flagSkin(uvec2 pixel) {
+    const uvec2 t = pixel / kSSSTile;
+    const uint vList = kSSSHeaderWords + kSSSMaxTiles;
+    const uint hList = vList + kSSSMaxTiles;
+    flagTile(t.y * pc.tilesX + t.x, 1u, 0u, vList);
+    for (int d = -int(kSSSRadiusTiles); d <= int(kSSSRadiusTiles); ++d) {
+        const int row = int(t.y) + d;
+        if (row >= 0 && row < int(pc.tilesY)) flagTile(uint(row) * pc.tilesX + t.x, 2u, 4u, hList);
+    }
+}
 
 // Normal encoding using octahedron mapping for better precision
 vec2 signNotZero(vec2 v) {
@@ -127,9 +155,12 @@ void main() {
         emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;
     }
 
-    // GBuffer1: Encoded Normal + Roughness + Emissive luminance
+    // GBuffer1: Encoded Normal + Roughness + (emissive luminance, or minus the subsurface
+    // strength: an emissive surface takes no SSS)
     vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;
-    outGBuffer1 = vec4(encodedNormal, roughness, emissiveLuminance);
+    const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;
+    outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);
+    if (subsurface > 0.0) flagSkin(uvec2(gl_FragCoord.xy));
 
     // GBuffer2: Albedo + AO
     outGBuffer2 = vec4(albedo, ao);

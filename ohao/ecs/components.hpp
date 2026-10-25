@@ -136,6 +136,7 @@ struct MaterialOverride {
     float roughness{0.5f};
     float metallic{0.0f};
     float emissiveStrength{0.0f};
+    float subsurface{0.0f};   // 0: none; > 0 the screen-space subsurface blur's strength (skin, wax)
 };
 
 // Instantiate's bookkeeping: tagged when MeshSource/MaterialOverride change; the error

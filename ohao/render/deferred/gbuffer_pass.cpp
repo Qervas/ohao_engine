@@ -1,6 +1,7 @@
 #include "gbuffer_pass.hpp"
 #include "render/scene/render_scene.hpp"
 #include "scene/asset/model.hpp"
+#include "gpu/shared_layout.hpp"
 #include <array>
 #include <cstring>
 
@@ -74,8 +75,10 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Always run the render pass, scene or not: its clears are what every later pass
     // samples. With no scene the G-buffer is simply empty (depth 1 = all sky).
 
-    // The slot's set and camera UBO are written before the render pass begins.
+    // The slot's set and camera UBO are written before the render pass begins, and the SSS
+    // classification is reset (no tile flagged: the SSS dispatches are empty).
     const bool haveScene = m_renderScene && !m_renderScene->draws().empty() && updateSceneSet(frameIndex);
+    resetSSSTiles(cmd);
 
     // Begin render pass
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
@@ -143,7 +146,8 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                 bound = true;
             }
 
-            const DrawPushConstant push{draw.materialSlot, {0u, 0u, 0u}};
+            const VkExtent2D tiles = sssTiles();
+            const DrawPushConstant push{draw.materialSlot, tiles.width, tiles.height, 0u};
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(DrawPushConstant), &push);
             // firstInstance = the slot: the shaders index the instance table with it.
@@ -152,6 +156,41 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     vkCmdEndRenderPass(cmd);
+}
+
+VkExtent2D GBufferPass::sssTiles() const {
+    return {(m_width + gpu::shared::kSSSTile - 1) / gpu::shared::kSSSTile,
+            (m_height + gpu::shared::kSSSTile - 1) / gpu::shared::kSSSTile};
+}
+
+uint32_t GBufferPass::sssTilesFlagged() const {
+    return m_sssTiles.mapped ? static_cast<const uint32_t*>(m_sssTiles.mapped)[0] : 0u;
+}
+
+void GBufferPass::resetSSSTiles(VkCommandBuffer cmd) {
+    if (!m_sssTiles.buffer) return;
+    namespace shared = gpu::shared;
+    const VkExtent2D tiles = sssTiles();
+    // The last frame's SSS read the lists (indirect and in its shaders) before this rewrite.
+    VkBufferMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.buffer = m_sssTiles.buffer;
+    b.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &b, 0, nullptr);
+    // Header: two empty indirect dispatches (x 0, y 1, z 1); the mask cleared for this frame's tiles.
+    const uint32_t header[shared::kSSSHeaderWords] = {0u, 1u, 1u, 0u, 0u, 1u, 1u, 0u};
+    vkCmdUpdateBuffer(cmd, m_sssTiles.buffer, 0, sizeof(header), header);
+    vkCmdFillBuffer(cmd, m_sssTiles.buffer, sizeof(header), uint64_t(tiles.width) * tiles.height * sizeof(uint32_t), 0u);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1,
+                         &b, 0, nullptr);
 }
 
 bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
@@ -168,13 +207,14 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
 
     // The table buffers can be replaced (arena / table growth), so the set is
     // rewritten every frame; the slot's previous use finished at its fence wait.
-    const std::array<VkDescriptorBufferInfo, 4> infos{{
+    const std::array<VkDescriptorBufferInfo, 5> infos{{
         {instances, 0, VK_WHOLE_SIZE},
         {materials, 0, VK_WHOLE_SIZE},
         {materialRefs, 0, VK_WHOLE_SIZE},
         {m_cameraBuffers[frameIndex], 0, sizeof(CameraUBO)},
+        {m_sssTiles.buffer, 0, VK_WHOLE_SIZE},
     }};
-    std::array<VkWriteDescriptorSet, 4> writes{};
+    std::array<VkWriteDescriptorSet, 5> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_sceneSets[frameIndex];
@@ -188,7 +228,15 @@ bool GBufferPass::updateSceneSet(uint32_t frameIndex) {
 }
 
 bool GBufferPass::createSceneDescriptors() {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    namespace shared = gpu::shared;
+    const VkDeviceSize sssBytes = VkDeviceSize(shared::kSSSHeaderWords + 3ull * shared::kSSSMaxTiles) * sizeof(uint32_t);
+    if (!rtc::createHostBuffer(m_device, m_physicalDevice, sssBytes,
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                               m_sssTiles))
+        return false;
+
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
     for (uint32_t i = 0; i < bindings.size(); ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -209,7 +257,7 @@ bool GBufferPass::createSceneDescriptors() {
     }
 
     const std::array<VkDescriptorPoolSize, 2> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
     }};
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -252,6 +300,7 @@ bool GBufferPass::createSceneDescriptors() {
 }
 
 void GBufferPass::destroySceneDescriptors() {
+    rtc::destroyHostBuffer(m_device, m_sssTiles);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (m_cameraMapped[i]) {
             vkUnmapMemory(m_device, m_cameraMemory[i]);

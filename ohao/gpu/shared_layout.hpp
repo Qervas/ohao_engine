@@ -35,6 +35,14 @@ inline constexpr uint32_t kGIHistoryFrames = 32u;
 inline constexpr uint32_t kGIFastHistoryFrames = 4u;
 // RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
 inline constexpr uint32_t kGITile = 16u;
+// SSS: the side of a classified tile in pixels (a workgroup of the blur covers one)
+inline constexpr uint32_t kSSSTile = 16u;
+// SSS: tiles the classification buffer holds (an 8192x8192 frame)
+inline constexpr uint32_t kSSSMaxTiles = 262144u;
+// SSS: the classification buffer's header, uints: the vertical blur's indirect dispatch (x, y, z, pad), then the horizontal blur's; the per-tile mask, the vertical list and the horizontal list follow, kSSSMaxTiles uints each
+inline constexpr uint32_t kSSSHeaderWords = 8u;
+// SSS: the tile rows above and below a skin tile the horizontal blur also covers (the vertical kernel reaches 3 x width <= 32 px)
+inline constexpr uint32_t kSSSRadiusTiles = 2u;
 // render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)
 inline constexpr uint32_t kInstanceGpuStride = 160u;
 // the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
@@ -107,6 +115,53 @@ static_assert(offsetof(GITracePush, seed) == 16);
 static_assert(offsetof(GITracePush, flags) == 32);
 static_assert(offsetof(GITracePush, cameraPos) == 48);
 static_assert(sizeof(GITracePush) == 64);
+
+// SSAO (compute/ssao.slang) push constants, both entries
+struct alignas(16) SSAOPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<float, 4> cameraPosRadius{};
+    alignas(16) std::array<float, 4> params{};
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<uint32_t, 4> config{};
+    alignas(16) std::array<float, 4> noise0{};
+    alignas(16) std::array<float, 4> noise1{};
+    alignas(16) std::array<float, 4> noise2{};
+    alignas(16) std::array<float, 4> noise3{};
+};
+static_assert(offsetof(SSAOPush, viewProj) == 0);
+static_assert(offsetof(SSAOPush, cameraPosRadius) == 64);
+static_assert(offsetof(SSAOPush, params) == 80);
+static_assert(offsetof(SSAOPush, extent) == 96);
+static_assert(offsetof(SSAOPush, config) == 112);
+static_assert(offsetof(SSAOPush, noise0) == 128);
+static_assert(offsetof(SSAOPush, noise1) == 144);
+static_assert(offsetof(SSAOPush, noise2) == 160);
+static_assert(offsetof(SSAOPush, noise3) == 176);
+static_assert(sizeof(SSAOPush) == 192);
+
+// SSR (postprocess/ssr.slang) push constants
+struct alignas(16) SSRPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<float, 4> cameraPos{};
+    alignas(16) std::array<float, 4> params{};
+    alignas(16) std::array<uint32_t, 4> extent{};
+};
+static_assert(offsetof(SSRPush, viewProj) == 0);
+static_assert(offsetof(SSRPush, cameraPos) == 64);
+static_assert(offsetof(SSRPush, params) == 80);
+static_assert(offsetof(SSRPush, extent) == 96);
+static_assert(sizeof(SSRPush) == 112);
+
+// SSS (postprocess/sss.slang) push constants, both entries
+struct alignas(16) SSSPush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<float, 4> params{};
+    alignas(16) std::array<float, 4> cameraPos{};
+};
+static_assert(offsetof(SSSPush, extent) == 0);
+static_assert(offsetof(SSSPush, params) == 16);
+static_assert(offsetof(SSSPush, cameraPos) == 32);
+static_assert(sizeof(SSSPush) == 48);
 
 // RT GI's denoiser (rt/gi_denoise.slang) push constants
 struct alignas(16) GIDenoisePush {

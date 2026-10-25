@@ -154,6 +154,7 @@ void writeFields(const MaterialOverride& v, const MaterialOverride* omit, FieldS
     if (!omit || !same(v.roughness, omit->roughness)) t.f32("\"roughness\"", v.roughness);
     if (!omit || !same(v.metallic, omit->metallic)) t.f32("\"metallic\"", v.metallic);
     if (!omit || !same(v.emissiveStrength, omit->emissiveStrength)) t.f32("\"emissiveStrength\"", v.emissiveStrength);
+    if (!omit || !same(v.subsurface, omit->subsurface)) t.f32("\"subsurface\"", v.subsurface);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

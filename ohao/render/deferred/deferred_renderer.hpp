@@ -250,7 +250,6 @@ private:
     TextureHandle m_graphNormalHandle;
     TextureHandle m_graphAlbedoHandle;
     TextureHandle m_graphShadowHandle;
-    TextureHandle m_graphSSAOHandle;
     TextureHandle m_graphLightingHandle;
 
     // (Re-)import all per-pass render targets into the graph.

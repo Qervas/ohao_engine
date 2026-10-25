@@ -116,7 +116,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("baseColor", &MaterialOverride::baseColor).doc("Albedo").unit("linear-rgb").color().min(0.0).max(1.0)
         .field("roughness", &MaterialOverride::roughness).doc("GGX roughness").unitless().min(0.0).max(1.0)
         .field("metallic", &MaterialOverride::metallic).doc("0 = dielectric, 1 = metal").unitless().min(0.0).max(1.0)
-        .field("emissiveStrength", &MaterialOverride::emissiveStrength).doc("Emission multiplier").unitless().min(0.0);
+        .field("emissiveStrength", &MaterialOverride::emissiveStrength).doc("Emission multiplier").unitless().min(0.0)
+        .field("subsurface", &MaterialOverride::subsurface)
+            .doc("Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under "
+                 "the surface; 0 = none. Ignored where emissiveStrength > 0.")
+            .unitless().min(0.0).max(1.0);
 
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())
         .doc("The scene camera (one per world). Its pose is the entity's world transform: it looks along -Z with +Y "

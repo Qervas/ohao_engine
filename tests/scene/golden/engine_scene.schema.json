@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 164f3e4493e49cca. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash c0d997f3a612b797. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -547,6 +547,11 @@
           "description": "Emission multiplier",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "subsurface": {
+          "description": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emissiveStrength > 0.",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         }
       },
       "additionalProperties": false

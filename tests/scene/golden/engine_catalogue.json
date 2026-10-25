@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "164f3e4493e49cca",
+  "schemaHash": "c0d997f3a612b797",
   "units": [
     "m",
     "m/s",
@@ -1143,6 +1143,23 @@
           "unit": "1",
           "min": 0,
           "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "subsurface",
+          "type": "f32",
+          "default": 0,
+          "doc": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emissiveStrength > 0.",
+          "unit": "1",
+          "min": 0,
+          "max": 1,
           "uiRange": null,
           "step": null,
           "tooltip": "",

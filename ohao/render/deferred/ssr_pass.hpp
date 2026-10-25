@@ -1,7 +1,9 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "render/rt/rt_compute.hpp"
 #include "render/frame/frame_resources.hpp"
+#include "gpu/shared_layout.hpp"
 
 #include <array>
 
@@ -9,8 +11,9 @@ namespace ohao {
 
 class GBufferPass;
 
-// Screen-Space Reflections — ray-march the depth buffer for glossy reflections.
-// Runs as a compute pass after deferred lighting, blended into final output.
+// Screen-space reflections (sub-project 2b spec, "Screen-space passes and order"): a compute
+// pass at half resolution (postprocess/ssr.slang) after deferred lighting; post's tonemap adds
+// it, upsampled with depth awareness.
 class SSRPass : public RenderPassBase {
 public:
     SSRPass() = default;
@@ -26,23 +29,18 @@ public:
     void setLitSceneView(VkImageView view) { m_litSceneView = view; }
     void setCameraData(const glm::mat4& viewProj, const glm::vec3& cameraPos);
 
-    [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
-    [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // output image size
+    // Half resolution, rounded up: rgb the reflection, a the pixel's view depth (0 for sky).
+    [[nodiscard]] VkImageView getOutputView() const { return m_output.view; }
+    [[nodiscard]] VkExtent2D outputExtent() const { return {m_output.width, m_output.height}; }
+    [[nodiscard]] VkExtent2D extent() const { return {m_width, m_height}; }   // the frame the pass follows
 
 private:
     [[nodiscard]] bool createOutputImage();
-    [[nodiscard]] bool createComputePipeline();
-    [[nodiscard]] bool createDescriptors();
 
     GBufferPass* m_gbuffer{nullptr};
     VkImageView m_litSceneView{VK_NULL_HANDLE};
+    rtc::Image m_output{};
 
-    // Output
-    VkImage m_output{VK_NULL_HANDLE};
-    VkDeviceMemory m_outputMem{VK_NULL_HANDLE};
-    VkImageView m_outputView{VK_NULL_HANDLE};
-
-    // Compute pipeline
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_descriptorLayout{VK_NULL_HANDLE};
@@ -52,17 +50,7 @@ private:
     VkSampler m_sampler{VK_NULL_HANDLE};
 
     uint32_t m_width{0}, m_height{0};
-
-    struct SSRPushConstants {
-        glm::mat4 viewProj;
-        glm::mat4 invViewProj;
-        glm::vec4 cameraPos;
-        glm::vec2 screenSize;
-        float maxDistance;
-        float thickness;
-    };
-
-    SSRPushConstants m_params{};
+    gpu::shared::SSRPush m_params{};
 };
 
 } // namespace ohao

@@ -148,6 +148,8 @@ void VulkanRenderer::renderDeferred() {
         }
     }
 
+    if (ld && m_ambientOverride) ld->ambientIntensity = *m_ambientOverride;
+
     // The lighting pass binds this slot's buffer in this slot's descriptor set.
     if (ld) {
         const uint32_t lightCount = static_cast<uint32_t>(std::max(1, ld->numLights));

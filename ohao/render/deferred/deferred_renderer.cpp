@@ -237,11 +237,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         // SSAO texture is set after executeSSAO() call below
     }
 
-    // Update post-processing
-    if (m_postProcessing) {
-        glm::mat4 invProj = glm::inverse(m_proj);
-        glm::mat4 invView = glm::inverse(m_view);
-        m_postProcessing->setProjectionMatrix(m_proj, invProj);
+    // SSAO's inputs: the G-buffer and the unjittered camera
+    if (m_postProcessing && m_gbufferPass) {
+        m_postProcessing->setSSAOInputs(m_gbufferPass->getPositionView(), m_gbufferPass->getNormalView(),
+                                        m_proj * m_view, m_cameraPos);
     }
 
     // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → Lighting) ---
@@ -529,18 +528,24 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                              0, nullptr, 0, nullptr);
     }
 
-    // 4.7. SSS — separable subsurface scattering blur on skin, over the lit image with
-    // sky and particles in it
-    VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
+    // 4.7. SSS — separable subsurface scattering blur, in place on the lit image (with sky
+    // and particles in it), over the tiles the G-buffer pass flagged for subsurface materials
+    const VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
     if (m_sssPass && litOutput) {
         timerBegin("sss");
-        m_sssPass->setLitSceneView(litOutput);
+        m_sssPass->setLitImage(m_lightingPass->getOutputImage(), litOutput);
+        m_sssPass->setCameraPos(m_cameraPos);
         m_sssPass->execute(cmd, frameIndex);
-        litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
         timerEnd();
     }
 
-    // 4.8. SSR — screen-space reflections on glossy surfaces
+    // 4.8. SSR — screen-space reflections on glossy surfaces, at half resolution; post's
+    // tonemap adds them, upsampled against the depth buffer (linearized with the
+    // jittered projection the depth buffer was drawn with).
+    if (m_postProcessing) {
+        m_postProcessing->setSSRView(VK_NULL_HANDLE);
+        m_postProcessing->setSSRProjection(jitteredProj);
+    }
     if (m_ssrPass && litOutput) {
         timerBegin("ssr");
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
@@ -554,12 +559,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
-        // Use SSS output if available (blurred skin), otherwise raw lighting
-        VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?
-            m_sssPass->getOutputView() : m_lightingPass->getOutputView();
-        VkImage hdrImage = (m_sssPass && m_sssPass->getOutputImage()) ?
-            m_sssPass->getOutputImage() : m_lightingPass->getOutputImage();
-        m_postProcessing->setHDRInputWithImage(hdrView, hdrImage);
+        // The lit image, SSS applied in place
+        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());
         m_postProcessing->setDeltaTime(m_deltaTime);
         m_postProcessing->setPassTimer(m_passTimer);
         m_postProcessing->execute(cmd, frameIndex);
@@ -851,7 +852,6 @@ void DeferredRenderer::importGraphTextures() {
     m_graphNormalHandle  = TextureHandle::invalid();
     m_graphAlbedoHandle  = TextureHandle::invalid();
     m_graphShadowHandle  = TextureHandle::invalid();
-    m_graphSSAOHandle    = TextureHandle::invalid();
     m_graphLightingHandle = TextureHandle::invalid();
 
     uint32_t w = m_width  > 0 ? m_width  : 1920u;
@@ -890,15 +890,6 @@ void DeferredRenderer::importGraphTextures() {
             VK_FORMAT_D32_SFLOAT,
             CSMPass::SHADOW_MAP_SIZE, CSMPass::SHADOW_MAP_SIZE,
             VK_IMAGE_LAYOUT_UNDEFINED);
-    }
-
-    if (m_postProcessing) {
-        VkImage ssaoImg = m_postProcessing->getSSAOImage();
-        if (ssaoImg != VK_NULL_HANDLE) {
-            m_graphSSAOHandle = m_renderGraph.importTexture(
-                "ssao_output", ssaoImg, m_postProcessing->getSSAOOutput(),
-                SSAOPass::kOutputFormat, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
-        }
     }
 
     if (m_lightingPass && m_lightingPass->getOutputImage() != VK_NULL_HANDLE) {

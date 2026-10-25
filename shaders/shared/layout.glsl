@@ -31,6 +31,14 @@ const uint kGIHistoryFrames = 32u;
 const uint kGIFastHistoryFrames = 4u;
 // RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side
 const uint kGITile = 16u;
+// SSS: the side of a classified tile in pixels (a workgroup of the blur covers one)
+const uint kSSSTile = 16u;
+// SSS: tiles the classification buffer holds (an 8192x8192 frame)
+const uint kSSSMaxTiles = 262144u;
+// SSS: the classification buffer's header, uints: the vertical blur's indirect dispatch (x, y, z, pad), then the horizontal blur's; the per-tile mask, the vertical list and the horizontal list follow, kSSSMaxTiles uints each
+const uint kSSSHeaderWords = 8u;
+// SSS: the tile rows above and below a skin tile the horizontal blur also covers (the vertical kernel reaches 3 x width <= 32 px)
+const uint kSSSRadiusTiles = 2u;
 // render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)
 const uint kInstanceGpuStride = 160u;
 // the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
@@ -77,6 +85,34 @@ struct GITracePush {
     uvec4 seed;   // x render seed, y frame index since the last temporal reset, z rays a pixel, w lights
     uvec4 flags;   // x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)
     vec4 cameraPos;   // xyz the camera's position (the denoiser's depth guide is the distance from it)
+};
+
+// SSAO (compute/ssao.slang) push constants, both entries
+struct SSAOPush {
+    mat4 viewProj;   // the unjittered view-projection: a direction's end projected to the screen
+    vec4 cameraPosRadius;   // xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres
+    vec4 params;   // x bias (metres along the normal), y intensity, z, w the distance falloff's start and end
+    uvec4 extent;   // x, y the half-resolution size; z, w the frame's
+    uvec4 config;   // x directions a pixel, y steps a direction
+    vec4 noise0;   // the 4x4 interleaved rotations, texels 0-3 (x + 4y), each a fraction of the angle between two directions
+    vec4 noise1;   // texels 4-7
+    vec4 noise2;   // texels 8-11
+    vec4 noise3;   // texels 12-15
+};
+
+// SSR (postprocess/ssr.slang) push constants
+struct SSRPush {
+    mat4 viewProj;   // the view-projection the ray is marched in
+    vec4 cameraPos;   // xyz the camera's position, w the march's length in metres
+    vec4 params;   // x thickness: how far behind the depth buffer (NDC depth) a sample still hits
+    uvec4 extent;   // x, y the half-resolution size; z, w the frame's
+};
+
+// SSS (postprocess/sss.slang) push constants, both entries
+struct SSSPush {
+    uvec4 extent;   // x, y the frame's size; z, w its tiles across and down
+    vec4 params;   // x the kernel's step in pixels (its 7 taps reach 3 steps), clamped to 10
+    vec4 cameraPos;   // xyz the camera's position: the depth weight compares distances from it
 };
 
 // RT GI's denoiser (rt/gi_denoise.slang) push constants

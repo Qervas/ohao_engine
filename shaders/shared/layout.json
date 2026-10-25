@@ -37,6 +37,14 @@
      "doc": "RT GI, realtime: the short accumulation's longest history; its neighbourhood's range clamps the long one"},
     {"name": "kGITile", "type": "uint", "value": 16,
      "doc": "RT GI's denoiser: the pixels a workgroup of the temporal pass covers, this many on a side"},
+    {"name": "kSSSTile", "type": "uint", "value": 16,
+     "doc": "SSS: the side of a classified tile in pixels (a workgroup of the blur covers one)"},
+    {"name": "kSSSMaxTiles", "type": "uint", "value": 262144,
+     "doc": "SSS: tiles the classification buffer holds (an 8192x8192 frame)"},
+    {"name": "kSSSHeaderWords", "type": "uint", "value": 8,
+     "doc": "SSS: the classification buffer's header, uints: the vertical blur's indirect dispatch (x, y, z, pad), then the horizontal blur's; the per-tile mask, the vertical list and the horizontal list follow, kSSSMaxTiles uints each"},
+    {"name": "kSSSRadiusTiles", "type": "uint", "value": 2,
+     "doc": "SSS: the tile rows above and below a skin tile the horizontal blur also covers (the vertical kernel reaches 3 x width <= 32 px)"},
     {"name": "kInstanceGpuStride", "type": "uint", "value": 160,
      "doc": "render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)"},
     {"name": "kInstanceGpuGiAlbedoOffset", "type": "uint", "value": 144,
@@ -79,6 +87,31 @@
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset, z rays a pixel, w lights"},
        {"name": "flags", "type": "uint4", "doc": "x quality (0 realtime, 1 reference), y 1 when an environment map is bound, z reference: the frames already in the running mean (0: start it again)"},
        {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position (the denoiser's depth guide is the distance from it)"}
+     ]},
+    {"name": "SSAOPush", "doc": "SSAO (compute/ssao.slang) push constants, both entries",
+     "fields": [
+       {"name": "viewProj", "type": "float4x4", "doc": "the unjittered view-projection: a direction's end projected to the screen"},
+       {"name": "cameraPosRadius", "type": "float4", "doc": "xyz the camera's position (the blur's depth guide is the distance from it), w the sampling radius in metres"},
+       {"name": "params", "type": "float4", "doc": "x bias (metres along the normal), y intensity, z, w the distance falloff's start and end"},
+       {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"},
+       {"name": "config", "type": "uint4", "doc": "x directions a pixel, y steps a direction"},
+       {"name": "noise0", "type": "float4", "doc": "the 4x4 interleaved rotations, texels 0-3 (x + 4y), each a fraction of the angle between two directions"},
+       {"name": "noise1", "type": "float4", "doc": "texels 4-7"},
+       {"name": "noise2", "type": "float4", "doc": "texels 8-11"},
+       {"name": "noise3", "type": "float4", "doc": "texels 12-15"}
+     ]},
+    {"name": "SSRPush", "doc": "SSR (postprocess/ssr.slang) push constants",
+     "fields": [
+       {"name": "viewProj", "type": "float4x4", "doc": "the view-projection the ray is marched in"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position, w the march's length in metres"},
+       {"name": "params", "type": "float4", "doc": "x thickness: how far behind the depth buffer (NDC depth) a sample still hits"},
+       {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"}
+     ]},
+    {"name": "SSSPush", "doc": "SSS (postprocess/sss.slang) push constants, both entries",
+     "fields": [
+       {"name": "extent", "type": "uint4", "doc": "x, y the frame's size; z, w its tiles across and down"},
+       {"name": "params", "type": "float4", "doc": "x the kernel's step in pixels (its 7 taps reach 3 steps), clamped to 10"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position: the depth weight compares distances from it"}
      ]},
     {"name": "GIDenoisePush", "doc": "RT GI's denoiser (rt/gi_denoise.slang) push constants",
      "fields": [

@@ -1,29 +1,91 @@
 #include "sss_pass.hpp"
 #include "gbuffer_pass.hpp"
-#include <array>
+#include "gpu/shared_layout.hpp"
 #include "core/log.hpp"
+#include <utility>
 
 namespace ohao {
+
+namespace shared = gpu::shared;
+
+namespace {
+
+constexpr VkImageLayout kReadOnly = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+constexpr VkPipelineStageFlags kCompute = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+constexpr VkPipelineStageFlags kReaders = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+// Offsets of the two indirect dispatches in the classification buffer's header.
+constexpr VkDeviceSize kVerticalArgs = 0;
+constexpr VkDeviceSize kHorizontalArgs = 4 * sizeof(uint32_t);
+
+void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags src,
+                  VkAccessFlags srcAccess, VkPipelineStageFlags dst, VkAccessFlags dstAccess) {
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcAccessMask = srcAccess;
+    b.dstAccessMask = dstAccess;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = image;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, src, dst, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+} // namespace
 
 SSSPass::~SSSPass() { cleanup(); }
 
 bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_device = device;
     m_physicalDevice = physicalDevice;
-    m_width = 1920; m_height = 1080;
+    m_width = 1920;
+    m_height = 1080;
+    if (!rtc::createImage(m_device, m_physicalDevice, m_scratch, VK_FORMAT_R16G16B16A16_SFLOAT,
+                          VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
+        return false;
 
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = VK_FILTER_LINEAR;
-    si.minFilter = VK_FILTER_LINEAR;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(m_device, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
-
-    if (!createImages()) return false;
-    if (!createDescriptors()) return false;
-    if (!createComputePipeline()) return false;
-
+    using rtc::layoutBinding;
+    const VkDescriptorSetLayoutBinding h[] = {
+        layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    const VkDescriptorSetLayoutBinding v[] = {
+        layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), layoutBinding(5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+        layoutBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+    for (auto [bindings, layout] : {std::pair{h, &m_hSetLayout}, std::pair{v, &m_vSetLayout}}) {
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 5;
+        li.pBindings = bindings;
+        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, layout) != VK_SUCCESS) return false;
+    }
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6 * MAX_FRAMES_IN_FLIGHT},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * MAX_FRAMES_IN_FLIGHT},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 2 * MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 3;
+    pi.pPoolSizes = sizes;
+    if (vkCreateDescriptorPool(m_device, &pi, nullptr, &m_descriptorPool) != VK_SUCCESS) return false;
+    for (uint32_t s = 0; s < MAX_FRAMES_IN_FLIGHT; ++s) {
+        for (auto [layout, set] : {std::pair{m_hSetLayout, &m_hSets[s]}, std::pair{m_vSetLayout, &m_vSets[s]}}) {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = m_descriptorPool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &layout;
+            if (vkAllocateDescriptorSets(m_device, &ai, set) != VK_SUCCESS) return false;
+        }
+    }
+    if (!rtc::createComputePipeline(m_device, "postprocess_sss.slang.blurH.spv", "blurH", m_hSetLayout,
+                                    sizeof(shared::SSSPush), m_hLayout, m_hPipeline) ||
+        !rtc::createComputePipeline(m_device, "postprocess_sss.slang.blurV.spv", "blurV", m_vSetLayout,
+                                    sizeof(shared::SSSPush), m_vLayout, m_vPipeline))
+        return false;
     OHAO_LOG(Info, render, "SSSPass: initialized");
     return true;
 }
@@ -31,213 +93,103 @@ bool SSSPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
 void SSSPass::cleanup() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
-    if (m_pipeline) { vkDestroyPipeline(m_device, m_pipeline, nullptr); m_pipeline = VK_NULL_HANDLE; }
-    if (m_pipelineLayout) { vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr); m_pipelineLayout = VK_NULL_HANDLE; }
-    if (m_descriptorPool) { vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); m_descriptorPool = VK_NULL_HANDLE; }
-    if (m_descriptorLayout) { vkDestroyDescriptorSetLayout(m_device, m_descriptorLayout, nullptr); m_descriptorLayout = VK_NULL_HANDLE; }
-    if (m_sampler) { vkDestroySampler(m_device, m_sampler, nullptr); m_sampler = VK_NULL_HANDLE; }
-    auto destroyImg = [&](VkImage& img, VkDeviceMemory& mem, VkImageView& view) {
-        if (view) { vkDestroyImageView(m_device, view, nullptr); view = VK_NULL_HANDLE; }
-        if (img) { vkDestroyImage(m_device, img, nullptr); img = VK_NULL_HANDLE; }
-        if (mem) { vkFreeMemory(m_device, mem, nullptr); mem = VK_NULL_HANDLE; }
-    };
-    destroyImg(m_temp, m_tempMem, m_tempView);
-    destroyImg(m_output, m_outputMem, m_outputView);
-}
-
-bool SSSPass::createImages() {
-    auto createImg = [&](VkImage& img, VkDeviceMemory& mem, VkImageView& view) -> bool {
-        VkImageCreateInfo ii{};
-        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ii.imageType = VK_IMAGE_TYPE_2D;
-        ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        ii.extent = {m_width, m_height, 1};
-        ii.mipLevels = 1; ii.arrayLayers = 1;
-        ii.samples = VK_SAMPLE_COUNT_1_BIT;
-        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        if (vkCreateImage(m_device, &ii, nullptr, &img) != VK_SUCCESS) return false;
-
-        VkMemoryRequirements mr;
-        vkGetImageMemoryRequirements(m_device, img, &mr);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mr.size;
-        ai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (vkAllocateMemory(m_device, &ai, nullptr, &mem) != VK_SUCCESS) return false;
-        vkBindImageMemory(m_device, img, mem, 0);
-
-        VkImageViewCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image = img; vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        return vkCreateImageView(m_device, &vi, nullptr, &view) == VK_SUCCESS;
-    };
-    return createImg(m_temp, m_tempMem, m_tempView) &&
-           createImg(m_output, m_outputMem, m_outputView);
-}
-
-bool SSSPass::createDescriptors() {
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
-    for (int i = 0; i < 4; i++) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    bindings[4].binding = 4;
-    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[4].descriptorCount = 1;
-    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo li{};
-    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = static_cast<uint32_t>(bindings.size());
-    li.pBindings = bindings.data();
-    if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &m_descriptorLayout) != VK_SUCCESS)
-        return false;
-
-    VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * MAX_FRAMES_IN_FLIGHT},  // 4 per pass × 2 passes
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT},
-    };
-    VkDescriptorPoolCreateInfo pi{};
-    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 2 * MAX_FRAMES_IN_FLIGHT;
-    pi.poolSizeCount = 2;
-    pi.pPoolSizes = poolSizes;
-    if (vkCreateDescriptorPool(m_device, &pi, nullptr, &m_descriptorPool) != VK_SUCCESS)
-        return false;
-
-    VkDescriptorSetLayout layouts[2] = {m_descriptorLayout, m_descriptorLayout};
-    VkDescriptorSetAllocateInfo dai{};
-    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dai.descriptorPool = m_descriptorPool;
-    dai.descriptorSetCount = 2;
-    dai.pSetLayouts = layouts;
-    for (auto& pair : m_descSets)
-        if (vkAllocateDescriptorSets(m_device, &dai, pair.data()) != VK_SUCCESS) return false;
-    return true;
-}
-
-bool SSSPass::createComputePipeline() {
-    VkShaderModule shader = loadShaderModule("postprocess_sss_blur.comp.spv");
-    if (!shader) { OHAO_LOG(Error, render, "SSSPass: shader not found"); return false; }
-
-    VkPushConstantRange pcr{};
-    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pcr.size = sizeof(SSSPushConstants);
-
-    VkPipelineLayoutCreateInfo pli{};
-    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pli.setLayoutCount = 1; pli.pSetLayouts = &m_descriptorLayout;
-    pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
-    if (vkCreatePipelineLayout(m_device, &pli, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(m_device, shader, nullptr); return false;
-    }
-
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = shader; stage.pName = "main";
-
-    VkComputePipelineCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    ci.stage = stage; ci.layout = m_pipelineLayout;
-    VkResult r = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_pipeline);
-    vkDestroyShaderModule(m_device, shader, nullptr);
-    return r == VK_SUCCESS;
-}
-
-void SSSPass::executePass(VkCommandBuffer cmd, VkDescriptorSet ds, VkImageView input, VkImage inputImg,
-                           VkImageView output, VkImage outputImg, glm::vec2 direction) {
-    if (!m_gbuffer || ds == VK_NULL_HANDLE) return;
-
-    // Update descriptors
-    VkDescriptorImageInfo imgInfos[4] = {};
-    imgInfos[0] = {m_sampler, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    imgInfos[1] = {m_sampler, m_gbuffer->getPositionView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    imgInfos[2] = {m_sampler, m_gbuffer->getNormalView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    imgInfos[3] = {m_sampler, m_gbuffer->getAlbedoView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo outInfo = {VK_NULL_HANDLE, output, VK_IMAGE_LAYOUT_GENERAL};
-
-    VkWriteDescriptorSet writes[5] = {};
-    for (int i = 0; i < 4; i++) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = ds; writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &imgInfos[i];
-    }
-    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = ds; writes[4].dstBinding = 4;
-    writes[4].descriptorCount = 1;
-    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[4].pImageInfo = &outInfo;
-    vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
-
-    // Transition output to GENERAL
-    VkImageMemoryBarrier toGeneral{};
-    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toGeneral.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toGeneral.image = outputImg;
-    toGeneral.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         0, 0, nullptr, 0, nullptr, 1, &toGeneral);
-
-    // Dispatch
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
-                            0, 1, &ds, 0, nullptr);
-    SSSPushConstants pc{};
-    pc.direction = direction;
-    pc.screenSize = glm::vec2(m_width, m_height);
-    pc.sssWidth = m_sssWidth;
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(SSSPushConstants), &pc);
-    vkCmdDispatch(cmd, (m_width + 15) / 16, (m_height + 15) / 16, 1);
-
-    // Transition output to SHADER_READ for next pass
-    VkImageMemoryBarrier toRead{};
-    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.image = outputImg;
-    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         0, 0, nullptr, 0, nullptr, 1, &toRead);
+    safeDestroy(m_hPipeline);
+    safeDestroy(m_vPipeline);
+    safeDestroy(m_hLayout);
+    safeDestroy(m_vLayout);
+    safeDestroy(m_descriptorPool);
+    safeDestroy(m_hSetLayout);
+    safeDestroy(m_vSetLayout);
+    rtc::destroyImage(m_device, m_scratch);
+    m_hSets = {};
+    m_vSets = {};
 }
 
 void SSSPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
-    if (!m_pipeline || !m_gbuffer || !m_litSceneView || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
-    const auto& sets = m_descSets[frameIndex];
+    if (!m_hPipeline || !m_vPipeline || !m_gbuffer || !m_litImage || frameIndex >= MAX_FRAMES_IN_FLIGHT) return;
+    const VkBuffer tiles = m_gbuffer->sssTileBuffer();
+    if (!tiles) return;
 
-    // Pass 1: Horizontal blur (lit scene → temp)
-    executePass(cmd, sets[0], m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));
+    // The G-buffer pass's fragments flagged the tiles: its writes before the indirect reads.
+    VkBufferMemoryBarrier bb{};
+    bb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = tiles;
+    bb.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                         &bb, 0, nullptr);
 
-    // Pass 2: Vertical blur (temp → output)
-    executePass(cmd, sets[1], m_tempView, m_temp, m_outputView, m_output, glm::vec2(0, 1));
+    shared::SSSPush pc{};
+    const VkExtent2D t = m_gbuffer->sssTiles();
+    pc.extent = {m_width, m_height, t.width, t.height};
+    pc.params = {m_sssWidth, 0.0f, 0.0f, 0.0f};
+    pc.cameraPos = {m_cameraPos.x, m_cameraPos.y, m_cameraPos.z, 0.0f};
+    const VkDescriptorBufferInfo tileInfo{tiles, 0, VK_WHOLE_SIZE};
+    const VkImageView position = m_gbuffer->getPositionView(), normal = m_gbuffer->getNormalView();
+
+    // Horizontal: lit -> scratch
+    rtc::transition(cmd, m_scratch, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT, true);
+    {
+        const VkDescriptorSet set = m_hSets[frameIndex];
+        const VkDescriptorImageInfo images[4] = {{VK_NULL_HANDLE, m_litView, kReadOnly},
+                                                 {VK_NULL_HANDLE, position, kReadOnly},
+                                                 {VK_NULL_HANDLE, normal, kReadOnly},
+                                                 {VK_NULL_HANDLE, m_scratch.view, kGeneral}};
+        VkWriteDescriptorSet writes[5] = {
+            rtc::descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+            rtc::descriptorWrite(set, 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        writes[0].pImageInfo = &images[0];
+        writes[1].pImageInfo = &images[1];
+        writes[2].pImageInfo = &images[2];
+        writes[3].pBufferInfo = &tileInfo;
+        writes[4].pImageInfo = &images[3];
+        vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_hPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_hLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_hLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatchIndirect(cmd, tiles, kHorizontalArgs);
+    }
+
+    // Vertical: scratch -> lit, in place (the lit image to GENERAL and back)
+    rtc::transition(cmd, m_scratch, kGeneral, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kCompute, VK_ACCESS_SHADER_READ_BIT, false);
+    imageBarrier(cmd, m_litImage, kReadOnly, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT);
+    {
+        const VkDescriptorSet set = m_vSets[frameIndex];
+        const VkDescriptorImageInfo images[4] = {{VK_NULL_HANDLE, position, kReadOnly},
+                                                 {VK_NULL_HANDLE, normal, kReadOnly},
+                                                 {VK_NULL_HANDLE, m_scratch.view, kGeneral},
+                                                 {VK_NULL_HANDLE, m_litView, kGeneral}};
+        VkWriteDescriptorSet writes[5] = {
+            rtc::descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), rtc::descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            rtc::descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER), rtc::descriptorWrite(set, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+            rtc::descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        writes[0].pImageInfo = &images[0];
+        writes[1].pImageInfo = &images[1];
+        writes[2].pBufferInfo = &tileInfo;
+        writes[3].pImageInfo = &images[2];
+        writes[4].pImageInfo = &images[3];
+        vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, m_vLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatchIndirect(cmd, tiles, kVerticalArgs);
+    }
+    imageBarrier(cmd, m_litImage, kGeneral, kReadOnly, kCompute, VK_ACCESS_SHADER_WRITE_BIT, kReaders, VK_ACCESS_SHADER_READ_BIT);
 }
 
 void SSSPass::onResize(uint32_t w, uint32_t h) {
     if (w == m_width && h == m_height) return;
-    m_width = w; m_height = h;
+    m_width = w;
+    m_height = h;
     vkDeviceWaitIdle(m_device);
-    auto destroyImg = [&](VkImage& img, VkDeviceMemory& mem, VkImageView& view) {
-        if (view) vkDestroyImageView(m_device, view, nullptr);
-        if (img) vkDestroyImage(m_device, img, nullptr);
-        if (mem) vkFreeMemory(m_device, mem, nullptr);
-        view = VK_NULL_HANDLE; img = VK_NULL_HANDLE; mem = VK_NULL_HANDLE;
-    };
-    destroyImg(m_temp, m_tempMem, m_tempView);
-    destroyImg(m_output, m_outputMem, m_outputView);
-    createImages();
+    rtc::destroyImage(m_device, m_scratch);
+    if (!rtc::createImage(m_device, m_physicalDevice, m_scratch, VK_FORMAT_R16G16B16A16_SFLOAT,
+                          VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_width, m_height))
+        OHAO_LOG(Error, render, "SSSPass: failed to recreate its scratch image at {}x{}", w, h);
 }
 
 } // namespace ohao

@@ -48,13 +48,18 @@ public:
     // must already hold the new views when it does.
     void setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity);
 
-    // The G-buffer views SSAO and TAA currently reference (null where a pass is absent).
+    // The G-buffer views TAA currently references (null where the pass is absent).
     struct BoundGBufferInputs {
-        VkImageView ssaoDepth{VK_NULL_HANDLE}, ssaoNormal{VK_NULL_HANDLE};
         VkImageView taaDepth{VK_NULL_HANDLE}, taaVelocity{VK_NULL_HANDLE};
     };
     [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
+    // The half-resolution SSR (rgb reflection, a its pixel's view depth) this frame adds, null
+    // for none, and the projection whose depth it linearizes the G-buffer's with.
     void setSSRView(VkImageView ssr) { m_ssrView = ssr; }
+    void setSSRProjection(const glm::mat4& proj) noexcept {
+        m_depthA = proj[2][2];
+        m_depthB = proj[3][2];
+    }
     // Times bloom, TAA and tonemapping as post.bloom, post.taa, post.tonemap (null: untimed).
     void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
@@ -88,10 +93,12 @@ public:
     // SSAO configuration
     void setSSAORadius(float radius);
     void setSSAOIntensity(float intensity);
-    void setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj);
+    // SSAO's per-frame inputs: the G-buffer's position and normal, the unjittered
+    // view-projection and the camera position (DeferredRenderer::render).
+    void setSSAOInputs(VkImageView position, VkImageView normal, const glm::mat4& viewProj, const glm::vec3& cameraPos);
     // The SSAO noise seed (VulkanRenderer::setRenderSeed); kept across re-initialization.
     void setNoiseSeed(uint32_t seed);
-    // The seed the SSAO pass's noise texture was built from.
+    // The seed the SSAO pass's noise comes from.
     [[nodiscard]] uint32_t noiseSeed() const noexcept { return m_ssaoPass ? m_ssaoPass->noiseSeed() : m_noiseSeed; }
 
     void setDeltaTime(float dt)          { m_totalTime += dt; }
@@ -106,6 +113,7 @@ public:
     [[nodiscard]] VkImageView getSSAOOutput() const;
     [[nodiscard]] VkImage getSSAOImage() const;
     [[nodiscard]] VkSampler getSSAOSampler() const;
+    [[nodiscard]] SSAOPass* ssaoPass() noexcept { return m_ssaoPass.get(); }
 
 private:
     [[nodiscard]] bool createTonemappingPass();
@@ -140,6 +148,7 @@ private:
     // Input views
     VkImageView m_hdrInputView{VK_NULL_HANDLE};
     VkImageView m_ssrView{VK_NULL_HANDLE};
+    VkImageView m_depthView{VK_NULL_HANDLE};   // the G-buffer depth: the SSR upsample's guide
 
     // Dimensions
     uint32_t m_width{0};
@@ -168,8 +177,12 @@ private:
         float bloomStrength;   // 0.0 = no bloom composite, 1.0+ = bloom intensity
         uint32_t tonemapOp;    // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
         float flashIntensity;  // lightning flash (0=none, 3+ = bright strike)
-        float paddingF;
+        uint32_t ssrOn;        // 1: add the half-resolution SSR, upsampled by depth
+        float depthA;          // the projection's [2][2] and [3][2]: view depth = depthB / (d + depthA)
+        float depthB;
     };
+    [[nodiscard]] bool ssrOn() const noexcept { return m_ssrView != VK_NULL_HANDLE && m_depthView != VK_NULL_HANDLE; }
+    float m_depthA{0.0f}, m_depthB{0.0f};
 
 };
 

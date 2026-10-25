@@ -58,6 +58,7 @@ struct MaterialDesc {
     uint32_t roughMetalTex{kNoTexture};
     uint32_t emissiveTex{kNoTexture};
     float emissiveStrength{0.0f};
+    float subsurface{0.0f};   // > 0: the SSS blur's strength on this material's pixels (table row 2, z)
 };
 
 struct InstanceDesc {

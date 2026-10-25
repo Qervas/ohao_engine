@@ -43,6 +43,10 @@ layout(set = 0, binding = 6) uniform sampler2DArrayShadow shadowMap;
 // IBL resources
 layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
 
+// SSAO (binding 10, flag bit 1): half resolution, (ao, distance from the camera; 0 for sky),
+// written by compute/ssao.slang; sample q sits on full-resolution pixel 2q.
+layout(set = 0, binding = 10) uniform sampler2D ssaoTexture;
+
 // RT GI (binding 11): full-resolution diffuse indirect light, albedo applied
 layout(set = 0, binding = 11) uniform sampler2D ssgiTexture;
 
@@ -100,6 +104,28 @@ float calculateAttenuation(vec3 lightPos, vec3 fragPos, float range) {
 float calculateSpotAttenuation(vec3 L, vec3 spotDir, float innerCone, float outerCone) {
     float theta = dot(L, -spotDir);
     return clamp((theta - outerCone) / (innerCone - outerCone), 0.0, 1.0);
+}
+
+// SSAO at this pixel: the 4 nearest half-resolution samples, weighted bilinearly and by how
+// close their distance from the camera is to this pixel's (within 5%); where none is the same
+// surface, the closest one.
+float ssaoAt(ivec2 pixel, float dist) {
+    const ivec2 size = textureSize(ssaoTexture, 0);
+    const ivec2 base = pixel >> 1;
+    const vec2 f = vec2(pixel & 1) * 0.5;
+    float sum = 0.0, wsum = 0.0, best = 1.0, bestErr = 1e30;
+    for (int i = 0; i < 4; ++i) {
+        const ivec2 o = ivec2(i & 1, i >> 1);
+        const vec2 s = texelFetch(ssaoTexture, min(base + o, size - 1), 0).xy;
+        if (s.y <= 0.0) continue;
+        const float err = abs(s.y - dist);
+        if (err < bestErr) { bestErr = err; best = s.x; }
+        const float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) *
+                        max(0.0, 1.0 - err / (0.05 * dist));
+        sum += w * s.x;
+        wsum += w;
+    }
+    return wsum > 1e-3 ? sum / wsum : best;
 }
 
 // Select CSM cascade based on positive view-space depth
@@ -160,7 +186,7 @@ void main() {
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
     float roughness = gBuffer1Sample.b;
-    float emissiveLuminance = gBuffer1Sample.a;  // stored by GBuffer pass
+    float emissiveLuminance = max(gBuffer1Sample.a, 0.0);  // stored by GBuffer pass (negative: subsurface)
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -260,8 +286,12 @@ void main() {
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
     }
 
+    // SSAO (flag bit 1) darkens the ambient and environment terms only: not direct light,
+    // which RT shadows or CSM occlude, and not RT GI, whose rays already see occluders.
+    const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;
+
     // Ambient lighting
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
+    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ssao;
 
     // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang):
     // full resolution, the diffuse albedo already applied.
@@ -312,7 +342,7 @@ void main() {
 
         // RT GI's rays that leave the scene bring back the environment, occluded: with it,
         // the unoccluded diffuse term here would count that light twice.
-        ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao;
+        ambient += (specularAmbient + (rtGI ? vec3(0.0) : diffuseAmbient)) * ao * ssao;
     }
 
     // Emissive — self-illuminating surfaces (glow independent of lighting)
