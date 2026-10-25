@@ -145,11 +145,12 @@ RT GI keeps a history, so give `--frames` (about 10) for converged indirect ligh
 `--post` no post effect is on; `model_viewer` turns on `--post taa,ssao,bloom --exposure 1`.
 
 The deferred frame has two qualities. `realtime` (the default) is the budgeted frame: RT
-shadows trace one ray to each of a pixel's 4 most important lights, filtered and averaged
-over the frames since the reset. `reference` is its converged answer: every shadow-casting
-light, 8 rays a frame, the plain mean of the capture's frames; slower, for a ground truth
-of the realtime frame (the path tracer, `--mode rt_offline`, is the ground truth for light
-transport). Give it `--frames` too.
+shadows trace one ray to each of a pixel's 4 most important lights, and RT GI 2 rays a
+pixel at half resolution, both denoised and averaged over the frames since the reset.
+`reference` is its converged answer: every shadow-casting light at 8 rays a frame, GI at
+full resolution and 32 rays a pixel, no denoiser, the plain mean of the capture's frames;
+slower, for a ground truth of the realtime frame (the path tracer, `--mode rt_offline`, is
+the ground truth for light transport). Give it `--frames` too.
 
 ```console
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell.png --mode deferred --size 960x540   # gpu

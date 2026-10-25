@@ -80,9 +80,9 @@ MODULE = {
         page(
             'rt-shaders',
             'RT program family',
-            'pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.',
-            files=['shaders/rt/pt_raygen.rgen', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_raygen_offline.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/rt_shadow.rgen', 'shaders/rt/rt_shadow.rmiss', 'shaders/rt/rt_shadow.rahit', 'shaders/rt/rt_gi.rgen', 'shaders/rt/rt_gi.rchit', 'shaders/rt/rt_gi.rmiss', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_atrous.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
-            design=['pt_raygen.rgen = reference brute force; realtime/offline variants add NEE/MIS/AOV packing.', 'Hybrid: rt_shadow_* visibility; rt_gi_* one-bounce inject into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
+            'pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.',
+            files=['shaders/rt/pt_raygen.rgen', 'shaders/rt/pt_raygen_realtime.rgen', 'shaders/rt/pt_raygen_offline.rgen', 'shaders/rt/pt_closesthit.rchit', 'shaders/rt/pt_anyhit.rahit', 'shaders/rt/pt_miss.rmiss', 'shaders/rt/shadow_trace.slang', 'shaders/rt/shadow_filter.slang', 'shaders/rt/gi_trace.slang', 'shaders/rt/gi_denoise.slang', 'shaders/rt/nrd_compose.comp', 'shaders/rt/rt_svgf_temporal.comp', 'shaders/rt/rt_svgf_atrous.comp', 'shaders/rt/cinematic_bloom_extract.comp', 'shaders/rt/cinematic_bloom_blur.comp', 'shaders/rt/cinematic_dof.comp', 'shaders/rt/cinematic_composite.comp'],
+            design=['pt_raygen.rgen = reference brute force; realtime/offline variants add NEE/MIS/AOV packing.', 'Hybrid (Slang compute, inline ray queries): shadow_* visibility; gi_* one-bounce diffuse GI into deferred.', 'Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.'],
         ),
     ],
 }

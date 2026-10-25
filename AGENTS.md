@@ -269,8 +269,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   frame is empty. Buffers the CPU reads must be host-cached memory: uncached
   host-visible memory read one 1280x720 frame in ~20 ms.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
-  keeps a history: frame 1 and frame 10 of Cornell differ (max_abs 29). Pass `frames` for
-  a converged image; the deferred goldens state theirs (`--frames 7`, `--frames 27`).
+  keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
+  frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass
+  `frames` for a converged image; the deferred goldens state theirs (`--frames 10`,
+  `--frames 30`). Without `VK_KHR_ray_query` there is no RT GI. With it, lighting drops its
+  diffuse IBL term: GI rays that leave the scene bring the environment back, occluded.
 - RT shadows are compute with inline ray queries (`VK_KHR_ray_query`; without it the
   frame keeps CSM, which renders only when RT shadows do not). They keep a history too: the
   filter averages the frames since the last reset, so frame 1 is the noisiest. Every

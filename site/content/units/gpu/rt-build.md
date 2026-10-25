@@ -180,15 +180,19 @@ and each has a distinct cost:
   no TLAS work, because the TLAS entry is byte-identical.
 
 RT global illumination still needs one value the material table does not hold. Its
-closest-hit reads the bounce albedo from the instance, not the material row, as the RGB
-of a legacy word on `InstanceGpu`:
+trace reads the bounce albedo from the instance, not the material row, as the RGB of
+a legacy word on `InstanceGpu`, loaded from the raw instance buffer at a byte offset
+the shared layout names and a `static_assert` in `rt_gi_technique.cpp` pins to the
+C++ struct:
 
-{{cite shaders/rt/rt_gi.rchit "vec3 albedo = instances[gl_InstanceCustomIndexEXT].giAlbedoPacked.rgb;"}}
+{{cite shaders/rt/gi_trace.slang "const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));"}}
+
+{{cite ohao/render/rt/rt_gi_technique.cpp "static_assert(offsetof(render::InstanceGpu, giAlbedoPacked) == shared::kInstanceGpuGiAlbedoOffset);"}}
 
 Its alpha is a sign-and-magnitude packing — sign carries metallic, magnitude carries
 roughness, and a ±10 bias tags meshes with more than 100 vertices — produced on the
-host and uploaded to an instance word that nothing in `shaders/` reads. A comment on
-the struct marks it for deletion when RT GI is reworked.
+host and uploaded to an instance word that nothing in `shaders/` reads; the trace
+loads three floats and stops short of it.
 
 {{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
 

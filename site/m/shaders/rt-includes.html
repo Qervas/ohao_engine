@@ -52,7 +52,7 @@
 <div class="citation-chip"><code class="citation-code">roughness = max(roughness, 0.04);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L159" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:159</a></div>
 <p>The *encoding* is not dead, though — only its route into the payload is. `giMaterialLegacyPacked` still builds the signed, shifted float, per model — `spawn` and the instantiate system store it on the entity as a `GiMaterialLegacy` component — and the render extractor copies it into the instance table&#x27;s `giAlbedoPacked.a`:</p>
 <div class="citation-chip"><code class="citation-code">float packed = metallic &gt; 0.5f ? -(roughness + 0.001f) : roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L169" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:169</a></div>
-<p>Nothing reads it. The only shader in the tree that indexes that field is `rt_gi.rchit`, on the deferred GI technique&#x27;s own descriptor set, and it takes `.rgb` only. The path tracer&#x27;s raygens and closest-hit do not declare a per-instance material word at all; they read materials from the shared table at binding 10. So the format has a live producer and no consumer — which is the reason the decoder&#x27;s shape is worth understanding before touching it, not the reachability of its branches.</p>
+<p>Nothing reads it. The only shader in the tree that touches that field is `rt/gi_trace.slang`, on the deferred GI technique&#x27;s own descriptor set, and it loads the three floats of `.rgb` by byte offset and stops there. The path tracer&#x27;s raygens and closest-hit do not declare a per-instance material word at all; they read materials from the shared table at binding 10. So the format has a live producer and no consumer — which is the reason the decoder&#x27;s shape is worth understanding before touching it, not the reachability of its branches.</p>
 </div>
 <div class="section-rule"><h2 id="the-refactor-that-left-two-decodes-behind">The refactor that left two decodes behind</h2></div>
 <div class="prose reveal">
@@ -115,14 +115,14 @@ $$</div>
 <div class="prose reveal">
 <p>The third header defines two ray-mask constants and pins them to their C++ twin:</p>
 <div class="citation-chip"><code class="citation-code">#define RT_RAY_MASK_STATIC   0x01</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/includes/rt_masks.glsl#L3" target="_blank" rel="noopener">shaders/rt/includes/rt_masks.glsl:3</a></div>
-<p>No shader in the tree includes it. The two that want a static-only ray mask write the value down themselves instead — `rt/shadow_trace.slang` as a Slang constant, `kRayMaskStatic`, that names the C++ constant in a comment (Slang could not include this GLSL header anyway), `rt_gi.rgen` as a literal pointing at the C++ header rather than at this one:</p>
-<div class="citation-chip"><code class="citation-code">uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_gi.rgen#L87" target="_blank" rel="noopener">shaders/rt/rt_gi.rgen:87</a></div>
+<p>No shader in the tree includes it. The two that want a static-only ray mask, `rt/shadow_trace.slang` and `rt/gi_trace.slang`, are Slang and could not include this GLSL header anyway; each writes the value down itself as a constant of its own, `kRayMaskStatic`, with a comment naming the macro and the C++ header:</p>
+<div class="citation-chip"><code class="citation-code">static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L39" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:39</a></div>
 <p>The ray mask also selects nothing among live geometry. Vulkan intersects an instance when `rayMask &amp; instanceMask` is non-zero, and the TLAS staging in `RenderScene` hands every visible instance 0xFF:</p>
 <div class="citation-chip"><code class="citation-code">vi.mask = visible ? 0xFFu : 0u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L102" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:102</a></div>
 <p>`0x01 &amp; 0xFF` is non-zero, so the &quot;static only&quot; ray hits every visible instance; `MASK_ANIMATED = 0x00` exists in `rt_visibility.hpp` and is never assigned, and the instance-mask constants there are no longer referenced by the TLAS code at all.</p>
-<p>What the mask does do is hide. An invisible or released instance gets mask 0, which no ray mask intersects, so it is removed from every trace — shadows, GI and the path tracer alike. A change of mask counts as a structural TLAS change, so toggling an instance&#x27;s visibility rebuilds the acceleration structure instead of refitting it. There is no longer a second, shader-side cull for animated instances: the GI closest-hit returns albedo and distance for every hit it is given.</p>
-<div class="citation-chip"><code class="citation-code">giPayload = vec4(albedo, gl_HitTEXT);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_gi.rchit#L20" target="_blank" rel="noopener">shaders/rt/rt_gi.rchit:20</a></div>
-<p>Keep the header against the day a ray mask really needs to select a subset; do not read it as a description of what the tracer does today. The comment above `rayMask` in `rt_gi.rgen` (&quot;animated instances have bit 0 clear&quot;) describes geometry the engine no longer has.</p>
+<p>What the mask does do is hide. An invisible or released instance gets mask 0, which no ray mask intersects, so it is removed from every trace — shadows, GI and the path tracer alike. A change of mask counts as a structural TLAS change, so toggling an instance&#x27;s visibility rebuilds the acceleration structure instead of refitting it. There is no second, shader-side cull: the GI trace&#x27;s ray query is forced opaque, and whatever triangle it commits is a bounce surface.</p>
+<div class="citation-chip"><code class="citation-code">if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L124" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:124</a></div>
+<p>Keep the header against the day a ray mask really needs to select a subset; do not read it as a description of what the tracer does today.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
@@ -145,9 +145,8 @@ $$</div>
         <div class="row"><code>ohao/render/rt/denoise/nrd_denoise.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/nrd_compose.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/includes/rt_masks.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/rt_gi.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/gi_trace.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/rt_gi.rchit</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

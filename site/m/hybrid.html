@@ -193,12 +193,12 @@ if (m_rtAccel &amp;&amp; m_rtAccel-&gt;isSupported()) {
         <a class="tree-card" href="hybrid/shadow-technique.html">
           <div class="num">shadow-technique</div>
           <h3>RT shadow technique</h3>
-          <p>init → SBT → render visibility from GBuffer.</p>
+          <p>Inline ray queries per light, filtered: 8 visibility channels for lighting.</p>
         </a>
         <a class="tree-card" href="hybrid/gi-technique.html">
           <div class="num">gi-technique</div>
           <h3>RT GI technique</h3>
-          <p>1-bounce GI inject, material albedos.</p>
+          <p>One-bounce diffuse GI: half-res trace, temporal + à-trous + upsample.</p>
         </a>
         <a class="tree-card" href="hybrid/visibility.html">
           <div class="num">visibility</div>

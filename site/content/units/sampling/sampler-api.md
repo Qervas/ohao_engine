@@ -206,7 +206,7 @@ pipeline — and only then pushes its own settings down.
 
 Every pipeline the `PathTracer` creates is therefore specialized to Sobol,
 including the realtime profile's, whose settings table asks for PCG. (The other
-ray-traced passes in the engine — `RTGITechnique`'s pipeline and
+ray-traced passes in the engine — `RTGITechnique`'s and
 `RTShadowTechnique`'s compute pipelines of inline ray queries — attach no
 `VkSpecializationInfo` at all: none of their shaders pulls in `sampler_api.glsl`,
 so they have no `SAMPLER_TYPE` to specialize.)

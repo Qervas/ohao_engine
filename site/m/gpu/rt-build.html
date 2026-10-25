@@ -105,9 +105,10 @@
 <li>A **material list** change uploads the instance&#x27;s 64-entry reference row and records</li>
 </ul>
 <p>no TLAS work, because the TLAS entry is byte-identical.</p>
-<p>RT global illumination still needs one value the material table does not hold. Its closest-hit reads the bounce albedo from the instance, not the material row, as the RGB of a legacy word on `InstanceGpu`:</p>
-<div class="citation-chip"><code class="citation-code">vec3 albedo = instances[gl_InstanceCustomIndexEXT].giAlbedoPacked.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_gi.rchit#L19" target="_blank" rel="noopener">shaders/rt/rt_gi.rchit:19</a></div>
-<p>Its alpha is a sign-and-magnitude packing — sign carries metallic, magnitude carries roughness, and a ±10 bias tags meshes with more than 100 vertices — produced on the host and uploaded to an instance word that nothing in `shaders/` reads. A comment on the struct marks it for deletion when RT GI is reworked.</p>
+<p>RT global illumination still needs one value the material table does not hold. Its trace reads the bounce albedo from the instance, not the material row, as the RGB of a legacy word on `InstanceGpu`, loaded from the raw instance buffer at a byte offset the shared layout names and a `static_assert` in `rt_gi_technique.cpp` pins to the C++ struct:</p>
+<div class="citation-chip"><code class="citation-code">const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L127" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:127</a></div>
+<div class="citation-chip"><code class="citation-code">static_assert(offsetof(render::InstanceGpu, giAlbedoPacked) == shared::kInstanceGpuGiAlbedoOffset);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_gi_technique.cpp#L17" target="_blank" rel="noopener">ohao/render/rt/rt_gi_technique.cpp:17</a></div>
+<p>Its alpha is a sign-and-magnitude packing — sign carries metallic, magnitude carries roughness, and a ±10 bias tags meshes with more than 100 vertices — produced on the host and uploaded to an instance word that nothing in `shaders/` reads; the trace loads three floats and stops short of it.</p>
 <div class="citation-chip"><code class="citation-code">float packed = metallic &gt; 0.5f ? -(roughness + 0.001f) : roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L169" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:169</a></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
@@ -134,7 +135,8 @@
         <div class="row"><code>ohao/render/scene/model_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/rt_gi.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/gi_trace.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_gi_technique.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/render/rt/rt_acceleration_structure.hpp</code><span class="desc"></span></div>
       </div>

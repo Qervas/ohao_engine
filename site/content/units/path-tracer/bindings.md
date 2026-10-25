@@ -57,11 +57,12 @@ deliberately not to raygen:
 So none of the path tracer's raygen shaders can sample a texture: not one of
 `pt_raygen.rgen`, `pt_raygen_offline.rgen` or `pt_raygen_realtime.rgen` declares
 a `sampler2D`, and shaded colour has to arrive through the ray payload. That is a
-property of *this* layout, not of the engine — the deferred pipeline's RT GI pass
-builds its own set 0 and reads GBuffer samplers straight from raygen (RT shadows,
-a compute pass of inline ray queries, read them the same way from compute):
+property of *this* layout, not of the engine — the deferred pipeline's RT passes
+have no raygen at all. RT GI and RT shadows are compute passes of inline ray
+queries, each with its own set 0, and they read the GBuffer straight from the
+thread that launches the rays:
 
-{{cite shaders/rt/rt_gi.rgen "layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;"}}
+{{cite shaders/rt/gi_trace.slang "[[vk::binding(1, 0)]] Texture2D<float4> gPosition;"}}
 
 The light buffer (11) and the environment CDF pair (17, 18) are the buffers raygen
 and miss share: raygen draws light samples and env samples from them, and miss

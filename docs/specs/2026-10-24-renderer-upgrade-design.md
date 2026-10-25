@@ -1066,6 +1066,32 @@ improvising. Intentional image changes are separate commits inside their step.
    - Goldens re-baselined (own commit).
    - Gates `rt.gi`, `rt.gi.denoise`.
    - Test 10.
+   - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step8.md`):* Slang compute with
+     inline ray queries, as RT shadows (`shaders/rt/gi_trace.slang`, `gi_denoise.slang`);
+     the ray tracing pipeline and its three GLSL shaders are deleted, and without
+     `VK_KHR_ray_query` the frame has no RT GI. The 2 rays are stratified in azimuth.
+     *Corrections:* (1) Hit shading keeps its kind (the 4 brightest lights by intensity, no
+     shadow ray, the hit's normal taken as facing the ray) but is made consistent with the
+     lighting pass: light colour, the lighting pass's attenuation (inverse square windowed
+     by range, a spot's cone) and the 1/pi of a diffuse bounce, which the old shader
+     omitted (its bounce was about 3x too bright). The environment a miss reads is level 0:
+     the uploaded environment has one mip. (2) With RT GI in the frame, lighting drops its
+     diffuse IBL term: GI rays that leave the scene carry the environment, occluded, and
+     the unoccluded term counted it twice. (3) "History clamped to the neighbourhood's
+     range": the long accumulation (to 32 frames) is clamped to the 3x3 range of a short one
+     (to 4 frames), not of the 2-ray samples, whose range a dark corner's zeros would
+     collapse. (4) A reference running mean (GI's and RT shadows') holds the reference
+     frames in an unbroken run, not every frame since the reset: a realtime frame or new
+     images start it again (until then a realtime-to-reference switch without a reset
+     blended into a stale mean, and the first reference frame read undefined memory).
+     Test 10: `engine_tests` `sp2b_t10_*` (exact across fresh renderers, history reset on
+     capture, |8-16| 0.10 < |1-8| 0.34, reference 160x120 at 32 rays without
+     `rt.gi.denoise` and realtime 80x60 at 2 with it, realtime toward the reference 0.40 ->
+     0.19, a red wall's bleed, the mean restart), and `deferred_determinism_gpu_test`'s
+     Cornell 8-frame and reference configs across processes. **Budgets:** `cornell_720p`
+     `rt.gi` 0.064-0.066 ms (0.30) and `rt.gi.denoise` 0.143-0.148 ms (0.20), frame
+     0.87-0.90 ms (was 4.64); both runs at the step's end were noisy (outside load), so
+     the gate's verdict is open.
 9. **SSAO wired; SSR and SSS made cheap.**
    - SSAO fixed and applied to the ambient term; SSR at half resolution; SSS on
      classified tiles.

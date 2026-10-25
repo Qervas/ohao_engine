@@ -113,8 +113,8 @@
 </ul>
 <h2 class="gloss-group">08 · Hybrid RT</h2><ul class="prose">
 <li><a href="hybrid.html"><strong>Hub</strong> — hybrid.html</a></li>
-<li><a href="hybrid/shadow-technique.html">RT shadow technique</a> — init → SBT → render visibility from GBuffer.</li>
-<li><a href="hybrid/gi-technique.html">RT GI technique</a> — 1-bounce GI inject, material albedos.</li>
+<li><a href="hybrid/shadow-technique.html">RT shadow technique</a> — Inline ray queries per light, filtered: 8 visibility channels for lighting.</li>
+<li><a href="hybrid/gi-technique.html">RT GI technique</a> — One-bounce diffuse GI: half-res trace, temporal + à-trous + upsample.</li>
 <li><a href="hybrid/visibility.html">Visibility helpers</a> — Shared RT visibility utilities.</li>
 </ul>
 <h2 class="gloss-group">09 · Denoise</h2><ul class="prose">
@@ -138,7 +138,7 @@
 <li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.frag MRT contract.</li>
 <li><a href="shaders/particles-sh.html">Particle shaders</a> — Emit, update, render.</li>
 <li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
-<li><a href="shaders/rt-shaders.html">RT program family</a> — pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.</li>
+<li><a href="shaders/rt-shaders.html">RT program family</a> — pt_*, shadow_*/gi_* (Slang), NRD compose, SVGF, cinematic.</li>
 </ul>
 <h2 class="gloss-group">Camera</h2><ul class="prose">
 <li><a href="camera/index.html"><strong>Hub</strong></a></li>

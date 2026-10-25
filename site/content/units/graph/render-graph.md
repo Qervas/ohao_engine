@@ -16,22 +16,23 @@ transient memory, generate optimal barriers, sort passes into execution order.
 Only the third has any implementation behind it, and the barriers it generates
 are neither optimal nor, for a texture read twice in a row, fully correct; both
 failures are traced below. The only production consumer is
-`DeferredRenderer`, which rebuilds the graph every frame — `reset()`, up to six pass
-registrations of seven possible, `compile()`, `execute()`, all inside one command buffer — to get
+`DeferredRenderer`, which rebuilds the graph every frame — `reset()`, up to seven pass
+registrations of eight possible, `compile()`, `execute()`, all inside one command buffer — to get
 one thing: image-layout barriers computed centrally, between passes that know
 nothing about each other. Nothing is aliased, nothing is reordered, no memory is
 owned. Reading this unit as "a frame graph" will mislead you; reading it as "a
 barrier scheduler with a frame-graph-shaped API" will not.
 
-The seven are `csm`, `gbuffer`, `ssao`, `rt.shadows`, `rt.shadows.filter`, `rt.gi`
-and `lighting`, in that order — three `addPass`, four `addComputePass` — named as the
-pass registry names them, since the graph times each pass under its name. Five are
-conditional. `ssao` is registered only while the effect is on. `rt.shadows` and
+The eight are `csm`, `gbuffer`, `ssao`, `rt.shadows`, `rt.shadows.filter`, `rt.gi`,
+`rt.gi.denoise` and `lighting`, in that order — three `addPass`, five `addComputePass` —
+named as the pass registry names them, since the graph times each pass under its name.
+Six are conditional. `ssao` is registered only while the effect is on. `rt.shadows` and
 `rt.gi` need `RTShadowTechnique` and `RTGITechnique` to have initialised and
 `RenderScene` to have a built TLAS (its handle stays null without ray tracing and
 before the first build), which on ray-tracing hardware with geometry in the scene is
 the ordinary case, not an opt-in; `rt.shadows` also needs a shadow-casting light, and
-`rt.shadows.filter` runs only after it in realtime quality. `csm` is the other side of
+`rt.shadows.filter` runs only after it in realtime quality, as `rt.gi.denoise` runs
+after `rt.gi`. `csm` is the other side of
 the same switch: it is registered only in frames where `rt.shadows` is not.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (m_useRTGI && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {"}}
@@ -160,7 +161,7 @@ aspect and a validation error.
 
 {{cite ohao/render/graph/render_graph.cpp "isDepthFormat(tex.format) ? VK_IMAGE_ASPECT_DEPTH_BIT"}}
 
-{{figure graph-render-graph-layout-timeline "Layout and stage track of four imported textures across csm, gbuffer, ssao, rt.shadows, rt.gi and lighting, drawn on one track although a frame registers csm only when rt.shadows does not run (and adds rt.shadows.filter, which reads no tracked texture, in realtime); each texture's transitions at the passes that do run are as drawn. Conceptual: derived by hand-executing computeBarriers against the pass declarations in deferred_renderer.cpp, not captured from a validation-layer trace."}}
+{{figure graph-render-graph-layout-timeline "Layout and stage track of four imported textures across csm, gbuffer, ssao, rt.shadows, rt.gi and lighting, drawn on one track although a frame registers csm only when rt.shadows does not run (and adds rt.shadows.filter and rt.gi.denoise, which read no tracked texture, in realtime); each texture's transitions at the passes that do run are as drawn. Conceptual: derived by hand-executing computeBarriers against the pass declarations in deferred_renderer.cpp, not captured from a validation-layer trace."}}
 
 ## Why every read-after-read starts from UNDEFINED
 

@@ -255,34 +255,36 @@ render hands the denoiser its average rather than its last sample:
 ## The hybrid pair, and what it is not
 
 `rt/shadow_trace.slang` (with its filter, `rt/shadow_filter.slang`) and
-`rt_gi.rgen` are a different family — they read the deferred GBuffer instead of
-tracing primary rays. Both are on by default. The `{false}` member initializers in
+`rt/gi_trace.slang` (with its denoiser, `rt/gi_denoise.slang`) are a different
+family — they read the deferred GBuffer instead of tracing primary rays. Both are on by default. The `{false}` member initializers in
 `deferred_renderer.hpp` are only the pre-init value; `DeferredRenderer::init` flips
 each flag to `true` as soon as the corresponding technique's own `init()` succeeds
-(for shadows, only on a device with ray queries). The CSM fallback runs when RT
+(for both, only on a device with ray queries). The CSM fallback runs when RT
 shadows do not trace a frame — initialisation failed, no TLAS, or no light casts
 shadows — and the no-GI branch when RT GI is not available.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_useRTShadows = true;"}}
 
-The shadow trace is not a ray tracing pipeline at all: it is a compute shader with
+Neither trace is a ray tracing pipeline at all: each is a compute shader with
 inline ray queries, no shader binding table, and its lights arrive in a storage
-buffer the C++ side writes per frame slot. It ranks the frame's shadow-casting lights
-(up to eight) per pixel by importance and traces one ray to each of the four most
-important; the filter then turns those bits into one 8-bit visibility channel a
-light (see the hybrid shadow technique). The GI pass binds no light buffer either:
-its light arrives in push constants, one, the brightest. It traces one
-cosine-weighted bounce, never fires a shadow ray from the secondary hit, uses a
-non-physical `1/(1+d²)` falloff, and approximates the hit surface's normal as the
-negated ray direction — a colour-bleed approximation, not a GI solver.
+buffer the C++ side writes per frame slot. The shadow trace ranks the frame's
+shadow-casting lights (up to eight) per pixel by importance and traces one ray to
+each of the four most important; the filter then turns those bits into one 8-bit
+visibility channel a light (see the hybrid shadow technique). The GI trace shoots
+cosine-weighted rays one bounce deep — two a pixel at half resolution in realtime,
+32 at full resolution in reference — and lights each hit with the four brightest
+lights, attenuated as the lighting pass attenuates them. It never fires a shadow
+ray from the secondary hit and takes the hit surface's normal as the negated ray
+direction: a one-bounce estimate with a direct-light shortcut at the hit, not a
+path tracer (see the hybrid GI technique).
 
-{{cite shaders/rt/rt_gi.rgen "float hitNdotL = max(dot(normalize(toLightFromHit), -dir), 0.0);"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(hit, -dir);"}}
 
-GI leans on the same absent-hit signal as the path tracer, and has the miss shader
-the path tracer does without: `rt_gi.rmiss` writes −1 into alpha as the miss marker
-the raygen tests before accumulating.
+There is no miss shader in either. The query's committed status is the whole answer:
+a shadow ray that commits nothing is lit, and a GI ray that commits nothing samples
+the environment map in its direction, or returns black when none is bound.
 
-{{cite shaders/rt/rt_gi.rmiss "giPayload = vec4(0.0, 0.0, 0.0, -1.0);"}}
+{{cite shaders/rt/gi_trace.slang "if (pc.flags.y == 0u) return float3(0.0);"}}
 
 Both draw their random numbers from an integer PCG hash, keyed by the render seed
 and the frame index since the last temporal reset as well as the pixel and sample,
@@ -292,16 +294,16 @@ so their noise changes every frame and repeats exactly for the same seed and fra
 
 Both trace with ray mask `0x01` under comments claiming static-only visibility.
 That filter selects nothing among live geometry — every visible TLAS instance is
-tagged 0xFF, and invisible ones 0, which no ray mask intersects — so the GI closest-hit
-has no static/animated distinction left to draw: it returns the hit instance's albedo
-and distance unconditionally.
+tagged 0xFF, and invisible ones 0, which no ray mask intersects — so the GI trace
+has no static/animated distinction left to draw: whatever triangle its opaque query
+commits, it reads that instance's bounce albedo unconditionally.
 
 {{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
-{{cite shaders/rt/rt_gi.rchit "giPayload = vec4(albedo, gl_HitTEXT);"}}
+{{cite shaders/rt/gi_trace.slang "const uint slot = q.CommittedInstanceID();"}}
 
 ## The rest of shaders/rt, and which of it runs
 
-Nineteen files sit in `shaders/rt/`. Past the path tracer and the hybrid passes above, four
+Eighteen files sit in `shaders/rt/`. Past the path tracer and the hybrid passes above, four
 `cinematic_*.comp` passes run after NRD compose — bright-pass extract, a 13-tap
 downsampling blur that builds the bloom mip chain, a gather-based DoF, and the
 composite that applies AgX and writes binding 30 — each built and dispatched
@@ -329,5 +331,5 @@ translation unit, `ohao/render/rt/denoiser.hpp`, since deleted.
 - Latch any payload field you still need before tracing a shadow ray: the miss shader overwrites `color`, `hitDist` and `envPdf` on every ray, visibility rays included.
 - Binding 11's header sits at fixed byte offsets 0 / 4 / 8 with `GPULight[]` at 16, declared in four shaders and written in one C++ file. Change it in one place and the miss shader reads a light's position as an env-map index.
 - TLAS instances must be added in the order the global index / UV / material-ID arrays are concatenated: `instanceCustomIndex` *is* the triangle base offset, capped at 2²⁴.
-- Alpha-tested geometry is opaque to camera, GI and shadow rays alike — suppressed by `gl_RayFlagsOpaqueEXT` at every call site *and* by `VK_GEOMETRY_OPAQUE_BIT_KHR` in the BLAS. Removing one does not revive it.
+- Alpha-tested geometry is opaque to camera, GI and shadow rays alike — suppressed by `gl_RayFlagsOpaqueEXT` (`RAY_FLAG_FORCE_OPAQUE` in the Slang ray queries) at every call site *and* by `VK_GEOMETRY_OPAQUE_BIT_KHR` in the BLAS. Removing one does not revive it.
 - Bindings 24/25 are demodulation factors matched to what the raygen already did — diffuse pre-divided, specular not. Demodulate the specular channel without changing `firstHitSpecColor`, or vice versa, and metals double-darken while dielectrics lose their Fresnel.

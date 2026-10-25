@@ -55,7 +55,7 @@ says `RGB10A2` and the shared header still calls itself the `A2R10G10B10`
 encoder, but the image is half-float now; the remap survives only because
 `decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder
 lives in `includes/common/encoding.glsl` and is the one every GLSL consumer runs —
-`deferred_lighting.frag`, `ssao.comp`, `ssr.comp`, `rt_gi.rgen`; the Slang RT shadow
+`deferred_lighting.frag`, `ssao.comp`, `ssr.comp`; the Slang RT shadow and RT GI
 passes carry their own `decodeOctahedron` with the same remap.
 
 {{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}

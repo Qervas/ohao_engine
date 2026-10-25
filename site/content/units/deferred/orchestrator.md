@@ -8,8 +8,8 @@ figures: [deferred-orchestrator-frame-schedule]
 
 ## A schedule written by hand, checked by a graph
 
-Up to twelve stages run per deferred frame, all recorded into one command buffer by
-`DeferredRenderer::render`. Six go through `RenderGraph`; the rest go straight onto
+Up to fourteen stages run per deferred frame, all recorded into one command buffer by
+`DeferredRenderer::render`. Eight go through `RenderGraph`; the rest go straight onto
 `cmd`. That split is most of the class, because the graph does far less than its name
 implies.
 
@@ -18,9 +18,10 @@ It does not schedule. `topologicalSort` copies passes into the execution list in
 
 {{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now"}}
 
-So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.shadows.filter` → `rt.gi` → `lighting`
-(the pass registry's names, each timed under it; `csm` only in frames where RT shadows do
-not run, `rt.shadows.filter` only in realtime quality, `ssao` only while the effect is on)
+So `csm` → `gbuffer` → `ssao` → `rt.shadows` → `rt.shadows.filter` → `rt.gi` → `rt.gi.denoise`
+→ `lighting` (the pass registry's names, each timed under it; `csm` only in frames where RT
+shadows do not run, `rt.shadows.filter` and `rt.gi.denoise` only in realtime quality, `ssao`
+only while the effect is on)
 is a decision made by hand
 in `render()`, not from declared dependencies. What the graph earns is barriers:
 `computeBarriers` walks that order tracking each texture's last access and emits a
@@ -28,9 +29,9 @@ in `render()`, not from declared dependencies. What the graph earns is barriers:
 
 ## declareColorWrite: a promise about a render pass the graph cannot see
 
-Three of the seven are graphics passes — CSM, GBuffer, DeferredLighting — each owning its
+Three of the eight are graphics passes — CSM, GBuffer, DeferredLighting — each owning its
 `VkRenderPass` and framebuffers, built before the graph existed; SSAO, the RT shadow trace
-and filter, and RTGI enter through `addComputePass` and own neither. The graph could take those render passes
+and filter, and the RT GI trace and denoiser enter through `addComputePass` and own neither. The graph could take those render passes
 over, through `useColorAttachment`. It uses the other door:
 
 {{cite ohao/render/graph/render_graph.cpp "// NOT added to colorAttachments"}}
@@ -183,10 +184,10 @@ lighting, post, gizmo, sky, SSS, SSR and both RT techniques.
 Before compiling the graph, `render()` clears the RT shadow visibility and the GI view
 out of the lighting pass. They come back only from inside the RT pass lambdas — the
 shadow visibility from `rt.shadows.filter` in realtime quality or from `rt.shadows`
-in reference, the GI view from `rt.gi` — and only when that technique's `render()`
-actually traced:
+in reference, the GI view likewise from `rt.gi.denoise` in realtime or from `rt.gi` in
+reference — and only when that technique's `render()` actually traced:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_rtGI->rendered() && m_lightingPass)"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_lightingPass && m_rtGI->rendered())"}}
 
 The hand-off happens at record time, during `m_renderGraph.execute(cmd)`, and its
 consumer is `DeferredLightingPass::execute` later in the same walk, which writes its
@@ -216,7 +217,7 @@ after a reset traces the same rays in every run with the same seed.
 
 :::key
 `RenderGraph` here is a barrier calculator, not a scheduler and not a resource manager.
-Pass order, lifetimes and every barrier outside the six graph passes are hand-written.
+Pass order, lifetimes and every barrier outside the eight graph passes are hand-written.
 :::
 
 ## Contracts

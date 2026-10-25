@@ -54,8 +54,9 @@ component — and the render extractor copies it into the instance table's
 
 {{cite ohao/render/scene/model_upload.cpp "float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;"}}
 
-Nothing reads it. The only shader in the tree that indexes that field is `rt_gi.rchit`,
-on the deferred GI technique's own descriptor set, and it takes `.rgb` only. The path
+Nothing reads it. The only shader in the tree that touches that field is
+`rt/gi_trace.slang`, on the deferred GI technique's own descriptor set, and it loads
+the three floats of `.rgb` by byte offset and stops there. The path
 tracer's raygens and closest-hit do not declare a per-instance material word at all;
 they read materials from the shared table at binding 10. So the format has a live
 producer and no consumer — which is the reason the decoder's shape is worth
@@ -234,13 +235,12 @@ The third header defines two ray-mask constants and pins them to their C++ twin:
 
 {{cite shaders/rt/includes/rt_masks.glsl "#define RT_RAY_MASK_STATIC   0x01"}}
 
-No shader in the tree includes it. The two that want a static-only ray mask
-write the value down themselves instead — `rt/shadow_trace.slang` as a Slang
-constant, `kRayMaskStatic`, that names the C++ constant in a comment (Slang could
-not include this GLSL header anyway), `rt_gi.rgen` as a literal pointing at the
-C++ header rather than at this one:
+No shader in the tree includes it. The two that want a static-only ray mask,
+`rt/shadow_trace.slang` and `rt/gi_trace.slang`, are Slang and could not include
+this GLSL header anyway; each writes the value down itself as a constant of its own,
+`kRayMaskStatic`, with a comment naming the macro and the C++ header:
 
-{{cite shaders/rt/rt_gi.rgen "uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)"}}
+{{cite shaders/rt/gi_trace.slang "static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)"}}
 
 The ray mask also selects nothing among live geometry. Vulkan intersects an instance
 when `rayMask & instanceMask` is non-zero, and the TLAS staging in `RenderScene` hands
@@ -256,15 +256,13 @@ What the mask does do is hide. An invisible or released instance gets mask 0, wh
 ray mask intersects, so it is removed from every trace — shadows, GI and the path
 tracer alike. A change of mask counts as a structural TLAS change, so toggling an
 instance's visibility rebuilds the acceleration structure instead of refitting it.
-There is no longer a second, shader-side cull for animated instances: the GI
-closest-hit returns albedo and distance for every hit it is given.
+There is no second, shader-side cull: the GI trace's ray query is forced opaque, and
+whatever triangle it commits is a bounce surface.
 
-{{cite shaders/rt/rt_gi.rchit "giPayload = vec4(albedo, gl_HitTEXT);"}}
+{{cite shaders/rt/gi_trace.slang "if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)"}}
 
 Keep the header against the day a ray mask really needs to select a subset; do not
-read it as a description of what the tracer does today. The comment above `rayMask`
-in `rt_gi.rgen` ("animated instances have bit 0 clear") describes geometry the engine
-no longer has.
+read it as a description of what the tracer does today.
 
 ## Contracts
 

@@ -53,8 +53,9 @@ The flag tags every block, so the device must have been created with
 `bufferDeviceAddress`, which the logical-device setup guarantees. The remaining raw
 allocations are the ones that chain `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` into their
 own allocate info — acceleration-structure scratch and storage in
-`rt_acceleration_structure.cpp`, and every shader binding table, with one each in
-`path_tracer_pipeline.cpp`, `rt_shadow_technique.cpp` and `rt_gi_technique.cpp`.
+`rt_acceleration_structure.cpp`, and the one shader binding table left in the tree,
+the path tracer's in `path_tracer_pipeline.cpp` (RT shadows and RT GI are compute
+passes of inline ray queries and have none).
 
 {{cite ohao/render/rt/path_tracer_pipeline.cpp "VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |"}}
 

@@ -29,9 +29,9 @@ bit 0.
 
 Only the ray-mask half is hybrid-specific. Every `traceRayEXT` in
 `pt_raygen.rgen`, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` passes
-`0xFF`, so the path tracers never cull by mask; the RT shadow trace
-(`rt/shadow_trace.slang`, whose inline ray query takes the same 8-bit mask) and
-`rt_gi.rgen` are the only rays in the tree that pass anything else. The
+`0xFF`, so the path tracers never cull by mask; the RT shadow and RT GI traces
+(`rt/shadow_trace.slang` and `rt/gi_trace.slang`, whose inline ray queries take
+the same 8-bit mask) are the only rays in the tree that pass anything else. The
 instance-mask half is *shared*: the `RenderScene` stamps the mask into every
 instance of its one TLAS, and that same TLAS is what the deferred renderer's RT
 passes and the path tracer both trace.
@@ -89,38 +89,38 @@ that promises to keep the two in step:
 
 {{cite shaders/rt/includes/rt_masks.glsl "// RT visibility masks — must match ohao/render/rt/rt_visibility.hpp"}}
 
-No shader includes it. `rt_gi.rgen` pulls exactly one header,
-`includes/common/encoding.glsl`; the shadow trace is Slang and imports only the
-generated `shared.layout` module, which does not carry the mask; and nothing else in
-`shaders/` names `rt_masks.glsl` at all. Both consumers instead write the value down
-themselves and point at the C++ header in a comment — the GI raygen as a literal:
+No shader includes it. Both consumers are Slang and import only the generated
+`shared.layout` module, which does not carry the mask, and nothing else in
+`shaders/` names `rt_masks.glsl` at all. Each writes the value down itself as a
+constant of its own, pointing at the C++ header in a comment — the GI trace:
 
-{{cite shaders/rt/rt_gi.rgen "uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)"}}
+{{cite shaders/rt/gi_trace.slang "static const uint kRayMaskStatic = 0x01u;"}}
 
-and the shadow trace as a constant of its own:
+and the shadow trace:
 
 {{cite shaders/rt/shadow_trace.slang "static const uint kRayMaskStatic = 0x01u;"}}
 
 So `0x01` is written down in four places — the C++ `RAY_MASK_STATIC`, the
-uncompiled `RT_RAY_MASK_STATIC` macro, the GI raygen's literal and the shadow
-trace's constant — with no compiler or build step linking them, and the one file
+uncompiled `RT_RAY_MASK_STATIC` macro and the two traces' constants — with no
+compiler or build step linking them, and the one file
 whose whole job is to prevent drift is dead. The C++ side
 is no better off:
 `render_dispatch.cpp` includes `rt_visibility.hpp` and references no symbol
 from it, and nothing else includes it, so no code uses any of its constants.
 
-## A hit shader that trusts the traversal
+## A trace that trusts the traversal
 
-The hit shader does not second-guess the cull mask. `rt_gi.rchit` reads the
-instance's albedo from the `RenderScene` instance table at binding 6, indexed by
-the TLAS custom index (the instance slot), and returns it with the hit distance:
+The GI trace does not second-guess the cull mask. Its query is forced opaque, so
+no candidate is ever handed back to the shader to accept or reject; once traversal
+ends, it reads the committed instance's custom index (the instance slot) and loads
+that instance's bounce albedo from the `RenderScene` instance table at binding 4:
 
-{{cite shaders/rt/rt_gi.rchit "vec3 albedo = instances[gl_InstanceCustomIndexEXT].giAlbedoPacked.rgb;"}}
+{{cite shaders/rt/gi_trace.slang "const uint slot = q.CommittedInstanceID();"}}
 
 There is no software re-implementation of the visibility test in it. Whether a
 ray may reach an instance is decided entirely in traversal — an `AND` of the
-raygen's `0x01` against the instance's `0xFF` or zero — at no per-hit shader
-cost, and a hit the traversal reports is always counted.
+trace's `0x01` against the instance's `0xFF` or zero — at no per-hit shader
+cost, and a hit the traversal commits is always counted.
 
 The consequence is that the mask is the only switch. A hidden instance is removed
 by its zero mask alone; there is no second, per-instance flag in the albedo data
@@ -130,10 +130,12 @@ that could contradict it.
 
 `render_technique.hpp` is the other half of this unit: a pluggable-technique
 contract for the hybrid passes. Each feature gets an `Input` struct of GBuffer
-views, what that feature needs besides (camera matrices for GI, reflections and AO;
+views, what that feature needs besides (camera matrices for reflections and AO;
 for shadows the scene's shadow lights, the sample seeds, the velocity view the filter
 reprojects with, the camera position, the `RenderQuality` and the per-pixel light
-cap) and a nullable `VkAccelerationStructureKHR`, an `Output` struct — one view for
+cap; for GI the same seeds, velocity view, camera position and quality, plus the
+scene's lights, the instance table the bounce albedo is read from and the
+environment map) and a nullable `VkAccelerationStructureKHR`, an `Output` struct — one view for
 shadows, an image plus its view for the other three — and a uniform lifecycle —
 `init / resize / render / getOutput / destroy`, plus `getName()` and `needsRT()`
 for introspection. Four interfaces are declared: shadows, GI, reflections, AO.
@@ -147,17 +149,19 @@ uses, and from none of the four interfaces:
 
 {{cite ohao/render/deferred/ssao_pass.hpp "class SSAOPass : public RenderPassBase"}}
 
-The `Output` doc comments are only half in step. `ShadowOutput::visibility` is
-documented as what the implementation allocates — eight 8-bit channels in an RG32UI
-image —
+The `Output` doc comments say what the implementations allocate.
+`ShadowOutput::visibility` is eight 8-bit channels in an RG32UI image —
 
 {{cite ohao/render/rt/render_technique.hpp "// x holds lights 0-3, y lights 4-7, the lowest byte first."}}
 
 {{cite ohao/render/rt/rt_shadow_technique.cpp "constexpr VkFormat kVisFormat = VK_FORMAT_R32G32_UINT;"}}
 
-— while `GIOutput::indirectLight` is documented RGB16F but allocated RGBA16F.
+— and `GIOutput::indirectLight` is a full-resolution RGBA16F image of diffuse
+indirect light with the receiver's albedo already applied:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
+{{cite ohao/render/rt/render_technique.hpp "VkImage indirectLight;         // RGBA16F, full resolution: diffuse indirect light, albedo applied"}}
+
+{{cite ohao/render/rt/rt_gi_technique.cpp "constexpr VkFormat kRadianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
 
 ## The runtime swap that is not wired
 
@@ -222,6 +226,11 @@ the trace pass in reference quality (the trace writes the output itself) and fro
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "if (!m_lightingPass || !m_rtShadow->rendered()) return;"}}
 
+GI follows the same shape: its lambda runs from `rt.gi` in reference quality and
+from `rt.gi.denoise` in realtime, after the upsample has written the output.
+
+{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_lightingPass && m_rtGI->rendered())"}}
+
 The lighting pass reads those members at its own record time, when it rewrites
 this frame slot's descriptor set and picks its flag bits: RT visibility if it
 arrived, CSM otherwise. So a frame samples exactly what that frame traced, and
@@ -234,7 +243,7 @@ order they were added:
 
 {{cite ohao/render/graph/render_graph.cpp "// Simple linear ordering for now (passes are added in correct order)"}}
 
-and `rt.shadows`, `rt.shadows.filter` and `rt.gi` are added before `lighting`.
+and `rt.shadows`, `rt.shadows.filter`, `rt.gi` and `rt.gi.denoise` are added before `lighting`.
 Register a technique after the lighting pass, or give the graph a scheduler that
 reorders passes, and lighting records before the handover and silently takes the
 fallback.
@@ -267,8 +276,8 @@ handover keeps the handle valid — it cannot fix the resolution.
 - Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r & m_i) != 0`. `MASK_ANIMATED = 0x00` is disjoint with *everything*, including the `0xFF` the path tracer's primary trace passes, so it removes geometry from the path-traced image outright — a debugging value, not the production animated mask.
 - Instance masks are written once, by the `RenderScene`, into the one TLAS both the deferred renderer and the path tracer consume. A mask change is not scoped to the hybrid passes.
 - Visible instances carry `0xFF` and hidden ones zero, so `RAY_MASK_STATIC` culls only hidden geometry. Any future animated-geometry class must clear a bit in the *visible* mask, not just define a new constant.
-- `0x01` exists as the C++ `RAY_MASK_STATIC`, as the uncompiled `RT_RAY_MASK_STATIC` macro in `rt_masks.glsl`, as a hard-coded literal in `rt_gi.rgen` and as `kRayMaskStatic` in `rt/shadow_trace.slang` — four sites. Changing the header does not change the shaders.
-- `rt_gi.rchit` filters nothing: the cull is the ray mask against the instance mask alone, and the closest-hit returns `giAlbedoPacked.rgb` of whatever slot traversal reports.
+- `0x01` exists as the C++ `RAY_MASK_STATIC`, as the uncompiled `RT_RAY_MASK_STATIC` macro in `rt_masks.glsl`, and as `kRayMaskStatic` in both `rt/shadow_trace.slang` and `rt/gi_trace.slang` — four sites. Changing the header does not change the shaders.
+- `rt/gi_trace.slang` filters nothing: the cull is the ray mask against the instance mask alone, and a hit reads `giAlbedoPacked.rgb` of whatever slot traversal commits.
 - Technique outputs reach the lighting pass only through the per-frame handover in each RT pass's callback, and only when `rendered()` is true. The graph does not track this dependency; it holds because the RT passes are added before `lighting` and the graph records in insertion order.
 - `DeferredRenderer::onResize` must forward the new extent to every RT technique it owns. It forwards to both `m_rtGI` and `m_rtShadow`; a technique added without a forward keeps its `init()` extent while the dispatch grid follows the window.
 - `init()` failure is non-fatal by design — the renderer resets the `unique_ptr` and continues on the CSM path, so a null `m_rtShadow` is a valid steady state, not an error.

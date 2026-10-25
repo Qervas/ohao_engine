@@ -104,9 +104,9 @@ consumers reconstruct it from depth:
 :::why
 Reconstruction from `D32_SFLOAT` plus an inverse view-projection is the standard
 alternative, and it is cheaper: 8 bytes per pixel saved, full float precision
-kept. OHAO rejects it because five consumers read this target directly —
-deferred lighting, SSR, the subsurface-scattering blur, the RT shadow trace and
-the RT GI raygen — and two of them launch rays from the value. Storing it once
+kept. OHAO rejects it because six consumers read this target directly —
+deferred lighting, SSR, the subsurface-scattering blur, the RT shadow trace, the
+RT GI trace and RT GI's upsample — and two of them launch rays from the value. Storing it once
 removes a class of per-consumer reconstruction bugs. The rejection is not
 total: SSAO reconstructs view-space position from depth instead, so the engine
 already pays for both approaches.
@@ -141,8 +141,9 @@ rasterised here" by testing GBuffer0 against its clear value of `(0,0,0,0)`:
 
 {{cite shaders/core/deferred_lighting.frag "if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {"}}
 
-The same exact-equality test is duplicated in `rt/shadow_trace.slang` (as
-`all(position == float4(0.0))`), `rt_gi.rgen`, and `postprocess/ssr.comp`. The fifth reader opts out entirely:
+The same exact-equality test is duplicated in `rt/shadow_trace.slang`,
+`rt/gi_trace.slang` and `rt/gi_denoise.slang`'s upsample (each as
+`all(position == float4(0.0))`), and in `postprocess/ssr.comp`. The sixth reader opts out entirely:
 the subsurface blur has no coverage test, gates on a skin heuristic over albedo
 and metallic instead, and then treats `length(position)` as an edge-aware depth
 proxy — so a sky tap arrives as a legal coordinate of magnitude zero rather than

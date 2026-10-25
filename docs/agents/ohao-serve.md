@@ -118,7 +118,7 @@ capture (`E_STATE`).
 ## Measure the frame
 
 `render_stats {frames}` says what the host's last frames cost on the GPU, pass by pass:
-`{frame, frames, gpuMs, cpuMs, passes: [["gbuffer", 0.06], ["rt.gi", 3.948], ...]}`,
+`{frame, frames, gpuMs, cpuMs, passes: [["gbuffer", 0.06], ["rt.gi", 0.064], ...]}`,
 medians over the newest `frames` (1–120) in microseconds, passes in frame order under the
 names of `ohao/render/frame/pass_registry.hpp`. A window host answers for the frames it
 presented; a headless host for its captures' frames (`E_STATE` before the first). One

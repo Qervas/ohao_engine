@@ -101,9 +101,12 @@ frame.
 {{cite ohao/render/rt/rt_shadow_technique.hpp "Both passes are compute: the trace uses inline ray queries (VK_KHR_ray_query; without it"}}
 
 Both are Slang, one entry point each (`trace` in `rt/shadow_trace.slang`, `filter` in
-`rt/shadow_filter.slang`), loaded by name into plain compute pipelines:
+`rt/shadow_filter.slang`), loaded by name into plain compute pipelines through the
+helper RT shadows and RT GI share in `rt_compute.cpp`:
 
-{{cite ohao/render/rt/rt_shadow_technique.cpp "ci.stage.pName = entry;"}}
+{{cite ohao/render/rt/rt_shadow_technique.cpp "rtc::createComputePipeline(m_device, "rt_shadow_trace.slang.spv", "trace""}}
+
+{{cite ohao/render/rt/rt_compute.cpp "ci.stage.pName = entry;"}}
 
 The query treats every intersection as opaque and stops at the first one it
 accepts; the answer is whether anything was committed.
@@ -124,11 +127,11 @@ not from the filter.
 
 The lights reach the trace in a storage buffer, not push constants: each frame slot
 owns a host-visible buffer holding up to eight `ShadowLight`s (the struct comes
-from the shared layout) and, behind them, a counter. It is device-local memory when
-the device has a host-visible kind of it (resizable BAR), because every pixel reads
-every light.
+from the shared layout) and, behind them, a counter. It is an `rtc::HostBuffer`,
+device-local memory when the device has a host-visible kind of it (resizable BAR),
+because every pixel reads every light; RT GI's light buffers are made the same way.
 
-{{cite ohao/render/rt/rt_shadow_technique.cpp "ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);"}}
+{{cite ohao/render/rt/rt_compute.cpp "ai.memoryTypeIndex = findMemoryType(physicalDevice, req.memoryTypeBits, host | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);"}}
 
 ## Four lights a pixel, by importance
 
@@ -194,8 +197,10 @@ $$L_o \approx \bar V(x)\; f_r(x,\omega_o,\bar\omega)\, L_i(\bar\omega)\,(\mathbf
 
 where $\bar\omega$ is the direction the lighting pass uses for the light. In
 reference quality $\bar V$ is exactly that mean: eight rays a light a frame,
-averaged, then folded into a running mean over the frames since the last temporal
-reset, so $N$ grows by eight every frame.
+averaged, then folded into a running mean over the reference frames since the last
+temporal reset, so $N$ grows by eight every frame. $k$ is the technique's count of
+the frames already in the mean (`history.x`), which a reset, new images or any
+realtime frame zero, so the mean never blends into a stale or undefined image.
 
 {{cite shaders/rt/shadow_trace.slang "const float4 meanLo = prevLo + (lo - prevLo) / (k + 1.0);"}}
 
@@ -276,7 +281,7 @@ first use; in realtime a 1×1 stand-in is bound in their place. The trace writes
 mean, packed to 8 bits a light with round-to-nearest, straight to the visibility
 image, and the renderer adds no filter pass:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "if (m_quality == RenderQuality::Realtime) {"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_renderGraph.addComputePass("rt.shadows.filter","}}
 
 ## Three penumbra samplers
 

@@ -44,7 +44,7 @@ implementation that is compiled, self-consistent, and currently unreachable on t
 No example parses a `--sampler` flag; switching sampler is supposed to mean switching
 profile, which also switches raygen, bounce budget and denoiser. This implementation has
 exactly one consumer — `sampler_api.glsl`. The deferred pipeline's RT shadow passes
-(`rt/shadow_trace.slang`, `rt/shadow_filter.slang`) and `rt_gi.rgen` carry their own copies
+(`rt/shadow_trace.slang`, `rt/shadow_filter.slang`) and the RT GI trace (`rt/gi_trace.slang`) carry their own copies
 of the same PCG permutation, with the same constants, as a stateless integer hash of seed,
 frame, pixel and sample, and never touch this interface.
 

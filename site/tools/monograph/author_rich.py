@@ -528,13 +528,13 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Uniform env sampling wastes paths on dark texels.",
     },
     "hybrid/shadow-technique": {
-        "what": ["RT shadow technique: visibility rays from GBuffer toward lights into a mask for deferred lighting."],
-        "how": ["rt_shadow_technique + rt_shadow.rgen/rmiss/rahit."],
+        "what": ["RT shadow technique: visibility rays from GBuffer toward lights into one channel a light for deferred lighting."],
+        "how": ["rt_shadow_technique + rt/shadow_trace.slang and rt/shadow_filter.slang: compute with inline ray queries."],
         "why": "Soft RT shadows without full path tracing cost.",
     },
     "hybrid/gi-technique": {
-        "what": ["One-bounce RT GI inject into deferred lighting using GBuffer normals and material albedos."],
-        "how": ["rt_gi_technique + rt_gi.rgen/rchit/rmiss; shares TLAS with shadows."],
+        "what": ["One-bounce diffuse RT GI for deferred lighting: half-resolution trace, denoised and upsampled, albedo applied."],
+        "how": ["rt_gi_technique + rt/gi_trace.slang and rt/gi_denoise.slang (temporal, atrous, upsample): compute with inline ray queries; shares the RenderScene TLAS with shadows."],
         "why": "Middle ground between IBL-only and full PT.",
     },
     "hybrid/visibility": {
@@ -640,7 +640,7 @@ KNOWLEDGE: dict[str, dict] = {
             "Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose, SVGF/à-trous, cinematic post.",
         ],
         "how": [
-            "pt_* for full PT; rt_shadow_* / rt_gi_* for hybrid; compute post for denoise/cinematic.",
+            "pt_* for full PT; shadow_* / gi_* (Slang compute, inline ray queries) for hybrid; compute post for denoise/cinematic.",
         ],
         "why": "One SPIR-V family documented together so binding/SBT changes stay coordinated.",
     },
