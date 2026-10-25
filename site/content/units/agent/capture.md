@@ -45,13 +45,17 @@ A path-traced capture under a CPU-side denoiser (OIDN, NRD) reads the same way. 
 
 ## What a window may capture
 
-`LiveHost::capture` refuses three requests before rendering anything. A minimized window has no frame (`E_STATE`). Another size is `E_COMMAND`: the window captures at its own size, and the agent leaves `width` and `height` out. Path tracing is `E_COMMAND` too, because the path tracer's frames have no swapchain path, so a window cannot present them:
+`LiveHost::capture` refuses a few requests before rendering anything. A minimized window has no frame (`E_STATE`). Another size is `E_COMMAND`: the window captures at its own size, and the agent leaves `width` and `height` out. A path-traced mode on a GPU without ray tracing is `E_COMMAND` too:
 
-{{cite ohao/runtime/live_host.cpp "a window host captures deferred frames; path tracing needs a headless "}}
+{{cite ohao/runtime/live_host.cpp "this GPU has no ray tracing: a window host captures deferred frames only"}}
 
-Otherwise the result depends on the time mode. In lockstep (or paused), the host first renders once if a resize is still pending, so the capture is at the window's current size. It then saves the window's post settings, runs `captureFrame` with a reset every time, and restores the settings, leaving the capture's last frame on screen. In realtime the world is moving, and a reset or extra frames would show the agent something the player never saw. So the capture is the next frame the window presents, with the live settings:
+Otherwise the result depends on the time mode. In lockstep (or paused), the host first renders once if a resize is still pending, so the capture is at the window's current size. It then saves the window's post settings, quality, denoiser and mode, runs `captureFrame` with a reset every time in the requested mode, and restores them all, leaving the capture's last frame on screen. Every frame of the capture is presented, so a path-traced capture's sample passes converge on screen while the agent waits. In realtime the world is moving, and a reset or extra frames would show the agent something the player never saw. So the capture is the next frame the window presents, with the live settings, and in the mode the window presents (its `--mode`); another mode is `E_COMMAND`:
 
-{{cite ohao/runtime/live_host.cpp "// Realtime: the next frame the window presents, as is (no reset, the live settings)."}}
+{{cite ohao/runtime/live_host.cpp "// Realtime: the next frame the window presents, as is (no reset, the live settings),"}}
+
+A lockstep capture checks the call's cancel flag between whole frames and reports progress after each one (the server sends it at most every 250 ms). A cancelled capture reads nothing back and gets no answer, and the window returns to its live mode:
+
+{{cite ohao/runtime/frame_capture.cpp "if (i > 0 && control && control->cancel && control->cancel->load(std::memory_order_relaxed)) {"}}
 
 That result is marked `deterministic: false`. A lockstep capture of the same world always gives the same pixels. That holds after step 1 of the sub-project, which made every deferred configuration bit-identical run to run (see the hash and determinism unit).
 
@@ -142,7 +146,7 @@ Readback on request, rather than a ring that is always copying, makes "the frame
 :::
 
 :::key
-One capture procedure serves both hosts, so a lockstep window capture equals a headless one bit for bit in deferred. The renderer copies a frame only on request, and the capture waits for that frame's fence alone, reading host-cached staging memory. A window host captures deferred frames only, at its own size. Previews are area-downscaled JPEGs that travel beside the result; an inline-only deferred capture has the GPU make the preview in the frame (`capture.preview`) and reads back only that. PNG files use a one-pass, four-band, run-length deflate.
+One capture procedure serves both hosts, so a lockstep window capture equals a headless one bit for bit in deferred. The renderer copies a frame only on request, and the capture waits for that frame's fence alone, reading host-cached staging memory. A window host captures any mode in lockstep and its live mode in realtime, always at its own size; a path-traced lockstep window capture equals the headless one too (test 11, max_abs 0 measured). Previews are area-downscaled JPEGs that travel beside the result; an inline-only deferred capture has the GPU make the preview in the frame (`capture.preview`) and reads back only that. PNG files use a one-pass, four-band, run-length deflate.
 :::
 
 ## Contracts

@@ -49,9 +49,9 @@ The same branch sets `m_releaseOnResume`. When stepping resumes, the first step 
 
 ## Render only when something may have changed
 
-In realtime every frame is rendered. In lockstep or paused, rendering an unchanged world would draw the same image again for no reason, and keep the GPU busy while an agent is thinking. A frame is due when the clock runs, when a resize or the first frame asks for one, or when the session's change count has moved since the last render:
+In realtime every frame is rendered. In lockstep or paused, rendering an unchanged world would draw the same image again for no reason, and keep the GPU busy while an agent is thinking. A frame is due when the clock runs, when a resize or the first frame asks for one, or when the session's change count has moved since the last render. One exception keeps drawing an unchanged world: a window presenting `rt_offline` (`--mode rt_offline`) accumulates one sample pass a frame until `--spp` samples, so a human watches the image converge, then stops:
 
-{{cite ohao/runtime/live_host.cpp "const bool due = m_time.running() || m_needRender || m_session->changeCount() != m_renderedChange;"}}
+{{cite ohao/runtime/live_host.cpp "const bool converging = m_liveMode == RenderMode::RTOffline && m_liveSamples < m_cfg.spp;"}}
 
 `Session::changeCount` counts `Session::step` calls and calls to the methods marked as mutating: `scene.load`, `world.apply`, `world.step`, `world.restore` and `input.replay`. It counts them whatever their outcome:
 

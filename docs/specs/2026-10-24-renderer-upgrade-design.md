@@ -572,6 +572,10 @@ change, and are re-baselined in their own commit.
 - `rt_realtime` presents every frame.
 - `rt_offline` presents its progressive accumulation: each sample pass is a frame, so a
   human watches it converge.
+- *As built (step 14):* what a window presents is a launch option, `ohao serve --window
+  --mode deferred|rt_realtime|rt_offline` (and `ohao_game --mode`); `render.settings` has
+  no mode. A lockstep or paused `rt_offline` window keeps presenting after a change until
+  `--spp` samples (default 64), then stops.
 
 **Capture.**
 - `LiveHost::capture` accepts RT modes.
@@ -1269,6 +1273,22 @@ improvising. Intentional image changes are separate commits inside their step.
     - The RT present path; RT captures in the window host; `window_capture_rt_inline_ms`
       recorded.
     - Test 11.
+    - *As built (2026-10-25, `docs/changes/2026-10-25-renderer-step14.md`):*
+      `renderRTPipeline` rebuilds the swapchain and acquires at the deferred path's points,
+      blits the tracer's RGBA8 output with the requested readback copy in the same pass, and
+      submits and presents with the same semaphores. `LiveHost::capture` takes any mode in
+      lockstep (presenting every frame, then restoring the live mode, denoiser, quality and
+      post) and the live mode in realtime. *Corrections:* (1) The window's live mode is a
+      launch option ("Live host", above). (2) The window's RT blit is its own pass,
+      `pt.present`, after `pt.render`: the registry lists passes in frame order and
+      `present` precedes the tracer there. (3) Cancel and progress reach the hosts on
+      `RenderRequest::control`, checked by `captureFrame`, so a headless capture is
+      cancellable too; a cancelled capture gets no answer. (4) In realtime a capture must
+      name the window's live mode, and a path-traced one is undenoised (`denoise` other than
+      `none` is `E_COMMAND`: the frame is captured as presented). Test 11 (`check_live.py`):
+      window and headless captures equal (max_abs 0 measured, rt_offline 16 spp and
+      rt_realtime 8, Cornell 640x360). `window_capture_rt_inline_ms` (1280x720, 16 spp):
+      median 128 ms, p95 131 ms (a run flagged noisy).
 15. **The agent surface and acceptance.**
     - `render.settings` (with `quality`); capture `gpuMs`/`timings`; `engine.info.gpu`; the serve guide's
       "Measure the frame" section; `docs/ARCHITECTURE.md` (the frame diagram, a recipe for

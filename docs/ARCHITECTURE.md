@@ -93,7 +93,8 @@ VulkanRenderer::render()
                                16x9x24 froxels out to the camera's far plane, up to 256
                                lights that reach it; lighting sums a pixel's froxel's list
                                (render/deferred/light_clusters)
-  deferred passes or a path tracer, then present (window); any frame, headless or
+  deferred passes or the path tracer, then present (window: the final image or the tracer's
+  output blitted into the swapchain image, present / pt.present); any frame, headless or
   windowed, copies to the CPU only when asked (requestReadback, then readback(): that
   frame's fence, never the queue); an inline capture of a deferred frame asks for the
   preview alone (requestPreviewReadback: capture.preview box-filters the final image into
@@ -107,12 +108,14 @@ VulkanRenderer::render()
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
 frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
 to 16 ms while nothing steps); the timeline's steps (`Session::step` each, then the
-`fixedUpdate` hook); the `update` hook; render and present (realtime: every frame;
-lockstep or paused: only when `Session::changeCount()` moved or the window resized);
-then send the replies those requests produced (`flush`), after the frame they caused.
-While nothing steps the window's own input is dropped, and stepping resumes with a focus
-loss. A capture in lockstep is `runtime::captureFrame`, the procedure the headless
-`RenderHost` runs, so both give the same pixels for the same world.
+`fixedUpdate` hook); the `update` hook; render and present in its live mode (`--mode`:
+deferred, `rt_realtime` or `rt_offline`; realtime: every frame; lockstep or paused: only
+when `Session::changeCount()` moved or the window resized, and an `rt_offline` window
+until `--spp` samples have accumulated); then send the replies those requests produced
+(`flush`), after the frame they caused. While nothing steps the window's own input is
+dropped, and stepping resumes with a focus loss. A capture in lockstep is
+`runtime::captureFrame`, the procedure the headless `RenderHost` runs, in any mode, so both
+give the same pixels for the same world; it checks the call's cancel flag between frames.
 
 - **Change tracking is by signal.** `patch`/`replace`/`emplace` fire EnTT signals that
   set `TransformDirty`, `InstantiateDirty` and `RenderDirty`; each system works only on

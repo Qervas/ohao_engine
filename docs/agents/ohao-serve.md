@@ -112,8 +112,14 @@ helmet room at 768x432 is about 57 KB. `region: [x, y, w, h]` zooms before scali
 `format: "png"` gives exact pixels, `path` writes the full-resolution PNG under `--out`.
 In lockstep a capture renders the world from a reset (1 deferred frame, 10 with TAA in
 `post`, or `frames`) and is deterministic: the same world gives the same pixels, in a
-window or headless. A window host captures deferred at its own size; minimized it cannot
-capture (`E_STATE`).
+window or headless. A window host captures at its own size; minimized it cannot capture
+(`E_STATE`). A path-traced capture (`mode: "rt_offline"`, `spp` sample passes) presents each
+pass, so a human watches it converge, and equals the headless capture of the same world; a
+long one reports progress (send `_meta: {progressToken}`) and can be cancelled
+(`notifications/cancelled`; it gets no answer and the window carries on). In realtime a
+capture is the window's next presented frame, in the mode the window presents: start it
+with `--mode rt_offline` or `rt_realtime` (`--spp N`: the samples an `rt_offline` window
+accumulates after each change, default 64) to watch path-traced frames live.
 
 ## Measure the frame
 

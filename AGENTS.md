@@ -180,9 +180,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `lightsOverflow`; twin runs build identical lists; casters past the 8 shadow channels
   render unshadowed (`--keep` leaves the compared PNGs in `build/`). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
-  previews, a region, another size and a path-traced mode refused), log.read; a lockstep
-  window capture equals a headless capture of the same world bit for bit (post off and
-  on); minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
+  previews, a region, another size refused), log.read; a lockstep window capture equals a
+  headless capture of the same world bit for bit (post off and on, and path-traced:
+  `rt_offline` and `rt_realtime`, test 11); a long path-traced capture reports progress and
+  is cancelled with the host serving on; a `--mode rt_offline --spp 24` window presents 24
+  accumulating frames, stops, and restarts after a change; a realtime `--mode rt_realtime`
+  window's capture is its next frame; minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
   readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
   camera moves 3 m in 60 injected steps; the window host over `--pipe` (a step, a capture,
   the client's disconnect ends it cleanly). `e2e_mcp.py`: a stdlib-only MCP client runs a
@@ -282,6 +285,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   one without keeps the bindings made in code.
 - Descriptor sets written at record time need one set per frame in flight
   (`MAX_FRAMES_IN_FLIGHT` = 3), or a frame rewrites the set the previous one reads (VUID 03047).
+- A window presents path-traced frames too: `renderRTPipeline` acquires, blits the tracer's
+  RGBA8 output (`pt.present`, which follows `pt.render` because the pass registry is in
+  frame order) and presents like the deferred path. What a window presents is a launch
+  option (`ohao serve --window --mode`, `ohao_game --mode`); a lockstep capture in another
+  mode switches, renders, then restores the live mode, denoiser, quality and post. The path
+  tracer does not notice a moved camera itself: a host calls `notifyCameraChanged()`
+  (`LiveHost` does whenever the world changed).
 - Readback is on request only: `requestReadback()` before the `render()` you want,
   `readback()` after (that frame's fence only; a path-traced frame under OIDN or NRD is
   denoised there), or for an inline preview of a deferred frame

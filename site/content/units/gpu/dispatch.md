@@ -43,19 +43,19 @@ The windowed path changes the prologue in two places. Swapchain recreation runs 
 
 Image acquisition then sits between the fence wait and the fence reset, so every early return — out-of-date, acquire error — leaves the slot's fence signalled and the next wait on it cannot deadlock. The acquire signals that slot's own image-acquired semaphore; the submit waits on it at the transfer stage and signals the render-finished semaphore of the *image*, not the slot. A slot-indexed render-finished semaphore could still be pending on a presentation of a different image when the slot comes round again, so `Swapchain` creates one per image.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "renderFinished = m_swapchain->renderFinished(imageIndex);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "if (m_swapchain) {   // the same per-slot semaphores as the deferred path"}}
 
 `vkQueuePresentKHR` returning `OUT_OF_DATE` or `SUBOPTIMAL` only marks the swapchain dirty; the rebuild happens at the top of the next frame, as does one requested by `setPresentExtent` when the window's drawable size changes.
 
-The RT body has no present path. It never acquires, so a windowed renderer switched to `RTRealtime` or `RTOffline` renders frames nobody sees. The windowed host does not offer the choice: `LiveHost::initialize` pins the mode to Deferred, and its `capture` refuses any other mode.
+The RT body presents the same way. It rebuilds the swapchain and acquires an image at the same points, blits the tracer's RGBA8 output into the image with a requested readback copy in the same pass (`pt.present`, after `pt.render` in the registry's frame order), and submits and presents with the same semaphores. A headless RT frame copies only when asked (`pt.readback`).
 
-{{cite ohao/runtime/live_host.cpp "m_renderer->setRenderMode(RenderMode::Deferred);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool VulkanRenderer::blitRTOutputToSwapchain(VkCommandBuffer cmd, uint32_t imageIndex, VkImage src, VkBuffer staging) {"}}
 
 ## Three ways to reach a transfer layout
 
 A presented or requested frame's last command reads the final image as a transfer source: `vkCmdBlitImage` into the swapchain, or `vkCmdCopyImageToBuffer` into the ring slot's staging buffer. The RT path delegates the layout: `PathTracer::render` ends with its own barrier on the output image, and the dispatch code records the assumption in a comment instead of re-checking it.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "// Output is already in TRANSFER_SRC_OPTIMAL from render()"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "// The path tracer's output (RGBA8, tonemapped, left in TRANSFER_SRC_OPTIMAL by render()):"}}
 
 The deferred path pays for the transition itself, once in each of its two ends, with the previous layout written as a constant both times.
 
