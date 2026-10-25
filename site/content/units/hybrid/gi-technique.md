@@ -7,10 +7,10 @@ standard: v2
 
 ## The bounce the ambient term cannot know
 
-The deferred pipeline's ambient term is one push-constant scalar times albedo times AO
-(the baked AO, and SSAO when it is on) —
+The deferred pipeline's ambient term is one push-constant scalar times the diffuse
+albedo (none for a metal) times AO (the baked AO, and SSAO when it is on) —
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
 
 plus, when an environment map is bound, two equirect samples of it, one standing in
 for diffuse irradiance and one for specular. Neither can know that a red wall stands

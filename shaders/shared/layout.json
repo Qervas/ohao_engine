@@ -167,6 +167,11 @@
        {"name": "params", "type": "float4", "doc": "x thickness: how far behind the depth buffer (NDC depth) a sample still hits"},
        {"name": "extent", "type": "uint4", "doc": "x, y the half-resolution size; z, w the frame's"}
      ]},
+    {"name": "SSRResolvePush", "doc": "SSR's resolve (postprocess/ssr_resolve.slang) push constants",
+     "fields": [
+       {"name": "extent", "type": "uint4", "doc": "x, y the frame's size; z, w the half-resolution trace's"},
+       {"name": "cameraPos", "type": "float4", "doc": "xyz the camera's position: the upsample compares distances from it"}
+     ]},
     {"name": "SSSPush", "doc": "SSS (postprocess/sss.slang) push constants, both entries",
      "fields": [
        {"name": "extent", "type": "uint4", "doc": "x, y the frame's size; z, w its tiles across and down"},

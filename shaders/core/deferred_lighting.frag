@@ -12,6 +12,11 @@
 layout(location = 0) in vec2 inTexCoord;
 
 layout(location = 0) out vec4 outColor;
+// For SSR's resolve (postprocess/ssr_resolve.slang), which replaces the environment's reflection
+// where the screen-space trace hits: E, the environment/RT GI specular this pixel added (rgb),
+// and W, its weight, the split sum F0 * A + B times specular occlusion (rgb). 0 for sky.
+layout(location = 1) out vec4 outEnvSpecular;
+layout(location = 2) out vec4 outSpecularWeight;
 
 // G-Buffer samplers (shader uses bindings 0-2; C++ has 5 gbuffer bindings but 3,4 unused here)
 layout(set = 0, binding = 0) uniform sampler2D gBuffer0; // Position + Metallic
@@ -180,6 +185,8 @@ void main() {
     // Early discard for sky/background — position (0,0,0) means no geometry was written
     if (gBuffer0Sample.rgb == vec3(0.0) && gBuffer0Sample.a == 0.0) {
         outColor = vec4(0.0);
+        outEnvSpecular = vec4(0.0);
+        outSpecularWeight = vec4(0.0);
         return;
     }
 
@@ -308,8 +315,9 @@ void main() {
     // which RT shadows or CSM occlude, and not RT GI, whose rays already see occluders.
     const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;
 
-    // Ambient lighting
-    vec3 ambient = vec3(pc.ambientIntensity) * albedo * ao * ssao;
+    // Ambient lighting: a diffuse term, so the diffuse albedo only (a metal has none; its
+    // albedo is its F0, and the reflection below is all the light it returns)
+    vec3 ambient = vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;
 
     // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang): the
     // incoming radiance times the diffuse albedo.
@@ -317,12 +325,21 @@ void main() {
     const vec4 gi = rtGI ? texture(ssgiTexture, inTexCoord) : vec4(0.0, 0.0, 0.0, 1.0);
     if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;
 
+    // The reflection's weight, for the environment here and for SSR's resolve: the GGX BRDF's
+    // directional albedo F0 * A + B (Karis's analytic fit, envBRDFApprox) times the share of the
+    // reflection that survives the occlusion below what RT GI's rays resolve, ao (the
+    // material's) and SSAO, through specularOcclusion (the reflection is a narrower cone than
+    // the hemisphere they measure).
+    const float NdotV = max(dot(N, V), 1e-4);
+    const vec2 ab = envBRDFApprox(NdotV, roughness);
+    const float occlusion = ao * ssao;
+    const vec3 specularWeight = (surface.F0 * ab.x + ab.y) * specularOcclusion(NdotV, occlusion, roughness);
+    vec3 envSpecular = vec3(0.0);
+
     // Image-based lighting (flag bit 0: an environment is loaded and prefiltered). The split
-    // sum: the radiance arriving around the reflection at this roughness, times the GGX BRDF's
-    // directional albedo F0 * A + B (Karis's analytic fit, envBRDFApprox).
+    // sum: the radiance arriving around the reflection at this roughness, times the weight.
     if ((pc.flags & 1u) != 0u) {
         const vec3 R = reflect(-V, N);
-        const float NdotV = max(dot(N, V), 1e-4);
         const vec3 prefiltered = pc.envIntensity *
             textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;
         const vec3 irradiance = pc.envIntensity * textureLod(envIrradiance, equirectUV(N), 0.0).rgb;   // over pi
@@ -331,14 +348,8 @@ void main() {
         // which is the visibility times the environment's own mean) in place of the rest.
         // Without RT GI the environment is taken as unoccluded (visibility 1).
         const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));
-        const vec2 ab = envBRDFApprox(NdotV, roughness);
-        const vec3 specularAmbient = incoming * (surface.F0 * ab.x + ab.y);
-
-        // Occlusion below what the GI rays resolve: ao (the material's) and SSAO darken the
-        // diffuse term as they measure; the reflection, a narrower cone, through
-        // specularOcclusion.
-        const float occlusion = ao * ssao;
-        ambient += specularAmbient * specularOcclusion(NdotV, occlusion, roughness);
+        envSpecular = incoming * specularWeight;
+        ambient += envSpecular;
 
         // RT GI's rays that leave the scene bring back the environment, occluded: with it, the
         // unoccluded diffuse term here would count that light twice.
@@ -356,4 +367,6 @@ void main() {
 
 
     outColor = vec4(color, 1.0);
+    outEnvSpecular = vec4(envSpecular, 0.0);
+    outSpecularWeight = vec4(specularWeight, 0.0);
 }

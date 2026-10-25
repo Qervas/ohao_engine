@@ -289,7 +289,7 @@ exists to keep small.
 
 ## Five curves, and one that must not be gamma-corrected
 
-The shader composites (HDR + bloom·strength + SSR + flash), multiplies by
+The shader composites (HDR + bloom·strength + flash), multiplies by
 exposure, and switches on an operator index: the Narkowicz ACES fit, extended
 Reinhard with a hard-coded white point of 4.0, Uncharted 2 with Hable's
 constants, a Neutral compressor that desaturates only above 0.76, and a Hejl
@@ -309,33 +309,12 @@ double-encodes all five operators — and the branch above means the Filmic path
 would break in a subtly different way from the other four.
 :::
 
-The SSR tap is added only when the frame has one. SSR is traced at half resolution,
-so the tonemap upsamples it: the four nearest half-resolution samples, weighted
-bilinearly and by how close the view depth each was traced for (SSR's alpha) is to
-this pixel's, read from the G-buffer depth at binding 3 and linearized with the
-projection's `[2][2]` and `[3][2]`:
+Screen-space reflections are not post's business: `SSRPass` resolves them into the
+lit image before bloom and TAA run, replacing the environment's reflection where its
+trace hit (the SSR and SSS unit), so bloom blooms them and TAA resolves them like any
+other lit pixel. The tonemap has two bindings, the frame and bloom:
 
-{{cite shaders/postprocess/tonemapping.frag "if (params.ssrOn != 0u) hdrColor += ssrAt(ivec2(gl_FragCoord.xy));"}}
-
-{{cite shaders/postprocess/tonemapping.frag "const float z = params.depthB / (d + params.depthA);"}}
-
-`ssrOn` is raised only when both the SSR view and the depth view are set; without
-them bindings 2 and 3 are filled with the HDR input, which the shader never reads:
-
-{{cite ohao/render/deferred/post_processing_pipeline.cpp "imageInfos[2].imageView = ssr ? m_ssrView : m_hdrInputView;"}}
-
-The flag closes the old hazard, a fallback binding that added the HDR input to itself
-under an additive composite. `DeferredRenderer` clears the SSR view at the start of
-the frame's tail and sets it again only after `SSRPass` executed, and hands over the
-*jittered* projection — the one the depth buffer was drawn with — for the
-linearization; jitter moves only the projection's third column, so the two depth
-terms are the unjittered ones either way:
-
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setSSRProjection(jitteredProj);"}}
-
-The composite is still a bare `+=`. SSR already weights its colour by Fresnel and a
-hit fade, but the lighting pass's own specular for that pixel stays at full strength,
-so a reflected surface carries both.
+{{cite ohao/render/deferred/post_processing_pipeline.cpp "// Write both bindings: HDR input, bloom"}}
 
 The `flashIntensity` push constant — an additive warm-white HDR spike for
 lightning, placed before the tonemap so the curve compresses it — is wired end to
@@ -343,7 +322,7 @@ end and has no producer anywhere in the tree.
 
 ## Contracts
 
-- `setSSRView()`, `setSSRProjection()`, the depth view and `setHDRInput*()` only store handles and values; `execute()` writes all four tonemap bindings into the set for `frameIndex` at record time, so all must be set before `execute()` that frame. A null SSR view or depth view turns the SSR term off (`ssrOn` 0).
+- `setHDRInput*()` only stores a handle; `execute()` writes both tonemap bindings into the set for `frameIndex` at record time, so the input must be set before `execute()` that frame. Post adds nothing for SSR: anything that should appear in the frame is in the lit image by then.
 - `setTonemappingEnabled(false)` does not yield an untonemapped LDR image. Bloom and TAA still run, but `m_didExecute` stays false and `DeferredRenderer::getFinalOutput()` falls back to the HDR lighting attachment, discarding both.
 - The output image is `R8G8B8A8_UNORM` on purpose. Moving to `_SRGB` must be paired with removing the `pow` in `tonemapping.frag`, and reconciled with the operator-4 branch that already skips it.
 - `setBloomIntensity()` and `setUseVarianceClipping()` are stored but never reach the image: bloom strength is a literal in `execute()`, and clipping is unconditional in the shader.

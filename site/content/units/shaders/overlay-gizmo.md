@@ -151,7 +151,7 @@ applies gamma itself:
 and the fallback used when post-processing did not execute is the lighting pass's
 HDR target, `R16G16B16A16_SFLOAT`:
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_hdrOutput.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "target.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
 
 Vulkan requires each framebuffer attachment view to be created with a format
 *equal* to the corresponding render-pass attachment description — sRGB and UNORM

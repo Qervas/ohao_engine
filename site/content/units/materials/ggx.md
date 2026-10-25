@@ -272,21 +272,19 @@ calls — was written specifically to reject Frisvad. Trust the function.
 ## What is actually reachable
 
 `brdf_common.glsl` and `brdf_ggx.glsl` define twenty functions between them; the
-deferred lighting fragment shader reaches nine. Four of the eleven unreachable
-ones still have their math shipping under no name at all. `geometrySchlickGGX`
-and `geometrySmith`, its sole caller, are the `(roughness+1)²/8` remap inlined in
-every NEE branch of all three raygens. `fresnelSchlick` — textbook Schlick with
-F90 = 1 — is written out by hand in those same branches and, in Slang, in
-`postprocess/ssr.slang`, whose cosine is clamped only from below rather than
-saturated. `lambertianDiffuse` is the `albedo/π` sitting a few lines under each of
-those Fresnels.
-
-{{cite shaders/postprocess/ssr.slang "const float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - nDotV, 5.0);"}}
+deferred lighting fragment shader reaches ten, `envBRDFApprox` among them (the split
+sum's environment BRDF, which also weights the screen-space reflections). Four of the
+ten unreachable ones still have their math shipping under no name at all.
+`geometrySchlickGGX` and `geometrySmith`, its sole caller, are the `(roughness+1)²/8`
+remap inlined in every NEE branch of all three raygens. `fresnelSchlick` — textbook
+Schlick with F90 = 1 — is written out by hand in those same branches.
+`lambertianDiffuse` is the `albedo/π` sitting a few lines under each of those
+Fresnels.
 
 {{cite shaders/rt/pt_raygen.rgen "vec3 diff = kD * albedo / 3.14159;"}}
 
-Five of the remaining seven are dead in both senses: `f0FromIOR`, `envBRDFApprox`,
-and the uncorrelated Smith trio, whose
+Four of the remaining six are dead in both senses: `f0FromIOR` and the uncorrelated
+Smith trio, whose
 $(2\,n\cdot\omega)/(n\cdot\omega+\sqrt{\cdot})$ arrangement appears nowhere else
 under `shaders/`.
 

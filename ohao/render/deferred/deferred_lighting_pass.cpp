@@ -1,4 +1,5 @@
 #include "deferred_lighting_pass.hpp"
+#include "core/log.hpp"
 #include <array>
 #include <cstring>
 
@@ -15,7 +16,7 @@ bool DeferredLightingPass::initialize(VkDevice device, VkPhysicalDevice physical
     m_width = 1920;
     m_height = 1080;
 
-    if (!createOutputImage()) return false;
+    if (!createOutputImages()) return false;
     if (!createRenderPass()) return false;
     if (!createFramebuffer()) return false;
     if (!createDescriptors()) return false;
@@ -81,7 +82,7 @@ void DeferredLightingPass::cleanup() {
         m_renderPass = VK_NULL_HANDLE;
     }
 
-    m_hdrOutput.destroy(m_device);
+    destroyOutputImages();
     destroyDummyResources();
 }
 
@@ -130,9 +131,9 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_dummyImageTransitioned = true;
     }
 
-    // Begin render pass
-    VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    // Begin render pass (the lit image, the environment's specular, its weight)
+    std::array<VkClearValue, 3> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -140,8 +141,8 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     renderPassInfo.framebuffer = m_framebuffer;
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {m_width, m_height};
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearValue;
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -203,9 +204,9 @@ void DeferredLightingPass::onResize(uint32_t width, uint32_t height) {
         vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
     }
 
-    m_hdrOutput.destroy(m_device);
-    createOutputImage();
-    createFramebuffer();
+    destroyOutputImages();
+    if (!createOutputImages() || !createFramebuffer())
+        OHAO_LOG(Error, render, "DeferredLightingPass: failed to recreate its outputs at {}x{}", width, height);
 }
 
 void DeferredLightingPass::setShadowMap(VkImageView shadowMap, VkSampler shadowSampler) {
@@ -370,32 +371,30 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
-bool DeferredLightingPass::createOutputImage() {
-    m_hdrOutput.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    m_hdrOutput.width = m_width;
-    m_hdrOutput.height = m_height;
+bool DeferredLightingPass::createTarget(RenderTarget& target, VkImageUsageFlags usage) {
+    target.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    target.width = m_width;
+    target.height = m_height;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = m_hdrOutput.format;
+    imageInfo.format = target.format;
     imageInfo.extent = {m_width, m_height, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT |   // final image when post-processing is off: readback copy / swapchain blit
-                      VK_IMAGE_USAGE_STORAGE_BIT;         // SSS blurs skin tiles in place
+    imageInfo.usage = usage;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_hdrOutput.image) != VK_SUCCESS) {
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &target.image) != VK_SUCCESS) {
         return false;
     }
 
     VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(m_device, m_hdrOutput.image, &memRequirements);
+    vkGetImageMemoryRequirements(m_device, target.image, &memRequirements);
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -403,45 +402,64 @@ bool DeferredLightingPass::createOutputImage() {
     allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_hdrOutput.memory) != VK_SUCCESS) {
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &target.memory) != VK_SUCCESS) {
         return false;
     }
 
-    vkBindImageMemory(m_device, m_hdrOutput.image, m_hdrOutput.memory, 0);
+    vkBindImageMemory(m_device, target.image, target.memory, 0);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_hdrOutput.image;
+    viewInfo.image = target.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = m_hdrOutput.format;
+    viewInfo.format = target.format;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_hdrOutput.view) == VK_SUCCESS;
+    return vkCreateImageView(m_device, &viewInfo, nullptr, &target.view) == VK_SUCCESS;
+}
+
+bool DeferredLightingPass::createOutputImages() {
+    return createTarget(m_hdrOutput,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |   // final image when post-processing is off: readback copy / swapchain blit
+                            VK_IMAGE_USAGE_STORAGE_BIT) &&      // SSS blurs skin tiles and SSR resolves in place
+           createTarget(m_envSpecular, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) &&
+           createTarget(m_specularWeight, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+}
+
+void DeferredLightingPass::destroyOutputImages() {
+    m_hdrOutput.destroy(m_device);
+    m_envSpecular.destroy(m_device);
+    m_specularWeight.destroy(m_device);
 }
 
 bool DeferredLightingPass::createRenderPass() {
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Three RGBA16F color attachments, each cleared, stored and left for shader reads: the lit
+    // image, the environment's specular and its weight (the shader's outputs 0, 1, 2).
+    std::array<VkAttachmentDescription, 3> attachments{};
+    std::array<VkAttachmentReference, 3> colorRefs{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        VkAttachmentDescription& colorAttachment = attachments[i];
+        colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        colorRefs[i].attachment = i;
+        colorRefs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -453,8 +471,8 @@ bool DeferredLightingPass::createRenderPass() {
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
@@ -467,8 +485,9 @@ bool DeferredLightingPass::createFramebuffer() {
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = m_renderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = &m_hdrOutput.view;
+    const std::array<VkImageView, 3> views = {m_hdrOutput.view, m_envSpecular.view, m_specularWeight.view};
+    framebufferInfo.attachmentCount = static_cast<uint32_t>(views.size());
+    framebufferInfo.pAttachments = views.data();
     framebufferInfo.width = m_width;
     framebufferInfo.height = m_height;
     framebufferInfo.layers = 1;
@@ -586,15 +605,18 @@ bool DeferredLightingPass::createPipeline() {
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
+    // One unblended write per attachment: the lit image, the environment's specular, its weight
+    std::array<VkPipelineColorBlendAttachmentState, 3> colorBlendAttachments{};
+    for (VkPipelineColorBlendAttachmentState& colorBlendAttachment : colorBlendAttachments) {
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+    }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+    colorBlending.pAttachments = colorBlendAttachments.data();
 
     std::array<VkDynamicState, 2> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,

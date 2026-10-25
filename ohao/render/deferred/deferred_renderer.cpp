@@ -599,21 +599,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         timerEnd();
     }
 
-    // 4.8. SSR — screen-space reflections on glossy surfaces, at half resolution; post's
-    // tonemap adds them, upsampled against the depth buffer (linearized with the
-    // jittered projection the depth buffer was drawn with).
-    if (m_postProcessing) {
-        m_postProcessing->setSSRView(VK_NULL_HANDLE);
-        m_postProcessing->setSSRProjection(jitteredProj);
-    }
+    // 4.8. SSR — screen-space reflections on glossy surfaces: traced at half resolution, then
+    // resolved into the lit image in place, replacing the environment's reflection where the
+    // trace hit (before bloom and TAA, which see the reflections like any lit pixel).
     if (m_ssrPass && m_ssrWanted && litOutput) {
         timerBegin("ssr");
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
-        m_ssrPass->setLitSceneView(litOutput);
+        m_ssrPass->setLitScene(m_lightingPass->getOutputImage(), litOutput, m_lightingPass->envSpecularView(),
+                               m_lightingPass->specularWeightView());
         m_ssrPass->execute(cmd, frameIndex);
-        if (m_postProcessing) {
-            m_postProcessing->setSSRView(m_ssrPass->getOutputView());
-        }
         timerEnd();
     }
 

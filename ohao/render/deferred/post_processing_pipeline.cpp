@@ -150,9 +150,6 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         params.bloomStrength  = bloomStrength;
         params.tonemapOp      = static_cast<uint32_t>(m_tonemapOp);
         params.flashIntensity = m_flashIntensity;
-        params.ssrOn          = ssrOn() ? 1u : 0u;
-        params.depthA         = m_depthA;
-        params.depthB         = m_depthB;
 
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(params), &params);
@@ -197,14 +194,12 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
 }
 
 void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
-    m_depthView = depth;
     if (m_taaPass) m_taaPass->setDepthBuffer(depth);
 }
 
 void PostProcessingPipeline::setNormalBuffer(VkImageView) {}
 
 void PostProcessingPipeline::setGBufferInputs(VkImageView depth, VkImageView, VkImageView velocity) {
-    m_depthView = depth;
     if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
 }
 
@@ -284,9 +279,9 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     if (set == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
     if (input == VK_NULL_HANDLE || bloom == VK_NULL_HANDLE) return;
 
-    // Write all 4 bindings: HDR input, bloom, SSR, depth (the SSR upsample's guide)
-    std::array<VkDescriptorImageInfo, 4> imageInfos{};
-    std::array<VkWriteDescriptorSet, 4> writes{};
+    // Write both bindings: HDR input, bloom
+    std::array<VkDescriptorImageInfo, 2> imageInfos{};
+    std::array<VkWriteDescriptorSet, 2> writes{};
 
     // Binding 0: HDR input
     imageInfos[0].sampler = m_sampler;
@@ -312,26 +307,7 @@ void PostProcessingPipeline::writeTonemapSet(uint32_t slot, VkImageView input, V
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &imageInfos[1];
 
-    // Binding 2: SSR (half resolution) and binding 3: the G-buffer depth. Without either the
-    // shader adds no reflection (ssrOn() false) and any read-only image fills them.
-    const bool ssr = ssrOn();
-    imageInfos[2].sampler = m_sampler;
-    imageInfos[2].imageView = ssr ? m_ssrView : m_hdrInputView;
-    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[3].sampler = m_sampler;
-    imageInfos[3].imageView = ssr ? m_depthView : m_hdrInputView;
-    imageInfos[3].imageLayout = ssr ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    for (uint32_t b = 2; b < 4; ++b) {
-        writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[b].dstSet = set;
-        writes[b].dstBinding = b;
-        writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[b].descriptorCount = 1;
-        writes[b].pImageInfo = &imageInfos[b];
-    }
-
-    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 bool PostProcessingPipeline::createFinalOutput() {
@@ -453,9 +429,9 @@ bool PostProcessingPipeline::createTonemappingPass() {
         return false;
     }
 
-    // Descriptor layout: HDR input + bloom + SSR + depth
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-    for (uint32_t b = 0; b < 4; ++b) {
+    // Descriptor layout: HDR input + bloom
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    for (uint32_t b = 0; b < 2; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
@@ -474,7 +450,7 @@ bool PostProcessingPipeline::createTonemappingPass() {
     // Descriptor pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT;  // HDR + bloom + SSR + depth, per frame slot
+    poolSize.descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;  // HDR + bloom, per frame slot
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

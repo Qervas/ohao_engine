@@ -14,16 +14,17 @@ in a `push_constant` block, every input is a combined image sampler, and every
 output is the one colour attachment of a fullscreen draw. Each shader is a pure
 function of its bindings.
 
-The other two, `ssr.slang` and `sss.slang`, are Slang compute modules and keep only
-half of that. Their parameters are still push constants, but the blocks are
-`SSRPush` and `SSSPush` from `shaders/shared/layout.json`, generated into Slang and
-C++ so the two sides cannot drift; their images are separate textures read with
-`Load` (SSR adds one `SamplerState` for its lit-scene lookup); they write storage
-images; and SSS reads a storage buffer, the G-buffer pass's tile lists.
+The other three, `ssr.slang`, `ssr_resolve.slang` and `sss.slang`, are Slang compute
+modules and keep only half of that. Their parameters are still push constants, but
+the blocks are `SSRPush`, `SSRResolvePush` and `SSSPush` from
+`shaders/shared/layout.json`, generated into Slang and C++ so the two sides cannot
+drift; their images are separate textures read with `Load` (SSR's trace adds one
+`SamplerState` for its lit-scene lookup); they write storage images, two of them the
+lit image in place; and SSS reads a storage buffer, the G-buffer pass's tile lists.
 
 {{cite shaders/postprocess/sss.slang "[[vk::binding(3, 0)]] StructuredBuffer<uint> tiles;   // the G-buffer pass's classification"}}
 
-Six of the nine are fragment shaders and a seventh is the vertex stage they all
+Six of the ten are fragment shaders and a seventh is the vertex stage they all
 share. `fullscreen.vert` takes no vertex input and no descriptors: it indexes two
 three-element constant arrays by `gl_VertexIndex` and emits a single oversized
 triangle at (-1,-1), (3,-1), (-1,3).
@@ -81,7 +82,7 @@ as 4-bit strata indices, two uints.
 
 {{cite ohao/render/deferred/ssao_pass.cpp "static_assert(sizeof(shared::SSAOPush) <= 128);"}}
 
-{{cite ohao/render/deferred/ssr_pass.cpp "sizeof(gpu::shared::SSRPush), m_pipelineLayout, m_pipeline))"}}
+{{cite ohao/render/deferred/ssr_pass.cpp "sizeof(gpu::shared::SSRPush), m_pipelineLayout, m_pipeline) ||"}}
 {{cite ohao/render/rt/path_tracer_render.cpp "256-byte device maxPushConstantsSize"}}
 
 :::why
@@ -93,11 +94,12 @@ that is invisible until it is exceeded: `sky.frag` cannot gain a single `vec4`
 without breaking on a 128-byte device.
 :::
 
-## Two of the nine are compute, and they pay for their own barriers
+## Three of the ten are compute, and they pay for their own barriers
 
-Neither compute shader covers the frame the way a fullscreen triangle does. SSR runs
-8×8 workgroups over the half-resolution image, rounded up, and opens with an explicit
-bounds guard — the fragment passes get that for free from the viewport. SSS runs one
+No compute shader covers the frame the way a fullscreen triangle does. SSR's trace
+runs 8×8 workgroups over the half-resolution image, rounded up, and its resolve over
+the full frame, both opening with an explicit bounds guard — the fragment passes get
+that for free from the viewport. SSS runs one
 16×16 workgroup per flagged tile, dispatched indirectly, and a tile on the frame's
 right or bottom edge overhangs it, so it guards too:
 
@@ -108,10 +110,14 @@ and final layouts in the render pass and never writes a barrier; the compute pas
 write theirs by hand. SSR transitions its output from `UNDEFINED` (the `discard`
 argument of `rtc::transition`) to `GENERAL` before the dispatch and to
 `SHADER_READ_ONLY_OPTIMAL` after, so last frame's contents are gone and it must store
-every in-range pixel. It does: zero for sky, the view depth with no colour for a
-rough dielectric, and the traced result for everything else.
+every in-range pixel. It does: zero for sky, a rough dielectric and a miss, and the
+traced result for a hit.
 
-{{cite ohao/render/deferred/ssr_pass.cpp "rtc::transition(cmd, m_output, VK_IMAGE_LAYOUT_GENERAL, kFragment, VK_ACCESS_SHADER_READ_BIT, kCompute,"}}
+{{cite ohao/render/deferred/ssr_pass.cpp "rtc::transition(cmd, m_output, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,"}}
+
+The resolve is the in-place case, like SSS's vertical pass below: it takes the lit
+image to `GENERAL` without discarding and back, and returns early from every pixel no
+trace sample reflects anything at, which must keep its value.
 
 SSS keeps a different invariant. Its scratch image is discarded every frame too, and
 `blurH` writes it only in the flagged tiles; `blurV` reads it only within the
@@ -123,9 +129,9 @@ is correct, and in `blurH`, whose non-skin pixels are later read, it is not:
 
 {{cite shaders/postprocess/sss.slang "hOut[p] = centre;"}}
 
-## One depth buffer, four conventions
+## One depth buffer, three conventions
 
-The G-buffer's `D32_SFLOAT` depth is sampled by four shaders in this unit, and
+The G-buffer's `D32_SFLOAT` depth is sampled by three shaders in this unit, and
 each treats it differently.
 
 `sky.frag` uses it as a stencil: anything the G-buffer wrote is discarded. Only the
@@ -153,14 +159,13 @@ thickness the test actually accepts therefore grows with the square of distance:
 a tight test a metre from the camera, a very permissive one across the room.
 Linearising both sides would make `thickness` a world-space constant instead.
 
-`tonemapping.frag` is the one shader that does linearize. Its SSR upsample turns the
-depth at binding 3 into view depth with the projection's two depth terms, pushed as
-`depthA` and `depthB`, to compare it with the view depth SSR stored in alpha — and
-reads it only where a neighbouring SSR sample reflects anything, treating 1.0 as sky:
+SSR's resolve, which needs a distance to tell surfaces apart when it upsamples the
+trace, does not read the depth buffer at all: it measures each surface's distance from
+the camera from the G-buffer's world position, which needs no projection terms:
 
-{{cite shaders/postprocess/tonemapping.frag "const float z = params.depthB / (d + params.depthA);"}}
+{{cite shaders/postprocess/ssr_resolve.slang "return all(position == float4(0.0)) ? 0.0 : distance(position.xyz, pc.cameraPos.xyz);"}}
 
-`taa_resolve.frag` is the fourth case: it declares a depth sampler at binding 3
+`taa_resolve.frag` is the third case: it declares a depth sampler at binding 3
 and never executes a single instruction that reads it.
 
 {{cite shaders/postprocess/taa_resolve.frag "layout(set = 0, binding = 3) uniform sampler2D depthBuffer;"}}
@@ -176,11 +181,11 @@ The GLSL compute shaders this directory used to hold carried three wrong comment
 SSR claimed the lighting pass composited its result, SSS called its albedo skin test
 a copy of one in the lighting shader that never existed, and SSR announced a depth
 linearisation it did not perform. The Slang rewrites say where their output goes —
-SSR's header names the tonemap upsample, SSS's the G-buffer pass that flags its tiles
-— and skin is no longer guessed from albedo at all but read from the material's
+SSR's header names its resolve, SSS's the G-buffer pass that flags its tiles — and
+skin is no longer guessed from albedo at all but read from the material's
 `subsurface` strength:
 
-{{cite shaders/postprocess/ssr.slang "// resolution, upsampled with depth awareness where post's tonemap adds it"}}
+{{cite shaders/postprocess/ssr.slang "// at half resolution; postprocess/ssr_resolve.slang upsamples it and puts it in the lit image in"}}
 
 One comment in the chain still describes its own code wrongly. `fullscreen.vert`
 labels vertex 0 "bottom left" — the OpenGL reading of clip $(-1,-1)$. Under Vulkan's
@@ -190,7 +195,7 @@ never needs a flip.
 {{cite shaders/postprocess/fullscreen.vert "// Vertex 0: (-1, -1) - bottom left"}}
 
 :::key
-None of these nine shaders can be debugged from its source alone. Each computes
+None of these ten shaders can be debugged from its source alone. Each computes
 exactly what its bindings and push block say; the rest of the truth — which
 image is bound, in what order the passes ran, whether a fallback view is neutral
 — is only in the C++. Read the pass that owns a shader before believing its
@@ -216,5 +221,6 @@ the same file is scaled by 40 with no equivalent note.
 - The origin convention is Vulkan's, not `fullscreen.vert`'s: clip $(-1,-1)$ is top-left and carries UV $(0,0)$, and no pass in the chain flips it or uses a negative-height viewport. An image authored bottom-up needs a flip in its own fragment shader — adding one to the vertex shader flips all seven pipelines built on it at once.
 - `sky.frag`'s push block is exactly 128 bytes, the Vulkan floor, and has no room left; SSR's is 112. No pass queries `maxPushConstantsSize`.
 - SSR must store every in-range half-resolution pixel: its output is transitioned from `UNDEFINED` each frame, and an early `return` that skips the store leaves garbage, not the previous frame. SSS's `blurH` must store every pixel of the tiles it covers, because `blurV` reads them; `blurV` must *not* store non-skin pixels, because it writes the lit image in place.
-- `ssr.slang` compares raw post-projection depth against a constant `thickness`. Changing the near or far plane changes the effective world-space tolerance everywhere in the frame, quadratically with distance. `tonemapping.frag`'s upsample linearizes with the pushed projection terms, so `setSSRProjection` must receive the projection the depth buffer was drawn with.
+- `ssr.slang` compares raw post-projection depth against a constant `thickness`. Changing the near or far plane changes the effective world-space tolerance everywhere in the frame, quadratically with distance.
+- SSR's resolve writes the lit image in place and must leave every pixel it has no reflection for untouched; it upsamples by distance from the camera taken from the G-buffer position, so the position's sky value (all zero) must stay distinct from any surface.
 - `taa_resolve.frag`'s binding 3 is declared and unread. Removing it from the shader requires dropping write 3 in `TAAPass::updateDescriptorSets` — and the binding-3 entry in `TAAPass::createDescriptors`'s set layout — in the same change.

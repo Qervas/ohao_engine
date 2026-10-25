@@ -208,6 +208,15 @@ static_assert(offsetof(SSRPush, params) == 80);
 static_assert(offsetof(SSRPush, extent) == 96);
 static_assert(sizeof(SSRPush) == 112);
 
+// SSR's resolve (postprocess/ssr_resolve.slang) push constants
+struct alignas(16) SSRResolvePush {
+    alignas(16) std::array<uint32_t, 4> extent{};
+    alignas(16) std::array<float, 4> cameraPos{};
+};
+static_assert(offsetof(SSRResolvePush, extent) == 0);
+static_assert(offsetof(SSRResolvePush, cameraPos) == 16);
+static_assert(sizeof(SSRResolvePush) == 32);
+
 // SSS (postprocess/sss.slang) push constants, both entries
 struct alignas(16) SSSPush {
     alignas(16) std::array<uint32_t, 4> extent{};

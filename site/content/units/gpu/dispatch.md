@@ -83,7 +83,7 @@ The blit is a blit and not a copy because the two images need not match: the def
 
 Those two images do not have the same format. The tonemapped output is `R8G8B8A8_UNORM`; the lighting pass output is the HDR target.
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_hdrOutput.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "target.format = VK_FORMAT_R16G16B16A16_SFLOAT;"}}
 
 Every staging buffer in the ring is sized for four bytes per pixel.
 

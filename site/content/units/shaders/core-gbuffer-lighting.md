@@ -255,11 +255,18 @@ branch never runs.
 
 Inside the branch the split sum reads the prefiltered level for the pixel's roughness
 along the reflection, weighted by RT GI's environment visibility with GI's bounce
-radiance for the occluded rest, times Karis's analytic environment BRDF, and occludes
-the result by the material's `ao` and SSAO through a specular-occlusion term (the
-deferred lighting unit, "Image-based lighting"):
+radiance for the occluded rest, times the reflection weight: Karis's analytic
+environment BRDF with the material's `ao` and SSAO applied through a
+specular-occlusion term (the deferred lighting unit, "Image-based lighting"). The
+weight is computed before the branch, for every pixel, because SSR's resolve weights
+its reflections by it too; the pass writes it and the environment's specular beside
+the lit image for that resolve (the SSR and SSS unit):
 
-{{cite shaders/core/deferred_lighting.frag "ambient += specularAmbient * specularOcclusion(NdotV, occlusion, roughness);"}}
+{{cite shaders/core/deferred_lighting.frag "const vec3 specularWeight = (surface.F0 * ab.x + ab.y) * specularOcclusion(NdotV, occlusion, roughness);"}}
+
+The constant ambient term ahead of it is diffuse only, `albedo * (1 - metallic)`: on
+a metal, whose albedo is its F0, it used to add a flat F0-tinted glow that the path
+tracer has no counterpart for, and that read the helmet's frame as bright silver.
 
 The prefiltered images are the deferred frame's own; the env image the path tracer and
 RT GI sample keeps its single mip level and its base-level sampler, so nothing here can

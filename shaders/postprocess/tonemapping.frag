@@ -8,10 +8,6 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D hdrInput;
 layout(set = 0, binding = 1) uniform sampler2D bloomInput;
-// Screen-space reflections at half resolution (postprocess/ssr.slang): rgb the reflection,
-// a the view depth of the pixel it was traced for (0: sky). Sample q sits on pixel 2q.
-layout(set = 0, binding = 2) uniform sampler2D ssrInput;
-layout(set = 0, binding = 3) uniform sampler2D depthInput;   // the G-buffer depth: the upsample's guide
 
 layout(push_constant) uniform TonemapParams {
     float exposure;
@@ -19,41 +15,7 @@ layout(push_constant) uniform TonemapParams {
     float bloomStrength;
     uint tonemapOperator;  // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
     float flashIntensity;  // lightning flash — additive pre-tonemap HDR brightening
-    uint ssrOn;            // 1: add the SSR
-    float depthA;          // projection [2][2], [3][2]: view depth = depthB / (d + depthA)
-    float depthB;
 } params;
-
-// The SSR at this pixel: the 4 nearest half-resolution samples, weighted bilinearly and by how
-// close their view depth is to this pixel's (within 5%); where none is the same surface, the
-// closest. The depth is read only where a neighbour reflects anything.
-vec3 ssrAt(ivec2 pixel) {
-    const ivec2 size = textureSize(ssrInput, 0);
-    const ivec2 base = pixel >> 1;
-    vec4 t[4];
-    bool any = false;
-    for (int i = 0; i < 4; ++i) {
-        t[i] = texelFetch(ssrInput, min(base + ivec2(i & 1, i >> 1), size - 1), 0);
-        any = any || (t[i].r + t[i].g + t[i].b) > 0.0;
-    }
-    if (!any) return vec3(0.0);
-    const float d = texelFetch(depthInput, pixel, 0).r;
-    if (d >= 1.0) return vec3(0.0);
-    const float z = params.depthB / (d + params.depthA);
-    const vec2 f = vec2(pixel & 1) * 0.5;
-    vec3 sum = vec3(0.0), best = vec3(0.0);
-    float wsum = 0.0, bestErr = 1e30;
-    for (int i = 0; i < 4; ++i) {
-        if (t[i].a <= 0.0) continue;
-        const ivec2 o = ivec2(i & 1, i >> 1);
-        const float err = abs(t[i].a - z);
-        if (err < bestErr) { bestErr = err; best = t[i].rgb; }
-        const float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) * max(0.0, 1.0 - err / (0.05 * z));
-        sum += w * t[i].rgb;
-        wsum += w;
-    }
-    return wsum > 1e-3 ? sum / wsum : best;
-}
 
 // ACES filmic tonemapping
 vec3 ACESFilm(vec3 x) {
@@ -125,9 +87,6 @@ void main() {
     // Add bloom
     vec3 bloom = texture(bloomInput, inTexCoord).rgb;
     hdrColor += bloom * params.bloomStrength;
-
-    // Add screen-space reflections
-    if (params.ssrOn != 0u) hdrColor += ssrAt(ivec2(gl_FragCoord.xy));
 
     // Lightning flash — warm-white additive HDR brightening (tonemapper compresses it naturally)
     if (params.flashIntensity > 0.001) {

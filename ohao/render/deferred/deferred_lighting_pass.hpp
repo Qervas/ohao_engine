@@ -43,6 +43,11 @@ public:
     [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
     [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
     [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
+    // Beside the lit image, for SSR's resolve (RGBA16F, full resolution, SHADER_READ_ONLY after
+    // the pass): the environment/RT GI specular each pixel added, and its weight (the split
+    // sum times specular occlusion). 0 for sky.
+    [[nodiscard]] VkImageView envSpecularView() const { return m_envSpecular.view; }
+    [[nodiscard]] VkImageView specularWeightView() const { return m_specularWeight.view; }
 
     // The light table (LightGpu records, binding 5), its light count and the ambient intensity.
     void setLights(VkBuffer lightBuffer, uint32_t count, float ambient) {
@@ -75,14 +80,18 @@ private:
     [[nodiscard]] bool createRenderPass();
     [[nodiscard]] bool createFramebuffer();
     [[nodiscard]] bool createPipeline();
-    [[nodiscard]] bool createOutputImage();
+    [[nodiscard]] bool createOutputImages();
+    [[nodiscard]] bool createTarget(RenderTarget& target, VkImageUsageFlags usage);
+    void destroyOutputImages();
     [[nodiscard]] bool createDescriptors();
 
     // G-Buffer reference
     GBufferPass* m_gbufferPass{nullptr};
 
-    // HDR output
+    // The three color attachments: the lit HDR image, the environment's specular and its weight
     RenderTarget m_hdrOutput;
+    RenderTarget m_envSpecular;
+    RenderTarget m_specularWeight;
 
     // Render pass and framebuffer
     VkRenderPass m_renderPass{VK_NULL_HANDLE};

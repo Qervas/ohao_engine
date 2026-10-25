@@ -18,12 +18,15 @@ half resolution; SSS runs only on the 16×16 tiles the G-buffer pass flagged for
 subsurface material, so a frame without one dispatches no workgroup at all.
 
 They run in that order, SSS then SSR, and on one image. SSS writes its blur back
-into the lighting output in place, and SSR is handed that same view:
+into the lighting output in place; SSR is handed that same image, traces it, and then
+writes its own result back into it in place too, beside the two images the lighting
+pass wrote for it:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_ssrPass->setLitSceneView(litOutput);"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_ssrPass->setLitScene(m_lightingPass->getOutputImage(), litOutput, m_lightingPass->envSpecularView(),"}}
 
 So a reflection of skin shows the skin blurred once, as the camera sees it, and
-post-processing reads the lighting output whatever SSS did. Measured with
+post-processing — bloom and TAA included — reads the lighting output with both
+effects in it. Measured with
 `render_bench` on an RTX 5070 Laptop GPU (2026-10-25, a run flagged noisy by outside
 load), `cornell_720p` — where no material has `subsurface` — spends 0.004 ms in `sss`
 and 0.008 ms in `ssr`, against budgets of 0.02 and 0.04, in a 0.85–0.87 ms frame;
@@ -31,9 +34,9 @@ and 0.008 ms in `ssr`, against budgets of 0.02 and 0.04, in a 0.85–0.87 ms fra
 
 ## The reflection ray marches in world space
 
-`SSRPass` dispatches one entry point, `trace` in `postprocess/ssr.slang`, at half the
-frame's size rounded up: half-resolution pixel $q$ traces for full-resolution pixel
-$2q$.
+`SSRPass` dispatches two entry points. The first, `trace` in `postprocess/ssr.slang`,
+runs at half the frame's size rounded up: half-resolution pixel $q$ traces for
+full-resolution pixel $2q$. The second, `resolve`, is the next section.
 
 {{cite ohao/render/deferred/ssr_pass.cpp "if (!rtc::createComputePipeline(m_device, "postprocess_ssr.slang.spv", "trace", m_descriptorLayout,"}}
 
@@ -94,38 +97,49 @@ real dielectric sitting on the world origin is sky too:
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}};"}}
 
-A hit takes the lit image at the hit's UV, fades it by march distance and roughness
-(at most 0.8) and weights it by Schlick Fresnel against an F0 of 0.04 for dielectrics
-and 1 for metals. The alpha channel is not coverage: it carries the pixel's view
-depth, the guide the upsample needs, written even where a rough pixel traced nothing:
+A hit takes the lit image at the hit's UV and a confidence $c$ that falls with march
+distance and roughness (at most 0.8). The trace writes the radiance premultiplied by
+$c$, and $c$ itself; no Fresnel, no weight of its own. A sky pixel, a miss and a
+skipped rough dielectric write zero:
 
-{{cite shaders/postprocess/ssr.slang "ssrOut[q] = float4(hitColor * fresnel * hitAlpha, viewDepth);"}}
+{{cite shaders/postprocess/ssr.slang "ssrOut[q] = float4(litScene.SampleLevel(linearSampler, uv, 0.0).rgb * confidence, confidence);"}}
 
-## The upsample in tonemap
+## The resolve replaces the environment's reflection
 
-Post's tonemap adds the reflection, and it is where the half resolution is undone.
-Each full-resolution pixel reads the four nearest half-resolution samples; if none
-reflects anything it reads nothing more. Otherwise it reads its own G-buffer depth at
-binding 3, linearizes it with the projection's `[2][2]` and `[3][2]` — the depth
-buffer's jittered projection, whose jitter does not touch those two terms — and
-weights the four bilinearly and by how close each sample's view depth is to its own,
-within 5 %. Where none is the same surface it takes the closest, rather than averaging
-a reflection across an edge:
+The lighting pass has already lit every pixel's reflection: the environment and RT
+GI's bounce light along it, $\text{incoming}$, times the split-sum weight with
+specular occlusion, $W$ (the deferred lighting unit, "Image-based lighting"). A trace
+hit is a better estimate of that same incoming light, so adding it on top would count
+the reflected energy twice; that is what an earlier tonemap-time `+=` did, and on the
+helmet room it brightened the helmet against its left wall from 0.676 to 0.734. The
+lighting pass therefore writes two more attachments beside the lit image, $E = W \cdot
+\text{incoming}$ and $W$:
 
-{{cite shaders/postprocess/tonemapping.frag "const float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) * max(0.0, 1.0 - err / (0.05 * z));"}}
+{{cite shaders/core/deferred_lighting.frag "outEnvSpecular = vec4(envSpecular, 0.0);"}}
 
-The term is added only when the frame has an SSR image and a depth view to guide it.
-`DeferredRenderer` clears the SSR view before the pass and sets it again only after
-`SSRPass` executed, and the pipeline raises `ssrOn` from both:
+and `resolve` (`postprocess/ssr_resolve.slang`, full resolution, the lit image in
+`GENERAL` and back) blends the reflection toward the trace by the confidence, under
+the same weight, applied once:
 
-{{cite ohao/render/deferred/post_processing_pipeline.hpp "[[nodiscard]] bool ssrOn() const noexcept { return m_ssrView != VK_NULL_HANDLE && m_depthView != VK_NULL_HANDLE; }"}}
+$$\text{lit} \mathrel{+}= W\,(c\,L) - c\,E \;=\; \text{lit} - E + W\,\mathrm{lerp}(\text{incoming}, L, c)$$
 
-The bindings still need *some* image when it is off, and get the HDR input, which the
-shader then never reads. That closes the hazard the earlier composite had: a fallback
-binding added under an unconditional `+=` doubled the frame. The composite is still a
-bare add, though. The lighting pass's specular for the pixel stays at full strength
-and the reflection stacks on top of it; the Fresnel weight and the 0.8 cap bound the
-overshoot, they do not remove it.
+{{cite shaders/postprocess/ssr_resolve.slang "lit[pixel] = float4(max(c.rgb + W * r.rgb - r.a * E, float3(0.0)), c.a);"}}
+
+The weight is computed outside the environment's branch, so a scene without an
+environment (Cornell) still gets correctly weighted screen-space reflections, with
+$E = 0$ there. The resolve is also where the half resolution is undone. Each
+full-resolution pixel reads the four nearest trace samples; if none has any
+confidence it reads nothing more. Otherwise it weights the four bilinearly and by
+how close the distance from the camera of each sample's surface (the G-buffer
+position at $2q$) is to its own, within 5 %. Where none is the same surface it takes
+the closest, rather than averaging a reflection across an edge:
+
+{{cite shaders/postprocess/ssr_resolve.slang "const float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) * max(0.0, 1.0 - err / (0.05 * z));"}}
+
+With SSR off nothing runs, and the frame keeps the environment's reflection exactly
+as lighting wrote it. With it on, the helmet room measures 0.471 against 0.473 off
+(the path tracer: 0.534): where the trace hits, it replaces radiance of about the same
+brightness rather than adding to it.
 
 ## The Hi-Z tracer that did not ship
 
@@ -182,11 +196,12 @@ and only at skin pixels:
 {{cite shaders/postprocess/sss.slang "if (skin <= 0.0) return;   // the lit image keeps the pixel"}}
 
 Writing in place needs the lit image to be a storage image, which the lighting pass
-now creates it as, and two barriers the pass rolls itself: `SHADER_READ_ONLY_OPTIMAL`
-to `GENERAL` before the vertical pass and back after it, with every later reader —
-SSR's compute and post's fragment shaders — in the destination scope.
+creates it as (SSR's resolve writes it in place the same way), and two barriers the
+pass rolls itself: `SHADER_READ_ONLY_OPTIMAL` to `GENERAL` before the vertical pass and
+back after it, with every later reader — SSR's compute and post's fragment shaders —
+in the destination scope.
 
-{{cite ohao/render/deferred/deferred_lighting_pass.cpp "VK_IMAGE_USAGE_STORAGE_BIT;         // SSS blurs skin tiles in place"}}
+{{cite ohao/render/deferred/deferred_lighting_pass.cpp "VK_IMAGE_USAGE_STORAGE_BIT) &&      // SSS blurs skin tiles and SSR resolves in place"}}
 
 Each pass mixes its result with the centre by the pixel's subsurface strength, so
 strength 1 is the full blur and 0.5 half of it:
@@ -255,12 +270,15 @@ fragment stages makes their writes visible to SSS, SSR and post:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,"}}
 
+SSR issues the same barrier itself before its trace, unconditionally: it reads the
+lighting pass's two extra attachments, which no sky or particle pass touches.
+
 SSS's first act is a buffer barrier of its own, from the G-buffer pass's fragment
 writes of the tile lists to the indirect-command and compute reads of them. The pass
 registry lists the order — `lighting`, `sky`, `particles`, `sss`, `ssr`, then post's own
 passes — and the timings come back in it.
 
-{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Lighting, then sky and particles, write the HDR lit image; SSS blurs its flagged tiles through a scratch image and writes them back in place; SSR traces it at half resolution; tonemap reads the lit image and adds the upsampled SSR."}}
+{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Lighting, then sky and particles, write the HDR lit image; SSS blurs its flagged tiles through a scratch image and writes them back in place; SSR traces it at half resolution and its resolve writes the reflection back in place, replacing the environment's; post reads the lit image."}}
 
 Resizing follows the same list by hand. `DeferredRenderer::onResize` forwards the new
 extent to every screen-sized pass, SSS and SSR included:
@@ -283,8 +301,8 @@ post-processing changes what ends up in the frame.
 
 - SSR's `thickness` is in projected depth units, not world units. Linearising the depth comparison without retuning it disables all reflections.
 - SSR's sky test is exact equality with the G-buffer clear colour. Changing `clearValues[0]` to anything non-zero makes SSR trace rays for the sky.
-- SSR's alpha is the traced pixel's view depth, zero for sky — the tonemap upsample's guide, not coverage. A consumer must upsample it against a full-resolution depth, and an OVER composite would need a coverage term SSR no longer stores.
-- The tonemap adds SSR only under `ssrOn`, which needs both the SSR view and the depth view. `setSSRView` must be called after `SSRPass::execute` in the same frame; a stale view from an earlier frame is never left bound because the renderer clears it first.
-- SSS writes the lighting image in place. It must run after everything that draws into the lit image and before everything that reads it (SSR, post); the lit image must be in `SHADER_READ_ONLY_OPTIMAL` when it starts, with its writers synchronized to compute, and is left there.
+- The trace stores the reflected radiance premultiplied by its confidence, and the confidence in alpha; it carries no weight. The resolve applies the lighting pass's weight $W$ and removes $c\,E$: anything that adds the trace to the frame without removing the environment's reflection counts reflected light twice.
+- The lighting pass's `envSpecular` must be exactly what it added to the lit image, and `specularWeight` the weight it used, for every pixel: the resolve subtracts the one and multiplies by the other. A new specular term in the lighting pass that SSR should replace goes into `envSpecular`; one it should not (direct light) stays out of it.
+- SSS writes the lighting image in place, and so does SSR's resolve after it. SSS must run after everything that draws into the lit image and before everything that reads it (SSR, post); the lit image must be in `SHADER_READ_ONLY_OPTIMAL` when either starts, with its writers synchronized to compute, and is left there.
 - SSS depends on the G-buffer pass's tile buffer of the same frame: `GBufferPass::execute` must have reset it and drawn before `SSSPass::execute`. `setSSSWidth` above 10 is clamped, because the vertical kernel must stay within `kSSSRadiusTiles` tile rows.
 - `DeferredRenderer::cleanup()` releases the particle system, sky, gizmo, post-processing, lighting, CSM and GBuffer passes and nothing else. `m_sssPass`, `m_ssrPass`, `m_rtShadow` and `m_rtGI` survive it and are freed only when `~DeferredRenderer` destroys their `unique_ptr`s. Calling `cleanup()` manually and then destroying the `VkDevice` destroys all four against a dead device.

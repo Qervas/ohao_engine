@@ -174,6 +174,13 @@ struct SSRPush
     uint4 extent;   // x, y the half-resolution size; z, w the frame's
 };
 
+// SSR's resolve (postprocess/ssr_resolve.slang) push constants
+struct SSRResolvePush
+{
+    uint4 extent;   // x, y the frame's size; z, w the half-resolution trace's
+    float4 cameraPos;   // xyz the camera's position: the upsample compares distances from it
+};
+
 // SSS (postprocess/sss.slang) push constants, both entries
 struct SSSPush
 {

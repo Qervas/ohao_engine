@@ -201,6 +201,17 @@ Rousiers' specular occlusion, which spares a narrow lobe seen head-on:
 RT GI's. With RT GI the diffuse environment arrives through its escaping rays,
 occluded, and the irradiance term is skipped so that light is not counted twice.
 
+The reflection's weight, $W = (F_0 A + B)$ times the specular occlusion, is computed for
+every pixel, environment or not, and the pass writes it beside the lit image together
+with what the environment and GI contributed through it, $E = W\,L_{\text{in}}$: two more
+RGBA16F attachments, for SSR's resolve, which replaces $E$ with its traced reflection
+under the same $W$ where it hits (the SSR and SSS unit). The constant ambient ahead of
+all this is a diffuse term and takes the diffuse albedo only,
+`albedo * (1 - metallic)`; on a metal, whose albedo is its F0, it was a flat glow the
+path tracer has no counterpart for.
+
+{{cite shaders/core/deferred_lighting.frag "layout(location = 2) out vec4 outSpecularWeight;"}}
+
 :::why
 Before this the IBL bindings resolved to an uncleared 1x1 dummy, the shader read the
 raw single-mip HDRI at a roughness-proportional LOD that always clamped to mip 0, and
@@ -239,7 +250,7 @@ shipped feature.
 
 - GBuffer0's clear colour and the shader's sky test are one invariant in two files. Changing either alone sends background pixels through the lighting loop.
 - The pass owns one descriptor set per frame in flight (`maxSets = MAX_FRAMES_IN_FLIGHT`, three today), and `execute(cmd, frameIndex)` rewrites all 16 bindings of `m_descriptorSets[frameIndex]` only, at record time. Its inputs — the slot's light table, the froxel lists, SSAO, RT shadow mask, GI, env map — can change between frames, so the set has to be rewritten; a single shared set would be rewritten while up to two already-submitted frames still read it. The per-slot set is safe because `VulkanRenderer::renderDeferred` waits the fence of `m_currentFrame` and then records the deferred renderer with that same slot, so the set's previous use is retired. The contract is on the caller: `frameIndex` must be the slot whose fence was waited. {{cite ohao/render/deferred/deferred_lighting_pass.hpp "std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_descriptorSets{};"}} {{cite ohao/gpu/vulkan/render_dispatch.cpp "m_deferredRenderer->render(cmd, m_currentFrame);"}}
-- `LightingParams` is 184 bytes, all scalar after `screenSize`; `ambientIntensity`, `sliceScale` and `sliceBias` sit after `cameraPos`, `wetness` and `snowCover`, and the one `paddingF` after `frostCover` keeps the C++ struct byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
+- `LightingParams` is 184 bytes, all scalar after `screenSize`; `ambientIntensity`, `sliceScale` and `sliceBias` sit after `cameraPos`, `wetness` and `snowCover`, and `envIntensity` after `frostCover` closes the struct, byte-identical to the push block, whose comment states the same total. Any field added to one side must be added to the other.
 - Every skipped term must be exactly zero: the `attenuation == 0.0` and `shadow == 0.0` tests, and the froxel lists, are what make clustered lighting equal the every-light loop byte for byte. An attenuation law without a hard zero past `direction.w` breaks both.
 - Binding an RT visibility view disables CSM for that frame outright. A light's `params.w` and the visibility's channels are one contract with the light table and the RT shadow passes (`rt/shadow_trace.slang`, `rt/shadow_filter.slang`): the table hands out slots 0 to 7 in the same order it lists `shadowLights()`, and the RT passes write light *i* into channel *i*. The visibility image must stay the lighting pass's size, since it is fetched at `gl_FragCoord`.
 - Declared or carried and never read by this shader: `params.z`, `cascades.normalBias`, `cascades.cascadeBlendWidth`, `pc.invViewProj`, and descriptor bindings 3 and 4 (written, no sampler declared) and 7 and 8 (likewise). Binding 13 does not exist: the layout jumps from the cascade UBO at 12 to the RT shadow visibility at 14.

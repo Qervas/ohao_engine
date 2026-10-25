@@ -53,13 +53,6 @@ public:
         VkImageView taaDepth{VK_NULL_HANDLE}, taaVelocity{VK_NULL_HANDLE};
     };
     [[nodiscard]] BoundGBufferInputs boundGBufferInputs() const;
-    // The half-resolution SSR (rgb reflection, a its pixel's view depth) this frame adds, null
-    // for none, and the projection whose depth it linearizes the G-buffer's with.
-    void setSSRView(VkImageView ssr) { m_ssrView = ssr; }
-    void setSSRProjection(const glm::mat4& proj) noexcept {
-        m_depthA = proj[2][2];
-        m_depthB = proj[3][2];
-    }
     // Times bloom, TAA and tonemapping as post.bloom, post.taa, post.tonemap (null: untimed).
     void setPassTimer(render::GpuPassTimer* timer) noexcept { m_passTimer = timer; }
 
@@ -119,7 +112,7 @@ private:
     [[nodiscard]] bool createTonemappingPass();
     [[nodiscard]] bool createFinalOutput();
     void destroyFinalOutput();
-    // Writes all three tonemap bindings into this frame slot's set.
+    // Writes both tonemap bindings into this frame slot's set.
     void writeTonemapSet(uint32_t slot, VkImageView input, VkImageView bloom);
 
     // Sub-passes
@@ -147,8 +140,6 @@ private:
 
     // Input views
     VkImageView m_hdrInputView{VK_NULL_HANDLE};
-    VkImageView m_ssrView{VK_NULL_HANDLE};
-    VkImageView m_depthView{VK_NULL_HANDLE};   // the G-buffer depth: the SSR upsample's guide
 
     // Dimensions
     uint32_t m_width{0};
@@ -177,12 +168,7 @@ private:
         float bloomStrength;   // 0.0 = no bloom composite, 1.0+ = bloom intensity
         uint32_t tonemapOp;    // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
         float flashIntensity;  // lightning flash (0=none, 3+ = bright strike)
-        uint32_t ssrOn;        // 1: add the half-resolution SSR, upsampled by depth
-        float depthA;          // the projection's [2][2] and [3][2]: view depth = depthB / (d + depthA)
-        float depthB;
     };
-    [[nodiscard]] bool ssrOn() const noexcept { return m_ssrView != VK_NULL_HANDLE && m_depthView != VK_NULL_HANDLE; }
-    float m_depthA{0.0f}, m_depthB{0.0f};
 
 };
 
