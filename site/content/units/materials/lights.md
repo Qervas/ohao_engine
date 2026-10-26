@@ -38,21 +38,23 @@ The deferred pipeline does not. Its `LightData` uses the classic raster conventi
 
 {{cite ohao/render/scene/render_scene_types.hpp "alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)"}}
 
-so `LightTable::set` swaps 0 and 1 on the way in. The remap is a single nested ternary:
+so `LightTable::set` swaps 0 and 1 on the way in, and gives AreaRect type 3 in both:
 
-{{cite ohao/render/scene/light_table.cpp "const int deferredType = (d.kind == LightKind::Point) ? 1 : (d.kind == LightKind::Directional) ? 0 : 2;"}}
+{{cite ohao/render/scene/light_table.cpp "const int deferredType = d.kind == LightKind::Point         ? 1"}}
 
-AreaRect = 3 has no raster equivalent, so the else-arm sends it to 2, and the deferred
-lighting loop treats the rectangle as a cone — attenuated by the component's cone angles,
-30° and 45° on a default-constructed `Light`, which nobody authoring an area light
-ever set:
+The deferred frame lights a type 3 light as the path tracer does, as a rectangle of
+uniform radiance `I / (4 pi r^2)` emitting one-sided toward `edge1 x edge2`, with no range
+and no `1/d^2`. Its diffuse term is the rectangle's exact irradiance, Lambert's edge
+integral (the polygon's vector form factor); its specular the representative point, the
+reflection ray where it meets the rectangle, with the lobe widened by the rectangle's
+projected size:
 
-{{cite shaders/core/deferred_lighting.frag "attenuation *= calculateSpotAttenuation(L, normalize(light.direction.xyz),"}}
+{{cite shaders/includes/brdf/brdf_ggx.glsl "vec3 evaluateBRDFRect(BRDFSurface surface, vec3 P, vec3 center, vec3 e1, vec3 e2, vec3 Le) {"}}
 
-Those two numbers are plain member initialisers on the component, and they travel
-unchanged through `LightDesc` (same defaults) into `params.x` and `params.y` as cosines:
+Clustered lighting lists a rectangle in every froxel, as it does a directional light: with
+no range there is no sphere to cull by.
 
-{{cite ohao/ecs/components.hpp "float innerConeDeg{30.0f};"}}
+{{cite shaders/compute/light_cluster.slang "if (l.position.w < 0.5 || l.position.w > 2.5)"}}
 
 The renderer decides what an unlit scene looks like. With no light in the raster list —
 no authored light and no emissive stand-in — `setFrameLights` lights the frame with a warm
@@ -66,7 +68,6 @@ white Lambertian surface facing it reflects its colour at unit scale:
 :::key
 `positionAndType.w` carries the `LightKind` enum; `LightData.position.w` does not.
 Read either code with the other table in hand and every point light becomes a sun.
-Area lights exist only on the ray-traced side.
 :::
 
 ## Eighty bytes and sixty-four

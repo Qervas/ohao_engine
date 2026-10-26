@@ -377,9 +377,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   its `range` (default 10 m) by `(1-(d/range)⁴)²`. The path tracer's sphere emitter has
   radiance `I/(πr²)` (`includes/rt/pt_lights.glsl`); albedo is base colour × albedo texture
   in both, never the vertex colour (primitives carry their colour as both). An area light
-  still differs: deferred lights it as a spot, the path tracer as its rectangle at
-  `I/(4πr²)`. What stays between them: one GI bounce against many, Burley against Lambert
-  at grazing angles (`docs/changes/2026-10-26-visible-lights.md` has the measurements).
+  is the same rectangle in both (Frank's ruling): uniform radiance `I/(4πr²)`, one-sided
+  toward `edge1 × edge2`, no range and no `1/d²`; deferred lights it as light type 3
+  (`evaluateBRDFRect`: the exact polygon irradiance, the representative point for specular),
+  clustered lighting lists it in every froxel, RT GI's bounce sees a cosine-profile point at
+  its centre. What stays between the renderers: one GI bounce against many, Burley against
+  Lambert and the roughness-limited Fresnel at grazing angles
+  (`docs/changes/2026-10-26-visible-lights.md`, `2026-10-26-area-light-align.md`).
 - Every point, spot and area light is also a mesh the camera sees (`RenderScene::setLights`
   makes an emitter instance per light: a sphere of its radius, or its rectangle, with the
   light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its

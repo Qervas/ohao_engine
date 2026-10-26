@@ -112,12 +112,14 @@ them into this frame slot's light buffer:
 {{cite ohao/render/rt/rt_gi_technique.cpp "if (input.lights[i].kind != render::LightKind::EmissiveProxy && input.lights[i].intensity > 0.0f)"}}
 
 Each is attenuated as the lighting pass attenuates it: inverse square, windowed by
-the light's range, and a spot light's cone. A rectangle light is a point at its
-centre; a directional light is a direction, not a position.
+the light's range, and a spot light's cone. A rectangle light is what it is from afar:
+a point at its centre of intensity `Le * area * cos(theta)` toward its face, a spot of
+cones 0 and 90 degrees (whose linear ramp is exactly the cosine), in the path tracer's
+units and with no range; a directional light is a direction, not a position.
 
 {{cite shaders/rt/gi_trace.slang "atten = window * window / max(d2, 0.01);"}}
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 1.0f);"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 2.0f);"}}
 
 Two shortcuts make that $L_i$ an estimate of an estimate. No shadow ray is traced
 from the hit to the light, so a bounce surface behind a wall still glows: indirect

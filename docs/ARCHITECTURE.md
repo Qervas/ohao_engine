@@ -95,7 +95,8 @@ VulkanRenderer::render()
   LightClusters                the raster lights (uncapped) into the frame slot's light
                                buffer when they changed; lights.cluster lists, for each of
                                16x9x24 froxels out to the camera's far plane, up to 256
-                               lights that reach it; lighting sums a pixel's froxel's list
+                               lights that reach it (directional and area lights reach
+                               every froxel); lighting sums a pixel's froxel's list
                                (render/deferred/light_clusters)
   deferred passes or the path tracer, then present (window: the final image or the tracer's
   output blitted into the swapchain image, present / pt.present); any frame, headless or

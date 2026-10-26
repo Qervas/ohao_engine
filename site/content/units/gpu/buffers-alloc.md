@@ -171,12 +171,11 @@ with a warning logged once when the list exceeds it. The GPU copy is not `LightD
 
 {{cite ohao/render/scene/light_table.cpp "OHAO_LOG(Warn, render, "RenderScene: {} lights: the raster table holds {}", sorted.size(), MAX_LIGHTS);"}}
 
-`LightData.position.w` carries the *shader* type (0 = directional, 1 = point, 2 = spot),
-and a two-way ternary remaps the source `LightKind` into it: `Point` to 1, `Directional`
-to 0, anything else (spot, and an area light, which the deferred frame lights as a spot)
-to 2:
+`LightData.position.w` carries the *shader* type (0 = directional, 1 = point, 2 = spot,
+3 = rectangle), remapped from the source `LightKind`, whose first two are the other way
+round:
 
-{{cite ohao/render/scene/light_table.cpp "const int deferredType = (d.kind == LightKind::Point) ? 1 : (d.kind == LightKind::Directional) ? 0 : 2;"}}
+{{cite ohao/render/scene/light_table.cpp "const int deferredType = d.kind == LightKind::Point         ? 1"}}
 
 `params.z` is a point or spot light's sphere radius, the radius its emitter mesh is drawn
 at (raised to the path tracer's 0.01 m), or 0 for a true point. The lighting pass gives
@@ -188,21 +187,17 @@ such a light the specular of a sphere, so that a mirror reflects the mesh:
 from the RT visibility channels in `params.w`, or from the cascades for directional
 lights.
 
-The ternary's "anything else" arm hides a second collision. `LightType` has a fourth
-enumerator, `AreaRect`, with no branch of its own, so the raster light buffer emits
-it as a spot light carrying the component's default 30°/45° cone along the entity's
--Z axis. It is not a hypothetical enumerator — `turntable.cpp` authors a ceiling area
-panel for its Cornell mode, and the RT path reads the same light correctly, packing both
-edge vectors and the derived area into `GPULight`:
+`LightType`'s fourth enumerator, `AreaRect` (`turntable.cpp` authors a ceiling panel for
+its Cornell mode), is a rectangle in both pipelines. The raster record repacks its four
+`vec4`s for it: the rectangle's centre in `position`, its edges in `direction.xyz` and
+`params.xyz`, and in `color.w` its radiance `I / (4 pi r^2)`, the path tracer's, instead
+of an intensity:
 
 {{cite ohao/ecs/components.hpp "enum class LightType : uint8_t { Point, Directional, Spot, AreaRect };"}}
 
 {{cite examples/turntable.cpp "area.type = ecs::LightType::AreaRect;"}}
 
-{{cite ohao/render/scene/light_table.cpp "if (d.kind == LightKind::AreaRect) {"}}
-
-The two pipelines therefore disagree about what that entity is: a rectangle to the path
-tracer, a cone to the rasteriser.
+{{cite ohao/render/scene/light_table.cpp "light.position = glm::vec4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 3.0f);"}}
 
 ## The default light and its $\pi$
 

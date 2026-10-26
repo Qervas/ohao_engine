@@ -76,7 +76,7 @@ attenuation is exactly 0; both are exact only because past $d = r$ the clamp ret
 0, not a small number. The `LightGpu` record states the same contract in its field
 documentation:
 
-{{cite shaders/shared/layout.json "xyz direction, w range: point and spot light contributes nothing past it"}}
+{{cite shaders/shared/layout.json "w range: point and spot light contributes nothing past it"}}
 
 The header already contains the near-match — `attenuationUE4` — with zero
 callers. It also differs from the deferred version in a way that changes units:

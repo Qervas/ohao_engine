@@ -253,10 +253,10 @@ struct HiZPush
 // one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)
 struct LightGpu
 {
-    float4 position;   // xyz position (world), w type: 0 directional, 1 point, 2 spot
-    float4 direction;   // xyz direction, w range: point and spot light contributes nothing past it
-    float4 color;   // xyz colour, w intensity
-    float4 params;   // x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
+    float4 position;   // xyz position (world; a rectangle's centre), w type: 0 directional, 1 point, 2 spot, 3 rectangle (area light)
+    float4 direction;   // xyz direction (a rectangle's first edge), w range: point and spot light contributes nothing past it (a rectangle has none)
+    float4 color;   // xyz colour, w intensity (a rectangle's radiance, I / (4 pi r^2))
+    float4 params;   // x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point); a rectangle's xyz is its second edge; w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
 };
 
 // lights.cluster (compute/light_cluster.slang) push constants
