@@ -14,9 +14,9 @@ scaling with geometry × lights. The interesting part is never the bet; it is th
 record — what fits, what was dropped to make it fit, and which downstream pass
 finds out.
 
-OHAO writes five attachments, in two render passes over one framebuffer (below): world position + metallic, an
+OHAO writes six attachments, in two render passes over one framebuffer (below): world position + metallic, an
 encoded normal + roughness + emissive luminance (or subsurface strength), albedo + AO, a two-component
-velocity vector, and depth. That is 28 bytes per pixel, roughly 55 MiB resident
+velocity vector, depth, and the emitted radiance. That is 36 bytes per pixel, roughly 71 MiB resident
 at the 1920×1080 default the pass initialises to.
 
 {{figure deferred-gbuffer-channels "Conceptual layout, not a captured render. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer.frag."}}
@@ -54,26 +54,22 @@ At 16 bits per channel the encoding buys almost no precision over storing
 visible threshold. What it buys is one *channel*. The normal costs two slots
 instead of three; roughness would have fitted in the fourth slot of an `N.xyz`
 layout anyway, so the one slot the encoding actually liberates is the last, and
-it carries the emissive intensity that would otherwise need its own attachment.
-
-That slot is shared by sign. Emissive luminance is never negative, so a material
-with a `subsurface` strength (row 2, z of the material table) stores *minus* that
-strength there instead, and an emissive surface takes no subsurface at all:
+it carries the subsurface strength, signed: a material with a `subsurface` strength (row
+2, z of the material table) stores *minus* that strength there, and the SSS blur reads
+`max(-w, 0)`. The positive half holds the emissive luminance, only so that an emissive
+surface takes no subsurface:
 
 {{cite shaders/core/gbuffer.frag "const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;"}}
 
-Lighting reads the slot through `max(w, 0)`, so a subsurface pixel emits nothing;
-the SSS blur reads `max(-w, 0)` as the pixel's blur strength.
+Emission itself has its own attachment, the sixth: the emissive texture's colour times
+the material's emissive strength, exactly what the path tracer's hit emits, which
+lighting adds as is:
 
-{{cite shaders/core/deferred_lighting.frag "float emissiveLuminance = max(gBuffer1Sample.a, 0.0);"}}
+{{cite shaders/core/deferred_lighting.frag "const vec3 emissive = texture(gBufferEmissive, inTexCoord).rgb;"}}
 
-The price is colour. Only luminance survives the write, so deferred lighting
-reconstructs the emitted colour by tinting albedo with it:
-
-{{cite shaders/core/deferred_lighting.frag "vec3 emissive = albedo * emissiveLuminance;"}}
-
-A red glow on a white surface renders white. That is a deliberate trade, but it
-means emissive look-dev cannot be trusted against the raster viewport.
+The slot used to hold all of emission as a luminance scalar, which lighting re-tinted
+with the albedo. On DamagedHelmet the cyan ring rendered as a dim grey (0.062 in linear
+luminance against the path tracer's 0.367); with the attachment it is cyan, at 0.283.
 
 Roughness is floored before storage:
 

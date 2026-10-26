@@ -24,7 +24,7 @@ What makes an uncovered pixel black is one early-out in deferred lighting, gated
 
 That render pass has no depth attachment, so it cannot express "only where depth == far" as a depth test — and *far* here is literally the GBuffer's depth clear.
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[4].depthStencil = {1.0f, 0};"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "clearValues[kDepth].depthStencil = {1.0f, 0};"}}
 
 Instead the GBuffer depth image arrives as a `NEAREST`-filtered texture at set 0 binding 0 and the fragment shader kills every covered pixel itself, discarding every depth below the 1.0 the G-buffer clears to, however far the surface (a threshold under 1.0 would paint sky over every surface beyond about 1,000 m at a 0.1 m near plane).
 

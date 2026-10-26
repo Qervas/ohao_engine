@@ -52,6 +52,9 @@ public:
     [[nodiscard]] VkImageView getAlbedoView() const { return m_gbuffer[2].view; }
     [[nodiscard]] VkImageView getVelocityView() const { return m_gbuffer[3].view; }
     [[nodiscard]] VkImageView getDepthView() const { return m_gbuffer[4].view; }
+    // Emitted radiance (rgb: the emissive texture times the material's emissive strength,
+    // linear, RGBA16F; 0 where nothing emits): lighting adds it to the lit image.
+    [[nodiscard]] VkImageView getEmissiveView() const { return m_gbuffer[kEmissive].view; }
 
     // VkImage handles for render graph import
     [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }
@@ -110,8 +113,11 @@ private:
     void timerBegin(VkCommandBuffer cmd, const char* name);
     void timerEnd(VkCommandBuffer cmd);
 
-    // G-Buffer render targets
-    static constexpr uint32_t GBUFFER_COUNT = 5;
+    // G-Buffer render targets: position, normal, albedo, velocity, depth (4, the depth
+    // attachment), emissive (5, the fragment shader's fifth color output)
+    static constexpr uint32_t GBUFFER_COUNT = 6;
+    static constexpr uint32_t kDepth = 4;
+    static constexpr uint32_t kEmissive = 5;
     std::array<RenderTarget, GBUFFER_COUNT> m_gbuffer;
 
     // The early render pass clears and leaves the targets for the late one (depth readable by

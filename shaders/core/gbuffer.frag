@@ -32,6 +32,10 @@ layout(location = 2) out vec4 outGBuffer2;
 // Velocity buffer for TAA - R16G16_SFLOAT
 layout(location = 3) out vec2 outVelocity;
 
+// Emitted radiance - R16G16B16A16_SFLOAT: the emissive texture (linear: the bindless table's
+// images are sRGB) times the material's emissive strength, as the path tracer's hit emits.
+layout(location = 4) out vec4 outEmissive;
+
 // Bindless texture array (set 0, binding 0)
 layout(set = 0, binding = 0) uniform sampler2D textures[];
 
@@ -149,13 +153,13 @@ void main() {
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, metallic);
 
-    // Sample emissive texture if available
-    float emissiveLuminance = 0.0;
+    // Emitted radiance: the emissive texture's colour times the strength
+    vec3 emissive = vec3(0.0);
     uint emissiveTexIdx = floatBitsToUint(row1.w);
-    if (emissiveTexIdx < 4096u) {
-        vec3 emissiveColor = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb;
-        emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;
-    }
+    if (emissiveTexIdx < 4096u)
+        emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;
+    outEmissive = vec4(emissive, 0.0);
+    const float emissiveLuminance = dot(emissive, vec3(0.2126, 0.7152, 0.0722));
 
     // GBuffer1: Encoded Normal + Roughness + (emissive luminance, or minus the subsurface
     // strength: an emissive surface takes no SSS)

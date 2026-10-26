@@ -259,13 +259,13 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     const VkDescriptorSet set = m_descriptorSets[slot];
     if (!m_gbufferPass || set == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write all 14 bindings, dummy resources for the unbound ones: Vulkan requires every
+    // Always write all 15 bindings, dummy resources for the unbound ones: Vulkan requires every
     // declared binding written before the set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 11> imageInfos{};
-    std::array<VkWriteDescriptorSet, 14> writes{};
+    std::array<VkDescriptorImageInfo, 12> imageInfos{};
+    std::array<VkWriteDescriptorSet, 15> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
     VkDescriptorBufferInfo clusterInfo{};
@@ -367,6 +367,9 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     // RT shadow visibility (binding 14): an RG32UI view, or the RG32UI stand-in
     imageWrite(11, 14, 9, m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : m_dummyUintView, fallbackSampler);
     imageWrite(12, 15, 10, m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView, iblSampler);
+    // The G-buffer's emitted radiance (binding 17)
+    const VkImageView emissive = m_gbufferPass->getEmissiveView();
+    imageWrite(14, 17, 11, emissive != VK_NULL_HANDLE ? emissive : fallbackView, m_gbufferSampler);
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -507,6 +510,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 14: RT shadow visibility (RG32UI)
     // 15: The GGX-prefiltered environment (EnvPrefilter, kEnvPrefilterLevels mips)
     // 16: The froxel light lists (SSBO, lights.cluster)
+    // 17: The G-buffer's emitted radiance
     constexpr struct { uint32_t binding; VkDescriptorType type; } kBindings[] = {
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
@@ -515,6 +519,7 @@ bool DeferredLightingPass::createDescriptors() {
         {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {12, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},         {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
     };
     std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
     for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -533,10 +538,10 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 11 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
+    // Descriptor pool — 12 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 11 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 12 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;

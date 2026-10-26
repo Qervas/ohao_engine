@@ -22,6 +22,7 @@ layout(location = 2) out vec4 outSpecularWeight;
 layout(set = 0, binding = 0) uniform sampler2D gBuffer0; // Position + Metallic
 layout(set = 0, binding = 1) uniform sampler2D gBuffer1; // Normal + Roughness
 layout(set = 0, binding = 2) uniform sampler2D gBuffer2; // Albedo + AO
+layout(set = 0, binding = 17) uniform sampler2D gBufferEmissive; // emitted radiance (rgb), core/gbuffer.frag
 
 // The light table (binding 5, shared/layout.json's LightGpu), and the froxels' light lists
 // (binding 16, compute/light_cluster.slang: kClusterCount counts, then kClusterMaxLights light
@@ -196,7 +197,6 @@ void main() {
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
     float roughness = gBuffer1Sample.b;
-    float emissiveLuminance = max(gBuffer1Sample.a, 0.0);  // stored by GBuffer pass (negative: subsurface)
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -362,8 +362,9 @@ void main() {
         }
     }
 
-    // Emissive — self-illuminating surfaces (glow independent of lighting)
-    vec3 emissive = albedo * emissiveLuminance;
+    // Emitted radiance, as the G-buffer wrote it (the emissive texture times its strength, the
+    // path tracer's hit emission): its own colour, independent of the albedo and the lighting
+    const vec3 emissive = texture(gBufferEmissive, inTexCoord).rgb;
 
     // Final color
     vec3 color = ambient + Lo + emissive;

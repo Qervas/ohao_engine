@@ -108,30 +108,25 @@ That sample is then
 read as ORM — R occlusion, G roughness, B metallic — though glTF defines only G
 and B, so an asset that packs nothing into R darkens by whatever sits there.
 
-## The emissive channel that forgets its colour
+## The emissive attachment
 
-There is no emissive attachment. Emission is collapsed to a single Rec. 709
-luminance scalar and hidden in the alpha of the normal target:
+Emission is the G-buffer's fifth colour output, an `RGBA16F` attachment of its own:
+the emissive texture's colour (sRGB-decoded by the bindless sampler) times the
+material's emissive strength, the same radiance the path tracer's closest-hit shader
+emits:
 
-{{cite shaders/core/gbuffer.frag "emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * row2.y;"}}
+{{cite shaders/core/gbuffer.frag "emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;"}}
 
-It shares that alpha with the subsurface strength, by sign: a non-emissive material
-with `subsurface` > 0 stores minus its strength there, for the SSS blur, so the
-lighting pass clamps the channel at zero before it reads emission:
+{{cite shaders/rt/pt_closesthit.rchit "emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb * matParams2.y;"}}
 
-{{cite shaders/core/deferred_lighting.frag "float emissiveLuminance = max(gBuffer1Sample.a, 0.0);  // stored by GBuffer pass (negative: subsurface)"}}
-
-and then re-tints that scalar with the surface albedo:
-
-{{cite shaders/core/deferred_lighting.frag "vec3 emissive = albedo * emissiveLuminance;"}}
-
-So an emitter can only glow in its own base colour — a blue LED on a white
-housing renders as a white glow of the right brightness. And it cannot glow
-*hard*: the strength lane, `row2.y`, is set to exactly `1.0f` for any material that has
-an emissive texture and left at 0 otherwise — model upload has no other path that raises
-it — and the bindless textures it multiplies are 8-bit
-(`R8G8B8A8_SRGB`/`_UNORM`), so the luminance is bounded by 1.0. The half-float
-alpha has HDR headroom nothing in this pipeline can fill.
+Lighting adds it unlit, in its own colour. It used to arrive as one luminance scalar in
+the normal target's alpha, re-tinted with the albedo, so an emitter glowed in its base
+colour: DamagedHelmet's cyan ring rendered dim grey. The alpha still carries that
+luminance, only to keep an emissive surface out of the SSS blur. Emission cannot glow
+*hard* yet: the strength lane, `row2.y`, is set to exactly `1.0f` for any material that
+has an emissive texture and left at 0 otherwise — model upload has no other path that
+raises it — and the bindless textures it multiplies are 8-bit, so the radiance is
+bounded by 1.0.
 
 {{cite ohao/render/scene/model_upload.cpp "if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;"}}
 

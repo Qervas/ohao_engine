@@ -160,8 +160,9 @@ void main() {
     // === Emissive ===
     vec3 emissive = vec3(0.0);
     if (emissiveTexIdx != 0xFFFFFFFFu) {
-        // R8G8B8A8_SRGB: the sampler decodes to linear.
-        emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb;
+        // R8G8B8A8_SRGB: the sampler decodes to linear. Times the material's emissive
+        // strength, as the deferred frame's G-buffer emits (core/gbuffer.frag).
+        emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb * matParams2.y;
     }
     payload.color = emissive;
 

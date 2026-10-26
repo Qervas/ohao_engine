@@ -132,7 +132,8 @@ void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, 
     clearValues[1].color = {{0.5f, 0.5f, 0.5f, 0.0f}}; // OctNormal (rg) + Roughness (b) + Emissive (a)
     clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Albedo (rgb) + AO (a)
     clearValues[3].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Velocity
-    clearValues[4].depthStencil = {1.0f, 0};           // Depth
+    clearValues[kDepth].depthStencil = {1.0f, 0};      // Depth
+    clearValues[kEmissive].color = {{0.0f, 0.0f, 0.0f, 0.0f}};   // Emitted radiance
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -416,6 +417,7 @@ bool GBufferPass::createGBuffer() {
     // 2: Albedo + AO - RGBA8 SRGB
     // 3: Velocity - RG16F
     // 4: Depth - D32F
+    // 5: Emitted radiance - RGBA16F
 
     struct GBufferFormat {
         VkFormat format;
@@ -428,7 +430,8 @@ bool GBufferPass::createGBuffer() {
         {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
-        {VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT}
+        {VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT},
+        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT}
     }};
 
     for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
@@ -498,7 +501,7 @@ void GBufferPass::destroyGBuffer() {
 }
 
 bool GBufferPass::createRenderPass() {
-    // Two compatible render passes over the same five targets: the early one clears them and
+    // Two compatible render passes over the same six targets: the early one clears them and
     // leaves the colors as attachments and the depth readable (the Hi-Z build samples it); the
     // late one loads them all and leaves them for the passes that sample the G-buffer.
     constexpr std::array<VkFormat, GBUFFER_COUNT> kFormats = {
@@ -507,11 +510,12 @@ bool GBufferPass::createRenderPass() {
         VK_FORMAT_R8G8B8A8_SRGB,         // albedo + AO
         VK_FORMAT_R16G16_SFLOAT,         // velocity
         VK_FORMAT_D32_SFLOAT,            // depth
+        VK_FORMAT_R16G16B16A16_SFLOAT,   // emitted radiance
     };
     const auto make = [&](bool late, VkRenderPass& out) {
         std::array<VkAttachmentDescription, GBUFFER_COUNT> attachments{};
         for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
-            const bool depth = i == 4;
+            const bool depth = i == kDepth;
             VkAttachmentDescription& a = attachments[i];
             a.format = kFormats[i];
             a.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -527,9 +531,11 @@ bool GBufferPass::createRenderPass() {
                                  : between;
         }
 
-        std::array<VkAttachmentReference, 4> colorRefs{};
+        // The fragment shader's outputs 0-3 are attachments 0-3 and output 4 the emissive one
+        std::array<VkAttachmentReference, GBUFFER_COUNT - 1> colorRefs{};
         for (uint32_t i = 0; i < 4; ++i) colorRefs[i] = {i, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        const VkAttachmentReference depthRef{4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        colorRefs[4] = {kEmissive, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        const VkAttachmentReference depthRef{kDepth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -677,7 +683,7 @@ bool GBufferPass::createDescriptors() {
     for (uint32_t i = 0; i < GBUFFER_COUNT; ++i) {
         imageInfos[i].sampler = m_sampler;
         imageInfos[i].imageView = m_gbuffer[i].view;
-        imageInfos[i].imageLayout = (i == 4) ?
+        imageInfos[i].imageLayout = (i == kDepth) ?
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -762,7 +768,7 @@ bool GBufferPass::createPipeline() {
     depthStencil.stencilTestEnable = VK_FALSE;
 
     // Color blending (no blending for G-Buffer)
-    std::array<VkPipelineColorBlendAttachmentState, 4> colorBlendAttachments{};
+    std::array<VkPipelineColorBlendAttachmentState, GBUFFER_COUNT - 1> colorBlendAttachments{};
     for (auto& attachment : colorBlendAttachments) {
         attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
