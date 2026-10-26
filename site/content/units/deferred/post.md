@@ -99,6 +99,21 @@ times what the $k$-scaled curve gives — double, here. And between $T+k$ and
 $T+1$, $c=1/L$ exactly, so every pixel in that band is renormalised to unit
 luminance instead of being scaled by its excess over the threshold.
 
+The extracted colour is then clamped to a luminance of `maxLuminance` (4, before
+exposure): a brighter source blooms as if it were that bright.
+
+{{cite shaders/postprocess/bloom_threshold.frag "if (brightLuminance > params.maxLuminance) bright *= params.maxLuminance / brightLuminance;"}}
+
+{{cite ohao/render/deferred/bloom_pass.hpp "static constexpr float kBloomMaxLuminance = 4.0f;"}}
+
+A light's emitter mesh is as bright as the light: `I / (pi r^2)`, tens of thousands for a
+small bulb. The Karis average below cannot stop that, because it renormalises within each
+4-tap group: a sphere many pixels wide is bright in every tap, and its average stays at
+full radiance. Unclamped, the upsample's additive chain (mip weights 1, ½, ¼, … down to
+1×1) spread that energy over a third to a half of the frame. Clamped, a light glares
+like any other bright surface, around itself. Lighting never reads the bloom chain, so no
+light energy changes; pixels below the clamp extract exactly as before.
+
 Downsampling is the 13-tap Jimenez/CoD filter, and the first step of the chain —
 and only the first — takes the *partial* Karis average. The thirteen taps are
 first collapsed into the filter's five 4-tap box groups; the weight

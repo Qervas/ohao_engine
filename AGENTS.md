@@ -390,6 +390,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
   emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
+  Bloom's input is clamped at luminance 4 before exposure (`BloomPass::kBloomMaxLuminance`,
+  `bloom_threshold.frag`): a mesh at radiance ~19,000 otherwise glared over half the frame
+  (the Karis average renormalises per tap group, so it cannot stop a bright area). Lighting
+  never reads bloom; tone glare there, never the mesh's radiance.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

@@ -130,7 +130,7 @@ lighting            froxel list + IBL + shadows + GI into the HDR image (+ env s
 sky, particles      into the HDR image
 sss                 subsurface blur on classified tiles   [sss]
 ssr                 half-res trace; resolve replaces env specular in place   [ssr]
-post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]
+post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]  (bloom's input clamped at luminance 4)
 gizmo               transform handles
 capture.preview     only for an inline capture: box filter into staging
 present | readback  window: blit to the swapchain (+ requested copy); headless: copy to staging
