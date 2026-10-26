@@ -9,7 +9,8 @@ namespace ohao::render {
 
 
 // What the camera sees of a light: RenderScene draws it as an emitter instance
-// (kInstanceEmitter), pure emission that only camera rays and the G-buffer see.
+// (kInstanceEmitter), pure emission that only the G-buffer, camera rays and a near-mirror's
+// first specular ray see.
 struct LightEmitter {
     bool quad{false};          // the unit quad ([0,1]^2 at z = 0, facing +z); else the unit sphere
     glm::mat4 world{1.0f};

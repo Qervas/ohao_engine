@@ -384,12 +384,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   makes an emitter instance per light: a sphere of its radius, or its rectangle, with the
   light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its
   TLAS mask (`kTlasMaskEmitter`) is in only the path tracer's camera ray's mask
-  (`kRayMaskCamera`), so no shadow, GI, bounce or specular ray hits it (else the light would
-  shadow itself and be counted twice); no CSM cascade draws it (`kDrawEmitter`); the
+  (`kRayMaskCamera`) and a near-mirror first hit's specular ray's (`ptMirrorRoughness`, 0.05:
+  that hit's light samples drop their GGX term, so the reflection counts once), so no shadow,
+  GI, bounce or other specular ray hits it (else the light would shadow itself and be
+  counted twice); no CSM cascade draws it (`kDrawEmitter`); the
   G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
   alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
   emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
+  Mirrors reflect it: in deferred a point or spot light's specular is its sphere's
+  (`LightGpu.params.z` = the mesh's radius, `evaluateBRDFSphere`: the representative point,
+  the lobe widened to `a + r/(2d)`), on screen or off, SSR or not; SSR treats an emitter pixel
+  as a miss, the analytic reflection stands in. A spot's mesh shines toward the camera by
+  its cone (`RenderScene::setViewerPosition`, each frame): dark from outside it, in both
+  renderers; its reflection uses the same per-frame value in the path tracer.
   Bloom's input is clamped at luminance 4 before exposure (`BloomPass::kBloomMaxLuminance`,
   `bloom_threshold.frag`): a mesh at radiance ~19,000 otherwise glared over half the frame
   (the Karis average renormalises per tap group, so it cannot stop a bright area). Lighting

@@ -21,7 +21,7 @@ header, the GLSL include and the Slang module, so the TLAS staging and every
 trace read the same numbers. Bit 0 is scene geometry, bit 1 a light's emitter
 mesh:
 
-{{cite shaders/shared/layout.json "TLAS instance mask of a light's emitter mesh: only camera rays see it"}}
+{{cite shaders/shared/layout.json "TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it"}}
 
 The instance-mask half is shared: the `RenderScene` stamps the mask into every
 instance of its one TLAS, and that same TLAS is what the deferred renderer's RT
@@ -53,6 +53,14 @@ analytic light the shaders sample; a shadow ray towards that light would
 otherwise hit the mesh around it and the light would shadow itself, and a
 bounce that reached the mesh would add the light's radiance a second time on
 top of its samples. With the mask, the mesh is only ever what the camera sees.
+
+One more ray passes `kRayMaskCamera`: the first specular ray of a near-mirror first hit
+(roughness below `ptMirrorRoughness`, 0.05). Sampling a light's surface all but never
+lands in a lobe that narrow, so that hit takes its specular light from the ray, which
+returns the mesh's radiance, and its light samples drop their GGX term: the light's
+reflection is counted once, and it is the mesh.
+
+{{cite shaders/rt/pt_raygen_offline.rgen "bounce == 1u && firstHitMirror ? kRayMaskCamera : kRayMaskScene, 0, 0, 0,"}}
 
 :::key
 A new class of geometry that some rays must not see is a new bit in
@@ -228,7 +236,7 @@ handover keeps the handle valid — it cannot fix the resolution.
 
 - Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r & m_i) != 0`. A hidden or released instance carries 0 and is invisible to every ray.
 - Instance masks are written once, by the `RenderScene`, into the one TLAS both the deferred renderer and the path tracer consume. A mask change is not scoped to the hybrid passes.
-- Scene instances carry `kTlasMaskScene`, light emitter meshes `kTlasMaskEmitter`. Only the path tracer's camera ray passes `kRayMaskCamera`; every other trace passes `kRayMaskScene`, so no shadow, GI, bounce or specular ray ever hits an emitter mesh. A new trace that passed the camera mask would shadow lights by their own meshes and count them twice.
+- Scene instances carry `kTlasMaskScene`, light emitter meshes `kTlasMaskEmitter`. Only the path tracer's camera ray and a near-mirror first hit's specular ray pass `kRayMaskCamera`; every other trace passes `kRayMaskScene`, so no shadow, GI, bounce or other specular ray ever hits an emitter mesh. The mirror's light samples drop their GGX term to match. A new trace that passed the camera mask would shadow lights by their own meshes and count them twice.
 - The masks live in `shaders/shared/layout.json` alone; the C++, GLSL and Slang copies are generated from it (`tools/gen_layout.py`).
 - `rt/gi_trace.slang` filters nothing: the cull is the ray mask against the instance mask alone, and a hit reads `giAlbedoPacked.rgb` of whatever slot traversal commits.
 - Technique outputs reach the lighting pass only through the per-frame handover in each RT pass's callback, and only when `rendered()` is true. The graph does not track this dependency; it holds because the RT passes are added before `lighting` and the graph records in insertion order.

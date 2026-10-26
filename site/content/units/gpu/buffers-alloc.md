@@ -171,31 +171,22 @@ with a warning logged once when the list exceeds it. The GPU copy is not `LightD
 
 {{cite ohao/render/scene/light_table.cpp "OHAO_LOG(Warn, render, "RenderScene: {} lights: the raster table holds {}", sorted.size(), MAX_LIGHTS);"}}
 
-Exactly one light in the array may carry a shadow-map index — a latch takes the first
-qualifying one and every later light gets an index of −1 and an identity light-space
-matrix:
-
-{{cite ohao/render/scene/light_table.cpp "int shadowCasterIndex = -1;  // Index of first shadow-casting light"}}
-
-Which light qualifies is where two enumerations collide. `LightData.position.w`
-carries the *shader* type (0 = directional, 1 = point, 2 = spot), and a two-way ternary
-remaps the source `LightKind` into it — `Point` to 1, `Directional` to 0, anything else
+`LightData.position.w` carries the *shader* type (0 = directional, 1 = point, 2 = spot),
+and a two-way ternary remaps the source `LightKind` into it: `Point` to 1, `Directional`
+to 0, anything else (spot, and an area light, which the deferred frame lights as a spot)
 to 2:
 
 {{cite ohao/render/scene/light_table.cpp "const int deferredType = (d.kind == LightKind::Point) ? 1 : (d.kind == LightKind::Directional) ? 0 : 2;"}}
 
-Further down the same iteration the shadow test re-reads the source kind and accepts
-only point and spot:
+`params.z` is a point or spot light's sphere radius, the radius its emitter mesh is drawn
+at (raised to the path tracer's 0.01 m), or 0 for a true point. The lighting pass gives
+such a light the specular of a sphere, so that a mirror reflects the mesh:
 
-{{cite ohao/render/scene/light_table.cpp "if (d.kind == LightKind::Point || d.kind == LightKind::Spot) {"}}
+{{cite ohao/render/scene/light_table.cpp "(d.kind == LightKind::Point || d.kind == LightKind::Spot) && d.radius > 0.0f ? std::max(d.radius, 0.01f) : 0.0f;"}}
 
-An authored directional light therefore never claims the shadow-map index, while a
-point light does — and `lightSpaceMatrix`, dispatching on the already-remapped
-`position.w = 1`, matches neither its directional nor its spot branch and returns
-identity. The collision has no visible effect: the matrix never reaches the GPU, and
-the lighting shader never reads `params.z`. Shadows come from the RT visibility
-channels in `params.w`, or from the cascades for directional lights. The latch and the
-matrix are host-side bookkeeping that only a single-shadow-map renderer would read.
+`lightSpaceMatrix` is identity for every scene light: no shadow map reads it. Shadows come
+from the RT visibility channels in `params.w`, or from the cascades for directional
+lights.
 
 The ternary's "anything else" arm hides a second collision. `LightType` has a fourth
 enumerator, `AreaRect`, with no branch of its own, so the raster light buffer emits

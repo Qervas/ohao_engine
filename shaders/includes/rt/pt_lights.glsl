@@ -7,7 +7,8 @@
 // = (range, radius) for spheres and spots.
 //
 // A point, spot or area light is also a mesh (RenderScene's emitter instances, TLAS mask
-// kTlasMaskEmitter): only the camera ray (kRayMaskCamera) sees it, as pure emission that ends
+// kTlasMaskEmitter): only the camera ray and a near-mirror's first specular ray (kRayMaskCamera,
+// ptMirrorRoughness below) see it, as pure emission that ends
 // the path. Every other ray traces kRayMaskScene, so the mesh never occludes its own light
 // and no bounce adds the light a second time on top of these analytic samples.
 #include "shared/layout.glsl"

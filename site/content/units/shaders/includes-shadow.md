@@ -112,13 +112,12 @@ is added to the graph only when RT shadows do not run.
 
 ## The host's shadow fields no shader reads
 
-The light table still tags the first point or spot light with a shadow-map index in
-`params.z` and computes a `lightSpaceMatrix` for it — identity for a point light, which
-has no cube-map path. Neither reaches a shader: the GPU record, `LightGpu`, carries
-`params.z` but the lighting loop reads only `params.x`, `.y` and `.w`, and the matrix is
-dropped when `LightClusters` copies `LightData` into `LightGpu`.
+`LightData.lightSpaceMatrix` is identity for every scene light and is dropped when
+`LightClusters` copies `LightData` into `LightGpu`: no shadow map is rendered for a point or
+spot light. `params.z` is not a shadow field: it is the light's sphere radius, for its
+specular.
 
-{{cite ohao/render/scene/light_table.cpp "// The legacy rule, kept as is: old LightType 0/2 = Sphere(point)/Spot."}}
+{{cite ohao/render/scene/light_table.cpp "// z: the sphere's radius for a point or spot light with an emitter mesh"}}
 
 ## Contracts
 
@@ -126,4 +125,4 @@ dropped when `LightClusters` copies `LightData` into `LightGpu`.
 - `params.w` and the visibility's channels are one contract with the light table and the RT shadow passes: the table hands out channels 0 to 7 in the order it lists `shadowLights()`, and the passes write light *i* into channel *i*. Casters past the eighth must keep -1.
 - A zero visibility must stay an exact zero term: the `shadow == 0.0` skip is part of what makes clustered lighting equal the every-light loop.
 - `ShadowPushConstant` and `shadow_csm.vert`'s push block must stay a single `mat4 viewProj` at 64 bytes; the C++ side is statically asserted, the GLSL side is not.
-- Cascade shadows apply to directional lights only, with a constant bias; `cascades.normalBias`, `params.z` and the host's `lightSpaceMatrix` are read by no shader.
+- Cascade shadows apply to directional lights only, with a constant bias; `cascades.normalBias` and the host's `lightSpaceMatrix` are read by no shader.

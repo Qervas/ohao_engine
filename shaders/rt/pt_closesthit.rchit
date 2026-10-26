@@ -93,7 +93,8 @@ void main() {
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
-    // A light's emitter mesh (kInstanceEmitter; only camera rays reach it): its radiance on the
+    // A light's emitter mesh (kInstanceEmitter; only camera rays and a near-mirror's first specular
+    // ray reach it): its radiance on the
     // front side, black behind, and the path ends there as at a miss. The light itself is the
     // analytic one the raygen samples; this is what the camera sees of it.
     if ((inst.flags & kInstanceEmitter) != 0u) {

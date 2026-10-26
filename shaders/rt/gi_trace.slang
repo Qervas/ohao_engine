@@ -123,7 +123,7 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
     ray.Direction = dir;
     ray.TMax = kRayLength;
     RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskScene, ray);   // light emitters are camera-only
+    q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskScene, ray);   // light emitters: camera and mirror rays only
     while (q.Proceed()) {}
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {

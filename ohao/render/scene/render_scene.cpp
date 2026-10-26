@@ -121,7 +121,8 @@ struct RenderScene::Impl {
         const bool live = instances.live(slot);
         vi.accelerationStructureReference = mesh && live ? rtAccel->getBlasAddress(mesh->blas) : 0;
         const bool visible = live && (g.flags & kInstanceVisible) != 0;
-        // A light's emitter mesh is seen by the path tracer's camera rays only (kRayMaskCamera).
+        // A light's emitter mesh is seen by the path tracer's camera rays and its near-mirrors'
+        // first specular rays only (kRayMaskCamera).
         vi.mask = !visible ? 0u
                 : (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;
         vi.instanceShaderBindingTableRecordOffset = 0;

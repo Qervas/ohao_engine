@@ -293,7 +293,7 @@ so their noise changes every frame and repeats exactly for the same seed and fra
 {{cite shaders/rt/shadow_trace.slang "return pcg(pc.seed.x ^ pcg(pc.seed.y ^ pcg(pixel.x ^ pcg(pixel.y))));"}}
 
 Both trace with ray mask `kRayMaskScene`: every visible scene instance, never a
-light's emitter mesh (camera rays only) nor a hidden instance (mask 0). Whatever
+light's emitter mesh (camera and mirror rays only) nor a hidden instance (mask 0). Whatever
 triangle the GI trace's opaque query commits, it reads that instance's bounce albedo
 unconditionally; the mask is why that word never has to mean anything for an emitter.
 

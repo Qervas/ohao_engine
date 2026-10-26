@@ -98,7 +98,7 @@ radiance for it:
 
 The instances are ordinary slots, reused in light order, so re-sending an unchanged list
 rewrites identical bytes and uploads nothing; `setLightEmitters(false)` removes them. The
-TLAS gives them their own mask, which only the path tracer's camera ray passes
+TLAS gives them their own mask, which only the path tracer's camera ray and a near-mirror's first specular ray pass
 (hybrid/visibility): a mesh around a light would otherwise shadow it, and a bounce that
 reached it would count the light twice.
 

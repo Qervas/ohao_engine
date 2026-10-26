@@ -43,11 +43,11 @@ inline constexpr uint32_t kDrawEmitter = 2u;
 inline constexpr uint32_t kInstanceEmitter = 2u;
 // TLAS instance mask of every scene instance
 inline constexpr uint32_t kTlasMaskScene = 1u;
-// TLAS instance mask of a light's emitter mesh: only camera rays see it, so it shadows nothing and no bounce counts the light twice
+// TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it, so it shadows nothing and no bounce counts the light twice
 inline constexpr uint32_t kTlasMaskEmitter = 2u;
 // ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
 inline constexpr uint32_t kRayMaskScene = 1u;
-// ray mask of the path tracer's camera rays: scene instances and light emitters
+// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances and light emitters
 inline constexpr uint32_t kRayMaskCamera = 3u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 inline constexpr uint32_t kMeshletMaxVertices = 64u;

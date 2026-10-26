@@ -78,7 +78,7 @@ lights.
 A light with `castShadows` off gets `kShadowNever` (-1), and so does every emissive
 proxy, which sits inside its own mesh.
 
-{{cite ohao/render/scene/light_table.cpp "light.params = glm::vec4(0.0f, 0.0f, -1.0f, kShadowNever);   // inside its own mesh: never shadowed"}}
+{{cite ohao/render/scene/light_table.cpp "light.params = glm::vec4(0.0f, 0.0f, 0.0f, kShadowNever);   // inside its own mesh: never shadowed; a point"}}
 
 The lighting shader reads the two cases directly. A negative slot is never
 occluded; any other slot takes its channel when the RT bit is set, and without it

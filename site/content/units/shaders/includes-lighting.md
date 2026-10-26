@@ -118,10 +118,18 @@ deferred lighting unit, "Image-based lighting"):
 The light record the lighting pass reads is not in this directory either. It is
 `LightGpu` in `shaders/shared/layout.json`, generated into `shared/layout.glsl`,
 `layout.slang` and `ohao/gpu/shared_layout.hpp`: type, range, intensity, the cone
-cosines, the shadow-map index and the RT shadow channel ride in the `w` and `params`
+cosines, the sphere radius and the RT shadow channel ride in the `w` and `params`
 channels of four `vec4`s, 64 bytes, std430.
 
-{{cite shaders/shared/layout.json "x cos inner cone, y cos outer cone, z shadow-map index (-1 none), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)"}}
+{{cite shaders/shared/layout.json "x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh"}}
+
+A non-zero radius turns the light's specular into a sphere light's (`evaluateBRDFSphere` in
+`brdf/brdf_ggx.glsl`): the representative point on the sphere closest to the reflection ray,
+and the GGX lobe widened by the sphere's angular size, `a' = a + r / (2d)` (Karis 2013). On a
+mirror that is a disc at the mesh's radiance `I / (pi r^2)` times F, the light's emitter mesh
+reflected, wherever the light is: on screen or off, with SSR or without.
+
+{{cite shaders/includes/brdf/brdf_ggx.glsl "const float aSphere = clamp(a + radius / (2.0 * length(toLight)), 0.0, 1.0);"}}
 
 The channel is -1 for a light that never casts, else the light's RT visibility
 channel, 0 to 7: the first eight shadow-casting lights in light order own one each,
