@@ -37,6 +37,7 @@
 #include "bench_env.hpp"   // after the engine headers: it includes windows.h
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -254,7 +255,7 @@ int main(int argc, char** argv) {
     // 5. 1,000 boxes falling into a pit (step 5): a 6 x 6 m floor walled 3 m high, the boxes (0.4 m
     // cubes, 10 x 10 x 10, 0.5 m apart) dropped from 0.5-5 m above it; every step after 60 of
     // warm-up, 200, while they fall and pile up awake. None may leave the pit.
-    std::vector<double> boxes;
+    std::vector<double> boxes, snapshotMs;
     uint32_t boxesAwake = 0;
     bool contained = true;
     for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
@@ -286,6 +287,13 @@ int main(int argc, char** argv) {
             if (r > 0 && i >= 60) boxes.push_back(physics.lastStepTiming().totalMs);
         }
         boxesAwake = physics.info().awake;
+        // What a snapshot of this world adds (the simulation it carries), reported, not budgeted.
+        for (int i = 0; i < 5 && r > 0; ++i) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto saved = physics.saveSimulation();
+            snapshotMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            (void)saved;
+        }
         for (const entt::entity e : crates) {
             const glm::vec3 p(reg.get<ecs::WorldTransform>(e).world[3]);
             contained &= std::fabs(p.x) < 3.0f && std::fabs(p.z) < 3.0f && p.y > 0.0f;
@@ -312,6 +320,9 @@ int main(int argc, char** argv) {
     std::printf("  boxes1k_step_ms         median %8.4f   p95 %8.4f   (%zu steps; %u awake at the end)\n", sb.median, sb.p95,
                 boxes.size(), boxesAwake);
     const Verdict vb = judge(budgets, currentStep, "boxes1k_step_ms", sb.median, failures);
+    const Stats ss = stats(snapshotMs);
+    std::printf("  boxes1k_snapshot_ms     median %8.4f   (reported: the simulation a snapshot of that world carries)\n",
+                ss.median);
     for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
@@ -336,6 +347,7 @@ int main(int argc, char** argv) {
     out["player_step_ms"] = {{"median", sp.median}, {"p95", sp.p95}, {"min", sp.min}, {"steps", player.size()}, {"verdict", vp.verdict}};
     out["boxes1k_step_ms"] = {{"median", sb.median}, {"p95", sb.p95}, {"min", sb.min}, {"steps", boxes.size()},
                               {"awakeAtEnd", boxesAwake}, {"verdict", vb.verdict}};
+    out["boxes1k_snapshot_ms"] = {{"median", ss.median}, {"min", ss.min}, {"verdict", "reported"}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
