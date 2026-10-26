@@ -29,6 +29,20 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
 
     registerKeyEnum(r);
 
+    r.enumeration<ColliderShape>("ColliderShape")
+        .doc("A collider's shape, fitted to the entity's mesh unless a size is given.")
+        .value("Box", ColliderShape::Box, "The mesh's bounding box")
+        .value("Sphere", ColliderShape::Sphere, "Around the bounding box's centre, to the farthest vertex")
+        .value("Capsule", ColliderShape::Capsule, "Along the bounding box's longest axis")
+        .value("Convex", ColliderShape::Convex, "The convex hull of the mesh's vertices")
+        .value("Mesh", ColliderShape::Mesh, "The mesh's triangles (static and kinematic bodies; a dynamic one is made convex)")
+        .value("None", ColliderShape::None, "No collision");
+    r.enumeration<Motion>("Motion")
+        .doc("How a rigid body moves.")
+        .value("Static", Motion::Static, "Never moves")
+        .value("Dynamic", Motion::Dynamic, "Moved by the simulation (not stepped yet: sub-project 6)")
+        .value("Kinematic", Motion::Kinematic, "Moved by its transform, pushing dynamic bodies");
+
     // ---- authoring components (saved in scene files) -----------------------------------
 
     r.type<Name>("Name").component().alwaysPresent().host(makeComponentOps<Name>())
@@ -196,6 +210,23 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("An attach point at the entity's transform (a level's SOCKET_ empties).")
         .field("name", &Socket::name).doc("The socket's name, as attachments refer to it").maxLength(64);
 
+    r.type<Collider>("Collider").component().host(makeComponentOps<Collider>())
+        .doc("The entity collides: the physics system builds a body for it (static unless it has a RigidBody). A zero "
+             "size fits the shape to the entity's mesh, in its frame and at its world scale.")
+        .field("shape", &Collider::shape).doc("The shape")
+        .field("size", &Collider::size)
+            .doc("Zero: fit to the mesh. Box: half extents; Sphere: x is the radius; Capsule: x the radius, y the half "
+                 "height of its straight part")
+            .unit("m").min(0.0)
+        .field("offset", &Collider::offset).doc("The shape's centre in the entity's frame, with an explicit size").unit("m");
+    r.type<RigidBody>("RigidBody").component().host(makeComponentOps<RigidBody>())
+        .doc("How the entity's body moves. Dynamic bodies are built but not stepped until the simulation steps "
+             "physics (sub-project 6).")
+        .field("motion", &RigidBody::motion).doc("Static, Dynamic or Kinematic")
+        .field("mass", &RigidBody::mass).doc("Mass of a dynamic body").unit("kg").min(0.001)
+        .field("friction", &RigidBody::friction).doc("Surface friction").unitless().min(0.0).max(1.0)
+        .field("restitution", &RigidBody::restitution).doc("Bounciness: 0 none, 1 elastic").unitless().min(0.0).max(1.0);
+
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 
     r.type<MeshHandle>("MeshHandle").runtime()
@@ -261,6 +292,18 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("index", &LevelNode::index).doc("The node's index in the default scene, depth first").unitless();
     r.type<LevelDirty>("LevelDirty").component().runtime()
         .doc("Tag: the Level changed; the level system re-expands it this frame.");
+    r.type<ColliderPart>("ColliderPart").component().runtime().host(makeComponentOps<ColliderPart>())
+        .doc("This entity's collider is part of another entity's body (a level's UCX_ hulls): one compound body.")
+        .field("body", &ColliderPart::body).doc("The entity whose body it is part of");
+    r.type<CollisionMesh>("CollisionMesh").component().runtime().host(makeComponentOps<CollisionMesh>())
+        .doc("The mesh a level node's collider is fitted to when the node is not drawn (vis 0, UCX_ hulls) and so has "
+             "no MeshSource. Set by the level system.")
+        .field("source", &CollisionMesh::source).doc("The glTF mesh");
+    r.type<PhysicsBody>("PhysicsBody").component().runtime().host(makeComponentOps<PhysicsBody>())
+        .doc("The entity's body in the physics backend. Owned by the physics system.")
+        .field("handle", &PhysicsBody::handle).doc("Body handle; 4294967295 means none").unitless();
+    r.type<PhysicsMoved>("PhysicsMoved").component().runtime()
+        .doc("Tag: an entity with a body moved; the physics system moves the body this frame.");
 }
 
 } // namespace ohao::ecs

@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "68bb0e8e33d45867",
+  "schemaHash": "3b74cd52cc6e209e",
   "units": [
     "m",
     "m/s",
@@ -140,6 +140,18 @@
     {
       "code": "W_LEVEL_UNSUPPORTED",
       "meaning": "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, orthographic cameras)."
+    },
+    {
+      "code": "W_LEVEL_DYNAMIC_MESH",
+      "meaning": "Warning: a dynamic body's mesh collider; it is built as the mesh's convex hull, since triangle meshes do not simulate."
+    },
+    {
+      "code": "W_COLLIDER_NO_MESH",
+      "meaning": "Warning: a collider with no size on an entity whose mesh is missing or did not load; it gets no collider."
+    },
+    {
+      "code": "W_COLLIDER_SCALE",
+      "meaning": "Warning: a sphere or capsule collider under a scale whose axes differ by more than 1%; it takes the largest axis."
     }
   ],
   "methods": [],
@@ -258,6 +270,39 @@
         { "name": "MouseLeft", "value": 1000, "doc": "The Left mouse button" },
         { "name": "MouseRight", "value": 1001, "doc": "The Right mouse button" },
         { "name": "MouseMiddle", "value": 1002, "doc": "The Middle mouse button" }
+      ]
+    },
+    {
+      "name": "ColliderShape",
+      "doc": "A collider's shape, fitted to the entity's mesh unless a size is given.",
+      "values": [
+        { "name": "Box", "value": 0, "doc": "The mesh's bounding box" },
+        {
+          "name": "Sphere",
+          "value": 1,
+          "doc": "Around the bounding box's centre, to the farthest vertex"
+        },
+        { "name": "Capsule", "value": 2, "doc": "Along the bounding box's longest axis" },
+        { "name": "Convex", "value": 3, "doc": "The convex hull of the mesh's vertices" },
+        {
+          "name": "Mesh",
+          "value": 4,
+          "doc": "The mesh's triangles (static and kinematic bodies; a dynamic one is made convex)"
+        },
+        { "name": "None", "value": 5, "doc": "No collision" }
+      ]
+    },
+    {
+      "name": "Motion",
+      "doc": "How a rigid body moves.",
+      "values": [
+        { "name": "Static", "value": 0, "doc": "Never moves" },
+        {
+          "name": "Dynamic",
+          "value": 1,
+          "doc": "Moved by the simulation (not stepped yet: sub-project 6)"
+        },
+        { "name": "Kinematic", "value": 2, "doc": "Moved by its transform, pushing dynamic bodies" }
       ]
     }
   ],
@@ -1819,6 +1864,151 @@
       "skipped": []
     },
     {
+      "name": "Collider",
+      "doc": "The entity collides: the physics system builds a body for it (static unless it has a RigidBody). A zero size fits the shape to the entity's mesh, in its frame and at its world scale.",
+      "role": "component",
+      "serialized": true,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "shape",
+          "type": "ColliderShape",
+          "default": "Box",
+          "doc": "The shape",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "size",
+          "type": "vec3",
+          "default": [0, 0, 0],
+          "doc": "Zero: fit to the mesh. Box: half extents; Sphere: x is the radius; Capsule: x the radius, y the half height of its straight part",
+          "unit": "m",
+          "min": 0,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "offset",
+          "type": "vec3",
+          "default": [0, 0, 0],
+          "doc": "The shape's centre in the entity's frame, with an explicit size",
+          "unit": "m",
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "RigidBody",
+      "doc": "How the entity's body moves. Dynamic bodies are built but not stepped until the simulation steps physics (sub-project 6).",
+      "role": "component",
+      "serialized": true,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "motion",
+          "type": "Motion",
+          "default": "Static",
+          "doc": "Static, Dynamic or Kinematic",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "mass",
+          "type": "f32",
+          "default": 10,
+          "doc": "Mass of a dynamic body",
+          "unit": "kg",
+          "min": 0.001,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "friction",
+          "type": "f32",
+          "default": 0.6,
+          "doc": "Surface friction",
+          "unit": "1",
+          "min": 0,
+          "max": 1,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "restitution",
+          "type": "f32",
+          "default": 0,
+          "doc": "Bounciness: 0 none, 1 elastic",
+          "unit": "1",
+          "min": 0,
+          "max": 1,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
       "name": "MeshHandle",
       "doc": "A mesh slot in the GPU render scene. Runtime only: files refer to meshes by source.",
       "role": "struct",
@@ -2463,6 +2653,108 @@
     {
       "name": "LevelDirty",
       "doc": "Tag: the Level changed; the level system re-expands it this frame.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [],
+      "skipped": []
+    },
+    {
+      "name": "ColliderPart",
+      "doc": "This entity's collider is part of another entity's body (a level's UCX_ hulls): one compound body.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "body",
+          "type": "entityRef",
+          "default": null,
+          "doc": "The entity whose body it is part of",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "CollisionMesh",
+      "doc": "The mesh a level node's collider is fitted to when the node is not drawn (vis 0, UCX_ hulls) and so has no MeshSource. Set by the level system.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "source",
+          "type": "ModelAsset",
+          "default": { "asset": { "path": "" } },
+          "doc": "The glTF mesh",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "PhysicsBody",
+      "doc": "The entity's body in the physics backend. Owned by the physics system.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "handle",
+          "type": "u32",
+          "default": 4294967295,
+          "doc": "Body handle; 4294967295 means none",
+          "unit": "1",
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "PhysicsMoved",
+      "doc": "Tag: an entity with a body moved; the physics system moves the body this frame.",
       "role": "component",
       "serialized": false,
       "singleton": false,

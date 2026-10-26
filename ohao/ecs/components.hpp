@@ -201,10 +201,41 @@ struct Socket { std::string name; };      // at most 64 characters
 // Tag: Level changed; the level system re-expands it this frame.
 struct LevelDirty {};
 
-// Collision hints read from a level node's extras (col, body). The Collider and RigidBody
-// components that use them are step 4's.
+// ---- collision (ecs/physics_scene.hpp; the `physics` sync system builds Jolt bodies) ----------
+
 enum class ColliderShape : uint8_t { Box, Sphere, Capsule, Convex, Mesh, None };
 enum class Motion : uint8_t { Static, Dynamic, Kinematic };
+
+// The entity collides. size 0 fits the shape to the entity's mesh (its MeshSource, or a
+// level node's CollisionMesh), in its own frame, scaled by its world scale.
+struct Collider {
+    ColliderShape shape{ColliderShape::Box};
+    glm::vec3 size{0.0f};     // box: half extents; sphere: x = radius; capsule: x = radius, y = half height
+    glm::vec3 offset{0.0f};   // the shape's centre in the entity's frame (with an explicit size)
+};
+
+// How the entity's body moves. A Collider without a RigidBody is static.
+struct RigidBody {
+    Motion motion{Motion::Static};
+    float mass{10.0f};         // kg, dynamic bodies
+    float friction{0.6f};
+    float restitution{0.0f};
+};
+
+// Runtime: this entity's Collider is part of another entity's body (a level's UCX_ hulls of
+// their target): one body, a compound shape, placed by the body entity.
+struct ColliderPart { entt::entity body{entt::null}; };
+
+// Runtime: the mesh a level node's collider is fitted to, when the node is not drawn (vis 0,
+// UCX_ hulls) and so has no MeshSource.
+struct CollisionMesh { ModelAsset source; };
+
+// Runtime: the entity's body in the physics backend (physics::backend::BodyHandle).
+struct PhysicsBody { uint32_t handle{UINT32_MAX}; };
+
+// Tag: the transform system moved an entity that has a body (or is part of one); the physics
+// system moves the body to it.
+struct PhysicsMoved {};
 
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 

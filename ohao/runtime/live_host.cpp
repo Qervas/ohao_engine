@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/instantiate.hpp"
+#include "ecs/physics_scene.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_view.hpp"
 #include "level/level_system.hpp"
@@ -66,6 +67,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     ecs::installRenderExtract(*m_world, m_renderer->renderScene());
     ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
+    ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);

@@ -159,7 +159,7 @@ private:
 
     // Jolt core systems
     std::unique_ptr<JPH::PhysicsSystem> m_physicsSystem;
-    std::unique_ptr<JPH::TempAllocatorImpl> m_tempAllocator;
+    std::unique_ptr<JPH::TempAllocatorImplWithMallocFallback> m_tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool> m_jobSystem;
 
     // Collision filtering (must outlive physics system)

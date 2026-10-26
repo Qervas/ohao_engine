@@ -18,6 +18,7 @@
 #include <new>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace ohao::level {
@@ -33,6 +34,21 @@ constexpr uint64_t splitmix64(uint64_t x) noexcept {
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
+}
+
+// The node a hull named UCX_<target>[_NN] belongs to: <target> as written, else without its
+// _NN suffix; null for any other name or a target the level does not have.
+entt::entity ucxTarget(std::string_view name,
+                       const ankerl::unordered_dense::map<std::string_view, entt::entity>& byName) {
+    if (!name.starts_with("UCX_")) return entt::null;
+    std::string_view target = name.substr(4);
+    if (const auto it = byName.find(target); it != byName.end()) return it->second;
+    const auto cut = target.rfind('_');
+    if (cut == std::string_view::npos || cut + 1 == target.size()) return entt::null;
+    for (const char c : target.substr(cut + 1))
+        if (c < '0' || c > '9') return entt::null;
+    const auto it = byName.find(target.substr(0, cut));
+    return it == byName.end() ? entt::entity{entt::null} : it->second;
 }
 
 // A component value of a registered type, default-constructed in its own aligned buffer.
@@ -261,7 +277,21 @@ private:
             }
             if (!hints.spawn.empty()) add(want, ecs::SpawnPoint{hints.spawn});
             if (!hints.socket.empty()) add(want, ecs::Socket{hints.socket});
+            // Collision: a collider on mesh nodes unless col says otherwise, a RigidBody only
+            // when a body hint is given (no RigidBody is static). None for a render-only level.
+            const ecs::ColliderShape col = hints.col.value_or(node.mesh >= 0 ? ecs::ColliderShape::Mesh : ecs::ColliderShape::None);
+            if (level.collision && col != ecs::ColliderShape::None) add(want, ecs::Collider{col});
+            if (level.collision && (hints.body || hints.mass || hints.fric || hints.rest)) {
+                ecs::RigidBody rb;
+                rb.motion = hints.body.value_or(ecs::Motion::Static);
+                rb.mass = hints.mass.value_or(rb.mass);
+                rb.friction = hints.fric.value_or(rb.friction);
+                rb.restitution = hints.rest.value_or(rb.restitution);
+                add(want, rb);
+            }
             for (const auto& [type, json] : hints.components) {
+                if (!level.collision && (type == m_types.find<ecs::Collider>() || type == m_types.find<ecs::RigidBody>()))
+                    continue;
                 auto doc = ecs::parseJson(json);
                 if (!doc) continue;
                 Value v = makeValue(*type);
@@ -270,6 +300,33 @@ private:
                 if (ctx.errors.empty()) want.emplace_back(type, std::move(v));
             }
             apply(ent, want);
+            // A collider on a node that is not drawn is fitted to the node's mesh all the same.
+            const bool collides = level.collision && m_reg.all_of<ecs::Collider>(ent);
+            if (collides && node.mesh >= 0 && !m_reg.all_of<ecs::MeshSource>(ent)) {
+                const ecs::CollisionMesh cm{ecs::ModelAsset{level.asset, "#" + std::to_string(node.mesh)}};
+                const auto* have = m_reg.try_get<ecs::CollisionMesh>(ent);
+                if (!have || have->source.asset.path != cm.source.asset.path || have->source.asset.guid != cm.source.asset.guid ||
+                    have->source.mesh != cm.source.mesh)
+                    m_reg.emplace_or_replace<ecs::CollisionMesh>(ent, cm);
+            } else if (m_reg.all_of<ecs::CollisionMesh>(ent)) {
+                m_reg.remove<ecs::CollisionMesh>(ent);
+            }
+        }
+        // UCX_<target>[_NN] hulls join the body of the node named <target> (the first by index).
+        ankerl::unordered_dense::map<std::string_view, entt::entity> byName;
+        for (uint32_t i = 0; i < n; ++i)
+            if (made[i] != entt::null && made[i] != e) byName.try_emplace(s->nodes[i].name, made[i]);
+        for (uint32_t i = 0; i < n; ++i) {
+            const entt::entity ent = made[i];
+            if (ent == entt::null || ent == e || !m_reg.valid(ent) || m_reg.get<ecs::LevelNode>(ent).index != i) continue;
+            entt::entity target = entt::null;
+            if (level.collision && m_reg.all_of<ecs::Collider>(ent)) target = ucxTarget(s->nodes[i].name, byName);
+            if (target != entt::null && target != ent) {
+                const auto* have = m_reg.try_get<ecs::ColliderPart>(ent);
+                if (!have || have->body != target) m_reg.emplace_or_replace<ecs::ColliderPart>(ent, ecs::ColliderPart{target});
+            } else if (m_reg.all_of<ecs::ColliderPart>(ent)) {
+                m_reg.remove<ecs::ColliderPart>(ent);
+            }
         }
         for (const entt::entity old : stale)   // nodes the file no longer has
             if (m_reg.valid(old)) m_world.destroy(old);

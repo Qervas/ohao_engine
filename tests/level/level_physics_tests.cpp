@@ -1,0 +1,366 @@
+// Level collision (sub-project 5, step 4; docs/specs/2026-10-26-level-pipeline-design.md,
+// "Collision generation", tests 6 and 7). CPU only: levels expand through the level system,
+// their hints become Collider/RigidBody, and the physics system builds Jolt bodies that the
+// tests ray-cast and (test 7's crates) step.
+#include "ecs/asset_resolver.hpp"
+#include "ecs/components.hpp"
+#include "ecs/physics_scene.hpp"
+#include "ecs/scene_types.hpp"
+#include "ecs/world.hpp"
+#include "level/level_system.hpp"
+#include "physics/backend/physics_backend.hpp"
+#include "reflect/registry.hpp"
+
+#include <glm/gtc/quaternion.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
+
+using namespace ohao::ecs;
+
+namespace {
+
+const ohao::reflect::TypeRegistry& engineTypes() {
+    static ohao::reflect::TypeRegistry r;
+    static const bool once = (registerSceneTypes(r), true);
+    (void)once;
+    return r;
+}
+
+constexpr const char* kPhysicsLevel = "tests/level/fixtures/level_physics.gltf";
+constexpr const char* kBlockout = "assets/levels/blockout_room.glb";
+
+// A world with the level and physics systems over the source tree, one level loaded.
+struct Fixture {
+    World world;
+    FileAssetResolver files{OHAO_SOURCE_DIR};
+    PhysicsScene* physics{nullptr};
+    entt::entity level{entt::null};
+    explicit Fixture(const char* path) {
+        world.seedIds(7);
+        ohao::level::installLevels(world, files, engineTypes());
+        physics = &installPhysics(world, files);
+        level = world.createWithId(0x1e7e1, "Level");
+        world.registry().emplace<Level>(level, Level{AssetRef{path, {}}});
+        world.sync();
+    }
+    [[nodiscard]] entt::entity named(std::string_view name) const {
+        for (auto [e, n, ln] : world.registry().view<const Name, const LevelNode>().each())
+            if (n.value == name) return e;
+        return entt::null;
+    }
+    // The hit's height (or the axis asked for), or NaN for a miss.
+    [[nodiscard]] std::optional<RayHit> ray(glm::vec3 from, glm::vec3 dir, float max = 100.0f) const {
+        return physics->raycast(from, dir, max);
+    }
+};
+
+bool near(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
+bool nearVec(const glm::vec3& a, const glm::vec3& b, float eps = 1e-3f) {
+    return near(a.x, b.x, eps) && near(a.y, b.y, eps) && near(a.z, b.z, eps);
+}
+
+MeshData brick() {   // the fixture's Brick: (0,0,0)..(2,1,0.5)
+    MeshData m;
+    for (float x : {0.0f, 2.0f})
+        for (float y : {0.0f, 1.0f})
+            for (float z : {0.0f, 0.5f}) m.positions.push_back({x, y, z});
+    m.indices = {0, 1, 3, 0, 3, 2};   // fitting reads positions; one face is enough to be a mesh
+    return m;
+}
+
+} // namespace
+
+// ---- test 6: shape fitting ---------------------------------------------------------------------
+
+static void t06_fit_box_sphere_capsule_from_mesh() {
+    const MeshData m = brick();
+    const FittedCollider box = fitCollider(m, ColliderShape::Box, glm::vec3(1.0f));
+    CHECK(box.shape == ColliderShape::Box && nearVec(box.halfExtents, {1.0f, 0.5f, 0.25f}, 1e-6f) &&
+              nearVec(box.offset, {1.0f, 0.5f, 0.25f}, 1e-6f),
+          "box: the mesh's AABB, its centre as the offset");
+    const FittedCollider sphere = fitCollider(m, ColliderShape::Sphere, glm::vec3(1.0f));
+    CHECK(sphere.shape == ColliderShape::Sphere && near(sphere.radius, std::sqrt(1.0f + 0.25f + 0.0625f), 1e-5f) &&
+              nearVec(sphere.offset, {1.0f, 0.5f, 0.25f}, 1e-6f),
+          "sphere: the AABB centre and the farthest vertex from it");
+    const FittedCollider capsule = fitCollider(m, ColliderShape::Capsule, glm::vec3(1.0f));
+    const glm::vec3 axis = capsule.rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+    CHECK(capsule.shape == ColliderShape::Capsule && near(capsule.radius, 0.5f, 1e-6f) &&
+              near(capsule.halfHeight, 0.5f, 1e-6f) && nearVec(glm::abs(axis), {1.0f, 0.0f, 0.0f}, 1e-5f),
+          "capsule: along the longest AABB axis, radius the larger other half extent");
+
+    Fixture f(kPhysicsLevel);
+    const auto top = [&](float x) {
+        const auto h = f.ray({x, 5.0f, 0.25f}, {0.0f, -1.0f, 0.0f});
+        return h ? h->point.y : -999.0f;
+    };
+    CHECK(near(top(1.0f), 1.0f) && near(top(11.0f), 0.5f + sphere.radius) && near(top(21.0f), 1.0f),
+          "the fitted box, sphere and capsule stand where the mesh is");
+    CHECK(f.ray({1.0f, 5.0f, 0.25f}, {0.0f, -1.0f, 0.0f})->entity == f.named("FitBox"), "a hit names its entity");
+}
+
+static void t06_convex_hull_of_mesh() {
+    Fixture f(kPhysicsLevel);
+    const auto h = f.ray({30.2f, 5.0f, 0.2f}, {0.0f, -1.0f, 0.0f});
+    CHECK(h && h->entity == f.named("Hull") && near(h->point.y, 0.6f, 2e-3f),
+          "a ray onto the tetrahedron's slanted face hits x + y + z = 1");
+    CHECK(nearVec(h->normal, glm::normalize(glm::vec3(1.0f)), 2e-3f), "with that face's normal");
+    CHECK(f.physics->info().shapes.convex == 2, "two convex shapes: Hull and the demoted DynMesh");
+}
+
+static void t06_static_mesh_shape() {
+    Fixture f(kPhysicsLevel);
+    const auto h = f.ray({0.0f, 0.0f, 3.0f}, {0.0f, -1.0f, 0.0f});
+    CHECK(h && h->entity == f.named("Ground") && near(h->point.y, -5.0f) && nearVec(h->normal, {0.0f, 1.0f, 0.0f}),
+          "a mesh node without hints is a static triangle mesh");
+    const PhysicsInfo info = f.physics->info();
+    CHECK(info.shapes.mesh == 3 && info.bodies.statics == 8, "three mesh shapes (Ground, StretchedMesh, Mirrored), 8 static bodies");
+    CHECK(info.shapes.box == 2 && info.shapes.sphere == 1 && info.shapes.capsule == 1, "and 2 boxes, a sphere, a capsule");
+    CHECK(!f.world.registry().all_of<Collider>(f.named("Marker")), "an empty without hints has no collider");
+}
+
+static void t06_ucx_hulls_are_one_compound_body() {
+    Fixture f(kPhysicsLevel);
+    const auto& reg = f.world.registry();
+    const entt::entity prop = f.named("Prop");
+    const auto low = f.ray({40.0f, 5.0f, 0.3f}, {0.0f, 0.0f, -1.0f});   // misses: the ray runs above the hulls
+    const auto upper = f.ray({40.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f});
+    const auto lower = f.ray({40.0f, 0.0f, 5.0f}, {0.0f, 0.0f, -1.0f});
+    CHECK(!low && upper && lower, "both hulls collide");
+    CHECK(upper->entity == prop && lower->entity == prop && near(upper->point.y, 2.5f) && near(lower->point.z, 0.5f),
+          "as one body, the Prop's: the upper hull's top at 2.5, the lower's face at z 0.5");
+    CHECK(f.physics->bodyOf(prop) != ohao::physics::backend::INVALID_BODY &&
+              f.physics->bodyOf(f.named("UCX_Prop_00")) == ohao::physics::backend::INVALID_BODY &&
+              !reg.any_of<MeshSource>(f.named("UCX_Prop_00")),
+          "the hull nodes have no body of their own and are not drawn");
+    const PhysicsInfo info = f.physics->info();
+    CHECK(info.shapes.compound == 1 && info.bodies.dynamics == 2 && info.unstepped == 2,
+          "one compound shape; Prop and DynMesh are the dynamic bodies, unstepped");
+    const auto* rb = reg.try_get<RigidBody>(prop);
+    CHECK(rb && rb->motion == Motion::Dynamic && rb->mass == 3.0f, "the target's body hints are its RigidBody");
+}
+
+static void t06_dynamic_mesh_becomes_convex_with_warning() {
+    Fixture f(kPhysicsLevel);
+    const entt::entity dyn = f.named("DynMesh");
+    const auto* c = f.world.registry().try_get<Collider>(dyn);
+    CHECK(c && c->shape == ColliderShape::Mesh, "the component keeps what the file asked for");
+    const auto& w = f.physics->warnings();
+    const bool warned = std::any_of(w.begin(), w.end(), [&](const PhysicsWarning& x) {
+        return x.code == "W_LEVEL_DYNAMIC_MESH" && x.entity == dyn && x.message.find("convex") != std::string::npos;
+    });
+    CHECK(warned, "a dynamic mesh collider is built convex, with W_LEVEL_DYNAMIC_MESH");
+    const auto h = f.ray({51.0f, 5.0f, 0.25f}, {0.0f, -1.0f, 0.0f});
+    CHECK(h && h->entity == dyn && near(h->point.y, 1.0f, 2e-3f), "and collides as the brick's hull");
+}
+
+static void t06_non_uniform_scale_baked() {
+    Fixture f(kPhysicsLevel);
+    for (const auto& [name, x] : {std::pair{"Stretched", 60.0f}, std::pair{"StretchedMesh", 70.0f}}) {
+        const auto fromX = f.ray({x + 5.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f});
+        const auto fromZ = f.ray({x, 0.0f, 5.0f}, {0.0f, 0.0f, -1.0f});
+        const auto fromY = f.ray({x, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f});
+        CHECK(fromX && fromZ && fromY && fromX->entity == f.named(name), "the stretched cube is hit from three sides");
+        CHECK(near(fromX->point.x, x + 1.0f) && near(fromY->point.y, 0.5f) && near(fromZ->point.z, 1.5f),
+              "its scale (2, 1, 3) is baked into the shape: faces at 1, 0.5, 1.5");
+    }
+}
+
+static void t06_mirrored_node_collides_outward() {
+    Fixture f(kPhysicsLevel);
+    const auto right = f.ray({85.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f});
+    const auto left = f.ray({75.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
+    const auto top = f.ray({80.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f});
+    CHECK(right && left && top, "a mirrored (scale -1) mesh is hit from outside");
+    CHECK(near(right->point.x, 80.5f) && nearVec(right->normal, {1.0f, 0.0f, 0.0f}) && near(left->point.x, 79.5f) &&
+              nearVec(left->normal, {-1.0f, 0.0f, 0.0f}) && nearVec(top->normal, {0.0f, 1.0f, 0.0f}),
+          "with outward normals: the winding is flipped with the mirror");
+}
+
+// ---- test 7: the blockout collides -----------------------------------------------------------
+
+static void t07_ray_down_at_each_spawn_hits_authored_height() {
+    Fixture f(kBlockout);
+    std::size_t spawns = 0;
+    for (auto [e, sp, wt] : f.world.registry().view<const SpawnPoint, const WorldTransform>().each()) {
+        const glm::vec3 p(wt.world[3]);
+        const auto h = f.ray(p + glm::vec3(0.0f, 0.5f, 0.0f), {0.0f, -1.0f, 0.0f}, 2.0f);
+        std::printf("\n      %s at (%.3f, %.3f, %.3f): hit %s", f.world.registry().get<Name>(e).value.c_str(), p.x, p.y,
+                    p.z, h ? std::to_string(h->point.y).c_str() : "none");
+        CHECK(h && std::fabs(h->point.y - p.y) <= 1e-3f, "a ray down from 0.5 m above a spawn hits at its height (1 mm)");
+        ++spawns;
+    }
+    CHECK(spawns == 3, "all three spawns checked");
+}
+
+static void t07_ray_through_doorway_passes() {
+    Fixture f(kBlockout);
+    const auto h = f.ray({1.5f, 1.0f, 2.5f}, {0.0f, 0.0f, 1.0f}, 3.0f);
+    CHECK(!h, "a ray through the doorway at 1 m meets nothing");
+}
+
+static void t07_ray_beside_doorway_hits_wall_south_a() {
+    Fixture f(kBlockout);
+    const auto h = f.ray({0.6f, 1.0f, 2.5f}, {0.0f, 0.0f, 1.0f}, 3.0f);
+    CHECK(h && h->entity == f.named("WallSouthA") && near(h->point.z, 3.0f) && nearVec(h->normal, {0.0f, 0.0f, -1.0f}),
+          "0.3 m beside the doorway the ray hits WallSouthA's face at z 3.0");
+}
+
+static void t07_ray_on_ramp_returns_slope_normal() {
+    Fixture f(kBlockout);
+    const auto h = f.ray({2.7f, 2.0f, -1.0f}, {0.0f, -1.0f, 0.0f}, 5.0f);
+    const glm::vec3 slope = glm::normalize(glm::vec3(0.0f, 1.0f, 0.2f));   // 0.6 m up over 3 m toward -z
+    CHECK(h && h->entity == f.named("Ramp") && near(h->point.y, 0.3f) && nearVec(h->normal, slope),
+          "the ramp (a mesh collider) is hit at its height with the slope's normal");
+}
+
+static void t07_crates_come_to_rest_when_stepped() {
+    Fixture f(kBlockout);
+    auto& backend = f.physics->backend();
+    std::vector<std::pair<ohao::physics::backend::BodyHandle, glm::vec3>> statics;
+    for (const char* n : {"Floor", "WallNorth", "Step", "Platform", "Ramp", "Pillar"}) {
+        const auto b = f.physics->bodyOf(f.named(n));
+        CHECK(b != ohao::physics::backend::INVALID_BODY, "every static node has a body");
+        statics.emplace_back(b, backend.getPosition(b));
+    }
+    const auto a = f.physics->bodyOf(f.named("CrateA"));
+    const auto b = f.physics->bodyOf(f.named("CrateB"));
+    CHECK(a != ohao::physics::backend::INVALID_BODY && b != ohao::physics::backend::INVALID_BODY, "the crates are bodies");
+    for (int i = 0; i < 120; ++i) backend.step(1.0f / 60.0f);
+    const glm::vec3 pa = backend.getPosition(a), pb = backend.getPosition(b);
+    std::printf("\n      CrateA y %.4f, CrateB y %.4f after 120 steps", pa.y, pb.y);
+    CHECK(near(pa.y, 0.3f, 0.02f) && near(pb.y, 0.8f, 0.02f), "the stacked crates rest at their authored heights (2 cm)");
+    CHECK(near(pa.x, 1.3f, 0.02f) && near(pa.z, -1.7f, 0.02f) && near(pb.x, 1.3f, 0.02f) && near(pb.z, -1.7f, 0.02f),
+          "without sliding off");
+    for (const auto& [h, p] : statics) CHECK(backend.getPosition(h) == p, "no static body moved");
+    const PhysicsInfo info = f.physics->info();
+    CHECK(info.bodies.statics == 11 && info.bodies.dynamics == 2 && info.shapes.mesh == 1,
+          "the blockout: 11 static bodies (one a mesh, the ramp) and the 2 crates");
+}
+
+static void t07_render_only_level_builds_no_bodies() {
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    ohao::level::installLevels(w, files, engineTypes());
+    PhysicsScene& physics = installPhysics(w, files);
+    const auto lv = w.createWithId(0x1e, "Level");
+    w.registry().emplace<Level>(lv, Level{AssetRef{kBlockout, {}}, 1.0f, false});
+    w.sync();
+    CHECK(w.registry().view<Collider>().empty() && physics.info().bodies.statics == 0, "Level.collision false: no colliders");
+    w.registry().patch<Level>(lv, [](Level& l) { l.collision = true; });
+    w.sync();
+    CHECK(physics.info().bodies.statics == 11 && physics.info().bodies.dynamics == 2, "turned on: the bodies are built");
+    w.destroy(lv);
+    w.sync();
+    const PhysicsInfo after = physics.info();
+    CHECK(after.bodies.statics == 0 && after.bodies.dynamics == 0, "destroying the level removes them");
+}
+
+static void t07_still_world_does_no_work() {
+    Fixture f(kBlockout);
+    const double built = f.physics->info().buildMs;
+    const std::size_t rebuilds = f.physics->bodyBuilds();
+    for (int i = 0; i < 10; ++i) f.world.sync();
+    CHECK(f.physics->bodyBuilds() == rebuilds && f.physics->info().buildMs == built, "syncs of a still world build nothing");
+    f.world.setTransform(f.named("Pillar"), Transform{{1.0f, 1.5f, -0.5f}});
+    f.world.sync();
+    const auto h = f.ray({1.0f, 5.0f, -0.5f}, {0.0f, -1.0f, 0.0f});
+    CHECK(h && h->entity == f.named("Pillar") && f.physics->bodyBuilds() == rebuilds, "a moved node's body follows it, no rebuild");
+}
+
+// ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
+// Every pixel is one ray against the physics scene (nothing is drawn from the meshes): a top-down
+// view (rays straight down, 2 cm apart) and a view from inside the east wall looking west. A hit
+// is tinted by its body and shaded by its normal; a miss is dark. crates.txt has the crates'
+// centres before and after 120 steps.
+
+static bool writePpm(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    std::fprintf(f, "P6\n%d %d\n255\n", w, h);
+    const bool ok = std::fwrite(rgb.data(), 1, rgb.size(), f) == rgb.size();
+    return std::fclose(f) == 0 && ok;
+}
+
+static glm::vec3 shade(const std::optional<RayHit>& h, glm::vec3 light) {
+    if (!h) return glm::vec3(0.08f);
+    const uint32_t k = static_cast<uint32_t>(entt::to_integral(h->entity)) * 2654435761u;
+    const glm::vec3 tint(0.45f + 0.5f * float(k & 255) / 255.0f, 0.45f + 0.5f * float((k >> 8) & 255) / 255.0f,
+                         0.45f + 0.5f * float((k >> 16) & 255) / 255.0f);
+    return tint * (0.25f + 0.75f * std::max(0.0f, glm::dot(h->normal, light)));
+}
+
+static bool look(const std::string& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    bool ok = true;
+    Fixture f(kBlockout);
+    const glm::vec3 light = glm::normalize(glm::vec3(0.4f, 1.0f, 0.3f));
+    const auto put = [](std::vector<uint8_t>& img, std::size_t i, glm::vec3 c) {
+        for (int k = 0; k < 3; ++k) img[3 * i + k] = static_cast<uint8_t>(std::clamp(c[k], 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    {   // top-down: x -4.2..4.2 across, z -3.2..3.2 down
+        const int w = 420, h = 320;
+        std::vector<uint8_t> img(std::size_t(w) * h * 3);
+        for (int r = 0; r < h; ++r)
+            for (int c = 0; c < w; ++c) {
+                const auto hit = f.ray({-4.2f + 0.02f * (c + 0.5f), 10.0f, -3.2f + 0.02f * (r + 0.5f)}, {0, -1, 0}, 20.0f);
+                glm::vec3 col = shade(hit, light);
+                if (hit) col *= 0.6f + 0.4f * std::clamp(hit->point.y / 3.0f, 0.0f, 1.0f);   // higher is brighter
+                put(img, std::size_t(r) * w + c, col);
+            }
+        ok &= writePpm(dir + "/collision_top.ppm", w, h, img);
+    }
+    {   // from x 3.9 looking toward -x: z -3..3 across, y 3..0 down
+        const int w = 300, h = 150;
+        std::vector<uint8_t> img(std::size_t(w) * h * 3);
+        for (int r = 0; r < h; ++r)
+            for (int c = 0; c < w; ++c) {
+                const auto hit = f.ray({3.9f, 3.0f - 0.02f * (r + 0.5f), 3.0f - 0.02f * (c + 0.5f)}, {-1, 0, 0}, 8.0f);
+                put(img, std::size_t(r) * w + c, shade(hit, glm::normalize(glm::vec3(1.0f, 0.6f, 0.2f))));
+            }
+        ok &= writePpm(dir + "/collision_side.ppm", w, h, img);
+    }
+    auto& backend = f.physics->backend();
+    const auto a = f.physics->bodyOf(f.named("CrateA")), b = f.physics->bodyOf(f.named("CrateB"));
+    const glm::vec3 a0 = backend.getPosition(a), b0 = backend.getPosition(b);
+    for (int i = 0; i < 120; ++i) backend.step(1.0f / 60.0f);
+    const glm::vec3 a1 = backend.getPosition(a), b1 = backend.getPosition(b);
+    const PhysicsInfo info = f.physics->info();
+    FILE* t = std::fopen((dir + "/crates.txt").c_str(), "w");
+    if (!t) return false;
+    std::fprintf(t, "blockout: %u static bodies, %u dynamic; shapes box %u, mesh %u; build %.3f ms\n", info.bodies.statics,
+                 info.bodies.dynamics, info.shapes.box, info.shapes.mesh, info.buildMs);
+    std::fprintf(t, "CrateA (%.4f, %.4f, %.4f) -> (%.4f, %.4f, %.4f) after 120 steps of 1/60 s\n", a0.x, a0.y, a0.z, a1.x, a1.y,
+                 a1.z);
+    std::fprintf(t, "CrateB (%.4f, %.4f, %.4f) -> (%.4f, %.4f, %.4f)\n", b0.x, b0.y, b0.z, b1.x, b1.y, b1.z);
+    ok &= std::fclose(t) == 0;
+    std::printf("look: %s %s/collision_top.ppm, collision_side.ppm, crates.txt\n", ok ? "wrote" : "FAILED to write", dir.c_str());
+    return ok;
+}
+
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--look") return look(argv[2]) ? 0 : 1;
+    std::printf("level_physics_tests\n");
+    RUN(t06_fit_box_sphere_capsule_from_mesh);
+    RUN(t06_convex_hull_of_mesh);
+    RUN(t06_static_mesh_shape);
+    RUN(t06_ucx_hulls_are_one_compound_body);
+    RUN(t06_dynamic_mesh_becomes_convex_with_warning);
+    RUN(t06_non_uniform_scale_baked);
+    RUN(t06_mirrored_node_collides_outward);
+    RUN(t07_ray_down_at_each_spawn_hits_authored_height);
+    RUN(t07_ray_through_doorway_passes);
+    RUN(t07_ray_beside_doorway_hits_wall_south_a);
+    RUN(t07_ray_on_ramp_returns_slope_normal);
+    RUN(t07_crates_come_to_rest_when_stepped);
+    RUN(t07_render_only_level_builds_no_bodies);
+    RUN(t07_still_world_does_no_work);
+    return ohao::test::finish("level_physics_tests");
+}

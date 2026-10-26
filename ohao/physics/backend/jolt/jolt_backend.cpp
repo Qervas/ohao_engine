@@ -294,8 +294,10 @@ bool JoltPhysicsBackend::initialize(const PhysicsWorldConfig& config) {
     try {
         ensureJoltGlobalInit();
 
-        // Temp allocator (10 MB)
-        m_tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
+        // Temp allocator: 10 MB, then the heap. A step takes its contact buffer from it, sized by
+        // the body cap (maxContactConstraints below): with a fixed block, a cap of 65,536 asked
+        // for more than 10 MB and Jolt aborted the process on the first step.
+        m_tempAllocator = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(10 * 1024 * 1024);
 
         // Job system
         unsigned int numThreads = std::max(1u, std::thread::hardware_concurrency() - 1);
@@ -1545,6 +1547,18 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
                 JPH::BoxShapeSettings settings(JPH::Vec3(50.0f, 0.01f, 50.0f));
                 result = settings.Create();
             }
+            break;
+        }
+        case ShapeInfo::Type::COMPOUND: {
+            if (info.children.empty()) {
+                JPH::BoxShapeSettings settings(JPH::Vec3(0.5f, 0.5f, 0.5f));
+                result = settings.Create();
+                break;
+            }
+            JPH::StaticCompoundShapeSettings settings;
+            for (const CompoundChild& child : info.children)
+                settings.AddShape(toJolt(child.position), toJolt(child.rotation), createJoltShape(child.shape));
+            result = settings.Create();
             break;
         }
         case ShapeInfo::Type::CONVEX_HULL: {

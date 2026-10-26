@@ -52,4 +52,8 @@ void installInstantiate(World& world, std::shared_ptr<InstantiateBackend> backen
 // Entities whose mesh could not be built (they carry InstantiateError), in creation order.
 [[nodiscard]] std::vector<entt::entity> instantiateErrors(const World& world);
 
+// The geometry a primitive MeshSource describes (what instantiate uploads); null for a
+// ModelAsset, which the asset resolver loads. The physics system fits colliders to it.
+[[nodiscard]] std::shared_ptr<const Model> primitiveModel(const MeshSource& source);
+
 } // namespace ohao::ecs

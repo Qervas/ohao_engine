@@ -1631,6 +1631,77 @@ bool testGravityScaleCreation() {
     return true;
 }
 
+// --- Level collision (sub-project 5, step 4) ---
+
+// The physics scene runs the backend without worker threads and with room for 65,536 bodies: a
+// box dropped on a static floor must come to rest on it when stepped that way. (Jolt sizes a
+// step's contact buffer by the body cap: 65,536 once overflowed a fixed 10 MB temp allocator
+// and aborted the process on the first step.)
+bool testSingleThreadedStep() {
+    TEST_BEGIN("Single-threaded backend with 65,536 max bodies steps a box onto a floor");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.enableMultithreading = false;
+    cfg.maxBodies = 65536;
+    auto backend = createPhysicsBackend("jolt");
+    EXPECT_TRUE(backend && backend->initialize(cfg));
+    BodyCreationInfo floor;
+    floor.motionType = MotionType::STATIC;
+    floor.shape.type = ShapeInfo::Type::BOX;
+    floor.shape.halfExtents = glm::vec3(5.0f, 0.5f, 5.0f);
+    floor.position = glm::vec3(0.0f, -0.5f, 0.0f);
+    EXPECT_NE(backend->createBody(floor), INVALID_BODY);
+    BodyCreationInfo box;
+    box.motionType = MotionType::DYNAMIC;
+    box.shape.type = ShapeInfo::Type::BOX;
+    box.shape.halfExtents = glm::vec3(0.25f);
+    box.position = glm::vec3(0.0f, 1.0f, 0.0f);
+    box.restitution = 0.0f;
+    const BodyHandle h = backend->createBody(box);
+    EXPECT_NE(h, INVALID_BODY);
+    for (int i = 0; i < 120; i++) backend->step(1.0f / 60.0f);
+    EXPECT_NEAR(backend->getPosition(h).y, 0.25f, 0.02f);
+    backend->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// A COMPOUND shape is its children, each placed (and turned) in the body's frame.
+bool testCompoundShape() {
+    TEST_BEGIN("Compound shape: children placed in the body's frame");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    BodyCreationInfo info;
+    info.motionType = MotionType::STATIC;
+    info.position = glm::vec3(300.0f, 0.0f, 300.0f);
+    info.shape.type = ShapeInfo::Type::COMPOUND;
+    ShapeInfo cube;
+    cube.type = ShapeInfo::Type::BOX;
+    cube.halfExtents = glm::vec3(0.5f);
+    info.shape.children.push_back({cube, glm::vec3(0.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0)});
+    ShapeInfo slab;
+    slab.type = ShapeInfo::Type::BOX;
+    slab.halfExtents = glm::vec3(1.0f, 0.1f, 0.1f);   // turned 90 degrees about z: 2 m tall
+    info.shape.children.push_back({slab, glm::vec3(0.0f, 0.0f, 3.0f),
+                                   glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f))});
+    const BodyHandle h = g_backend->createBody(info);
+    EXPECT_NE(h, INVALID_BODY);
+
+    RaycastHit hit;
+    EXPECT_TRUE(g_backend->castRay(glm::vec3(300.0f, 5.0f, 300.0f), glm::vec3(0, -1, 0), 10.0f, hit));
+    EXPECT_EQ(hit.bodyHandle, h);
+    EXPECT_NEAR(hit.position.y, 0.5f, 1e-3f);
+    EXPECT_TRUE(g_backend->castRay(glm::vec3(300.0f, 5.0f, 303.0f), glm::vec3(0, -1, 0), 10.0f, hit));
+    EXPECT_EQ(hit.bodyHandle, h);
+    EXPECT_NEAR(hit.position.y, 1.0f, 1e-3f);   // the turned slab's top
+    EXPECT_FALSE(g_backend->castRay(glm::vec3(300.0f, 5.0f, 301.5f), glm::vec3(0, -1, 0), 10.0f, hit));
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
 // =============================================================================
 // TEST RUNNER
 // =============================================================================
@@ -1747,6 +1818,10 @@ void runAllTests() {
     testVelocityGetters();
     testCCDToggleRuntime();
     testAxisLock();
+
+    std::cout << "\n\033[1m--- Level collision: single-threaded stepping, compound shapes ---\033[0m" << std::endl;
+    testSingleThreadedStep();
+    testCompoundShape();
 
     // Cleanup
     shutdownBackend();

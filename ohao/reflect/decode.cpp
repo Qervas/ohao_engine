@@ -89,7 +89,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 40> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 43> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -132,6 +132,12 @@ constexpr std::array<ErrorCodeInfo, 40> kCodes = {{
     {"W_LEVEL_EXTRAS", "Warning: an unknown lower-case key in a level node's extras (another tool's property); ignored."},
     {"W_LEVEL_UNSUPPORTED", "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, "
                             "orthographic cameras)."},
+    {"W_LEVEL_DYNAMIC_MESH", "Warning: a dynamic body's mesh collider; it is built as the mesh's convex hull, since "
+                             "triangle meshes do not simulate."},
+    {"W_COLLIDER_NO_MESH", "Warning: a collider with no size on an entity whose mesh is missing or did not load; it "
+                           "gets no collider."},
+    {"W_COLLIDER_SCALE", "Warning: a sphere or capsule collider under a scale whose axes differ by more than 1%; it "
+                         "takes the largest axis."},
 }};
 } // namespace
 

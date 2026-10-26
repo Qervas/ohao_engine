@@ -703,7 +703,8 @@ static void t13_no_reflection_on_hot_paths() {
                           "ohao/ecs/render_extract.cpp", "ohao/ecs/render_extract.hpp",
                           "ohao/ecs/instantiate.cpp", "ohao/ecs/instantiate.hpp",
                           "ohao/ecs/spin_system.cpp", "ohao/ecs/spin_system.hpp",
-                          "ohao/ecs/fly_controller_system.cpp", "ohao/ecs/fly_controller_system.hpp"})
+                          "ohao/ecs/fly_controller_system.cpp", "ohao/ecs/fly_controller_system.hpp",
+                          "ohao/ecs/physics_scene.cpp", "ohao/ecs/physics_scene.hpp"})
         if (fs::exists(root / f)) files.push_back(root / f);
     CHECK(files.size() > 50, "the renderer and GPU sources were found");
     std::vector<std::string> hits;
@@ -845,6 +846,7 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
         {"ohao/render/scene/render_scene.cpp", "_clock::now", "RenderSceneStats::recordCpuMs, a timing statistic"},
         {"ohao/gpu/vulkan/render_dispatch.cpp", "_clock::now",
          "a frame's CPU record + submit time for render.stats (GpuPassTimer::endFrame), a timing statistic"},
+        {"ohao/ecs/physics_scene.cpp", "_clock::now", "PhysicsInfo::buildMs, the time spent building bodies, a timing statistic"},
     };
 
     std::vector<fs::path> files;
@@ -857,7 +859,8 @@ static void sp4_t02_no_unseeded_randomness_or_wall_clock_in_render_gpu_or_system
                           "ohao/ecs/render_extract.cpp", "ohao/ecs/render_extract.hpp",
                           "ohao/ecs/instantiate.cpp", "ohao/ecs/instantiate.hpp",
                           "ohao/ecs/spin_system.cpp", "ohao/ecs/spin_system.hpp",
-                          "ohao/ecs/fly_controller_system.cpp", "ohao/ecs/fly_controller_system.hpp"})
+                          "ohao/ecs/fly_controller_system.cpp", "ohao/ecs/fly_controller_system.hpp",
+                          "ohao/ecs/physics_scene.cpp", "ohao/ecs/physics_scene.hpp"})
         if (fs::exists(root / f)) files.push_back(root / f);
     CHECK(files.size() > 50, "the renderer, GPU and system sources were found");
 

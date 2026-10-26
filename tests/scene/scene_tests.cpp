@@ -304,6 +304,12 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<Socket>(r, checked);
     ok &= complete<LevelNode>(r, checked);
     ok &= complete<LevelDirty>(r, checked);
+    ok &= complete<Collider>(r, checked);
+    ok &= complete<RigidBody>(r, checked);
+    ok &= complete<ColliderPart>(r, checked);
+    ok &= complete<CollisionMesh>(r, checked);
+    ok &= complete<PhysicsBody>(r, checked);
+    ok &= complete<PhysicsMoved>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -320,12 +326,14 @@ static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
-                              "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket"}) {
+                              "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
+                              "Collider", "RigidBody"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
-                                "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode"}) {
+                                "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode",
+                                "ColliderPart", "CollisionMesh", "PhysicsBody"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");
     }
@@ -496,6 +504,19 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
                                                      pickFloat(rng, true), rng() % 2 == 0});
             if (!w.registry().all_of<SpawnPoint>(e)) w.registry().emplace<SpawnPoint>(e, SpawnPoint{pickName(rng, k)});
             if (rng() % 2 && !w.registry().all_of<Socket>(e)) w.registry().emplace<Socket>(e, Socket{pickName(rng, k)});
+        }
+        // Colliders and rigid bodies (step 4), after the levels for the same reason. No
+        // physics system is installed: they are data here.
+        const auto unit = [&] { return std::min(1.0f, pickFloat(rng, true)); };
+        for (int k = 0; k < 4; ++k) {
+            const auto e = es[rng() % es.size()];
+            if (!w.registry().all_of<Collider>(e))
+                w.registry().emplace<Collider>(e, Collider{static_cast<ColliderShape>(rng() % 6),
+                                                           {pickFloat(rng, true), pickFloat(rng, true), pickFloat(rng, true)},
+                                                           {pickFloat(rng, false), pickFloat(rng, false), pickFloat(rng, false)}});
+            if (rng() % 2 && !w.registry().all_of<RigidBody>(e))
+                w.registry().emplace<RigidBody>(e, RigidBody{static_cast<Motion>(rng() % 3),
+                                                             std::max(0.001f, pickFloat(rng, true)), unit(), unit()});
         }
     }
 }

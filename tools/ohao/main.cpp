@@ -43,6 +43,7 @@
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
+#include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
@@ -280,6 +281,7 @@ struct Context {
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
         level::installLevels(*world, *assets, engineTypes());   // Level components expand into entities
+        ecs::installPhysics(*world, *assets);                    // and their colliders into bodies
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);

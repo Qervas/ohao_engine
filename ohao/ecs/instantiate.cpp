@@ -293,6 +293,11 @@ void installInstantiate(World& world, render::RenderScene& scene, BindlessTextur
     installInstantiate(world, std::make_shared<RenderSceneBackend>(scene, textures), assets);
 }
 
+std::shared_ptr<const Model> primitiveModel(const MeshSource& source) {
+    if (std::holds_alternative<ModelAsset>(source.source)) return nullptr;
+    return generate(source);
+}
+
 std::vector<entt::entity> instantiateErrors(const World& world) {
     const auto& reg = world.registry();
     std::vector<std::pair<uint64_t, entt::entity>> found;

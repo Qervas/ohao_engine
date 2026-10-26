@@ -256,6 +256,40 @@ void writeFields(const Level& v, const Level* omit, FieldSink& out) {
     if (!omit || v.collision != omit->collision) t.boolean("\"collision\"", v.collision);
 }
 
+void writeFields(const Collider& v, const Collider* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.shape != omit->shape) {
+        static constexpr std::string_view kShapes[] = {"\"Box\"", "\"Sphere\"", "\"Capsule\"",
+                                                       "\"Convex\"", "\"Mesh\"", "\"None\""};
+        const auto raw = static_cast<uint8_t>(v.shape);
+        if (raw < std::size(kShapes)) {
+            t.token("\"shape\"", kShapes[raw]);
+        } else {
+            t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum ColliderShape");
+            t.null("\"shape\"");
+        }
+    }
+    if (!omit || !same(v.size, omit->size)) vec3(t, "\"size\"", v.size);
+    if (!omit || !same(v.offset, omit->offset)) vec3(t, "\"offset\"", v.offset);
+}
+
+void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.motion != omit->motion) {
+        static constexpr std::string_view kMotions[] = {"\"Static\"", "\"Dynamic\"", "\"Kinematic\""};
+        const auto raw = static_cast<uint8_t>(v.motion);
+        if (raw < std::size(kMotions)) {
+            t.token("\"motion\"", kMotions[raw]);
+        } else {
+            t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum Motion");
+            t.null("\"motion\"");
+        }
+    }
+    if (!omit || !same(v.mass, omit->mass)) t.f32("\"mass\"", v.mass);
+    if (!omit || !same(v.friction, omit->friction)) t.f32("\"friction\"", v.friction);
+    if (!omit || !same(v.restitution, omit->restitution)) t.f32("\"restitution\"", v.restitution);
+}
+
 void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out) {
     if (!omit || v.tag != omit->tag) out.tree.string("\"tag\"", v.tag);
 }

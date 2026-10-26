@@ -32,6 +32,8 @@ void writeFields(const Spin& v, const Spin* omit, FieldSink& out);
 void writeFields(const InputActions& v, const InputActions* omit, FieldSink& out);
 void writeFields(const FlyController& v, const FlyController* omit, FieldSink& out);
 void writeFields(const Level& v, const Level* omit, FieldSink& out);
+void writeFields(const Collider& v, const Collider* omit, FieldSink& out);
+void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out);
 void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out);
 void writeFields(const Socket& v, const Socket* omit, FieldSink& out);
 

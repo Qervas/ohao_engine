@@ -29,6 +29,7 @@ void recompute(entt::registry& reg, entt::entity root) {
             reg.emplace<WorldTransform>(e, WorldTransform{world, world});
         }
         reg.emplace_or_replace<RenderDirty>(e);
+        if (reg.any_of<PhysicsBody, ColliderPart>(e)) reg.emplace_or_replace<PhysicsMoved>(e);   // the physics system follows
         reg.remove<TransformDirty>(e);
         if (const auto* ch = reg.try_get<Children>(e))
             stack.insert(stack.end(), ch->entities.begin(), ch->entities.end());

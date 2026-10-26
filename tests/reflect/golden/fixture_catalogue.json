@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "d976e572eec2c6a6",
+  "schemaHash": "0d1cb0be7956b11a",
   "units": [
     "m",
     "m/s",
@@ -140,6 +140,18 @@
     {
       "code": "W_LEVEL_UNSUPPORTED",
       "meaning": "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, orthographic cameras)."
+    },
+    {
+      "code": "W_LEVEL_DYNAMIC_MESH",
+      "meaning": "Warning: a dynamic body's mesh collider; it is built as the mesh's convex hull, since triangle meshes do not simulate."
+    },
+    {
+      "code": "W_COLLIDER_NO_MESH",
+      "meaning": "Warning: a collider with no size on an entity whose mesh is missing or did not load; it gets no collider."
+    },
+    {
+      "code": "W_COLLIDER_SCALE",
+      "meaning": "Warning: a sphere or capsule collider under a scale whose axes differ by more than 1%; it takes the largest axis."
     }
   ],
   "methods": [],

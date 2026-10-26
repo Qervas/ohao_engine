@@ -92,6 +92,8 @@ namespace CollisionLayer {
 // Shape description (backend-agnostic)
 // ============================================================================
 
+struct CompoundChild;
+
 struct ShapeInfo {
     enum class Type {
         BOX,
@@ -101,7 +103,8 @@ struct ShapeInfo {
         PLANE,
         MESH,
         HEIGHTFIELD,
-        CONVEX_HULL
+        CONVEX_HULL,
+        COMPOUND
     };
 
     Type type = Type::BOX;
@@ -133,6 +136,11 @@ struct ShapeInfo {
     float heightfieldMinHeight = 0.0f;
     float heightfieldMaxHeight = 1.0f;
 
+    // COMPOUND: child shapes, each placed in the body's frame (one rigid shape; a static
+    // compound in Jolt). A child is any other type, a compound included. A single child with
+    // an offset is how a shape away from the body's origin is made.
+    std::vector<CompoundChild> children;
+
     // Span convenience (sets raw pointers; caller keeps storage alive)
     void setMesh(std::span<const glm::vec3> vertices, std::span<const uint32_t> indices) noexcept {
         meshVertices = vertices.data();
@@ -155,6 +163,12 @@ struct ShapeInfo {
     [[nodiscard]] std::span<const uint32_t> meshIndexSpan() const noexcept {
         return {meshIndices, meshIndexCount};
     }
+};
+
+struct CompoundChild {
+    ShapeInfo shape;
+    glm::vec3 position{0.0f};          // in the body's frame
+    glm::quat rotation{1, 0, 0, 0};
 };
 
 // ============================================================================
