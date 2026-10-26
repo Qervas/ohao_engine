@@ -105,7 +105,7 @@ struct MovedLastFrame {};
 
 using AssetRef = reflect::AssetRef;   // {path (project-relative, '/'), guid (empty until the asset DB)}
 
-struct ModelAsset   { AssetRef asset; };
+struct ModelAsset   { AssetRef asset; std::string mesh; };   // mesh: one glTF mesh (name or #index); empty: the file
 struct SpherePrim   { float radius{0.5f}; int32_t sectors{32}; int32_t stacks{16}; };
 struct CubePrim     { float size{1.0f}; };
 struct PlatformPrim { float width{2.0f}; float height{0.4f}; float depth{2.0f}; };

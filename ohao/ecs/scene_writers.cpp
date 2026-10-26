@@ -33,7 +33,10 @@ void assetRef(LayoutTree& t, std::string_view key, const AssetRef& a) {
 }
 
 // Each primitive in full (a variant's value is never shortened).
-void prim(LayoutTree& t, const ModelAsset& p) { assetRef(t, "\"asset\"", p.asset); }
+void prim(LayoutTree& t, const ModelAsset& p) {
+    assetRef(t, "\"asset\"", p.asset);
+    if (!p.mesh.empty()) t.string("\"mesh\"", p.mesh);   // omitDefault: files without it keep their bytes
+}
 void prim(LayoutTree& t, const SpherePrim& p) {
     t.f32("\"radius\"", p.radius);
     t.i64("\"sectors\"", p.sectors);
@@ -77,7 +80,7 @@ static_assert(std::size(kAltKeys) == std::variant_size_v<decltype(MeshSource::so
 // equal bytes is bit-exact field equality.
 template <class P>
 bool samePrim(const P& a, const P& b) {
-    if constexpr (std::is_same_v<P, ModelAsset>) return a.asset == b.asset;
+    if constexpr (std::is_same_v<P, ModelAsset>) return a.asset == b.asset && a.mesh == b.mesh;
     else return std::memcmp(&a, &b, sizeof(P)) == 0;
 }
 

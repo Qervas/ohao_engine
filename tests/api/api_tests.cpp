@@ -1077,7 +1077,7 @@ static void t10_snapshot_and_restore_through_the_api() {
 namespace {
 // Knows one model path; never touches the disk.
 struct OneFileResolver final : ecs::AssetResolver {
-    Result<std::shared_ptr<const Model>, ecs::AssetError> loadModel(const ecs::AssetRef&) override {
+    Result<std::shared_ptr<const Model>, ecs::AssetError> loadModel(const ecs::AssetRef&, std::string_view = {}) override {
         return Result<std::shared_ptr<const Model>, ecs::AssetError>::err({"E_ASSET_NOT_FOUND", "fake"});
     }
     bool exists(const ecs::AssetRef& r) const override { return r.path == "props/chair.glb"; }

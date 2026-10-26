@@ -130,7 +130,7 @@ one output line; every line runs, and the exit code is the worst one seen.
 $ printf '%s\n' '{"method":"world.snapshot","params":{"name":"base"}}' '{"method":"world.step","params":{"frames":30,"dt":0.0333333}}' '{"method":"world.query","params":{"names":["MetalSphere 2"],"fields":["/Transform/rotation"]}}' '{"method":"world.restore","params":{"name":"base"}}' > build/doc_tmp/spin.jsonl
 $ build/Release/ohao run build/doc_tmp/edited.scene.json --script build/doc_tmp/spin.jsonl
 {"method":"scene.load","result":{"entities":22}}
-{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4160}}
+{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4352}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"world.query","result":{"entities":[{"id":"910a2dec89025cc1","Transform":{"rotation":[0,0.25881878,0,0.96592593]}}],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":1,"frame":0}}

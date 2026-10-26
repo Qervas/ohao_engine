@@ -67,17 +67,14 @@ makes it work.
 {{cite ohao/scene/asset/primitive_mesh_generator.cpp "vertex.normal = {x, y, z};"}}
 {{cite shaders/rt/pt_closesthit.rchit "vec3 vtxNormal(uint v) { uint b = v * 25u + 6u; return vec3(vtx[b], vtx[b + 1u], vtx[b + 2u]); }"}}
 
-The OBJ and Assimp loaders substitute `(0,1,0)` when a file carries none, so they
-cannot reach the fallback either.
+The loaders leave a zero normal where a file carries none — OBJ, Assimp, and `ufbx`,
+which writes the vertex normal only when the mesh has a normal layer — and
+`ModelLoader` then gives every such vertex its faces' smooth normal, so a loaded
+model cannot reach the fallback either.
 
-{{cite ohao/scene/asset/model.cpp "vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);"}}
-{{cite ohao/scene/asset/model_loader.cpp "v.normal = nLen > 1e-20f ? n / nLen : glm::vec3(0, 1, 0);"}}
-
-The one live path that can still produce a zero normal is FBX: `ufbx` writes the
-vertex normal only when the mesh has a normal layer, so a mesh without one leaves
-`Vertex::normal` at its zero-initialised default.
-
+{{cite ohao/scene/asset/model.cpp "vertex.normal = glm::vec3(0.0f);"}}
 {{cite ohao/scene/asset/model_fbx.cpp "if (mesh->vertex_normal.exists)"}}
+{{cite ohao/scene/asset/model_loader.cpp "// Post-load: give vertices the file left without a normal their faces' smooth normal"}}
 
 Real meshes therefore get no flip, and every TLAS instance disables triangle
 culling, so a hit from behind keeps its outward normal.

@@ -92,7 +92,7 @@ restores and replays to the same hash:
 $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000000000001 --script docs/agents/examples/fly.jsonl
 {"method":"scene.load","result":{"entities":19}}
 {"method":"world.query","result":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,30.534174]},"FlyController":{"moveSpeed":3}}],"count":1}}
-{"method":"world.snapshot","result":{"name":"start","entities":19,"bytes":4000}}
+{"method":"world.snapshot","result":{"name":"start","entities":19,"bytes":4288}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":0,"events":0}}
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}

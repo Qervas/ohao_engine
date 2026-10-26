@@ -1,0 +1,8 @@
+# A unit square in z = 0, two triangles wound counter-clockwise about +Z, no normals:
+# the loader must make them (the repair), facing +Z.
+v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+f 1 2 3
+f 1 3 4

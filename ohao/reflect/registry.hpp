@@ -70,6 +70,7 @@ public:
     TypeBuilder& hidden();
     TypeBuilder& readOnly();
     TypeBuilder& required();   // must be given (method params)
+    TypeBuilder& omitDefault();   // written only when not the default, even inside a variant
     TypeBuilder& maxItems(uint32_t n);   // an array (vector, optional vector or JSON): at most n elements
     TypeBuilder& alias(std::string_view oldName);
 
@@ -394,6 +395,7 @@ TypeBuilder<T>& TypeBuilder<T>::angle() {
 template <class T> TypeBuilder<T>& TypeBuilder<T>::hidden() { if (auto* f = last("hidden")) f->attrs.hidden = true; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::readOnly() { if (auto* f = last("readOnly")) f->attrs.readOnly = true; return *this; }
 template <class T> TypeBuilder<T>& TypeBuilder<T>::required() { if (auto* f = last("required")) f->attrs.required = true; return *this; }
+template <class T> TypeBuilder<T>& TypeBuilder<T>::omitDefault() { if (auto* f = last("omitDefault")) f->attrs.omitDefault = true; return *this; }
 
 template <class T>
 TypeBuilder<T>& TypeBuilder<T>::maxItems(uint32_t n) {

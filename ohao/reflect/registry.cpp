@@ -80,6 +80,7 @@ void writeStruct(const void* object, JsonWriter& w, const TypeInfo& t, const voi
     w.beginObject();
     for (const auto& f : t.fields) {
         if (omitEqualTo && f.ops->equal(object, omitEqualTo, *f.type)) continue;
+        if (f.attrs.omitDefault && t.defaultValue && f.ops->equal(object, t.defaultValue.get(), *f.type)) continue;
         w.key(f.name);
         f.ops->write(object, w, *f.type);
     }
@@ -137,7 +138,12 @@ void hashStruct(const void* object, Hasher& h, const TypeInfo& t) {
         h.words(object, t.size);
         return;
     }
-    for (const auto& f : t.fields) f.ops->hash(object, h, *f.type);
+    for (const auto& f : t.fields) {
+        // As the writer: an omitDefault field at its default adds nothing, so a field added
+        // later leaves older worlds' hashes as they were.
+        if (f.attrs.omitDefault && t.defaultValue && f.ops->equal(object, t.defaultValue.get(), *f.type)) continue;
+        f.ops->hash(object, h, *f.type);
+    }
 }
 
 std::string typeName(const TypeDesc& d) {

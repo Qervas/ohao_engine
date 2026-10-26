@@ -24,22 +24,23 @@ bool FileAssetResolver::exists(const AssetRef& ref) const {
     return !p.empty() && fs::is_regular_file(p, ec);
 }
 
-Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(const AssetRef& ref) {
+Result<std::shared_ptr<const Model>, AssetError> FileAssetResolver::loadModel(const AssetRef& ref, std::string_view mesh) {
     using R = Result<std::shared_ptr<const Model>, AssetError>;
     const fs::path p = absolutePath(ref);
     if (p.empty())
         return R::err({"E_ASSET_NOT_FOUND", ref.path.empty() ? "the asset path is empty"
                                                              : "'" + ref.path + "' is not a relative path inside the project"});
-    const std::string key = p.generic_string();
+    const std::string file = p.generic_string();
+    const std::string key = mesh.empty() ? file : file + "\n" + std::string(mesh);
     {
         std::lock_guard lock(m_mutex);
         if (const auto it = m_models.find(key); it != m_models.end()) return R::ok(it->second);
     }
     std::error_code ec;
     if (!fs::is_regular_file(p, ec)) return R::err({"E_ASSET_NOT_FOUND", "no file '" + ref.path + "' in the project"});
-    if (!ModelLoader::isSupportedExtension(ModelLoader::getExtension(key)))
+    if (!ModelLoader::isSupportedExtension(ModelLoader::getExtension(file)))
         return R::err({"E_ASSET_INVALID", "'" + ref.path + "' is not a supported model format (glb, gltf, fbx, obj, dae, blend, 3ds, ply)"});
-    auto loaded = ModelLoader::loadResult(key);
+    auto loaded = mesh.empty() ? ModelLoader::loadResult(file) : ModelLoader::loadMesh(file, mesh);
     if (!loaded || !loaded.value()) {
         const std::string why = loaded ? std::string("the loader returned nothing") : loaded.error();
         return R::err({"E_ASSET_INVALID", "'" + ref.path + "' could not be loaded: " + why});

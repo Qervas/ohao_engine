@@ -11,7 +11,7 @@ figures: [scene-loaders-routing]
 Every model file enters OHAO through one function. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. Nothing in the tree calls it directly. Everything reaches it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else, and it has two callers: `model_viewer`, for a model outside the project, and the file asset resolver, which every `ModelAsset` in a scene goes through — so `ohao_game` (playing `helmet_game.scene.json`), `ohao run` and `model_viewer`'s in-project models all load this way.
 
 {{cite ohao/scene/asset/model_loader.cpp "// GLB, GLTF, DAE, etc → Assimp"}}
-{{cite ohao/ecs/asset_resolver.cpp "auto loaded = ModelLoader::loadResult(key);"}}
+{{cite ohao/ecs/asset_resolver.cpp "auto loaded = mesh.empty() ? ModelLoader::loadResult(file) : ModelLoader::loadMesh(file, mesh);"}}
 
 `env_demo` and `turntable` call `ModelLoader::load` directly. There is no second glTF importer, so a `.glb` takes the same path wherever it is loaded, with the V coordinate flipped on import.
 
@@ -40,27 +40,25 @@ That is why the whole file is then read a second time through Assimp, purely for
 The obvious alternative — welding the ufbx output ourselves with a position/normal/UV hash — was not taken. Assimp already ships a tested welder plus degenerate-face removal, cache-locality reordering and infacing-normal repair, so a second full parse buys four passes for one dependency call. The cost is that this is the one route where two libraries' material *orderings* are assumed to match: when the texture guard above fires, `materialTextureIndex` is grafted from ufbx (indexed by `typed_id`) onto geometry whose `materialPerTriangle` uses Assimp's indices, and nothing checks that they agree.
 :::
 
-## The normal repair that also erases hard edges
+## The normal repair, for vertices without a normal
 
-Every model that comes out of `ModelLoader::load` — not just FBX — is run through `repairMeshNormals`. On the FBX route that means the *Assimp* geometry: the reassignment happens first, so the repair never touches ufbx's triangle soup.
+Every model that comes out of `ModelLoader::load` — not just FBX — is run through `repairMeshNormals`, and so is every mesh `loadMesh` returns. On the FBX route that means the *Assimp* geometry: the reassignment happens first, so the repair never touches ufbx's triangle soup.
 
 {{cite ohao/scene/asset/model_loader.cpp "model = assimpModel;"}}
 
-It buckets vertices by quantised position using an FNV-1a hash of the integer cell coordinates, with a cell edge of one hundred-thousandth of the mesh diagonal:
+It only fills in what the file did not give. A loader that finds no normal leaves zero in the vertex (the OBJ parser and the Assimp emitter both do), and the repair rewrites exactly the vertices whose normal is zero-length or not finite; a model whose every vertex has a normal is returned untouched.
+
+{{cite ohao/scene/asset/model_loader.cpp "if (!missingNormal(v.normal)) continue;"}}
+
+For those vertices it buckets positions using an FNV-1a hash of the integer cell coordinates, with a cell edge of one hundred-thousandth of the mesh diagonal:
 
 {{cite ohao/scene/asset/model_loader.cpp "float cellSize = meshSize * 1e-5f;"}}
 
 Face normals are accumulated per bucket as raw cross products. Because $\lVert (p_1-p_0)\times(p_2-p_0)\rVert$ equals twice the triangle area, skipping the normalisation makes the accumulation area-weighted for free — large triangles pull the vertex normal toward their plane in proportion to their area, which is what you want and what a naive normalise-then-sum gets wrong.
 
-The subtlety is that the result is written back unconditionally, to every vertex whose position bucket exists:
+A file's own normals are kept, so its hard edges survive: a cube exported with 24 vertices and six flat face normals keeps all six. The repair used to write the smoothed normal back to *every* vertex, which averaged the three normals meeting at each cube corner into one and rounded every flat-shaded box; the level pipeline's blockout showed it (sub-project 5, step 2, `docs/changes/2026-10-26-level-pipeline-step2.md`).
 
-{{cite ohao/scene/asset/model_loader.cpp "v.normal = it->second;"}}
-
-The triangle-soup detection nearby looks like it gates the repair. It does not — it only decides whether a log line is printed.
-
-{{cite ohao/scene/asset/model_loader.cpp "if (isTriangleSoup || changed > vertices.size() / 10) {"}}
-
-The consequence is concrete: a cube exported with 24 vertices and six flat face normals still has only 8 distinct *positions*, so the three normals meeting at each corner are averaged into one. Hard creases cannot survive this function. Anything authored with split normals loses them on load.
+The cost of keeping authored normals is that a mesh exported as triangle soup *with* flat per-face normals (some AI-generated models) now renders faceted, as authored, instead of smoothed on load. Smoothing such a model is an authoring step (Blender's Shade Smooth), not a loader guess.
 
 ## The node walk
 
@@ -69,7 +67,7 @@ The Assimp path walks the node tree from `mRootNode`, depth first, multiplying e
 {{cite ohao/scene/asset/model_loader.cpp "const glm::mat4 toModel = parent * toGlm(node->mTransformation);"}}
 {{cite ohao/scene/asset/model_loader.cpp "uint32_t globalVertexOffset = 0;"}}
 
-Positions take the full matrix. Normals take the inverse transpose of its upper 3x3, which keeps them perpendicular to the surface under a non-uniform scale; tangents lie in the surface, so they take the 3x3 itself. A matrix with a negative determinant mirrors the mesh, which would turn every triangle inside out, so the emitter swaps two indices of each face and negates the tangent's handedness. The winding matters beyond culling: `repairMeshNormals` below recomputes normals from it.
+Positions take the full matrix. Normals take the inverse transpose of its upper 3x3, which keeps them perpendicular to the surface under a non-uniform scale; tangents lie in the surface, so they take the 3x3 itself. A matrix with a negative determinant mirrors the mesh, which would turn every triangle inside out, so the emitter swaps two indices of each face and negates the tangent's handedness. The winding matters beyond culling: `repairMeshNormals` above makes the normals a file did not give from it.
 
 {{cite ohao/scene/asset/model_loader.cpp "const glm::mat3 normalMat = glm::transpose(glm::inverse(linear));"}}
 {{cite ohao/scene/asset/model_loader.cpp "model->indices.push_back(globalVertexOffset + face.mIndices[mirrored ? 2 : 1]);"}}

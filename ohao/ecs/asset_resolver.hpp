@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace ohao { class Model; }
@@ -23,7 +24,9 @@ struct AssetError {
 class AssetResolver {
 public:
     virtual ~AssetResolver() = default;
-    [[nodiscard]] virtual Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref) = 0;
+    // `mesh` empty: the whole file; else one glTF mesh by name or "#<index>" (ModelAsset::mesh).
+    [[nodiscard]] virtual Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref,
+                                                                                     std::string_view mesh = {}) = 0;
     [[nodiscard]] virtual bool exists(const AssetRef& ref) const = 0;   // no load
     // Empty for a path the resolver rejects (absolute, or outside the project).
     [[nodiscard]] virtual std::filesystem::path absolutePath(const AssetRef& ref) const = 0;
@@ -31,12 +34,13 @@ public:
 
 // Files under a project root. Paths are '/'-separated and relative; absolute paths and
 // paths that leave the root ("../") are rejected. Loaded models are cached by normalized
-// path until clearCache().
+// path (and mesh) until clearCache().
 class FileAssetResolver final : public AssetResolver {
 public:
     explicit FileAssetResolver(std::filesystem::path projectRoot);
 
-    [[nodiscard]] Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref) override;
+    [[nodiscard]] Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& ref,
+                                                                             std::string_view mesh = {}) override;
     [[nodiscard]] bool exists(const AssetRef& ref) const override;
     [[nodiscard]] std::filesystem::path absolutePath(const AssetRef& ref) const override;
 

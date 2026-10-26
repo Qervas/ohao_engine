@@ -16,6 +16,7 @@
 #include "ecs/snapshot.hpp"
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
+#include "level/gltf_structure.hpp"
 #include "reflect/schema.hpp"
 #include "gpu/shared_layout.hpp"
 #include "render/scene/meshlet_builder.hpp"
@@ -33,6 +34,11 @@
 #include <limits>
 
 #include <boost/pfr.hpp>
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <span>
 
 #include <algorithm>
 #include <chrono>
@@ -1202,15 +1208,17 @@ struct FakeBackend final : InstantiateBackend {
     }
 };
 
-// Models held in memory: nothing touches the disk.
+// Models held in memory: nothing touches the disk. One mesh of a file is "path\nmesh".
 struct FakeResolver final : AssetResolver {
     int loads = 0;
     std::map<std::string, std::shared_ptr<const Model>> files;
-    Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& r) override {
+    Result<std::shared_ptr<const Model>, AssetError> loadModel(const AssetRef& r, std::string_view mesh = {}) override {
         ++loads;
-        const auto it = files.find(r.path);
+        const std::string key = mesh.empty() ? r.path : r.path + "\n" + std::string(mesh);
+        const auto it = files.find(key);
         if (it == files.end())
-            return Result<std::shared_ptr<const Model>, AssetError>::err({"E_ASSET_NOT_FOUND", "no file '" + r.path + "'"});
+            return Result<std::shared_ptr<const Model>, AssetError>::err(
+                {"E_ASSET_NOT_FOUND", mesh.empty() ? "no file '" + r.path + "'" : "'" + r.path + "' has no mesh '" + std::string(mesh) + "'"});
         return Result<std::shared_ptr<const Model>, AssetError>::ok(it->second);
     }
     bool exists(const AssetRef& r) const override { return files.contains(r.path); }
@@ -2093,6 +2101,337 @@ static void sp2b_t07_meshlets_cover_the_damaged_helmet() {
 
 // ---- main --------------------------------------------------------------------------------
 
+// ---- level pipeline: the glTF structure reader (sub-project 5, test 2) ---------------------
+
+static const fs::path kLevelFixtures = fs::path(OHAO_SOURCE_DIR) / "tests" / "level" / "fixtures";
+static const fs::path kBlockout = fs::path(OHAO_SOURCE_DIR) / "assets" / "levels" / "blockout_room.glb";
+
+static Result<level::GltfStructure, level::GltfError> readStructure(const fs::path& p) {
+    const std::string bytes = readFile(p);
+    return level::readGltfStructure(std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+}
+
+static bool nearVec(const glm::vec3& a, const glm::vec3& b, float eps = 1e-6f) {
+    return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(eps)));
+}
+// The same rotation (q and -q are one rotation).
+static bool sameRotation(const glm::quat& a, const glm::quat& b, float eps = 1e-6f) {
+    return std::abs(std::abs(glm::dot(a, b)) - 1.0f) <= eps;
+}
+
+// nodes.gltf: scene 0's roots are Room (children Wall and an unnamed node) and Spawn; Orphan
+// is in no scene. WallMesh's primitives are 36 indices (12 triangles), a strip of 8 vertices
+// (6) and lines (none).
+static void sp5_t02_structure_reads_nodes_trs_and_hierarchy() {
+    const auto r = readStructure(kLevelFixtures / "nodes.gltf");
+    CHECK(r, "nodes.gltf reads");
+    const level::GltfStructure& s = r.value();
+    CHECK(s.nodes.size() == 4, "the default scene's four nodes; the orphan is not in it");
+    CHECK(s.nodes[0].name == "Room" && s.nodes[0].parent == -1 && nearVec(s.nodes[0].translation, {1, 2, 3}),
+          "Room first, a root, translated");
+    CHECK(s.nodes[1].name == "Wall" && s.nodes[1].parent == 0 && s.nodes[1].mesh == 0, "Wall next, Room's child, mesh 0");
+    CHECK(s.nodes[2].name.empty() && s.nodes[2].parent == 0 && nearVec(s.nodes[2].scale, {2, 2, 2}) &&
+              sameRotation(s.nodes[2].rotation, glm::quat(0.7071068f, 0, 0.7071068f, 0)),
+          "the unnamed child: glTF's [x, y, z, w] rotation and its scale");
+    CHECK(s.nodes[3].name == "Spawn" && s.nodes[3].parent == -1 && s.nodes[3].mesh == -1, "Spawn, the second root");
+    CHECK(level::nodePath(s, 0) == "/Room" && level::nodePath(s, 1) == "/Room/Wall" && level::nodePath(s, 2) == "/Room/#2" &&
+              level::nodePath(s, 3) == "/Spawn",
+          "paths name the chain from the root, #index for an unnamed node");
+    CHECK(s.meshes.size() == 2 && s.meshes[0].name == "WallMesh" && s.meshes[0].primitives == 3 &&
+              s.meshes[0].triangles == 18 && s.meshes[1].name.empty() && s.meshes[1].primitives == 1,
+          "meshes with their primitive and triangle counts (lines count none)");
+    CHECK(s.generator == "OHAO fixture" && s.sceneExtrasJson == R"({"col":"none"})" && s.unsupported.empty(),
+          "the generator and the scene's own extras");
+}
+
+static void sp5_t02_extras_kept_verbatim() {
+    const auto r = readStructure(kLevelFixtures / "nodes.gltf");
+    CHECK(r, "nodes.gltf reads");
+    const level::GltfStructure& s = r.value();
+    std::printf("\n      Wall extras %s ", s.nodes[1].extrasJson.c_str());
+    CHECK(s.nodes[1].extrasJson == R"({"col":"box","mass":20.0,"vis":0,"tags":["a","b c"]})",
+          "extras as compact JSON: member order, integers and non-integers, strings kept");
+    CHECK(s.nodes[3].extrasJson == R"({"spawn":"player"})" && s.nodes[0].extrasJson.empty(),
+          "a node without extras has none");
+}
+
+// matrix.gltf: Turned = translate (1,2,3) * rotate 90 degrees about Y * scale (2,3,4);
+// Mirror = translate (0,0,5) * scale (-1,1,1).
+static void sp5_t02_matrix_nodes_decompose() {
+    const auto r = readStructure(kLevelFixtures / "matrix.gltf");
+    CHECK(r, "matrix.gltf reads");
+    const level::GltfStructure& s = r.value();
+    CHECK(s.nodes.size() == 2, "two nodes");
+    const level::GltfNode& t = s.nodes[0];
+    CHECK(nearVec(t.translation, {1, 2, 3}) && nearVec(t.scale, {2, 3, 4}, 1e-5f) &&
+              sameRotation(t.rotation, glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0)), 1e-5f),
+          "a matrix becomes its translation, rotation and scale");
+    const level::GltfNode& m = s.nodes[1];
+    CHECK(nearVec(m.translation, {0, 0, 5}) && nearVec(m.scale, {-1, 1, 1}) && sameRotation(m.rotation, glm::quat(1, 0, 0, 0)),
+          "a mirroring matrix is a negative X scale and no rotation");
+    const glm::mat4 rebuilt = glm::translate(glm::mat4(1.0f), t.translation) * glm::mat4_cast(t.rotation) *
+                              glm::scale(glm::mat4(1.0f), t.scale);
+    const float expected[16] = {0, 0, -2, 0, 0, 3, 0, 0, 4, 0, 0, 0, 1, 2, 3, 1};
+    float worst = 0.0f;
+    for (int i = 0; i < 16; ++i) worst = std::max(worst, std::abs(glm::value_ptr(rebuilt)[i] - expected[i]));
+    CHECK(worst < 1e-5f, "T * R * S rebuilds the file's matrix");
+}
+
+static void sp5_t02_sheared_matrix_is_an_error() {
+    const auto r = readStructure(kLevelFixtures / "errors_shear.gltf");
+    CHECK(!r && r.error().code == "E_LEVEL_NODE" && r.error().path == "/Room/Skewed" &&
+              r.error().message.find("shear") != std::string::npos,
+          "a sheared matrix is E_LEVEL_NODE, naming the node's path");
+}
+
+static void sp5_t02_khr_lights_and_cameras() {
+    const auto r = readStructure(kLevelFixtures / "lights_cameras.gltf");
+    CHECK(r, "lights_cameras.gltf reads");
+    const level::GltfStructure& s = r.value();
+    using T = level::GltfLight::Type;
+    CHECK(s.lights.size() == 3 && s.lights[0].type == T::Point && nearVec(s.lights[0].color, {1, 0.5f, 0.25f}) &&
+              s.lights[0].intensity == 40.0f && s.lights[0].range == 12.0f,
+          "a point light with colour, intensity and range");
+    CHECK(s.lights[1].type == T::Spot && s.lights[1].range == 0.0f && s.lights[1].innerCone == 0.2f &&
+              s.lights[1].outerCone == 0.6f && nearVec(s.lights[1].color, {1, 1, 1}),
+          "a spot light: cones, no range (infinite), white by default");
+    CHECK(s.lights[2].type == T::Directional && s.lights[2].intensity == 3.0f, "a directional light");
+    CHECK(s.nodes[0].light == 0 && s.nodes[1].light == 1 && s.nodes[2].light == 2, "nodes reference their lights");
+    CHECK(s.cameras.size() == 3 && s.nodes[3].camera == 0 && s.cameras[0].yfovRad == 1.2f && s.cameras[0].znear == 0.05f &&
+              s.cameras[0].zfar == 300.0f,
+          "a perspective camera");
+    CHECK(s.nodes[4].camera == 1 && s.cameras[1].zfar == 0.0f, "a camera without zfar is infinite (0)");
+    CHECK(s.nodes[5].camera == -1, "an orthographic camera is not a camera here");
+    const auto has = [&](const char* k) { return std::find(s.unsupported.begin(), s.unsupported.end(), k) != s.unsupported.end(); };
+    CHECK(s.unsupported.size() == 4 && has("skins") && has("animations") && has("orthographic cameras") &&
+              has("KHR_materials_clearcoat"),
+          "unsupported content is listed once per kind");
+}
+
+static void sp5_t02_draco_is_refused() {
+    const auto r = readStructure(kLevelFixtures / "errors_draco.gltf");
+    CHECK(!r && r.error().code == "E_LEVEL_UNSUPPORTED" && r.error().message.find("KHR_draco_mesh_compression") != std::string::npos,
+          "Draco compression is E_LEVEL_UNSUPPORTED, naming the extension");
+}
+
+static void sp5_t02_malformed_files_are_invalid() {
+    const auto bad = readStructure(kLevelFixtures / "errors_bad_index.gltf");
+    CHECK(!bad && bad.error().code == "E_ASSET_INVALID" && bad.error().path == "/Room", "a child index out of range");
+    const std::string notJson = "this is not glTF";
+    const auto nj = level::readGltfStructure(std::span(reinterpret_cast<const uint8_t*>(notJson.data()), notJson.size()));
+    CHECK(!nj && nj.error().code == "E_ASSET_INVALID", "text that is not JSON");
+    std::string glb = readFile(kBlockout);
+    glb[4] = 1;   // version 1
+    const auto v1 = level::readGltfStructure(std::span(reinterpret_cast<const uint8_t*>(glb.data()), glb.size()));
+    CHECK(!v1 && v1.error().code == "E_ASSET_INVALID" && v1.error().message.find("version 1") != std::string::npos,
+          "a glTF 1 binary");
+    const auto readText = [](const std::string& json) {
+        return level::readGltfStructure(std::span(reinterpret_cast<const uint8_t*>(json.data()), json.size()));
+    };
+    const auto cycle = readText(R"({"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"children":[1]},{"children":[0]}]})");
+    CHECK(!cycle && cycle.error().code == "E_ASSET_INVALID" && cycle.error().message.find("reached twice") != std::string::npos,
+          "a node cycle");
+    const auto twoParents = readText(R"({"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[{"children":[2]},{"children":[2]},{}]})");
+    CHECK(!twoParents && twoParents.error().code == "E_ASSET_INVALID" && twoParents.error().message.find("reached twice") != std::string::npos,
+          "a node with two parents");
+}
+
+static void sp5_t02_default_scene_is_used() {
+    const auto r = readStructure(kLevelFixtures / "scenes.gltf");
+    CHECK(r && r.value().nodes.size() == 1 && r.value().nodes[0].name == "InChosen", "`scene` picks the scene; others are ignored");
+}
+
+// assets/levels/blockout_room.glb (step 1's contract): 17 root nodes, 13 meshes, 12 boxes of 12
+// triangles and the ramp's wedge of 8, the hints as extras.
+static void sp5_t02_blockout_structure() {
+    const auto r = readStructure(kBlockout);
+    CHECK(r, "the blockout reads");
+    const level::GltfStructure& s = r.value();
+    CHECK(s.nodes.size() == 17 && s.meshes.size() == 13, "17 nodes, 13 meshes");
+    uint64_t triangles = 0;
+    for (const auto& m : s.meshes) {
+        triangles += m.triangles;
+        CHECK(m.primitives == 1 && m.triangles == (m.name == "Ramp" ? 8u : 12u), "one primitive per mesh: a box or the wedge");
+    }
+    CHECK(triangles == 152, "152 triangles, as the merged model's 456 indices");
+    const auto node = [&](const char* name) {
+        for (const auto& n : s.nodes)
+            if (n.name == name) return &n;
+        return static_cast<const level::GltfNode*>(nullptr);
+    };
+    const auto* crate = node("CrateA");
+    const auto* spawn = node("SpawnPlayer");
+    const auto* cam = node("LevelCamera");
+    CHECK(crate && crate->parent == -1 && crate->mesh >= 0 && nearVec(crate->translation, {1.3f, 0.3f, -1.7f}, 1e-6f) &&
+              crate->extrasJson == R"({"col":"box","body":"dynamic","mass":20.0})",
+          "CrateA: its place and hints");
+    CHECK(spawn && spawn->mesh == -1 && spawn->extrasJson == R"({"spawn":"player"})", "SpawnPlayer: an empty with its tag");
+    CHECK(cam && cam->camera == 0 && s.cameras.size() == 1, "the camera node");
+    CHECK(s.generator.rfind("Khronos glTF Blender I/O", 0) == 0 && s.unsupported.empty(), "Blender's exporter, nothing unsupported");
+}
+
+// ---- level pipeline: per-mesh geometry (sub-project 5, test 3) -----------------------------
+
+// FNV-1a over everything a loader returns except the normals (step 5 of the plan changes those
+// on purpose): positions, colours, both UV sets, tangents, indices, per-triangle materials,
+// material colours and metalness, and the texture counts.
+static uint64_t modelHashWithoutNormals(const Model& m) {
+    uint64_t h = 1469598103934665603ULL;
+    const auto mix = [&](const void* p, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ULL;
+    };
+    for (const Vertex& v : m.vertices) {
+        mix(&v.position, sizeof v.position);
+        mix(&v.color, sizeof v.color);
+        mix(&v.texCoord, sizeof v.texCoord);
+        mix(&v.texCoord1, sizeof v.texCoord1);
+        mix(&v.tangent, sizeof v.tangent);
+    }
+    mix(m.indices.data(), m.indices.size() * sizeof(uint32_t));
+    mix(m.materialPerTriangle.data(), m.materialPerTriangle.size() * sizeof(m.materialPerTriangle[0]));
+    mix(m.materialColors.data(), m.materialColors.size() * sizeof(glm::vec4));
+    mix(m.materialMetallic.data(), m.materialMetallic.size() * sizeof(float));
+    const std::size_t textures[] = {m.albedoTextures.size(), m.normalTextures.size(), m.roughMetalTextures.size(),
+                                    m.emissiveTextures.size(), m.occlusionTextures.size()};
+    mix(textures, sizeof textures);
+    return h;
+}
+
+// Every blockout mesh loaded alone: its triangles are its accessors' (152 in all), it is not
+// moved by its node (the pillar is centred on the origin), it carries only its own material;
+// by name and by #index the same mesh.
+static void sp5_t03_load_mesh_matches_accessors() {
+    const auto r = readStructure(kBlockout);
+    CHECK(r, "the blockout reads");
+    const level::GltfStructure& s = r.value();
+    for (std::size_t i = 0; i < s.meshes.size(); ++i) {
+        const auto byIndex = ModelLoader::loadMesh(kBlockout.string(), "#" + std::to_string(i));
+        const auto byName = ModelLoader::loadMesh(kBlockout.string(), s.meshes[i].name);
+        CHECK(byIndex && byName, "every mesh loads by index and by name");
+        const Model& m = *byIndex.value();
+        if (m.indices.size() / 3 != s.meshes[i].triangles)
+            std::printf("\n      %s: %zu triangles, accessors %llu ", s.meshes[i].name.c_str(), m.indices.size() / 3,
+                        static_cast<unsigned long long>(s.meshes[i].triangles));
+        CHECK(m.indices.size() / 3 == s.meshes[i].triangles, "a mesh's triangles are its accessors'");
+        CHECK(m.materialColors.size() == 1 && m.materialPerTriangle.size() == m.indices.size() / 3 &&
+                  std::all_of(m.materialPerTriangle.begin(), m.materialPerTriangle.end(), [](auto k) { return k == 0; }),
+              "one material, the mesh's own, at index 0");
+        CHECK(modelHashWithoutNormals(m) == modelHashWithoutNormals(*byName.value()), "by name and by #index: the same mesh");
+    }
+    const auto pillar = ModelLoader::loadMesh(kBlockout.string(), "Pillar");
+    CHECK(pillar, "the pillar loads");
+    glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (const Vertex& v : pillar.value()->vertices) {
+        lo = glm::min(lo, v.position);
+        hi = glm::max(hi, v.position);
+    }
+    CHECK(nearVec(lo, {-0.3f, -1.5f, -0.3f}, 1e-5f) && nearVec(hi, {0.3f, 1.5f, 0.3f}, 1e-5f),
+          "untransformed: the 0.6 x 3 x 0.6 m pillar centred on its own origin, not at its node's (0, 1.5, -0.5)");
+    const auto missing = ModelLoader::loadMesh(kBlockout.string(), "Chandelier");
+    const auto outOfRange = ModelLoader::loadMesh(kBlockout.string(), "#13");
+    CHECK(!missing && missing.error().find("Chandelier") != std::string::npos && !outOfRange,
+          "a mesh the file does not have is an error naming it");
+    const auto notGltf = ModelLoader::loadMesh((fs::path(OHAO_SOURCE_DIR) / "assets" / "scenes" / "cornell_box.scene.json").string(), "#0");
+    CHECK(!notGltf, "per-mesh loading is glTF only");
+}
+
+// The whole-file path (an empty `mesh`) is unchanged by per-mesh loading: the hashes are from
+// the task's base commit (e47bccb), normals aside.
+static void sp5_t03_whole_file_unchanged() {
+    struct Case { const char* path; uint64_t hash; };
+    const Case cases[] = {
+        {"assets/levels/blockout_room.glb", 0xff69ea18844ea165ULL},
+        {"assets/test_models/DamagedHelmet.glb", 0x57901f2647bd9f79ULL},
+        {"tests/assets/node_transforms.gltf", 0x07bff31e8fe20a25ULL},
+    };
+    bool same = true;
+    for (const Case& c : cases) {
+        const auto m = ModelLoader::loadResult((fs::path(OHAO_SOURCE_DIR) / c.path).string());
+        CHECK(m, "the file loads");
+        const uint64_t h = modelHashWithoutNormals(*m.value());
+        if (h != c.hash) std::printf("\n      %s: 0x%016llxULL ", c.path, static_cast<unsigned long long>(h));
+        same = same && h == c.hash;
+    }
+    CHECK(same, "every merged model's bytes (normals aside) are the base commit's");
+}
+
+// Two entities on one (file, mesh) share one load and one upload; another mesh of the same
+// file is its own; the whole file is a third.
+static void sp5_t03_shared_mesh_uploads_once() {
+    InstantiateFixture f;
+    f.files.files["levels/kit.glb\nCrate"] = twoMaterialModel();
+    f.files.files["levels/kit.glb\nBarrel"] = PrimitiveMeshGenerator::makeSphere(0.4f, 12, 6);
+    f.files.files["levels/kit.glb"] = twoMaterialModel();
+    const auto a = f.add("a", MeshSource{ModelAsset{AssetRef{"levels/kit.glb", {}}, "Crate"}});
+    const auto b = f.add("b", MeshSource{ModelAsset{AssetRef{"levels/kit.glb", {}}, "Crate"}});
+    const auto c = f.add("c", MeshSource{ModelAsset{AssetRef{"levels/kit.glb", {}}, "Barrel"}});
+    const auto d = f.add("d", MeshSource{ModelAsset{AssetRef{"levels/kit.glb", {}}}});
+    f.step();
+    const auto& reg = f.world.registry();
+    CHECK(f.files.loads == 3 && f.backend->uploads == 3, "three distinct (file, mesh) sources: three loads, three uploads");
+    CHECK(reg.get<MeshRenderer>(a).mesh == reg.get<MeshRenderer>(b).mesh &&
+              reg.get<MeshRenderer>(a).mesh != reg.get<MeshRenderer>(c).mesh &&
+              reg.get<MeshRenderer>(a).mesh != reg.get<MeshRenderer>(d).mesh,
+          "one GPU mesh per (file, mesh)");
+    const auto missing = f.add("e", MeshSource{ModelAsset{AssetRef{"levels/kit.glb", {}}, "Lamp"}});
+    f.step();
+    CHECK(reg.get<InstantiateError>(missing).message.find("Lamp") != std::string::npos, "a missing mesh names itself");
+}
+
+// The largest |vertex normal - its triangle's face normal| (a distance, not an angle: float
+// acos cannot resolve an angle under about 0.02 degrees).
+static float worstNormalToFace(const Model& m) {
+    float worst = 0.0f;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vertex* v[3] = {&m.vertices[m.indices[t]], &m.vertices[m.indices[t + 1]], &m.vertices[m.indices[t + 2]]};
+        const glm::vec3 face = glm::normalize(glm::cross(v[1]->position - v[0]->position, v[2]->position - v[0]->position));
+        for (const Vertex* x : v) worst = std::max(worst, glm::length(x->normal - face));
+    }
+    return worst;
+}
+
+// A file's normals are kept: the blockout's flat-shaded boxes keep their face normals, loaded
+// alone and merged (they used to be smoothed across their 90-degree edges by the repair).
+// A mesh without normals still gets them.
+static void sp5_t03_authored_hard_edges_kept() {
+    const auto r = readStructure(kBlockout);
+    CHECK(r, "the blockout reads");
+    float worst = 0.0f;
+    for (const auto& mesh : r.value().meshes) {
+        const auto m = ModelLoader::loadMesh(kBlockout.string(), mesh.name);
+        CHECK(m, "every mesh loads");
+        worst = std::max(worst, worstNormalToFace(*m.value()));
+    }
+    const auto whole = ModelLoader::loadResult(kBlockout.string());
+    CHECK(whole, "the blockout loads");
+    const float merged = worstNormalToFace(*whole.value());
+    std::printf("\n      worst |normal - face normal|: per mesh %.2e, whole blockout %.2e ", worst, merged);
+    CHECK(worst <= 1e-4f && merged <= 1e-4f, "every vertex normal is its face's within 1e-4: the hard edges are kept");
+    const auto quad = ModelLoader::loadResult((kLevelFixtures / "no_normals.obj").string());
+    CHECK(quad && quad.value()->vertices.size() >= 4, "the OBJ without normals loads");
+    for (const Vertex& v : quad.value()->vertices)
+        CHECK(nearVec(v.normal, {0, 0, 1}, 1e-5f), "a mesh without normals is given them (the repair still runs there)");
+}
+
+static void sp5_t03_model_asset_mesh_round_trips() {
+    World w;
+    CHECK(load(w, R"({"format":"ohao.scene","version":1,"entities":[)"
+                  R"({"id":"00000000000000c1","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"levels/kit.glb"},"mesh":"Crate"}}}},)"
+                  R"({"id":"00000000000000c2","MeshSource":{"source":{"ModelAsset":{"asset":{"path":"levels/kit.glb"}}}}}]})"),
+          "loads");
+    const auto& reg = w.registry();
+    CHECK(std::get<ModelAsset>(reg.get<MeshSource>(w.findById(0xc1)).source).mesh == "Crate" &&
+              std::get<ModelAsset>(reg.get<MeshSource>(w.findById(0xc2)).source).mesh.empty(),
+          "mesh read, absent is empty");
+    const std::string saved = save(w, reflect::JsonLayout::Compact);
+    CHECK(saved.find(R"({"ModelAsset":{"asset":{"path":"levels/kit.glb"},"mesh":"Crate"}})") != std::string::npos &&
+              saved.find(R"({"ModelAsset":{"asset":{"path":"levels/kit.glb"}}})") != std::string::npos,
+          "mesh written only when set: existing files save byte for byte");
+    World again;
+    CHECK(load(again, saved) && save(again, reflect::JsonLayout::Compact) == saved, "and round-trips");
+}
+
 int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--update-golden") == 0) {
         reflect::TypeRegistry r;
@@ -2170,6 +2509,20 @@ int main(int argc, char** argv) {
     RUN(sp2b_t07_meshlets_fill_limits_and_are_deterministic);
     RUN(sp2b_t07_meshlets_keep_degenerate_and_repeated_triangles);
     RUN(sp2b_t07_meshlets_cover_the_damaged_helmet);
+    RUN(sp5_t02_structure_reads_nodes_trs_and_hierarchy);
+    RUN(sp5_t02_extras_kept_verbatim);
+    RUN(sp5_t02_matrix_nodes_decompose);
+    RUN(sp5_t02_sheared_matrix_is_an_error);
+    RUN(sp5_t02_khr_lights_and_cameras);
+    RUN(sp5_t02_draco_is_refused);
+    RUN(sp5_t02_malformed_files_are_invalid);
+    RUN(sp5_t02_default_scene_is_used);
+    RUN(sp5_t02_blockout_structure);
+    RUN(sp5_t03_whole_file_unchanged);
+    RUN(sp5_t03_load_mesh_matches_accessors);
+    RUN(sp5_t03_shared_mesh_uploads_once);
+    RUN(sp5_t03_model_asset_mesh_round_trips);
+    RUN(sp5_t03_authored_hard_edges_kept);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

@@ -119,6 +119,12 @@ Verified against the tree at `a19d437`:
   - Step 2 keeps the file's normals whenever the file has them and repairs only meshes
     without normals. That moves goldens whose models have authored hard edges, which are
     re-baselined after looking, in their own commit.
+  - *As built (step 2):* the repair now fills only vertices without a normal (zero or not
+    finite; the loaders write zero there instead of `(0,1,0)`) and leaves every other
+    vertex as the file has it. The blockout's `Pillar` keeps its face normals (worst
+    vertex normal within 1e-4 of its face's, where the smoothed one was up to 169.4° off). 11 golden images (15 manifest
+    scenes) moved: the helmet, the flight helmet, the metal-rough spheres, Sponza and the
+    blockout; Cornell and the area-light scenes did not.
 
 ## Assets and staging
 
@@ -195,12 +201,22 @@ scene, depth first in file order:
     maps a glTF mesh to its primitive range by the primitive counts it reads from the JSON.
   - Test 3 checks each mesh's triangle count against its accessors.
   - Materials stay as the Khronos goldens validate them.
+  - *As built (step 2):* per-mesh loading drops two of the whole-file path's Assimp steps.
+    `SortByPType` splits a mesh of mixed primitive types, and `FindDegenerates` turns
+    degenerate triangles into lines and points that it would split off; either would shift
+    the primitive ranges. `loadMesh` refuses a file whose Assimp mesh count is not its
+    primitive count. Only the materials a mesh's primitives use are built (renumbered from
+    0), so one prop of a kit loads only its own textures.
 - **Structure** (nodes, `extras`, `KHR_lights_punctual`, cameras) is read from the glTF
-  JSON itself: chunk 0 of a `.glb`, or the `.gltf`, parsed with `reflect`'s JSON value
-  parser.
+  JSON itself: chunk 0 of a `.glb`, or the `.gltf`.
   - This gives exact `extras` and light semantics without depending on how Assimp
     translates metadata.
-  - Component passthrough (below) reuses the scene reader on the same JSON values.
+  - *As built (step 2):* `ohao/level` (`ohao_level`) parses it with simdjson's DOM, not the
+    ECS's `parseJson`. `ohao_scene` links `ohao_level` (`loadMesh` needs the primitive
+    counts), and `ohao_ecs` links `ohao_scene`, so `ohao_level` cannot depend on the ECS.
+    It depends on `ohao_core`, glm and simdjson only.
+  - `extras` are kept as compact JSON text (member order and integer/float kinds kept). The
+    passthrough in step 3 parses that text with the scene reader.
 
 **Lights:** `KHR_lights_punctual` becomes a `Light`.
 - Point, spot and directional map to their types.
@@ -426,10 +442,20 @@ Numbered as the build steps reference them.
    - nodes, TRS and matrix transforms, hierarchy, `extras`, KHR lights and cameras;
    - error corpus: a bad `col`, an unknown component, a sheared matrix, Draco refused,
      several scenes.
+   - *As built (step 2):* `sp5_t02_*` in `scene_tests` (9 tests). The hint errors (a bad
+     `col`, an unknown component) belong to the hint mapping and move to step 3
+     (`t02_extras_errors_name_the_node` in the plan's Task 3); the reader keeps `extras`
+     as text and judges none of them. Malformed files (a child index out of range, text that
+     is not JSON, a glTF 1 binary, a node cycle, a node with two parents) are
+     `E_ASSET_INVALID`; orthographic cameras, skins,
+     animations, morph targets and `KHR_materials_*` are listed in `unsupported`.
 3. **Per-mesh geometry** (`scene_tests`, CPU):
    - `loadMesh` triangle counts equal the accessors for every blockout mesh;
    - a mesh used by two nodes is uploaded once (instantiate's cache counts);
    - an empty `mesh` field keeps today's merged output byte for byte.
+   - *As built (step 2):* `sp5_t03_*` (5 tests). The whole-file check compares positions,
+     colours, UVs, tangents, indices and materials against hashes taken at the step's base commit, normals
+     aside, since the normals change on purpose (`sp5_t03_authored_hard_edges_kept`).
 4. **Expansion** (`ecs_tests`):
    - one entity per node, parented as in the file;
    - stable ids;
@@ -502,6 +528,11 @@ here stops and reports.
    - Normals: the loader keeps a file's normals and repairs only meshes without them (see
      "Why"); the goldens this moves are re-baselined after looking, in their own commit.
    - Tests 2 and 3.
+   - *As built:* done 2026-10-26 (`docs/changes/2026-10-26-level-pipeline-step2.md`). Two
+     additions the step needed: a reflection attribute, `omitDefault`, so `ModelAsset.mesh`
+     is written (and hashed) only when set and every existing scene file and `world.hash`
+     keeps its bytes; and `Result` (`core/result.hpp`) in place of `std::expected`, which
+     C++20 lacks.
 3. **Levels in the world.**
    - The `Level` and `LevelNode` components and the `level` sync system: expansion, ids,
      saving, `vis`, hints → components, passthrough, the `UCX_`/`SOCKET_` conventions, KHR

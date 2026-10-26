@@ -68,7 +68,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.type<ModelAsset>("ModelAsset")
         .doc("A model file (glb, gltf, fbx, obj, dae, blend, 3ds, ply) loaded through the asset resolver; its own "
              "materials are used.")
-        .field("asset", &ModelAsset::asset).doc("Project-relative path of the model file, '/' separators");
+        .field("asset", &ModelAsset::asset).doc("Project-relative path of the model file, '/' separators")
+        .field("mesh", &ModelAsset::mesh)
+            .doc("One mesh of a glTF file, by name or '#<index>', at its own origin with only its own materials; "
+                 "empty: the whole file, every node's meshes merged in place")
+            .omitDefault();
     r.type<SpherePrim>("SpherePrim")
         .doc("A UV sphere around the origin.")
         .field("radius", &SpherePrim::radius).doc("Radius").unit("m").min(0.0)

@@ -22,6 +22,8 @@ build/
 *.o
 *.os
 *.obj
+# ...but not the Wavefront OBJ test fixtures
+!tests/level/fixtures/*.obj
 *.a
 *.so
 *.dylib

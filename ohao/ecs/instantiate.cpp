@@ -42,6 +42,8 @@ std::string meshKey(const MeshSource& ms) {
                        key += m.asset.path;
                        key.push_back('\0');
                        key += m.asset.guid;
+                       key.push_back('\n');   // one GPU mesh per (file, mesh): every user of a glTF mesh shares it
+                       key += m.mesh;
                    },
                    [&](const auto& prim) { key.append(reinterpret_cast<const char*>(&prim), sizeof(prim)); },
                },
@@ -52,7 +54,7 @@ std::string meshKey(const MeshSource& ms) {
 std::string debugName(const MeshSource& ms) {
     static constexpr const char* kNames[] = {"ModelAsset", "SpherePrim", "CubePrim", "PlatformPrim",
                                              "CylinderPrim", "ConePrim", "QuadPrim", "BoxPrim"};
-    if (const auto* m = std::get_if<ModelAsset>(&ms.source)) return m->asset.path;
+    if (const auto* m = std::get_if<ModelAsset>(&ms.source)) return m->mesh.empty() ? m->asset.path : m->asset.path + ":" + m->mesh;
     return kNames[ms.source.index()];
 }
 
@@ -177,7 +179,7 @@ private:
         if (it == m_meshes.end()) {
             std::shared_ptr<const Model> model;
             if (const auto* asset = std::get_if<ModelAsset>(&ms.source)) {
-                auto loaded = m_assets.loadModel(asset->asset);
+                auto loaded = m_assets.loadModel(asset->asset, asset->mesh);
                 if (!loaded) return fail(e, loaded.error().code, loaded.error().message);
                 model = std::move(loaded.value());
             } else {

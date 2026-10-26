@@ -1,0 +1,6 @@
+{
+  "asset": { "version": "2.0" },
+  "scene": 1,
+  "scenes": [ { "name": "Other", "nodes": [0] }, { "name": "Chosen", "nodes": [1] } ],
+  "nodes": [ { "name": "InOther" }, { "name": "InChosen" } ]
+}

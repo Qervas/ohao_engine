@@ -65,6 +65,10 @@ struct FieldAttrs {
     bool hidden{false};
     bool readOnly{false};
     bool required{false};             // must be given (method params; the schema says so)
+    // Written (and hashed) only when it differs from the type's default, even where every
+    // other field is written (a variant alternative's value): a field added later keeps
+    // older files' bytes and worlds' hashes. The catalogue lists it only when set.
+    bool omitDefault{false};
     // An array field (or free JSON given as an array): at most this many elements, checked
     // before any element is read (E_RANGE) and given as the schema's maxItems.
     std::optional<uint32_t> maxItems;

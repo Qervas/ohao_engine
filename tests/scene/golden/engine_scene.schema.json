@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash c0d997f3a612b797. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 898f4a8041f42ebf. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -261,6 +261,11 @@
           "description": "Project-relative path of the model file, '/' separators",
           "default": { "path": "" },
           "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        },
+        "mesh": {
+          "description": "One mesh of a glTF file, by name or '#<index>', at its own origin with only its own materials; empty: the whole file, every node's meshes merged in place",
+          "default": "",
+          "allOf": [{ "type": "string" }]
         }
       },
       "additionalProperties": false

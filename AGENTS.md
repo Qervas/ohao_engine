@@ -446,9 +446,13 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     `assets/local/`, with the scenes that use them, and are never committed until he rules
     (the repo is MIT). Never write under `C:\Users\djmax\Desktop\games` or the Unreal
     project.
-  - Until step 3 of that spec, a `ModelAsset` merges every mesh in a file, collision hulls
-    included, and `ModelLoader` smooths every model's normals (`repairMeshNormals`; step 2
-    keeps authored ones).
+  - A `ModelAsset` without `mesh` merges every mesh in a file, collision hulls included;
+    with `mesh` (a glTF mesh name or `#<index>`) it is that one mesh at its own origin,
+    loaded by `ModelLoader::loadMesh` and cached per `(path, mesh)`. A glTF's node tree,
+    `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
+  - Loaders keep a file's normals. `repairMeshNormals` fills only vertices left without
+    one (zero or not finite) with their faces' smooth normal; a loader that finds no normal
+    writes zero for it, never a placeholder direction.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

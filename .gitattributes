@@ -25,3 +25,5 @@ shaders/slangc.version text eol=lf
 assets/khronos/** -text
 # Checked-in levels (sub-project 5): byte for byte, so a Blender rebuild compares exactly.
 assets/levels/** -text
+# glTF structure fixtures (sub-project 5, step 2): byte offsets and extras text are asserted.
+tests/level/fixtures/** text eol=lf

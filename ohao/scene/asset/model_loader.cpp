@@ -13,8 +13,14 @@
 #include "stb_image.h"
 
 #include "core/log.hpp"
+#include "level/gltf_structure.hpp"
 
+#include <charconv>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -53,16 +59,20 @@ bool ModelLoader::isSupportedExtension(std::string_view ext) {
            ext == "dae" || ext == "blend" || ext == "3ds" || ext == "ply";
 }
 
-// Mesh repair: merge vertices at the same position and recalculate smooth normals.
-// AI-generated meshes (Meshy, etc.) export "triangle soup" where every triangle has 3 unique
-// vertices. This makes smooth normals impossible — each vertex only sees 1 face.
-// Fix: group vertices by position, accumulate face normals across all triangles at each position,
-// then write back area-weighted smooth normals. Same as Blender's "Shade Smooth" on import.
+// A normal the file did not give: the loaders leave zero there (or a non-finite value when a
+// transform normalised a zero).
+static bool missingNormal(const glm::vec3& n) {
+    const float len2 = glm::dot(n, n);
+    return !(len2 > 1e-12f) || !std::isfinite(len2);
+}
+
+// Mesh repair: a vertex without a normal gets the area-weighted average of the faces at its
+// position (vertices grouped by position), as Blender's "Shade Smooth" would make it. A
+// file's own normals are kept, so its hard edges survive (sub-project 5, step 2: the repair
+// used to overwrite every normal, smoothing flat-shaded boxes across their edges).
 static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
     if (indices.size() < 3 || vertices.empty()) return;
-
-    // Detect triangle soup: if vertexCount == indexCount, no vertices are shared
-    bool isTriangleSoup = (vertices.size() == indices.size());
+    if (std::none_of(vertices.begin(), vertices.end(), [](const Vertex& v) { return missingNormal(v.normal); })) return;
 
     // Spatial hash: quantize positions to group vertices at the same location
     // Use a grid cell size based on mesh bounds
@@ -115,22 +125,16 @@ static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<u
         else n = glm::vec3(0, 1, 0);
     }
 
-    // Write back smooth normals to all vertices
-    uint32_t changed = 0;
+    // Write the smooth normal to the vertices that have none.
+    uint32_t repaired = 0;
     for (auto& v : vertices) {
-        uint64_t h = posHash(v.position);
-        auto it = smoothNormals.find(h);
-        if (it != smoothNormals.end()) {
-            if (glm::dot(v.normal, it->second) < 0.95f) changed++;
-            v.normal = it->second;
-        }
+        if (!missingNormal(v.normal)) continue;
+        const auto it = smoothNormals.find(posHash(v.position));
+        v.normal = it != smoothNormals.end() ? it->second : glm::vec3(0, 1, 0);
+        ++repaired;
     }
-
-    size_t uniquePositions = smoothNormals.size();
-    if (isTriangleSoup || changed > vertices.size() / 10) {
-        OHAO_LOG(Info, asset, "ModelLoader: mesh repair: {} vertices -> {} unique positions, {} normals smoothed",
-                 vertices.size(), uniquePositions, changed);
-    }
+    OHAO_LOG(Info, asset, "ModelLoader: mesh repair: {} of {} vertices had no normal ({} positions)", repaired,
+             vertices.size(), smoothNormals.size());
 }
 
 // === Main Entry Point ===
@@ -173,7 +177,7 @@ std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
         model = loadAssimp(path);
     }
 
-    // Post-load: fix inverted normals (handles broken AI-generated exports)
+    // Post-load: give vertices the file left without a normal their faces' smooth normal
     if (model && !model->vertices.empty()) {
         repairMeshNormals(model->vertices, model->indices);
     }
@@ -196,6 +200,49 @@ Result<std::shared_ptr<Model>> ModelLoader::loadResult(std::string_view path) {
             "ModelLoader: failed to load '" + std::string(path) + "'");
     }
     return Result<std::shared_ptr<Model>>::ok(std::move(model));
+}
+
+Result<std::shared_ptr<Model>> ModelLoader::loadMesh(std::string_view path, std::string_view mesh) {
+    using R = Result<std::shared_ptr<Model>>;
+    const std::string where = "'" + std::string(path) + "'";
+    const std::string ext = getExtension(path);
+    if (ext != "glb" && ext != "gltf") return R::err(where + ": per-mesh loading needs a glTF file (.glb or .gltf)");
+    std::ifstream in{std::filesystem::path(path), std::ios::binary};
+    if (!in) return R::err(where + ": cannot be read");
+    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    const auto structure = level::readGltfStructure(bytes);
+    if (!structure) return R::err(where + ": " + structure.error().message);
+    const auto& meshes = structure.value().meshes;
+
+    int index = -1;
+    if (!mesh.empty() && mesh.front() == '#') {
+        int value = 0;
+        const auto [end, ec] = std::from_chars(mesh.data() + 1, mesh.data() + mesh.size(), value);
+        if (ec == std::errc() && end == mesh.data() + mesh.size() && value >= 0 && value < static_cast<int>(meshes.size()))
+            index = value;
+    } else {
+        for (int i = 0; i < static_cast<int>(meshes.size()); ++i) {
+            if (meshes[i].name != mesh) continue;
+            if (index >= 0)
+                return R::err(where + ": meshes " + std::to_string(index) + " and " + std::to_string(i) + " are both named '" +
+                              std::string(mesh) + "'; use '#" + std::to_string(index) + "'");
+            index = i;
+        }
+    }
+    if (index < 0)
+        return R::err(where + " has no mesh '" + std::string(mesh) + "' (" + std::to_string(meshes.size()) + " meshes)");
+
+    MeshRange range;
+    for (int i = 0; i < static_cast<int>(meshes.size()); ++i) {
+        if (i < index) range.first += meshes[i].primitives;
+        range.total += meshes[i].primitives;
+    }
+    range.count = meshes[index].primitives;
+    auto model = loadAssimp(path, &range);
+    if (!model) return R::err(where + ": mesh '" + std::string(mesh) + "' could not be loaded");
+    repairMeshNormals(model->vertices, model->indices);
+    if (model->empty()) return R::err(where + ": mesh '" + std::string(mesh) + "' has no triangles");
+    return R::ok(std::move(model));
 }
 
 // === OBJ Loader (native) ===
@@ -273,7 +320,7 @@ static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
     return -1;
 }
 
-std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
+std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const MeshRange* range) {
     Assimp::Importer importer;
     const std::string pathStr{path};
 
@@ -288,10 +335,20 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         aiProcess_SortByPType |
         aiProcess_ImproveCacheLocality |
         aiProcess_FixInfacingNormals;
+    // One glTF mesh: its primitives are Assimp's meshes [first, first + count) only while no
+    // step splits a mesh. SortByPType splits a mesh of mixed primitive types, and
+    // FindDegenerates turns degenerate triangles into lines and points that it would then
+    // split off, so neither runs here (non-triangle faces are skipped when emitting anyway).
+    if (range) flags &= ~(aiProcess_FindDegenerates | aiProcess_SortByPType);
 
     const aiScene* scene = importer.ReadFile(pathStr, flags);
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         OHAO_LOG(Error, asset, "ModelLoader: Assimp error: {}", importer.GetErrorString());
+        return nullptr;
+    }
+    if (range && (scene->mNumMeshes != range->total || range->first + range->count > scene->mNumMeshes)) {
+        OHAO_LOG(Error, asset, "ModelLoader: {}: Assimp made {} meshes of the file's {} primitives", pathStr,
+                 scene->mNumMeshes, range->total);
         return nullptr;
     }
 
@@ -303,8 +360,18 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
              scene->mNumMeshes, scene->mNumMaterials, scene->mNumTextures,
              scene->mNumAnimations);
 
-    // --- Materials ---
-    uint32_t numMats = scene->mNumMaterials;
+    // --- Materials --- (one mesh: only those its primitives use, renumbered from 0)
+    std::vector<unsigned> usedMaterials;
+    std::vector<uint32_t> materialSlot(scene->mNumMaterials, 0);
+    for (unsigned m = 0; m < scene->mNumMaterials; ++m) {
+        bool used = !range;
+        for (unsigned i = range ? range->first : 0; range && i < range->first + range->count && !used; ++i)
+            used = scene->mMeshes[i]->mMaterialIndex == m;
+        if (!used) continue;
+        materialSlot[m] = static_cast<uint32_t>(usedMaterials.size());
+        usedMaterials.push_back(m);
+    }
+    uint32_t numMats = static_cast<uint32_t>(usedMaterials.size());
     model->materialColors.resize(numMats, glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
     model->materialMetallic.resize(numMats, 0.0f);
     model->materialDoubleSided.resize(numMats, 1u);
@@ -315,7 +382,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     model->materialOcclusionTexIndex.resize(numMats, -1);
 
     for (unsigned m = 0; m < numMats; m++) {
-        const aiMaterial* mat = scene->mMaterials[m];
+        const aiMaterial* mat = scene->mMaterials[usedMaterials[m]];
         aiString matName; mat->Get(AI_MATKEY_NAME, matName);
 
         aiColor3D color(0.8f, 0.8f, 0.8f);
@@ -411,7 +478,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     // nodes reference is emitted twice. Meshes no node references are not emitted.
     uint32_t globalVertexOffset = 0;
     const auto emitMesh = [&](const aiMesh* mesh, const glm::mat4& toModel) {
-        const uint32_t matIdx = mesh->mMaterialIndex;
+        const uint32_t matIdx = materialSlot[mesh->mMaterialIndex];
         const glm::mat3 linear(toModel);
         const glm::mat3 normalMat = glm::transpose(glm::inverse(linear));
         const float det = glm::determinant(linear);
@@ -442,9 +509,10 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
         for (unsigned vi = 0; vi < mesh->mNumVertices; vi++) {
             Vertex v{};
             v.position = glm::vec3(toModel * glm::vec4(toGlm(mesh->mVertices[vi]), 1.0f));
-            const glm::vec3 n = normalMat * (mesh->HasNormals() ? toGlm(mesh->mNormals[vi]) : glm::vec3(0, 1, 0));
+            // No normal (or a degenerate one) stays zero: repairMeshNormals makes it.
+            const glm::vec3 n = mesh->HasNormals() ? normalMat * toGlm(mesh->mNormals[vi]) : glm::vec3(0.0f);
             const float nLen = glm::length(n);
-            v.normal = nLen > 1e-20f ? n / nLen : glm::vec3(0, 1, 0);
+            v.normal = nLen > 1e-20f ? n / nLen : glm::vec3(0.0f);
             v.texCoord = mesh->HasTextureCoords(0)
                 ? glm::vec2(mesh->mTextureCoords[0][vi].x, mesh->mTextureCoords[0][vi].y)
                 : glm::vec2(0);
@@ -485,7 +553,11 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
             if (node->mMeshes[k] < scene->mNumMeshes) emitMesh(scene->mMeshes[node->mMeshes[k]], toModel);
         for (unsigned c = 0; c < node->mNumChildren; ++c) walk(node->mChildren[c], toModel);
     };
-    walk(scene->mRootNode, glm::mat4(1.0f));
+    if (range) {
+        for (uint32_t i = range->first; i < range->first + range->count; ++i) emitMesh(scene->mMeshes[i], glm::mat4(1.0f));
+    } else {
+        walk(scene->mRootNode, glm::mat4(1.0f));
+    }
 
     // Skeletal animation removed — skeleton and animation channels are no
     // longer built. Bone weights remain in the Vertex struct as inert data.

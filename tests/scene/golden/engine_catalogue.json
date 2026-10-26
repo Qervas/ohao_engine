@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "c0d997f3a612b797",
+  "schemaHash": "898f4a8041f42ebf",
   "units": [
     "m",
     "m/s",
@@ -574,6 +574,24 @@
           "angle": false,
           "hidden": false,
           "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "mesh",
+          "type": "string",
+          "default": "",
+          "doc": "One mesh of a glTF file, by name or '#<index>', at its own origin with only its own materials; empty: the whole file, every node's meshes merged in place",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "omitDefault": true,
           "aliases": []
         }
       ],

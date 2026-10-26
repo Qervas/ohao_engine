@@ -25,6 +25,12 @@ public:
     /// Same as load(), with an error string on failure.
     [[nodiscard]] static Result<std::shared_ptr<Model>> loadResult(std::string_view path);
 
+    /// One mesh of a glTF file (.glb or .gltf), by its name or "#<index>", untransformed (no
+    /// node's transform), with only the materials its primitives use (renumbered from 0).
+    /// The mesh's primitives are found by the counts in the file's JSON (level/gltf_structure):
+    /// Assimp makes one mesh per primitive, in glTF order.
+    [[nodiscard]] static Result<std::shared_ptr<Model>> loadMesh(std::string_view path, std::string_view mesh);
+
     /// Extension without leading dot, lowercased (e.g. "glb").
     [[nodiscard]] static std::string getExtension(std::string_view path);
 
@@ -32,7 +38,9 @@ public:
 
 private:
     [[nodiscard]] static std::shared_ptr<Model> loadFBX(std::string_view path);
-    [[nodiscard]] static std::shared_ptr<Model> loadAssimp(std::string_view path);
+    // Aiscene meshes [first, first + count) only, untransformed; nullptr: the node tree.
+    struct MeshRange { uint32_t first = 0, count = 0, total = 0; };
+    [[nodiscard]] static std::shared_ptr<Model> loadAssimp(std::string_view path, const MeshRange* range = nullptr);
     [[nodiscard]] static std::shared_ptr<Model> loadOBJ(std::string_view path);
 };
 

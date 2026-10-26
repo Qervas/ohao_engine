@@ -83,25 +83,25 @@
 - Produces: `assets/levels/blockout_room.glb`. Its node names, extras and transforms are the contract tests 7 and 9 assert against: `Floor` top at y 0, `Step` top at 0.3, `Platform` and the ramp top at 0.6, the doorway x ∈ [0.9, 2.1] in the south wall at z ∈ [3.0, 3.2], spawns `SpawnPlayer` (1.5, 0, 2.2), `SpawnEnemyA` (−2.5, 0.3, −2), `SpawnEnemyB` (3, 0.6, −2), crates `CrateA` (dynamic, 20 kg) and `CrateB` (dynamic, 8 kg) stacked.
 - Produces: `tests/level/extras_schema.json`, a JSON Schema for a node's `extras` (the spec's hint table: `col`, `body`, `mass`, `fric`, `rest`, `vis`, `spawn`, `socket`; additional properties allowed, since passthrough and other tools' keys are checked by the engine in Task 3).
 
-- [ ] **Step 1: Write `check_level_assets.py` first.** In the `check_layout.py` style (`run(fn)`, final JSON line), with these tests:
+- [x] **Step 1: Write `check_level_assets.py` first.** In the `check_layout.py` style (`run(fn)`, final JSON line), with these tests:
   - `l1_every_checked_in_level_has_valid_hints`: every `assets/levels/*.glb` node's `extras` validates against `extras_schema.json` with `jsonschema`.
   - `l1_blockout_hints_are_the_contract`: the node set and the hints above.
   - `l1_blockout_rebuilds_byte_identical`: runs `blender -b --factory-startup --python tools/level/blockout_room.py -- build/level_check/blockout_room.glb` when `blender` is found (the scoop shim or `OHAO_BLENDER`), compares bytes, reports `SKIP` otherwise.
   - `l1_blockout_scene_references_the_level`: the scene's `ModelAsset` path is the checked-in file.
-- [ ] **Step 2: Run it.** `python tests/level/check_level_assets.py`. Expected: FAIL, the level and the schema are missing.
-- [ ] **Step 3: Generate the blockout.** `C:/Users/djmax/scoop/shims/blender.exe -b --factory-startup --python tools/level/blockout_room.py -- assets/levels/blockout_room.glb`. Write `assets/levels/README.md` (generated, MIT, the rebuild command, Blender 5.2.2) and the schema. Pin `assets/levels/** -text`.
-- [ ] **Step 4: Write the scene.** `blockout_room.scene.json`:
+- [x] **Step 2: Run it.** `python tests/level/check_level_assets.py`. Expected: FAIL, the level and the schema are missing.
+- [x] **Step 3: Generate the blockout.** `C:/Users/djmax/scoop/shims/blender.exe -b --factory-startup --python tools/level/blockout_room.py -- assets/levels/blockout_room.glb`. Write `assets/levels/README.md` (generated, MIT, the rebuild command, Blender 5.2.2) and the schema. Pin `assets/levels/** -text`.
+- [x] **Step 4: Write the scene.** `blockout_room.scene.json`:
   - a `Level` entity as `MeshSource{ModelAsset}` of the `.glb` (Task 3 turns it into `Level`);
   - a `MainCamera` at the doorway looking in;
   - a sun and one point light.
   - Run `build/Release/ohao validate assets/scenes/blockout_room.scene.json`; expected `{"result":{"ok":true}}`.
-- [ ] **Step 5: Run the check again.** Expected: PASS (or `SKIP` for the rebuild without Blender).
-- [ ] **Step 6: Register the suite.** `ohao_add_python_test(check_level_assets LABEL quick SCRIPT tests/level/check_level_assets.py)`. Reconfigure, then `ctest --test-dir build -C Release -R check_level_assets`; expected: pass.
-- [ ] **Step 7: Add the golden.** `cli_blockout_room_deferred`: `ohao run … --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1`, exact. Capture it with `--update --only`, look at it, re-run without `--update`, expect a pass.
-- [ ] **Step 8: Stage the Flat42 props.**
+- [x] **Step 5: Run the check again.** Expected: PASS (or `SKIP` for the rebuild without Blender).
+- [x] **Step 6: Register the suite.** `ohao_add_python_test(check_level_assets LABEL quick SCRIPT tests/level/check_level_assets.py)`. Reconfigure, then `ctest --test-dir build -C Release -R check_level_assets`; expected: pass.
+- [x] **Step 7: Add the golden.** `cli_blockout_room_deferred`: `ohao run … --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1`, exact. Capture it with `--update --only`, look at it, re-run without `--update`, expect a pass.
+- [x] **Step 8: Stage the Flat42 props.**
   - Run `stage_flat42.py` for PinnChair, KitchenTable, BookStack and Kettle into `assets/local/flat42/`, and write `assets/local/README.md`.
   - Render a local scene of the blockout furnished with them through today's path (the hulls show; Task 3 fixes that) for the look shots in `C:\Users\djmax\ohao_refs\look_shots\sp5_level\`.
-- [ ] **Step 9: Close the step.**
+- [x] **Step 9: Close the step.**
   - Run `python tools/check.py`, the goldens and `engine_tests`.
   - Write the change record.
   - Commit: the spec, plan and roadmap link (`docs:`); the assets, scene, check and golden (`feat(level):`).
@@ -142,8 +142,9 @@
   ```
 - Produces: `ModelLoader::loadMesh(const std::string& path, const std::string& mesh) -> LoadResult`. One glTF mesh, by name or `#index`, untransformed. Primitive ranges come from `GltfStructure::meshes`.
 - Produces: `ModelAsset{AssetRef asset; std::string mesh;}`. An empty `mesh` is today's behaviour. Instantiate's `meshKey` is `path + "\n" + mesh`.
+- *As built:* `ohao_level` links `ohao_core`, glm and simdjson only (`ohao_scene` links it, so it cannot link `ohao_scene` or the ECS's JSON reader); `readGltfStructure` returns `Result<GltfStructure, GltfError>` (`core/result.hpp`; C++20 has no `std::expected`); `loadMesh(std::string_view, std::string_view) -> Result<std::shared_ptr<Model>>`. Reflection gained `omitDefault` so `mesh` is neither written nor hashed when empty. Tests are named `sp5_t02_*`/`sp5_t03_*`.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - `t02_structure_reads_nodes_trs_and_hierarchy` on `fixtures/nodes.gltf`;
   - `t02_matrix_nodes_decompose` and `t02_sheared_matrix_is_an_error`;
   - `t02_khr_lights_and_cameras`;
@@ -151,17 +152,17 @@
   - `t02_extras_kept_verbatim` (compact JSON);
   - `t02_blockout_structure` (17 nodes, 13 meshes, the hints of Task 1).
   Run `build/Release/scene_tests.exe`; expected: build failure (no `ohao/level`).
-- [ ] **Step 2: Implement the reader.** `readGltfStructure` with `reflect`'s JSON value parser: the GLB header, chunk 0 JSON, `scene`/`scenes`, nodes depth first, TRS or decomposed `matrix` (shear → `E_LEVEL_NODE`), `extensionsUsed` checks, primitive and triangle counts from accessors. Run the t02 tests; expected: PASS.
-- [ ] **Step 3: Write failing per-mesh tests.**
+- [x] **Step 2: Implement the reader.** `readGltfStructure` with `reflect`'s JSON value parser: the GLB header, chunk 0 JSON, `scene`/`scenes`, nodes depth first, TRS or decomposed `matrix` (shear → `E_LEVEL_NODE`), `extensionsUsed` checks, primitive and triangle counts from accessors. Run the t02 tests; expected: PASS.
+- [x] **Step 3: Write failing per-mesh tests.**
   - `t03_load_mesh_matches_accessors`: every blockout mesh's triangle count from `loadMesh` equals `GltfStructure::meshes[i].triangles`.
   - `t03_whole_file_unchanged`: `ModelAsset` without `mesh` gives the same vertex and index bytes as before; hash them in the test from a run at the task's base commit.
   - `t03_shared_mesh_uploads_once`: two entities, same `(path, mesh)`, one upload, through the fake instantiate backend.
-- [ ] **Step 4: Implement.** `loadMesh` reuses `loadAssimp`'s per-`aiMesh` conversion over the glTF mesh's primitive range, with no node transform. Then `ModelAsset.mesh` (reflected, documented, written only when non-empty, so every existing scene file saves byte for byte) and the cache key. Run `scene_tests`; expected: PASS. Run the scene goldens; expected: unchanged.
-- [ ] **Step 5: Keep authored normals.**
+- [x] **Step 4: Implement.** `loadMesh` reuses `loadAssimp`'s per-`aiMesh` conversion over the glTF mesh's primitive range, with no node transform. Then `ModelAsset.mesh` (reflected, documented, written only when non-empty, so every existing scene file saves byte for byte) and the cache key. Run `scene_tests`; expected: PASS. Run the scene goldens; expected: unchanged.
+- [x] **Step 5: Keep authored normals.**
   - Write the failing test first: `t03_authored_hard_edges_kept`. The blockout's `Pillar` keeps the file's face normals (each vertex normal within 1e-4 of its face's), where today's `repairMeshNormals` smooths them (step 1 measured 263 of 306 normals changed).
   - Restrict the repair to meshes the file gives no normals (Assimp `aiMesh::HasNormals()` false, or a degenerate normal).
   - Run every golden. Look at what moved, then re-baseline the moved ones (the blockout, and any Khronos or helmet scene with authored hard edges) with `--update --only`, in one commit whose message lists each scene's max_abs and changed fraction.
-- [ ] **Step 6: Close the step.** `check.py --all`, change record, commit `feat(level): glTF structure reader and per-mesh models`.
+- [x] **Step 6: Close the step.** `check.py --all`, change record, commit `feat(level): glTF structure reader and per-mesh models`.
 
 ### Task 3: Levels in the world (build step 3)
 

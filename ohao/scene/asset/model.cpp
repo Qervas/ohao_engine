@@ -399,8 +399,8 @@ uint32_t Model::getOrCreateVertex(std::string_view vertexStr,
     if (vertexIndices.size() > 2 && vertexIndices[2] > 0 && vertexIndices[2] <= normals.size()) {
         vertex.normal = normals[vertexIndices[2] - 1];
     } else {
-        // Generate a default normal if none provided
-        vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        // None given: zero, which ModelLoader's repairMeshNormals replaces with the faces' smooth normal.
+        vertex.normal = glm::vec3(0.0f);
     }
 
     // Set default color (will be updated by material assignment)

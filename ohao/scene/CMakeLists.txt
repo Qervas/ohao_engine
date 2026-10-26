@@ -17,6 +17,7 @@ target_compile_features(ohao_scene PUBLIC cxx_std_20)
 target_link_libraries(ohao_scene
     PUBLIC
         ohao_core
+        ohao_level   # glTF structure: ModelLoader::loadMesh's primitive ranges
         glm
         ${Vulkan_LIBRARIES}
 )

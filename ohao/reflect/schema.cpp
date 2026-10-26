@@ -124,6 +124,7 @@ void writeCatalogueBody(JsonWriter& w, const TypeRegistry& r, std::span<const Me
             w.key("angle"); w.boolean(a.angle);
             w.key("hidden"); w.boolean(a.hidden);
             w.key("readOnly"); w.boolean(a.readOnly);
+            if (a.omitDefault) { w.key("omitDefault"); w.boolean(true); }
             w.key("aliases");
             w.beginArray();
             for (const auto& s : a.aliases) w.string(s);
