@@ -12,6 +12,7 @@ layout(push_constant) uniform BloomParams {
     float threshold;
     float softThreshold;
     float intensity;
+    float maxLuminance;   // the input's luminance at most: a brighter source blooms as this bright
 } params;
 
 void main() {
@@ -29,5 +30,11 @@ void main() {
     float contribution = max(soft, luminance - params.threshold);
     contribution /= max(luminance, 0.0001);
 
-    outColor = vec4(color * contribution, 1.0);
+    // Clamp the extracted luminance: a light's emitter mesh is as bright as the light (tens of
+    // thousands), and the mip chain would spread all of it over the frame. Lighting is untouched;
+    // only how far its glare reaches.
+    vec3 bright = color * contribution;
+    const float brightLuminance = luminance * contribution;
+    if (brightLuminance > params.maxLuminance) bright *= params.maxLuminance / brightLuminance;
+    outColor = vec4(bright, 1.0);
 }

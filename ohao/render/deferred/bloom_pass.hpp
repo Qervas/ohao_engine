@@ -28,6 +28,8 @@ public:
     void setSoftThreshold(float softThreshold) { m_softThreshold = softThreshold; }
     void setIntensity(float intensity) { m_intensity = intensity; }
     void setFilterRadius(float radius) { m_filterRadius = radius; }
+    void setMaxLuminance(float maxLuminance) { m_maxLuminance = maxLuminance; }
+    static constexpr float kBloomMaxLuminance = 4.0f;
 
     // Get output (for compositing)
     [[nodiscard]] VkImageView getBloomOutput() const { return m_mipViews[0]; }
@@ -92,13 +94,17 @@ private:
     float m_softThreshold{0.5f};
     float m_intensity{1.0f};
     float m_filterRadius{1.0f};
+    // The bloom input's luminance at most (pre-exposure HDR): a brighter source blooms as if it
+    // were this bright. A light's emitter mesh is as bright as the light (I / (pi r^2), tens of
+    // thousands for a small bulb); unclamped, the mip chain spread that over half the frame.
+    float m_maxLuminance{kBloomMaxLuminance};
 
     // Push constants
     struct ThresholdParams {
         float threshold;
         float softThreshold;
         float intensity;
-        float padding;
+        float maxLuminance;
     };
 
     struct SampleParams {

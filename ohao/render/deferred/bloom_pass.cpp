@@ -601,7 +601,7 @@ void BloomPass::executeThreshold(VkCommandBuffer cmd, VkDescriptorSet inputSet) 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_thresholdLayout,
                             0, 1, &inputSet, 0, nullptr);
 
-    ThresholdParams params{m_threshold, m_softThreshold, m_intensity, 0.0f};
+    ThresholdParams params{m_threshold, m_softThreshold, m_intensity, m_maxLuminance};
     vkCmdPushConstants(cmd, m_thresholdLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
