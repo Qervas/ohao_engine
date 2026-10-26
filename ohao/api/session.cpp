@@ -113,7 +113,7 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
          "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."},
         {"physics.info", p.find<PhysicsInfoParams>(),
-         "{bodies, shapes, steps, awake, contacts, triggers?, buildMs, warnings?: [{code, entity, name, message}]}",
+         "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
          "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."},
         {"physics.events", p.find<PhysicsEventsParams>(),
          "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed}], next, dropped?}",

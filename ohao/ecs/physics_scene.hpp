@@ -111,6 +111,7 @@ struct PhysicsInfo {
     uint32_t awake{0};      // dynamic bodies awake
     uint32_t triggers{0};   // sensor bodies
     uint32_t contacts{0};   // body pairs in contact now (triggers' overlaps included)
+    uint32_t players{0};    // PlayerControllers with a character
 };
 
 class PhysicsScene {
@@ -128,7 +129,7 @@ public:
     // One fixed step of dt (the `physics` simulate system): propagate transforms, sync, step in
     // ceil(dt * 60) substeps (at most kMaxSubsteps), write back, publish events. A world with
     // no collider does nothing (not even the propagation).
-    void step(entt::registry& reg, float dt);
+    void step(World& world, float dt);
     // The latest step's events, sorted (removals since the step before it first).
     [[nodiscard]] std::span<const PhysicsEvent> stepEvents() const noexcept;
     // Up to max logged events with seq > since, oldest first; dropped is how many of those the
@@ -142,6 +143,7 @@ public:
     // Where the last step's time went (physics_bench reads it).
     struct StepTiming {
         double totalMs{0.0};    // the whole step
+        double playerMs{0.0};   // the players (their characters' moves)
         double joltMs{0.0};     // the substeps
         double eventsMs{0.0};   // draining, collapsing, sorting and logging the events
         double writeMs{0.0};    // the write-back

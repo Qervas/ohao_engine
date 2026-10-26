@@ -223,12 +223,38 @@ int main(int argc, char** argv) {
     }
     if (begins != 1000) failures.push_back("1,000 spheres on a floor began " + std::to_string(begins) + " contacts (want 1,000)");
 
+    // 4. The player walking the blockout: from the spawn, forward and turning (so it meets walls,
+    // the crates and the ramp), the player part of each step, 200 steps after 20, N rounds.
+    std::vector<double> player;
+    bool walked = true;
+    for (int r = 0; r < rounds + 1; ++r) {
+        Blockout b;
+        const entt::entity pl = b.world.createWithId(0xb1a7e2, "Player");
+        b.world.registry().emplace<ecs::PlayerController>(pl);
+        std::vector<InputEvent> go(2);
+        go[0].type = InputEvent::Type::AxisSet;
+        go[0].name = "move_forward";
+        go[0].value = 1.0f;
+        go[1].type = InputEvent::Type::AxisSet;
+        go[1].name = "look_x";
+        go[1].value = 6.0f;   // 0.6 degrees a step
+        const glm::vec3 start(b.world.registry().get<ecs::Transform>(pl).position);
+        for (int i = 0; i < 220; ++i) {
+            b.world.stepInput(i == 0 ? std::span<const InputEvent>(go) : std::span<const InputEvent>());
+            b.world.simulate(kDt);
+            b.world.sync();
+            if (r > 0 && i >= 20) player.push_back(b.physics->lastStepTiming().playerMs);
+        }
+        walked &= glm::length(b.world.registry().get<ecs::Transform>(pl).position - start) > 1.0f;
+    }
+    if (!walked) failures.push_back("the player did not walk");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
     const double cal1 = bench::calibrationMs();
 
-    const Stats sf = stats(fall), sr = stats(rest), se = stats(events);
+    const Stats sf = stats(fall), sr = stats(rest), se = stats(events), sp = stats(player);
     std::printf("physics_bench (%d rounds after a warm-up)\n", rounds);
     std::printf("  blockout_step_ms        median %8.4f   p95 %8.4f   (%zu steps)\n", sf.median, sf.p95, fall.size());
     const Verdict vf = judge(budgets, currentStep, "blockout_step_ms", sf.median, failures);
@@ -237,11 +263,13 @@ int main(int argc, char** argv) {
     const Verdict vr = judge(budgets, currentStep, "blockout_rest_step_ms", sr.median, failures);
     std::printf("  events_1k_ms            median %8.4f   p95 %8.4f   (%zu begins)\n", se.median, se.p95, begins);
     const Verdict ve = judge(budgets, currentStep, "events_1k_ms", se.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve})
+    std::printf("  player_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sp.median, sp.p95, player.size());
+    const Verdict vp = judge(budgets, currentStep, "player_step_ms", sp.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
-        if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms")
+        if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -257,6 +285,7 @@ int main(int argc, char** argv) {
     out["blockout_step_ms"] = {{"median", sf.median}, {"p95", sf.p95}, {"min", sf.min}, {"steps", fall.size()}, {"verdict", vf.verdict}};
     out["blockout_rest_step_ms"] = {{"median", sr.median}, {"p95", sr.p95}, {"min", sr.min}, {"writes", restWrites}, {"verdict", vr.verdict}};
     out["events_1k_ms"] = {{"median", se.median}, {"p95", se.p95}, {"min", se.min}, {"begins", begins}, {"verdict", ve.verdict}};
+    out["player_step_ms"] = {{"median", sp.median}, {"p95", sp.p95}, {"min", sp.min}, {"steps", player.size()}, {"verdict", vp.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -271,7 +300,7 @@ int main(int argc, char** argv) {
     }
     std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
 
-    const bool wrong = !landed || restWrites != 0 || begins != 1000;   // no machine excuses these
+    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",

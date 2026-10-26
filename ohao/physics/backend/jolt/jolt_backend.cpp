@@ -142,6 +142,12 @@ struct JoltPhysicsBackend::ObjectLayerPairFilterImpl : public JPH::ObjectLayerPa
         setCollision(CollisionLayer::TRIGGER, CollisionLayer::TERRAIN, false);
         setCollision(CollisionLayer::TRIGGER, CollisionLayer::TRIGGER, false);
 
+        // A character's inner body (kinematic, moved with the character) gives it presence for
+        // sensors and rays; it must not shove dynamic bodies with infinite mass (the character
+        // pushes them itself, with its strength) nor meet other characters' inner bodies.
+        setCollision(CollisionLayer::CHARACTER, CollisionLayer::DYNAMIC, false);
+        setCollision(CollisionLayer::CHARACTER, CollisionLayer::CHARACTER, false);
+
         // Debris doesn't collide with other debris (performance)
         setCollision(CollisionLayer::DEBRIS, CollisionLayer::DEBRIS, false);
         // Debris doesn't collide with triggers
@@ -1327,6 +1333,16 @@ CharacterHandle JoltPhysicsBackend::createCharacter(const CharacterCreationInfo&
         settings.mMaxStrength = info.maxStrength;
         settings.mPenetrationRecoverySpeed = 1.0f;
         settings.mPredictiveContactDistance = 0.1f;
+        if (info.positionAtFeet) {
+            // The capsule stands on the position; only contacts below its lower hemisphere's centre
+            // are ground (a wall touching the capsule's side never supports it).
+            settings.mShapeOffset = JPH::Vec3(0.0f, halfCylinderHeight + info.capsuleRadius, 0.0f);
+            settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -info.capsuleRadius);
+        }
+        if (info.innerBody) {
+            settings.mInnerBodyShape = capsule;
+            settings.mInnerBodyLayer = static_cast<JPH::ObjectLayer>(info.layer);
+        }
 
         auto character = new JPH::CharacterVirtual(
             &settings, toJoltR(info.position), toJolt(info.rotation),
@@ -1338,6 +1354,11 @@ CharacterHandle JoltPhysicsBackend::createCharacter(const CharacterCreationInfo&
         CharacterData data;
         data.character = character;
         data.layer = info.layer;
+        if (info.innerBody && !character->GetInnerBodyID().IsInvalid()) {
+            // A handle that contacts and rays report; the character owns the body itself.
+            data.innerBody = m_nextHandle++;
+            m_bodyIdToHandle[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = data.innerBody;
+        }
         m_characters[handle] = std::move(data);
 
         return handle;
@@ -1349,7 +1370,35 @@ CharacterHandle JoltPhysicsBackend::createCharacter(const CharacterCreationInfo&
 }
 
 void JoltPhysicsBackend::destroyCharacter(CharacterHandle handle) {
-    m_characters.erase(handle);
+    const auto it = m_characters.find(handle);
+    if (it == m_characters.end()) return;
+    if (it->second.innerBody != INVALID_BODY)
+        m_bodyIdToHandle.erase(it->second.character->GetInnerBodyID().GetIndexAndSequenceNumber());
+    m_characters.erase(it);
+}
+
+BodyHandle JoltPhysicsBackend::getCharacterInnerBody(CharacterHandle handle) const {
+    const auto it = m_characters.find(handle);
+    return it == m_characters.end() ? INVALID_BODY : it->second.innerBody;
+}
+
+void JoltPhysicsBackend::moveCharacter(CharacterHandle handle, float deltaTime, const glm::vec3& velocity,
+                                       const glm::vec3& gravity, float stepUp, float stickDown) {
+    auto it = m_characters.find(handle);
+    if (it == m_characters.end() || !m_physicsSystem || !m_tempAllocator) return;
+    auto& character = it->second.character;
+    character->SetLinearVelocity(toJolt(velocity));
+    JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
+    updateSettings.mStickToFloorStepDown = JPH::Vec3(0.0f, -stickDown, 0.0f);
+    updateSettings.mWalkStairsStepUp = JPH::Vec3(0.0f, stepUp, 0.0f);
+    LayerMaskObjectFilter layerFilter(CollisionLayer::ALL_MASK);
+    character->ExtendedUpdate(deltaTime, toJolt(gravity), updateSettings, {}, layerFilter, {}, {}, *m_tempAllocator);
+}
+
+void JoltPhysicsBackend::moveKinematic(BodyHandle h, const glm::vec3& pos, const glm::quat& rot, float deltaTime) {
+    const JPH::BodyID id = lookupBodyID(h);
+    if (id.IsInvalid() || !m_physicsSystem || !(deltaTime > 0.0f)) return;
+    m_physicsSystem->GetBodyInterface().MoveKinematic(id, toJoltR(pos), toJolt(rot), deltaTime);
 }
 
 bool JoltPhysicsBackend::isValidCharacter(CharacterHandle handle) const {

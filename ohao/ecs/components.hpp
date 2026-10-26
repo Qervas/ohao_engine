@@ -238,6 +238,42 @@ struct PhysicsBody { uint32_t handle{UINT32_MAX}; };
 // system moves the body to it.
 struct PhysicsMoved {};
 
+// ---- the player (sub-project 6; the physics system moves it, ecs/physics_scene.hpp) -----------
+
+// A first-person player: a Jolt CharacterVirtual capsule standing on its Transform's position
+// (the feet), turned about +Y by its yaw. Walks from the named axes and actions, once per fixed
+// step, before the bodies step. Spawns at the first SpawnPoint tagged "player" (creation order).
+struct PlayerController {
+    float radius{0.3f};           // m
+    float height{1.8f};           // m, feet to the top of the capsule
+    float eyeHeight{1.62f};       // m, above the feet (the camera, step 3)
+    float walkSpeed{4.0f};        // m/s
+    float sprintSpeed{6.5f};      // m/s, while `sprint` is held
+    float acceleration{40.0f};    // m/s², toward the wanted horizontal velocity on the ground
+    float airControl{0.3f};       // fraction of the acceleration in the air
+    float jumpSpeed{4.9f};        // m/s up (a 1.22 m jump)
+    float maxSlopeDeg{45.0f};     // steeper ground is a wall
+    float stepHeight{0.35f};      // m, steps climbed without jumping
+    float mass{80.0f};            // kg
+    float pushForce{200.0f};      // N, the most it pushes a dynamic body with
+    float lookDegPerUnit{0.1f};   // turn per unit of mouse movement (or of a look axis a step)
+    std::string moveForward{"move_forward"};
+    std::string moveRight{"move_right"};
+    std::string jump{"jump"};
+    std::string sprint{"sprint"};
+    std::string lookX{"look_x"};
+    std::string lookY{"look_y"};
+};
+
+// Runtime: the player as the physics system left it after the last step.
+struct PlayerState {
+    glm::vec3 velocity{0.0f};     // m/s, world
+    bool onGround{false};
+    float yawDeg{0.0f};           // about +Y from -Z, counter-clockwise seen from above
+    float pitchDeg{0.0f};         // up positive, within ±89
+    uint32_t character{UINT32_MAX};   // physics::backend::CharacterHandle
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

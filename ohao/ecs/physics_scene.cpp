@@ -186,6 +186,21 @@ struct PhysicsScene::Impl {
     int lastSubsteps{0};
     bool warnedLongStep{false};
     PhysicsScene::StepTiming timing;
+    float stepDt{0.0f};                            // the step's dt while it runs; 0 outside a step
+    std::vector<pb::BodyHandle> kinematicMoved;    // moved by velocity this step; stopped after it
+
+    // A player (spec "The player"): its character, and what the step last made of it.
+    struct PlayerRecord {
+        pb::CharacterHandle character{pb::INVALID_CHARACTER};
+        pb::BodyHandle inner{pb::INVALID_BODY};
+        glm::vec3 written{0.0f};                // the Transform position last written
+        glm::quat writtenRot{1, 0, 0, 0};
+        glm::vec3 horizontal{0.0f};             // m/s
+        float vy{0.0f};                         // m/s, the vertical velocity at the step's end
+        float yawDeg{0.0f}, pitchDeg{0.0f};
+    };
+    ankerl::unordered_dense::map<entt::entity, PlayerRecord> players;
+    std::vector<entt::entity> playersTouched;  // PlayerController added or changed
 
     Impl(entt::registry& r, AssetResolver& a) : reg(r), assets(a) {
         connect<Collider>();
@@ -194,8 +209,12 @@ struct PhysicsScene::Impl {
         connect<CollisionMesh>();
         connect<MeshSource>();
         reg.on_destroy<PhysicsBody>().connect<&Impl::onBodyGone>(this);
+        reg.on_construct<PlayerController>().connect<&Impl::touchPlayer>(this);
+        reg.on_update<PlayerController>().connect<&Impl::touchPlayer>(this);
+        reg.on_destroy<PlayerController>().connect<&Impl::onPlayerGone>(this);
         for (const entt::entity e : reg.view<Collider>()) touched.push_back(e);
         for (const entt::entity e : reg.view<ColliderPart>()) touched.push_back(e);
+        for (const entt::entity e : reg.view<PlayerController>()) playersTouched.push_back(e);
     }
 
     ~Impl() {
@@ -205,6 +224,25 @@ struct PhysicsScene::Impl {
         disconnect<CollisionMesh>();
         disconnect<MeshSource>();
         reg.on_destroy<PhysicsBody>().disconnect(this);
+        reg.on_construct<PlayerController>().disconnect(this);
+        reg.on_update<PlayerController>().disconnect(this);
+        reg.on_destroy<PlayerController>().disconnect(this);
+        if (backend)
+            for (auto& [e, p] : players) backend->destroyCharacter(p.character);
+    }
+
+    void touchPlayer(entt::registry&, entt::entity e) { playersTouched.push_back(e); }
+    // A player's character goes with its PlayerController (or entity); its trigger pairs end.
+    void onPlayerGone(entt::registry&, entt::entity e) { removePlayer(e); }
+    void removePlayer(entt::entity e) {
+        const auto it = players.find(e);
+        if (it == players.end()) return;
+        if (it->second.inner != pb::INVALID_BODY) {
+            if (!pairs.empty()) endPairsOf(it->second.inner);
+            entityOf.erase(it->second.inner);
+        }
+        if (backend) backend->destroyCharacter(it->second.character);
+        players.erase(it);
     }
 
     template <class T>
@@ -532,6 +570,12 @@ struct PhysicsScene::Impl {
                 r.awake = true;
                 continue;
             }
+            if (r.motion == Motion::Kinematic && stepDt > 0.0f) {
+                // Inside a step: by velocity, so it pushes what it meets; stopped after the step.
+                backend->moveKinematic(r.handle, p.position, p.rotation, stepDt);
+                kinematicMoved.push_back(r.handle);
+                continue;
+            }
             backend->setPosition(r.handle, p.position);
             backend->setRotation(r.handle, p.rotation);
         }
@@ -612,6 +656,7 @@ struct PhysicsScene::Impl {
         for (const pb::BodyHandle h : {pb::BodyHandle(key >> 32), pb::BodyHandle(key & 0xffffffffu)}) {
             const auto e = entityOf.find(h);
             if (e == entityOf.end()) continue;
+            if (players.contains(e->second)) return false;   // a character's inner body never sleeps
             const auto r = bodies.find(e->second);
             if (r == bodies.end() || r->second.motion == Motion::Static) continue;
             if (backend->isAwake(h)) return false;
@@ -672,7 +717,165 @@ struct PhysicsScene::Impl {
         }
     }
 
-    void step(float dt) {
+    // ---- the player (spec "The player") -----------------------------------------------------------
+
+    static float yawOf(const glm::quat& q) {
+        const glm::vec3 f = q * glm::vec3(0.0f, 0.0f, -1.0f);
+        if (std::fabs(f.x) < 1e-6f && std::fabs(f.z) < 1e-6f) return 0.0f;
+        return glm::degrees(std::atan2(-f.x, -f.z));
+    }
+    static glm::quat yawQuat(float deg) { return glm::angleAxis(glm::radians(deg), glm::vec3(0.0f, 1.0f, 0.0f)); }
+
+    // The first SpawnPoint tagged "player" in creation order, or null.
+    [[nodiscard]] entt::entity playerSpawn() const {
+        entt::entity best = entt::null;
+        uint64_t bestSeq = UINT64_MAX;
+        for (auto [e, sp] : reg.view<const SpawnPoint>().each()) {
+            if (sp.tag != "player" || !reg.all_of<WorldTransform>(e)) continue;
+            const uint64_t s = seqOf(e);
+            if (s < bestSeq) bestSeq = s, best = e;
+        }
+        return best;
+    }
+
+    // A character for a new PlayerController, at the player spawn (or where the entity is, with
+    // W_PLAYER_NO_SPAWN); for a changed one, where the player stands, facing as it faced.
+    void createPlayer(entt::entity e) {
+        const auto old = players.find(e);
+        const bool existed = old != players.end();
+        const float oldPitch = existed ? old->second.pitchDeg : 0.0f;
+        // Its yaw, unless its rotation was edited too.
+        const glm::quat& rotNow = reg.get<Transform>(e).rotation;
+        const float oldYaw = !existed ? 0.0f
+                             : sameRotation(rotNow, old->second.writtenRot, 1e-4f) ? old->second.yawDeg
+                                                                                   : yawOf(rotNow);
+        removePlayer(e);
+        const PlayerController& pc = reg.get<PlayerController>(e);
+        glm::vec3 pos(0.0f);
+        float yaw = 0.0f;
+        const entt::entity spawn = existed ? entt::null : playerSpawn();
+        if (existed) {
+            pos = reg.get<Transform>(e).position;
+            yaw = oldYaw;
+        } else if (spawn != entt::null) {
+            const glm::mat4& w = reg.get<WorldTransform>(spawn).world;
+            pos = glm::vec3(w[3]);
+            yaw = yawOf(decompose(w).rotation);
+        } else {
+            const auto* wt = reg.try_get<WorldTransform>(e);
+            const Placement p = decompose(wt ? wt->world : reg.get<Transform>(e).matrix());
+            pos = p.position;
+            yaw = yawOf(p.rotation);
+            warn(e, "W_PLAYER_NO_SPAWN", "no SpawnPoint is tagged \"player\"; the player starts where it is");
+        }
+        pb::CharacterCreationInfo ci;
+        ci.position = pos;
+        ci.rotation = yawQuat(yaw);
+        ci.capsuleRadius = pc.radius;
+        ci.capsuleHeight = std::max(pc.height, 2.0f * pc.radius + 0.01f);
+        ci.maxSlopeAngleDeg = pc.maxSlopeDeg;
+        ci.mass = pc.mass;
+        ci.maxStrength = pc.pushForce;
+        ci.layer = pb::CollisionLayer::CHARACTER;
+        ci.positionAtFeet = true;
+        ci.innerBody = true;
+        pb::IPhysicsBackend& be = ensureBackend();
+        PlayerRecord p;
+        p.character = be.createCharacter(ci);
+        if (p.character == pb::INVALID_CHARACTER) {
+            warn(e, "W_PLAYER_NO_CHARACTER", "the physics backend could not make the player's character");
+            return;
+        }
+        p.inner = be.getCharacterInnerBody(p.character);
+        if (p.inner != pb::INVALID_BODY) entityOf[p.inner] = e;
+        p.yawDeg = yaw;
+        p.pitchDeg = oldPitch;
+        p.written = pos;
+        p.writtenRot = ci.rotation;
+        writePlayer(e, p, pos, glm::vec3(0.0f), false);
+        players[e] = p;
+    }
+
+    // The player's Transform (feet, yaw) and PlayerState.
+    void writePlayer(entt::entity e, PlayerRecord& p, glm::vec3 pos, glm::vec3 velocity, bool onGround) {
+        const glm::quat rot = yawQuat(p.yawDeg);
+        p.written = pos;
+        p.writtenRot = rot;
+        reg.patch<Transform>(e, [&](Transform& t) {
+            t.position = pos;
+            t.rotation = rot;
+        });
+        reg.emplace_or_replace<PlayerState>(e, PlayerState{velocity, onGround, p.yawDeg, p.pitchDeg, p.character});
+    }
+
+    // Every player, once per step, before the bodies step (spec: the character moves first).
+    void updatePlayers(const InputMap& input, float dt) {
+        if (!playersTouched.empty()) {
+            std::vector<entt::entity> list;
+            list.swap(playersTouched);
+            for (const entt::entity e : list)
+                if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e);
+        }
+        if (players.empty() || !(dt > 0.0f) || !backend) return;
+        const glm::vec3 gravity = backend->getGravity();
+        const glm::vec2 mouse = input.mouseDelta();
+        for (auto& [e, p] : players) {
+            const PlayerController& pc = reg.get<PlayerController>(e);
+            const Transform& t = reg.get<Transform>(e);
+            // Moved by anything but this system (an edit, a restore): it goes there, at rest.
+            if (differs(t.position, p.written, 1e-4f)) {
+                backend->setCharacterPosition(p.character, t.position);
+                backend->setCharacterLinearVelocity(p.character, glm::vec3(0.0f));
+                p.horizontal = glm::vec3(0.0f);
+                p.vy = 0.0f;
+            }
+            if (!sameRotation(t.rotation, p.writtenRot, 1e-4f)) p.yawDeg = yawOf(t.rotation);
+
+            // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
+            p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
+            p.yawDeg = std::remainder(p.yawDeg, 360.0f);
+            p.pitchDeg = std::clamp(p.pitchDeg - (mouse.y + input.axis(pc.lookY)) * pc.lookDegPerUnit, -89.0f, 89.0f);
+            const glm::quat rot = yawQuat(p.yawDeg);
+            backend->setCharacterRotation(p.character, rot);
+
+            // The wanted horizontal velocity, in the yaw frame.
+            glm::vec2 wish(input.axis(pc.moveRight), input.axis(pc.moveForward));
+            if (glm::dot(wish, wish) > 1.0f) wish = glm::normalize(wish);
+            const float speed = input.held(pc.sprint) ? pc.sprintSpeed : pc.walkSpeed;
+            const glm::vec3 target = (rot * glm::vec3(0.0f, 0.0f, -1.0f) * wish.y + rot * glm::vec3(1.0f, 0.0f, 0.0f) * wish.x) * speed;
+
+            // On the ground (and not rising from a jump): walk and maybe jump; else fall.
+            const pb::CharacterState before = backend->getCharacterState(p.character);
+            const bool grounded = before.groundState == pb::GroundState::ON_GROUND && p.vy < 0.1f;
+            const float accel = (grounded ? 1.0f : pc.airControl) * pc.acceleration * dt;
+            const glm::vec3 dv = target - p.horizontal;
+            const float dvLen = glm::length(dv);
+            p.horizontal = dvLen <= accel || dvLen == 0.0f ? target : p.horizontal + dv * (accel / dvLen);
+            bool jumped = false;
+            if (grounded) {
+                p.vy = 0.0f;
+                if (input.pressed(pc.jump)) {
+                    p.vy = pc.jumpSpeed;
+                    jumped = true;
+                }
+            }
+            // The move takes the step's average vertical velocity (half a step of gravity), so a
+            // jump follows the exact parabola: apex jumpSpeed^2 / 2g.
+            const bool falling = !grounded || jumped;
+            const float vMove = falling ? p.vy + 0.5f * gravity.y * dt : 0.0f;
+            backend->moveCharacter(p.character, dt, glm::vec3(p.horizontal.x, vMove, p.horizontal.z), gravity,
+                                   pc.stepHeight, grounded && !jumped ? 0.5f : 0.0f);
+            const pb::CharacterState after = backend->getCharacterState(p.character);
+            // What the move left: sideways what a wall took away, vertically the step's end.
+            p.horizontal = glm::vec3(after.linearVelocity.x, 0.0f, after.linearVelocity.z);
+            if (falling) p.vy = after.linearVelocity.y + 0.5f * gravity.y * dt;
+            const bool onGround = after.groundState == pb::GroundState::ON_GROUND && p.vy < 0.1f;
+            if (onGround) p.vy = 0.0f;
+            writePlayer(e, p, after.position, glm::vec3(p.horizontal.x, p.vy, p.horizontal.z), onGround);
+        }
+    }
+
+    void step(const InputMap& input, float dt) {
         using Clock = std::chrono::steady_clock;
         const auto ms = [](Clock::time_point a, Clock::time_point b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
@@ -682,13 +885,19 @@ struct PhysicsScene::Impl {
         lastSubsteps = 0;
         timing = {};
         std::vector<PhysicsEvent> fresh;
-        if (bodies.empty() && touched.empty() && pending.empty() && reg.view<PhysicsMoved>().empty()) {
-            stepEvents.clear();   // a world without colliders: no work at all
+        if (bodies.empty() && touched.empty() && pending.empty() && players.empty() && playersTouched.empty() &&
+            reg.view<PhysicsMoved>().empty()) {
+            stepEvents.clear();   // a world without colliders or players: no work at all
             return;
         }
         propagateTransforms(reg);
+        stepDt = dt;
         sync();
+        stepDt = 0.0f;
+        const auto tp = Clock::now();
+        updatePlayers(input, dt);
         auto t1 = Clock::now(), t2 = t1, t3 = t1;
+        timing.playerMs = ms(tp, t1);
         if (backend && dt > 0.0f) {
             constexpr float kMaxDt = 1.0f / 60.0f;
             int n = static_cast<int>(std::ceil(dt / kMaxDt - 1e-4f));
@@ -703,6 +912,12 @@ struct PhysicsScene::Impl {
             t1 = Clock::now();
             for (int i = 0; i < n; ++i) backend->step(dt / float(n));
             lastSubsteps = n;
+            // Kinematic bodies moved this step stop at their targets until their entities move again.
+            for (const pb::BodyHandle h : kinematicMoved) {
+                backend->setLinearVelocity(h, glm::vec3(0.0f));
+                backend->setAngularVelocity(h, glm::vec3(0.0f));
+            }
+            kinematicMoved.clear();
             t2 = Clock::now();
             drainContacts(fresh);
             t3 = Clock::now();
@@ -772,10 +987,11 @@ PhysicsInfo PhysicsScene::info() const {
     out.buildMs = m->buildMs;
     out.steps = m->steps;
     out.contacts = static_cast<uint32_t>(m->pairs.size());
+    out.players = static_cast<uint32_t>(m->players.size());
     return out;
 }
 
-void PhysicsScene::step(entt::registry&, float dt) { m->step(dt); }
+void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
 std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
 std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
     return m->since(since, max, dropped);
@@ -819,7 +1035,7 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
     // Once per fixed step, after the simulate systems added so far (spin, fly controller).
-    world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w.registry(), dt); });
+    world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
     return *scene;
 }
 

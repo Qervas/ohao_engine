@@ -134,7 +134,11 @@ public:
     void setCharacterLinearVelocity(CharacterHandle handle, const glm::vec3& vel) override;
     void updateCharacter(CharacterHandle handle, float deltaTime,
                           const glm::vec3& gravity, const glm::vec3& movementInput) override;
+    void moveCharacter(CharacterHandle handle, float deltaTime, const glm::vec3& velocity, const glm::vec3& gravity,
+                       float stepUp, float stickDown) override;
+    [[nodiscard]] BodyHandle getCharacterInnerBody(CharacterHandle handle) const override;
     size_t getCharacterCount() const override;
+    void moveKinematic(BodyHandle h, const glm::vec3& pos, const glm::quat& rot, float deltaTime) override;
 
     // === Info ===
     const char* getName() const override { return "jolt"; }
@@ -198,6 +202,7 @@ private:
     struct CharacterData {
         JPH::Ref<JPH::CharacterVirtual> character;
         uint16_t layer = CollisionLayer::CHARACTER;
+        BodyHandle innerBody = INVALID_BODY;   // in m_bodyIdToHandle only: the character owns the body
     };
     std::unordered_map<CharacterHandle, CharacterData> m_characters;
     CharacterHandle m_nextCharacterHandle = 0;

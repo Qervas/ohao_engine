@@ -317,6 +317,7 @@ bool methodPhysicsInfo(Session::Impl& s, const JsonDocument&, const JsonNode& pa
     out.key("awake"); out.uint64(info.awake);
     out.key("contacts"); out.uint64(info.contacts);
     if (info.triggers) { out.key("triggers"); out.uint64(info.triggers); }
+    if (info.players) { out.key("players"); out.uint64(info.players); }
     out.key("buildMs"); out.float32(ms3(info.buildMs));
     const auto& warnings = physics->warnings();
     if (!warnings.empty()) {

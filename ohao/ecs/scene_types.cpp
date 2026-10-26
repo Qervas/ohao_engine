@@ -193,6 +193,40 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("look", &FlyController::look).doc("Action that, while held, lets the mouse turn the entity")
         .field("fast", &FlyController::fast).doc("Action that, while held, multiplies the speed");
 
+    r.type<PlayerController>("PlayerController").component().host(makeComponentOps<PlayerController>())
+        .doc("A first-person player: a capsule standing on the entity's position (its feet), turned about +Y. Once per "
+             "fixed step, before bodies step, it walks from the named axes and actions (forward along its -Z, right "
+             "along its +X), jumps, climbs steps and slopes, and pushes dynamic bodies. It spawns at the first "
+             "SpawnPoint tagged \"player\"; triggers and rays see it.")
+        .field("radius", &PlayerController::radius).doc("Capsule radius").unit("m").min(0.05).max(2.0)
+        .field("height", &PlayerController::height).doc("Capsule height, feet to top").unit("m").min(0.2).max(5.0)
+        .field("eyeHeight", &PlayerController::eyeHeight).doc("The eyes above the feet (the first-person camera)")
+            .unit("m").min(0.0).max(5.0)
+        .field("walkSpeed", &PlayerController::walkSpeed).doc("Speed at a move axis of 1").unit("m/s").min(0.0).max(50.0)
+        .field("sprintSpeed", &PlayerController::sprintSpeed).doc("Speed while `sprint` is held").unit("m/s").min(0.0)
+            .max(50.0)
+        .field("acceleration", &PlayerController::acceleration).doc("How fast the horizontal velocity reaches the wanted one")
+            .unit("m/s2").min(0.0).max(1000.0)
+        .field("airControl", &PlayerController::airControl).doc("Fraction of the acceleration while in the air")
+            .unitless().min(0.0).max(1.0)
+        .field("jumpSpeed", &PlayerController::jumpSpeed).doc("Upward speed of a jump (4.9 m/s: 1.22 m high)").unit("m/s")
+            .min(0.0).max(50.0)
+        .field("maxSlopeDeg", &PlayerController::maxSlopeDeg).doc("Steepest walkable ground; steeper is a wall").unit("deg")
+            .min(0.0).max(89.0)
+        .field("stepHeight", &PlayerController::stepHeight).doc("Highest step climbed without jumping").unit("m").min(0.0)
+            .max(2.0)
+        .field("mass", &PlayerController::mass).doc("Mass pressing on what it stands on").unit("kg").min(1.0).max(10000.0)
+        .field("pushForce", &PlayerController::pushForce).doc("The most force it pushes a dynamic body with").unit("N")
+            .min(0.0).max(100000.0)
+        .field("lookDegPerUnit", &PlayerController::lookDegPerUnit)
+            .doc("Turn per unit of mouse movement, or of a look axis's value in a step").unit("deg").min(0.0).max(10.0)
+        .field("moveForward", &PlayerController::moveForward).doc("Axis walking along the player's -Z")
+        .field("moveRight", &PlayerController::moveRight).doc("Axis walking along the player's +X")
+        .field("jump", &PlayerController::jump).doc("Action that jumps when pressed on the ground")
+        .field("sprint", &PlayerController::sprint).doc("Action that, while held, walks at sprintSpeed")
+        .field("lookX", &PlayerController::lookX).doc("Axis turning the player (yaw), added to the mouse's x")
+        .field("lookY", &PlayerController::lookY).doc("Axis tilting the view (pitch), added to the mouse's y");
+
     r.type<Level>("Level").component().host(makeComponentOps<Level>())
         .doc("A level file (glTF) placed in the world. The level system expands it into one child entity per node of "
              "the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those "
@@ -307,6 +341,13 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("handle", &PhysicsBody::handle).doc("Body handle; 4294967295 means none").unitless();
     r.type<PhysicsMoved>("PhysicsMoved").component().runtime()
         .doc("Tag: an entity with a body moved; the physics system moves the body this frame.");
+    r.type<PlayerState>("PlayerState").component().runtime().host(makeComponentOps<PlayerState>())
+        .doc("The player as the physics system left it after the last step. Owned by the physics system.")
+        .field("velocity", &PlayerState::velocity).doc("World velocity").unit("m/s")
+        .field("onGround", &PlayerState::onGround).doc("Standing on walkable ground")
+        .field("yawDeg", &PlayerState::yawDeg).doc("Facing about +Y from -Z, counter-clockwise seen from above").unit("deg")
+        .field("pitchDeg", &PlayerState::pitchDeg).doc("Looking up (positive) or down, within 89 degrees").unit("deg")
+        .field("character", &PlayerState::character).doc("Character handle; 4294967295 means none").unitless();
 }
 
 } // namespace ohao::ecs

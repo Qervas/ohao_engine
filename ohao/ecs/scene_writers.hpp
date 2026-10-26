@@ -36,5 +36,6 @@ void writeFields(const Collider& v, const Collider* omit, FieldSink& out);
 void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out);
 void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out);
 void writeFields(const Socket& v, const Socket* omit, FieldSink& out);
+void writeFields(const PlayerController& v, const PlayerController* omit, FieldSink& out);
 
 } // namespace ohao::ecs

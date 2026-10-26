@@ -89,7 +89,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 47> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 49> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -146,6 +146,10 @@ constexpr std::array<ErrorCodeInfo, 47> kCodes = {{
                                 "has none."},
     {"W_PHYSICS_PARENT_SCALE", "Warning: a dynamic body under a parent scaled unevenly; the pose physics writes "
                                "back to its Transform is approximate (physics.info)."},
+    {"W_PLAYER_NO_SPAWN", "Warning: a PlayerController in a world with no SpawnPoint tagged \"player\"; it starts where "
+                          "its entity is (physics.info)."},
+    {"W_PLAYER_NO_CHARACTER", "Warning: the physics backend could not make a player's character; it does not move "
+                              "(physics.info)."},
 }};
 } // namespace
 

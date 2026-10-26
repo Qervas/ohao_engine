@@ -299,4 +299,33 @@ void writeFields(const Socket& v, const Socket* omit, FieldSink& out) {
     if (!omit || v.name != omit->name) out.tree.string("\"name\"", v.name);
 }
 
+void writeFields(const PlayerController& v, const PlayerController* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    const auto f = [&](std::string_view key, float PlayerController::*m) {
+        if (!omit || !same(v.*m, omit->*m)) t.f32(key, v.*m);
+    };
+    f("\"radius\"", &PlayerController::radius);
+    f("\"height\"", &PlayerController::height);
+    f("\"eyeHeight\"", &PlayerController::eyeHeight);
+    f("\"walkSpeed\"", &PlayerController::walkSpeed);
+    f("\"sprintSpeed\"", &PlayerController::sprintSpeed);
+    f("\"acceleration\"", &PlayerController::acceleration);
+    f("\"airControl\"", &PlayerController::airControl);
+    f("\"jumpSpeed\"", &PlayerController::jumpSpeed);
+    f("\"maxSlopeDeg\"", &PlayerController::maxSlopeDeg);
+    f("\"stepHeight\"", &PlayerController::stepHeight);
+    f("\"mass\"", &PlayerController::mass);
+    f("\"pushForce\"", &PlayerController::pushForce);
+    f("\"lookDegPerUnit\"", &PlayerController::lookDegPerUnit);
+    const auto s = [&](std::string_view key, std::string PlayerController::*m) {
+        if (!omit || v.*m != omit->*m) t.string(key, v.*m);
+    };
+    s("\"moveForward\"", &PlayerController::moveForward);
+    s("\"moveRight\"", &PlayerController::moveRight);
+    s("\"jump\"", &PlayerController::jump);
+    s("\"sprint\"", &PlayerController::sprint);
+    s("\"lookX\"", &PlayerController::lookX);
+    s("\"lookY\"", &PlayerController::lookY);
+}
+
 } // namespace ohao::ecs

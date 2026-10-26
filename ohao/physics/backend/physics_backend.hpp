@@ -331,6 +331,13 @@ struct CharacterCreationInfo {
 
     // Collision layer
     uint16_t layer = CollisionLayer::CHARACTER;
+
+    // The character's position is its feet (the capsule stands on it) instead of the capsule's
+    // centre, and only contacts below the lower hemisphere's centre support it.
+    bool positionAtFeet = false;
+    // A kinematic inner body of the same capsule on `layer`, so sensors and rays see the
+    // character (it is not a rigid body otherwise). getCharacterInnerBody gives its handle.
+    bool innerBody = false;
 };
 
 enum class GroundState {
@@ -473,7 +480,18 @@ public:
     virtual void setCharacterLinearVelocity(CharacterHandle handle, const glm::vec3& vel) = 0;
     virtual void updateCharacter(CharacterHandle handle, float deltaTime,
                                   const glm::vec3& gravity, const glm::vec3& movementInput) = 0;
+    // Moves the character with exactly this velocity for deltaTime (no gravity added): sliding
+    // along what it hits, walking up steps of at most stepUp, sticking to the floor down to
+    // stickDown when it was on ground, pushing dynamic bodies with its strength.
+    virtual void moveCharacter(CharacterHandle handle, float deltaTime, const glm::vec3& velocity,
+                               const glm::vec3& gravity, float stepUp, float stickDown) = 0;
+    // The character's inner body (CharacterCreationInfo::innerBody), or INVALID_BODY.
+    [[nodiscard]] virtual BodyHandle getCharacterInnerBody(CharacterHandle handle) const = 0;
     virtual size_t getCharacterCount() const = 0;
+
+    // A kinematic body set moving so that it reaches this pose after deltaTime (its velocity
+    // pushes what it meets); setLinearVelocity/setAngularVelocity to zero stop it.
+    virtual void moveKinematic(BodyHandle h, const glm::vec3& pos, const glm::quat& rot, float deltaTime) = 0;
 
     // === INFO ===
     virtual const char* getName() const = 0;
@@ -567,7 +585,10 @@ public:
     void setCharacterRotation(CharacterHandle, const glm::quat&) override {}
     void setCharacterLinearVelocity(CharacterHandle, const glm::vec3&) override {}
     void updateCharacter(CharacterHandle, float, const glm::vec3&, const glm::vec3&) override {}
+    void moveCharacter(CharacterHandle, float, const glm::vec3&, const glm::vec3&, float, float) override {}
+    [[nodiscard]] BodyHandle getCharacterInnerBody(CharacterHandle) const override { return INVALID_BODY; }
     size_t getCharacterCount() const override { return 0; }
+    void moveKinematic(BodyHandle, const glm::vec3&, const glm::quat&, float) override {}
 
     const char* getName() const override { return "null"; }
     BackendStats getStats() const override { return {}; }
