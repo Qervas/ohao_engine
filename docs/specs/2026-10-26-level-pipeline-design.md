@@ -110,6 +110,15 @@ Verified against the tree at `a19d437`:
     `physics_world.cpp:582-588`).
 - **There is no spawn point, collider or level component,** and no CLI command that reads
   a level.
+- **Every loaded model's normals are replaced by smoothed ones.**
+  - `repairMeshNormals` (`model_loader.cpp:56-134`) runs after every load, not only on the
+    "triangle soup" it was written for.
+  - It merges vertices by position and writes back area-weighted normals, so a file's
+    authored hard edges are lost. The blockout's boxes render rounded (step 1: 306 vertices
+    → 83 positions, 263 normals changed).
+  - Step 2 keeps the file's normals whenever the file has them and repairs only meshes
+    without normals. That moves goldens whose models have authored hard edges, which are
+    re-baselined after looking, in their own commit.
 
 ## Assets and staging
 
@@ -490,6 +499,8 @@ here stops and reports.
 2. **Structure and per-mesh geometry.**
    - The glTF structure reader (`ohao/level/gltf_structure.*`).
    - `ModelLoader::loadMesh`, `ModelAsset.mesh` and instantiate's `(path, mesh)` cache.
+   - Normals: the loader keeps a file's normals and repairs only meshes without them (see
+     "Why"); the goldens this moves are re-baselined after looking, in their own commit.
    - Tests 2 and 3.
 3. **Levels in the world.**
    - The `Level` and `LevelNode` components and the `level` sync system: expansion, ids,

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ohao.dev/schema/level-extras.json",
+  "title": "OHAO level hints: a glTF node's extras",
+  "description": "docs/specs/2026-10-26-level-pipeline-design.md, 'Extras: the hint schema'. Other keys are allowed here: component passthrough (a registered component's name with an object value) and other tools' properties are checked by the engine's level loader.",
+  "type": "object",
+  "properties": {
+    "col": {"enum": ["box", "sphere", "capsule", "convex", "mesh", "none"], "description": "Collision shape fitted to the node's mesh; default mesh on mesh nodes, none elsewhere"},
+    "body": {"enum": ["static", "dynamic", "kinematic"], "description": "Motion type; default static"},
+    "mass": {"type": "number", "exclusiveMinimum": 0, "description": "kg; dynamic bodies, default 10"},
+    "fric": {"type": "number", "minimum": 0, "maximum": 1, "description": "Friction, default 0.6"},
+    "rest": {"type": "number", "minimum": 0, "maximum": 1, "description": "Restitution, default 0"},
+    "vis": {"enum": [0, 1], "description": "0: collision only, not drawn"},
+    "spawn": {"type": "string", "minLength": 1, "maxLength": 32, "description": "SpawnPoint tag (player, enemy, ...)"},
+    "socket": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Socket name (an attach point)"}
+  }
+}

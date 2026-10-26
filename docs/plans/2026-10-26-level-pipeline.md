@@ -157,7 +157,11 @@
   - `t03_whole_file_unchanged`: `ModelAsset` without `mesh` gives the same vertex and index bytes as before; hash them in the test from a run at the task's base commit.
   - `t03_shared_mesh_uploads_once`: two entities, same `(path, mesh)`, one upload, through the fake instantiate backend.
 - [ ] **Step 4: Implement.** `loadMesh` reuses `loadAssimp`'s per-`aiMesh` conversion over the glTF mesh's primitive range, with no node transform. Then `ModelAsset.mesh` (reflected, documented, written only when non-empty, so every existing scene file saves byte for byte) and the cache key. Run `scene_tests`; expected: PASS. Run the scene goldens; expected: unchanged.
-- [ ] **Step 5: Close the step.** `check.py --all`, change record, commit `feat(level): glTF structure reader and per-mesh models`.
+- [ ] **Step 5: Keep authored normals.**
+  - Write the failing test first: `t03_authored_hard_edges_kept`. The blockout's `Pillar` keeps the file's face normals (each vertex normal within 1e-4 of its face's), where today's `repairMeshNormals` smooths them (step 1 measured 263 of 306 normals changed).
+  - Restrict the repair to meshes the file gives no normals (Assimp `aiMesh::HasNormals()` false, or a degenerate normal).
+  - Run every golden. Look at what moved, then re-baseline the moved ones (the blockout, and any Khronos or helmet scene with authored hard edges) with `--update --only`, in one commit whose message lists each scene's max_abs and changed fraction.
+- [ ] **Step 6: Close the step.** `check.py --all`, change record, commit `feat(level): glTF structure reader and per-mesh models`.
 
 ### Task 3: Levels in the world (build step 3)
 

@@ -95,6 +95,9 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(check_doctor_gpu LABEL gpu GPU SCRIPT tests/doctor/check_doctor.py ARGS --gpu)
     # The shared shader/C++ layout (sub-project 2b, step 6): generated files current, std430.
     ohao_add_python_test(check_layout LABEL quick SCRIPT tests/layout/check_layout.py)
+    # The level pipeline's checked-in assets (sub-project 5, test 1): hints, the blockout's
+    # contract, its byte-identical Blender rebuild (skip without Blender).
+    ohao_add_python_test(check_level_assets LABEL quick TIMEOUT 600 SCRIPT tests/level/check_level_assets.py)
     # `ohao serve` as a process (tests 8-10, 15): its goldens write build/serve_tmp/<session>.
     ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
 

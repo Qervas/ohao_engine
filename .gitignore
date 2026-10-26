@@ -54,6 +54,10 @@ skills-lock.json
 
 # Local test assets (user-downloaded models)
 assets/test_pbr/
+# Staged assets that may not be published (Frank's Somnabulate props, sub-project 5):
+# only the staging rule is tracked (assets/local/README.md)
+assets/local/*
+!assets/local/README.md
 
 # Debug markdown files (temporary)
 *_FIXES.md
