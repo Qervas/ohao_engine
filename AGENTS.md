@@ -187,7 +187,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   sun none; with the lights out of view the image with emitters is the image without them
   (deferred with RT shadows and GI, deferred with CSM, path traced: byte for byte), with
   them in view each emitter is bright and every other pixel the same (deferred: 1 LSB within
-  24 px of an emitter, its denoisers' neighbourhoods). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  24 px of an emitter, its denoisers' neighbourhoods); a moved light's emitter carries last
+  frame's placement as its prevWorld, and under TAA a moving point light's mesh is as bright
+  as the light held still. `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size refused), log.read; a lockstep window capture equals a
   headless capture of the same world bit for bit (post off and on, and path-traced:
@@ -209,9 +211,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 22 scenes: 8 examples, 14 through
-  `ohao run`; six at the deferred frame's `reference` quality; eight of them the Khronos
-  validation pack, `assets/khronos/README.md`): `--only NAME`, `--update` after a deliberate change (look at what drifted
+- **Render goldens** (`tests/golden/manifest.json`, 24 scenes: 8 examples, 16 through
+  `ohao run`; seven at the deferred frame's `reference` quality; eight of them the Khronos
+  validation pack, `assets/khronos/README.md`; two an area light, `area_light.scene.json`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
   `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
@@ -396,6 +398,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
   emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
+  A mesh moves with its light and writes motion vectors as any mesh does: the extract passes
+  the light entity's `prevWorld * inverse(world)` as `LightDesc::lastFrameMotion`, and the
+  emitter's prevWorld is that times its world (identity, so prevWorld = world, when still).
   Mirrors reflect it: in deferred a point or spot light's specular is its sphere's
   (`LightGpu.params.z` = the mesh's radius, `evaluateBRDFSphere`: the representative point,
   the lobe widened to `a + r/(2d)`), on screen or off, SSR or not; SSR treats an emitter pixel
