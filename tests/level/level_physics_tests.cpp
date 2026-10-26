@@ -940,6 +940,161 @@ static void t12_play_scene_loads_with_head_camera() {
     CHECK(reg.get<PlayerState>(player).onGround, "on the floor");
 }
 
+// ---- test 13: footsteps (sub-project 6 step 4) -----------------------------------------------------
+// docs/specs/2026-10-26-player-physics-design.md, "Footsteps": a footstep every stride (0.75 m
+// walking, 0.95 m sprinting) while on the ground and moving, a land after a fall of more than
+// 0.3 m, each with the surface of the ground body (Collider.surface; the blockout's hints: the
+// Floor concrete, the Step, Platform and Ramp metal, the crates wood), in the physics event log.
+
+namespace {
+
+using Kind = PhysicsEvent::Kind;
+
+// n steps; the first with `first`; the player's footstep and land events, in order.
+std::vector<PhysicsEvent> playerEvents(PlayerFixture& f, int n, std::vector<InputEvent> first = {}) {
+    std::vector<PhysicsEvent> out;
+    for (int i = 0; i < n; ++i) {
+        f.step(i == 0 ? std::move(first) : std::vector<InputEvent>{});
+        for (const PhysicsEvent& e : physicsEvents(f.world))
+            if (e.kind == Kind::Footstep || e.kind == Kind::Land) out.push_back(e);
+    }
+    return out;
+}
+
+std::vector<PhysicsEvent> only(const std::vector<PhysicsEvent>& ev, Kind k) {
+    std::vector<PhysicsEvent> out;
+    for (const PhysicsEvent& e : ev)
+        if (e.kind == k) out.push_back(e);
+    return out;
+}
+
+// Distances between consecutive events' points, in the ground plane.
+std::vector<float> spacing(const std::vector<PhysicsEvent>& ev) {
+    std::vector<float> out;
+    for (std::size_t i = 1; i < ev.size(); ++i)
+        out.push_back(glm::length(glm::vec2(ev[i].point.x - ev[i - 1].point.x, ev[i].point.z - ev[i - 1].point.z)));
+    return out;
+}
+
+} // namespace
+
+static void t13_walk_strides_0_75_m() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    const float z0 = f.pos().z;
+    const auto ev = playerEvents(f, 75, {axisSet("move_forward", 1.0f)});
+    const auto steps = only(ev, Kind::Footstep);
+    const float walked = z0 - f.pos().z;
+    const auto gaps = spacing(steps);
+    std::printf("\n      walked %.3f m: %zu footsteps", walked, steps.size());
+    for (const float g : gaps) std::printf(" %.3f", g);
+    CHECK(std::fabs(float(steps.size()) - walked / 0.75f) < 1.0f, "a footstep every 0.75 m walked");
+    bool even = !gaps.empty();
+    for (const float g : gaps) even &= std::fabs(g - 0.75f) <= 4.0f / 60.0f + 1e-3f;
+    CHECK(even, "0.75 m apart (within the step's 6.7 cm)");
+    bool floor = !steps.empty();
+    for (const PhysicsEvent& e : steps)
+        floor &= e.surface == "concrete" && e.a == f.player && e.b == f.named("Floor") && e.point.y < 0.01f;
+    CHECK(floor, "each on the Floor's concrete, at the player's feet");
+    CHECK(!steps.empty() && near(steps.back().speed, 4.0f, 0.05f), "at walking speed");
+    CHECK(only(ev, Kind::Land).empty(), "no land on flat ground");
+}
+
+static void t13_sprint_strides_0_95_m() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    const float z0 = f.pos().z;
+    const auto steps = only(playerEvents(f, 45, {axisSet("move_forward", 1.0f), actionEvent("sprint", true)}), Kind::Footstep);
+    const float ran = z0 - f.pos().z;
+    const auto gaps = spacing(steps);
+    std::printf("\n      ran %.3f m: %zu footsteps", ran, steps.size());
+    for (const float g : gaps) std::printf(" %.3f", g);
+    CHECK(std::fabs(float(steps.size()) - ran / 0.95f) < 1.0f, "a footstep every 0.95 m sprinted");
+    bool even = !gaps.empty();
+    for (const float g : gaps) even &= std::fabs(g - 0.95f) <= 6.5f / 60.0f + 1e-3f;
+    CHECK(even, "0.95 m apart (within the step's 10.8 cm)");
+    CHECK(!steps.empty() && near(steps.back().speed, 6.5f, 0.05f), "at sprinting speed");
+}
+
+static void t13_surface_from_ground_body() {
+    PlayerFixture f;
+    f.place({0.5f, 0.0f, -2.0f}, 90.0f);   // facing -X: 2 m of Floor, then the Step and the Platform
+    const auto steps = only(playerEvents(f, 90, {axisSet("move_forward", 1.0f)}), Kind::Footstep);
+    std::string seen;
+    for (const PhysicsEvent& e : steps) seen += f.world.registry().get<Name>(e.b).value + ":" + e.surface + " ";
+    std::printf("\n      %s", seen.c_str());
+    bool floorFirst = !steps.empty() && steps.front().surface == "concrete", metal = false;
+    for (const PhysicsEvent& e : steps) {
+        const std::string& name = f.world.registry().get<Name>(e.b).value;
+        if ((name == "Step" || name == "Platform") && e.surface == "metal") metal = true;
+        if (name == "Floor" && e.surface != "concrete") floorFirst = false;
+    }
+    CHECK(floorFirst && metal, "concrete on the Floor, metal on the Step and the Platform (their surf hints)");
+
+    // A Collider's surface, edited: the next footsteps there report it.
+    f.world.registry().patch<Collider>(f.named("Floor"), [](Collider& c) { c.surface = "gravel"; });
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    const auto after = only(playerEvents(f, 40, {axisSet("move_forward", 1.0f)}), Kind::Footstep);
+    CHECK(!after.empty() && after.back().surface == "gravel", "an edited Collider.surface is what the footsteps report");
+
+    // A collider without a surface is "default".
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    installPhysics(w, files);
+    const entt::entity ground = w.create("Ground", Transform{{0.0f, -0.5f, 0.0f}});
+    w.registry().emplace<Collider>(ground, Collider{ColliderShape::Box, {20.0f, 0.5f, 20.0f}});
+    const entt::entity pl = w.create("Player");
+    w.registry().emplace<PlayerController>(pl);
+    std::vector<PhysicsEvent> ev;
+    for (int i = 0; i < 40; ++i) {
+        w.stepInput(i == 0 ? std::vector<InputEvent>{axisSet("move_forward", 1.0f)} : std::vector<InputEvent>{});
+        w.update(kDt);
+        for (const PhysicsEvent& e : physicsEvents(w))
+            if (e.kind == Kind::Footstep) ev.push_back(e);
+    }
+    CHECK(!ev.empty() && ev.front().surface == "default", "a collider without a surface: \"default\"");
+}
+
+static void t13_land_after_a_drop() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 1.0f}, 0.0f);
+    f.world.setTransform(f.player, Transform{{-1.0f, 0.5f, 1.0f}, yawRotation(0.0f)});   // 0.5 m up
+    const auto ev = playerEvents(f, 40);
+    const auto lands = only(ev, Kind::Land);
+    const float v = std::sqrt(2.0f * 9.81f * 0.5f);
+    std::printf("\n      0.5 m: %zu land(s), speed %.3f (free fall %.3f)", lands.size(), lands.empty() ? 0.0f : lands[0].speed, v);
+    CHECK(lands.size() == 1 && near(lands[0].speed, v, 0.25f) && lands[0].surface == "concrete" && lands[0].a == f.player,
+          "a 0.5 m drop: one land, at the free-fall speed, on concrete");
+    CHECK(only(ev, Kind::Footstep).empty(), "and no footstep standing");
+
+    f.world.setTransform(f.player, Transform{{-1.0f, 0.2f, 1.0f}, yawRotation(0.0f)});   // 0.2 m: under 0.3
+    CHECK(only(playerEvents(f, 30), Kind::Land).empty(), "a 0.2 m drop: no land");
+
+    const auto jump = playerEvents(f, 80, {actionEvent("jump", true)});
+    const auto jl = only(jump, Kind::Land);
+    CHECK(jl.size() == 1 && near(jl[0].speed, 4.9f, 0.3f), "a jump (1.22 m) lands once, at its take-off speed");
+}
+
+static void t13_none_while_still_or_airborne() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    CHECK(playerEvents(f, 60).empty(), "standing still: no footstep, no land");
+    // Walking, then a jump mid-stride: nothing while in the air, a land on touching down.
+    auto ev = playerEvents(f, 20, {axisSet("move_forward", 1.0f)});
+    const std::size_t before = ev.size();
+    const uint64_t takeoff = f.physics->steps() + 1;
+    const auto air = playerEvents(f, 60, {actionEvent("jump", true)});
+    uint64_t landed = 0;
+    for (const PhysicsEvent& e : air)
+        if (e.kind == Kind::Land && !landed) landed = e.step;
+    bool quiet = landed != 0;
+    for (const PhysicsEvent& e : air)
+        if (e.kind == Kind::Footstep && e.step >= takeoff && e.step < landed) quiet = false;
+    std::printf("\n      %zu events walking; jump at step %llu, landed at %llu", before, static_cast<unsigned long long>(takeoff),
+                static_cast<unsigned long long>(landed));
+    CHECK(before > 0 && quiet, "no footstep between take-off and landing");
+}
+
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
 // Every pixel is one ray against the physics scene (nothing is drawn from the meshes): a top-down
 // view (rays straight down, 2 cm apart) and a view from inside the east wall looking west. A hit
@@ -1163,5 +1318,10 @@ int main(int argc, char** argv) {
     RUN(t12_yaw_turns_the_body);
     RUN(t12_interpolation_leaves_hash_and_save);
     RUN(t12_play_scene_loads_with_head_camera);
+    RUN(t13_walk_strides_0_75_m);
+    RUN(t13_sprint_strides_0_95_m);
+    RUN(t13_surface_from_ground_body);
+    RUN(t13_land_after_a_drop);
+    RUN(t13_none_while_still_or_airborne);
     return ohao::test::finish("level_physics_tests");
 }

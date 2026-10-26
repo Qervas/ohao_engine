@@ -3,10 +3,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include "ecs/asset_resolver.hpp"
+#include "ecs/physics_scene.hpp"
 #include "runtime/clock.hpp"
+#include "runtime/footsteps.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/image.hpp"
 #include "core/input.hpp"
@@ -510,7 +515,79 @@ static void sp2b_t14_stats_are_medians_per_pass_in_registry_order() {
     CHECK(close, "each pass's median over the frames that ran it (bloom: two frames)");
 }
 
+// ---- sub-project 6, step 4: which footstep sound plays (runtime/footsteps.hpp) -----------------
+
+static void sp6_t13_footstep_sounds_round_robin_and_fallback() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+                          ("ohao_footsteps_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path local = root / "local", shipped = root / "shipped";
+    fs::create_directories(local);
+    fs::create_directories(shipped);
+    const auto touch = [](const fs::path& p) { std::ofstream(p) << "RIFF"; };
+    for (const char* f : {"default_1.wav", "default_2.wav", "metal_1.wav", "metal_2.wav", "metal_10.wav", "wood_x.wav",
+                          "metal_3.ogg", "readme.txt"})
+        touch(shipped / f);
+    touch(local / "wood_1.wav");
+
+    FootstepSounds s({local, shipped});
+    const auto name = [&](std::string_view surface) { return fs::path(s.next(surface)).filename().string(); };
+    CHECK(name("metal") == "metal_1.wav" && name("metal") == "metal_2.wav" && name("metal") == "metal_10.wav" &&
+              name("metal") == "metal_1.wav",
+          "a surface's sounds in number order, round robin");
+    CHECK(name("wood") == "wood_1.wav" && fs::path(s.next("wood")).parent_path() == local,
+          "the local folder's sounds (wood_x.wav is not numbered and is ignored)");
+    CHECK(name("concrete") == "default_1.wav" && name("concrete") == "default_2.wav" && name("concrete") == "default_1.wav",
+          "a surface without sounds plays default's");
+    CHECK(s.sounds() == 6, "six sounds found: .ogg, unnumbered and other files are not");
+
+    touch(local / "metal_1.wav");
+    FootstepSounds over({local, shipped});
+    CHECK(fs::path(over.next("metal")).parent_path() == local && fs::path(over.next("metal")).parent_path() == local,
+          "a surface the local folder has is played from there only (it overrides the shipped set)");
+
+    FootstepSounds none({root / "missing"});
+    CHECK(none.next("metal").empty() && none.sounds() == 0, "no folder: nothing to play");
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// The window host's player: a walk's footsteps, read from the physics log and played (at volume 0).
+static void sp6_t13_footsteps_play_the_walk() {
+    Footsteps steps;
+    if (!steps.initialize(OHAO_SOURCE_DIR)) {
+        std::printf("\n      skip: no audio device");
+        return;
+    }
+    steps.setVolume(0.0f);
+    ecs::World w;
+    ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
+    ecs::installPhysics(w, files);
+    const entt::entity ground = w.create("Ground", ecs::Transform{{0.0f, -0.5f, 0.0f}});
+    ecs::Collider floor{ecs::ColliderShape::Box, {30.0f, 0.5f, 30.0f}};
+    floor.surface = "metal";
+    w.registry().emplace<ecs::Collider>(ground, floor);
+    w.registry().emplace<ecs::PlayerController>(w.create("Player"));
+    InputEvent walk;
+    walk.type = InputEvent::Type::AxisSet;
+    walk.name = "move_forward";
+    walk.value = 1.0f;
+    std::size_t logged = 0;
+    for (int i = 0; i < 90; ++i) {
+        w.stepInput(i == 0 ? std::vector<InputEvent>{walk} : std::vector<InputEvent>{});
+        w.update(1.0f / 60.0f);
+        for (const auto& e : ecs::physicsEvents(w)) logged += e.kind == ecs::PhysicsEvent::Kind::Footstep;
+        if (i % 3 == 2) steps.update(w);   // a frame every three steps: the log keeps what came between
+    }
+    steps.update(w);
+    std::printf("\n      %zu footsteps logged, %llu played", logged, static_cast<unsigned long long>(steps.played()));
+    CHECK(logged >= 6 && steps.played() == logged, "every footstep the steps logged is played, none twice");
+}
+
 int main() {
+    std::printf("[footsteps]\n");
+    RUN(sp6_t13_footstep_sounds_round_robin_and_fallback);
+    RUN(sp6_t13_footsteps_play_the_walk);
     std::printf("[render stats]\n");
     RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");

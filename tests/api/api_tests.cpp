@@ -2174,6 +2174,32 @@ static void sp6_t11_physics_info_counts_steps() {
     CHECK(r.at("/result/awake") && r.at("/result/contacts") && !r.at("/result/triggers"), "awake and contacts; no triggers");
 }
 
+// ---- sub-project 6, step 4: footsteps in physics.events -----------------------------------------
+
+static void sp6_t13_footsteps_in_physics_events() {
+    LevelWorld lw;
+    CHECK(lw.load("assets/scenes/blockout_play.scene.json").ok(), "the play scene loads");
+    CHECK(Reply(lw.s.call("input.inject", R"({"events":[{"step":0,"axis":"move_forward","value":1}]})")).ok(),
+          "walk forward");
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":40})")).ok(), "40 steps");
+    const Reply r(lw.s.call("physics.events", R"({"max":64})"));
+    std::printf("\n      %.600s", r.text.c_str());
+    int footsteps = 0;
+    std::size_t largest = 0;
+    bool shape = true;
+    for (uint32_t i = 0; r.at("/result/events") && i < r.at("/result/events")->count; ++i) {
+        const std::string at = "/result/events/" + std::to_string(i);
+        largest = std::max(largest, r.json(at).size());
+        if (r.str(at + "/kind") != "footstep") continue;
+        ++footsteps;
+        shape &= r.str(at + "/an") == "Player" && r.str(at + "/bn") == "Floor" && r.str(at + "/surface") == "concrete" &&
+                 r.at(at + "/point") && r.at(at + "/speed");
+    }
+    CHECK(r.ok() && footsteps >= 2, "the walk's footsteps are in the log (2.3 m: three strides)");
+    CHECK(shape, "each names the player and the Floor, with its surface, point and speed");
+    CHECK(largest < 200, "every event under 200 bytes");
+}
+
 static void sp5_t08_level_reload_keeps_world_hash() {
     LevelWorld lw;
     CHECK(lw.load().ok(), "the blockout scene loads");
@@ -2262,6 +2288,7 @@ int main() {
     RUN(sp6_t11_events_cursor_and_dropped);
     RUN(sp6_t11_events_params_refused);
     RUN(sp6_t11_physics_info_counts_steps);
+    RUN(sp6_t13_footsteps_in_physics_events);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

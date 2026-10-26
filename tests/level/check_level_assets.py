@@ -77,19 +77,19 @@ def l1_every_checked_in_level_has_valid_hints():
 # The blockout's contract: name -> (translation, extras). Later steps' collision and spawn tests
 # assert against these numbers (docs/plans/2026-10-26-level-pipeline.md, Task 1).
 BLOCKOUT = {
-    "Floor": ([0, -0.1, 0], {"col": "box"}),
+    "Floor": ([0, -0.1, 0], {"col": "box", "surf": "concrete"}),
     "WallNorth": ([0, 1.5, -3.1], {"col": "box"}),
     "WallEast": ([4.1, 1.5, 0], {"col": "box"}),
     "WallWest": ([-4.1, 1.5, 0], {"col": "box"}),
     "WallSouthA": ([-1.65, 1.5, 3.1], {"col": "box"}),
     "WallSouthB": ([3.15, 1.5, 3.1], {"col": "box"}),
     "WallSouthLintel": ([1.5, 2.6, 3.1], {"col": "box"}),
-    "Step": ([-2.25, 0.15, -2], {"col": "box"}),
-    "Platform": ([-3.5, 0.3, -2], {"col": "box"}),
-    "Ramp": ([2.7, 0.3, -1], {"col": "mesh"}),
-    "Pillar": ([0, 1.5, -0.5], {"col": "box"}),
-    "CrateA": ([1.3, 0.3, -1.7], {"col": "box", "body": "dynamic", "mass": 20.0}),
-    "CrateB": ([1.3, 0.8, -1.7], {"col": "box", "body": "dynamic", "mass": 8.0}),
+    "Step": ([-2.25, 0.15, -2], {"col": "box", "surf": "metal"}),
+    "Platform": ([-3.5, 0.3, -2], {"col": "box", "surf": "metal"}),
+    "Ramp": ([2.7, 0.3, -1], {"col": "mesh", "surf": "metal"}),
+    "Pillar": ([0, 1.5, -0.5], {"col": "box", "surf": "metal"}),
+    "CrateA": ([1.3, 0.3, -1.7], {"col": "box", "body": "dynamic", "mass": 20.0, "surf": "wood"}),
+    "CrateB": ([1.3, 0.8, -1.7], {"col": "box", "body": "dynamic", "mass": 8.0, "surf": "wood"}),
     "SpawnPlayer": ([1.5, 0, 2.2], {"spawn": "player"}),
     "SpawnEnemyA": ([-2.5, 0.3, -2], {"spawn": "enemy"}),
     "SpawnEnemyB": ([3, 0.5, -2], {"spawn": "enemy"}),   # on the ramp (step 4: was 0.6, 0.1 m above it)

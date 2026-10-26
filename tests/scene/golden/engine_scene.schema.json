@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash a2735a10a7ed2698. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 63927d1c2b0e1f6e. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -923,6 +923,12 @@
           "description": "A trigger volume: reports bodies entering and leaving it (trigger_enter, trigger_exit) and blocks nothing",
           "default": false,
           "allOf": [{ "type": "boolean" }]
+        },
+        "surface": {
+          "description": "What it is made of, for footsteps on it (concrete, metal, wood, ...); empty is \"default\"",
+          "default": "",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 32
         }
       },
       "additionalProperties": false

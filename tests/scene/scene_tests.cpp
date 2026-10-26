@@ -520,6 +520,7 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
                 w.registry().emplace<RigidBody>(e, RigidBody{static_cast<Motion>(rng() % 3),
                                                              std::max(0.001f, pickFloat(rng, true)), unit(), unit()});
             if (rng() % 2) w.registry().patch<Collider>(e, [&](Collider& c) { c.trigger = rng() % 2 == 0; });
+            if (rng() % 2) w.registry().patch<Collider>(e, [&](Collider& c) { c.surface = rng() % 2 ? "metal" : "wood"; });
         }
         // Players (sub-project 6 step 2): data here too.
         if (rng() % 2) {
@@ -2318,7 +2319,7 @@ static void sp5_t02_blockout_structure() {
     const auto* spawn = node("SpawnPlayer");
     const auto* cam = node("LevelCamera");
     CHECK(crate && crate->parent == -1 && crate->mesh >= 0 && nearVec(crate->translation, {1.3f, 0.3f, -1.7f}, 1e-6f) &&
-              crate->extrasJson == R"({"col":"box","body":"dynamic","mass":20.0})",
+              crate->extrasJson == R"({"col":"box","body":"dynamic","mass":20.0,"surf":"wood"})",
           "CrateA: its place and hints");
     CHECK(spawn && spawn->mesh == -1 && spawn->extrasJson == R"({"spawn":"player"})", "SpawnPlayer: an empty with its tag");
     CHECK(cam && cam->camera == 0 && s.cameras.size() == 1, "the camera node");
@@ -2488,6 +2489,7 @@ static void sp5_t04_hints_read_keys_defaults_and_conventions() {
     CHECK(crate.col == ColliderShape::Box && crate.body == Motion::Dynamic && crate.mass == 5.0f && !crate.fric &&
               !crate.rest && crate.visible,
           "col, body and mass are read; absent keys stay unset for their defaults");
+    CHECK(crate.surface == "wood" && hintsOf(s, "Room", d).surface.empty(), "surf is the collider's surface; none by default");
     CHECK(!hintsOf(s, "Ghost", d).visible && hintsOf(s, "SpawnA", d).spawn == "player", "vis 0 and spawn");
     const auto room = hintsOf(s, "Room", d);
     CHECK(!room.col && !room.body && room.visible && room.components.empty(), "a node without extras sets nothing");
@@ -2543,9 +2545,10 @@ static void sp5_t02_extras_errors_name_the_node() {
     CHECK(find("E_LEVEL_EXTRAS", "BadVis", "'vis'") && find("E_LEVEL_EXTRAS", "BadVis", "'mass'") && h["BadVis"].visible &&
               !h["BadVis"].mass,
           "vis must be 0 or 1 and mass positive");
+    CHECK(find("E_LEVEL_EXTRAS", "BadVis", "'surf'") && h["BadVis"].surface.empty(), "surf is a string");
     CHECK(find("E_LEVEL_EXTRAS", "Runtime", "'MeshRenderer'") && find("W_LEVEL_EXTRAS", "Runtime", "'addon_prop'"),
           "runtime state cannot be passed through; another tool's property only warns");
-    CHECK(d.size() == 9, "nine diagnostics in all: seven errors and two warnings");
+    CHECK(d.size() == 10, "ten diagnostics in all: eight errors and two warnings");
 
     // The level system loads such a level with the bad parts left out, and says so on the level entity.
     World w;
@@ -2555,9 +2558,9 @@ static void sp5_t02_extras_errors_name_the_node() {
     w.registry().emplace<Level>(lv, Level{AssetRef{"tests/level/fixtures/level_errors.gltf", {}}});
     w.sync();
     const auto* err = w.registry().try_get<InstantiateError>(lv);
-    CHECK(w.idCount() == 9 && err && err->code == "E_LEVEL_EXTRAS" && err->message.find("7 errors") != std::string::npos,
+    CHECK(w.idCount() == 9 && err && err->code == "E_LEVEL_EXTRAS" && err->message.find("8 errors") != std::string::npos,
           "every node loads; the level entity carries E_LEVEL_EXTRAS with the count");
-    CHECK(level::levelDiagnostics(w, lv).size() == 9, "and the diagnostics are kept for level.info");
+    CHECK(level::levelDiagnostics(w, lv).size() == 10, "and the diagnostics are kept for level.info");
 }
 
 // String limits (reflect maxLength): SpawnPoint.tag <= 32 and Socket.name <= 64 code points.
@@ -2568,7 +2571,8 @@ static void sp5_t04_string_limits_are_checked() {
     };
     std::string accented;
     for (int i = 0; i < 32; ++i) accented += "\xc3\xa9";   // 32 code points, 64 bytes
-    for (const auto& [component, field, limit] : {std::tuple{"SpawnPoint", "tag", 32}, std::tuple{"Socket", "name", 64}}) {
+    for (const auto& [component, field, limit] :
+         {std::tuple{"SpawnPoint", "tag", 32}, std::tuple{"Socket", "name", 64}, std::tuple{"Collider", "surface", 32}}) {
         const std::string atLimit(static_cast<std::size_t>(limit), 'a'), over(static_cast<std::size_t>(limit) + 1, 'a');
         CHECK(validateScene(scene(component, field, atLimit), engineTypes()).ok(), "a string at the limit is valid");
         const auto bad = validateScene(scene(component, field, over), engineTypes());

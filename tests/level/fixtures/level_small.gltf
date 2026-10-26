@@ -14,7 +14,7 @@
   "nodes": [
     { "name": "Room", "mesh": 0, "translation": [1, 0, 0], "children": [1, 2, 3, 5, 6, 7, 10, 11] },
     { "name": "Crate", "mesh": 1, "translation": [0, 0.5, 0], "children": [4],
-      "extras": { "col": "box", "body": "dynamic", "mass": 5 } },
+      "extras": { "col": "box", "body": "dynamic", "mass": 5, "surf": "wood" } },
     { "name": "Lamp", "translation": [0, 2, 0], "extensions": { "KHR_lights_punctual": { "light": 0 } } },
     { "name": "UCX_Crate_01", "mesh": 3 },
     { "name": "SOCKET_Handle", "translation": [0, 0.5, 0] },

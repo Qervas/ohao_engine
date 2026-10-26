@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "a2735a10a7ed2698",
+  "schemaHash": "63927d1c2b0e1f6e",
   "units": [
     "m",
     "m/s",
@@ -2303,6 +2303,25 @@
           "angle": false,
           "hidden": false,
           "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "surface",
+          "type": "string",
+          "default": "",
+          "doc": "What it is made of, for footsteps on it (concrete, metal, wood, ...); empty is \"default\"",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "omitDefault": true,
+          "maxLength": 32,
           "aliases": []
         }
       ],

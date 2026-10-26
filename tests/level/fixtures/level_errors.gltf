@@ -8,7 +8,7 @@
     { "name": "BadShape", "extras": { "col": "cube", "socket": "grip" } },
     { "name": "BadLight", "extras": { "Light": { "intensity": -1 } } },
     { "name": "LongTag", "extras": { "spawn": "a-tag-much-longer-than-thirty-two-characters" } },
-    { "name": "BadVis", "extras": { "vis": 2, "mass": 0 } },
+    { "name": "BadVis", "extras": { "vis": 2, "mass": 0, "surf": 3 } },
     { "name": "Runtime", "extras": { "MeshRenderer": { "visible": false }, "addon_prop": 1 } }
   ]
 }
