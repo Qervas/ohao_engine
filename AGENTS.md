@@ -353,14 +353,21 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   W: split sum times specular occlusion, computed for every pixel, environment or not);
   SSR's resolve (`postprocess/ssr_resolve.slang`) rewrites the lit image in place,
   `lit += W·(c·L) − c·E`, before bloom and TAA. A new reflection source must go through
-  E/W, never be added on top in post. The constant ambient is diffuse only
-  (`albedo·(1−metallic)`): on metals it was a flat F0-tinted glow.
+  E/W, never be added on top in post.
+- Indirect diffuse light has one source per frame: RT GI's rays, else the environment's
+  irradiance, else (neither: no `VK_KHR_ray_query` or `rtGI` off, and no environment) the
+  constant ambient (`ambientIntensity`, 0.35 with scene lights; `setAmbientIntensity`
+  overrides it). With RT GI the constant does nothing, so walls are lit by direct light
+  and one bounce, darker than the multi-bounce path tracer, and RT GI's denoiser noise
+  shows on them. A test that wants ambient light must turn RT GI off. All three are
+  diffuse only (`albedo·(1−metallic)`).
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass
   `frames` for a converged image; the deferred goldens state theirs (`--frames 10`,
   `--frames 30`). Without `VK_KHR_ray_query` there is no RT GI. With it, lighting drops its
-  diffuse IBL term: GI rays that leave the scene bring the environment back, occluded.
+  diffuse IBL term and the constant ambient: GI rays that leave the scene bring the
+  environment back, occluded.
 - RT shadows are compute with inline ray queries (`VK_KHR_ray_query`; without it the
   frame keeps CSM, which renders only when RT shadows do not). They keep a history too: the
   filter averages the frames since the last reset, so frame 1 is the noisiest. The first 8
