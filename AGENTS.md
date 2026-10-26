@@ -450,6 +450,15 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     with `mesh` (a glTF mesh name or `#<index>`) it is that one mesh at its own origin,
     loaded by `ModelLoader::loadMesh` and cached per `(path, mesh)`. A glTF's node tree,
     `extras`, lights and cameras are read by `ohao/level`'s `readGltfStructure`, not Assimp.
+  - A `Level` component is a level file in the world: the `level` sync system
+    (`ohao_level_world`, `level/level_system.hpp`, before `instantiate`) makes one entity per
+    node with `LevelNode`, ids `levelNodeId(level id, node index)`, and `MeshSource`
+    `#<mesh index>`, `Light`, `Camera`, `SpawnPoint`, `Socket` and passed-through components
+    from the node and its `extras` (`level/level_hints.hpp`; `vis: 0` and `UCX_` hulls get no
+    mesh). A host must call `level::installLevels` (the CLI context and `LiveHost` do);
+    `scene.load` expands levels at once (`World::runSync("level")`). Node entities are never
+    saved, and a changed `Level` re-expands in place (same entities, the file's state back),
+    so an unchanged file keeps `world.hash`.
   - Loaders keep a file's normals. `repairMeshNormals` fills only vertices left without
     one (zero or not finite) with their faces' smooth normal; a loader that finds no normal
     writes zero for it, never a placeholder direction.

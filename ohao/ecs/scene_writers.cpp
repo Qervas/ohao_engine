@@ -249,4 +249,19 @@ void writeFields(const FlyController& v, const FlyController* omit, FieldSink& o
     if (!omit || v.fast != omit->fast) t.string("\"fast\"", v.fast);
 }
 
+void writeFields(const Level& v, const Level* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.asset != omit->asset) assetRef(t, "\"asset\"", v.asset);
+    if (!omit || !same(v.lightScale, omit->lightScale)) t.f32("\"lightScale\"", v.lightScale);
+    if (!omit || v.collision != omit->collision) t.boolean("\"collision\"", v.collision);
+}
+
+void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out) {
+    if (!omit || v.tag != omit->tag) out.tree.string("\"tag\"", v.tag);
+}
+
+void writeFields(const Socket& v, const Socket* omit, FieldSink& out) {
+    if (!omit || v.name != omit->name) out.tree.string("\"name\"", v.name);
+}
+
 } // namespace ohao::ecs

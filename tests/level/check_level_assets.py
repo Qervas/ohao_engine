@@ -138,10 +138,12 @@ def l1_blockout_rebuilds_byte_identical():
 
 
 def l1_blockout_scene_references_the_level():
+    # Step 3: the level is a Level component (one entity per node at load); nothing loads
+    # the file as a merged ModelAsset any more.
     scene = json.load(open(SCENE))
-    paths = [e["MeshSource"]["source"]["ModelAsset"]["asset"]["path"] for e in scene["entities"]
-             if "ModelAsset" in e.get("MeshSource", {}).get("source", {})]
-    assert paths == ["assets/levels/blockout_room.glb"], f"model paths {paths}"
+    paths = [e["Level"]["asset"]["path"] for e in scene["entities"] if "Level" in e]
+    assert paths == ["assets/levels/blockout_room.glb"], f"level paths {paths}"
+    assert not any("MeshSource" in e for e in scene["entities"]), "the level is also loaded as a mesh"
     assert any("Camera" in e for e in scene["entities"]), "no camera"
 
 

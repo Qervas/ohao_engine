@@ -1,6 +1,7 @@
 // ohao: the agent/automation CLI over ohao_api (sub-project 3, step 9).
 //
 //   ohao schema   [-o dir]
+//   ohao schema   level-extras [-o file]   the level hint keys as a JSON Schema for a glTF node's extras
 //   ohao validate <scene> [--check-assets] [--limit N]
 //   ohao fmt      <scene> [--check] [--compact] [-o out]
 //   ohao apply    <scene> <commands.json> [-o out] [--seed S]
@@ -45,6 +46,8 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
+#include "level/level_hints.hpp"
+#include "level/level_system.hpp"
 #include "ohao/doctor.hpp"
 #include "ohao/render_host.hpp"
 #include "reflect/json_writer.hpp"
@@ -276,6 +279,7 @@ struct Context {
         assets = std::make_unique<ecs::FileAssetResolver>(root);
         render = std::make_unique<host::RenderHost>(*assets, kind);
         world = std::make_unique<ecs::World>();
+        level::installLevels(*world, *assets, engineTypes());   // Level components expand into entities
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);
@@ -325,7 +329,20 @@ std::string loadScene(Context& c, const std::string& scene, const std::string& s
 }
 
 int cmdSchema(const Args& a) {
-    if (!a.positional.empty()) return usage("schema takes no scene");
+    if (a.positional.size() == 1 && a.positional[0] == "level-extras") {
+        // The level hint keys as a JSON Schema for one glTF node's extras (checked in as
+        // tests/level/extras_schema.json).
+        const std::string file = opt(a, "-o", "level_extras.schema.json");
+        std::ofstream f(file, std::ios::binary | std::ios::trunc);
+        f << level::extrasJsonSchema();
+        if (!f) {
+            emit(errorDoc("E_IO", "cannot write " + file));
+            return kInput;
+        }
+        emit("{\"result\":{\"files\":[" + jsonString(file) + "]}}");
+        return kOk;
+    }
+    if (!a.positional.empty()) return usage("schema takes no scene (or `level-extras`)");
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);

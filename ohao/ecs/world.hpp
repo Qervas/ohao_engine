@@ -89,6 +89,9 @@ public:
     void simulate(float dt);
     // Every sync system, in order.
     void sync();
+    // One sync system by name (false when there is none): a session expands levels right
+    // after scene.load this way, without running the rest of sync.
+    bool runSync(std::string_view name);
     // simulate(dt) then sync(): one step and its derived state, for tests and tools.
     void update(float dt) {
         simulate(dt);

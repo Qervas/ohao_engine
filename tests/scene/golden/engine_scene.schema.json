@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 898f4a8041f42ebf. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 68bb0e8e33d45867. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -40,7 +40,10 @@
         "Environment": { "$ref": "#/$defs/Environment" },
         "Spin": { "$ref": "#/$defs/Spin" },
         "InputActions": { "$ref": "#/$defs/InputActions" },
-        "FlyController": { "$ref": "#/$defs/FlyController" }
+        "FlyController": { "$ref": "#/$defs/FlyController" },
+        "Level": { "$ref": "#/$defs/Level" },
+        "SpawnPoint": { "$ref": "#/$defs/SpawnPoint" },
+        "Socket": { "$ref": "#/$defs/Socket" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -723,6 +726,54 @@
           "description": "Action that, while held, multiplies the speed",
           "default": "fast",
           "allOf": [{ "type": "string" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Level": {
+      "description": "A level file (glTF) placed in the world. The level system expands it into one child entity per node of the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, vis, spawn, socket) and components by name.",
+      "type": "object",
+      "properties": {
+        "asset": {
+          "description": "Project-relative path of the .glb or .gltf file, '/' separators",
+          "default": { "path": "" },
+          "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        },
+        "lightScale": {
+          "description": "Multiplier on the file's KHR_lights_punctual intensities",
+          "default": 1,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "collision": {
+          "description": "Whether the level's nodes get colliders; false: render only",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpawnPoint": {
+      "description": "A named place to spawn something, at the entity's world position, facing its -Z. Spawns are taken in creation order (a level's node order).",
+      "type": "object",
+      "properties": {
+        "tag": {
+          "description": "What spawns here: player, enemy, ...",
+          "default": "",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 32
+        }
+      },
+      "additionalProperties": false
+    },
+    "Socket": {
+      "description": "An attach point at the entity's transform (a level's SOCKET_ empties).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The socket's name, as attachments refer to it",
+          "default": "",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
         }
       },
       "additionalProperties": false

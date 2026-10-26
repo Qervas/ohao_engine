@@ -101,11 +101,11 @@ template <class T>
 // the catalogue and of component blocks in scene files):
 //   authoring (saved):  Name, Transform, Parent, Light, MeshSource, MaterialOverride,
 //     Camera, Environment (both singletons), Spin, InputActions (singleton),
-//     FlyController. MeshSource's alternatives ModelAsset and the *Prim structs, and
-//     ActionBinding/AxisBinding, are nested types.
+//     FlyController, Level, SpawnPoint, Socket. MeshSource's alternatives ModelAsset and
+//     the *Prim structs, and ActionBinding/AxisBinding, are nested types.
 //   runtime (catalogue only): Children, WorldTransform, MeshRenderer, RenderSlot,
 //     EmissiveProxyLight, GiMaterialLegacy, CreationOrder, PreservedComponents,
-//     InstantiateError and the dirty tags.
+//     InstantiateError, LevelNode and the dirty tags.
 // EntityId is not registered: it is the entity's key ("id" in scene files).
 void registerSceneTypes(reflect::TypeRegistry& r);
 // The Key enum (core/input.hpp's table), for any registry whose types name keys.

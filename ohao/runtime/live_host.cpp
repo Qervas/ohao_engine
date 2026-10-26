@@ -4,6 +4,7 @@
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_view.hpp"
+#include "level/level_system.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/scene_view_apply.hpp"
@@ -64,6 +65,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_world = std::make_unique<ecs::World>();
     ecs::installRenderExtract(*m_world, m_renderer->renderScene());
     ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
+    level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);

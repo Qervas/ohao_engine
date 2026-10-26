@@ -250,6 +250,25 @@ scene, depth first in file order:
 - A command may change a level node at run time (move a crate, hide a wall); the change is
   not saved, and the command's result carries `W_LEVEL_NODE_UNSAVED`.
 - `level.reload` discards such changes. Saved overrides of level nodes are later work.
+- *As built (step 3):*
+  - The level system lives in `ohao_level_world` (`ohao/level/level_hints.*`,
+    `level_system.*`), above the ECS: it reads files through the host's `AssetResolver` and
+    decodes passed-through components with reflection, so neither `ohao_level` (below the
+    scene library) nor `world.cpp` (in `ohao_ecs`) can hold it. A host installs it with
+    `level::installLevels(world, assets, types)`, which places `level` before `instantiate`
+    whichever is installed first; the CLI context and `LiveHost` do. `scene.load` runs it at
+    once (`World::runSync("level")`), so a headless `query` sees the nodes.
+  - `LevelNode.index` (and the id hash) is the node's position in the default scene, depth
+    first; a mesh node's `MeshSource` names its mesh `#<glTF mesh index>` (names may repeat).
+  - A changed `Level` (and so a reload) re-expands in place: an existing node entity is
+    kept and given back the file's name, transform, parent and saved components (anything
+    else saved is removed); missing nodes are recreated, gone ones destroyed. An unchanged
+    file therefore keeps `world.hash`, CreationOrder included. A file's structure is read
+    once per path per World (step 5's `level.reload` will clear it).
+  - A level's errors (file, or hints: `E_LEVEL_EXTRAS` with the count and the first
+    message) go on the level entity's `InstantiateError`; every diagnostic is logged and
+    kept for `level.info` (`level::levelDiagnostics`).
+  - `col`, `body`, `mass`, `fric`, `rest` are parsed and checked now; step 4 applies them.
 
 ## Extras: the hint schema
 
@@ -463,6 +482,12 @@ Numbered as the build steps reference them.
    - `level.reload` of an unchanged file keeps `world.hash`;
    - `vis: 0` nodes have no `MeshRenderer`;
    - passthrough components equal the same JSON read from a scene file.
+   - *As built (step 3):* `sp5_t04_*` and `sp5_t09_*` in `ecs_tests` (11 tests, on the CPU,
+     over `tests/level/fixtures/level_small.gltf` and the blockout; ids across processes by
+     running `ecs_tests --level-ids` as a child), and in `scene_tests` the hint reader
+     (`sp5_t04_hints_read_keys_defaults_and_conventions`), its error corpus
+     (`sp5_t02_extras_errors_name_the_node` over `level_errors.gltf`), the string limits and
+     the checked-in extras schema. Test 9's grounding ray is step 4's (it needs collision).
 5. **Render parity** (golden): the blockout through `Level` against step 1's merged golden.
    - Exact equality is expected; per-mesh BLAS and draw order may move RT GI noise.
    - If it is not exact, the golden is re-baselined after looking, in its own commit with
@@ -540,6 +565,12 @@ here stops and reports.
    - `SpawnPoint` and `Socket`; `ohao schema level-extras`.
    - The blockout scene moves to `Level`, with its golden (test 5, own commit).
    - Tests 4 and 9.
+   - *As built:* done 2026-10-26 (`docs/changes/2026-10-26-level-pipeline-step3.md`). Test 5
+     was exact (max_abs 0): no re-baseline. Additions the step needed: reflection's
+     `maxLength` for string fields (`SpawnPoint.tag` ≤ 32, `Socket.name` ≤ 64, checked by both
+     decoders, in the schemas and the catalogue); `World::runSync`; five error codes in the
+     catalogue (`E_LEVEL_NODE`, `E_LEVEL_UNSUPPORTED`, `E_LEVEL_EXTRAS`, `W_LEVEL_EXTRAS`,
+     `W_LEVEL_UNSUPPORTED`), the `E_LEVEL_*` ones in exit class 2.
 4. **Collision.**
    - `Collider` and `RigidBody`; `ShapeInfo::COMPOUND`; shape fitting.
    - The `physics` sync system over `PhysicsBackend`.

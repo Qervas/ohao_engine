@@ -332,9 +332,15 @@ that id.
 | `Spin` | Turns the entity about a local axis at `degreesPerSecond` (the spin system, every step). |
 | `InputActions` | The world's controls (one per world): `actions: [{action, key}]`, `axes: [{axis, positive, negative}]`. Key names are the catalogue's `Key` enum (`W`, `Space`, `LeftShift`, `Escape`, `Digit1`, `F5`, `MouseLeft`, `MouseRight`, `None`, …); a typo is `E_ENUM` with a suggestion. |
 | `FlyController` | Flies the entity from named axes and actions (`move_forward`, `move_right`, `move_up`, `look`, `fast` by default) at `moveSpeed`; on the Camera entity, a fly camera. |
+| `Level` | A glTF level (`asset`, `lightScale`, `collision`). At load (and whenever it changes) it becomes one child entity per node of the file's default scene: meshes, KHR lights, cameras, and its nodes' `extras` hints (`spawn`, `socket`, `vis`, components by name). Those entities carry `LevelNode`, keep the same ids on every load, and are never saved: a scene holds only the `Level` line. |
+| `SpawnPoint` | A named place to spawn something (`tag`, ≤ 32 characters), facing its −Z; `query --has SpawnPoint` lists them in node order. |
+| `Socket` | An attach point (`name`, ≤ 64 characters): a level's `SOCKET_` empties. |
 
-Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, …) are derived each
-frame, appear in the catalogue for reference, and are refused in files and commands.
+Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, …) are
+derived, appear in the catalogue for reference, and are refused in files and commands.
+
+`ohao schema level-extras [-o file]` writes the level hint keys (`col`, `body`, `mass`,
+`fric`, `rest`, `vis`, `spawn`, `socket`) as a JSON Schema for one node's `extras`.
 
 ## Error codes
 
@@ -373,8 +379,13 @@ frame, appear in the catalogue for reference, and are refused in files and comma
 | `E_ACCESS` | A path outside the server's sandbox: absolute, with `..`, or a write outside `--out`. |
 | `E_STATE` | A method not allowed in the current time mode or host. |
 | `E_REPLAY` | An input recording that does not match the world it is replayed on. |
+| `E_LEVEL_NODE` | A level node whose transform is not translation, rotation and scale. Exit code 2. |
+| `E_LEVEL_UNSUPPORTED` | A level file that needs Draco or meshopt compression. Exit code 2. |
+| `E_LEVEL_EXTRAS` | A level node's extras with a bad hint value or an unknown capitalised key (a misspelt component); the node loads without it. On the level entity's `InstantiateError`. Exit code 2. |
 | `W_UNKNOWN_COMPONENT` | Warning: an unknown component close to a known name, kept but probably a typo. |
 | `W_UNSAVEABLE_MESH` | Warning: a mesh made in code, with no MeshSource, is not saved. |
+| `W_LEVEL_EXTRAS` | Warning: an unknown lower-case key in a level node's extras (another tool's property). |
+| `W_LEVEL_UNSUPPORTED` | Warning: level content OHAO ignores (skins, animations, morph targets, `KHR_materials_*`, orthographic cameras). |
 
 ## Habits that save tokens and mistakes
 

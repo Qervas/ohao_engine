@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "898f4a8041f42ebf",
+  "schemaHash": "68bb0e8e33d45867",
   "units": [
     "m",
     "m/s",
@@ -114,12 +114,32 @@
       "meaning": "An input recording that does not match the world it is replayed on."
     },
     {
+      "code": "E_LEVEL_NODE",
+      "meaning": "A level node whose transform is not translation, rotation and scale (shear or perspective)."
+    },
+    {
+      "code": "E_LEVEL_UNSUPPORTED",
+      "meaning": "A level file that needs an extension OHAO does not read (Draco or meshopt compression)."
+    },
+    {
+      "code": "E_LEVEL_EXTRAS",
+      "meaning": "A level node's extras with a bad hint value or an unknown capitalised key (a misspelt component); the node loads without it."
+    },
+    {
       "code": "W_UNKNOWN_COMPONENT",
       "meaning": "Warning: an unknown component close to a known name. It is kept, but may be a typo."
     },
     {
       "code": "W_UNSAVEABLE_MESH",
       "meaning": "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."
+    },
+    {
+      "code": "W_LEVEL_EXTRAS",
+      "meaning": "Warning: an unknown lower-case key in a level node's extras (another tool's property); ignored."
+    },
+    {
+      "code": "W_LEVEL_UNSUPPORTED",
+      "meaning": "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, orthographic cameras)."
     }
   ],
   "methods": [],
@@ -1673,6 +1693,132 @@
       "skipped": []
     },
     {
+      "name": "Level",
+      "doc": "A level file (glTF) placed in the world. The level system expands it into one child entity per node of the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, vis, spawn, socket) and components by name.",
+      "role": "component",
+      "serialized": true,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "asset",
+          "type": "assetRef",
+          "default": { "path": "" },
+          "doc": "Project-relative path of the .glb or .gltf file, '/' separators",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "lightScale",
+          "type": "f32",
+          "default": 1,
+          "doc": "Multiplier on the file's KHR_lights_punctual intensities",
+          "unit": "1",
+          "min": 0,
+          "max": null,
+          "uiRange": [0, 10],
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "collision",
+          "type": "bool",
+          "default": true,
+          "doc": "Whether the level's nodes get colliders; false: render only",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "SpawnPoint",
+      "doc": "A named place to spawn something, at the entity's world position, facing its -Z. Spawns are taken in creation order (a level's node order).",
+      "role": "component",
+      "serialized": true,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "tag",
+          "type": "string",
+          "default": "",
+          "doc": "What spawns here: player, enemy, ...",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "maxLength": 32,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "Socket",
+      "doc": "An attach point at the entity's transform (a level's SOCKET_ empties).",
+      "role": "component",
+      "serialized": true,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": "",
+          "doc": "The socket's name, as attachments refer to it",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "maxLength": 64,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
       "name": "MeshHandle",
       "doc": "A mesh slot in the GPU render scene. Runtime only: files refer to meshes by source.",
       "role": "struct",
@@ -2265,6 +2411,65 @@
           "aliases": []
         }
       ],
+      "skipped": []
+    },
+    {
+      "name": "LevelNode",
+      "doc": "This entity is a node of a level: made by the level system from the file, never saved, rebuilt from the file when its Level changes.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "level",
+          "type": "entityRef",
+          "default": null,
+          "doc": "The entity with the Level",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "index",
+          "type": "u32",
+          "default": 0,
+          "doc": "The node's index in the default scene, depth first",
+          "unit": "1",
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "LevelDirty",
+      "doc": "Tag: the Level changed; the level system re-expands it this frame.",
+      "role": "component",
+      "serialized": false,
+      "singleton": false,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [],
       "skipped": []
     }
   ]

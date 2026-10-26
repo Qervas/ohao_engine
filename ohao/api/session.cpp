@@ -267,6 +267,9 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
         return false;
     }
     if (p.seed) s.world.seedIds(*p.seed);
+    // A host with the level system expands the scene's levels now, so the next query sees
+    // their nodes; nothing else of sync runs (that is the next step's or render's).
+    s.world.runSync("level");
     s.scenePath = p.path.value_or("");
     s.sceneSeed = p.seed;
     const ecs::LoadReport& rep = r.value();
@@ -887,7 +890,9 @@ std::span<const reflect::MethodDoc> methods() {
 }
 
 int exitClass(std::string_view code) noexcept {
-    if (code == "E_ASSET_NOT_FOUND" || code == "E_ASSET_INVALID" || code == "E_MESH_INVALID") return 2;
+    if (code == "E_ASSET_NOT_FOUND" || code == "E_ASSET_INVALID" || code == "E_MESH_INVALID" ||
+        code.starts_with("E_LEVEL_"))
+        return 2;
     if (code == "E_RENDER" || code == "E_INTERNAL") return 3;
     return 1;
 }

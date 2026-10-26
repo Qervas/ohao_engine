@@ -72,6 +72,9 @@ struct FieldAttrs {
     // An array field (or free JSON given as an array): at most this many elements, checked
     // before any element is read (E_RANGE) and given as the schema's maxItems.
     std::optional<uint32_t> maxItems;
+    // A string field: at most this many characters (Unicode code points, as JSON Schema's
+    // maxLength counts them), E_RANGE otherwise; given as the schema's and catalogue's maxLength.
+    std::optional<uint32_t> maxLength;
     std::vector<std::string> aliases;  // older names accepted on load
 };
 

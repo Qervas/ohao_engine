@@ -89,7 +89,7 @@ bool isJsonNumber(std::string_view s, bool* isInteger) noexcept {
 // ---- codes, rendering, positions ---------------------------------------------------------
 
 namespace {
-constexpr std::array<ErrorCodeInfo, 35> kCodes = {{
+constexpr std::array<ErrorCodeInfo, 40> kCodes = {{
     {"E_IO", "The file could not be read or written."},
     {"E_PARSE", "The text is not valid JSON (or not valid UTF-8)."},
     {"E_FORMAT", "Not an OHAO scene: \"format\" is missing or not \"ohao.scene\", or \"version\" or \"entities\" is missing."},
@@ -123,8 +123,15 @@ constexpr std::array<ErrorCodeInfo, 35> kCodes = {{
     {"E_ACCESS", "A path outside the server's sandbox: absolute, with '..', or a write outside the output directory."},
     {"E_STATE", "A method not allowed in the current time mode or host."},
     {"E_REPLAY", "An input recording that does not match the world it is replayed on."},
+    {"E_LEVEL_NODE", "A level node whose transform is not translation, rotation and scale (shear or perspective)."},
+    {"E_LEVEL_UNSUPPORTED", "A level file that needs an extension OHAO does not read (Draco or meshopt compression)."},
+    {"E_LEVEL_EXTRAS", "A level node's extras with a bad hint value or an unknown capitalised key (a misspelt component); "
+                       "the node loads without it."},
     {"W_UNKNOWN_COMPONENT", "Warning: an unknown component close to a known name. It is kept, but may be a typo."},
     {"W_UNSAVEABLE_MESH", "Warning: an entity renders a mesh with no MeshSource (made in code); it is saved without it."},
+    {"W_LEVEL_EXTRAS", "Warning: an unknown lower-case key in a level node's extras (another tool's property); ignored."},
+    {"W_LEVEL_UNSUPPORTED", "Warning: level content OHAO ignores (skins, animations, morph targets, KHR_materials_*, "
+                            "orthographic cameras)."},
 }};
 } // namespace
 
@@ -460,6 +467,14 @@ std::string limitsText(const FieldInfo& f) {
     return s + "<= " + num(*l.max);
 }
 
+// Unicode code points in UTF-8 text (every byte that does not continue a sequence), as JSON
+// Schema's maxLength counts characters.
+std::size_t codePoints(std::string_view s) noexcept {
+    std::size_t n = 0;
+    for (const char c : s) n += (static_cast<unsigned char>(c) & 0xC0u) != 0x80u ? 1 : 0;
+    return n;
+}
+
 } // namespace
 
 int findField(const TypeInfo& t, std::string_view key, uint32_t position) noexcept {
@@ -533,10 +548,13 @@ bool readStructFast(void* obj, const TypeInfo& t, FastDecode& c) {
         const auto& l = f.attrs.limits;
         const bool limited = l.min || l.max;
         const bool outer = c.needValue;
-        c.needValue = !c.valuesUnused || limited;   // as readField
+        c.needValue = !c.valuesUnused || limited || f.attrs.maxLength;   // as readField
         const bool ok = f.ops->readFast(obj, c, *f.type);
         c.needValue = outer;
         if (!ok || (limited && !f.ops->inRange(obj, l))) return false;
+        if (f.attrs.maxLength &&
+            codePoints(*static_cast<const std::string*>(f.ops->address(static_cast<const void*>(obj)))) > *f.attrs.maxLength)
+            return false;   // the tree decoder reports it
     }
     return !c.in.failed();
 }
@@ -546,6 +564,12 @@ bool readField(void* obj, const TypeInfo& t, const FieldInfo& f, const JsonNode&
     if (f.attrs.maxItems && n.type == JsonType::Array && n.count > *f.attrs.maxItems) {
         ctx.error("E_RANGE", n, t.name + "." + f.name + " has more elements than its limit",
                   "at most " + std::to_string(*f.attrs.maxItems) + " elements", std::to_string(n.count) + " elements");
+        return false;
+    }
+    if (f.attrs.maxLength && n.type == JsonType::String && codePoints(n.text) > *f.attrs.maxLength) {
+        ctx.error("E_RANGE", n, t.name + "." + f.name + " is longer than its limit",
+                  "at most " + std::to_string(*f.attrs.maxLength) + " characters",
+                  std::to_string(codePoints(n.text)) + " characters");
         return false;
     }
     const auto& l = f.attrs.limits;

@@ -83,9 +83,10 @@ that the host program installs with `Session::setHost`.
 {{cite ohao/api/CMakeLists.txt "target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_reflect ohao_unordered_dense)"}}
 
 `ohao_runtime` — window, fixed-step clock, the live host's loop, the shared frame
-capture — is the host layer. It links the API, core, the ECS, the GPU archive and GLFW:
+capture — is the host layer. It links the API, core, the ECS, the level system (which a
+host installs, so a `Level` component expands into entities), the GPU archive and GLFW:
 
-{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_api ohao_core ohao_ecs ohao_gpu_vulkan glm glfw"}}
+{{cite ohao/runtime/CMakeLists.txt "target_link_libraries(ohao_runtime PUBLIC ohao_api ohao_core ohao_ecs ohao_level_world ohao_gpu_vulkan glm glfw"}}
 
 Nothing else in `ohao/` includes a `runtime/` header. `ohao_game`, the CLI's
 `ohao_host` and `runtime_tests` link it; `cornell_box`, `model_viewer` and

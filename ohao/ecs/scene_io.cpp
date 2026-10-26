@@ -282,6 +282,11 @@ void checkAsset(const Environment& env, const JsonDocument& doc, const JsonNode&
         reportMissingAsset(*env.hdri, "environment image", {"hdri", "path"}, doc, c, ctx);
 }
 
+void checkAsset(const Level& level, const JsonDocument& doc, const JsonNode& c, const AssetResolver& assets,
+                DecodeContext& ctx) {
+    if (!assets.exists(level.asset)) reportMissingAsset(level.asset, "level", {"asset", "path"}, doc, c, ctx);
+}
+
 std::string hexId(uint64_t id) {
     JsonWriter w;
     w.hex64(id);
@@ -315,6 +320,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
     const TypeInfo* parentType = r.find<Parent>();
     const TypeInfo* meshSourceType = r.find<MeshSource>();
     const TypeInfo* environmentType = r.find<Environment>();
+    const TypeInfo* levelType = r.find<Level>();
     std::vector<std::string_view> knownNames;
     ankerl::unordered_dense::map<std::string_view, const TypeInfo*> byName;
     for (const TypeInfo* t : r.types()) {
@@ -407,6 +413,7 @@ void decodeEntities(const JsonDocument& doc, const JsonNode& ents, const TypeReg
                         if (t == meshSourceType) checkAsset(*static_cast<const MeshSource*>(v), doc, c, *out.assets, ctx);
                         else if (t == environmentType)
                             checkAsset(*static_cast<const Environment*>(v), doc, c, *out.assets, ctx);
+                        else if (t == levelType) checkAsset(*static_cast<const Level*>(v), doc, c, *out.assets, ctx);
                     }
                 }
             } else if (t) {
@@ -539,6 +546,7 @@ bool decodeFast(std::string_view text, const TypeRegistry& r, Decoded& out) {
     const TypeInfo* parentType = r.find<Parent>();
     const TypeInfo* meshSourceType = r.find<MeshSource>();
     const TypeInfo* environmentType = r.find<Environment>();
+    const TypeInfo* levelType = r.find<Level>();
 
     ankerl::unordered_dense::map<uint64_t, uint32_t> fileIndex;   // id -> index in out.entities
     std::vector<uint32_t> singletons(known.size(), 0);
@@ -617,6 +625,8 @@ bool decodeFast(std::string_view text, const TypeRegistry& r, Decoded& out) {
                         } else if (&t == environmentType) {
                             const auto& env = *static_cast<const Environment*>(v);
                             if (env.hdri && !out.assets->exists(*env.hdri)) return false;
+                        } else if (&t == levelType) {
+                            if (!out.assets->exists(static_cast<const Level*>(v)->asset)) return false;
                         }
                     }
                 }
@@ -802,8 +812,10 @@ Result<std::string, Diagnostic> saveSceneGeneric(const World& world, const TypeR
     using R = Result<std::string, Diagnostic>;
     const entt::registry& reg = world.registry();
 
+    // A level's node entities are the level file's: only their Level entity is saved.
     std::vector<std::pair<uint64_t, entt::entity>> order;
-    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>().each()) order.emplace_back(co.seq, e);
+    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
+        order.emplace_back(co.seq, e);
     std::sort(order.begin(), order.end());
 
     const std::vector<SavedType> saved = savedTypes(types);
@@ -900,7 +912,9 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     };
     std::vector<Row> order;
     order.reserve(reg.storage<CreationOrder>() ? reg.storage<CreationOrder>()->size() : 0);
-    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>().each()) order.push_back({co.seq, e, id.value});
+    // A level's node entities are the level file's: only their Level entity is saved.
+    for (auto [e, id, co] : reg.view<const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
+        order.push_back({co.seq, e, id.value});
     std::sort(order.begin(), order.end(), [](const Row& a, const Row& b) { return a.seq < b.seq; });
 
     // The saved component types, their keys as JSON tokens, and whether an entity writes
@@ -931,7 +945,8 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
                 break;
             }
     }
-    for (auto [e, p, id, co] : reg.view<const PreservedComponents, const EntityId, const CreationOrder>().each())
+    for (auto [e, p, id, co] :
+         reg.view<const PreservedComponents, const EntityId, const CreationOrder>(entt::exclude<LevelNode>).each())
         for (const auto& entry : p.entries) header.emplace(entry.name, entry.version);
     std::vector<std::string> headerKeys;   // never resized once filled: the tree references them
     headerKeys.reserve(header.size());

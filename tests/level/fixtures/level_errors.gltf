@@ -1,0 +1,14 @@
+{
+  "asset": { "version": "2.0", "generator": "OHAO fixture" },
+  "scenes": [ { "nodes": [0] } ],
+  "nodes": [
+    { "name": "Room", "children": [1, 2, 3, 4, 5, 6, 7] },
+    { "name": "Typo", "extras": { "coll": "box", "spawn": "player" } },
+    { "name": "Misspelt", "extras": { "Lihgt": { "intensity": 3 } } },
+    { "name": "BadShape", "extras": { "col": "cube", "socket": "grip" } },
+    { "name": "BadLight", "extras": { "Light": { "intensity": -1 } } },
+    { "name": "LongTag", "extras": { "spawn": "a-tag-much-longer-than-thirty-two-characters" } },
+    { "name": "BadVis", "extras": { "vis": 2, "mass": 0 } },
+    { "name": "Runtime", "extras": { "MeshRenderer": { "visible": false }, "addon_prop": 1 } }
+  ]
+}

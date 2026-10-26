@@ -4,8 +4,8 @@
   "components": {
     "Camera": 1,
     "Environment": 1,
+    "Level": 1,
     "Light": 1,
-    "MeshSource": 1,
     "Name": 1,
     "Transform": 1
   },
@@ -42,9 +42,7 @@
     {
       "id": "5c0b10c000000005",
       "Name": { "value": "Level" },
-      "MeshSource": {
-        "source": { "ModelAsset": { "asset": { "path": "assets/levels/blockout_room.glb" } } }
-      }
+      "Level": { "asset": { "path": "assets/levels/blockout_room.glb" } }
     }
   ]
 }

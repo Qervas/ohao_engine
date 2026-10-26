@@ -184,8 +184,9 @@
   ```
 - Produces: `struct LevelHints { std::optional<ColliderShape> col; std::optional<Motion> body; std::optional<float> mass, fric, rest; bool visible = true; std::string spawn, socket; std::vector<std::pair<const reflect::TypeInfo*, std::string>> components; };` and `LevelHints parseHints(const GltfStructure&, int node, const reflect::TypeRegistry&, std::vector<Diagnostic>&)`.
 - Produces: `uint64_t levelNodeId(uint64_t levelId, uint32_t index)`, a 64-bit mix (splitmix64 of the pair); never 0.
+- *As built:* `level_hints` and `level_system` are a second library, `ohao_level_world` (it needs the ECS; `ohao_level` stays below `ohao_scene`). Registration is `level::installLevels(world, assets, types)`, called by the CLI context and `LiveHost`, which places `level` before `instantiate`; `world.cpp` only gained `runSync`, which `scene.load` uses to expand levels at once. Also `level::levelDiagnostics(world, level)` and `level::extrasJsonSchema()`. Tests are named `sp5_t04_*`/`sp5_t09_*`/`sp5_t02_extras_errors_name_the_node`.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - `t04_one_entity_per_node`, `t04_hierarchy_matches_file`;
   - `t04_ids_stable_across_processes` (ids from a child process equal the parent's);
   - `t04_save_writes_only_the_level`;
@@ -198,13 +199,13 @@
   - `t04_level_camera_active_only_without_another`;
   - `t09_spawns_in_node_order_with_facing`.
   Expected: FAIL to compile.
-- [ ] **Step 2: Implement.** Components and registration (docs, units, limits: `tag` ≤ 32, `name` ≤ 64), `parseHints`, the `level` system (expansion on new or changed `Level`; destroy and re-expand on change), id hashing, save skip.
-- [ ] **Step 3: Run the tests.** `ecs_tests` and `scene_tests`; expected: PASS. Then `reflect_tests`; expected: PASS (schema completeness, dependency rule: `ohao/level` is not in the banned list; `level_system.cpp` includes `reflect/` and is documented as load-time only).
-- [ ] **Step 4: Move the scene to `Level`.** Switch `blockout_room.scene.json`. Run its golden (test 5).
+- [x] **Step 2: Implement.** Components and registration (docs, units, limits: `tag` ≤ 32, `name` ≤ 64), `parseHints`, the `level` system (expansion on new or changed `Level`; destroy and re-expand on change), id hashing, save skip.
+- [x] **Step 3: Run the tests.** `ecs_tests` and `scene_tests`; expected: PASS. Then `reflect_tests`; expected: PASS (schema completeness, dependency rule: `ohao/level` is not in the banned list; `level_system.cpp` includes `reflect/` and is documented as load-time only).
+- [x] **Step 4: Move the scene to `Level`.** Switch `blockout_room.scene.json`. Run its golden (test 5).
   - Exact: done.
   - Not exact: look at `build/golden_diff/`, re-baseline with `--update --only cli_blockout_room_deferred`, and commit the image alone, with max_abs and the changed fraction in the message.
-- [ ] **Step 5: Run the staged props.** The Flat42 local scene now renders without hulls. Take the look shots.
-- [ ] **Step 6: Close the step.** `check.py --all`, change record, commits.
+- [x] **Step 5: Run the staged props.** The Flat42 local scene now renders without hulls. Take the look shots.
+- [x] **Step 6: Close the step.** `check.py --all`, change record, commits.
 
 ### Task 4: Collision (build step 4)
 

@@ -72,6 +72,7 @@ public:
     TypeBuilder& required();   // must be given (method params)
     TypeBuilder& omitDefault();   // written only when not the default, even inside a variant
     TypeBuilder& maxItems(uint32_t n);   // an array (vector, optional vector or JSON): at most n elements
+    TypeBuilder& maxLength(uint32_t n);  // a string: at most n characters (code points)
     TypeBuilder& alias(std::string_view oldName);
 
 private:
@@ -405,6 +406,17 @@ TypeBuilder<T>& TypeBuilder<T>::maxItems(uint32_t n) {
             m_r.error("field " + m_t.name + "." + f->name + ": maxItems needs an array or JSON field");
         else
             f->attrs.maxItems = n;
+    }
+    return *this;
+}
+
+template <class T>
+TypeBuilder<T>& TypeBuilder<T>::maxLength(uint32_t n) {
+    if (auto* f = last("maxLength")) {
+        if (f->type->kind != Kind::String)
+            m_r.error("field " + m_t.name + "." + f->name + ": maxLength needs a string field");
+        else
+            f->attrs.maxLength = n;
     }
     return *this;
 }

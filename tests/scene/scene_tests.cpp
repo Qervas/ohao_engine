@@ -17,6 +17,8 @@
 #include "ecs/transform_system.hpp"
 #include "ecs/world.hpp"
 #include "level/gltf_structure.hpp"
+#include "level/level_hints.hpp"
+#include "level/level_system.hpp"
 #include "reflect/schema.hpp"
 #include "gpu/shared_layout.hpp"
 #include "render/scene/meshlet_builder.hpp"
@@ -51,6 +53,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -296,6 +299,11 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<AxisBinding>(r, checked);
     ok &= complete<InputActions>(r, checked);
     ok &= complete<FlyController>(r, checked);
+    ok &= complete<Level>(r, checked);
+    ok &= complete<SpawnPoint>(r, checked);
+    ok &= complete<Socket>(r, checked);
+    ok &= complete<LevelNode>(r, checked);
+    ok &= complete<LevelDirty>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -312,12 +320,12 @@ static void t01_authoring_and_runtime_split() {
     reflect::TypeRegistry r;
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
-                              "Environment", "Spin", "InputActions", "FlyController"}) {
+                              "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
-                                "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder"}) {
+                                "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");
     }
@@ -478,6 +486,16 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             if (rng() % 2) fc.moveForward = pickName(rng, k);
             if (rng() % 2) fc.look = "";
             w.registry().emplace<FlyController>(e, fc);
+        }
+        // Levels (sub-project 5, step 3), last so the draws above stay as they were. Nothing
+        // expands them here: no level system is installed.
+        for (int k = 0; k < 3; ++k) {
+            const auto e = es[rng() % es.size()];
+            if (!w.registry().all_of<Level>(e))
+                w.registry().emplace<Level>(e, Level{AssetRef{"assets/levels/l_" + std::to_string(seed) + "_" + std::to_string(k) + ".glb", {}},
+                                                     pickFloat(rng, true), rng() % 2 == 0});
+            if (!w.registry().all_of<SpawnPoint>(e)) w.registry().emplace<SpawnPoint>(e, SpawnPoint{pickName(rng, k)});
+            if (rng() % 2 && !w.registry().all_of<Socket>(e)) w.registry().emplace<Socket>(e, Socket{pickName(rng, k)});
         }
     }
 }
@@ -2414,6 +2432,125 @@ static void sp5_t03_authored_hard_edges_kept() {
         CHECK(nearVec(v.normal, {0, 0, 1}, 1e-5f), "a mesh without normals is given them (the repair still runs there)");
 }
 
+// ---- sub-project 5, step 3: node extras -> hints (level/level_hints.hpp) ---------------------
+
+static const fs::path kLevelSchema = fs::path(OHAO_SOURCE_DIR) / "tests" / "level" / "extras_schema.json";
+
+static level::LevelHints hintsOf(const level::GltfStructure& s, std::string_view node, std::vector<Diagnostic>& d) {
+    for (int i = 0; i < static_cast<int>(s.nodes.size()); ++i)
+        if (s.nodes[static_cast<std::size_t>(i)].name == node) return level::parseHints(s, i, engineTypes(), d);
+    return {};
+}
+
+static void sp5_t04_hints_read_keys_defaults_and_conventions() {
+    const auto r = readStructure(kLevelFixtures / "level_small.gltf");
+    CHECK(r, "the fixture reads");
+    const auto& s = r.value();
+    std::vector<Diagnostic> d;
+    const auto crate = hintsOf(s, "Crate", d);
+    CHECK(crate.col == ColliderShape::Box && crate.body == Motion::Dynamic && crate.mass == 5.0f && !crate.fric &&
+              !crate.rest && crate.visible,
+          "col, body and mass are read; absent keys stay unset for their defaults");
+    CHECK(!hintsOf(s, "Ghost", d).visible && hintsOf(s, "SpawnA", d).spawn == "player", "vis 0 and spawn");
+    const auto room = hintsOf(s, "Room", d);
+    CHECK(!room.col && !room.body && room.visible && room.components.empty(), "a node without extras sets nothing");
+    const auto spot = hintsOf(s, "Spot", d);
+    CHECK(spot.components.size() == 1 && spot.components[0].first == engineTypes().find<Spin>() &&
+              spot.components[0].second == R"({"degreesPerSecond":30})",
+          "a capitalised key naming a saved component is passed through as its JSON");
+    const auto ucx = hintsOf(s, "UCX_Crate_01", d);
+    const auto shown = hintsOf(s, "UCX_Shown", d);
+    CHECK(ucx.col == ColliderShape::Convex && !ucx.visible && shown.col == ColliderShape::Convex && shown.visible,
+          "UCX_ reads as convex and hidden; an explicit vis wins");
+    CHECK(hintsOf(s, "SOCKET_Handle", d).socket == "Handle" && hintsOf(s, "SOCKET_Grip", d).socket == "grip",
+          "SOCKET_<name> reads as its socket; an explicit socket wins");
+    CHECK(d.empty(), "the fixture has no hint diagnostics");
+
+    // File defaults: the scene's extras {"col":"none"} apply where a node sets no col.
+    const auto n = readStructure(kLevelFixtures / "nodes.gltf");
+    CHECK(n, "nodes.gltf reads");
+    CHECK(hintsOf(n.value(), "Spawn", d).col == ColliderShape::None && hintsOf(n.value(), "Wall", d).col == ColliderShape::Box,
+          "the default scene's col fills nodes without one; a node's own col wins");
+    CHECK(d.size() == 1 && d[0].code == "W_LEVEL_EXTRAS" && d[0].message.find("tags") != std::string::npos,
+          "nodes.gltf's Wall carries an unknown lower-case key 'tags': one warning");
+}
+
+// Spec "Extras: the hint schema", Strictness; plan Review Focus 2.
+static void sp5_t02_extras_errors_name_the_node() {
+    const auto r = readStructure(kLevelFixtures / "level_errors.gltf");
+    CHECK(r, "the fixture reads");
+    std::vector<Diagnostic> d;
+    std::map<std::string, level::LevelHints> h;
+    for (int i = 0; i < static_cast<int>(r.value().nodes.size()); ++i)
+        h[r.value().nodes[static_cast<std::size_t>(i)].name] = level::parseHints(r.value(), i, engineTypes(), d);
+    const auto find = [&](std::string_view code, std::string_view node, std::string_view key) -> const Diagnostic* {
+        const std::string path = "/Room/" + std::string(node);
+        for (const Diagnostic& x : d)
+            if (x.code == code && x.path == path && x.message.find(path) != std::string::npos &&
+                x.message.find(key) != std::string::npos)
+                return &x;
+        return nullptr;
+    };
+    for (const Diagnostic& x : d) std::printf("\n      %s %s: %s", x.code.c_str(), x.path.c_str(), x.message.c_str());
+    const auto* typo = find("W_LEVEL_EXTRAS", "Typo", "'coll'");
+    CHECK(typo && typo->suggestion == "col", "an unknown lower-case key warns, naming the node and key, with a suggestion");
+    CHECK(h["Typo"].spawn == "player", "and the node's other keys still apply");
+    const auto* misspelt = find("E_LEVEL_EXTRAS", "Misspelt", "'Lihgt'");
+    CHECK(misspelt && misspelt->suggestion == "Light" && h["Misspelt"].components.empty(),
+          "an unknown capitalised key (a misspelt component) is an error");
+    CHECK(find("E_LEVEL_EXTRAS", "BadShape", "'col'") && !h["BadShape"].col && h["BadShape"].socket == "grip",
+          "a bad value is an error; the key is dropped and the rest applies");
+    CHECK(find("E_RANGE", "BadLight", "Light") && h["BadLight"].components.empty(),
+          "a passed-through component is read as in a scene file: the same diagnostic, and it is not applied");
+    CHECK(find("E_LEVEL_EXTRAS", "LongTag", "'spawn'") && h["LongTag"].spawn.empty(), "a spawn tag over 32 characters is an error");
+    CHECK(find("E_LEVEL_EXTRAS", "BadVis", "'vis'") && find("E_LEVEL_EXTRAS", "BadVis", "'mass'") && h["BadVis"].visible &&
+              !h["BadVis"].mass,
+          "vis must be 0 or 1 and mass positive");
+    CHECK(find("E_LEVEL_EXTRAS", "Runtime", "'MeshRenderer'") && find("W_LEVEL_EXTRAS", "Runtime", "'addon_prop'"),
+          "runtime state cannot be passed through; another tool's property only warns");
+    CHECK(d.size() == 9, "nine diagnostics in all: seven errors and two warnings");
+
+    // The level system loads such a level with the bad parts left out, and says so on the level entity.
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    level::installLevels(w, files, engineTypes());
+    const auto lv = w.createWithId(0x1e, "Level");
+    w.registry().emplace<Level>(lv, Level{AssetRef{"tests/level/fixtures/level_errors.gltf", {}}});
+    w.sync();
+    const auto* err = w.registry().try_get<InstantiateError>(lv);
+    CHECK(w.idCount() == 9 && err && err->code == "E_LEVEL_EXTRAS" && err->message.find("7 errors") != std::string::npos,
+          "every node loads; the level entity carries E_LEVEL_EXTRAS with the count");
+    CHECK(level::levelDiagnostics(w, lv).size() == 9, "and the diagnostics are kept for level.info");
+}
+
+// String limits (reflect maxLength): SpawnPoint.tag <= 32 and Socket.name <= 64 code points.
+static void sp5_t04_string_limits_are_checked() {
+    const auto scene = [](std::string_view component, std::string_view field, const std::string& value) {
+        return std::string(R"({"format":"ohao.scene","version":1,"entities":[{"id":"00000000000000d1",")") +
+               std::string(component) + R"(":{")" + std::string(field) + R"(":")" + value + R"("}}]})";
+    };
+    std::string accented;
+    for (int i = 0; i < 32; ++i) accented += "\xc3\xa9";   // 32 code points, 64 bytes
+    for (const auto& [component, field, limit] : {std::tuple{"SpawnPoint", "tag", 32}, std::tuple{"Socket", "name", 64}}) {
+        const std::string atLimit(static_cast<std::size_t>(limit), 'a'), over(static_cast<std::size_t>(limit) + 1, 'a');
+        CHECK(validateScene(scene(component, field, atLimit), engineTypes()).ok(), "a string at the limit is valid");
+        const auto bad = validateScene(scene(component, field, over), engineTypes());
+        CHECK(!bad.ok() && bad.errors[0].code == "E_RANGE", "one character over is E_RANGE");
+        CHECK(!validateSceneReference(scene(component, field, over), engineTypes()).ok(), "the tree decoder agrees");
+        World w;
+        CHECK(!loadScene(w, scene(component, field, over), engineTypes()), "and so does load");
+    }
+    World w;
+    CHECK(loadScene(w, scene("SpawnPoint", "tag", accented), engineTypes()) &&
+              w.registry().get<SpawnPoint>(w.findById(0xd1)).tag == accented,
+          "the limit counts code points, not bytes");
+}
+
+static void sp5_t04_extras_schema_is_the_checked_in_file() {
+    CHECK(level::extrasJsonSchema() == readFile(kLevelSchema),
+          "tests/level/extras_schema.json is `ohao schema level-extras` (scene_tests --update-golden after a deliberate change)");
+}
+
 static void sp5_t03_model_asset_mesh_round_trips() {
     World w;
     CHECK(load(w, R"({"format":"ohao.scene","version":1,"entities":[)"
@@ -2438,7 +2575,8 @@ int main(int argc, char** argv) {
         registerSceneTypes(r);
         writeFile(kGolden / "engine_catalogue.json", reflect::exportCatalogue(r));
         writeFile(kGolden / "engine_scene.schema.json", reflect::exportSceneJsonSchema(r));
-        std::printf("updated %s\n", kGolden.generic_string().c_str());
+        writeFile(kLevelSchema, level::extrasJsonSchema());
+        std::printf("updated %s and %s\n", kGolden.generic_string().c_str(), kLevelSchema.generic_string().c_str());
         return 0;
     }
 
@@ -2523,6 +2661,10 @@ int main(int argc, char** argv) {
     RUN(sp5_t03_shared_mesh_uploads_once);
     RUN(sp5_t03_model_asset_mesh_round_trips);
     RUN(sp5_t03_authored_hard_edges_kept);
+    RUN(sp5_t04_hints_read_keys_defaults_and_conventions);
+    RUN(sp5_t02_extras_errors_name_the_node);
+    RUN(sp5_t04_string_limits_are_checked);
+    RUN(sp5_t04_extras_schema_is_the_checked_in_file);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);
     reflect::JsonWriter s;

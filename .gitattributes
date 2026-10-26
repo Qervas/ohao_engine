@@ -27,3 +27,5 @@ assets/khronos/** -text
 assets/levels/** -text
 # glTF structure fixtures (sub-project 5, step 2): byte offsets and extras text are asserted.
 tests/level/fixtures/** text eol=lf
+# The level hint schema (step 3): `ohao schema level-extras`' output, compared byte for byte.
+tests/level/extras_schema.json text eol=lf

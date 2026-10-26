@@ -1,0 +1,41 @@
+{
+  "asset": { "version": "2.0", "generator": "OHAO fixture" },
+  "extensionsUsed": ["KHR_lights_punctual"],
+  "extensions": {
+    "KHR_lights_punctual": {
+      "lights": [
+        { "type": "point", "color": [1, 0.5, 0.25], "intensity": 40 },
+        { "type": "spot", "intensity": 100, "range": 5, "spot": { "innerConeAngle": 0.2, "outerConeAngle": 0.6 } }
+      ]
+    }
+  },
+  "scene": 0,
+  "scenes": [ { "name": "Small", "nodes": [0, 8, 9] } ],
+  "nodes": [
+    { "name": "Room", "mesh": 0, "translation": [1, 0, 0], "children": [1, 2, 3, 5, 6, 7, 10, 11] },
+    { "name": "Crate", "mesh": 1, "translation": [0, 0.5, 0], "children": [4],
+      "extras": { "col": "box", "body": "dynamic", "mass": 5 } },
+    { "name": "Lamp", "translation": [0, 2, 0], "extensions": { "KHR_lights_punctual": { "light": 0 } } },
+    { "name": "UCX_Crate_01", "mesh": 3 },
+    { "name": "SOCKET_Handle", "translation": [0, 0.5, 0] },
+    { "name": "Ghost", "mesh": 2, "extras": { "vis": 0 } },
+    { "name": "SpawnB", "translation": [2, 0, 0], "rotation": [0, 0.7071068, 0, 0.7071068], "extras": { "spawn": "enemy" } },
+    { "name": "Spot", "translation": [0, 3, 0], "extensions": { "KHR_lights_punctual": { "light": 1 } },
+      "extras": { "Spin": { "degreesPerSecond": 30 } } },
+    { "name": "SpawnA", "translation": [-1, 0, 2], "extras": { "spawn": "player" } },
+    { "name": "Cam", "camera": 0, "translation": [0, 1.6, 4] },
+    { "name": "UCX_Shown", "mesh": 3, "extras": { "vis": 1 } },
+    { "name": "SOCKET_Grip", "extras": { "socket": "grip" } }
+  ],
+  "cameras": [ { "type": "perspective", "perspective": { "yfov": 0.8, "znear": 0.05 } } ],
+  "meshes": [
+    { "name": "RoomMesh", "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] },
+    { "name": "CrateMesh", "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] },
+    { "name": "GhostMesh", "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] },
+    { "name": "HullMesh", "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] }
+  ],
+  "accessors": [
+    { "componentType": 5126, "count": 24, "type": "VEC3" },
+    { "componentType": 5123, "count": 36, "type": "SCALAR" }
+  ]
+}

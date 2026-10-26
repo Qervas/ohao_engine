@@ -263,6 +263,15 @@ void World::sync() {
     for (auto& [name, fn] : m_sync) fn(*this);
 }
 
+bool World::runSync(std::string_view name) {
+    for (auto& [n, fn] : m_sync)
+        if (n == name) {
+            fn(*this);
+            return true;
+        }
+    return false;
+}
+
 void World::addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn) {
     auto it = std::find_if(m_sync.begin(), m_sync.end(), [&](const auto& s) { return s.first == anchor; });
     if (it != m_sync.end()) ++it;
