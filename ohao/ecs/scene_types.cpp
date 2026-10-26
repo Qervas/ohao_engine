@@ -351,6 +351,12 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("yawDeg", &PlayerState::yawDeg).doc("Facing about +Y from -Z, counter-clockwise seen from above").unit("deg")
         .field("pitchDeg", &PlayerState::pitchDeg).doc("Looking up (positive) or down, within 89 degrees").unit("deg")
         .field("character", &PlayerState::character).doc("Character handle; 4294967295 means none").unitless();
+    r.type<BodyMotion>("BodyMotion").component().runtime().host(makeComponentOps<BodyMotion>())
+        .doc("The motion a dynamic body or a player carries into the next step. Written by the physics system; "
+             "never saved or hashed, but held by snapshots: a restore puts it back into the bodies and players.")
+        .field("linear", &BodyMotion::linear).doc("Linear velocity, world (a player's velocity)").unit("m/s")
+        .field("angular", &BodyMotion::angular).doc("Angular velocity, world").unit("rad/s")
+        .field("asleep", &BodyMotion::asleep).doc("The body sleeps; its velocities are zero");
 }
 
 } // namespace ohao::ecs

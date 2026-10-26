@@ -8,6 +8,7 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/scene_view.hpp"
+#include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "ecs/world_hash.hpp"
 #include "level/level_system.hpp"
@@ -553,7 +554,8 @@ glm::quat yawRotation(float deg) { return glm::angleAxis(glm::radians(deg), glm:
 struct PlayerFixture : Fixture {
     entt::entity player{entt::null};
     entt::entity head{entt::null};   // with `withHead`: a child holding the Camera (step 3)
-    explicit PlayerFixture(bool withHead = false) : Fixture(kBlockout) {
+    // stepFirst false: spawned by a sync, as scene.load leaves a play scene, and not stepped.
+    explicit PlayerFixture(bool withHead = false, bool stepFirst = true) : Fixture(kBlockout) {
         player = world.createWithId(0xb1a7e2, "Player");
         world.registry().emplace<PlayerController>(player);
         if (withHead) {
@@ -564,7 +566,8 @@ struct PlayerFixture : Fixture {
             // loads the head first and the level's camera stays inactive (the level system's rule).
             for (auto [e, cam, ln] : world.registry().view<Camera, const LevelNode>().each()) cam.active = false;
         }
-        step();
+        if (stepFirst) step();
+        else world.sync();
     }
     // One world step with these input events (then none: actions stay held, axes stay set).
     void step(std::vector<InputEvent> events = {}) {
@@ -1095,6 +1098,184 @@ static void t13_none_while_still_or_airborne() {
     CHECK(before > 0 && quiet, "no footstep between take-off and landing");
 }
 
+// ---- test 14: replay through snapshots (sub-project 6 step 5) ------------------------------------
+// docs/specs/2026-10-26-player-physics-design.md, "Snapshots and replay". BodyMotion holds what the
+// saved components do not: a body's velocities and sleep, a player's velocity. A snapshot taken
+// mid-motion, restored and stepped again, lands where the first run did, bit for bit.
+
+namespace {
+
+bool samePose(const Transform& a, const Transform& b) { return a.position == b.position && a.rotation == b.rotation; }
+
+} // namespace
+
+static void t14_body_motion_follows_awake_bodies() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 10);
+    auto& reg = f.world.registry();
+    auto& be = f.physics->backend();
+    const entt::entity a = f.named("CrateA");
+    const auto* m = reg.try_get<BodyMotion>(a);
+    if (m) std::printf("\n      CrateA after 10 steps: linear (%.4f, %.4f, %.4f)", m->linear.x, m->linear.y, m->linear.z);
+    CHECK(m && !m->asleep && near(m->linear.y, -9.81f * 10.0f * kDt, 0.01f), "CrateA falling: its BodyMotion is -g t, awake");
+    CHECK(m && m->linear == be.getLinearVelocity(f.physics->bodyOf(a)) && m->angular == be.getAngularVelocity(f.physics->bodyOf(a)),
+          "exactly its body's velocities");
+    CHECK(!reg.all_of<BodyMotion>(f.named("Floor")), "a static body has none");
+    (void)runSteps(f.world, 170);
+    m = reg.try_get<BodyMotion>(a);
+    CHECK(m && m->asleep && m->linear == glm::vec3(0.0f) && m->angular == glm::vec3(0.0f), "settled: asleep, at rest");
+    std::size_t writes = 0;
+    struct Counter {
+        std::size_t* n;
+        void on(entt::registry&, entt::entity) { ++*n; }
+    } counter{&writes};
+    reg.on_update<BodyMotion>().connect<&Counter::on>(counter);
+    (void)runSteps(f.world, 60);
+    reg.on_update<BodyMotion>().disconnect(&counter);
+    CHECK(writes == 0, "a settled world writes no BodyMotion");
+}
+
+static void t14_body_motion_is_neither_saved_nor_hashed() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 10);
+    const uint64_t hash = hashOf(f.world);
+    const std::string saved = savedText(f.world);
+    CHECK(saved.find("BodyMotion") == std::string::npos, "runtime state: never saved");
+    f.world.registry().patch<BodyMotion>(f.named("CrateA"), [](BodyMotion& m) { m.linear.y = 3.0f; });
+    CHECK(hashOf(f.world) == hash && savedText(f.world) == saved, "and not in world.hash: the hash is of the saved state");
+    const Snapshot snap = takeSnapshot(f.world, engineTypes());
+    bool captured = false;
+    for (const SnapshotColumn& c : snap.columns) captured |= c.type == engineTypes().find<BodyMotion>();
+    CHECK(captured, "but a snapshot holds it");
+}
+
+static void t14_restore_mid_fall_is_exact() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 15);   // CrateA lands at step 26-29: both crates are in the air
+    const Snapshot mid = takeSnapshot(f.world, engineTypes());
+    const uint64_t midHash = hashOf(f.world);
+    (void)runSteps(f.world, 60);
+    auto& reg = f.world.registry();
+    const entt::entity a = f.named("CrateA"), b = f.named("CrateB");
+    const Transform a1 = reg.get<Transform>(a), b1 = reg.get<Transform>(b);
+    const uint64_t hash1 = hashOf(f.world);
+    restoreSnapshot(f.world, mid);
+    CHECK(hashOf(f.world) == midHash, "restored to the snapshot's hash");
+    (void)runSteps(f.world, 60);
+    const Transform a2 = reg.get<Transform>(a), b2 = reg.get<Transform>(b);
+    std::printf("\n      CrateA y %.6f / %.6f, CrateB y %.6f / %.6f", a1.position.y, a2.position.y, b1.position.y, b2.position.y);
+    CHECK(samePose(a1, a2) && samePose(b1, b2), "the same 60 steps from the restored snapshot: the same poses, bit for bit");
+    CHECK(hashOf(f.world) == hash1, "and the same world.hash");
+}
+
+static void t14_restore_puts_bodies_back_to_sleep() {
+    Fixture f(kBlockout);
+    (void)runSteps(f.world, 120);   // the crates settle and sleep
+    auto& be = f.physics->backend();
+    const entt::entity b = f.named("CrateB");
+    const Snapshot rest = takeSnapshot(f.world, engineTypes());
+    f.world.setTransform(b, Transform{{-1.0f, 1.5f, 1.5f}});
+    (void)runSteps(f.world, 5);   // CrateB falls again, awake
+    CHECK(be.isAwake(f.physics->bodyOf(b)), "an edited crate wakes");
+    restoreSnapshot(f.world, rest);
+    f.world.update(kDt);
+    CHECK(!be.isAwake(f.physics->bodyOf(b)) && glm::length(be.getLinearVelocity(f.physics->bodyOf(b))) == 0.0f,
+          "restored: asleep at rest, as it was");
+    CHECK(f.physics->info().awake == 0, "nothing awake");
+}
+
+static void t14_restore_mid_jump_is_exact() {
+    PlayerFixture f(true);
+    f.place({-1.0f, 0.0f, 1.5f}, 0.0f);
+    auto& reg = f.world.registry();
+    f.step({axisSet("move_forward", 1.0f), actionEvent("jump", true)});
+    f.step({actionEvent("jump", false)});
+    f.steps(8);   // up and moving: horizontal speed and a vertical velocity the saved state does not hold
+    CHECK(!reg.get<PlayerState>(f.player).onGround, "in the air");
+    const Snapshot mid = takeSnapshot(f.world, engineTypes());
+    f.steps(50);
+    const Transform p1 = reg.get<Transform>(f.player), h1 = reg.get<Transform>(f.head);
+    restoreSnapshot(f.world, mid);
+    f.steps(50);
+    const Transform p2 = reg.get<Transform>(f.player);
+    std::printf("\n      after 50 steps: (%.5f, %.5f, %.5f) / (%.5f, %.5f, %.5f)", p1.position.x, p1.position.y, p1.position.z,
+                p2.position.x, p2.position.y, p2.position.z);
+    CHECK(samePose(p1, p2) && samePose(h1, reg.get<Transform>(f.head)), "the jump lands in the same place, bit for bit");
+}
+
+namespace {
+
+// A walk north, then east onto the Ramp, then a stop; the world's hash after it.
+uint64_t walkAndHash(PlayerFixture& f) {
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(19);
+    f.step({axisSet("move_right", 1.0f)});
+    f.steps(19);
+    f.step({axisSet("move_forward", 0.0f), axisSet("move_right", 0.0f)});
+    f.steps(9);
+    return hashOf(f.world);
+}
+
+} // namespace
+
+static void t14_restore_from_spawn_replays_a_walk() {
+    // The agent's loop: snapshot the loaded scene (spawned, not stepped), walk, restore, walk again.
+    PlayerFixture f(true, false);
+    const Snapshot base = takeSnapshot(f.world, engineTypes());
+    const uint64_t baseHash = hashOf(f.world);
+    const uint64_t first = walkAndHash(f);
+    const Transform p1 = f.world.registry().get<Transform>(f.player);
+    restoreSnapshot(f.world, base);
+    CHECK(hashOf(f.world) == baseHash, "back at the spawn's hash");
+    const uint64_t second = walkAndHash(f);
+    const Transform p2 = f.world.registry().get<Transform>(f.player);
+    std::printf("\n      walked to (%.5f, %.5f, %.5f) / (%.5f, %.5f, %.5f)", p1.position.x, p1.position.y, p1.position.z,
+                p2.position.x, p2.position.y, p2.position.z);
+    CHECK(first == second && samePose(p1, p2), "the same walk from the restored spawn: the same hash and pose, bit for bit");
+}
+
+static void t14_restore_puts_a_body_back_however_close() {
+    // A restore moves a body back even when it settled less than the 1e-4 the scene uses to know
+    // its own write-back (the crates sink 20 micrometres into the floor): the Transform was
+    // written by the restore, not by the step.
+    PlayerFixture f(false, false);
+    const Snapshot base = takeSnapshot(f.world, engineTypes());
+    const entt::entity a = f.named("CrateA");
+    const glm::vec3 authored = f.world.registry().get<Transform>(a).position;
+    f.steps(90);   // settled and asleep, a few micrometres down
+    auto& be = f.physics->backend();
+    const glm::vec3 settled = be.getPosition(f.physics->bodyOf(a));
+    restoreSnapshot(f.world, base);
+    f.world.sync();
+    const glm::vec3 back = be.getPosition(f.physics->bodyOf(a));
+    std::printf("\n      CrateA y %.7f settled %.7f restored %.7f", authored.y, settled.y, back.y);
+    CHECK(settled != authored && back == authored, "the body is back where the snapshot had it, exactly");
+}
+
+static void t14_resting_contacts_replay_within_0_1_mm() {
+    // The known limit (spec "As built (step 5)"): BodyMotion holds velocities and sleep, not Jolt's
+    // contact cache (the impulses it warm-starts the next step with). A snapshot taken while awake
+    // bodies rest on each other (the crates, one step after loading) replays them to within
+    // 0.1 mm, not bit for bit; the player, which the solver does not warm-start, replays exactly.
+    PlayerFixture f(true);
+    const Snapshot base = takeSnapshot(f.world, engineTypes());
+    (void)walkAndHash(f);
+    auto& reg = f.world.registry();
+    const Transform p1 = reg.get<Transform>(f.player), a1 = reg.get<Transform>(f.named("CrateA")),
+                    b1 = reg.get<Transform>(f.named("CrateB"));
+    restoreSnapshot(f.world, base);
+    (void)walkAndHash(f);
+    const float da = glm::length(reg.get<Transform>(f.named("CrateA")).position - a1.position);
+    const float db = glm::length(reg.get<Transform>(f.named("CrateB")).position - b1.position);
+    std::printf("\n      crates differ by %.2e m and %.2e m", da, db);
+    CHECK(samePose(p1, reg.get<Transform>(f.player)), "the player: bit for bit");
+    CHECK(da > 0.0f || db > 0.0f, "the crates resting in contact are not bit for bit (if they are, the limit is gone: say so)");
+    CHECK(da < 1e-4f && db < 1e-4f, "but within 0.1 mm");
+}
+
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
 // Every pixel is one ray against the physics scene (nothing is drawn from the meshes): a top-down
 // view (rays straight down, 2 cm apart) and a view from inside the east wall looking west. A hit
@@ -1323,5 +1504,13 @@ int main(int argc, char** argv) {
     RUN(t13_surface_from_ground_body);
     RUN(t13_land_after_a_drop);
     RUN(t13_none_while_still_or_airborne);
+    RUN(t14_body_motion_follows_awake_bodies);
+    RUN(t14_body_motion_is_neither_saved_nor_hashed);
+    RUN(t14_restore_mid_fall_is_exact);
+    RUN(t14_restore_puts_bodies_back_to_sleep);
+    RUN(t14_restore_mid_jump_is_exact);
+    RUN(t14_restore_from_spawn_replays_a_walk);
+    RUN(t14_restore_puts_a_body_back_however_close);
+    RUN(t14_resting_contacts_replay_within_0_1_mm);
     return ohao::test::finish("level_physics_tests");
 }

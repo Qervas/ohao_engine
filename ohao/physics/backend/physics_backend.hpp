@@ -396,6 +396,10 @@ public:
     virtual glm::vec3 getPosition(BodyHandle h) const = 0;
     virtual void setRotation(BodyHandle h, const glm::quat& rot) = 0;
     virtual glm::quat getRotation(BodyHandle h) const = 0;
+    // Position and rotation at once (a teleport): the body lands exactly where a new body made
+    // there would be, which setPosition then setRotation does not promise (the second re-derives
+    // the position through the centre of mass).
+    virtual void setPose(BodyHandle h, const glm::vec3& pos, const glm::quat& rot) = 0;
 
     // === BODY VELOCITY ===
     virtual void setLinearVelocity(BodyHandle h, const glm::vec3& vel) = 0;
@@ -475,6 +479,7 @@ public:
     virtual void destroyCharacter(CharacterHandle handle) = 0;
     [[nodiscard]] virtual bool isValidCharacter(CharacterHandle handle) const = 0;
     virtual CharacterState getCharacterState(CharacterHandle handle) const = 0;
+    // A teleport: its contacts and ground are found where it now is (a new character's too).
     virtual void setCharacterPosition(CharacterHandle handle, const glm::vec3& pos) = 0;
     virtual void setCharacterRotation(CharacterHandle handle, const glm::quat& rot) = 0;
     virtual void setCharacterLinearVelocity(CharacterHandle handle, const glm::vec3& vel) = 0;
@@ -517,6 +522,7 @@ public:
     void setPosition(BodyHandle, const glm::vec3&) override {}
     glm::vec3 getPosition(BodyHandle) const override { return glm::vec3(0.0f); }
     void setRotation(BodyHandle, const glm::quat&) override {}
+    void setPose(BodyHandle, const glm::vec3&, const glm::quat&) override {}
     glm::quat getRotation(BodyHandle) const override { return glm::quat(1, 0, 0, 0); }
 
     void setLinearVelocity(BodyHandle, const glm::vec3&) override {}

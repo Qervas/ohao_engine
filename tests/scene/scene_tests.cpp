@@ -312,6 +312,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<PhysicsMoved>(r, checked);
     ok &= complete<PlayerController>(r, checked);
     ok &= complete<PlayerState>(r, checked);
+    ok &= complete<BodyMotion>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -335,7 +336,7 @@ static void t01_authoring_and_runtime_split() {
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
                                 "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode",
-                                "ColliderPart", "CollisionMesh", "PhysicsBody", "PlayerState"}) {
+                                "ColliderPart", "CollisionMesh", "PhysicsBody", "PlayerState", "BodyMotion"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");
     }

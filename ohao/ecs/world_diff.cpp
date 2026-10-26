@@ -70,6 +70,7 @@ void diffWorld(const World& world, const Snapshot& s, WorldDiff& out) {
     DiffScratch scratch{live, rowOfLive, {}, 0};
     scratch.stamp.assign(rowOfLive.size(), 0);
     for (uint32_t c = 0; c < s.columns.size(); ++c) {
+        if (static_cast<int>(c) == s.motionColumn) continue;   // runtime physics state, not the saved state
         componentOps(*s.columns[c].type)->diff(reg, s.columns[c], scratch, changes);
         columnOf.resize(changes.size(), c);
     }

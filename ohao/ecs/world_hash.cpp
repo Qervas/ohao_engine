@@ -29,7 +29,7 @@ uint64_t hashWorld(const World& world, const reflect::TypeRegistry& types, Snaps
     hashArray(h, table.childBegin);
     hashArray(h, table.children);
     const entt::registry& reg = world.registry();
-    for (const reflect::TypeInfo* t : snapshotTypes(types)) componentOps(*t)->hash(reg, rowOf, *t, h);
+    for (const reflect::TypeInfo* t : snapshotTypes(types, false)) componentOps(*t)->hash(reg, rowOf, *t, h);
     h.u64(table.idGen.seed);
     h.u64(table.idGen.counter);
     h.u64(table.nextSeq);

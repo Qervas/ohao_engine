@@ -6,7 +6,9 @@
 //   - the entity table, in creation order: id, CreationOrder, parent row, child rows
 //     (so Children order comes back exactly);
 //   - one column per saved component (Parent excepted: it is the parent row), plus the
-//     preserved unknown components;
+//     preserved unknown components, plus BodyMotion: runtime, but physics state the saved
+//     components do not hold (velocities, sleep), so a restore mid-motion replays exactly
+//     (world.hash and world.diff leave it out: they are about the saved state);
 //   - the id generator, the next creation sequence and the caller's frame counter.
 // Derived runtime components (Children, WorldTransform, render and GPU state) are not
 // captured; their owners rebuild them from the restored components, driven by the same
@@ -41,6 +43,7 @@ struct Snapshot {
     std::vector<SnapshotColumn> columns;
     int nameColumn{-1};        // the Name and Transform columns (entities are created with them)
     int transformColumn{-1};
+    int motionColumn{-1};      // BodyMotion's: restored, never diffed
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
@@ -65,8 +68,9 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
 // The parts of a capture, for code that reads the world in snapshot order without copying
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;
 // no columns, the frame untouched) with `rowOf` mapping an entity index to its row
-// (kNoRow: none), and the component types a snapshot has a column for, in column order.
+// (kNoRow: none), and the component types a snapshot has a column for, in column order
+// (`runtime` false: without BodyMotion, the saved state alone).
 void captureEntityTable(const World& world, Snapshot& into, std::vector<uint32_t>& rowOf);
-[[nodiscard]] std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types);
+[[nodiscard]] std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime = true);
 
 } // namespace ohao::ecs

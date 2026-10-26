@@ -645,6 +645,12 @@ void JoltPhysicsBackend::setRotation(BodyHandle h, const glm::quat& rot) {
     m_physicsSystem->GetBodyInterface().SetRotation(id, toJolt(rot), JPH::EActivation::DontActivate);
 }
 
+void JoltPhysicsBackend::setPose(BodyHandle h, const glm::vec3& pos, const glm::quat& rot) {
+    JPH::BodyID id = lookupBodyID(h);
+    if (id.IsInvalid() || !m_physicsSystem) return;
+    m_physicsSystem->GetBodyInterface().SetPositionAndRotation(id, toJoltR(pos), toJolt(rot), JPH::EActivation::DontActivate);
+}
+
 glm::quat JoltPhysicsBackend::getRotation(BodyHandle h) const {
     JPH::BodyID id = lookupBodyID(h);
     if (id.IsInvalid() || !m_physicsSystem) return glm::quat(1, 0, 0, 0);
@@ -1359,6 +1365,7 @@ CharacterHandle JoltPhysicsBackend::createCharacter(const CharacterCreationInfo&
             data.innerBody = m_nextHandle++;
             m_bodyIdToHandle[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = data.innerBody;
         }
+        refreshCharacterContacts(*character);
         m_characters[handle] = std::move(data);
 
         return handle;
@@ -1437,10 +1444,18 @@ CharacterState JoltPhysicsBackend::getCharacterState(CharacterHandle handle) con
     return state;
 }
 
+// A placed character's contacts and ground found where it now is, not at its next move: a new or
+// teleported character stands (or not) at once, as it would after a move that ended there.
+void JoltPhysicsBackend::refreshCharacterContacts(JPH::CharacterVirtual& character) {
+    LayerMaskObjectFilter layerFilter(CollisionLayer::ALL_MASK);
+    character.RefreshContacts({}, layerFilter, {}, {}, *m_tempAllocator);
+}
+
 void JoltPhysicsBackend::setCharacterPosition(CharacterHandle handle, const glm::vec3& pos) {
     auto it = m_characters.find(handle);
     if (it == m_characters.end()) return;
     it->second.character->SetPosition(toJoltR(pos));
+    refreshCharacterContacts(*it->second.character);
 }
 
 void JoltPhysicsBackend::setCharacterRotation(CharacterHandle handle, const glm::quat& rot) {

@@ -13,6 +13,11 @@
 //     body's pose written back to its entity's Transform, then the step's events.
 //   - A dynamic body's entity moved by anything but that write-back (an edit, a restore, a
 //     moved parent) teleports the body there, at rest.
+//   - BodyMotion (runtime, snapshotted) carries what the saved components do not: each step
+//     writes it for every dynamic body awake in the step (and once as it falls asleep) and for
+//     each player whose velocity changed; written by anything else (a snapshot's restore), it
+//     goes into the body (after a teleport) or the player, so a restore mid-motion replays
+//     exactly.
 //   - Events: contact begin/end per body pair (sub-shape contacts collapsed) and trigger
 //     enter/exit (a Collider with trigger is a sensor), drained from the backend's queue on
 //     the simulating thread after the step, sorted, and published as the step's span and in
@@ -104,6 +109,27 @@ struct PhysicsEvent {
 };
 [[nodiscard]] const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept;   // contact_begin, ...
 
+// A body pair in contact now, or a body inside a trigger (physics.contacts; spec "Events"): from
+// its begin to its end, sleeping included.
+struct PhysicsContact {
+    entt::entity a{entt::null}, b{entt::null};   // as its begin event: a has the lower id, or is the trigger
+    uint64_t aId{0}, bId{0};
+    glm::vec3 point{0.0f}, normal{0.0f};         // the begin's
+    bool trigger{false};
+    uint64_t since{0};                           // the step it began in
+};
+
+// A player as its last step (or placement) left it (player.info).
+struct PlayerInfo {
+    glm::vec3 pos{0.0f};                // the feet, world
+    float yawDeg{0.0f}, pitchDeg{0.0f};
+    glm::vec3 velocity{0.0f};           // m/s
+    bool onGround{false};
+    entt::entity ground{entt::null};    // the body it stands on, when on the ground
+    std::string surface;                // that body's Collider.surface ("default" if none); empty in the air
+    uint64_t footsteps{0};              // footstep events since it was made
+};
+
 struct PhysicsInfo {
     struct BodyCounts {
         uint32_t statics{0}, dynamics{0}, kinematics{0};
@@ -166,6 +192,16 @@ public:
     // The closest body along the ray within max (dir need not be normalized).
     [[nodiscard]] std::optional<RayHit> raycast(glm::vec3 from, glm::vec3 dir, float max) const;
     [[nodiscard]] PhysicsInfo info() const;
+    // The pairs in contact now, by a's id then b's.
+    [[nodiscard]] std::vector<PhysicsContact> contacts() const;
+    // Entities with a player character, in creation order.
+    [[nodiscard]] std::vector<entt::entity> players() const;
+    // The player as its last step left it, or nothing for an entity without a character.
+    [[nodiscard]] std::optional<PlayerInfo> playerInfo(entt::entity e) const;
+    // Puts the player at pos (its feet), at rest, facing yawDeg if given (else as it faced), its
+    // ground found there at once: its Transform, head, PlayerState and BodyMotion are written now.
+    // False for an entity without a character.
+    bool teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<float> yawDeg);
     // The backend, created on first use; tests step it.
     [[nodiscard]] physics::backend::IPhysicsBackend& backend();
     // The entity's body, or INVALID_BODY.

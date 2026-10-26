@@ -285,6 +285,19 @@ struct PlayerState {
     uint32_t character{UINT32_MAX};   // physics::backend::CharacterHandle
 };
 
+// Runtime, snapshotted (sub-project 6 spec, "Snapshots and replay"): the motion a body carries
+// into the next step, which the saved components do not hold. The physics step writes it for
+// every dynamic body awake during the step (and once more as it falls asleep) and for every
+// player whose velocity changed; a write by anything else (a snapshot's restore) puts it into the
+// body. Never saved or hashed; snapshots hold it, so a restore mid-motion replays exactly, except
+// for awake bodies resting on others at the snapshot: Jolt's warm-start impulses are not in it
+// (within 0.1 mm; spec "As built (step 5)").
+struct BodyMotion {
+    glm::vec3 linear{0.0f};    // m/s, world; a player's velocity
+    glm::vec3 angular{0.0f};   // rad/s, world
+    bool asleep{false};        // the body sleeps (its velocities are then zero)
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

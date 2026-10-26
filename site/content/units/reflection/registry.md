@@ -32,9 +32,9 @@ Each member must be either a field or an explicit `.skip(name, &T::m, reason)`, 
 A `TypeInfo` holds the name, doc, version, role flags, the fields in registration order (also the key order in files), the skipped members, the upgrades, and what reflection needs to treat the type as raw memory: size, alignment, construct, destroy, copy, and a shared default instance. Per field, `FieldAttrs` carries:
 
 - `doc` and `tooltip`.
-- `unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 18 names, from `m` and `deg/s` to `linear-rgb`, `lux` and `nits`:
+- `unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 19 names, from `m`, `rad/s` and `deg/s` to `linear-rgb`, `lux` and `nits`:
 
-{{cite ohao/reflect/registry.cpp "constexpr std::array<std::string_view, 18> kUnits = {"}}
+{{cite ohao/reflect/registry.cpp "constexpr std::array<std::string_view, 19> kUnits = {"}}
 
 - `min` and `max`, which are hard limits enforced by validation and commands, per component for vectors. `uiRange` and `step` are editor hints and are not enforced.
 - `color()` (only on vec3 and vec4), `angle()` (only on float), `hidden`, `readOnly`, and `alias`, an older name that is still accepted on load.

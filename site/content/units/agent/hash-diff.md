@@ -26,7 +26,12 @@ In order, it hashes the entity table (ids, creation sequence, parent rows, child
 then every saved component type in the snapshot's column order, and last the id
 generator and the next creation sequence:
 
-{{cite ohao/ecs/world_hash.cpp "for (const reflect::TypeInfo* t : snapshotTypes(types)) componentOps(*t)->hash(reg, rowOf, *t, h);"}}
+{{cite ohao/ecs/world_hash.cpp "for (const reflect::TypeInfo* t : snapshotTypes(types, false)) componentOps(*t)->hash(reg, rowOf, *t, h);"}}
+
+The `false` leaves out the one runtime column a snapshot does hold, `BodyMotion`: the
+velocities and sleep state physics carries into the next step (sub-project 6, step 5). A
+restore needs them to replay a fall exactly; the hash does not, since it is about the
+saved state, and `world.diff` skips that column for the same reason.
 
 {{cite ohao/ecs/world_hash.cpp "h.u64(table.idGen.counter);"}}
 
@@ -145,7 +150,8 @@ deferred captures are bit-identical run to run.
   hash of unchanged scenes.
 - A diff's snapshot must come from a world with the same registrations.
 - Runtime components and the frame number are not part of the hash. Read the frame from
-  `world.hash`'s `frame`.
+  `world.hash`'s `frame`. `BodyMotion` is runtime too: snapshotted and restored, never hashed
+  or diffed, so two worlds with one hash can still differ in what is moving.
 - Deferred determinism holds for deferred captures in lockstep. A realtime capture is the
   presented frame (`deterministic: false`), and path-traced frames have their own
   tolerance.

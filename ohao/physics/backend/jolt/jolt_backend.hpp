@@ -50,6 +50,7 @@ public:
     void setPosition(BodyHandle h, const glm::vec3& pos) override;
     glm::vec3 getPosition(BodyHandle h) const override;
     void setRotation(BodyHandle h, const glm::quat& rot) override;
+    void setPose(BodyHandle h, const glm::vec3& pos, const glm::quat& rot) override;
     glm::quat getRotation(BodyHandle h) const override;
 
     // === Body Velocity ===
@@ -158,6 +159,9 @@ private:
 
     // Look up Jolt BodyID from our handle
     JPH::BodyID lookupBodyID(BodyHandle handle) const;
+
+    // A new or teleported character's contacts and ground, where it now is.
+    void refreshCharacterContacts(JPH::CharacterVirtual& character);
 
     bool m_initialized = false;
 
