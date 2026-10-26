@@ -33,9 +33,9 @@ struct SceneView {
 };
 
 // The world's Camera and Environment (each a singleton; with several, the first in
-// creation order wins). The camera pose is the entity's world matrix computed from
-// Transform and Parent exactly as the transform system does, so it is correct before
-// the first update.
+// creation order wins: for cameras, the first active one). The camera pose is its RenderPose when the frame draws it between two
+// steps (render interpolation), else the entity's world matrix computed from Transform and
+// Parent exactly as the transform system does, so it is correct before the first update.
 [[nodiscard]] SceneView resolveSceneView(const World& world);
 
 // Pitch/yaw (degrees, renderer convention) of a view direction; see CameraView.

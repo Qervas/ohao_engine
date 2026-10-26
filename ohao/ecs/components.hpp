@@ -265,6 +265,16 @@ struct PlayerController {
     std::string lookY{"look_y"};
 };
 
+// Runtime, render only: where the renderer draws an entity a simulation step moved, between its
+// last two step poses at the World's render alpha (World::setRenderAlpha; sub-project 6 spec,
+// "Interpolation"). Set and removed by the `interpolate` sync system; the render extract and
+// the scene view's camera read it in place of WorldTransform. Never saved or hashed: the step's
+// pose stays in Transform and WorldTransform.
+struct RenderPose {
+    glm::mat4 world{1.0f};
+    glm::mat4 prevWorld{1.0f};   // what the last frame drew (motion vectors)
+};
+
 // Runtime: the player as the physics system left it after the last step.
 struct PlayerState {
     glm::vec3 velocity{0.0f};     // m/s, world

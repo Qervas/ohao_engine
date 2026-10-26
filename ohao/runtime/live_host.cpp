@@ -126,6 +126,9 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
         }
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
+        // Realtime frames draw what the steps move between their last two poses; lockstep and
+        // paused ones the last step's exactly (so a lockstep window matches a headless capture).
+        m_world->setRenderAlpha(m_time.running() ? tick.alpha : 1.0f);
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
 
         const VkExtent2D ext = m_window.framebufferExtent();
@@ -254,6 +257,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         // Lockstep or paused: the world as it is, rendered as a headless host renders it.
         // A pending resize (the swapchain rebuilds at the next frame) is applied first, so
         // the capture is at the window's size.
+        m_world->setRenderAlpha(1.0f);
         if (m_renderer->getWidth() != ext.width || m_renderer->getHeight() != ext.height) {
             m_world->sync();
             m_renderer->render();

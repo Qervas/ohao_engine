@@ -73,7 +73,11 @@ void Window::setCursorCaptured(bool captured) {
     // Raw motion only while captured: it bypasses OS acceleration for look input.
     if (glfwRawMouseMotionSupported())
         glfwSetInputMode(m_window, GLFW_RAW_MOUSE_MOTION, captured ? GLFW_TRUE : GLFW_FALSE);
+    // Motion counts from here: the cursor's jump when it is captured or freed is not a look.
+    glfwGetCursorPos(m_window, &m_lastX, &m_lastY);
 }
+
+bool Window::focused() const { return glfwGetWindowAttrib(m_window, GLFW_FOCUSED) != 0; }
 
 void Window::setSize(uint32_t w, uint32_t h) {
     glfwSetWindowSize(m_window, static_cast<int>(w), static_cast<int>(h));
@@ -112,12 +116,19 @@ void Window::onMouseButton(GLFWwindow* w, int button, int action, int) {
     self(w)->m_pending.push_back(e);
 }
 
+// Look input comes only from a captured mouse, as relative motion: a free cursor crossing the
+// window turns nothing.
 void Window::onCursor(GLFWwindow* w, double x, double y) {
+    Window* s = self(w);
+    const double dx = x - s->m_lastX, dy = y - s->m_lastY;
+    s->m_lastX = x;
+    s->m_lastY = y;
+    if (!s->m_cursorCaptured || (dx == 0.0 && dy == 0.0)) return;
     InputEvent e;
-    e.type = InputEvent::Type::MouseMove;
-    e.x = x;
-    e.y = y;
-    self(w)->m_pending.push_back(e);
+    e.type = InputEvent::Type::MouseDelta;
+    e.x = dx;
+    e.y = dy;
+    s->m_pending.push_back(e);
 }
 
 void Window::onFocus(GLFWwindow* w, int focused) {

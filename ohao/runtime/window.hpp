@@ -38,7 +38,10 @@ public:
     [[nodiscard]] VkExtent2D framebufferExtent() const;
     // True once after each framebuffer size change.
     [[nodiscard]] bool consumeResized();
+    // Captured: hidden and held by the window, its motion reported as MouseDelta events (look
+    // input). Not captured: the cursor is free and its motion is not reported.
     void setCursorCaptured(bool captured);
+    [[nodiscard]] bool focused() const;
     void setSize(uint32_t w, uint32_t h);
     [[nodiscard]] ohao::PresentTarget presentTarget(bool vsync) const;
 
@@ -53,6 +56,7 @@ private:
     std::vector<InputEvent> m_pending;
     bool m_resized{false};
     bool m_cursorCaptured{false};
+    double m_lastX{0.0}, m_lastY{0.0};   // the cursor at its last event (or capture change)
 };
 
 } // namespace ohao::runtime

@@ -1,0 +1,66 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "InputActions": 1,
+    "Level": 1,
+    "Light": 1,
+    "Name": 1,
+    "Parent": 1,
+    "PlayerController": 1,
+    "Transform": 1
+  },
+  "entities": [
+    { "id": "5c0b1a7e00000001", "Name": { "value": "Player" }, "PlayerController": {} },
+    {
+      "id": "5c0b1a7e00000002",
+      "Name": { "value": "Head" },
+      "Transform": { "position": [0, 1.62, 0] },
+      "Parent": { "entity": "5c0b1a7e00000001" },
+      "Camera": { "fovDeg": 75, "nearPlane": 0.05 }
+    },
+    {
+      "id": "5c0b1a7e00000003",
+      "Name": { "value": "Controls" },
+      "InputActions": {
+        "actions": [
+          { "action": "jump", "key": "Space" },
+          { "action": "sprint", "key": "LeftShift" },
+          { "action": "release_mouse", "key": "Escape" },
+          { "action": "capture_mouse", "key": "MouseLeft" }
+        ],
+        "axes": [
+          { "axis": "move_forward", "positive": "W", "negative": "S" },
+          { "axis": "move_right", "positive": "D", "negative": "A" }
+        ]
+      }
+    },
+    {
+      "id": "5c0b10c000000002",
+      "Name": { "value": "Environment" },
+      "Environment": { "hdri": { "path": "assets/test_models/env_outdoor.hdr" } }
+    },
+    {
+      "id": "5c0b10c000000003",
+      "Name": { "value": "Sun" },
+      "Transform": {
+        "position": [0, 20, 0],
+        "rotation": [-0.440377, -0.266729, -0.13885, 0.845957]
+      },
+      "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 }
+    },
+    {
+      "id": "5c0b10c000000004",
+      "Name": { "value": "Lamp" },
+      "Transform": { "position": [-1.5, 2.6, 0.5] },
+      "Light": { "color": [1, 0.85, 0.65], "intensity": 4, "range": 9, "radius": 0.08 }
+    },
+    {
+      "id": "5c0b10c000000005",
+      "Name": { "value": "Level" },
+      "Level": { "asset": { "path": "assets/levels/blockout_room.glb" } }
+    }
+  ]
+}

@@ -7,6 +7,7 @@
 #include "scene/asset/model.hpp"
 
 #include <ankerl/unordered_dense.h>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -198,9 +199,23 @@ struct PhysicsScene::Impl {
         glm::vec3 horizontal{0.0f};             // m/s
         float vy{0.0f};                         // m/s, the vertical velocity at the step's end
         float yawDeg{0.0f}, pitchDeg{0.0f};
+        // The head (spec "The camera"): the child holding the Camera, and its local pose last written.
+        entt::entity head{entt::null};
+        glm::vec3 headPos{0.0f};
+        glm::quat headRot{1, 0, 0, 0};
     };
     ankerl::unordered_dense::map<entt::entity, PlayerRecord> players;
     std::vector<entt::entity> playersTouched;  // PlayerController added or changed
+
+    // Render interpolation (spec "Interpolation"): what the last step moved, from where to where
+    // (world poses, without scale). An entry the next step does not move is dropped after it.
+    struct Mover {
+        glm::vec3 fromPos{0.0f}, toPos{0.0f};
+        glm::quat fromRot{1, 0, 0, 0}, toRot{1, 0, 0, 0};
+        bool moved{false};
+    };
+    ankerl::unordered_dense::map<entt::entity, Mover> movers;
+    ankerl::unordered_dense::set<entt::entity> drawn;   // given a RenderPose by the last interpolate
 
     Impl(entt::registry& r, AssetResolver& a) : reg(r), assets(a) {
         connect<Collider>();
@@ -679,6 +694,7 @@ struct PhysicsScene::Impl {
             r.awake = awake;
             const glm::vec3 pos = backend->getPosition(r.handle);
             const glm::quat rot = backend->getRotation(r.handle);
+            recordMove(e, r.wpos, r.wrot, pos, rot);
             r.wpos = pos;
             r.wrot = rot;
             glm::vec3 localPos = pos;
@@ -725,13 +741,56 @@ struct PhysicsScene::Impl {
         return glm::degrees(std::atan2(-f.x, -f.z));
     }
     static glm::quat yawQuat(float deg) { return glm::angleAxis(glm::radians(deg), glm::vec3(0.0f, 1.0f, 0.0f)); }
+    static glm::quat pitchQuat(float deg) { return glm::angleAxis(glm::radians(deg), glm::vec3(1.0f, 0.0f, 0.0f)); }
+    // Up positive, from the rotation's -Z.
+    static float pitchOf(const glm::quat& q) {
+        const glm::vec3 f = q * glm::vec3(0.0f, 0.0f, -1.0f);
+        return glm::degrees(std::asin(std::clamp(f.y, -1.0f, 1.0f)));
+    }
+
+    // An entity's world matrix from the Transforms up its chain: right after a level expands,
+    // before the transform system has given its nodes a WorldTransform.
+    [[nodiscard]] glm::mat4 worldOf(entt::entity e) const {
+        const auto* t = reg.try_get<Transform>(e);
+        glm::mat4 m = t ? t->matrix() : glm::mat4(1.0f);
+        for (const auto* p = reg.try_get<Parent>(e); p && reg.valid(p->entity); p = reg.try_get<Parent>(p->entity))
+            if (const auto* pt = reg.try_get<Transform>(p->entity)) m = pt->matrix() * m;
+        return m;
+    }
+
+    // The player's head: its first child (creation order) holding a Camera, else one named Head.
+    [[nodiscard]] entt::entity headOf(entt::entity e) const {
+        const auto* ch = reg.try_get<Children>(e);
+        if (!ch) return entt::null;
+        entt::entity camera = entt::null, named = entt::null;
+        uint64_t cameraSeq = UINT64_MAX, namedSeq = UINT64_MAX;
+        for (const entt::entity c : ch->entities) {
+            if (!reg.valid(c) || !reg.all_of<Transform>(c)) continue;
+            const uint64_t s = seqOf(c);
+            if (reg.all_of<Camera>(c)) {
+                if (s < cameraSeq) cameraSeq = s, camera = c;
+            } else if (const auto* n = reg.try_get<Name>(c); n && n->value == "Head" && s < namedSeq) {
+                namedSeq = s, named = c;
+            }
+        }
+        return camera != entt::null ? camera : named;
+    }
+
+    void recordMove(entt::entity e, glm::vec3 fromPos, glm::quat fromRot, glm::vec3 toPos, glm::quat toRot) {
+        Mover& m = movers[e];
+        m.fromPos = fromPos;
+        m.fromRot = fromRot;
+        m.toPos = toPos;
+        m.toRot = toRot;
+        m.moved = true;
+    }
 
     // The first SpawnPoint tagged "player" in creation order, or null.
     [[nodiscard]] entt::entity playerSpawn() const {
         entt::entity best = entt::null;
         uint64_t bestSeq = UINT64_MAX;
         for (auto [e, sp] : reg.view<const SpawnPoint>().each()) {
-            if (sp.tag != "player" || !reg.all_of<WorldTransform>(e)) continue;
+            if (sp.tag != "player" || !reg.all_of<Transform>(e)) continue;
             const uint64_t s = seqOf(e);
             if (s < bestSeq) bestSeq = s, best = e;
         }
@@ -758,12 +817,11 @@ struct PhysicsScene::Impl {
             pos = reg.get<Transform>(e).position;
             yaw = oldYaw;
         } else if (spawn != entt::null) {
-            const glm::mat4& w = reg.get<WorldTransform>(spawn).world;
+            const glm::mat4 w = worldOf(spawn);
             pos = glm::vec3(w[3]);
             yaw = yawOf(decompose(w).rotation);
         } else {
-            const auto* wt = reg.try_get<WorldTransform>(e);
-            const Placement p = decompose(wt ? wt->world : reg.get<Transform>(e).matrix());
+            const Placement p = decompose(worldOf(e));
             pos = p.position;
             yaw = yawOf(p.rotation);
             warn(e, "W_PLAYER_NO_SPAWN", "no SpawnPoint is tagged \"player\"; the player starts where it is");
@@ -792,44 +850,93 @@ struct PhysicsScene::Impl {
         p.pitchDeg = oldPitch;
         p.written = pos;
         p.writtenRot = ci.rotation;
-        writePlayer(e, p, pos, glm::vec3(0.0f), false);
+        movers.erase(e);   // placed, not moved: nothing to draw between
+        writePlayer(e, p, pos, glm::vec3(0.0f), false, false);
         players[e] = p;
     }
 
-    // The player's Transform (feet, yaw) and PlayerState.
-    void writePlayer(entt::entity e, PlayerRecord& p, glm::vec3 pos, glm::vec3 velocity, bool onGround) {
+    // The player's Transform (feet, yaw), its head and PlayerState. `track`: a move of the step,
+    // drawn between where it was and where it is (else a placement).
+    void writePlayer(entt::entity e, PlayerRecord& p, glm::vec3 pos, glm::vec3 velocity, bool onGround, bool track) {
         const glm::quat rot = yawQuat(p.yawDeg);
+        const glm::vec3 fromPos = p.written;
+        const glm::quat fromRot = p.writtenRot;
+        if (track) recordMove(e, fromPos, fromRot, pos, rot);
         p.written = pos;
         p.writtenRot = rot;
         reg.patch<Transform>(e, [&](Transform& t) {
             t.position = pos;
             t.rotation = rot;
         });
+        writeHead(e, p, fromPos, fromRot, track);
         reg.emplace_or_replace<PlayerState>(e, PlayerState{velocity, onGround, p.yawDeg, p.pitchDeg, p.character});
+    }
+
+    // The head at eyeHeight above the feet, pitched; written only when it changes.
+    void writeHead(entt::entity e, PlayerRecord& p, glm::vec3 fromPos, glm::quat fromRot, bool track) {
+        const entt::entity head = headOf(e);
+        if (head == entt::null) {
+            p.head = entt::null;
+            return;
+        }
+        const glm::vec3 local(0.0f, reg.get<PlayerController>(e).eyeHeight, 0.0f);
+        const glm::quat localRot = pitchQuat(p.pitchDeg);
+        if (track && head == p.head) {
+            const glm::vec3 scale = reg.get<Transform>(e).scale;
+            recordMove(head, fromPos + fromRot * (scale * p.headPos), fromRot * p.headRot, p.written + p.writtenRot * (scale * local),
+                       p.writtenRot * localRot);
+        } else {
+            movers.erase(head);
+        }
+        p.head = head;
+        p.headPos = local;
+        p.headRot = localRot;
+        const Transform& ht = reg.get<Transform>(head);
+        if (ht.position != local || ht.rotation != localRot)
+            reg.patch<Transform>(head, [&](Transform& t) {
+                t.position = local;
+                t.rotation = localRot;
+            });
+    }
+
+    // Characters for PlayerControllers added or changed since: the `player_spawn` sync system
+    // (before `transform`, so a play scene's first frame is drawn from the spawn) and each step.
+    void spawnPlayers() {
+        if (playersTouched.empty()) return;
+        std::vector<entt::entity> list;
+        list.swap(playersTouched);
+        for (const entt::entity e : list)
+            if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e);
     }
 
     // Every player, once per step, before the bodies step (spec: the character moves first).
     void updatePlayers(const InputMap& input, float dt) {
-        if (!playersTouched.empty()) {
-            std::vector<entt::entity> list;
-            list.swap(playersTouched);
-            for (const entt::entity e : list)
-                if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e);
-        }
+        spawnPlayers();
         if (players.empty() || !(dt > 0.0f) || !backend) return;
         const glm::vec3 gravity = backend->getGravity();
         const glm::vec2 mouse = input.mouseDelta();
         for (auto& [e, p] : players) {
             const PlayerController& pc = reg.get<PlayerController>(e);
             const Transform& t = reg.get<Transform>(e);
-            // Moved by anything but this system (an edit, a restore): it goes there, at rest.
+            // Moved by anything but this system (an edit, a restore): it goes there, at rest (a
+            // placement: the step draws from there).
             if (differs(t.position, p.written, 1e-4f)) {
                 backend->setCharacterPosition(p.character, t.position);
                 backend->setCharacterLinearVelocity(p.character, glm::vec3(0.0f));
                 p.horizontal = glm::vec3(0.0f);
                 p.vy = 0.0f;
+                p.written = t.position;
             }
-            if (!sameRotation(t.rotation, p.writtenRot, 1e-4f)) p.yawDeg = yawOf(t.rotation);
+            if (!sameRotation(t.rotation, p.writtenRot, 1e-4f)) {
+                p.yawDeg = yawOf(t.rotation);
+                p.writtenRot = yawQuat(p.yawDeg);
+            }
+            // A head turned by anything but this system sets the pitch.
+            if (p.head != entt::null && reg.valid(p.head))
+                if (const auto* ht = reg.try_get<Transform>(p.head); ht && !sameRotation(ht->rotation, p.headRot, 1e-4f)) {
+                    p.pitchDeg = std::clamp(pitchOf(ht->rotation), -89.0f, 89.0f);
+                    p.headRot = pitchQuat(p.pitchDeg);
+                }
 
             // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
             p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
@@ -871,7 +978,7 @@ struct PhysicsScene::Impl {
             if (falling) p.vy = after.linearVelocity.y + 0.5f * gravity.y * dt;
             const bool onGround = after.groundState == pb::GroundState::ON_GROUND && p.vy < 0.1f;
             if (onGround) p.vy = 0.0f;
-            writePlayer(e, p, after.position, glm::vec3(p.horizontal.x, p.vy, p.horizontal.z), onGround);
+            writePlayer(e, p, after.position, glm::vec3(p.horizontal.x, p.vy, p.horizontal.z), onGround, true);
         }
     }
 
@@ -894,6 +1001,7 @@ struct PhysicsScene::Impl {
         stepDt = dt;
         sync();
         stepDt = 0.0f;
+        for (auto& [e, mv] : movers) mv.moved = false;
         const auto tp = Clock::now();
         updatePlayers(input, dt);
         auto t1 = Clock::now(), t2 = t1, t3 = t1;
@@ -923,6 +1031,8 @@ struct PhysicsScene::Impl {
             t3 = Clock::now();
             writeBack();
         }
+        // What this step did not move is drawn where it is.
+        for (auto it = movers.begin(); it != movers.end();) it = it->second.moved ? std::next(it) : movers.erase(it);
         const auto t4 = Clock::now();
         publish(fresh);
         const auto t5 = Clock::now();
@@ -930,6 +1040,44 @@ struct PhysicsScene::Impl {
         timing.eventsMs = ms(t2, t3) + ms(t4, t5);
         timing.writeMs = ms(t3, t4);
         timing.totalMs = ms(t0, t5);
+    }
+
+    // RenderPose for what the last step moved, between its last two step poses at alpha, and for
+    // their subtrees (a descendant that moves by itself has its own entry). Alpha 1 (or outside
+    // [0, 1)) draws the step's poses: every RenderPose goes. The step's state is not touched.
+    void interpolate(float alpha) {
+        ankerl::unordered_dense::set<entt::entity> was;
+        was.swap(drawn);
+        if (alpha >= 0.0f && alpha < 1.0f) {
+            std::vector<entt::entity> stack;
+            for (const auto& [e, mv] : movers) {
+                if (!reg.valid(e) || !reg.all_of<WorldTransform>(e)) continue;
+                if (mv.fromPos == mv.toPos && mv.fromRot == mv.toRot) continue;
+                const glm::mat4 at = glm::translate(glm::mat4(1.0f), glm::mix(mv.fromPos, mv.toPos, alpha)) *
+                                     glm::mat4_cast(glm::slerp(mv.fromRot, mv.toRot, alpha));
+                const glm::mat4 to = glm::translate(glm::mat4(1.0f), mv.toPos) * glm::mat4_cast(mv.toRot);
+                const glm::mat4 delta = at * glm::inverse(to);
+                stack.assign(1, e);
+                while (!stack.empty()) {
+                    const entt::entity x = stack.back();
+                    stack.pop_back();
+                    if (!reg.valid(x) || (x != e && movers.contains(x))) continue;
+                    if (const auto* wt = reg.try_get<WorldTransform>(x)) {
+                        const auto* last = reg.try_get<RenderPose>(x);
+                        const glm::mat4 prev = last && was.contains(x) ? last->world : wt->prevWorld;
+                        reg.emplace_or_replace<RenderPose>(x, RenderPose{delta * wt->world, prev});
+                        reg.emplace_or_replace<RenderDirty>(x);
+                        drawn.insert(x);
+                    }
+                    if (const auto* ch = reg.try_get<Children>(x)) stack.insert(stack.end(), ch->entities.begin(), ch->entities.end());
+                }
+            }
+        }
+        for (const entt::entity x : was) {
+            if (drawn.contains(x) || !reg.valid(x)) continue;
+            reg.remove<RenderPose>(x);
+            reg.emplace_or_replace<RenderDirty>(x);
+        }
     }
 
     [[nodiscard]] std::vector<PhysicsEvent> since(uint64_t after, std::size_t max, uint64_t& dropped) const {
@@ -992,6 +1140,8 @@ PhysicsInfo PhysicsScene::info() const {
 }
 
 void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
+void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
+void PhysicsScene::interpolate(float alpha) { m->interpolate(alpha); }
 std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
 std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
     return m->since(since, max, dropped);
@@ -1033,7 +1183,17 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     // The system owns the scene: it goes with the World's systems, before the registry.
     auto scene = std::make_shared<PhysicsScene>(reg, assets);
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
+    // Players spawn before the transform system, so a play scene's first frame is the spawn's.
+    world.addSyncBefore("transform", "player_spawn", [scene](World&) { scene->spawnPlayers(); });
     world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
+    // Render interpolation, before the render extract reads the poses (installRenderExtract
+    // places itself after it when it comes later).
+    const auto names = world.syncNames();
+    const auto interpolate = [scene](World& w) { scene->interpolate(w.renderAlpha()); };
+    if (std::find(names.begin(), names.end(), "render_extract") != names.end())
+        world.addSyncBefore("render_extract", "interpolate", interpolate);
+    else
+        world.addSyncAfter("physics", "interpolate", interpolate);
     // Once per fixed step, after the simulate systems added so far (spin, fly controller).
     world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w, dt); });
     return *scene;

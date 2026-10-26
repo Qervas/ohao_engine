@@ -11,7 +11,9 @@ namespace ohao::ecs {
 // it emplaces and removes it; nothing else should write it.
 struct RenderSlot { uint32_t slot; };
 
-// Adds the "render_extract" system right after "transform". Each update it
+// Adds the "render_extract" system right after "transform" (after "interpolate" when the physics
+// scene is installed first). An entity with a RenderPose is drawn there, not at its
+// WorldTransform. Each update it
 //   1. releases the slots of entities whose MeshRenderer (or RenderSlot) went away,
 //   2. creates an instance for every renderable without a slot (in creation order),
 //   3. re-uploads every RenderDirty renderable (moved, or MeshRenderer patched),

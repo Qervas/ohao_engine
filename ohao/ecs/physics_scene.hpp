@@ -130,6 +130,14 @@ public:
     // ceil(dt * 60) substeps (at most kMaxSubsteps), write back, publish events. A world with
     // no collider does nothing (not even the propagation).
     void step(World& world, float dt);
+    // Characters for PlayerControllers added or changed (the `player_spawn` sync system, before
+    // `transform`; a step does it too): a new player at the first SpawnPoint tagged "player",
+    // a changed one where it stands.
+    void spawnPlayers();
+    // RenderPose for what the last step moved (players, their heads, dynamic bodies) and their
+    // subtrees, between the last two step poses at alpha; alpha 1 removes them (the `interpolate`
+    // sync system, with World::renderAlpha).
+    void interpolate(float alpha);
     // The latest step's events, sorted (removals since the step before it first).
     [[nodiscard]] std::span<const PhysicsEvent> stepEvents() const noexcept;
     // Up to max logged events with seq > since, oldest first; dropped is how many of those the
@@ -166,9 +174,10 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-// Adds the "physics" sync system right after "transform" and the "physics" simulate system
-// after those added so far, and returns the scene (once per World; a second call returns the
-// first). The resolver must outlive the World.
+// Adds the sync systems "player_spawn" right before "transform", "physics" right after it and
+// "interpolate" after that (before "render_extract"), the "physics" simulate system after those
+// added so far, and returns the scene (once per World; a second call returns the first). The
+// resolver must outlive the World.
 PhysicsScene& installPhysics(World& world, AssetResolver& assets);
 // The World's physics scene, or null without installPhysics.
 [[nodiscard]] PhysicsScene* physicsScene(World& world);

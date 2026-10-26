@@ -137,8 +137,14 @@ private:
         render::InstanceDesc d{};
         d.mesh = mr.mesh;
         d.materials = mr.materials;
-        d.world = wt.world;
-        d.prevWorld = wt.prevWorld;
+        // Drawn between two simulation steps (render interpolation) or at the step's pose.
+        if (const auto* rp = m_reg.try_get<RenderPose>(e)) {
+            d.world = rp->world;
+            d.prevWorld = rp->prevWorld;
+        } else {
+            d.world = wt.world;
+            d.prevWorld = wt.prevWorld;
+        }
         d.visible = mr.visible;
         if (const auto* gi = m_reg.try_get<GiMaterialLegacy>(e)) d.giAlbedoPacked = gi->packed;
         return d;
@@ -231,7 +237,10 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
     }
     reg.ctx().emplace<RenderExtractInstalled>();
     auto state = std::make_shared<ExtractState>(reg, scene);
-    world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });
+    // After the transform system, and after render interpolation when physics installed it first.
+    const auto names = world.syncNames();
+    const bool interpolate = std::find(names.begin(), names.end(), "interpolate") != names.end();
+    world.addSyncAfter(interpolate ? "interpolate" : "transform", "render_extract", [state](World&) { state->run(); });
 }
 
 } // namespace ohao::ecs

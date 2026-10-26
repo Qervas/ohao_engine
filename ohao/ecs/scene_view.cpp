@@ -10,12 +10,13 @@ namespace ohao::ecs {
 
 namespace {
 
-// The first entity (in creation order) holding T.
-template <class T>
-entt::entity firstWith(const entt::registry& reg) {
+// The first entity (in creation order) holding T and passing `keep`.
+template <class T, class Keep = bool (*)(const T&)>
+entt::entity firstWith(const entt::registry& reg, Keep keep = [](const T&) { return true; }) {
     entt::entity best = entt::null;
     uint64_t bestSeq = UINT64_MAX;
     for (const entt::entity e : reg.view<const T>()) {
+        if (!keep(reg.get<T>(e))) continue;
         const auto* co = reg.try_get<CreationOrder>(e);
         const uint64_t seq = co ? co->seq : UINT64_MAX - 1;
         if (best == entt::null || seq < bestSeq) {
@@ -58,10 +59,13 @@ SceneView resolveSceneView(const World& world) {
     const entt::registry& reg = world.registry();
     SceneView view;
 
-    if (const entt::entity e = firstWith<Camera>(reg); e != entt::null) {
+    // The first active camera: an inactive one (a level's, beside a player's head) never hides it.
+    if (const entt::entity e = firstWith<Camera>(reg, [](const Camera& c) { return c.active; }); e != entt::null) {
         const Camera& cam = reg.get<Camera>(e);
-        if (cam.active) {
-            const glm::mat4 w = worldMatrix(reg, e);
+        {
+            // Where the frame draws it (render interpolation), else its step pose.
+            const auto* drawn = reg.try_get<RenderPose>(e);
+            const glm::mat4 w = drawn ? drawn->world : worldMatrix(reg, e);
             const glm::vec2 py = pitchYawDegrees(-glm::vec3(w[2]));
             view.camera = CameraView{glm::vec3(w[3]), py.x, py.y, cam.fovDeg, cam.nearPlane, cam.farPlane};
         }

@@ -1,13 +1,17 @@
 // ohao_game -- the windowed game: a scene file played by the live host (runtime::LiveHost)
 // in realtime. Deferred rendering straight to a swapchain, fixed-step simulation, input as
 // data: the scene's InputActions bind the keys, its FlyController flies the camera, its
-// Spin turns the cube. No host code moves anything.
+// Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
 //   ohao_game [scene] [--vsync] [--frames N] [--resize-at F] [--mode deferred|rt_realtime|rt_offline]
 //
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
-//   WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
+//   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
+//   play mode (a scene with a PlayerController, e.g. assets/scenes/blockout_play.scene.json):
+//                 the mouse is captured while the window has focus and looks; WASD walk,
+//                 Shift sprints, Space jumps; Esc (release_mouse) frees the mouse, a click
+//                 (capture_mouse) takes it again; close the window to quit
 //
 // --frames N runs N frames and exits non-zero if any frame did an unrequested GPU->CPU
 // readback, or if validation was on (OHAO_VALIDATION=1) and reported anything. --resize-at
@@ -17,6 +21,7 @@
 // Exit codes: 0 ok; 1 no window or GPU; 2 the scene did not load; 3 a readback; 4 validation.
 
 #include "core/log.hpp"
+#include "ecs/components.hpp"
 #include "ecs/scene_types.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/live_host.hpp"
@@ -24,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 
 using namespace ohao;
@@ -104,11 +110,21 @@ int main(int argc, char** argv) {
     }
 
     GameHooks hooks;
+    // Play mode: the world has a player, whose look is the mouse.
+    const bool play = !host.world().registry().view<ecs::PlayerController>().empty();
+    auto released = std::make_shared<bool>(false);   // play mode: Esc freed the mouse
     // Input is stepped once per fixed step, so it is read after each step.
-    hooks.fixedUpdate = [](LiveHost& h, float) {
-        if (h.input().pressed("quit")) h.quit();
+    hooks.fixedUpdate = [play, released](LiveHost& h, float) {
+        if (!play) {
+            if (h.input().pressed("quit")) h.quit();
+            return;
+        }
+        if (h.input().pressed("release_mouse")) *released = true;
+        if (h.input().pressed("capture_mouse")) *released = false;
     };
-    hooks.update = [](LiveHost& h, float, float) { h.window().setCursorCaptured(h.input().held("look")); };
+    hooks.update = [play, released](LiveHost& h, float, float) {
+        h.window().setCursorCaptured(play ? !*released && h.window().focused() : h.input().held("look"));
+    };
 
     const RunReport r = host.run(hooks);
 

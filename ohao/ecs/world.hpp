@@ -107,6 +107,12 @@ public:
     [[nodiscard]] InputMap& input() noexcept { return m_input; }
     [[nodiscard]] const InputMap& input() const noexcept { return m_input; }
     void stepInput(std::span<const InputEvent> events);
+    // How far past the last step the next render shows, as a fraction of a fixed step: the
+    // `interpolate` sync system draws what the steps move between their last two step poses
+    // at this fraction. 1 (the default) is the last step's pose exactly: lockstep and
+    // headless hosts leave it there; a realtime host sets the timeline's alpha each frame.
+    void setRenderAlpha(float alpha) noexcept { m_renderAlpha = alpha; }
+    [[nodiscard]] float renderAlpha() const noexcept { return m_renderAlpha; }
     // Debug builds: before running sync systems, sync() checks every untagged entity's
     // WorldTransform against its local Transform (verifyTransforms) and logs the first
     // nonzero result once per World. This is that result (0: none seen; always 0 in
@@ -133,6 +139,7 @@ private:
     std::vector<std::pair<std::string, SyncSystem>> m_sync;
     InputMap m_input;
     bool m_bindingsDirty{false};
+    float m_renderAlpha{1.0f};
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };

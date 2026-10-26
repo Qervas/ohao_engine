@@ -187,7 +187,9 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
         return out;
     }
 
-    // As the examples: the view first, then the mode, the denoiser and post effects.
+    // As the examples: the view first, then the mode, the denoiser and post effects. The view is
+    // the synced world's (a player spawns in sync, and its head is the camera).
+    world.sync();
     for (const auto& w : applySceneView(renderer, ecs::resolveSceneView(world), assets).warnings)
         OHAO_LOG(Warn, render, "capture: {}", w);
     const RenderMode mode = r.mode == "rt_realtime" ? RenderMode::RTRealtime
