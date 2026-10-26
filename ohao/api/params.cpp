@@ -233,6 +233,18 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("since", &PhysicsEventsParams::since)
             .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
         .field("max", &PhysicsEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
+    r.type<PhysicsContactsParams>("PhysicsContactsParams").doc("physics.contacts params")
+        .field("entity", &PhysicsContactsParams::entity).doc("Only the pairs this entity (16 hex digits) is in")
+        .field("max", &PhysicsContactsParams::max).doc("Pairs in one reply").unitless().min(1).max(64);
+    r.type<PlayerInfoParams>("PlayerInfoParams").doc("player.info params")
+        .field("entity", &PlayerInfoParams::entity).doc("The player's id, 16 hex digits; absent: the only player");
+    r.type<PlayerTeleportParams>("PlayerTeleportParams").doc("player.teleport params")
+        .field("entity", &PlayerTeleportParams::entity).doc("The player's id, 16 hex digits; absent: the only player")
+        .field("pos", &PlayerTeleportParams::pos).doc("Where its feet go, world [x, y, z]").unit("m")
+            .min(-kMaxTeleport).max(kMaxTeleport).required()
+        .field("yawDeg", &PlayerTeleportParams::yawDeg)
+            .doc("Facing about +Y from -Z, counter-clockwise seen from above; absent: as it faced").unit("deg")
+            .min(-360.0).max(360.0);
 }
 
 } // namespace

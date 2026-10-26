@@ -1,6 +1,6 @@
 // level.info, level.reload, physics.raycast, physics.info (sub-project 5, step 5;
 // docs/specs/2026-10-26-level-pipeline-design.md, "The agent-facing surface"), physics.events
-// (sub-project 6, step 1).
+// (sub-project 6, step 1), physics.contacts, player.info and player.teleport (sub-project 6, step 5).
 //
 // The session reaches level data and bodies through what the World's install hooks left on it:
 // level::levelSummary / levelDiagnostics / reloadLevel (installLevels, ohao_level_world) and
@@ -381,6 +381,154 @@ bool methodPhysicsEvents(Session::Impl& s, const JsonDocument&, const JsonNode& 
     out.key("next"); out.uint64(events.empty() ? std::min(since, physics->nextEventSeq() - 1) : events.back().seq);
     if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
+    return true;
+}
+
+// ---- physics.contacts, player.info, player.teleport (sub-project 6, step 5; the spec's "The
+// agent-facing surface") -------------------------------------------------------------------------
+
+namespace {
+
+// Angles to 0.01 degree, without -0.
+float deg2(float v) { return std::fabs(v) < 0.005f ? 0.0f : std::round(v * 100.0f) / 100.0f; }
+
+std::string nameOrId(Session::Impl& s, entt::entity e) {
+    const auto& reg = s.world.registry();
+    if (e == entt::null || !reg.valid(e)) return std::string();
+    const auto* n = reg.try_get<ecs::Name>(e);
+    return n && !n->value.empty() ? utf8Prefix(n->value, kMaxEventName) : hex16(s.world.idOf(e));
+}
+
+// The players' state as a step would start from it: levels expanded, players spawned, bodies built.
+void syncPlayers(Session::Impl& s) {
+    s.world.runSync("level");
+    s.world.runSync("player_spawn");
+    s.world.runSync("transform");
+    s.world.runSync("physics");
+}
+
+// The player the params name, or the world's only one. Reports and returns null.
+entt::entity findPlayer(Session::Impl& s, const ecs::PhysicsScene& physics, const JsonNode& params,
+                        const std::optional<uint64_t>& id, DecodeContext& ctx) {
+    const std::vector<entt::entity> players = physics.players();
+    if (id) {
+        const entt::entity e = s.world.findById(*id);
+        if (e == entt::null || std::find(players.begin(), players.end(), e) == players.end()) {
+            ctx.push("entity");
+            ctx.error("E_NOT_FOUND", *ctx.doc.member(params, "entity"),
+                      "entity " + hex16(*id) + (e == entt::null ? " does not exist" : " is not a player (no PlayerController)"),
+                      "the id of an entity with a PlayerController", "\"" + hex16(*id) + "\"");
+            ctx.pop();
+            return entt::null;
+        }
+        return e;
+    }
+    if (players.empty()) {
+        ctx.error("E_STATE", params, "the world has no player",
+                  "a scene with a PlayerController, as assets/scenes/blockout_play.scene.json");
+        return entt::null;
+    }
+    if (players.size() > 1) {
+        std::string ids;
+        for (const entt::entity e : players) ids += (ids.empty() ? "" : ", ") + hex16(s.world.idOf(e));
+        ctx.error("E_COMMAND", params, std::to_string(players.size()) + " players in the world; name one with entity",
+                  "{\"entity\": one of " + ids + "}");
+        return entt::null;
+    }
+    return players.front();
+}
+
+void writePlayerInfo(Session::Impl& s, entt::entity e, const ecs::PlayerInfo& info, JsonWriter& out) {
+    const auto* name = s.world.registry().try_get<ecs::Name>(e);
+    out.beginObject();
+    out.key("entity"); out.string(hex16(s.world.idOf(e)));
+    out.key("name"); out.string(name ? utf8Prefix(name->value, kMaxName) : std::string());
+    out.key("pos"); writeVec(out, info.pos);
+    out.key("yawDeg"); out.float32(deg2(info.yawDeg));
+    out.key("pitchDeg"); out.float32(deg2(info.pitchDeg));
+    out.key("velocity"); writeVec3(out, info.velocity, 1e3f);
+    out.key("ground"); out.boolean(info.onGround);
+    if (info.ground != entt::null) { out.key("on"); out.string(nameOrId(s, info.ground)); }
+    if (!info.surface.empty()) { out.key("surface"); out.string(utf8Prefix(info.surface, 32)); }
+    out.key("footsteps"); out.uint64(info.footsteps);
+    out.endObject();
+}
+
+} // namespace
+
+bool methodPhysicsContacts(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                           JsonWriter& out) {
+    PhysicsContactsParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    ecs::PhysicsScene* physics = needPhysics(s, params, ctx);
+    if (!physics) return false;
+    syncPhysics(s);
+    entt::entity only = entt::null;
+    if (p.entity) {
+        only = s.world.findById(*p.entity);
+        const std::vector<entt::entity> players = physics->players();
+        const bool hasBody = only != entt::null && (physics->bodyOf(only) != physics::backend::INVALID_BODY ||
+                                                    std::find(players.begin(), players.end(), only) != players.end());
+        if (!hasBody) {
+            ctx.push("entity");
+            ctx.error("E_NOT_FOUND", *ctx.doc.member(params, "entity"),
+                      "entity " + hex16(*p.entity) + (only == entt::null ? " does not exist" : " has no body (no Collider)"),
+                      "the id of an entity with a Collider or a PlayerController", "\"" + hex16(*p.entity) + "\"");
+            ctx.pop();
+            return false;
+        }
+    }
+    const std::vector<ecs::PhysicsContact> all = physics->contacts();
+    std::size_t count = 0, listed = 0;
+    out.beginObject();
+    out.key("contacts");
+    out.beginArray();
+    for (const ecs::PhysicsContact& c : all) {
+        if (only != entt::null && c.a != only && c.b != only) continue;
+        ++count;
+        if (listed == static_cast<std::size_t>(p.max)) continue;
+        ++listed;
+        out.beginObject();
+        out.key("a"); out.string(hex16(c.aId));
+        out.key("b"); out.string(hex16(c.bId));
+        out.key("an"); out.string(nameOrId(s, c.a));
+        out.key("bn"); out.string(nameOrId(s, c.b));
+        if (c.trigger) { out.key("trigger"); out.boolean(true); }
+        out.key("point"); writeVec3(out, c.point, 1e3f);
+        out.key("normal"); writeVec3(out, c.normal, 1e3f);
+        out.key("since"); out.uint64(c.since);
+        out.endObject();
+    }
+    out.endArray();
+    out.key("count"); out.uint64(count);
+    if (count > listed) { out.key("more"); out.uint64(count - listed); }
+    out.endObject();
+    return true;
+}
+
+bool methodPlayerInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx, JsonWriter& out) {
+    PlayerInfoParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    ecs::PhysicsScene* physics = needPhysics(s, params, ctx);
+    if (!physics) return false;
+    syncPlayers(s);
+    const entt::entity e = findPlayer(s, *physics, params, p.entity, ctx);
+    if (e == entt::null) return false;
+    writePlayerInfo(s, e, *physics->playerInfo(e), out);
+    return true;
+}
+
+bool methodPlayerTeleport(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                          JsonWriter& out) {
+    PlayerTeleportParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    ecs::PhysicsScene* physics = needPhysics(s, params, ctx);
+    if (!physics) return false;
+    syncPlayers(s);
+    const entt::entity e = findPlayer(s, *physics, params, p.entity, ctx);
+    if (e == entt::null) return false;
+    physics->teleportPlayer(e, p.pos, p.yawDeg);
+    writePlayerInfo(s, e, *physics->playerInfo(e), out);
     return true;
 }
 

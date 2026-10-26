@@ -236,6 +236,20 @@ struct PhysicsEventsParams {
     int64_t since{0};   // the seq of the last event already read (the previous reply's next)
     int32_t max{32};    // 1..64
 };
+// Sub-project 6, step 5.
+inline constexpr float kMaxTeleport = 100'000.0f;   // player.teleport's pos: each axis within ±1e5 m
+struct PhysicsContactsParams {
+    std::optional<uint64_t> entity;   // only the pairs this entity is in
+    int32_t max{32};                  // 1..64
+};
+struct PlayerInfoParams {
+    std::optional<uint64_t> entity;   // absent: the world's only player
+};
+struct PlayerTeleportParams {
+    std::optional<uint64_t> entity;
+    glm::vec3 pos{0.0f};
+    std::optional<float> yawDeg;      // absent: it keeps its facing
+};
 
 // The registry of every params struct and its enums, built once.
 [[nodiscard]] const reflect::TypeRegistry& paramsRegistry();

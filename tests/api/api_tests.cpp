@@ -176,7 +176,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 29, "twenty-nine methods");
+    CHECK(api::methods().size() == 32, "thirty-two methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -2200,6 +2200,183 @@ static void sp6_t13_footsteps_in_physics_events() {
     CHECK(largest < 200, "every event under 200 bytes");
 }
 
+// ---- sub-project 6, step 5: player.info, player.teleport, physics.contacts, replay ----------------
+// docs/specs/2026-10-26-player-physics-design.md, "The agent-facing surface" and "Snapshots and
+// replay". The play scene's player is 5c0b1a7e00000001, its head 5c0b1a7e00000002.
+
+constexpr const char* kPlayer = "5c0b1a7e00000001";
+constexpr const char* kPlayScene = "assets/scenes/blockout_play.scene.json";
+
+static void sp6_t14_player_info_after_load_and_walk() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("player.info")).code() == "E_STATE", "a world without the physics system: E_STATE");
+    }
+    {
+        LevelWorld lw;
+        CHECK(lw.load().ok(), "the blockout scene (no player) loads");
+        const Reply none(lw.s.call("player.info"));
+        CHECK(none.code() == "E_STATE", "a world without a player: E_STATE");
+    }
+    LevelWorld lw;
+    CHECK(lw.load(kPlayScene).ok(), "the play scene loads");
+    const Reply r(lw.s.call("player.info"));
+    std::printf("\n      %s (%zu bytes)", r.json("/result").c_str(), r.json("/result").size());
+    CHECK(r.ok() && r.str("/result/entity") == kPlayer && r.str("/result/name") == "Player", "the only player, by id and name");
+    CHECK(r.json("/result/pos") == "[1.5,0,2.2]" && r.str("/result/yawDeg") == "0" && r.str("/result/pitchDeg") == "0" &&
+              r.json("/result/velocity") == "[0,0,0]",
+          "at the spawn, facing -Z, still, before any step");
+    CHECK(r.json("/result/ground") == "true" && r.str("/result/on") == "Floor" && r.str("/result/surface") == "concrete" &&
+              r.str("/result/footsteps") == "0",
+          "standing on the Floor's concrete, no footstep yet");
+    CHECK(r.json("/result").size() < 300, "under 300 bytes");
+
+    CHECK(Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":1}]})")).ok() &&
+              Reply(lw.s.call("world.step", R"({"frames":30})")).ok(),
+          "walk forward 30 steps");
+    const Reply w(lw.s.call("player.info"));
+    std::printf("\n      %s", w.json("/result").c_str());
+    const std::string z = w.str("/result/pos/2"), vz = w.str("/result/velocity/2");
+    CHECK(w.ok() && !z.empty() && std::stod(z) < 0.6 && std::stod(z) > 0.1, "30 steps north: about 1.9 m from z 2.2");
+    CHECK(!vz.empty() && std::fabs(std::stod(vz) + 4.0) < 0.01 && w.json("/result/ground") == "true",
+          "at the walk speed, 4 m/s toward -Z, on the ground");
+    CHECK(std::stoi(w.str("/result/footsteps")) >= 2, "and its footsteps counted");
+
+    const Reply head(lw.s.call("player.info", R"({"entity":"5c0b1a7e00000002"})"));
+    CHECK(head.code() == "E_NOT_FOUND" && head.str("/error/data/0/path") == "/entity", "the head is not a player: E_NOT_FOUND");
+    CHECK(Reply(lw.s.call("player.info", R"({"entity":"00000000000000ff"})")).code() == "E_NOT_FOUND", "nor is a missing id");
+    const Reply byId(lw.s.call("player.info", "{\"entity\":\"" + std::string(kPlayer) + "\"}"));
+    CHECK(byId.ok() && byId.json("/result") == Reply(lw.s.call("player.info")).json("/result"), "named by entity, the same");
+}
+
+static void sp6_t14_player_teleport_moves_and_stops() {
+    LevelWorld lw;
+    CHECK(lw.load(kPlayScene).ok(), "the play scene loads");
+    CHECK(Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":1}]})")).ok() &&
+              Reply(lw.s.call("world.step", R"({"frames":20})")).ok() &&
+              Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":null}]})")).ok(),
+          "walk 20 steps, then let go");
+    const uint64_t before = lw.s.changeCount();
+    const Reply t(lw.s.call("player.teleport", R"({"pos":[-2.2,0.3,-2],"yawDeg":90})"));
+    std::printf("\n      %s", t.json("/result").c_str());
+    CHECK(t.ok() && t.json("/result/pos") == "[-2.2,0.3,-2]" && t.str("/result/yawDeg") == "90" &&
+              t.json("/result/velocity") == "[0,0,0]",
+          "onto the Step, facing -X, at rest; the reply is player.info's");
+    CHECK(t.json("/result/ground") == "true" && t.str("/result/on") == "Step" && t.str("/result/surface") == "metal",
+          "standing on the Step's metal at once");
+    CHECK(lw.s.changeCount() > before, "it changes the world");
+    const Reply q(lw.s.call("world.query", R"({"names":["Player"],"fields":["/Transform/position"]})"));
+    CHECK(q.json("/result/entities/0/Transform/position") == "[-2.2,0.3,-2]", "its Transform says so");
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":10})")).ok(), "10 steps");
+    const Reply after(lw.s.call("player.info"));
+    CHECK(after.json("/result/pos") == "[-2.2,0.3,-2]" && after.json("/result/velocity") == "[0,0,0]",
+          "it stays: the walk's speed did not carry through the teleport");
+    const Reply keep(lw.s.call("player.teleport", R"({"pos":[-1,0,1]})"));
+    CHECK(keep.ok() && keep.str("/result/yawDeg") == "90" && keep.str("/result/on") == "Floor", "without yawDeg it keeps its facing");
+
+    for (const char* bad : {R"({"pos":[0,0,200000]})", R"({"pos":[-1e6,0,0]})"}) {
+        const Reply r(lw.s.call("player.teleport", bad));
+        CHECK(r.code() == "E_RANGE" && r.str("/error/data/0/path").rfind("/pos", 0) == 0, "a position past 100 km: E_RANGE at /pos");
+    }
+    const Reply yaw(lw.s.call("player.teleport", R"({"pos":[0,0,0],"yawDeg":400})"));
+    CHECK(yaw.code() == "E_RANGE" && yaw.str("/error/data/0/path") == "/yawDeg", "yawDeg outside [-360, 360]: E_RANGE");
+    CHECK(Reply(lw.s.call("player.teleport", R"({"yawDeg":0})")).code() == "E_COMMAND", "pos is required");
+    CHECK(Reply(lw.s.call("player.teleport", R"({"pos":[0,0,0],"entity":"5c0b1a7e00000002"})")).code() == "E_NOT_FOUND",
+          "the head is not a player");
+    LevelWorld empty;
+    CHECK(empty.load().ok() && Reply(empty.s.call("player.teleport", R"({"pos":[0,0,0]})")).code() == "E_STATE",
+          "no player: E_STATE");
+}
+
+static void sp6_t14_physics_contacts_lists_pairs_in_contact() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("physics.contacts")).code() == "E_STATE", "a world without the physics system: E_STATE");
+    }
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const Reply none(lw.s.call("physics.contacts"));
+    CHECK(none.ok() && none.json("/result") == R"({"contacts":[],"count":0})", "nothing stepped: no contact");
+    liftBlockoutCrates(lw);
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":120})")).ok(), "the crates fall and settle");
+    const Reply r(lw.s.call("physics.contacts"));
+    std::printf("\n      %s (%zu bytes)", r.json("/result").c_str(), r.json("/result").size());
+    CHECK(r.ok() && r.str("/result/count") == "2" && r.at("/result/contacts") && r.at("/result/contacts")->count == 2,
+          "two pairs: CrateA on the Floor, CrateB on CrateA");
+    const auto pair = [&](const Reply& x, int i) { return x.str("/result/contacts/" + std::to_string(i) + "/an") + "-" +
+                                                          x.str("/result/contacts/" + std::to_string(i) + "/bn"); };
+    const std::string p0 = pair(r, 0), p1 = pair(r, 1);
+    CHECK((p0 == "CrateA-Floor" || p0 == "Floor-CrateA" || p0 == "CrateA-CrateB" || p0 == "CrateB-CrateA") &&
+              (p1 == "CrateA-Floor" || p1 == "Floor-CrateA" || p1 == "CrateA-CrateB" || p1 == "CrateB-CrateA") && p0 != p1,
+          "named by their entities");
+    CHECK(r.str("/result/contacts/0/a") < r.str("/result/contacts/0/b") && r.str("/result/contacts/0/a") <= r.str("/result/contacts/1/a"),
+          "a is the lower id; sorted by a, then b");
+    const std::string since = r.str("/result/contacts/0/since");
+    CHECK(!since.empty() && std::stoi(since) >= 26 && std::stoi(since) <= 40 && r.at("/result/contacts/0/point") &&
+              r.at("/result/contacts/0/normal"),
+          "each with the step it began, its point and normal");
+
+    const Reply crateB(lw.s.call("physics.contacts", R"({"names":"CrateB"})"));
+    CHECK(crateB.code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
+    char bId[17] = {};
+    for (auto [e, n] : lw.w.registry().view<const Name>().each())
+        if (n.value == "CrateB") std::snprintf(bId, sizeof bId, "%016llx", static_cast<unsigned long long>(lw.w.idOf(e)));
+    const Reply onB(lw.s.call("physics.contacts", "{\"entity\":\"" + std::string(bId) + "\"}"));
+    CHECK(onB.ok() && onB.str("/result/count") == "1" && (pair(onB, 0) == "CrateA-CrateB" || pair(onB, 0) == "CrateB-CrateA"),
+          "entity: only CrateB's pair");
+    const Reply one(lw.s.call("physics.contacts", R"({"max":1})"));
+    CHECK(one.ok() && one.at("/result/contacts")->count == 1 && one.str("/result/count") == "2" && one.str("/result/more") == "1",
+          "max 1: one pair, count 2, one more");
+    for (const char* bad : {R"({"max":0})", R"({"max":65})"}) {
+        const Reply x(lw.s.call("physics.contacts", bad));
+        CHECK(x.code() == "E_RANGE" && x.str("/error/data/0/path") == "/max", "max outside 1..64: E_RANGE");
+    }
+    const Reply sun(lw.s.call("physics.contacts", R"({"entity":"5c0b10c000000003"})"));
+    CHECK(sun.code() == "E_NOT_FOUND" && sun.str("/error/data/0/path") == "/entity", "a light has no body: E_NOT_FOUND");
+}
+
+static void sp6_t14_restore_mid_fall_replays_to_the_same_hash() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    liftBlockoutCrates(lw);
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":15})")).ok() && Reply(lw.s.call("world.snapshot", R"({"name":"mid"})")).ok(),
+          "15 steps (the crates in the air), then a snapshot");
+    const Reply motion(lw.s.call("world.query", R"({"names":["CrateA"],"fields":["/BodyMotion/linear"]})"));
+    std::printf("\n      %s", motion.json("/result").c_str());
+    const std::string vy = motion.str("/result/entities/0/BodyMotion/linear/1");
+    CHECK(!vy.empty() && std::stod(vy) < -2.0, "world.query sees CrateA's BodyMotion: falling");
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":60})")).ok(), "60 steps");
+    const std::string first = Reply(lw.s.call("world.hash")).str("/result/hash");
+    CHECK(Reply(lw.s.call("world.restore", R"({"name":"mid"})")).ok() && Reply(lw.s.call("world.step", R"({"frames":60})")).ok(),
+          "restore, the same 60 steps");
+    const std::string second = Reply(lw.s.call("world.hash")).str("/result/hash");
+    std::printf("\n      %s / %s", first.c_str(), second.c_str());
+    CHECK(!first.empty() && first == second, "the same world.hash");
+}
+
+static void sp6_t14_restore_and_replay_a_walk_through_the_api() {
+    LevelWorld lw;
+    CHECK(lw.load(kPlayScene).ok() && Reply(lw.s.call("world.snapshot", R"({"name":"base"})")).ok(), "the play scene, snapshot");
+    const auto walk = [&] {
+        return Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":1},{"action":"jump","down":true}]})")).ok() &&
+               Reply(lw.s.call("world.step", R"({"frames":1})")).ok() &&
+               Reply(lw.s.call("input.inject", R"({"events":[{"action":"jump","down":false}]})")).ok() &&
+               Reply(lw.s.call("world.step", R"({"frames":40})")).ok() &&
+               Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":null}]})")).ok() &&
+               Reply(lw.s.call("world.step", R"({"frames":10})")).ok();
+    };
+    CHECK(walk(), "walk and jump");
+    const std::string first = Reply(lw.s.call("world.hash")).str("/result/hash");
+    const std::string pos1 = Reply(lw.s.call("player.info")).json("/result/pos");
+    CHECK(Reply(lw.s.call("world.restore", R"({"name":"base"})")).ok() && walk(), "restore, the same walk");
+    const std::string second = Reply(lw.s.call("world.hash")).str("/result/hash");
+    const std::string pos2 = Reply(lw.s.call("player.info")).json("/result/pos");
+    std::printf("\n      %s at %s / %s at %s", first.c_str(), pos1.c_str(), second.c_str(), pos2.c_str());
+    CHECK(!first.empty() && first == second && pos2 == pos1, "the same world.hash and the same place");
+}
+
 static void sp5_t08_level_reload_keeps_world_hash() {
     LevelWorld lw;
     CHECK(lw.load().ok(), "the blockout scene loads");
@@ -2289,6 +2466,11 @@ int main() {
     RUN(sp6_t11_events_params_refused);
     RUN(sp6_t11_physics_info_counts_steps);
     RUN(sp6_t13_footsteps_in_physics_events);
+    RUN(sp6_t14_player_info_after_load_and_walk);
+    RUN(sp6_t14_player_teleport_moves_and_stops);
+    RUN(sp6_t14_physics_contacts_lists_pairs_in_contact);
+    RUN(sp6_t14_restore_mid_fall_replays_to_the_same_hash);
+    RUN(sp6_t14_restore_and_replay_a_walk_through_the_api);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

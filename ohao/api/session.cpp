@@ -119,6 +119,16 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
          "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface "
          "(world.step runs physics), oldest first. Pass the reply's next as since to read on."},
+        {"physics.contacts", p.find<PhysicsContactsParams>(),
+         "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
+         "Body pairs touching now (resting ones included) and bodies inside triggers, by id; since is the step "
+         "they began in."},
+        {"player.info", p.find<PlayerInfoParams>(),
+         "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
+         "The player: its feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
+         "input.inject (move_forward, move_right, jump, sprint, mouse) and world.step. E_STATE without a player."},
+        {"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
+         "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."},
     };
 }
 
@@ -284,8 +294,11 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     }
     if (p.seed) s.world.seedIds(*p.seed);
     // A host with the level system expands the scene's levels now, so the next query sees
-    // their nodes; nothing else of sync runs (that is the next step's or render's).
+    // their nodes, and one with physics puts its players at their spawns, so a snapshot taken
+    // now holds the spawned world (a restore to it replays from the spawn); nothing else of
+    // sync runs (that is the next step's or render's).
     s.world.runSync("level");
+    s.world.runSync("player_spawn");
     s.scenePath = p.path.value_or("");
     s.sceneSeed = p.seed;
     const ecs::LoadReport& rep = r.value();
@@ -854,6 +867,8 @@ constexpr MethodEntry kDispatch[] = {
     {"render.stats", renderStats},   {"render.settings", renderSettings}, {"log.read", logRead},
     {"level.info", methodLevelInfo}, {"level.reload", methodLevelReload, true},
     {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo}, {"physics.events", methodPhysicsEvents},
+    {"physics.contacts", methodPhysicsContacts}, {"player.info", methodPlayerInfo},
+    {"player.teleport", methodPlayerTeleport, true},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

@@ -75,12 +75,17 @@ EXAMPLES = {
     "physics_raycast": {"from": [1.5, 0.5, 2.2], "dir": [0, -1, 0], "max": 2},
     "physics_info": {},
     "physics_events": {"since": 0, "max": 8},
+    "physics_contacts": {"max": 8},
+    "player_info": {"entity": "5c0b1a7e00000001"},
+    "player_teleport": {"pos": [-2.2, 0.3, -2], "yawDeg": 90},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests
 # replays recordings); the scene here has no level, so level_info and level_reload are
-# E_NOT_FOUND (the level session calls them on the blockout).
-CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay", "level_info", "level_reload")]
+# E_NOT_FOUND, and no player, so the player methods are E_STATE (the level and player
+# sessions call them on the blockout).
+CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay", "level_info", "level_reload",
+                                         "player_info", "player_teleport")]
 # Timings in results (level.info's loadMs, physics.info's buildMs) vary run to run: the goldens
 # hold them as 0, the rest of each line byte for byte.
 MASKED = (b"loadMs", b"buildMs")
