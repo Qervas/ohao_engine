@@ -78,8 +78,13 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     Transform, PlayerState), Jolt in
                     substeps <= 1/60 s, awake dynamic bodies ->
                     Transform (patch), the step's contact/trigger events
-                    (physicsEvents(world), the log physics.events reads)
+                    and the players' footsteps and landings (with the
+                    ground's Collider.surface) (physicsEvents(world), the
+                    log physics.events reads)
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
+after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
+  runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,
+                      <surface>_<n>.wav (assets/local/audio/footsteps, then assets/audio/footsteps)
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with

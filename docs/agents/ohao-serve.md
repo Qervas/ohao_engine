@@ -109,7 +109,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --seed 00000
 {"method":"physics.raycast","result":{"hit":false}}
 {"method":"physics.raycast","result":{"hit":true,"entity":"36125b5b252b59a1","name":"Ramp","point":[2.7,0.3,-1],"normal":[0,0.9806,0.1961],"dist":1.7}}
 {"method":"physics.raycast","error":{"code":"E_PARAMS","message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
-{"method":"world.hash","result":{"hash":"281300e97b39cc62","frame":0}}
+{"method":"world.hash","result":{"hash":"f5dc48183849f7d2","frame":0}}
 {"method":"level.reload","error":{"code":"E_NOT_FOUND","message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}
 ```
 
@@ -155,6 +155,11 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.step","result":{"frame":40}}
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,-4.0978193e-08,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
 ```
+
+The walk's footsteps are in `physics_events` as kind `footstep` (one every 0.75 m walked, 0.95 m
+sprinting) with the ground's `surface` (the blockout: `concrete` floor, `metal` step, platform
+and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `land`. Only `ohao_game`
+sounds them; a server's window stays silent.
 
 In a window (`ohao serve --window`, or `ohao_game` on the scene for a person to play) a realtime
 frame draws the player and moving bodies between their last two steps; in lockstep, and in

@@ -84,9 +84,11 @@
 
 ### Task 4: Footsteps (build step 4)
 
-- [ ] **Step 1: Write failing tests.** Footstep cadence (walk 0.75 m, sprint 0.95 m strides), surface from the ground body, `land` after a 0.3 m drop, none while still or airborne.
-- [ ] **Step 2: Implement.** `Collider.surface` and hint `surf`, player events in the log, the window host's footsteps system and sounds (generated/CC0, `assets/audio/footsteps/`).
-- [ ] **Step 3: Close.** Docs, gate, change record, commits.
+- As built: footsteps and landings are `PhysicsEvent` kinds in the physics log; the window host's player is `runtime::Footsteps` (`LiveConfig::footsteps`, on in `ohao_game`); the blockout carries `surf` hints; Somnabulate's footsteps can be staged into `assets/local/` for local listening (Frank's ruling); see the spec's "As built (step 4)".
+
+- [x] **Step 1: Write failing tests.** Footstep cadence (walk 0.75 m, sprint 0.95 m strides), surface from the ground body, `land` after a 0.3 m drop, none while still or airborne.
+- [x] **Step 2: Implement.** `Collider.surface` and hint `surf`, player events in the log, the window host's footsteps system and sounds (generated/CC0, `assets/audio/footsteps/`).
+- [x] **Step 3: Close.** Docs, gate, change record, commits.
 
 ### Task 5: Agent surface and replay (build step 5)
 

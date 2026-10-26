@@ -460,6 +460,38 @@ adds to "The camera" and "Interpolation":
   `Player` (`PlayerController`, defaults), its `Head` (`Camera` fov 75°, near 0.05 m, at 1.62 m)
   and `Controls` (WASD, Space jump, LeftShift sprint, Escape and the left button).
 
+## As built (step 4)
+
+Built 2026-10-26 (`docs/changes/2026-10-26-player-physics-step4.md`). Where it differs from or
+adds to "Footsteps":
+- **`Collider.surface`** is a string of at most 32 characters, empty by default (reported and
+  played as `default`) and `omitDefault`, so files and `world.hash` without it keep their
+  bytes. The hint `surf` (1 to 32 characters) sets it on the node's collider; on a node without
+  one it does nothing. The blockout's own hints: the Floor `concrete`; the Step, Platform, Ramp
+  and Pillar `metal`; the crates `wood` (rebuilt with Blender 5.2.2).
+- **Events** are `PhysicsEvent`s of kinds `Footstep` and `Land` in the same span and log as the
+  physics events, sorted after them within a step: `a` the player, `b` the ground's entity
+  (null when the ground has none), `point` the feet, `normal` the ground's, `speed` the
+  horizontal speed (a landing: the downward speed of the move that touched down), `surface`
+  the ground's. `physics.events` writes `surface` for them.
+- **Cadence.** The stride accumulates the ground distance actually covered each step (walking
+  into a wall makes none); a footstep fires on the step that completes 0.75 m (0.95 m while
+  `sprint` is held), keeping the remainder; touching down starts a new stride. A landing is
+  touching ground with the highest point since leaving it more than 0.3 m above; a teleport
+  restarts both.
+- **Sound.** `runtime::Footsteps` plays the log's footstep and land events since its last call,
+  once per frame in `LiveHost` with `LiveConfig::footsteps` (on in `ohao_game`, `--mute` turns
+  it off; off in `ohao serve --window`, so agents' hidden windows stay silent). Files are
+  `<surface>_<n>.wav`, the first folder holding a surface supplies all of its sounds, round
+  robin in number order, else `default`'s; folders `assets/local/audio/footsteps` then
+  `assets/audio/footsteps`. Volume: footsteps 0.25 + 0.1 × speed (walk 0.65, sprint 0.9), a
+  landing speed / 6, within [0.4, 1]; at the feet, heard from the scene's camera.
+- **The sounds** in `assets/audio/footsteps/` are ours, synthesized by
+  `tools/audio/make_footsteps.py` (fixed seed: `default`, `concrete`, `metal`, `wood`, four each).
+  **Frank's ruling (2026-10-26):** Somnabulate's footsteps may be used for local listening only:
+  `tools/audio/stage_somnabulate_footsteps.py` copies its wood and tile walks into git-ignored
+  `assets/local/audio/footsteps/` (as `wood` and `concrete`), never committed.
+
 ## Decisions record
 
 - Physics steps inside `World::simulate`, not in a host loop: one clock for every host,

@@ -285,6 +285,8 @@ type:
 | `vis` | `0` or `1` | `1` | `0`: collision only, no `MeshRenderer` |
 | `spawn` | a tag, ≤ 32 chars (`player`, `enemy`, …) | — | `SpawnPoint{tag}` |
 | `socket` | a name, ≤ 64 chars | — | `Socket{name}` |
+| `trig` | `0` or `1` | `0` | `Collider.trigger` (added by sub-project 6, step 1) |
+| `surf` | a surface, ≤ 32 chars (`concrete`, `metal`, `wood`, …) | — | `Collider.surface`, the footsteps' surface (sub-project 6, step 4) |
 
 - **Component passthrough.** A key that names a registered, saved component (`Light`,
   `Spin`, `MaterialOverride`, …), with an object value, becomes that component.
