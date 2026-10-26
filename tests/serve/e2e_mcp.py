@@ -10,7 +10,10 @@ the acceptance session of the spec's test 19:
   inject a 61-step flight -> step with watch -> capture inline and to a file -> frame
   stats (sub-project 2b, test 14) -> log read ->
   stop recording -> restore -> replay (every checkpoint matches) -> capture again ->
-  load the blockout level -> level.info -> a ray down at the player spawn -> physics.info
+  load the blockout level -> level.info -> a ray down at the player spawn -> physics.info ->
+  (sub-project 6) lift and drop the crates -> physics.events -> load the play scene ->
+  player.info -> look -> snapshot -> walk, turn and jump on injected input -> player.info,
+  footsteps -> look -> player.teleport -> physics.contacts -> restore -> the same walk
 
 and requires: the flight moves the camera as injected, the replay reaches the same world
 hash, the second capture is bit-identical to the first (the PNG files byte for byte, the
@@ -138,6 +141,70 @@ def camera_position(result):
     return entities[0].get("Transform", {}).get("position") if entities else None
 
 
+def walk(c):
+    """The play scene's walk (sub-project 6, step 5): a quarter turn left by the mouse, west along the
+    south of the room, a turn back, north up the lane at x -1, a jump. Returns the last step's reply."""
+    steps = [([{"mouse": [-900, 0]}], 1),
+             ([{"axis": "move_forward", "value": 1}], 35),
+             ([{"axis": "move_forward", "value": None}, {"mouse": [900, 0]}], 10),
+             ([{"axis": "move_forward", "value": 1}], 60),
+             ([{"action": "jump", "down": True}], 1),
+             ([{"action": "jump", "down": False}, {"axis": "move_forward", "value": None}], 60)]
+    last = None
+    for events, frames in steps:
+        _, _, err = c.tool("input_inject", {"events": events})
+        last, _, err2 = c.tool("world_step", {"frames": frames})
+        if err or err2:
+            return None
+    return last
+
+
+def walk_the_level(c):
+    """An agent walks the blockout as a player would (sub-project 6, step 5): it looks through the
+    player's eyes, walks with injected input, reads where it is and what it stood on, teleports,
+    and replays the walk from a snapshot to the same world hash."""
+    loaded, _, err = c.tool("scene_load", {"path": "assets/scenes/blockout_play.scene.json", "replace": True})
+    check(not err and loaded.get("entities", 0) > 0, "scene_load the play scene (replace)")
+    spawn, _, err = c.tool("player_info")
+    check(not err and spawn.get("pos") == [1.5, 0, 2.2] and spawn.get("ground") is True and spawn.get("on") == "Floor",
+          "player_info: at the spawn (1.5, 0, 2.2), standing on the Floor")
+    _, eyes0, err = c.tool("render_capture", {"inline": True, "path": OUT + "/walk_0.png"})
+    check(not err and eyes0 is not None, "render_capture: the view from the player's eyes at the spawn")
+    snap, _, err = c.tool("world_snapshot", {"name": "walk"})
+    check(not err and snap is not None, "world_snapshot before the walk")
+    events0 = ((c.tool("physics_events", {"since": 0, "max": 64})[0]) or {}).get("next", 0)
+
+    stepped = walk(c)
+    there, _, err = c.tool("player_info")
+    pos = (there or {}).get("pos", [9, 9, 9])
+    print("        walked to %s, yaw %s, %s footsteps" % (pos, (there or {}).get("yawDeg"), (there or {}).get("footsteps")))
+    check(stepped is not None and not err and -1.3 < pos[0] < -0.6 and pos[2] < -1.0 and abs(pos[1]) < 0.01 and
+          there.get("yawDeg") == 0 and there.get("ground") is True,
+          "walked west then north up the lane x -1 and jumped: on the floor at (%.2f, %.2f), facing -Z" % (pos[0], pos[2]))
+    events, _, err = c.tool("physics_events", {"since": events0, "max": 64})
+    kinds = [e.get("kind") for e in (events or {}).get("events", [])]
+    check(not err and kinds.count("footstep") >= 8 and kinds.count("land") == 1,
+          "physics_events: the walk's footsteps (%d) and the jump's landing" % kinds.count("footstep"))
+    _, eyes1, err = c.tool("render_capture", {"inline": True, "path": OUT + "/walk_1.png"})
+    check(not err and eyes1 is not None and eyes1.get("data") != eyes0.get("data"),
+          "render_capture: the view has changed with the walk")
+    hash1 = (c.tool("world_hash")[0] or {}).get("hash")
+
+    moved, _, err = c.tool("player_teleport", {"pos": [-2.2, 0.3, -2], "yawDeg": 90})
+    check(not err and moved.get("on") == "Step" and moved.get("surface") == "metal", "player_teleport onto the Step: metal")
+    contacts, _, err = c.tool("physics_contacts")
+    check(not err and contacts is not None and "count" in contacts, "physics_contacts answers (%s pairs)" % contacts.get("count"))
+
+    restored, _, err = c.tool("world_restore", {"name": "walk"})
+    check(not err and restored is not None, "world_restore to the spawn")
+    walk(c)
+    hash2 = (c.tool("world_hash")[0] or {}).get("hash")
+    _, eyes2, _ = c.tool("render_capture", {"inline": True, "path": OUT + "/walk_2.png"})
+    check(hash1 is not None and hash1 == hash2, "the same walk from the snapshot reaches the same world hash (%s)" % hash2)
+    check(eyes2 is not None and read_bytes(OUT + "/walk_1.png") == read_bytes(OUT + "/walk_2.png"),
+          "and the same view, byte for byte")
+
+
 def main():
     if not os.path.exists(OHAO):
         print("ohao is not built: " + OHAO)
@@ -156,9 +223,10 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 29 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+    check(len(names) == 32 and "render_capture" in names and "render_stats" in names and "render_settings" in names
           and "input_replay" in names and "level_info" in names and "physics_raycast" in names
-          and "physics_events" in names, "tools/list: 29 tools")
+          and "physics_events" in names and "physics_contacts" in names and "player_info" in names
+          and "player_teleport" in names, "tools/list: 32 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})
@@ -304,6 +372,8 @@ def main():
         after, _, err = c.tool("world_query", {"names": ["CrateA"], "fields": ["/Transform/position"]})
         y = ((after or {}).get("entities") or [{}])[0].get("Transform", {}).get("position", [0, 9, 0])[1]
         check(not err and abs(y - 0.3) < 0.01, "and its Transform rests at y %.4f (0.3, 1 cm)" % y)
+
+    walk_the_level(c)
 
     code, err_text = c.close()
     live = [l for l in err_text.splitlines() if "live host:" in l]

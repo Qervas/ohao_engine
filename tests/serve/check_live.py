@@ -20,6 +20,9 @@ check_live -- `ohao serve --window`, the live host, end to end (sub-project 4, s
            the host serves on; `--mode rt_offline --spp 24` presents 24 accumulating frames,
            stops, and starts again after a change; a realtime `--mode rt_realtime` window's
            capture is its next presented frame, and another mode is E_COMMAND.
+  sp6 14   walking the level: the play scene's player in a hidden window walks, turns by the
+           mouse and jumps on injected input; player.info says where; the same walk headless
+           reaches the same place, world.hash and picture from the player's eyes, bit for bit.
   test 15  (the window host's part, Windows) `ohao serve --window --pipe NAME`: a step and
            an inline capture over the pipe; the client's disconnect ends the session with
            exit 0 and a clean teardown.
@@ -439,6 +442,56 @@ def test_game_scene():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+def walk(s):
+    """The play scene's player walks the same way in any host (sub-project 6, step 5): a quarter
+    turn left by the mouse, west along the south of the room, a turn back, north up the lane at
+    x -1, a jump. Returns (player.info, world.hash) after it."""
+    for events, frames in [([{"mouse": [-900, 0]}], 1),
+                           ([{"axis": "move_forward", "value": 1}], 35),
+                           ([{"axis": "move_forward", "value": None}, {"mouse": [900, 0]}], 10),
+                           ([{"axis": "move_forward", "value": 1}], 60),
+                           ([{"action": "jump", "down": True}], 1),
+                           ([{"action": "jump", "down": False}, {"axis": "move_forward", "value": None}], 60)]:
+        s.call("input.inject", {"events": events})
+        s.call("world.step", {"frames": frames})
+    return result(s.call("player.info")) or {}, (result(s.call("world.hash")) or {}).get("hash")
+
+
+def test_walk():
+    print("sp6 test 14: walking the level in a hidden window")
+    out = out_dir("walk")
+    scene = "assets/scenes/blockout_play.scene.json"
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--out", out, "--seed", SEED, scene], "walk",
+               env=validation_env())
+    spawn = result(s.call("player.info")) or {}
+    check(spawn.get("pos") == [1.5, 0, 2.2] and spawn.get("ground") is True,
+          "the play scene's player stands at the spawn (player.info)")
+    eyes = result(s.call("render.capture", {"inline": True})) or {}
+    check(eyes.get("mimeType") == "image/jpeg", "the window shows the player's eyes")
+    info, hashed = walk(s)
+    pos = info.get("pos", [9, 9, 9])
+    check(-1.3 < pos[0] < -0.6 and pos[2] < -1.0 and abs(pos[1]) < 0.01 and info.get("yawDeg") == 0 and
+          info.get("footsteps", 0) >= 8,
+          "a walk on injected input: west, north, a jump; on the floor at (%.3f, %.3f), %s footsteps" %
+          (pos[0], pos[2], info.get("footsteps")))
+    shot = result(s.call("render.capture", {"path": out + "/walk_window.png", "post": []})) or {}
+    check(shot.get("deterministic") is True, "a lockstep capture after the walk")
+
+    h = Server([OHAO, "serve", "--out", out, "--seed", SEED, scene], "walk_headless")
+    info2, hashed2 = walk(h)
+    check(hashed is not None and hashed == hashed2 and info2.get("pos") == info.get("pos"),
+          "the same walk headless: the same place and world.hash (%s)" % hashed)
+    shot2 = result(h.call("render.capture", {"path": out + "/walk_headless.png", "post": [],
+                                              "width": shot.get("width", 960), "height": shot.get("height", 540)})) or {}
+    same = False
+    if shot2.get("path") and shot.get("path"):
+        same = pixels(out + "/walk_window.png") == pixels(out + "/walk_headless.png")
+    check(same, "and the same picture from the player's eyes, bit for bit")
+    h.close()
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+
 def test_window_pipe():
     print("test 15: the window host over the named pipe")
     out = out_dir("pipe")
@@ -496,6 +549,7 @@ def main():
     test_live()
     test_path_tracer_window()
     test_game_scene()
+    test_walk()
     if os.name == "nt":
         test_window_pipe()
     print("Results: %d/%d passed" % (passed, passed + failed))
