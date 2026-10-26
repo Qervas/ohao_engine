@@ -74,7 +74,9 @@ World::sync()
                   meshes and materials registered in the RenderScene   a renderer (addSyncBefore)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
-                  and the light list                                    a renderer (addSyncAfter)
+                  and the light list; setLights gives each point,      a renderer (addSyncAfter)
+                  spot and area light an emitter instance (its
+                  sphere or rectangle, seen by camera rays only)
 host: applySceneView (Camera, Environment -> renderer camera, HDRI)   runtime/scene_view_apply.hpp
 VulkanRenderer::render()
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit;

@@ -144,6 +144,7 @@ $ build/Release/restore_render_gpu_test.exe > /dev/null   # gpu
 $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ build/Release/cull_parity_gpu_test.exe > /dev/null   # gpu
 $ build/Release/light_cluster_gpu_test.exe > /dev/null   # gpu
+$ build/Release/light_emitter_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -181,7 +182,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   bench scenes' 1,000 point lights and sun, a wall 1,500 m out under a 3,000 m far plane, an
   orthographic camera); 1,000 lights packed together overflow and `render.stats` reports
   `lightsOverflow`; twin runs build identical lists; casters past the 8 shadow channels
-  render unshadowed (`--keep` leaves the compared PNGs in `build/`). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
+  render unshadowed (`--keep` leaves the compared PNGs in `build/`).
+  `light_emitter_gpu_test`: a point, a spot and an area light get one emitter mesh each, a
+  sun none; with the lights out of view the image with emitters is the image without them
+  (deferred with RT shadows and GI, deferred with CSM, path traced: byte for byte), with
+  them in view each emitter is bright and every other pixel the same (deferred: 1 LSB within
+  24 px of an emitter, its denoisers' neighbourhoods). `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size refused), log.read; a lockstep window capture equals a
   headless capture of the same world bit for bit (post off and on, and path-traced:
@@ -366,13 +372,24 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   strength, the same radiance `pt_closesthit` emits, added by lighting unlit. The normal
   target's alpha keeps only its luminance, to keep emitters out of SSS. A pipeline drawn
   in the G-buffer render pass needs `GBUFFER_COUNT - 1` blend states.
-- Light semantics differ between the renderers (open, see
-  `docs/changes/2026-10-26-emissive-hotspot.md`): a point light is `I/d²` in deferred
-  but a sphere of radiance `I/(4πr²)` (intensity `I/4`) in the path tracer; deferred cuts
-  every light at `range` (default 10 m), the path tracer ignores range; deferred's albedo
-  is base colour × vertex colour (squared on primitives, whose vertex colour is their
-  base colour), the path tracer's base colour × texture only. Compare deferred lighting
-  against the path tracer with that in mind.
+- Point and spot lights mean the same in both renderers (Frank's ruling, 2026-10-26): a
+  light of intensity `I` lights a surface `d` away with `I/d²`, windowed to exactly 0 at
+  its `range` (default 10 m) by `(1-(d/range)⁴)²`. The path tracer's sphere emitter has
+  radiance `I/(πr²)` (`includes/rt/pt_lights.glsl`); albedo is base colour × albedo texture
+  in both, never the vertex colour (primitives carry their colour as both). An area light
+  still differs: deferred lights it as a spot, the path tracer as its rectangle at
+  `I/(4πr²)`. What stays between them: one GI bounce against many, Burley against Lambert
+  at grazing angles (`docs/changes/2026-10-26-visible-lights.md` has the measurements).
+- Every point, spot and area light is also a mesh the camera sees (`RenderScene::setLights`
+  makes an emitter instance per light: a sphere of its radius, or its rectangle, with the
+  light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its
+  TLAS mask (`kTlasMaskEmitter`) is in only the path tracer's camera ray's mask
+  (`kRayMaskCamera`), so no shadow, GI, bounce or specular ray hits it (else the light would
+  shadow itself and be counted twice); no CSM cascade draws it (`kDrawEmitter`); the
+  G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
+  alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
+  `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
+  emitter pixel is to it. `setLightEmitters(false)` turns the meshes off (the lights stay).
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass

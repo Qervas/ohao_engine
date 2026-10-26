@@ -65,7 +65,19 @@ Emission itself has its own attachment, the sixth: the emissive texture's colour
 the material's emissive strength, exactly what the path tracer's hit emits, which
 lighting adds as is:
 
-{{cite shaders/core/deferred_lighting.frag "const vec3 emissive = texture(gBufferEmissive, inTexCoord).rgb;"}}
+{{cite shaders/core/deferred_lighting.frag "const vec3 emissive = emitted.rgb;"}}
+
+A light's emitter mesh (the sphere or rectangle the `RenderScene` draws for a point, spot
+or area light) writes its radiance there with alpha 1, from its instance rather than a
+material, black on its back side:
+
+{{cite shaders/core/gbuffer.frag "const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);"}}
+
+Lighting then outputs that radiance and nothing else, with no environment specular and a
+zero reflection weight, so SSR leaves the pixel alone; SSR also treats a march that lands
+on such a pixel as a miss, because the light's reflection is already its analytic specular:
+
+{{cite shaders/core/deferred_lighting.frag "if (emitted.a > 0.5) {"}}
 
 The slot used to hold all of emission as a luminance scalar, which lighting re-tinted
 with the albedo. On DamagedHelmet the cyan ring rendered as a dim grey (0.062 in linear

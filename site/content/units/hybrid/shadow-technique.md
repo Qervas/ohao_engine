@@ -361,7 +361,7 @@ peter-panning, and too small for a kilometre-scale scene.
 Sky pixels are detected by testing all four channels of the GBuffer position for
 exact zero:
 
-{{cite shaders/rt/shadow_trace.slang "if (all(position == float4(0.0)))"}}
+{{cite shaders/rt/shadow_trace.slang "if (all(position == float4(0.0)) || position.w < 0.0)"}}
 
 The fourth is not a coverage bit — GBuffer0 packs metallic there:
 
@@ -369,7 +369,9 @@ The fourth is not a coverage bit — GBuffer0 packs metallic there:
 
 The test works only because that attachment clears to (0,0,0,0); a non-metallic
 surface passing exactly through the world origin is classified as sky and comes out
-fully lit in every channel.
+fully lit in every channel. A negative metallic is a light's emitter mesh (the G-buffer
+writes -1 there): lit by nothing, it is skipped like sky, and its pixels no longer count
+toward `shadowLightsDropped`.
 
 A light a pixel did not trace — worth nothing there, or past the per-pixel cap —
 is lit in that pixel's output. For the first that is free: the light contributes
@@ -393,18 +395,18 @@ The product is indicator × cosine: a step-shaped second falloff riding on the
 cosine, darkening a band near the terminator by an amount no BRDF term accounts
 for.
 
-Finally the ray mask. The trace queries with `0x01`, named for static geometry
-only. The `RenderScene` builds every live, visible TLAS instance with mask
-`0xFF`, and a hidden or released slot with zero:
+Finally the ray mask. The trace queries with `kRayMaskScene`; the `RenderScene`
+builds every visible scene instance with `kTlasMaskScene`, a light's emitter mesh
+with `kTlasMaskEmitter`, and a hidden or released slot with zero:
 
-{{cite shaders/rt/shadow_trace.slang "static const uint kRayMaskStatic = 0x01u;"}}
+{{cite shaders/rt/shadow_trace.slang "q.TraceRayInline(scene, 0, kRayMaskScene, ray);"}}
 
-{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
 
-so the filter passes every visible instance and rejects exactly the ones that
-should cast nothing. It is a visibility switch, not a static-versus-dynamic
-distinction: the companion `MASK_ANIMATED = 0x00` in `rt_visibility.hpp` has no
-users at all, since skeletal geometry left the RT path.
+so the query sees every visible scene instance and neither hidden ones nor the
+light meshes. The second matters: a light's emitter mesh surrounds the light's
+own position, and a shadow ray aimed at the light would hit it and shadow every
+pixel the light reaches (hybrid/visibility).
 
 :::key
 Each channel is a boolean visibility average, not a shadow with radiance in it.

@@ -47,9 +47,9 @@ MODULE = {
         page(
             'rt-includes',
             'RT shader includes',
-            'pbr_unpack, rt_masks, NRD frontend used by raygen.',
-            files=['shaders/rt/includes/pbr_unpack.glsl', 'shaders/rt/includes/rt_masks.glsl', 'shaders/includes/rt/nrd_frontend.glsl', 'shaders/includes/pbr_unpack.glsl'],
-            design=['pbr_unpack: material row → albedo/metal/rough/F0 for hit and raygen.', 'rt_masks: visibility/anyhit mask bits.', 'nrd_frontend: YCoCg pack + norm hit-dist — wrong pack = magenta REBLUR.'],
+            'pbr_unpack and the NRD frontend used by raygen.',
+            files=['shaders/rt/includes/pbr_unpack.glsl', 'shaders/includes/rt/nrd_frontend.glsl', 'shaders/includes/pbr_unpack.glsl'],
+            design=['pbr_unpack: material row → albedo/metal/rough/F0 for hit and raygen.', 'nrd_frontend: YCoCg pack + norm hit-dist — wrong pack = magenta REBLUR.'],
         ),
         page(
             'compute',

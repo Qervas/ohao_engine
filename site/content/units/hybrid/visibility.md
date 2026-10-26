@@ -8,105 +8,58 @@ standard: v2
 ## Eight bits between a ray and a triangle
 
 Every TLAS instance in Vulkan carries an 8-bit `mask`, and every `traceRayEXT`
-call carries an 8-bit cull mask. When the two share no set bit the traverser
-drops the instance before any intersection test — no BLAS descent, no any-hit
-invocation, no shader cost. `rt_visibility.hpp` is the twenty-two lines that
-name those bits for OHAO, and it opens by stating the rule it is built on:
-
-{{cite ohao/render/rt/rt_visibility.hpp "Vulkan rule: ray intersects instance if (ray_mask & instance_mask) != 0."}}
-
-Writing that as a predicate makes the rest of this page checkable. Let $m_i$ be
-the instance mask that ends up in `VkAccelerationStructureInstanceKHR::mask`,
-and $m_r$ the cull mask passed as the third argument of `traceRayEXT`:
+call (or inline ray query) carries an 8-bit cull mask. When the two share no set
+bit the traverser drops the instance before any intersection test: no BLAS
+descent, no any-hit invocation, no shader cost. Let $m_i$ be the instance mask
+that ends up in `VkAccelerationStructureInstanceKHR::mask` and $m_r$ the ray's:
 
 $$\text{visible}(r,\,i) \iff (m_r \wedge m_i) \neq 0$$
 
-with $\wedge$ the bitwise AND over eight bits. The scheme the header sketches
-gives bit 0 the meaning "GI and shadow rays may see this," reserving bits 1–7
-for ray classes that do not exist yet (reflection, AO). A ray that wants only
-rigid geometry passes $m_r = \texttt{0x01}$; geometry it must not see clears
-bit 0.
+with $\wedge$ the bitwise AND over eight bits. OHAO names the bits once, in
+`shaders/shared/layout.json`, which `tools/gen_layout.py` turns into the C++
+header, the GLSL include and the Slang module, so the TLAS staging and every
+trace read the same numbers. Bit 0 is scene geometry, bit 1 a light's emitter
+mesh:
 
-Only the ray-mask half is hybrid-specific. Every `traceRayEXT` in
-`pt_raygen.rgen`, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` passes
-`0xFF`, so the path tracers never cull by mask; the RT shadow and RT GI traces
-(`rt/shadow_trace.slang` and `rt/gi_trace.slang`, whose inline ray queries take
-the same 8-bit mask) are the only rays in the tree that pass anything else. The
-instance-mask half is *shared*: the `RenderScene` stamps the mask into every
+{{cite shaders/shared/layout.json "TLAS instance mask of a light's emitter mesh: only camera rays see it"}}
+
+The instance-mask half is shared: the `RenderScene` stamps the mask into every
 instance of its one TLAS, and that same TLAS is what the deferred renderer's RT
 passes and the path tracer both trace.
 
 {{cite ohao/gpu/vulkan/render_dispatch.cpp "rtRenderer->setSceneBuffers(*m_renderScene);"}}
 
-A bad instance mask is therefore not contained to the hybrid passes.
+## Three instance masks, two ray masks
 
-## Two masks in use, five constants named
+Exactly three values reach a TLAS instance, chosen from its flags:
 
-Read the five constants and the scheme collapses. Static geometry is `0xFF`,
-animated geometry is `0x00`:
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
 
-{{cite ohao/render/rt/rt_visibility.hpp "MASK_ANIMATED       = 0x00;  // TEST"}}
+A hidden instance, or a released slot that keeps its place in the table, carries
+zero, which no ray mask intersects: it is a hole in the path-traced image and
+casts no RT shadow and gives no GI bounce, as the rasteriser, which draws only
+visible instances, agrees. A visible instance carries `kTlasMaskScene` (`0x01`),
+a light's emitter mesh `kTlasMaskEmitter` (`0x02`).
 
-`0x00` does not mean "invisible to GI rays." Under the predicate above it fails
-against *every* $m_r$, including the `0xFF` of the path tracer's primary trace —
-so in the *path-traced* image an instance carrying it is a hole in the frame,
-not a missing bounce. The `TEST:` prefix is the author flagging it as a
-diagnostic value. A production "animated" value would be something like `0xFE`:
-visible to camera rays, culled by anything that passes `0x01`.
+Two values reach a trace. The path tracer's camera ray passes `kRayMaskCamera`
+(`0x03`) and sees both; every other ray, the path tracer's light samples,
+bounces and specular chains and the deferred frame's RT shadow and GI queries,
+passes `kRayMaskScene`:
 
-The tree never assigns the named constants. Exactly two values reach a TLAS
-instance, chosen by visibility:
+{{cite shaders/rt/shadow_trace.slang "q.TraceRayInline(scene, 0, kRayMaskScene, ray);"}}
 
-{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
-
-A live, visible instance carries `0xFF`, bit-identical to `MASK_VISIBLE_ALL`; a
-hidden one, or a released slot that keeps its place in the table, carries zero.
-That is the `MASK_ANIMATED` behaviour used deliberately: a hidden instance is a
-hole in the path-traced image and casts no RT shadow and gives no GI bounce. The
-deferred frame agrees, because the rasteriser draws only the instances the
-`RenderScene` marks visible, so what the G-buffer shows and what the rays see
-cannot disagree.
-
-Consequently $\texttt{0x01} \wedge \texttt{0xFF} = \texttt{0x01} \neq 0$ for
-every visible instance in every scene the engine can currently build: the shadow
-and GI rays that carefully pass `RAY_MASK_STATIC` cull nothing that is on screen.
-The static/animated distinction the header sketches is unused — there is no
-skeletal geometry in the RT path to separate — while the visible/hidden
-distinction it does not name is the one that is live.
+That split is what makes an emitter mesh safe. The light it shows is the
+analytic light the shaders sample; a shadow ray towards that light would
+otherwise hit the mesh around it and the light would shadow itself, and a
+bounce that reached the mesh would add the light's radiance a second time on
+top of its samples. With the mask, the mesh is only ever what the camera sees.
 
 :::key
-`MASK_STATIC_ONLY` and `MASK_VISIBLE_ALL` are the same number, and neither is
-referenced by any code. Reintroducing animated RT geometry means giving those
-instances a mask with bit 0 clear in the `RenderScene`'s instance stage — not
-merely starting to write `MASK_ANIMATED`. Add the new instance class alone and
-the `0x01` rays still hit it.
+A new class of geometry that some rays must not see is a new bit in
+`layout.json`, set by the `RenderScene`'s instance stage, and cleared from the
+ray mask of the traces that must miss it. A constant nobody stamps into an
+instance selects nothing.
 :::
-
-## Four copies of one constant
-
-The header is C++; the cull mask is consumed in GLSL. There is a mirror file
-that promises to keep the two in step:
-
-{{cite shaders/rt/includes/rt_masks.glsl "// RT visibility masks — must match ohao/render/rt/rt_visibility.hpp"}}
-
-No shader includes it. Both consumers are Slang and import only the generated
-`shared.layout` module, which does not carry the mask, and nothing else in
-`shaders/` names `rt_masks.glsl` at all. Each writes the value down itself as a
-constant of its own, pointing at the C++ header in a comment — the GI trace:
-
-{{cite shaders/rt/gi_trace.slang "static const uint kRayMaskStatic = 0x01u;"}}
-
-and the shadow trace:
-
-{{cite shaders/rt/shadow_trace.slang "static const uint kRayMaskStatic = 0x01u;"}}
-
-So `0x01` is written down in four places — the C++ `RAY_MASK_STATIC`, the
-uncompiled `RT_RAY_MASK_STATIC` macro and the two traces' constants — with no
-compiler or build step linking them, and the one file
-whose whole job is to prevent drift is dead. The C++ side
-is no better off:
-`render_dispatch.cpp` includes `rt_visibility.hpp` and references no symbol
-from it, and nothing else includes it, so no code uses any of its constants.
 
 ## A trace that trusts the traversal
 
@@ -119,7 +72,7 @@ that instance's bounce albedo from the `RenderScene` instance table at binding 4
 
 There is no software re-implementation of the visibility test in it. Whether a
 ray may reach an instance is decided entirely in traversal — an `AND` of the
-trace's `0x01` against the instance's `0xFF` or zero — at no per-hit shader
+trace's `kRayMaskScene` against the instance's mask — at no per-hit shader
 cost, and a hit the traversal commits is always counted.
 
 The consequence is that the mask is the only switch. A hidden instance is removed
@@ -273,10 +226,10 @@ handover keeps the handle valid — it cannot fix the resolution.
 
 ## Contracts
 
-- Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r & m_i) != 0`. `MASK_ANIMATED = 0x00` is disjoint with *everything*, including the `0xFF` the path tracer's primary trace passes, so it removes geometry from the path-traced image outright — a debugging value, not the production animated mask.
+- Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r & m_i) != 0`. A hidden or released instance carries 0 and is invisible to every ray.
 - Instance masks are written once, by the `RenderScene`, into the one TLAS both the deferred renderer and the path tracer consume. A mask change is not scoped to the hybrid passes.
-- Visible instances carry `0xFF` and hidden ones zero, so `RAY_MASK_STATIC` culls only hidden geometry. Any future animated-geometry class must clear a bit in the *visible* mask, not just define a new constant.
-- `0x01` exists as the C++ `RAY_MASK_STATIC`, as the uncompiled `RT_RAY_MASK_STATIC` macro in `rt_masks.glsl`, and as `kRayMaskStatic` in both `rt/shadow_trace.slang` and `rt/gi_trace.slang` — four sites. Changing the header does not change the shaders.
+- Scene instances carry `kTlasMaskScene`, light emitter meshes `kTlasMaskEmitter`. Only the path tracer's camera ray passes `kRayMaskCamera`; every other trace passes `kRayMaskScene`, so no shadow, GI, bounce or specular ray ever hits an emitter mesh. A new trace that passed the camera mask would shadow lights by their own meshes and count them twice.
+- The masks live in `shaders/shared/layout.json` alone; the C++, GLSL and Slang copies are generated from it (`tools/gen_layout.py`).
 - `rt/gi_trace.slang` filters nothing: the cull is the ray mask against the instance mask alone, and a hit reads `giAlbedoPacked.rgb` of whatever slot traversal commits.
 - Technique outputs reach the lighting pass only through the per-frame handover in each RT pass's callback, and only when `rendered()` is true. The graph does not track this dependency; it holds because the RT passes are added before `lighting` and the graph records in insertion order.
 - `DeferredRenderer::onResize` must forward the new extent to every RT technique it owns. It forwards to both `m_rtGI` and `m_rtShadow`; a technique added without a forward keeps its `init()` extent while the dispatch grid follows the window.

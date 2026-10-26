@@ -134,8 +134,8 @@ That glob roots at `shaders/includes/` and matches only files one level deeper:
 evaluated standalone it yields thirty `.glsl` files, all in a
 `shaders/includes/<subdir>/`. Neither `shaders/rt/includes/*.glsl` nor the two
 `.glsl` files directly in `shaders/includes/` appear, so they are absent from the
-`DEPENDS` list of every compile command. Editing `pbr_unpack.glsl` or
-`rt_masks.glsl` alone rebuilds nothing.
+`DEPENDS` list of every compile command. Editing `pbr_unpack.glsl` alone rebuilds
+nothing.
 
 :::key
 Both hazards here are silent. Edit the wrong copy and the compiler never sees
@@ -229,40 +229,18 @@ raygens, and by nothing else:
 The default offline `PathTracer` raygen, `pt_raygen.rgen`, does not include it.
 NRD packing is a profile feature, not something the flagship offline tracer does.
 
-## rt_masks.glsl has no readers, and its ray masks pick nothing
+## The ray masks are not a header here
 
-The third header defines two ray-mask constants and pins them to their C++ twin:
+The masks a trace passes are generated constants, one source for C++, GLSL and Slang:
+`shaders/shared/layout.json` names the instance masks and the ray masks, and
+`tools/gen_layout.py` writes them into `shared/layout.glsl`, which the path tracer reaches
+through `includes/rt/pt_lights.glsl`:
 
-{{cite shaders/rt/includes/rt_masks.glsl "#define RT_RAY_MASK_STATIC   0x01"}}
+{{cite shaders/includes/rt/pt_lights.glsl "shared/layout.glsl"}}
 
-No shader in the tree includes it. The two that want a static-only ray mask,
-`rt/shadow_trace.slang` and `rt/gi_trace.slang`, are Slang and could not include
-this GLSL header anyway; each writes the value down itself as a constant of its own,
-`kRayMaskStatic`, with a comment naming the macro and the C++ header:
-
-{{cite shaders/rt/gi_trace.slang "static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)"}}
-
-The ray mask also selects nothing among live geometry. Vulkan intersects an instance
-when `rayMask & instanceMask` is non-zero, and the TLAS staging in `RenderScene` hands
-every visible instance 0xFF:
-
-{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
-
-`0x01 & 0xFF` is non-zero, so the "static only" ray hits every visible instance;
-`MASK_ANIMATED = 0x00` exists in `rt_visibility.hpp` and is never assigned, and the
-instance-mask constants there are no longer referenced by the TLAS code at all.
-
-What the mask does do is hide. An invisible or released instance gets mask 0, which no
-ray mask intersects, so it is removed from every trace — shadows, GI and the path
-tracer alike. A change of mask counts as a structural TLAS change, so toggling an
-instance's visibility rebuilds the acceleration structure instead of refitting it.
-There is no second, shader-side cull: the GI trace's ray query is forced opaque, and
-whatever triangle it commits is a bounce surface.
-
-{{cite shaders/rt/gi_trace.slang "if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)"}}
-
-Keep the header against the day a ray mask really needs to select a subset; do not
-read it as a description of what the tracer does today.
+Every trace in the three raygens passes `kRayMaskScene` except the camera ray, which
+passes `kRayMaskCamera` and is the only ray that sees a light's emitter mesh
+(hybrid/visibility has the scheme).
 
 ## Contracts
 

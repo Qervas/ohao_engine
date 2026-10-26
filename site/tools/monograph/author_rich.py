@@ -622,7 +622,7 @@ KNOWLEDGE: dict[str, dict] = {
         "workflow": ["threshold", "downsample", "upsample", "TAA", "tonemap"],
     },
     "shaders/rt-includes": {
-        "what": ["RT-specific includes: pbr_unpack, rt_masks, nrd_frontend."],
+        "what": ["RT-specific includes: pbr_unpack, nrd_frontend; the ray masks are shared layout constants."],
         "how": ["Included by raygen/hit; nrd_frontend is the YCoCg pack source of truth."],
         "why": "Wrong NRD pack is a one-line bug with a magenta symptom — keep pack code centralized.",
     },

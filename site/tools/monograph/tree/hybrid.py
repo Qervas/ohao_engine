@@ -26,8 +26,8 @@ MODULE = {
             'visibility',
             'Visibility helpers',
             'Shared RT visibility utilities.',
-            files=['ohao/render/rt/rt_visibility.hpp', 'ohao/render/rt/render_technique.hpp'],
-            design=['RenderTechnique base pattern: init / resize / render / cleanup for hybrid RT passes.', 'rt_visibility helpers for common ray flags and miss shaders.'],
+            files=['shaders/shared/layout.json', 'ohao/render/rt/render_technique.hpp'],
+            design=['RenderTechnique base pattern: init / resize / render / cleanup for hybrid RT passes.', 'TLAS instance and ray masks: scene geometry and light emitters, camera rays and every other ray.'],
         ),
     ],
 }

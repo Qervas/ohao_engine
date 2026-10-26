@@ -330,12 +330,14 @@ Sky pixels are detected by testing all four channels of the G-buffer position fo
 exact zero, in the trace and again in the upsample. The fourth channel is metallic,
 so a non-metallic surface passing exactly through the world origin gets no GI.
 
-{{cite shaders/rt/gi_trace.slang "if (all(position == float4(0.0)))   // sky: no indirect light"}}
+{{cite shaders/rt/gi_trace.slang "if (all(position == float4(0.0)) || position.w < 0.0)   // sky, or a light's emitter mesh: no indirect light"}}
 
-The trace queries with ray mask `0x01`, named for static geometry. The `RenderScene`
-gives every live, visible TLAS instance mask `0xFF` and a hidden or released one
-zero, so the mask keeps hidden geometry out of the bounce and distinguishes nothing
-else. The query is forced opaque, so an alpha-masked surface is a solid bounce
+A negative metallic is a light's emitter mesh, which the G-buffer writes as pure emission:
+nothing lights it, so it takes no GI either, and its guide reads as sky.
+
+The trace queries with ray mask `kRayMaskScene`: every visible scene instance, neither
+hidden ones (mask 0) nor light emitter meshes, so a bounce never reaches a light's mesh and
+adds the light a second time (hybrid/visibility). The query is forced opaque, so an alpha-masked surface is a solid bounce
 surface.
 
 {{cite shaders/rt/gi_trace.slang "RayQuery<RAY_FLAG_FORCE_OPAQUE> q;"}}

@@ -292,13 +292,12 @@ so their noise changes every frame and repeats exactly for the same seed and fra
 
 {{cite shaders/rt/shadow_trace.slang "return pcg(pc.seed.x ^ pcg(pc.seed.y ^ pcg(pixel.x ^ pcg(pixel.y))));"}}
 
-Both trace with ray mask `0x01` under comments claiming static-only visibility.
-That filter selects nothing among live geometry — every visible TLAS instance is
-tagged 0xFF, and invisible ones 0, which no ray mask intersects — so the GI trace
-has no static/animated distinction left to draw: whatever triangle its opaque query
-commits, it reads that instance's bounce albedo unconditionally.
+Both trace with ray mask `kRayMaskScene`: every visible scene instance, never a
+light's emitter mesh (camera rays only) nor a hidden instance (mask 0). Whatever
+triangle the GI trace's opaque query commits, it reads that instance's bounce albedo
+unconditionally; the mask is why that word never has to mean anything for an emitter.
 
-{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
 {{cite shaders/rt/gi_trace.slang "const uint slot = q.CommittedInstanceID();"}}
 
 ## The rest of shaders/rt, and which of it runs

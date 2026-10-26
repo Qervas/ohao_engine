@@ -64,9 +64,14 @@ Slots come from a free list that always returns the lowest released slot, and th
 
 `draws()` — the raster draw list, one entry per visible instance × submesh, in slot order — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates. Each `Draw` also records whether its submesh's material is one-sided, resolved through the instance's material list the way the shader resolves it, and the submesh's meshlets in the meshlet arena (first and count, from `MeshInfo::submeshMeshlets`).
 
-Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided flag, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
+Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided and emitter flags, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
 
-{{cite ohao/render/scene/render_scene.cpp "r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, d.firstMeshlet, d.meshletCount};"}}
+{{cite ohao/render/scene/render_scene.cpp "(d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u),"}}
+
+An emitter draw is a light's mesh, and the cascade lists leave it out: a light's sphere would
+otherwise cast the sun's shadow.
+
+{{cite shaders/cull/instances.slang "member = inFrustum && (d.info.y & kDrawEmitter) == 0u;"}}
 
 The box's spare `w` carries one more number, as a uint's bits: the draw's first *meshlet entry*, the meshlets of every draw before it. `meshletEntryCount()` is the total, what the mesh-shader fallback culls one entry a thread:
 
@@ -81,6 +86,21 @@ It is what GPU culling reads, and what the G-buffer and CSM vertex shaders index
 `setLights` stable-sorts the list by `order` and resolves it once into both consumers' formats. The raster array keeps up to 65,536 `LightData` entries in a host copy, which the deferred renderer's `LightClusters` uploads into each frame slot's light table, and a version (`rasterLightsVersion()`) that changes only when the array's bytes do, so an unchanged list is not uploaded again. The first eight shadow-casting raster lights get RT shadow channels; casters past them render unshadowed and are counted (`shadowCastersWithoutChannel()`). The RT buffer holds a 16-byte header — count, environment-map texture index, environment intensity — and up to 64 `GPULight`s. In both, emissive proxies are placed after all regular lights, so emissive models cannot crowd authored lights out of either cap. The RT bytes are compared with the previous upload and only re-uploaded when they differ.
 
 {{cite ohao/render/scene/render_scene.hpp "// Changes whenever rasterLights() does (clustered lighting uploads only then)."}}
+
+`setLights` also gives every point, spot and area light a body: an *emitter instance*, a
+unit sphere scaled to the light's radius or a unit quad mapped onto its rectangle, with the
+light's radiance in the instance's `giAlbedoPacked.rgb` and the `kInstanceEmitter` flag. A
+point or spot light's sphere shines with `I / (pi r^2)`, so from afar it is the source of
+intensity `I` that lights the scene; an area light's rectangle with the path tracer's own
+radiance for it:
+
+{{cite ohao/render/scene/light_table.cpp "e.radiance = d.color * (d.intensity / (kPi * r * r));"}}
+
+The instances are ordinary slots, reused in light order, so re-sending an unchanged list
+rewrites identical bytes and uploads nothing; `setLightEmitters(false)` removes them. The
+TLAS gives them their own mask, which only the path tracer's camera ray passes
+(hybrid/visibility): a mesh around a light would otherwise shadow it, and a bounce that
+reached it would count the light twice.
 
 ## Staging per frame slot, and the retire queue
 

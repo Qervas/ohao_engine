@@ -169,13 +169,15 @@ whose edge cross product points along +z, into the room. Every wall follows the 
 convention, so an interior ray already strikes the front face and back-face culling
 would never have dropped it.
 
-The mask is the other per-instance field, and it carries visibility:
+The mask is the other per-instance field: who may hit the instance.
 
-{{cite ohao/render/scene/render_scene.cpp "vi.mask = visible ? 0xFFu : 0u;"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
 
 An instance that is hidden, or whose slot was released, keeps its place in the TLAS
-with mask zero, so no ray (every trace passes `0xFF`) can hit it and the slot
-numbers of the instances around it stay valid.
+with mask zero, so no ray can hit it and the slot numbers of the instances around it
+stay valid. A light's emitter mesh is hit only by the camera ray, the one trace that
+passes `kRayMaskCamera`; the light samples, bounces and specular chains pass
+`kRayMaskScene` (hybrid/visibility).
 
 ## Everything is opaque, so the any-hit cannot run
 
