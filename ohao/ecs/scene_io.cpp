@@ -923,9 +923,11 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     const std::size_t nt = saved.size();
     std::vector<std::string> keys(nt);   // never resized: the tree references these keys
     std::vector<const void*> pools(nt);
+    std::vector<std::size_t> present;    // the types some entity has, in key order: only these are looked up per entity
     for (std::size_t i = 0; i < nt; ++i) {
         reflect::appendJsonString(keys[i], saved[i].type->name);
         pools[i] = saved[i].ops->pool(reg);
+        if (pools[i] && saved[i].ops->count(reg) > 0) present.push_back(i);
     }
     const auto* preservedPool = reg.storage<PreservedComponents>();
     const auto writes = [&](std::size_t i, entt::entity e) -> const void* {
@@ -937,8 +939,7 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
 
     // Header: every type some entity writes, and every preserved component, by name.
     std::map<std::string, uint32_t> header;
-    for (std::size_t i = 0; i < nt; ++i) {
-        if (!pools[i] || saved[i].ops->count(reg) == 0) continue;
+    for (const std::size_t i : present) {
         for (const Row& row : order)
             if (writes(i, row.e)) {
                 header[saved[i].type->name] = saved[i].type->version;
@@ -963,7 +964,7 @@ Result<std::string, Diagnostic> saveScene(const World& world, const TypeRegistry
     const auto build = [&](const Row& row) {
         tree.beginObject();
         tree.hex64("\"id\"", row.id);
-        for (std::size_t i = 0; i < nt; ++i) {
+        for (const std::size_t i : present) {
             const void* value = writes(i, row.e);
             if (!value) continue;
             const TypeInfo& t = *saved[i].type;
