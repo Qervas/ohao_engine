@@ -126,7 +126,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params) |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
-| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity |
+| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -217,10 +217,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 25 scenes: 8 examples, 17 through
+- **Render goldens** (`tests/golden/manifest.json`, 26 scenes: 8 examples, 18 through
   `ohao run`; seven at the deferred frame's `reference` quality; eight of them the Khronos
   validation pack, `assets/khronos/README.md`; two an area light, `area_light.scene.json`;
-  one the level pipeline's blockout, `blockout_room.scene.json`): `--only NAME`, `--update` after a deliberate change (look at what drifted
+  one the level pipeline's blockout, `blockout_room.scene.json`; one the play scene through
+  the player's head, `blockout_play.scene.json`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
   `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
@@ -525,6 +526,21 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     its `Transform` by anything but the step teleports it. It must be a root entity. A
     kinematic body moved during a step moves by `moveKinematic` (velocity, so it pushes what
     it meets) and stops after the step; moved outside a step it teleports.
+  - The camera: the player's head is its first child holding a `Camera` (the scene authors
+    it, `assets/scenes/blockout_play.scene.json`); the step writes it at `eyeHeight`, pitched
+    within ±89°. Players spawn in the `player_spawn` sync system (before `transform`), so a
+    play scene's first frame, before any step, is the spawn's. The view is the first *active*
+    camera (a level's own camera stays inactive beside the head).
+  - Render interpolation: `World::setRenderAlpha` (default 1; `LiveHost` sets the timeline's
+    alpha in realtime, 1 in lockstep and for lockstep captures). The `interpolate` sync system
+    (after `physics`, before `render_extract`) gives what the last step moved (players, heads,
+    dynamic bodies) and their subtrees a runtime `RenderPose` between the last two step poses,
+    which the render extract and the scene view's camera use; `Transform`, `WorldTransform`,
+    `world.hash` and saved files stay the step's. A placement (spawn, teleport, edit) is never
+    interpolated across. A capture syncs before it resolves the view.
+  - The window reports look input only from a captured cursor, as `MouseDelta`;
+    `ohao_game` on a scene with a `PlayerController` captures the mouse while focused,
+    `release_mouse` (Esc) frees it, `capture_mouse` (click) takes it back.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

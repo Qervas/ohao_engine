@@ -76,9 +76,11 @@
 
 ### Task 3: The camera (build step 3)
 
-- [ ] **Step 1: Write failing tests.** Pitch clamp ±89°, yaw turns the body, the head at `eyeHeight`, render interpolation leaves `world.hash` and saved files unchanged, `blockout_play.scene.json` loads with an active head camera.
-- [ ] **Step 2: Implement.** Head child and camera, look, interpolation (render-only matrices at `alpha`), the play scene, `ohao_game` play mode (mouse capture, Esc).
-- [ ] **Step 3: Close.** A golden of the play scene from the spawn (looked at), look shots from the player's eyes, docs, gate, change record, commits.
+- As built: the scene authors the head (first child with a `Camera`); players spawn in a `player_spawn` sync system; interpolation is the `interpolate` sync system writing a runtime `RenderPose`; see the spec's "As built (step 3)".
+
+- [x] **Step 1: Write failing tests.** Pitch clamp ±89°, yaw turns the body, the head at `eyeHeight`, render interpolation leaves `world.hash` and saved files unchanged, `blockout_play.scene.json` loads with an active head camera.
+- [x] **Step 2: Implement.** Head child and camera, look, interpolation (render-only matrices at `alpha`), the play scene, `ohao_game` play mode (mouse capture, Esc).
+- [x] **Step 3: Close.** A golden of the play scene from the spawn (looked at), look shots from the player's eyes, docs, gate, change record, commits.
 
 ### Task 4: Footsteps (build step 4)
 

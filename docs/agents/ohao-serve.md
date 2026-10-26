@@ -140,6 +140,26 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --script doc
 A 1 m fall lands at 4.57 m/s in step 28 (0.45 s), the 2 m one at 6.19 m/s in step 39. Resting
 crates sit up to 5 mm into what they rest on (Jolt's penetration slop) per contact.
 
+## Walk the level
+
+`assets/scenes/blockout_play.scene.json` is the blockout with a player: `render_capture` sees
+through its head, at the player spawn, from the first frame. Drive it with `input_inject` on
+its axes and actions (`move_forward`, `move_right`, `jump`, `sprint`, `look_x`, `look_y`; a
+look axis of 100 turns 10° a step) and `world_step`; read where it went with `world_query` on
+`Player` (`Transform`, `PlayerState`). Turn round, walk to the doorway, look:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/walk.jsonl
+{"method":"scene.load","result":{"entities":7}}
+{"method":"input.inject","result":{"queued":4,"firstStep":0,"lastStep":26}}
+{"method":"world.step","result":{"frame":40}}
+{"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,-4.0978193e-08,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
+```
+
+In a window (`ohao serve --window`, or `ohao_game` on the scene for a person to play) a realtime
+frame draws the player and moving bodies between their last two steps; in lockstep, and in
+every capture an agent asks for in lockstep, what is drawn is the last step exactly.
+
 ## Record and replay
 
 `input_record {path}` writes every event that reaches the input map with its step, plus a

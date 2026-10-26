@@ -67,7 +67,7 @@ Systems come in two phases, two vectors walked in order — no discovery, no dep
 {{cite ohao/ecs/world.cpp "addSimulate("spin", [](World& w, float dt) { updateSpin(w.registry(), dt); });"}}
 {{cite ohao/ecs/world.cpp "addSync("transform", [](World& w) { updateTransforms(w.registry()); });"}}
 {{cite ohao/ecs/instantiate.cpp "world.addSyncBefore("transform", "instantiate", [state](World&) { state->run(); });"}}
-{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });"}}
+{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter(interpolate ? "interpolate" : "transform", "render_extract", [state](World&) { state->run(); });"}}
 
 With everything installed, a step runs `spin` then `fly_controller` (after the World's `InputMap` has taken that step's events, `World::stepInput`), and a sync runs `instantiate`, `transform`, `render_extract`. Everything the simulate phase moved reaches the world matrices and the GPU at the next sync. Instantiate runs before `transform`, so an entity whose mesh it just built gets its world matrix — and with it a render slot — in that same sync. `World::update(dt)` is one `simulate(dt)` then one `sync()`, for tests and tools.
 

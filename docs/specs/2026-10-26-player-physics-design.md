@@ -418,6 +418,48 @@ adds to "The player":
 - **Agent surface.** `physics.info` reports `players` (non-zero only). New warnings:
   `W_PLAYER_NO_SPAWN`, `W_PLAYER_NO_CHARACTER`.
 
+## As built (step 3)
+
+Built 2026-10-26 (`docs/changes/2026-10-26-player-physics-step3.md`). Where it differs from or
+adds to "The camera" and "Interpolation":
+- **The head** is the player's first child (creation order) holding a `Camera`, else its first
+  child named `Head`. The scene authors it; nothing creates it (an entity made at runtime would
+  be saved and hashed). The physics step writes its local `Transform` (0, `eyeHeight`, 0) and
+  its pitch about +X, only when they change; a rotation written by anything else sets the
+  pitch (clamped to ±89°), as an edited player rotation sets the yaw. Without a head the pitch
+  stays in `PlayerState.pitchDeg`.
+- **Spawn in sync.** A new `player_spawn` sync system (right before `transform`) creates the
+  characters of new or changed `PlayerController`s, so a loaded play scene's first frame is
+  drawn from the spawn before any step; the spawn's pose is taken from the `Transform`s up its
+  chain (the level's nodes have no `WorldTransform` yet in that sync). A step still spawns what
+  was added in between.
+- **The view takes the first active camera** (`resolveSceneView`), not the first camera: a
+  level's own camera (inactive beside a player's head, the level system's rule) no longer hides
+  the head's.
+- **Interpolation** is a sync system `interpolate` (after `physics`, before `render_extract`)
+  driven by `World::renderAlpha` (default 1). The physics step records what it moved (players,
+  their heads, written-back dynamic bodies) as world poses before and after it; a placement
+  (spawn, teleport, an edit) records nothing, so nothing is drawn across it. Below 1 each mover
+  and its subtree get a runtime `RenderPose{world, prevWorld}` (the pose at alpha between the
+  two, `prevWorld` what the last frame drew) that the render extract and the scene view's camera
+  read in place of `WorldTransform`; at 1 (or when nothing moved) they are removed. `Transform`,
+  `WorldTransform`, `world.hash` and saved files are the step's. Lights are not interpolated.
+- **Hosts.** `LiveHost` sets the timeline's alpha in realtime and 1 in lockstep, paused and
+  for a lockstep capture (so a lockstep window still equals a headless capture); `ohao run` and
+  `ohao serve` headless never change it. The latency this adds to looking is at most one fixed
+  step (16.7 ms).
+- **The window's mouse.** Look input comes only from a captured cursor, as `MouseDelta` events
+  (the window used to report absolute positions always): a free cursor crossing the window turns
+  nothing, and capturing or freeing it is not a look. A fly camera still captures while `look`
+  is held.
+- **`ohao_game` play mode** is a scene with a `PlayerController`: the mouse is captured while the
+  window has focus; the scene's `release_mouse` action (Escape in `blockout_play.scene.json`)
+  frees it and `capture_mouse` (the left button) takes it back; closing the window quits (Esc no
+  longer quits in play mode).
+- **`blockout_play.scene.json`** is `blockout_room.scene.json` without its `MainCamera`, plus
+  `Player` (`PlayerController`, defaults), its `Head` (`Camera` fov 75°, near 0.05 m, at 1.62 m)
+  and `Controls` (WASD, Space jump, LeftShift sprint, Escape and the left button).
+
 ## Decisions record
 
 - Physics steps inside `World::simulate`, not in a host loop: one clock for every host,

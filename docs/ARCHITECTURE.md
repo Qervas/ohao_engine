@@ -84,16 +84,25 @@ once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
                   meshes and materials registered in the RenderScene   a renderer (addSyncBefore)
+  player_spawn    new or changed PlayerControllers -> characters, at  installed by installPhysics
+                  the player spawn (so a play scene's first frame is
+                  the spawn's view)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
   physics         dirty colliders -> Jolt bodies; moved entities move     installed by installPhysics
                   their bodies (no step: that is the simulate system)
+  interpolate     World::renderAlpha < 1: what the last step moved    installed by installPhysics
+                  (players, heads, dynamic bodies) and its subtree ->
+                  RenderPose between its last two step poses; at 1
+                  none (Transform, the hash, saved files untouched)
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
+                  (at RenderPose when there is one)
                   and the light list; setLights gives each point,      a renderer (addSyncAfter)
                   spot and area light an emitter instance (its
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
-host: applySceneView (Camera, Environment -> renderer camera, HDRI)   runtime/scene_view_apply.hpp
+host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
+      any; Environment -> renderer camera, HDRI)
 VulkanRenderer::render()
   RenderScene::recordUpdates   staged copies of changed table rows; TLAS build or refit;
                                the draw table (one DrawRecord an instance's submesh) when

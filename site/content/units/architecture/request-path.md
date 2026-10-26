@@ -70,10 +70,10 @@ systems in exactly the order they were added. The constructor adds the structura
 Instantiate, when installed, goes immediately before `transform`, so a mesh it builds
 gets its world matrix in the same sync. `TransformSystem` recomputes `WorldTransform`
 for every dirty entity and its descendants, parents first, and tags the movers
-`RenderDirty`. The render extract is installed straight after it and consumes those
-tags:
+`RenderDirty`. The render extract is installed straight after it (after render
+interpolation when the physics scene put one there first) and consumes those tags:
 
-{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter("transform", "render_extract", [state](World&) { state->run(); });"}}
+{{cite ohao/ecs/render_extract.cpp "world.addSyncAfter(interpolate ? "interpolate" : "transform", "render_extract", [state](World&) { state->run(); });"}}
 
 It releases the slots of vanished renderables, creates an instance for every
 renderable without one — in creation order, so slot numbers are deterministic —

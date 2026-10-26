@@ -1,0 +1,3 @@
+{"method":"input.inject","params":{"events":[{"step":0,"axis":"look_x","value":100},{"step":18,"axis":"look_x","value":0},{"step":18,"axis":"move_forward","value":1},{"step":26,"axis":"move_forward","value":0}]}}
+{"method":"world.step","params":{"frames":40}}
+{"method":"world.query","params":{"names":["Player"],"fields":["/Transform/position","/PlayerState"]}}
