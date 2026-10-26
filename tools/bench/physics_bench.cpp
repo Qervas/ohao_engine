@@ -13,8 +13,9 @@
 //   events_1k_ms           the events part of one step in which 1,000 spheres touch a floor at
 //                          once: draining, collapsing, sorting and logging 1,000 begins (the
 //                          scene's own timing of that part); median of N rounds.
-// boxes1k_step_ms (step 5) and player_step_ms (step 2) are reported as not measured until those
-// steps add them.
+// Step 2 adds player_step_ms (the player part of a step walking the blockout), step 5
+// boxes1k_step_ms (one step while 1,000 dynamic boxes fall and pile up in a walled pit, awake;
+// none may leave it).
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -36,6 +37,7 @@
 #include "bench_env.hpp"   // after the engine headers: it includes windows.h
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -249,12 +251,54 @@ int main(int argc, char** argv) {
     }
     if (!walked) failures.push_back("the player did not walk");
 
+    // 5. 1,000 boxes falling into a pit (step 5): a 6 x 6 m floor walled 3 m high, the boxes (0.4 m
+    // cubes, 10 x 10 x 10, 0.5 m apart) dropped from 0.5-5 m above it; every step after 60 of
+    // warm-up, 200, while they fall and pile up awake. None may leave the pit.
+    std::vector<double> boxes;
+    uint32_t boxesAwake = 0;
+    bool contained = true;
+    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+        ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+        ecs::World w;
+        w.seedIds(11);
+        ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+        auto& reg = w.registry();
+        const auto wall = [&](const char* name, glm::vec3 at, glm::vec3 half) {
+            const entt::entity e = w.create(name, ecs::Transform{at});
+            reg.emplace<ecs::Collider>(e, ecs::Collider{ecs::ColliderShape::Box, half});
+        };
+        wall("Floor", {0.0f, -0.5f, 0.0f}, {3.5f, 0.5f, 3.5f});
+        wall("WallN", {0.0f, 1.5f, -3.25f}, {3.5f, 1.5f, 0.25f});
+        wall("WallS", {0.0f, 1.5f, 3.25f}, {3.5f, 1.5f, 0.25f});
+        wall("WallW", {-3.25f, 1.5f, 0.0f}, {0.25f, 1.5f, 3.0f});
+        wall("WallE", {3.25f, 1.5f, 0.0f}, {0.25f, 1.5f, 3.0f});
+        std::vector<entt::entity> crates;
+        for (int i = 0; i < 1000; ++i) {
+            const glm::vec3 at(-2.25f + 0.5f * float(i % 10), 0.5f + 0.5f * float(i / 100), -2.25f + 0.5f * float((i / 10) % 10));
+            const entt::entity e = w.create("Box", ecs::Transform{at});
+            reg.emplace<ecs::Collider>(e, ecs::Collider{ecs::ColliderShape::Box, {0.2f, 0.2f, 0.2f}});
+            reg.emplace<ecs::RigidBody>(e, ecs::RigidBody{ecs::Motion::Dynamic, 5.0f});
+            crates.push_back(e);
+        }
+        for (int i = 0; i < 260; ++i) {
+            w.simulate(kDt);
+            w.sync();
+            if (r > 0 && i >= 60) boxes.push_back(physics.lastStepTiming().totalMs);
+        }
+        boxesAwake = physics.info().awake;
+        for (const entt::entity e : crates) {
+            const glm::vec3 p(reg.get<ecs::WorldTransform>(e).world[3]);
+            contained &= std::fabs(p.x) < 3.0f && std::fabs(p.z) < 3.0f && p.y > 0.0f;
+        }
+    }
+    if (!contained) failures.push_back("a box of the 1,000 left the pit");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
     const double cal1 = bench::calibrationMs();
 
-    const Stats sf = stats(fall), sr = stats(rest), se = stats(events), sp = stats(player);
+    const Stats sf = stats(fall), sr = stats(rest), se = stats(events), sp = stats(player), sb = stats(boxes);
     std::printf("physics_bench (%d rounds after a warm-up)\n", rounds);
     std::printf("  blockout_step_ms        median %8.4f   p95 %8.4f   (%zu steps)\n", sf.median, sf.p95, fall.size());
     const Verdict vf = judge(budgets, currentStep, "blockout_step_ms", sf.median, failures);
@@ -265,11 +309,15 @@ int main(int argc, char** argv) {
     const Verdict ve = judge(budgets, currentStep, "events_1k_ms", se.median, failures);
     std::printf("  player_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sp.median, sp.p95, player.size());
     const Verdict vp = judge(budgets, currentStep, "player_step_ms", sp.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp})
+    std::printf("  boxes1k_step_ms         median %8.4f   p95 %8.4f   (%zu steps; %u awake at the end)\n", sb.median, sb.p95,
+                boxes.size(), boxesAwake);
+    const Verdict vb = judge(budgets, currentStep, "boxes1k_step_ms", sb.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
-        if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms")
+        if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
+            name != "boxes1k_step_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -286,6 +334,8 @@ int main(int argc, char** argv) {
     out["blockout_rest_step_ms"] = {{"median", sr.median}, {"p95", sr.p95}, {"min", sr.min}, {"writes", restWrites}, {"verdict", vr.verdict}};
     out["events_1k_ms"] = {{"median", se.median}, {"p95", se.p95}, {"min", se.min}, {"begins", begins}, {"verdict", ve.verdict}};
     out["player_step_ms"] = {{"median", sp.median}, {"p95", sp.p95}, {"min", sp.min}, {"steps", player.size()}, {"verdict", vp.verdict}};
+    out["boxes1k_step_ms"] = {{"median", sb.median}, {"p95", sb.p95}, {"min", sb.min}, {"steps", boxes.size()},
+                              {"awakeAtEnd", boxesAwake}, {"verdict", vb.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -300,7 +350,7 @@ int main(int argc, char** argv) {
     }
     std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
 
-    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked;   // no machine excuses these
+    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked || !contained;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",
