@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "bedd2e0083307201",
+  "schemaHash": "4e572e20d5f5ded9",
   "units": [
     "m",
     "m/s",
@@ -168,6 +168,14 @@
     {
       "code": "W_PHYSICS_PARENT_SCALE",
       "meaning": "Warning: a dynamic body under a parent scaled unevenly; the pose physics writes back to its Transform is approximate (physics.info)."
+    },
+    {
+      "code": "W_PLAYER_NO_SPAWN",
+      "meaning": "Warning: a PlayerController in a world with no SpawnPoint tagged \"player\"; it starts where its entity is (physics.info)."
+    },
+    {
+      "code": "W_PLAYER_NO_CHARACTER",
+      "meaning": "Warning: the physics backend could not make a player's character; it does not move (physics.info)."
     }
   ],
   "methods": [],

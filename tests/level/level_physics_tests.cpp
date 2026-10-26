@@ -23,6 +23,7 @@
 #include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
 
 using namespace ohao::ecs;
+using ohao::InputEvent;
 
 namespace {
 
@@ -518,6 +519,256 @@ static void t10_event_log_cursor() {
     CHECK(tail.size() == 1 && tail[0].seq == 2, "since 1, max 1: event 2");
 }
 
+// ---- test 11: the player (sub-project 6 step 2) ----------------------------------------------------
+// docs/specs/2026-10-26-player-physics-design.md, "The player". A PlayerController entity walks the
+// blockout on injected input (the virtual device: axes forced, actions held), one World::update a
+// step as every host steps it. The blockout in engine axes: north is -Z (WallNorth's face at
+// z -3.0), the Step x -3..-1.5 z -3..-1 at 0.3 m, the Platform x -4..-3 at 0.6 m, the Ramp x 2..3.4
+// rising from z 0.5 (0 m) to z -2.5 (0.6 m), CrateA x 1.0..1.6 z -2.0..-1.4, SpawnPlayer at
+// (1.5, 0, 2.2) facing -Z. The lane x = -1.0 is clear from z 2.5 to the north wall.
+
+namespace {
+
+InputEvent axisSet(const char* name, float value) {
+    InputEvent e;
+    e.type = InputEvent::Type::AxisSet;
+    e.name = name;
+    e.value = value;
+    return e;
+}
+
+InputEvent actionEvent(const char* name, bool down) {
+    InputEvent e;
+    e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
+    e.name = name;
+    return e;
+}
+
+glm::quat yawRotation(float deg) { return glm::angleAxis(glm::radians(deg), glm::vec3(0.0f, 1.0f, 0.0f)); }
+
+// The blockout with a player, spawned (one step), then placed where a test wants it.
+struct PlayerFixture : Fixture {
+    entt::entity player{entt::null};
+    PlayerFixture() : Fixture(kBlockout) {
+        player = world.createWithId(0xb1a7e2, "Player");
+        world.registry().emplace<PlayerController>(player);
+        step();
+    }
+    // One world step with these input events (then none: actions stay held, axes stay set).
+    void step(std::vector<InputEvent> events = {}) {
+        world.stepInput(events);
+        world.update(kDt);
+    }
+    void steps(int n) {
+        for (int i = 0; i < n; ++i) step();
+    }
+    void place(glm::vec3 pos, float yawDeg) {
+        world.setTransform(player, Transform{pos, yawRotation(yawDeg)});
+        steps(10);   // settle onto the floor
+    }
+    [[nodiscard]] glm::vec3 pos() const { return world.registry().get<Transform>(player).position; }
+    [[nodiscard]] glm::vec3 facing() const { return world.registry().get<Transform>(player).rotation * glm::vec3(0, 0, -1); }
+};
+
+} // namespace
+
+static void t11_spawns_at_the_player_spawn_facing_its_yaw() {
+    PlayerFixture f;
+    const glm::vec3 p = f.pos();
+    std::printf("\n      spawned at (%.4f, %.4f, %.4f) facing (%.3f, %.3f, %.3f)", p.x, p.y, p.z, f.facing().x, f.facing().y,
+                f.facing().z);
+    CHECK(nearVec(p, {1.5f, 0.0f, 2.2f}, 0.01f), "at SpawnPlayer (1.5, 0, 2.2), feet on the floor (1 cm)");
+    CHECK(nearVec(f.facing(), {0.0f, 0.0f, -1.0f}, 1e-3f), "facing the spawn's -Z");
+    f.steps(5);
+    const auto* st = f.world.registry().try_get<PlayerState>(f.player);
+    CHECK(st && st->onGround && near(st->yawDeg, 0.0f, 0.01f), "standing, yaw 0");
+
+    // A spawn turned 90 degrees (facing -X), in a world without a level.
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    w.seedIds(3);
+    PhysicsScene& physics = installPhysics(w, files);
+    const entt::entity floor = w.create("Floor", Transform{{0.0f, -0.5f, 0.0f}});
+    w.registry().emplace<Collider>(floor, Collider{ColliderShape::Box, {10.0f, 0.5f, 10.0f}});
+    const entt::entity spawn = w.create("Spawn", Transform{{2.0f, 0.0f, -1.0f}, yawRotation(90.0f)});
+    w.registry().emplace<SpawnPoint>(spawn, SpawnPoint{"player"});
+    const entt::entity pl = w.create("Player");
+    w.registry().emplace<PlayerController>(pl);
+    w.stepInput({});
+    w.update(kDt);
+    const Transform& t = w.registry().get<Transform>(pl);
+    CHECK(nearVec(t.position, {2.0f, 0.0f, -1.0f}, 0.01f) && nearVec(t.rotation * glm::vec3(0, 0, -1), {-1.0f, 0.0f, 0.0f}, 1e-3f),
+          "a spawn yawed 90 degrees: the player faces -X");
+    CHECK(physics.warnings().empty(), "no warning with a spawn");
+
+    World bare;
+    PhysicsScene& bp = installPhysics(bare, files);
+    const entt::entity lone = bare.create("Player", Transform{{0.0f, 5.0f, 0.0f}});
+    bare.registry().emplace<PlayerController>(lone);
+    bare.stepInput({});
+    bare.update(kDt);
+    bool warned = false;
+    for (const PhysicsWarning& wn : bp.warnings()) warned |= wn.code == "W_PLAYER_NO_SPAWN" && wn.entity == lone;
+    CHECK(warned && bare.registry().get<Transform>(lone).position.y < 5.0f, "no spawn: W_PLAYER_NO_SPAWN, and it falls from where it is");
+}
+
+static void t11_walks_four_metres_in_sixty_steps() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(14);   // up to speed (40 m/s^2: 0.1 s)
+    const glm::vec3 a = f.pos();
+    f.steps(60);
+    const glm::vec3 b = f.pos();
+    std::printf("\n      60 steps: (%.4f, %.4f, %.4f) -> (%.4f, %.4f, %.4f), %.4f m", a.x, a.y, a.z, b.x, b.y, b.z, a.z - b.z);
+    CHECK(near(a.z - b.z, 4.0f, 0.05f), "forward at walk speed: 4.0 m in 60 steps (5 cm)");
+    CHECK(near(b.x, -1.0f, 0.01f) && near(b.y, 0.0f, 0.02f), "straight, on the floor");
+    const auto& st = f.world.registry().get<PlayerState>(f.player);
+    CHECK(near(glm::length(glm::vec2(st.velocity.x, st.velocity.z)), 4.0f, 0.05f) && st.onGround, "at 4 m/s, on the ground");
+
+    PlayerFixture g;   // the same input gives the same walk
+    g.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    g.step({axisSet("move_forward", 1.0f)});
+    g.steps(74);
+    CHECK(g.pos() == b, "two runs walk to the same place, bit for bit");
+}
+
+static void t11_the_north_wall_stops_the_player() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(150);
+    const glm::vec3 p = f.pos();
+    std::printf("\n      stopped at (%.4f, %.4f, %.4f)", p.x, p.y, p.z);
+    CHECK(p.z > -2.75f && p.z < -2.6f, "against WallNorth (its face z -3.0, the capsule's radius 0.3)");
+    CHECK(near(p.x, -1.0f, 0.02f), "without sliding sideways");
+}
+
+static void t11_climbs_the_step_and_the_platform() {
+    PlayerFixture f;
+    f.place({-0.8f, 0.0f, -2.0f}, 90.0f);   // facing -X, toward the Step
+    CHECK(nearVec(f.facing(), {-1.0f, 0.0f, 0.0f}, 1e-3f), "facing -X");
+    f.step({axisSet("move_forward", 1.0f)});
+    float onStep = -1.0f;
+    for (int i = 0; i < 150; ++i) {
+        f.step();
+        const glm::vec3 p = f.pos();
+        if (p.x < -2.0f && p.x > -2.6f) onStep = p.y;
+    }
+    const glm::vec3 p = f.pos();
+    std::printf("\n      on the Step y %.4f; ends at (%.4f, %.4f, %.4f)", onStep, p.x, p.y, p.z);
+    CHECK(near(onStep, 0.3f, 0.02f), "up the 0.3 m Step");
+    CHECK(near(p.y, 0.6f, 0.02f) && p.x > -3.75f && p.x < -3.6f, "up the Platform (0.6 m), against WallWest");
+}
+
+static void t11_climbs_the_ramp() {
+    PlayerFixture f;
+    f.place({2.7f, 0.0f, 1.5f}, 0.0f);
+    f.step({axisSet("move_forward", 1.0f)});
+    float y = -1.0f, z = 0.0f;
+    for (int i = 0; i < 90 && f.pos().z > -1.0f; ++i) {
+        f.step();
+        y = f.pos().y;
+        z = f.pos().z;
+    }
+    const float want = 0.6f * (0.5f - z) / 3.0f;
+    std::printf("\n      at z %.4f: y %.4f (the ramp %.4f)", z, y, want);
+    CHECK(z <= -1.0f && near(y, want, 0.03f), "up the ramp: on its surface (3 cm)");
+}
+
+static void t11_pushes_a_crate() {
+    PlayerFixture f;   // at the spawn, facing CrateA (x 1.0..1.6; the player's x 1.5 is off its centre)
+    const glm::vec3 crate0 = worldPos(f.world, f.named("CrateA"));
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(79);   // it reaches the crate's face at about step 52
+    const glm::vec3 crate1 = worldPos(f.world, f.named("CrateA")), p = f.pos();
+    std::printf("\n      step 80: CrateA (%.3f, %.3f, %.3f) -> (%.3f, %.3f, %.3f); player at z %.3f", crate0.x, crate0.y,
+                crate0.z, crate1.x, crate1.y, crate1.z, p.z);
+    CHECK(crate1.z < crate0.z - 0.2f, "walking into CrateA pushes it north (20 cm or more)");
+    CHECK(p.z > crate1.z + 0.55f, "with the player still behind it (the crate's half depth and the capsule's radius)");
+    CHECK(p.z < 2.2f - 3.3f + 0.05f, "and the player came through the crate's old place: it is pushing, not stopped at the face");
+}
+
+static void t11_jumps_one_point_two_two_metres() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 1.0f}, 0.0f);
+    const float ground = f.pos().y;
+    f.step({actionEvent("jump", true)});
+    f.step({actionEvent("jump", false)});
+    float apex = f.pos().y;
+    for (int i = 0; i < 80; ++i) {
+        f.step();
+        apex = std::max(apex, f.pos().y);
+    }
+    std::printf("\n      apex %.4f m above %.4f; lands at %.4f", apex - ground, ground, f.pos().y);
+    CHECK(near(apex - ground, 1.22f, 0.05f), "a jump rises 1.22 m (5 cm)");
+    CHECK(near(f.pos().y, ground, 0.01f) && f.world.registry().get<PlayerState>(f.player).onGround, "and lands");
+}
+
+static void t11_a_trigger_sees_the_player() {
+    PlayerFixture f;
+    const entt::entity zone = f.world.create("Zone", Transform{{-1.0f, 1.0f, 0.0f}});
+    Collider c{ColliderShape::Box, {0.5f, 1.0f, 0.5f}};
+    c.trigger = true;
+    f.world.registry().emplace<Collider>(zone, c);
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    std::vector<PhysicsEvent> ev;
+    f.step({axisSet("move_forward", 1.0f)});
+    for (int i = 0; i < 90; ++i) {
+        f.step();
+        const auto s = physicsEvents(f.world);
+        ev.insert(ev.end(), s.begin(), s.end());
+    }
+    const uint64_t z = f.world.idOf(zone), pl = f.world.idOf(f.player);
+    const PhysicsEvent* enter = findEvent(ev, Kind::TriggerEnter, z, pl);
+    const PhysicsEvent* exit = findEvent(ev, Kind::TriggerExit, z, pl);
+    CHECK(enter && enter->a == zone && enter->b == f.player, "trigger_enter (the zone, the player) through its inner body");
+    CHECK(exit && enter && exit->step > enter->step, "and trigger_exit once it walks out");
+    const auto hit = f.ray({-1.0f, 3.0f, f.pos().z}, {0.0f, -1.0f, 0.0f});
+    CHECK(hit && hit->entity == f.player, "a ray down onto the player hits it");
+}
+
+static void t11_an_edited_controller_keeps_the_player_where_it_is() {
+    PlayerFixture f;
+    f.place({-1.0f, 0.0f, 2.5f}, 90.0f);
+    const glm::vec3 before = f.pos();
+    f.world.registry().patch<PlayerController>(f.player, [](PlayerController& pc) { pc.walkSpeed = 2.0f; });
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(39);
+    const glm::vec3 p = f.pos();
+    std::printf("\n      from (%.3f, %.3f, %.3f) at 2 m/s for 40 steps: (%.3f, %.3f, %.3f)", before.x, before.y, before.z, p.x,
+                p.y, p.z);
+    CHECK(near(p.z, before.z, 0.01f) && p.x < before.x - 1.2f && p.x > before.x - 1.4f,
+          "walkSpeed 2 from where it stood, still facing -X: not back at the spawn (1.33 m in 40 steps, less the start)");
+}
+
+static void t11_kinematic_bodies_move_by_velocity() {
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    w.seedIds(5);
+    PhysicsScene& physics = installPhysics(w, files);
+    auto& reg = w.registry();
+    const entt::entity floor = w.create("Floor", Transform{{0.0f, -0.5f, 0.0f}});
+    reg.emplace<Collider>(floor, Collider{ColliderShape::Box, {20.0f, 0.5f, 20.0f}});
+    const entt::entity pusher = w.create("Pusher", Transform{{0.0f, 0.5f, 0.0f}});
+    reg.emplace<Collider>(pusher, Collider{ColliderShape::Box, {0.5f, 0.5f, 0.5f}});
+    reg.emplace<RigidBody>(pusher, RigidBody{Motion::Kinematic});
+    const entt::entity box = w.create("Box", Transform{{1.0f, 0.4f, 0.0f}});
+    reg.emplace<Collider>(box, Collider{ColliderShape::Box, {0.4f, 0.4f, 0.4f}});
+    reg.emplace<RigidBody>(box, RigidBody{Motion::Dynamic, 1.0f, 0.0f});
+    w.update(kDt);
+    for (int i = 1; i <= 90; ++i) {
+        w.setTransform(pusher, Transform{{i / 60.0f, 0.5f, 0.0f}});   // 1 m/s along +X
+        w.update(kDt);
+    }
+    const glm::vec3 bp = worldPos(w, box);
+    const glm::vec3 v = physics.backend().getLinearVelocity(physics.bodyOf(box));
+    std::printf("\n      pusher at x 1.5; box at x %.4f moving %.3f m/s", bp.x, v.x);
+    CHECK(bp.x > 2.3f && bp.x < 2.45f, "a kinematic body moved by its entity pushes a box ahead of it (no gap, no overlap)");
+    CHECK(near(v.x, 1.0f, 0.15f), "at its own speed: it moves by velocity, not by teleports");
+    CHECK(glm::length(physics.backend().getLinearVelocity(physics.bodyOf(pusher))) == 0.0f, "and stops when its entity stops");
+}
+
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
 // Every pixel is one ray against the physics scene (nothing is drawn from the meshes): a top-down
 // view (rays straight down, 2 cm apart) and a view from inside the east wall looking west. A hit
@@ -726,5 +977,15 @@ int main(int argc, char** argv) {
     RUN(t10_substeps);
     RUN(t10_runs_are_identical);
     RUN(t10_event_log_cursor);
+    RUN(t11_spawns_at_the_player_spawn_facing_its_yaw);
+    RUN(t11_walks_four_metres_in_sixty_steps);
+    RUN(t11_the_north_wall_stops_the_player);
+    RUN(t11_climbs_the_step_and_the_platform);
+    RUN(t11_climbs_the_ramp);
+    RUN(t11_pushes_a_crate);
+    RUN(t11_jumps_one_point_two_two_metres);
+    RUN(t11_a_trigger_sees_the_player);
+    RUN(t11_an_edited_controller_keeps_the_player_where_it_is);
+    RUN(t11_kinematic_bodies_move_by_velocity);
     return ohao::test::finish("level_physics_tests");
 }

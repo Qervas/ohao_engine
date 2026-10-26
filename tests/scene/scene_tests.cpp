@@ -310,6 +310,8 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<CollisionMesh>(r, checked);
     ok &= complete<PhysicsBody>(r, checked);
     ok &= complete<PhysicsMoved>(r, checked);
+    ok &= complete<PlayerController>(r, checked);
+    ok &= complete<PlayerState>(r, checked);
     CHECK(ok, "every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -327,13 +329,13 @@ static void t01_authoring_and_runtime_split() {
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
-                              "Collider", "RigidBody"}) {
+                              "Collider", "RigidBody", "PlayerController"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
                                 "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode",
-                                "ColliderPart", "CollisionMesh", "PhysicsBody"}) {
+                                "ColliderPart", "CollisionMesh", "PhysicsBody", "PlayerState"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");
     }
@@ -517,6 +519,20 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             if (rng() % 2 && !w.registry().all_of<RigidBody>(e))
                 w.registry().emplace<RigidBody>(e, RigidBody{static_cast<Motion>(rng() % 3),
                                                              std::max(0.001f, pickFloat(rng, true)), unit(), unit()});
+            if (rng() % 2) w.registry().patch<Collider>(e, [&](Collider& c) { c.trigger = rng() % 2 == 0; });
+        }
+        // Players (sub-project 6 step 2): data here too.
+        if (rng() % 2) {
+            const auto e = es[rng() % es.size()];
+            PlayerController pc;
+            pc.radius = 0.05f + unit();
+            pc.walkSpeed = 10.0f * unit();   // within the limits (load checks them)
+            pc.airControl = unit();
+            pc.jumpSpeed = 10.0f * unit();
+            pc.stepHeight = unit();
+            pc.jump = pickName(rng, 1);
+            pc.lookY = pickName(rng, 2);
+            if (!w.registry().all_of<PlayerController>(e)) w.registry().emplace<PlayerController>(e, pc);
         }
     }
 }

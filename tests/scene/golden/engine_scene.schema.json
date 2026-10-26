@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 058e0f5dadc6e377. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash a2735a10a7ed2698. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -41,6 +41,7 @@
         "Spin": { "$ref": "#/$defs/Spin" },
         "InputActions": { "$ref": "#/$defs/InputActions" },
         "FlyController": { "$ref": "#/$defs/FlyController" },
+        "PlayerController": { "$ref": "#/$defs/PlayerController" },
         "Level": { "$ref": "#/$defs/Level" },
         "SpawnPoint": { "$ref": "#/$defs/SpawnPoint" },
         "Socket": { "$ref": "#/$defs/Socket" },
@@ -735,6 +736,108 @@
         "fast": {
           "description": "Action that, while held, multiplies the speed",
           "default": "fast",
+          "allOf": [{ "type": "string" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlayerController": {
+      "description": "A first-person player: a capsule standing on the entity's position (its feet), turned about +Y. Once per fixed step, before bodies step, it walks from the named axes and actions (forward along its -Z, right along its +X), jumps, climbs steps and slopes, and pushes dynamic bodies. It spawns at the first SpawnPoint tagged \"player\"; triggers and rays see it.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "Capsule radius",
+          "default": 0.3,
+          "allOf": [{ "type": "number", "minimum": 0.05, "maximum": 2 }]
+        },
+        "height": {
+          "description": "Capsule height, feet to top",
+          "default": 1.8,
+          "allOf": [{ "type": "number", "minimum": 0.2, "maximum": 5 }]
+        },
+        "eyeHeight": {
+          "description": "The eyes above the feet (the first-person camera)",
+          "default": 1.62,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 5 }]
+        },
+        "walkSpeed": {
+          "description": "Speed at a move axis of 1",
+          "default": 4,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 50 }]
+        },
+        "sprintSpeed": {
+          "description": "Speed while `sprint` is held",
+          "default": 6.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 50 }]
+        },
+        "acceleration": {
+          "description": "How fast the horizontal velocity reaches the wanted one",
+          "default": 40,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
+        },
+        "airControl": {
+          "description": "Fraction of the acceleration while in the air",
+          "default": 0.3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "jumpSpeed": {
+          "description": "Upward speed of a jump (4.9 m/s: 1.22 m high)",
+          "default": 4.9,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 50 }]
+        },
+        "maxSlopeDeg": {
+          "description": "Steepest walkable ground; steeper is a wall",
+          "default": 45,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 89 }]
+        },
+        "stepHeight": {
+          "description": "Highest step climbed without jumping",
+          "default": 0.35,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 2 }]
+        },
+        "mass": {
+          "description": "Mass pressing on what it stands on",
+          "default": 80,
+          "allOf": [{ "type": "number", "minimum": 1, "maximum": 10000 }]
+        },
+        "pushForce": {
+          "description": "The most force it pushes a dynamic body with",
+          "default": 200,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+05 }]
+        },
+        "lookDegPerUnit": {
+          "description": "Turn per unit of mouse movement, or of a look axis's value in a step",
+          "default": 0.1,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 10 }]
+        },
+        "moveForward": {
+          "description": "Axis walking along the player's -Z",
+          "default": "move_forward",
+          "allOf": [{ "type": "string" }]
+        },
+        "moveRight": {
+          "description": "Axis walking along the player's +X",
+          "default": "move_right",
+          "allOf": [{ "type": "string" }]
+        },
+        "jump": {
+          "description": "Action that jumps when pressed on the ground",
+          "default": "jump",
+          "allOf": [{ "type": "string" }]
+        },
+        "sprint": {
+          "description": "Action that, while held, walks at sprintSpeed",
+          "default": "sprint",
+          "allOf": [{ "type": "string" }]
+        },
+        "lookX": {
+          "description": "Axis turning the player (yaw), added to the mouse's x",
+          "default": "look_x",
+          "allOf": [{ "type": "string" }]
+        },
+        "lookY": {
+          "description": "Axis tilting the view (pitch), added to the mouse's y",
+          "default": "look_y",
           "allOf": [{ "type": "string" }]
         }
       },
