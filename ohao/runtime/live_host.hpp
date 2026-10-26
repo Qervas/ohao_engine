@@ -28,6 +28,7 @@
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "runtime/clock.hpp"
+#include "runtime/footsteps.hpp"
 #include "runtime/window.hpp"
 
 #include <chrono>
@@ -71,6 +72,9 @@ struct LiveConfig {
     // after a change until `spp` samples have accumulated, so a human watches it converge.
     RenderMode mode{RenderMode::Deferred};
     int spp{64};
+    // Players' footsteps and landings played through the default audio device (runtime/
+    // footsteps.hpp). ohao_game turns it on; a server's window stays silent.
+    bool footsteps{false};
 };
 
 struct RunReport {
@@ -133,6 +137,7 @@ private:
     std::unique_ptr<ecs::FileAssetResolver> m_assets;
     std::unique_ptr<ecs::World> m_world;       // destroyed before the renderer (it holds RenderScene slots)
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
+    std::unique_ptr<Footsteps> m_footsteps;     // LiveConfig::footsteps
     Timeline m_time;
     FrameStats m_stats;
     std::vector<InputEvent> m_events;   // polled, not yet consumed by a step

@@ -72,6 +72,10 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);
     m_session->setHost(this);
+    if (cfg.footsteps) {
+        m_footsteps = std::make_unique<Footsteps>();
+        if (!m_footsteps->initialize(cfg.root)) m_footsteps.reset();   // no audio device: silent
+    }
     return true;
 }
 
@@ -125,6 +129,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             m_events.clear();
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
         }
+        if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
         // Realtime frames draw what the steps move between their last two poses; lockstep and
         // paused ones the last step's exactly (so a lockstep window matches a headless capture).
@@ -306,6 +311,7 @@ uint64_t LiveHost::shutdown() {
     const bool validated = m_renderer && m_renderer->validationEnabled();
     const uint64_t unrequested = unrequestedReadbacks();
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
+    m_footsteps.reset();
     m_session.reset();
     m_world.reset();   // releases its RenderScene slots while the RenderScene exists
     if (m_renderer) {

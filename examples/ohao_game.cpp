@@ -3,7 +3,7 @@
 // data: the scene's InputActions bind the keys, its FlyController flies the camera, its
 // Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
-//   ohao_game [scene] [--vsync] [--frames N] [--resize-at F] [--mode deferred|rt_realtime|rt_offline]
+//   ohao_game [scene] [--vsync] [--frames N] [--resize-at F] [--mode deferred|rt_realtime|rt_offline] [--mute]
 //
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
@@ -11,7 +11,8 @@
 //   play mode (a scene with a PlayerController, e.g. assets/scenes/blockout_play.scene.json):
 //                 the mouse is captured while the window has focus and looks; WASD walk,
 //                 Shift sprints, Space jumps; Esc (release_mouse) frees the mouse, a click
-//                 (capture_mouse) takes it again; close the window to quit
+//                 (capture_mouse) takes it again; close the window to quit. Footsteps sound
+//                 by surface (assets/audio/footsteps; --mute silences them)
 //
 // --frames N runs N frames and exits non-zero if any frame did an unrequested GPU->CPU
 // readback, or if validation was on (OHAO_VALIDATION=1) and reported anything. --resize-at
@@ -76,6 +77,7 @@ int main(int argc, char** argv) {
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;
+    cfg.footsteps = !argFlag(argc, argv, "--mute");   // a player's footsteps, through the default audio device
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") != 0) continue;
         const std::string m = argv[i + 1];
