@@ -345,7 +345,117 @@ static bool look(const std::string& dir) {
     return ok;
 }
 
+// ---- --drop DIR: the crates dropped from above, for before/after look shots ---------------------
+// Lifts and tilts the two crates, steps 120 frames of 1/60 s, and writes crates.txt (poses before,
+// at frame 40 and after, plus every contact that began) and drop_{before,mid,after}.jsonl: ohao run
+// scripts that put the crates at those poses and render the room, deferred. Nothing in the live
+// world steps physics yet (SP6), so the scripts set the crates' Transform from the bodies.
+
+namespace {
+struct ContactLog final : ohao::physics::backend::IContactListener {
+    std::vector<ohao::physics::backend::ContactEvent> begins;
+    int frame{0};
+    std::vector<int> frames;
+    void onContactBegin(const ohao::physics::backend::ContactEvent& e) override { begins.push_back(e); frames.push_back(frame); }
+    void onContactPersist(const ohao::physics::backend::ContactEvent&) override {}
+    void onContactEnd(const ohao::physics::backend::ContactEvent&) override {}
+};
+} // namespace
+
+static bool drop(const std::string& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    Fixture f(kBlockout);
+    auto& backend = f.physics->backend();
+    using ohao::physics::backend::BodyHandle;
+    std::vector<std::pair<BodyHandle, std::string>> names;
+    for (auto [e, n, ln] : f.world.registry().view<const Name, const LevelNode>().each()) {
+        const BodyHandle h = f.physics->bodyOf(e);
+        if (h != ohao::physics::backend::INVALID_BODY) names.emplace_back(h, n.value);
+    }
+    const auto nameOf = [&](BodyHandle h) -> std::string {
+        for (const auto& [b, n] : names) if (b == h) return n;
+        return "?";
+    };
+    struct Crate { const char* name; BodyHandle body; std::string id; glm::vec3 pos[4]; glm::quat rot[4]; };
+    Crate crates[2] = {{"CrateA", 0, {}, {}, {}}, {"CrateB", 0, {}, {}, {}}};
+    for (auto& c : crates) {
+        const entt::entity e = f.named(c.name);
+        c.body = f.physics->bodyOf(e);
+        char id[17];
+        std::snprintf(id, sizeof id, "%016llx", static_cast<unsigned long long>(f.world.idOf(e)));
+        c.id = id;
+        c.pos[0] = backend.getPosition(c.body);
+        c.rot[0] = backend.getRotation(c.body);
+    }
+    // The drop: CrateA 1.3 m up, tilted; CrateB higher still, off-centre and tilted the other way.
+    const glm::vec3 start[2] = {{1.3f, 1.6f, -1.7f}, {1.42f, 2.7f, -1.6f}};
+    const glm::quat tilt[2] = {glm::quat(glm::radians(glm::vec3(18.0f, 30.0f, 0.0f))),
+                               glm::quat(glm::radians(glm::vec3(0.0f, -20.0f, 35.0f)))};
+    for (int i = 0; i < 2; ++i) {
+        backend.setPosition(crates[i].body, start[i]);
+        backend.setRotation(crates[i].body, tilt[i]);
+        backend.setLinearVelocity(crates[i].body, glm::vec3(0.0f));
+        backend.setAngularVelocity(crates[i].body, glm::vec3(0.0f));
+        backend.setAwake(crates[i].body, true);
+        crates[i].pos[1] = backend.getPosition(crates[i].body);
+        crates[i].rot[1] = backend.getRotation(crates[i].body);
+    }
+    ContactLog log;
+    backend.setContactListener(&log);
+    for (int i = 1; i <= 120; ++i) {
+        log.frame = i;
+        backend.step(1.0f / 60.0f);
+        if (i == 40)
+            for (auto& c : crates) { c.pos[2] = backend.getPosition(c.body); c.rot[2] = backend.getRotation(c.body); }
+    }
+    backend.setContactListener(nullptr);
+    for (auto& c : crates) { c.pos[3] = backend.getPosition(c.body); c.rot[3] = backend.getRotation(c.body); }
+
+    bool ok = true;
+    FILE* t = std::fopen((dir + "/crates.txt").c_str(), "w");
+    if (!t) return false;
+    std::fprintf(t, "blockout_room: CrateA (20 kg box), CrateB (8 kg box); Jolt, 120 steps of 1/60 s\n\n");
+    std::fprintf(t, "authored (at rest already):\n");
+    for (const auto& c : crates) std::fprintf(t, "  %s %s (%.4f, %.4f, %.4f)\n", c.name, c.id.c_str(), c.pos[0].x, c.pos[0].y, c.pos[0].z);
+    const char* label[4] = {"authored", "before (dropped, frame 0)", "frame 40 (just after impact)", "after (frame 120)"};
+    for (int k = 1; k < 4; ++k) {
+        std::fprintf(t, "\n%s:\n", label[k]);
+        for (const auto& c : crates) {
+            const glm::vec3 up = c.rot[k] * glm::vec3(0, 1, 0);
+            std::fprintf(t, "  %s pos (%.4f, %.4f, %.4f) quat xyzw (%.4f, %.4f, %.4f, %.4f) tilt %.1f deg awake %d\n", c.name,
+                         c.pos[k].x, c.pos[k].y, c.pos[k].z, c.rot[k].x, c.rot[k].y, c.rot[k].z, c.rot[k].w,
+                         glm::degrees(std::acos(std::clamp(std::fabs(up.y), 0.0f, 1.0f))), k == 3 ? int(backend.isAwake(c.body)) : 1);
+        }
+    }
+    std::fprintf(t, "\ncontact begin events: %zu\n", log.begins.size());
+    for (std::size_t i = 0; i < log.begins.size(); ++i) {
+        const auto& e = log.begins[i];
+        std::fprintf(t, "  frame %3d  %s <-> %s  at (%.3f, %.3f, %.3f)  rel speed %.2f m/s\n", log.frames[i], nameOf(e.body1).c_str(),
+                     nameOf(e.body2).c_str(), e.contactPoint.x, e.contactPoint.y, e.contactPoint.z, glm::length(e.relativeVelocity));
+    }
+    ok &= std::fclose(t) == 0;
+    const char* shot[3] = {"before", "mid", "after"};
+    for (int k = 1; k < 4; ++k) {
+        FILE* s = std::fopen((dir + "/drop_" + shot[k - 1] + ".jsonl").c_str(), "w");
+        if (!s) return false;
+        std::fprintf(s, "{\"method\":\"world.apply\",\"params\":{\"commands\":[");
+        for (int i = 0; i < 2; ++i) {
+            const auto& c = crates[i];
+            std::fprintf(s, "%s{\"op\":\"field.set\",\"id\":\"%s\",\"path\":\"/Transform/position\",\"value\":[%.5f,%.5f,%.5f]},"
+                            "{\"op\":\"field.set\",\"id\":\"%s\",\"path\":\"/Transform/rotation\",\"value\":[%.6f,%.6f,%.6f,%.6f]}",
+                         i ? "," : "", c.id.c_str(), c.pos[k].x, c.pos[k].y, c.pos[k].z, c.id.c_str(), c.rot[k].x, c.rot[k].y,
+                         c.rot[k].z, c.rot[k].w);
+        }
+        std::fprintf(s, "]}}\n");
+        ok &= std::fclose(s) == 0;
+    }
+    std::printf("drop: %s %s/crates.txt, drop_{before,mid,after}.jsonl\n", ok ? "wrote" : "FAILED to write", dir.c_str());
+    return ok;
+}
+
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--drop") return drop(argv[2]) ? 0 : 1;
     if (argc == 3 && std::string(argv[1]) == "--look") return look(argv[2]) ? 0 : 1;
     std::printf("level_physics_tests\n");
     RUN(t06_fit_box_sphere_capsule_from_mesh);
