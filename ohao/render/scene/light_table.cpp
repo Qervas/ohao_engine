@@ -208,7 +208,10 @@ void LightTable::set(std::span<const LightDesc> lights) {
             gl.extra2 = glm::vec4(e2, area);
         } else {
             gl.extra = glm::vec4(0.0f, 0.0f, 0.0f, d.outerConeDeg);
-            gl.extra2 = glm::vec4(0.0f);
+            // Range and radius: the path tracer windows a point or spot light to zero at its
+            // range exactly as the raster table's direction.w does, and samples a spot's
+            // emitter at its radius (dirAndParam.w holds the inner cone there).
+            gl.extra2 = glm::vec4(d.range, d.radius, 0.0f, 0.0f);
         }
         gpuLights.push_back(gl);
     }
@@ -219,7 +222,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         gl.colorAndIntensity = glm::vec4(d.color, d.intensity);
         gl.dirAndParam = glm::vec4(0, -1, 0, d.radius);
         gl.extra = glm::vec4(0);
-        gl.extra2 = glm::vec4(0);
+        gl.extra2 = glm::vec4(d.radius * 10.0f, d.radius, 0.0f, 0.0f);   // the raster table's range
         gpuLights.push_back(gl);
     }
     if (gpuLights.size() > MAX_GPU_LIGHTS) {

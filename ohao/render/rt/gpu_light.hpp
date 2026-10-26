@@ -12,7 +12,8 @@ struct GPULight {
     glm::vec4 colorAndIntensity;  // rgb=color, w=intensity
     glm::vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius, spot:innerAngle)
     glm::vec4 extra;              // spot: w=outerAngle, area: xyz=edge1
-    glm::vec4 extra2;             // area: xyz=edge2, w=area
+    glm::vec4 extra2;             // sphere/spot: x=range (the contribution's hard zero, as the
+                                  // deferred frame's window), y=radius; area: xyz=edge2, w=area
 };
 OHAO_ASSERT_GPU_LAYOUT(GPULight, layout::kGPULightBytes);
 

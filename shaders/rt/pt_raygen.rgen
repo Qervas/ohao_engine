@@ -52,6 +52,7 @@ layout(push_constant) uniform PushConstants {
 #include "includes/rt/env_sampling.glsl"
 #include "includes/rt/sampler_api.glsl"
 #include "includes/material/ggx_aniso.glsl"
+#include "includes/rt/pt_lights.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
@@ -313,13 +314,14 @@ void main() {
             vec3 lightCenter = light.positionAndType.xyz;
             vec3 lightColor = light.colorAndIntensity.rgb;
             float lightIntensity = light.colorAndIntensity.w;
-            float lightRadius = light.dirAndParam.w;
+            float lightRadius = ptLightRadius(lightType, light.dirAndParam.w, light.extra2);
 
             vec3 lightDir = normalize(light.dirAndParam.xyz);
             float outerAngle = light.extra.w;
             float r = max(lightRadius, 0.01);
-            float area = 4.0 * 3.14159 * r * r;
+            float area = ptEmitterArea(lightType, r);
             vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+            Le *= ptRangeWindow(lightType, distance(hitPos, lightCenter), light.extra2.x);
             vec3 L;
             float shadowDist;
             float weight;
@@ -363,7 +365,6 @@ void main() {
                 float innerCos = cos(radians(light.dirAndParam.w));
                 float outerCos = cos(radians(outerAngle));
                 float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
-                spotFactor *= spotFactor;
 
                 float lightArea = 4.0 * 3.14159 * r * r;
                 weight = lightArea / (lightDist * lightDist) * spotFactor;
@@ -593,13 +594,14 @@ void main() {
                 vec3 lightCenter = light.positionAndType.xyz;
                 vec3 lightColor = light.colorAndIntensity.rgb;
                 float lightIntensity = light.colorAndIntensity.w;
-                float lightRadius = light.dirAndParam.w;
+                float lightRadius = ptLightRadius(lightType, light.dirAndParam.w, light.extra2);
 
                 vec3 lightDir = normalize(light.dirAndParam.xyz);
                 float outerAngle = light.extra.w;
                 float r = max(lightRadius, 0.01);
-                float area = 4.0 * 3.14159 * r * r;
+                float area = ptEmitterArea(lightType, r);
                 vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                Le *= ptRangeWindow(lightType, distance(bHitPos, lightCenter), light.extra2.x);
                 vec3 L;
                 float shadowDist;
                 float weight;
@@ -643,7 +645,6 @@ void main() {
                     float innerCos = cos(radians(light.dirAndParam.w));
                     float outerCos = cos(radians(outerAngle));
                     float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
-                    spotFactor *= spotFactor;
 
                     float lightArea = 4.0 * 3.14159 * r * r;
                     weight = lightArea / (lightDist * lightDist) * spotFactor;
@@ -892,13 +893,14 @@ void main() {
                 vec3 lightCenter = light.positionAndType.xyz;
                 vec3 lightColor = light.colorAndIntensity.rgb;
                 float lightIntensity = light.colorAndIntensity.w;
-                float lightRadius = light.dirAndParam.w;
+                float lightRadius = ptLightRadius(lightType, light.dirAndParam.w, light.extra2);
 
                 vec3 lightDir = normalize(light.dirAndParam.xyz);
                 float outerAngle = light.extra.w;
                 float r = max(lightRadius, 0.01);
-                float area = 4.0 * 3.14159 * r * r;
+                float area = ptEmitterArea(lightType, r);
                 vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                Le *= ptRangeWindow(lightType, distance(bHitPos, lightCenter), light.extra2.x);
                 vec3 L;
                 float shadowDist;
                 float weight;
@@ -942,7 +944,6 @@ void main() {
                     float innerCos = cos(radians(light.dirAndParam.w));
                     float outerCos = cos(radians(outerAngle));
                     float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
-                    spotFactor *= spotFactor;
 
                     float lightArea = 4.0 * 3.14159 * r * r;
                     weight = lightArea / (lightDist * lightDist) * spotFactor;
