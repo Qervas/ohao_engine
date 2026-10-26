@@ -67,9 +67,18 @@ uint64_t pairKey(pb::BodyHandle x, pb::BodyHandle y) {
     return (uint64_t(lo) << 32) | hi;
 }
 
-// Begins and enters sort before ends and exits within a step.
+// Begins and enters sort before ends and exits within a step; a player's footsteps and landings
+// after both.
 int kindRank(PhysicsEvent::Kind k) {
-    return k == PhysicsEvent::Kind::ContactBegin || k == PhysicsEvent::Kind::TriggerEnter ? 0 : 1;
+    switch (k) {
+        case PhysicsEvent::Kind::ContactBegin:
+        case PhysicsEvent::Kind::TriggerEnter: return 0;
+        case PhysicsEvent::Kind::ContactEnd:
+        case PhysicsEvent::Kind::TriggerExit: return 1;
+        case PhysicsEvent::Kind::Footstep:
+        case PhysicsEvent::Kind::Land: return 2;
+    }
+    return 3;
 }
 
 pb::MotionType toBackend(Motion m) {
@@ -203,7 +212,15 @@ struct PhysicsScene::Impl {
         entt::entity head{entt::null};
         glm::vec3 headPos{0.0f};
         glm::quat headRot{1, 0, 0, 0};
+        // Footsteps (spec "Footsteps"): ground walked since the last footstep, the highest point
+        // since it last stood on the ground, and whether it did at the last step's end.
+        float stride{0.0f};
+        float airTop{0.0f};
+        bool grounded{false};
     };
+    static constexpr float kWalkStride = 0.75f;     // m between footsteps walking
+    static constexpr float kSprintStride = 0.95f;   // and sprinting
+    static constexpr float kLandDrop = 0.3f;        // m fallen before touching the ground is a land
     ankerl::unordered_dense::map<entt::entity, PlayerRecord> players;
     std::vector<entt::entity> playersTouched;  // PlayerController added or changed
 
@@ -850,6 +867,7 @@ struct PhysicsScene::Impl {
         p.pitchDeg = oldPitch;
         p.written = pos;
         p.writtenRot = ci.rotation;
+        p.airTop = pos.y;
         movers.erase(e);   // placed, not moved: nothing to draw between
         writePlayer(e, p, pos, glm::vec3(0.0f), false, false);
         players[e] = p;
@@ -909,8 +927,27 @@ struct PhysicsScene::Impl {
             if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e);
     }
 
-    // Every player, once per step, before the bodies step (spec: the character moves first).
-    void updatePlayers(const InputMap& input, float dt) {
+    // A player's footstep or landing on the ground body `ground` (spec "Footsteps").
+    PhysicsEvent playerEvent(PhysicsEvent::Kind kind, entt::entity e, const pb::CharacterState& at, float speed) const {
+        PhysicsEvent ev;
+        ev.kind = kind;
+        ev.a = e;
+        ev.aId = idOf(e);
+        if (const auto it = entityOf.find(at.groundBody); at.groundBody != pb::INVALID_BODY && it != entityOf.end()) {
+            ev.b = it->second;
+            ev.bId = idOf(ev.b);
+        }
+        const auto* c = ev.b != entt::null && reg.valid(ev.b) ? reg.try_get<Collider>(ev.b) : nullptr;
+        ev.surface = c && !c->surface.empty() ? c->surface : std::string("default");
+        ev.point = at.position;
+        ev.normal = at.groundNormal;
+        ev.speed = speed;
+        return ev;
+    }
+
+    // Every player, once per step, before the bodies step (spec: the character moves first); its
+    // footsteps and landing go into `out`.
+    void updatePlayers(const InputMap& input, float dt, std::vector<PhysicsEvent>& out) {
         spawnPlayers();
         if (players.empty() || !(dt > 0.0f) || !backend) return;
         const glm::vec3 gravity = backend->getGravity();
@@ -926,6 +963,8 @@ struct PhysicsScene::Impl {
                 p.horizontal = glm::vec3(0.0f);
                 p.vy = 0.0f;
                 p.written = t.position;
+                p.airTop = t.position.y;
+                p.stride = 0.0f;
             }
             if (!sameRotation(t.rotation, p.writtenRot, 1e-4f)) {
                 p.yawDeg = yawOf(t.rotation);
@@ -978,6 +1017,26 @@ struct PhysicsScene::Impl {
             if (falling) p.vy = after.linearVelocity.y + 0.5f * gravity.y * dt;
             const bool onGround = after.groundState == pb::GroundState::ON_GROUND && p.vy < 0.1f;
             if (onGround) p.vy = 0.0f;
+
+            // Footsteps: one every stride walked on the ground; a land on touching it after a fall.
+            if (onGround) {
+                if (!p.grounded) {
+                    if (p.airTop - after.position.y > kLandDrop)
+                        out.push_back(playerEvent(PhysicsEvent::Kind::Land, e, after, std::max(0.0f, -vMove)));
+                    p.stride = 0.0f;   // a new stride starts where it lands
+                }
+                const glm::vec3 moved = after.position - before.position;
+                p.stride += glm::length(glm::vec2(moved.x, moved.z));
+                const float stride = input.held(pc.sprint) ? kSprintStride : kWalkStride;
+                if (p.stride >= stride) {
+                    p.stride -= stride;
+                    out.push_back(playerEvent(PhysicsEvent::Kind::Footstep, e, after, glm::length(p.horizontal)));
+                }
+                p.airTop = after.position.y;
+            } else {
+                p.airTop = std::max(p.airTop, after.position.y);
+            }
+            p.grounded = onGround;
             writePlayer(e, p, after.position, glm::vec3(p.horizontal.x, p.vy, p.horizontal.z), onGround, true);
         }
     }
@@ -1003,7 +1062,7 @@ struct PhysicsScene::Impl {
         stepDt = 0.0f;
         for (auto& [e, mv] : movers) mv.moved = false;
         const auto tp = Clock::now();
-        updatePlayers(input, dt);
+        updatePlayers(input, dt, fresh);
         auto t1 = Clock::now(), t2 = t1, t3 = t1;
         timing.playerMs = ms(tp, t1);
         if (backend && dt > 0.0f) {
@@ -1157,6 +1216,8 @@ const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept {
         case PhysicsEvent::Kind::ContactEnd: return "contact_end";
         case PhysicsEvent::Kind::TriggerEnter: return "trigger_enter";
         case PhysicsEvent::Kind::TriggerExit: return "trigger_exit";
+        case PhysicsEvent::Kind::Footstep: return "footstep";
+        case PhysicsEvent::Kind::Land: return "land";
     }
     return "?";
 }

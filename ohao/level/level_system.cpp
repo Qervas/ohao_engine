@@ -345,6 +345,7 @@ private:
             if (level.collision && col != ecs::ColliderShape::None) {
                 ecs::Collider c{col};
                 c.trigger = hints.trigger;
+                c.surface = hints.surface;
                 add(want, c);
             }
             if (level.collision && (hints.body || hints.mass || hints.fric || hints.rest)) {

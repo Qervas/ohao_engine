@@ -116,9 +116,9 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "{bodies, shapes, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}]}",
          "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."},
         {"physics.events", p.find<PhysicsEventsParams>(),
-         "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed}], next, dropped?}",
-         "Contacts begun/ended and triggers entered/exited (world.step runs physics), oldest first. Pass the reply's "
-         "next as since to read on."},
+         "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
+         "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface "
+         "(world.step runs physics), oldest first. Pass the reply's next as since to read on."},
     };
 }
 

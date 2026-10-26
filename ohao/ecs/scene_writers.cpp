@@ -272,6 +272,7 @@ void writeFields(const Collider& v, const Collider* omit, FieldSink& out) {
     if (!omit || !same(v.size, omit->size)) vec3(t, "\"size\"", v.size);
     if (!omit || !same(v.offset, omit->offset)) vec3(t, "\"offset\"", v.offset);
     if (!omit || v.trigger != omit->trigger) t.boolean("\"trigger\"", v.trigger);
+    if (!v.surface.empty()) t.string("\"surface\"", v.surface);   // omitDefault: files without it keep their bytes
 }
 
 void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out) {

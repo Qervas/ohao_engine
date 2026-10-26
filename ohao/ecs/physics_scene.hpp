@@ -83,17 +83,22 @@ struct PhysicsWarning {
     std::string message;
 };
 
-// Something physics decided in one step (spec "Events").
+// Something physics decided in one step (spec "Events"), or a player's footstep or landing
+// (spec "Footsteps").
 struct PhysicsEvent {
-    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit };
+    enum class Kind : uint8_t { ContactBegin, ContactEnd, TriggerEnter, TriggerExit, Footstep, Land };
     Kind kind{Kind::ContactBegin};
-    // Contacts: a has the lower entity id. Triggers: a is the trigger, b the body. The entities
+    // Contacts: a has the lower entity id. Triggers: a is the trigger, b the body. Footsteps and
+    // landings: a is the player, b the ground's entity (null when it has none). The entities
     // may be gone by the time the event is read; the ids are kept.
     entt::entity a{entt::null}, b{entt::null};
     uint64_t aId{0}, bId{0};
-    glm::vec3 point{0.0f};    // world; an end repeats its begin's
-    glm::vec3 normal{0.0f};   // world, from a toward b
-    float speed{0.0f};        // the relative normal speed at a begin or enter, m/s; 0 for an end or exit
+    glm::vec3 point{0.0f};    // world; an end repeats its begin's; a footstep's or landing's: the feet
+    glm::vec3 normal{0.0f};   // world, from a toward b; a footstep's or landing's: the ground's
+    // The relative normal speed at a begin or enter, m/s; 0 for an end or exit. A footstep: the
+    // player's horizontal speed; a landing: its downward speed on touching the ground.
+    float speed{0.0f};
+    std::string surface;      // footsteps and landings: the ground's Collider.surface ("default" if none)
     uint64_t step{0};         // the scene's step it was published in (1 is the first); a body removed between steps ends its pairs in the next
     uint64_t seq{0};          // its place in the log, from 1
 };

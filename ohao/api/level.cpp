@@ -373,6 +373,7 @@ bool methodPhysicsEvents(Session::Impl& s, const JsonDocument&, const JsonNode& 
         out.key("point"); writeVec3(out, e.point, 1e3f);
         out.key("normal"); writeVec3(out, e.normal, 1e3f);
         out.key("speed"); out.float32(std::round(e.speed * 100.0f) / 100.0f);
+        if (!e.surface.empty()) { out.key("surface"); out.string(utf8Prefix(e.surface, 32)); }
         out.endObject();
     }
     out.endArray();

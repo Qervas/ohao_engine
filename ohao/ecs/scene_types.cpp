@@ -255,7 +255,10 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("offset", &Collider::offset).doc("The shape's centre in the entity's frame, with an explicit size").unit("m")
         .field("trigger", &Collider::trigger)
             .doc("A trigger volume: reports bodies entering and leaving it (trigger_enter, trigger_exit) and blocks "
-                 "nothing");
+                 "nothing")
+        .field("surface", &Collider::surface)
+            .doc("What it is made of, for footsteps on it (concrete, metal, wood, ...); empty is \"default\"")
+            .maxLength(32).omitDefault();
     r.type<RigidBody>("RigidBody").component().host(makeComponentOps<RigidBody>())
         .doc("How the entity's body moves. Dynamic bodies are simulated at the world's fixed step and move their "
              "entity; static and kinematic ones follow it.")
