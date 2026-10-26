@@ -488,6 +488,10 @@ void main() {
         float roughness, metallic;
         unpackHitPbr(payload.attenuation, roughness, metallic);
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
+        // A near-mirror first hit (ptMirrorRoughness) takes its specular light from its specular
+        // ray, which sees light meshes, and none from light sampling: a light's reflection is its
+        // emitter mesh, at its radiance, as the deferred frame's sphere-light specular gives it.
+        const bool firstHitMirror = roughness < ptMirrorRoughness;
 
         // Phase 5 (DLSS-RR): overwrite normalAOV (binding 7) with WORLD-space
         // normal xyz in [-1,1] + perceptual roughness in w — the packed
@@ -613,6 +617,7 @@ void main() {
                     float G = (NdotL / (NdotL * (1.0 - k) + k))
                             * (NdotV / (NdotV * (1.0 - k) + k));
                     vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
+                    if (firstHitMirror) spec = vec3(0.0);   // its specular ray reflects the light's mesh
                     vec3 kD = (1.0 - F) * (1.0 - metallic);
                     vec3 diff = kD * albedo / 3.14159;
 
@@ -826,7 +831,8 @@ void main() {
 
         for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
             payload.hitDist = -1.0;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskScene, 0, 0, 0,
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT,
+                         bounce == 1u && firstHitMirror ? kRayMaskCamera : kRayMaskScene, 0, 0, 0,
                          specRayOrigin, 0.001, specRayDir, 10000.0, 0);
 
             // Sub-plan 3.D: accumulate specular hit-distance while the specular chain is unbroken

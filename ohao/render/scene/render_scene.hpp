@@ -52,6 +52,9 @@ public:
     void setLights(std::span<const LightDesc> lights);
     // Lights without their emitter meshes (true by default): the light still lights.
     void setLightEmitters(bool enabled);
+    // Where the camera is this frame: a spot light's mesh shines toward it by its cone
+    // (lightEmitter). Re-derives the spot emitters when it moves; nothing else depends on it.
+    void setViewerPosition(const glm::vec3& viewer);
     // The emitter instances' slots, in light order (one per light that has one).
     [[nodiscard]] std::span<const uint32_t> lightEmitterSlots() const;
     // Bindless index of the environment map, stamped into the RT light header.

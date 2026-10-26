@@ -25,7 +25,7 @@ void VulkanRenderer::setFrameLights() {
         // Intensity = PI compensates for PBR energy-conserving divide-by-PI in diffuse BRDF
         sun.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
         // Shadowed through RT shadow channel 0 (render_dispatch traces the sun into it).
-        sun.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f,
+        sun.params = glm::vec4(0.0f, 0.0f, 0.0f,
                                m_shadowsEnabled ? 0.0f : render::kShadowNever);
         sun.lightSpaceMatrix = glm::mat4(1.0f);
 

@@ -256,7 +256,7 @@ struct LightGpu
     float4 position;   // xyz position (world), w type: 0 directional, 1 point, 2 spot
     float4 direction;   // xyz direction, w range: point and spot light contributes nothing past it
     float4 color;   // xyz colour, w intensity
-    float4 params;   // x cos inner cone, y cos outer cone, z shadow-map index (-1 none), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
+    float4 params;   // x cos inner cone, y cos outer cone, z the sphere radius of a point or spot light with an emitter mesh (its specular is that sphere's reflection; 0 a point), w RT shadow channel (-1 never, 0..kShadowMaxLights-1)
 };
 
 // lights.cluster (compute/light_cluster.slang) push constants

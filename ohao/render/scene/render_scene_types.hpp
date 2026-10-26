@@ -25,7 +25,7 @@ struct LightData {
     alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     alignas(16) glm::vec4 direction;     // xyz = direction, w = range
     alignas(16) glm::vec4 color;         // xyz = color, w = intensity
-    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = shadow slot (kShadowNever, 0..7)
+    alignas(16) glm::vec4 params;        // x = cos innerCone, y = cos outerCone, z = sphere radius (0: a point), w = shadow slot (kShadowNever, 0..7)
     alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)
 };
 OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);

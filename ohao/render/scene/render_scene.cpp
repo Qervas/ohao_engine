@@ -74,6 +74,8 @@ struct RenderScene::Impl {
     MeshHandle emitterSphere{}, emitterQuad{};
     MaterialHandle emitterMaterial{};
     bool emitterAssetsReady{false};
+    std::optional<glm::vec3> viewer;   // setViewerPosition: spot emitters shine toward it
+    bool spotEmitters{false};          // a spot light has an emitter: they follow the viewer
 
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
@@ -337,9 +339,13 @@ struct RenderScene::Impl {
     // an unchanged light rewrites identical bytes and uploads nothing.
     void syncEmitters() {
         std::vector<LightEmitter> want;
+        spotEmitters = false;
         if (emittersEnabled)
             for (const LightDesc& d : lights.descs())
-                if (const auto e = lightEmitter(d)) want.push_back(*e);
+                if (const auto e = lightEmitter(d, viewer)) {
+                    want.push_back(*e);
+                    spotEmitters = spotEmitters || d.kind == LightKind::Spot;
+                }
         if (!want.empty() && !ensureEmitterAssets()) want.clear();
         const MaterialHandle mats[1] = {emitterMaterial};
         for (std::size_t i = 0; i < want.size(); ++i) {
@@ -509,6 +515,12 @@ void RenderScene::setLightEmitters(bool enabled) {
     if (!m->initialized || enabled == m->emittersEnabled) return;
     m->emittersEnabled = enabled;
     m->syncEmitters();
+}
+
+void RenderScene::setViewerPosition(const glm::vec3& viewer) {
+    if (!m->initialized || (m->viewer && *m->viewer == viewer)) return;
+    m->viewer = viewer;
+    if (m->spotEmitters) m->syncEmitters();
 }
 
 std::span<const uint32_t> RenderScene::lightEmitterSlots() const { return m->emitterSlots; }

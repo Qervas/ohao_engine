@@ -317,8 +317,13 @@ void main() {
         }
         if (shadow == 0.0) continue;   // fully occluded: adds exactly zero
 
-        // Cook-Torrance BRDF via include (height-correlated Smith-GGX)
-        Lo += evaluateBRDF(surface, L, radiance) * shadow;
+        // Cook-Torrance BRDF via include (height-correlated Smith-GGX). A point or spot light with
+        // an emitter mesh (params.z: its sphere's radius) reflects as that sphere: a mirror shows
+        // the mesh, at its radiance, wherever it is (on screen or not, SSR or not).
+        if (lightType != 0 && light.params.z > 0.0)
+            Lo += evaluateBRDFSphere(surface, light.position.xyz - fragPos, light.params.z, radiance) * shadow;
+        else
+            Lo += evaluateBRDF(surface, L, radiance) * shadow;
     }
 
     // SSAO (flag bit 1) darkens the ambient and environment terms only: not direct light,

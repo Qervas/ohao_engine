@@ -12,6 +12,13 @@
 // and no bounce adds the light a second time on top of these analytic samples.
 #include "shared/layout.glsl"
 
+// A first hit smoother than this is a mirror: its specular light comes from its specular ray,
+// which alone may hit a light's mesh (kRayMaskCamera) and returns the mesh's radiance, and its
+// light samples carry no GGX specular. A lobe this narrow is all but never reached by sampling a
+// light's surface, so without this a mirror showed no reflection of a light at all; with it the
+// reflection is the mesh, once.
+const float ptMirrorRoughness = 0.05;
+
 // The emitter's radius: a sphere keeps it in dirAndParam.w, a spot in extra2.y (its
 // dirAndParam.w is the inner cone angle).
 float ptLightRadius(float type, float dirParam, vec4 extra2) {

@@ -124,10 +124,11 @@ float GGX_E(float cosTheta, float roughness) {
     return clamp(e, 0.0, 1.0);
 }
 
-vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
+// The core of evaluateBRDF and evaluateBRDFSphere: diffuse toward L (normalized), the given
+// single-scatter specular (per NdotL) and its Fresnel F.
+vec3 evaluateBRDFCore(BRDFSurface surface, vec3 L, vec3 specular, vec3 F, vec3 lightColor) {
     vec3 N = surface.normal;
     vec3 V = surface.viewDir;
-    vec3 L = normalize(lightDir);
 
     float NdotL = max(dot(N, L), 0.0);
 
@@ -137,10 +138,6 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
     }
 
     float NdotV = max(dot(N, V), EPSILON);
-
-    // Single-scatter specular BRDF
-    vec3 F;
-    vec3 specular = evaluateSpecularBRDF(N, V, L, surface.roughness, surface.F0, F);
 
     // Energy conservation: diffuse gets what specular doesn't reflect
     vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);
@@ -167,6 +164,37 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
 
     // Combined BRDF * cosTheta * lightColor
     return (diffuse + specular) * lightColor * NdotL;
+}
+
+vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
+    const vec3 L = normalize(lightDir);
+    // Single-scatter specular BRDF
+    vec3 F;
+    const vec3 specular = evaluateSpecularBRDF(surface.normal, surface.viewDir, L, surface.roughness, surface.F0, F);
+    return evaluateBRDFCore(surface, L, specular, F, lightColor);
+}
+
+// A sphere light of radius `radius` whose centre is `toLight` away (unnormalized): diffuse from
+// the centre; specular from the representative point, the sphere's closest point to the
+// reflection ray, with the GGX lobe widened by the sphere's angular size, a' = a + radius / (2 d)
+// (Karis 2013, "Real Shading in Unreal Engine 4"). The lobe is evaluated at a' itself: its peak
+// 1 / (pi a'^2) is the one Karis's D(a) * (a / a')^2 normalisation aims at, and D(a) at a mirror's
+// a (~0.002) underflows distributionGGX's EPSILON floor. On a mirror that is the sphere's
+// reflection at its radiance I / (pi r^2) times F: the light's emitter mesh, as the path
+// tracer's specular ray sees it.
+vec3 evaluateBRDFSphere(BRDFSurface surface, vec3 toLight, float radius, vec3 lightColor) {
+    const vec3 L = normalize(toLight);
+    const vec3 R = reflect(-surface.viewDir, surface.normal);
+    const vec3 centerToRay = dot(toLight, R) * R - toLight;
+    const vec3 closest = toLight + centerToRay * clamp(radius / max(length(centerToRay), EPSILON), 0.0, 1.0);
+    const float a = surface.roughness * surface.roughness;
+    const float aSphere = clamp(a + radius / (2.0 * length(toLight)), 0.0, 1.0);
+    const vec3 specL = normalize(closest);
+    vec3 F;
+    vec3 specular = evaluateSpecularBRDF(surface.normal, surface.viewDir, specL, sqrt(aSphere), surface.F0, F);
+    // The core multiplies by the centre's cosine; the lobe's is the representative point's.
+    specular *= max(dot(surface.normal, specL), 0.0) / max(dot(surface.normal, L), EPSILON);
+    return evaluateBRDFCore(surface, L, specular, F, lightColor);
 }
 
 // =============================================================================

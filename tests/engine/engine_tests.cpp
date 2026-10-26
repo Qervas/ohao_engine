@@ -2927,19 +2927,23 @@ static void runRenderSceneTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("raster shadow map goes to the first point or spot light (legacy rule)");
+    // params.z is a point or spot light's sphere radius: its specular is the reflection of its
+    // emitter mesh (core/deferred_lighting.frag's evaluateBRDFSphere).
+    TEST_BEGIN("raster lights carry their sphere radius, sorted by order");
     {
         ohao::VulkanRenderer r(64, 64);
         if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
         RenderScene& rs = r.renderScene();
-        LightDesc point{}; point.kind = LightKind::Point; point.order = 0;
+        LightDesc point{}; point.kind = LightKind::Point; point.order = 0; point.radius = 0.25f;
         LightDesc sun{};   sun.kind = LightKind::Directional; sun.order = 1;
-        const LightDesc lights[] = {sun, point};   // `order` sorts them: point first
+        LightDesc bare{};  bare.kind = LightKind::Point; bare.order = 2; bare.radius = 0.0f;
+        const LightDesc lights[] = {sun, bare, point};   // `order` sorts them: point, sun, bare
         rs.setLights(lights);
         const auto raster = rs.rasterLights();
-        EXPECT_EQ(raster.size(), size_t{2}, "two raster lights");
-        EXPECT(raster[0].position.w == 1.0f && raster[0].params.z == 0.0f, "the point light has shadow index 0");
-        EXPECT(raster[1].position.w == 0.0f && raster[1].params.z == -1.0f, "the directional light has none");
+        EXPECT_EQ(raster.size(), size_t{3}, "three raster lights");
+        EXPECT(raster[0].position.w == 1.0f && raster[0].params.z == 0.25f, "the point light's sphere radius");
+        EXPECT(raster[1].position.w == 0.0f && raster[1].params.z == 0.0f, "the directional light has none");
+        EXPECT(raster[2].position.w == 1.0f && raster[2].params.z == 0.0f, "a point light of radius 0 stays a point");
         TEST_PASS();
     }
 

@@ -8,11 +8,13 @@
 //                   GI, deferred with CSM, path traced), within the driver's BVH floor of 1 LSB
 //                   on a few pixels: no emitter shadows its light or another, no GI ray or bounce
 //                   adds a light twice, no cascade draws one.
-//   in view         the same room seen with its lights: each emitter's centre pixel is bright;
+//   in view         the same room seen with its lights: the point's and the area light's emitters'
+//                   centre pixels are bright, the downward spot's (the camera outside its cone) dark;
 //                   every pixel that changed by more than 1 lies on an emitter's footprint, and
 //                   the 1-LSB changes around it within 24 px: the deferred frame's screen-space
 //                   filters (RT GI's and RT shadows' denoisers) take the mesh's depth among a
 //                   pixel's neighbours (deferred and path traced).
+//   spot            the spot turned toward the camera: from inside its cone its emitter is bright.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "api/session.hpp"
@@ -29,6 +31,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>   // glm::rotation
 
 #include <algorithm>
 #include <cmath>
@@ -87,7 +91,7 @@ const View kLightsOutOfView{{0.0f, 2.5f, 6.0f}, -50.0f};
 
 // A floor, a back wall and a box, lit by a point, a spot and an area light and a sun, seen from
 // `view`: saved as a scene file (relative to the source root, where the asset resolver looks).
-std::string roomScene(const View& view, const std::string& tag) {
+std::string roomScene(const View& view, const std::string& tag, bool spotAtCamera = false) {
     using namespace ecs;
     World w;
     w.seedIds(11);
@@ -121,6 +125,8 @@ std::string roomScene(const View& view, const std::string& tag) {
     spot.color = {0.6f, 0.8f, 1.0f};
     Transform spotT{kSpotPos};
     spotT.rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));   // -Z to -Y: down
+    if (spotAtCamera)   // -Z turned toward the camera: it looks into the cone
+        spotT.rotation = glm::rotation(glm::vec3(0.0f, 0.0f, -1.0f), glm::normalize(view.position - kSpotPos));
     light("Spot", spotT, spot);
     Light area;
     area.type = LightType::AreaRect;
@@ -332,11 +338,36 @@ void in_view_emitters_change_only_their_pixels() {
         for (int k = 0; k < 3; ++k) {
             const int lit = centre(on, centres[k]), dark = centre(off, centres[k]);
             std::printf("  %s: %s light's centre pixel %d with its emitter, %d without\n", modeName(mode), names[k], lit, dark);
-            check(lit >= 200 && lit > dark + 10,
-                  std::string("in view: ") + modeName(mode) + ": the " + names[k] + " light's emitter is visible and bright");
+            if (k == 1)   // the spot points down: the camera is outside its cone, and its bulb is dark
+                check(lit < 30 && lit < dark,
+                      std::string("in view: ") + modeName(mode) + ": the spot light's emitter, seen from outside its cone, is dark");
+            else
+                check(lit >= 200 && lit > dark + 10,
+                      std::string("in view: ") + modeName(mode) + ": the " + names[k] + " light's emitter is visible and bright");
         }
         keep(on, std::string("in_on_") + std::to_string(int(mode)));
         keep(off, std::string("in_off_") + std::to_string(int(mode)));
+    }
+    std::remove((std::string(OHAO_SOURCE_DIR) + "/" + scene).c_str());
+}
+
+// The same spot turned toward the camera: seen from inside its cone, its bulb shines.
+void spot_seen_from_inside_its_cone_is_bright() {
+    std::printf("spot: seen from inside its cone, its emitter is bright\n");
+    const std::string scene = roomScene(kLightsInView, "aim", true);
+    for (const Mode mode : {Mode::Deferred, Mode::PathTraced}) {
+        const Image on = capture(scene, mode, true), off = capture(scene, mode, false);
+        if (on.rgba.empty() || off.rgba.empty()) {
+            check(false, std::string("spot: ") + modeName(mode) + ": the captures rendered");
+            continue;
+        }
+        const glm::vec3 q = project(kLightsInView, kSpotPos);
+        const std::size_t i = (std::size_t(q.y) * kWidth + std::size_t(q.x)) * 4;
+        const int lit = std::max({on.rgba[i], on.rgba[i + 1], on.rgba[i + 2]});
+        const int dark = std::max({off.rgba[i], off.rgba[i + 1], off.rgba[i + 2]});
+        std::printf("  %s: the spot's centre pixel %d with its emitter, %d without\n", modeName(mode), lit, dark);
+        check(lit >= 200 && lit > dark + 10, std::string("spot: ") + modeName(mode) + ": seen from inside its cone, the emitter is bright");
+        keep(on, std::string("aim_on_") + std::to_string(int(mode)));
     }
     std::remove((std::string(OHAO_SOURCE_DIR) + "/" + scene).c_str());
 }
@@ -348,5 +379,6 @@ int main(int argc, char** argv) {
     emitters_follow_the_lights();
     out_of_view_emitters_change_nothing();
     in_view_emitters_change_only_their_pixels();
+    spot_seen_from_inside_its_cone_is_bright();
     return test::finish("light_emitter_gpu_test", g_passed, g_failed, g_failures);
 }

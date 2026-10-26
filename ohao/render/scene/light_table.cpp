@@ -12,86 +12,7 @@
 
 namespace ohao::render {
 
-glm::mat4 lightSpaceMatrix(const LightData& light) {
-    // For directional lights, use orthographic projection
-    int lightType = static_cast<int>(light.position.w);
-
-    if (lightType == 0) {  // Directional light
-        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
-
-        // Calculate scene bounds - use larger frustum to encompass typical scenes
-        float orthoSize = 50.0f;  // Covers -50 to 50 units (increased from 25)
-        float nearPlane = 0.1f;   // Closer near plane
-        float farPlane = 200.0f;  // Further far plane
-
-        // Light view matrix: looking from "infinity" in light direction toward scene center
-        glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-        glm::vec3 lightPos = sceneCenter - lightDir * 100.0f;  // Position light further away
-
-        // Calculate up vector (avoid parallel with light direction)
-        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
-            up = glm::vec3(1.0f, 0.0f, 0.0f);
-        }
-
-        glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, up);
-        glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, nearPlane, farPlane);
-
-        // Flip Y for Vulkan coordinate system (do this BEFORE combining)
-        lightProj[1][1] *= -1.0f;
-
-        // Combine view and projection
-        glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
-        // Formula: z_vulkan = z_ndc * 0.5 + 0.5
-        // This scales the Z output and adds a bias
-        // In GLM column-major: matrix[col][row], so row 2 is the Z output
-        for (int i = 0; i < 4; i++) {
-            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
-        }
-        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w=1)
-
-        return lightSpaceMatrix;
-    }
-    else if (lightType == 2) {  // Spot light - use perspective projection
-        glm::vec3 lightPos = glm::vec3(light.position);
-        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
-
-        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
-            up = glm::vec3(1.0f, 0.0f, 0.0f);
-        }
-
-        float outerCone = glm::acos(light.params.y);  // Convert from cosine to angle
-        float fov = outerCone * 2.0f;
-        float range = light.direction.w;
-
-        glm::mat4 lightView = glm::lookAt(lightPos, lightPos + lightDir, up);
-        float near = 0.1f;
-        float far = range;
-        glm::mat4 lightProj = glm::perspective(fov, 1.0f, near, far);
-
-        // Flip Y for Vulkan coordinate system
-        lightProj[1][1] *= -1.0f;
-
-        // Combine view and projection
-        glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
-        for (int i = 0; i < 4; i++) {
-            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
-        }
-        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w)
-
-        return lightSpaceMatrix;
-    }
-
-    // Point lights don't use a single matrix (need cube maps)
-    return glm::mat4(1.0f);
-}
-
-std::optional<LightEmitter> lightEmitter(const LightDesc& d) {
+std::optional<LightEmitter> lightEmitter(const LightDesc& d, const std::optional<glm::vec3>& viewer) {
     constexpr float kPi = glm::pi<float>();
     const float r = std::max(d.radius, 0.01f);   // the path tracer's emitter radius
     LightEmitter e;
@@ -101,6 +22,13 @@ std::optional<LightEmitter> lightEmitter(const LightDesc& d) {
         if (!(d.radius > 0.0f)) return std::nullopt;
         e.world = glm::scale(glm::translate(glm::mat4(1.0f), d.position), glm::vec3(r));
         e.radiance = d.color * (d.intensity / (kPi * r * r));
+        if (d.kind == LightKind::Spot && viewer && glm::length(*viewer - d.position) > 0.0f) {
+            // pt_raygen*'s spotFactor, toward the viewer.
+            const float cosAngle = glm::dot(glm::normalize(*viewer - d.position), glm::normalize(d.direction));
+            const float cosInner = std::cos(glm::radians(d.innerConeDeg));
+            const float cosOuter = std::cos(glm::radians(d.outerConeDeg));
+            e.radiance *= std::clamp((cosAngle - cosOuter) / (cosInner - cosOuter + 0.001f), 0.0f, 1.0f);
+        }
         return e;
     case LightKind::AreaRect: {
         const glm::vec3 n = glm::cross(d.areaEdge1, d.areaEdge2);
@@ -148,7 +76,6 @@ void LightTable::set(std::span<const LightDesc> lights) {
     std::vector<LightData> raster;
     m_shadowLights.clear();
     m_shadowCastersWithoutChannel = 0;
-    int shadowCasterIndex = -1;  // Index of first shadow-casting light
     for (const LightDesc& d : sorted) {
         if (d.kind == LightKind::EmissiveProxy) continue;
         if (raster.size() >= MAX_LIGHTS) break;
@@ -160,15 +87,6 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.direction = glm::vec4(d.direction, d.range);
         light.color = glm::vec4(d.color, d.intensity);
 
-        float shadowMapIndex = -1.0f;
-        if (m_shadowsEnabled && shadowCasterIndex < 0) {
-            // The legacy rule, kept as is: old LightType 0/2 = Sphere(point)/Spot.
-            if (d.kind == LightKind::Point || d.kind == LightKind::Spot) {
-                shadowMapIndex = 0.0f;
-                shadowCasterIndex = static_cast<int>(raster.size());
-            }
-        }
-
         float shadowSlot = kShadowNever;
         if (d.castShadows) {
             if (m_shadowLights.size() < kMaxShadowLights) {
@@ -178,18 +96,17 @@ void LightTable::set(std::span<const LightDesc> lights) {
                 ++m_shadowCastersWithoutChannel;
             }
         }
+        // z: the sphere's radius for a point or spot light with an emitter mesh (lightEmitter's,
+        // so its specular is the reflection of that mesh: core/deferred_lighting.frag); 0 a point.
+        const float sphereRadius =
+            (d.kind == LightKind::Point || d.kind == LightKind::Spot) && d.radius > 0.0f ? std::max(d.radius, 0.01f) : 0.0f;
         light.params = glm::vec4(
             glm::cos(glm::radians(d.innerConeDeg)),
             glm::cos(glm::radians(d.outerConeDeg)),
-            shadowMapIndex,
+            sphereRadius,
             shadowSlot
         );
-
-        if (shadowMapIndex >= 0.0f) {
-            light.lightSpaceMatrix = lightSpaceMatrix(light);
-        } else {
-            light.lightSpaceMatrix = glm::mat4(1.0f);
-        }
+        light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }
     // Emissive mesh lights after the regular ones (was m_cachedEmissiveLights).
@@ -200,7 +117,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         light.position = glm::vec4(d.position, 1.0f);  // type 1 = point light
         light.direction = glm::vec4(0, -1, 0, d.radius * 10.0f);
         light.color = glm::vec4(d.color, d.intensity);
-        light.params = glm::vec4(0.0f, 0.0f, -1.0f, kShadowNever);   // inside its own mesh: never shadowed
+        light.params = glm::vec4(0.0f, 0.0f, 0.0f, kShadowNever);   // inside its own mesh: never shadowed; a point
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }

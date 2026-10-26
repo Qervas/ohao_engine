@@ -99,6 +99,7 @@ void main() {
     if ((inst.flags & kInstanceEmitter) != 0u) {
         payload.color = dot(worldNormal, gl_WorldRayDirectionEXT) < 0.0 ? inst.giAlbedoPacked.rgb : vec3(0.0);
         payload.hitDist = -1.0;
+        payload.envPdf = 0.0;   // not the environment: a specular ray adds it unweighted
         payload.hitNormal = worldNormal;
         payload.hitAlbedo = vec3(0.0);
         payload.attenuation = vec3(1.0, 0.0, 0.0);
