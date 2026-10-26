@@ -291,12 +291,16 @@ void main() {
             vec3 lightPos = light.position.xyz;
             L = normalize(lightPos - fragPos);
             attenuation = calculateAttenuation(lightPos, fragPos, light.direction.w);
-        } else {
+        } else if (lightType == 2) {
             vec3 lightPos = light.position.xyz;
             L = normalize(lightPos - fragPos);
             attenuation = calculateAttenuation(lightPos, fragPos, light.direction.w);
             attenuation *= calculateSpotAttenuation(L, normalize(light.direction.xyz),
                                                      light.params.x, light.params.y);
+        } else {
+            // A rectangle (type 3): its radiance, colour times color.w = I / (4 pi r^2), lights by
+            // its own irradiance below; no range window and no 1/d^2, as the path tracer's.
+            L = normalize(light.position.xyz - fragPos);
         }
 
         if (attenuation == 0.0) continue;   // adds exactly zero: past its range or its cone
@@ -320,7 +324,9 @@ void main() {
         // Cook-Torrance BRDF via include (height-correlated Smith-GGX). A point or spot light with
         // an emitter mesh (params.z: its sphere's radius) reflects as that sphere: a mirror shows
         // the mesh, at its radiance, wherever it is (on screen or not, SSR or not).
-        if (lightType != 0 && light.params.z > 0.0)
+        if (lightType == 3)
+            Lo += evaluateBRDFRect(surface, fragPos, light.position.xyz, light.direction.xyz, light.params.xyz, radiance) * shadow;
+        else if (lightType != 0 && light.params.z > 0.0)
             Lo += evaluateBRDFSphere(surface, light.position.xyz - fragPos, light.params.z, radiance) * shadow;
         else
             Lo += evaluateBRDF(surface, L, radiance) * shadow;

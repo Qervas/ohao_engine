@@ -174,6 +174,65 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
     return evaluateBRDFCore(surface, L, specular, F, lightColor);
 }
 
+// A rectangle of uniform radiance `Le` (colour included), centred `center`, spanned by edges e1
+// and e2 and emitting one-sided toward e1 x e2: the path tracer's area light (its type 3, the
+// same Le = I / (4 pi r^2)). Diffuse is the rectangle's exact irradiance, Le * dot(N, J) with J
+// the polygon's vector form factor 1/2 sum acos(vi . vi+1) normalize(vi x vi+1) (Lambert's edge
+// integral; the part below the horizon is not clipped, only the total clamped at 0). Specular is
+// the representative point (the reflection ray where it meets the rectangle, clamped onto it)
+// with the GGX lobe widened by the rectangle's projected size as a disc of equal area,
+// a' = a + r_eq / (2 d): on a mirror the rectangle's reflection at Le times F, its emitter mesh.
+vec3 evaluateBRDFRect(BRDFSurface surface, vec3 P, vec3 center, vec3 e1, vec3 e2, vec3 Le) {
+    const vec3 nArea = cross(e1, e2);
+    const float area = length(nArea);
+    if (area <= 0.0) return vec3(0.0);
+    const vec3 n = nArea / area;
+    if (dot(P - center, n) <= 0.0) return vec3(0.0);   // behind the rectangle: it emits one side
+    const vec3 corner = center - 0.5 * (e1 + e2);
+    vec3 v[4];
+    v[0] = normalize(corner - P);
+    v[1] = normalize(corner + e1 - P);
+    v[2] = normalize(corner + e1 + e2 - P);
+    v[3] = normalize(corner + e2 - P);
+    vec3 J = vec3(0.0);
+    for (int i = 0; i < 4; ++i) {
+        const vec3 c = cross(v[i], v[(i + 1) & 3]);
+        const float s = length(c);
+        if (s > 1e-7) J += acos(clamp(dot(v[i], v[(i + 1) & 3]), -1.0, 1.0)) * (c / s);
+    }
+    J *= 0.5;
+    if (dot(J, center - P) < 0.0) J = -J;   // toward the rectangle, whichever way its corners wind
+    const float E = dot(surface.normal, J);   // irradiance over Le
+    if (E <= 0.0) return vec3(0.0);
+
+    // The representative point: the reflection ray on the rectangle's plane, clamped onto it.
+    const vec3 N = surface.normal, V = surface.viewDir;
+    const vec3 R = reflect(-V, N);
+    const float rn = dot(R, n);
+    vec3 onPlane = center;
+    if (rn < -1e-4) onPlane = P + R * (dot(center - P, n) / rn);
+    const vec3 d = onPlane - corner;
+    const vec3 rep = corner + clamp(dot(d, e1) / dot(e1, e1), 0.0, 1.0) * e1
+                            + clamp(dot(d, e2) / dot(e2, e2), 0.0, 1.0) * e2 - P;
+    const float dist = length(rep);
+    const vec3 specL = rep / dist;
+    const float cosLight = dot(-specL, n);
+    vec3 F;
+    vec3 specular = vec3(0.0);
+    if (cosLight > 0.0) {
+        const float a = surface.roughness * surface.roughness;
+        const float rEq = sqrt(area * cosLight / PI);
+        const float aRect = clamp(a + rEq / (2.0 * dist), 0.0, 1.0);
+        // The rectangle as a source of intensity Le * area * cos toward the point.
+        specular = evaluateSpecularBRDF(N, V, specL, sqrt(aRect), surface.F0, F)
+                 * (area * cosLight / (dist * dist)) * max(dot(N, specL), 0.0) / E;
+    } else {
+        evaluateSpecularBRDF(N, V, normalize(J), surface.roughness, surface.F0, F);
+    }
+    // The core multiplies by Le * |J| * dot(N, J / |J|) = Le * E: diffuse gets the irradiance.
+    return evaluateBRDFCore(surface, normalize(J), specular, F, Le * length(J));
+}
+
 // A sphere light of radius `radius` whose centre is `toLight` away (unnormalized): diffuse from
 // the centre; specular from the representative point, the sphere's closest point to the
 // reflection ray, with the GGX lobe widened by the sphere's angular size, a' = a + radius / (2 d)

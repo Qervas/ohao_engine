@@ -81,8 +81,11 @@ void LightTable::set(std::span<const LightDesc> lights) {
         if (raster.size() >= MAX_LIGHTS) break;
 
         LightData light{};
-        // Map: Point->1, Directional->0, Spot/AreaRect->2
-        const int deferredType = (d.kind == LightKind::Point) ? 1 : (d.kind == LightKind::Directional) ? 0 : 2;
+        // Map: Directional->0, Point->1, Spot->2, AreaRect->3
+        const int deferredType = d.kind == LightKind::Point         ? 1
+                               : d.kind == LightKind::Directional ? 0
+                               : d.kind == LightKind::Spot        ? 2
+                                                                  : 3;
         light.position = glm::vec4(d.position, static_cast<float>(deferredType));
         light.direction = glm::vec4(d.direction, d.range);
         light.color = glm::vec4(d.color, d.intensity);
@@ -106,6 +109,15 @@ void LightTable::set(std::span<const LightDesc> lights) {
             sphereRadius,
             shadowSlot
         );
+        if (d.kind == LightKind::AreaRect) {
+            // The path tracer's rectangle (light type 3): centre, edges, and its radiance
+            // I / (4 pi r^2) in color.w (deferred_lighting.frag's evaluateBRDFRect).
+            const float r = std::max(d.radius, 0.01f);
+            light.position = glm::vec4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 3.0f);
+            light.direction = glm::vec4(d.areaEdge1, d.range);
+            light.color = glm::vec4(d.color, d.intensity / (4.0f * glm::pi<float>() * r * r));
+            light.params = glm::vec4(d.areaEdge2, shadowSlot);
+        }
         light.lightSpaceMatrix = glm::mat4(1.0f);
         raster.push_back(light);
     }

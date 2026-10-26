@@ -66,9 +66,9 @@ void build(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
         if (i < count)
         {
             const LightGpu l = lights[i];
-            if (l.position.w < 0.5)
+            if (l.position.w < 0.5 || l.position.w > 2.5)
             {
-                hit = true;   // directional: everywhere
+                hit = true;   // directional, or a rectangle (no range, as the path tracer's): everywhere
             }
             else
             {

@@ -1,6 +1,7 @@
 #include "rt_gi_technique.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "core/log.hpp"
+#include <glm/gtc/constants.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -50,10 +51,20 @@ shared::GILight toGpu(const render::LightDesc& d) {
         g.directionAndRange = f4(dir, d.range);
         g.cone = f4(std::cos(glm::radians(d.innerConeDeg)), std::cos(glm::radians(d.outerConeDeg)), 0.0f, 0.0f);
         break;
-    case render::LightKind::AreaRect:
-        g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 1.0f);
-        g.directionAndRange = f4(dir, d.range);
+    case render::LightKind::AreaRect: {
+        // Seen from afar, the path tracer's rectangle: radiance Le = I / (4 pi r^2) over its area A,
+        // emitting toward edge1 x edge2 with intensity Le A cos(theta), a spot of cones 0 and 90
+        // degrees (its linear ramp is cos(theta)). No range: the path tracer applies none.
+        const glm::vec3 n = glm::cross(d.areaEdge1, d.areaEdge2);
+        const float area = glm::length(n);
+        const float r = std::max(d.radius, 0.01f);
+        const float le = d.intensity / (4.0f * glm::pi<float>() * r * r);
+        g.radiance = f4(d.color * (le * area), 0.0f);
+        g.positionAndType = f4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 2.0f);
+        g.directionAndRange = f4(area > 0.0f ? n / area : dir, 1.0e9f);
+        g.cone = f4(1.0f, 0.0f, 0.0f, 0.0f);
         break;
+    }
     default:   // Point
         g.positionAndType = f4(d.position, 1.0f);
         g.directionAndRange = f4(dir, d.range);
