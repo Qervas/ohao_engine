@@ -361,6 +361,18 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   and one bounce, darker than the multi-bounce path tracer, and RT GI's denoiser noise
   shows on them. A test that wants ambient light must turn RT GI off. All three are
   diffuse only (`albedo·(1−metallic)`).
+- Emission is the G-buffer's sixth attachment (`GBufferPass::kEmissive`, RGBA16F, the
+  fragment shader's output 4; depth stays attachment 4): emissive texture × emissive
+  strength, the same radiance `pt_closesthit` emits, added by lighting unlit. The normal
+  target's alpha keeps only its luminance, to keep emitters out of SSS. A pipeline drawn
+  in the G-buffer render pass needs `GBUFFER_COUNT - 1` blend states.
+- Light semantics differ between the renderers (open, see
+  `docs/changes/2026-10-26-emissive-hotspot.md`): a point light is `I/d²` in deferred
+  but a sphere of radiance `I/(4πr²)` (intensity `I/4`) in the path tracer; deferred cuts
+  every light at `range` (default 10 m), the path tracer ignores range; deferred's albedo
+  is base colour × vertex colour (squared on primitives, whose vertex colour is their
+  base colour), the path tracer's base colour × texture only. Compare deferred lighting
+  against the path tracer with that in mind.
 - A deferred capture renders 1 frame by default (10 with TAA), but the hybrid's RT GI
   keeps a history: it traces half resolution at 2 rays a pixel and accumulates (up to 32
   frames), so frame 1 and frame 10 of Cornell differ (max_abs 10 at 1920x1080). Pass
