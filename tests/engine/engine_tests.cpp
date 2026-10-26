@@ -2216,14 +2216,15 @@ static void sp2b_t10_a_reference_mean_restarts_after_realtime_frames() {
 
 // ---------------------------------------------------------------------------------------
 // Test 5 (2b step 9): SSAO. A floor meeting a wall, one point light of `light` intensity and
-// a constant ambient of `ambient`; one frame after a reset, SSAO on or off. Empty without a
-// device.
+// a constant ambient of `ambient`, which lighting applies only without RT GI (and without an
+// environment, which this scene has none of): `rtGI` false turns RT GI off; one frame after a
+// reset, SSAO on or off. Empty without a device.
 struct AORun {
     std::vector<uint8_t> px;
     bool ssaoPass{false};
 };
 
-static AORun aoRun(bool ssao, float light, float ambient) {
+static AORun aoRun(bool ssao, float light, float ambient, bool rtGI = true) {
     ohao::VulkanRenderer r(160, 120);
     if (!r.initialize()) return {};
     AORun out;
@@ -2242,6 +2243,9 @@ static AORun aoRun(bool ssao, float light, float ambient) {
         ohao::ecs::spawnLight(world, "light", l, ohao::ecs::Transform{{0.0f, 2.0f, 1.0f}});
         r.setRenderMode(ohao::RenderMode::Deferred);
         r.setAmbientIntensity(ambient);
+        auto settings = r.renderSettings();
+        settings.rtGI = rtGI;
+        r.setRenderSettings(settings);
         r.getDeferredRenderer()->getPostProcessing()->setSSAOEnabled(ssao);
         r.getCamera().setPosition({0.0f, 1.5f, 2.5f});
         r.getCamera().setRotation(-30.0f, -90.0f);   // down at the crease where the floor meets the wall
@@ -2260,17 +2264,17 @@ static AORun aoRun(bool ssao, float light, float ambient) {
 }
 
 // Test 5: SSAO darkens the ambient term where it is occluded, and nothing else: with only
-// ambient light, AO on darkens the crease and brightens nothing; with only a point light (and
-// RT GI), AO on changes no pixel.
+// ambient light (the fallback without RT GI), AO on darkens the crease and brightens nothing;
+// with only a point light (and RT GI), AO on changes no pixel.
 static void sp2b_t05_ssao_darkens_only_the_ambient_term() {
     TEST_BEGIN("sp2b_t05: SSAO darkens ambient light in the crease; a point-lit frame is unchanged");
-    const AORun ambOff = aoRun(false, 0.0f, 0.6f);
+    const AORun ambOff = aoRun(false, 0.0f, 0.6f, false);
     if (ambOff.px.empty()) {
         std::cout << "(no Vulkan device -- skipped) ";
         TEST_PASS();
         return;
     }
-    const AORun ambOn = aoRun(true, 0.0f, 0.6f);
+    const AORun ambOn = aoRun(true, 0.0f, 0.6f, false);
     const AORun litOff = aoRun(false, 30.0f, 0.0f);
     const AORun litOn = aoRun(true, 30.0f, 0.0f);
     int darker = 0, brighter = 0;
@@ -2299,6 +2303,30 @@ static void sp2b_t05_ssao_twin_renders_are_identical() {
     }
     const AORun b = aoRun(true, 10.0f, 0.6f);
     EXPECT_EQ(maxAbsDiff(a.px, b.px), 0, "bit-identical");
+    TEST_PASS();
+}
+
+// The constant ambient is a fallback for frames without another source of indirect light: with
+// RT GI on, its intensity changes no pixel (the walls are lit by GI's rays only); with RT GI off
+// (and no environment) it lights the frame.
+static void ambient_is_a_fallback_only_without_rt_gi() {
+    TEST_BEGIN("ambient: no effect with RT GI on; the fallback fill without it");
+    const AORun giNone = aoRun(false, 10.0f, 0.0f);
+    if (giNone.px.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const AORun giAmbient = aoRun(false, 10.0f, 0.6f);
+    const AORun noGiNone = aoRun(false, 10.0f, 0.0f, false);
+    const AORun noGiAmbient = aoRun(false, 10.0f, 0.6f, false);
+    int brighter = 0;
+    for (std::size_t p = 0; p + 3 < noGiNone.px.size() && p + 3 < noGiAmbient.px.size(); p += 4)
+        brighter += int(noGiAmbient.px[p + 1]) - int(noGiNone.px[p + 1]) >= 2;
+    std::cout << "(RT GI on: max_abs " << maxAbsDiff(giAmbient.px, giNone.px) << "; off: " << brighter
+              << " px brighter) ";
+    EXPECT_EQ(maxAbsDiff(giAmbient.px, giNone.px), 0, "with RT GI, the ambient intensity changes no pixel");
+    EXPECT(brighter > 10000, "without RT GI, the ambient fallback lights most of the frame");
     TEST_PASS();
 }
 
@@ -2367,6 +2395,7 @@ static void runSSAOTests() {
     std::cout << "\n=== SSAO, SSS ===" << std::endl;
     sp2b_t05_ssao_darkens_only_the_ambient_term();
     sp2b_t05_ssao_twin_renders_are_identical();
+    ambient_is_a_fallback_only_without_rt_gi();
     sp2b_s9_sss_runs_only_on_flagged_tiles();
 }
 

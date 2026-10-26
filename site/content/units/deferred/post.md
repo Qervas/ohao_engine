@@ -27,7 +27,8 @@ against each pixel's distance from the camera, only when that bit is set:
 
 {{cite shaders/core/deferred_lighting.frag "const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;"}}
 
-It multiplies the constant ambient and IBL terms on top of the baked `ao` from the
+It multiplies the IBL terms (and the constant ambient, in a frame without RT GI or an
+environment) on top of the baked `ao` from the
 albedo G-buffer's alpha — which the G-buffer pass filled from the R channel of the
 material's glTF occlusion texture (1 without one; a metallicRoughness map's R channel is
 unused by glTF and never read as occlusion):

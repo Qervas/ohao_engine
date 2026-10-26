@@ -49,7 +49,8 @@ public:
     [[nodiscard]] VkImageView envSpecularView() const { return m_envSpecular.view; }
     [[nodiscard]] VkImageView specularWeightView() const { return m_specularWeight.view; }
 
-    // The light table (LightGpu records, binding 5), its light count and the ambient intensity.
+    // The light table (LightGpu records, binding 5), its light count and the ambient intensity
+    // (the fallback fill of a frame with neither RT GI nor an environment).
     void setLights(VkBuffer lightBuffer, uint32_t count, float ambient) {
         m_lightBuffer = lightBuffer;
         m_lightCount = count;

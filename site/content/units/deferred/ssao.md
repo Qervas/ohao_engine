@@ -134,12 +134,12 @@ none is the same surface it takes the closest instead of blurring across the edg
 
 ## What it darkens
 
-The upsampled value multiplies only the light that arrives from everywhere: the
-constant ambient term and, with an environment map, the IBL terms. Direct light is
-occluded by RT shadows or CSM, and RT GI's rays already see what is in the way, so
-neither is touched:
+The upsampled value multiplies only the light that arrives from everywhere: with an
+environment map, the IBL terms, and the constant ambient term, which lighting applies
+only to a frame with neither RT GI nor an environment. Direct light is occluded by RT
+shadows or CSM, and RT GI's rays already see what is in the way, so neither is touched:
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "else if (!ibl) ambient += vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
 
 {{cite shaders/core/deferred_lighting.frag "const float occlusion = ao * ssao;"}}
 
@@ -147,9 +147,9 @@ neither is touched:
 material's glTF occlusion texture); `ssao` multiplies on top of it. The diffuse IBL takes
 the product as it is, the specular IBL through `specularOcclusion`, which occludes a
 reflection's narrower lobe less. Test 5 in
-`engine_tests` checks both halves: with only ambient light, a crease frame has 3191
-pixels darker with SSAO on and none brighter; lit by a point light with zero ambient,
-the frame is unchanged (max_abs 0). A second test renders an SSAO frame from two fresh
+`engine_tests` checks both halves: with only ambient light (RT GI off, so the fallback
+applies), a crease frame has pixels darker with SSAO on and none brighter; lit by a
+point light with zero ambient and RT GI, the frame is unchanged (max_abs 0). A second test renders an SSAO frame from two fresh
 renderers and finds them bit-identical.
 
 ## Cost

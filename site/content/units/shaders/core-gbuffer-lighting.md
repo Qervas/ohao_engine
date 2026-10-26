@@ -264,9 +264,10 @@ the lit image for that resolve (the SSR and SSS unit):
 
 {{cite shaders/core/deferred_lighting.frag "const vec3 specularWeight = (surface.F0 * ab.x + ab.y) * specularOcclusion(NdotV, occlusion, roughness);"}}
 
-The constant ambient term ahead of it is diffuse only, `albedo * (1 - metallic)`: on
-a metal, whose albedo is its F0, it used to add a flat F0-tinted glow that the path
-tracer has no counterpart for, and that read the helmet's frame as bright silver.
+The constant ambient term ahead of it is the last resort, applied only when the frame
+has neither RT GI nor an environment, and diffuse only, `albedo * (1 - metallic)`: on
+a metal it used to add a flat F0-tinted glow, and on every wall a flat floor of light
+under RT GI's bounce, neither of which the path tracer has.
 
 The prefiltered images are the deferred frame's own; the env image the path tracer and
 RT GI sample keeps its single mip level and its base-level sampler, so nothing here can

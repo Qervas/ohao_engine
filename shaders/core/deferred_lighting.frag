@@ -315,15 +315,18 @@ void main() {
     // which RT shadows or CSM occlude, and not RT GI, whose rays already see occluders.
     const float ssao = (pc.flags & 2u) != 0u ? ssaoAt(ivec2(gl_FragCoord.xy), distance(fragPos, pc.cameraPos)) : 1.0;
 
-    // Ambient lighting: a diffuse term, so the diffuse albedo only (a metal has none; its
-    // albedo is its F0, and the reflection below is all the light it returns)
-    vec3 ambient = vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;
-
-    // RT GI's diffuse indirect light (flag bit 3, rt/gi_trace.slang and gi_denoise.slang): the
-    // incoming radiance times the diffuse albedo.
+    // Indirect diffuse light comes from RT GI's rays (flag bit 3, rt/gi_trace.slang and
+    // gi_denoise.slang: the incoming radiance, times the diffuse albedo here) or, without them,
+    // from the environment's irradiance (the IBL block below). Only a frame with neither falls
+    // back to the constant ambient, a fill with no counterpart in the path tracer. All three are
+    // diffuse: the diffuse albedo only (a metal has none; its albedo is its F0, and the
+    // reflection below is all the light it returns).
     const bool rtGI = (pc.flags & 8u) != 0u;
+    const bool ibl = (pc.flags & 1u) != 0u;
     const vec4 gi = rtGI ? texture(ssgiTexture, inTexCoord) : vec4(0.0, 0.0, 0.0, 1.0);
+    vec3 ambient = vec3(0.0);
     if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;
+    else if (!ibl) ambient += vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;
 
     // The reflection's weight, for the environment here and for SSR's resolve: the GGX BRDF's
     // directional albedo F0 * A + B (Karis's analytic fit, envBRDFApprox) times the share of the
@@ -338,7 +341,7 @@ void main() {
 
     // Image-based lighting (flag bit 0: an environment is loaded and prefiltered). The split
     // sum: the radiance arriving around the reflection at this roughness, times the weight.
-    if ((pc.flags & 1u) != 0u) {
+    if (ibl) {
         const vec3 R = reflect(-V, N);
         const vec3 prefiltered = pc.envIntensity *
             textureLod(envPrefiltered, equirectUV(R), roughness * float(kEnvPrefilterLevels - 1u)).rgb;

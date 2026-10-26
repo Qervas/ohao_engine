@@ -7,16 +7,20 @@ standard: v2
 
 ## The bounce the ambient term cannot know
 
-The deferred pipeline's ambient term is one push-constant scalar times the diffuse
-albedo (none for a metal) times AO (the baked AO, and SSAO when it is on) —
+Without RT GI the deferred pipeline's indirect diffuse light is a guess: the
+environment's irradiance when one is bound, and with none a constant, one push-constant
+scalar times the diffuse albedo (none for a metal) times AO (the baked AO, and SSAO when
+it is on). Neither can know that a red wall stands beside a white floor, so the floor
+stays white. `RTGITechnique` replaces that guess with traced rays, one bounce deep:
+light that leaves a lit surface, lands on another and is reflected once more toward the
+camera. With it the constant is not applied at all — the walls are lit by direct light
+and GI's rays only, as in the path tracer, which has no such term:
 
-{{cite shaders/core/deferred_lighting.frag "vec3 ambient = vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
+{{cite shaders/core/deferred_lighting.frag "else if (!ibl) ambient += vec3(pc.ambientIntensity) * albedo * (1.0 - metallic) * ao * ssao;"}}
 
-plus, when an environment map is bound, two equirect samples of it, one standing in
-for diffuse irradiance and one for specular. Neither can know that a red wall stands
-beside a white floor, so the floor stays white. `RTGITechnique` replaces that guess
-with traced rays, one bounce deep: light that leaves a lit surface, lands on another
-and is reflected once more toward the camera.
+On the helmet room that took the helmet against its left wall to 0.534 (the path
+tracer's 0.534) and the wall itself from 0.645 to 0.523 (the path tracer: 0.610, with
+every bounce, where RT GI traces one).
 
 The result is a full-resolution `RGBA16F` image the lighting pass reads at binding 11:
 the incoming radiance over the cosine lobe in rgb (the receiver's albedo not applied)
@@ -253,7 +257,7 @@ means follow the same rule.
 
 The lighting pass raises flag bit 3 when it holds a GI view and adds the radiance,
 times the diffuse albedo and AO, to the ambient term (above). The constant ambient term
-still applies on top of it.
+does not apply with it: GI's rays are the frame's only indirect diffuse light.
 
 GI and image-based lighting are not simply additive. A GI ray that leaves the scene
 already brings back the environment, occluded by everything it passed; the lighting
@@ -264,7 +268,8 @@ for the rest (the lighting unit, "Image-based lighting"):
 
 {{cite shaders/core/deferred_lighting.frag "const vec3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, vec3(0.0)) : vec3(0.0));"}}
 
-SSAO multiplies the IBL terms and the constant ambient, never the GI image: a GI ray
+SSAO multiplies the IBL terms and the constant ambient (when a frame without GI has
+it), never the GI image: a GI ray
 already stops at the occluder SSAO would be guessing at, so occluding its result again
 would count the same crease twice.
 

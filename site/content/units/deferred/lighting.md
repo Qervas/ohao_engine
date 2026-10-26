@@ -205,10 +205,15 @@ The reflection's weight, $W = (F_0 A + B)$ times the specular occlusion, is comp
 every pixel, environment or not, and the pass writes it beside the lit image together
 with what the environment and GI contributed through it, $E = W\,L_{\text{in}}$: two more
 RGBA16F attachments, for SSR's resolve, which replaces $E$ with its traced reflection
-under the same $W$ where it hits (the SSR and SSS unit). The constant ambient ahead of
-all this is a diffuse term and takes the diffuse albedo only,
-`albedo * (1 - metallic)`; on a metal, whose albedo is its F0, it was a flat glow the
-path tracer has no counterpart for.
+under the same $W$ where it hits (the SSR and SSS unit).
+
+Indirect diffuse light has one source per frame: RT GI's rays when they ran, else the
+environment's irradiance, and only with neither a constant ambient (`ambientIntensity`,
+0.35 with scene lights), the fallback that keeps a frame without RT or an environment
+from going black. The path tracer has no such term, so a frame with RT GI has none
+either: walls are lit by direct light and one bounce. All three take the diffuse albedo
+only, `albedo * (1 - metallic)`; on a metal, whose albedo is its F0, a diffuse term is a
+flat glow the path tracer has no counterpart for.
 
 {{cite shaders/core/deferred_lighting.frag "layout(location = 2) out vec4 outSpecularWeight;"}}
 

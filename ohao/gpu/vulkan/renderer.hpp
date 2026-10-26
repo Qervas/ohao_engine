@@ -254,7 +254,8 @@ public:
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;
     // The deferred frame's constant ambient light, in place of the default (0.35 with scene
-    // lights, the sky's day/night value with the fallback sun); nullopt: the default.
+    // lights, the sky's day/night value with the fallback sun); nullopt: the default. A fallback
+    // only: lighting applies it to a frame with neither RT GI nor an environment.
     void setAmbientIntensity(std::optional<float> ambient) noexcept { m_ambientOverride = ambient; }
     // RT shadows: pixels of the newest finished frame (its renderer frame number) that had
     // more lights worth tracing than the 4 they may trace. Collects finished frames first.
