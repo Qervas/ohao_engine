@@ -1,7 +1,7 @@
 {"jsonrpc":"2.0","id":"p","result":{}}
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"64f7fa000866559b","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"568c4633526fa55a","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":2,"result":{"entities":4}}
-{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"64f7fa000866559b","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"568c4633526fa55a","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":4,"result":{"entities":4,"roots":2,"components":{"Name":4,"Transform":4,"Parent":2,"Light":2,"Children":4,"CreationOrder":4},"bounds":{"min":[0,0,-4],"max":[15,50,0]},"outline":[{"id":"1000000000000001","name":"Room","children":[{"id":"1000000000000002","name":"Lamp","more":1}]},{"id":"1000000000000003","name":"Sun"}]}}
 {"jsonrpc":"2.0","id":5,"result":{"entities":[{"id":"1000000000000002","Light":{"type":"Spot","color":[1,0.85,0.6],"intensity":12.5,"range":15,"radius":0.05,"innerConeDeg":20,"outerConeDeg":35}}],"count":1}}
 {"jsonrpc":"2.0","id":6,"result":{"name":"base","entities":4,"bytes":564}}
@@ -24,4 +24,4 @@
 {"jsonrpc":"2.0","id":30,"result":{"quality":"realtime","rtShadows":{"enabled":true,"maxLights":4},"rtGI":{"enabled":true,"resolution":"half","rays":2},"ssao":false,"ssr":true,"sss":true,"geometry":"auto","occlusionCulling":true,"csm":{"cascades":4,"size":2048},"exposure":0.6}}
 {"jsonrpc":"2.0","id":31,"result":{"quality":"realtime","rtShadows":{"enabled":true,"maxLights":4},"rtGI":{"enabled":true,"resolution":"half","rays":4},"ssao":false,"ssr":false,"sss":true,"geometry":"auto","occlusionCulling":true,"csm":{"cascades":4,"size":2048},"exposure":0.6}}
 {"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"CsmSettings.size is outside its limits","data":[{"code":"E_RANGE","path":"/set/csm/size","message":"CsmSettings.size is outside its limits","expected":"in [512, 4096]","got":"100"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"64f7fa000866559b","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":2,"fixedDt":0.05}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"568c4633526fa55a","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":2,"fixedDt":0.05}}}

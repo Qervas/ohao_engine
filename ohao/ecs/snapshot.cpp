@@ -64,6 +64,8 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
     }
     s.columns.resize(used);
     s.frame = frame;
+    const auto* hook = reg.ctx().find<SnapshotHook>();
+    s.systems = hook && hook->save ? hook->save() : nullptr;
 }
 
 std::vector<const reflect::TypeInfo*> snapshotTypes(const reflect::TypeRegistry& types, bool runtime) {
@@ -157,7 +159,19 @@ void captureEntityTable(const World& world, Snapshot& s, std::vector<uint32_t>& 
     s.nextSeq = world.nextCreationSeq();
 }
 
+namespace {
+RestoreStats restoreComponents(World& world, const Snapshot& s);
+} // namespace
+
 RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
+    const RestoreStats stats = restoreComponents(world, s);
+    if (const auto* hook = world.registry().ctx().find<SnapshotHook>(); hook && hook->restore) hook->restore(s.systems);
+    return stats;
+}
+
+namespace {
+
+RestoreStats restoreComponents(World& world, const Snapshot& s) {
     entt::registry& reg = world.registry();
     RestoreStats stats;
     const std::size_t n = s.rows();
@@ -363,5 +377,7 @@ RestoreStats restoreSnapshot(World& world, const Snapshot& s) {
     world.setNextCreationSeq(s.nextSeq);
     return stats;
 }
+
+} // namespace
 
 } // namespace ohao::ecs

@@ -9,7 +9,8 @@
 //     preserved unknown components, plus BodyMotion: runtime, but physics state the saved
 //     components do not hold (velocities, sleep), so a restore mid-motion replays exactly
 //     (world.hash and world.diff leave it out: they are about the saved state);
-//   - the id generator, the next creation sequence and the caller's frame counter.
+//   - the id generator, the next creation sequence and the caller's frame counter;
+//   - what the World's SnapshotHook keeps (ecs/snapshot_hook.hpp: the physics simulation).
 // Derived runtime components (Children, WorldTransform, render and GPU state) are not
 // captured; their owners rebuild them from the restored components, driven by the same
 // signals as any edit.
@@ -22,7 +23,10 @@
 #include "ecs/world.hpp"
 #include "reflect/registry.hpp"
 
+#include "ecs/snapshot_hook.hpp"
+
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace ohao::ecs {
@@ -47,6 +51,7 @@ struct Snapshot {
     World::IdGenState idGen{};
     uint64_t nextSeq{0};
     uint64_t frame{0};
+    std::shared_ptr<const void> systems;   // the SnapshotHook's state, or null (not counted in bytes())
 
     [[nodiscard]] std::size_t rows() const noexcept { return ids.size(); }
     [[nodiscard]] std::size_t bytes() const noexcept;   // memory held by the snapshot
@@ -62,7 +67,8 @@ struct RestoreStats {
 // Captures over an existing snapshot, reusing its memory: recapturing allocates nothing
 // once the world has stopped growing (an agent re-snapshotting "base" every step).
 void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapshot& into, uint64_t frame = 0);
-// `snapshot` must come from a world with the same registrations. Never fails.
+// `snapshot` must come from a world with the same registrations. Never fails. The components
+// first, then the SnapshotHook's state.
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
 
 // The parts of a capture, for code that reads the world in snapshot order without copying

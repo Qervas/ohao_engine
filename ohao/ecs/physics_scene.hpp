@@ -13,11 +13,13 @@
 //     body's pose written back to its entity's Transform, then the step's events.
 //   - A dynamic body's entity moved by anything but that write-back (an edit, a restore, a
 //     moved parent) teleports the body there, at rest.
-//   - BodyMotion (runtime, snapshotted) carries what the saved components do not: each step
-//     writes it for every dynamic body awake in the step (and once as it falls asleep) and for
-//     each player whose velocity changed; written by anything else (a snapshot's restore), it
-//     goes into the body (after a teleport) or the player, so a restore mid-motion replays
-//     exactly.
+//   - Snapshots replay exactly. A snapshot carries the simulation (saveSimulation, through the
+//     World's SnapshotHook): the backend's bodies, contact cache and characters, the players and
+//     the contact bookkeeping; the next sync after a restore puts it back if the bodies are the
+//     snapshot's. When they are not (a body rebuilt since), BodyMotion (runtime, snapshotted:
+//     each step writes it for every dynamic body awake in the step, once more as it falls
+//     asleep, and for each player whose velocity changed) goes into the bodies after their
+//     teleports, and into the players.
 //   - Events: contact begin/end per body pair (sub-shape contacts collapsed) and trigger
 //     enter/exit (a Collider with trigger is a sensor), drained from the backend's queue on
 //     the simulating thread after the step, sorted, and published as the step's span and in
@@ -202,6 +204,12 @@ public:
     // ground found there at once: its Transform, head, PlayerState and BodyMotion are written now.
     // False for an entity without a character.
     bool teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<float> yawDeg);
+    // The simulation a snapshot carries (installPhysics puts these in the World's SnapshotHook):
+    // the backend's bodies, contact cache and characters, the players, the contact bookkeeping.
+    // A restore takes effect at the next sync, if the bodies are the snapshot's (the same
+    // entities' bodies); else the components' path (teleports at rest, BodyMotion) applies.
+    [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
+    void restoreSimulation(const std::shared_ptr<const void>& state);
     // The backend, created on first use; tests step it.
     [[nodiscard]] physics::backend::IPhysicsBackend& backend();
     // The entity's body, or INVALID_BODY.

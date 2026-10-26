@@ -51,6 +51,8 @@ public:
     glm::vec3 getPosition(BodyHandle h) const override;
     void setRotation(BodyHandle h, const glm::quat& rot) override;
     void setPose(BodyHandle h, const glm::vec3& pos, const glm::quat& rot) override;
+    [[nodiscard]] std::string saveState() const override;
+    bool restoreState(const std::string& state) override;
     glm::quat getRotation(BodyHandle h) const override;
 
     // === Body Velocity ===

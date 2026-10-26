@@ -48,6 +48,7 @@
 
 // Character
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 
 #include "core/log.hpp"
 #include <thread>
@@ -649,6 +650,39 @@ void JoltPhysicsBackend::setPose(BodyHandle h, const glm::vec3& pos, const glm::
     JPH::BodyID id = lookupBodyID(h);
     if (id.IsInvalid() || !m_physicsSystem) return;
     m_physicsSystem->GetBodyInterface().SetPositionAndRotation(id, toJoltR(pos), toJolt(rot), JPH::EActivation::DontActivate);
+}
+
+// The characters' handles (in order) first, so a restore can refuse a different set before it
+// changes anything; then the physics system (bodies, contact cache, constraints, gravity); then
+// each character.
+std::string JoltPhysicsBackend::saveState() const {
+    if (!m_physicsSystem) return {};
+    std::vector<CharacterHandle> handles;
+    for (const auto& [h, c] : m_characters) handles.push_back(h);
+    std::sort(handles.begin(), handles.end());
+    JPH::StateRecorderImpl rec;
+    rec.Write(static_cast<uint32_t>(handles.size()));
+    for (const CharacterHandle h : handles) rec.Write(h);
+    m_physicsSystem->SaveState(rec, JPH::EStateRecorderState::All);
+    for (const CharacterHandle h : handles) m_characters.at(h).character->SaveState(rec);
+    return rec.GetData();
+}
+
+bool JoltPhysicsBackend::restoreState(const std::string& state) {
+    if (!m_physicsSystem || state.empty()) return false;
+    JPH::StateRecorderImpl rec;
+    rec.WriteBytes(state.data(), state.size());
+    rec.Rewind();
+    uint32_t count = 0;
+    rec.Read(count);
+    std::vector<CharacterHandle> handles(count);
+    for (CharacterHandle& h : handles) rec.Read(h);
+    if (count != m_characters.size()) return false;
+    for (const CharacterHandle h : handles)
+        if (!m_characters.contains(h)) return false;
+    if (!m_physicsSystem->RestoreState(rec)) return false;
+    for (const CharacterHandle h : handles) m_characters.at(h).character->RestoreState(rec);
+    return !rec.IsFailed();
 }
 
 glm::quat JoltPhysicsBackend::getRotation(BodyHandle h) const {

@@ -1255,11 +1255,10 @@ static void t14_restore_puts_a_body_back_however_close() {
     CHECK(settled != authored && back == authored, "the body is back where the snapshot had it, exactly");
 }
 
-static void t14_resting_contacts_replay_within_0_1_mm() {
-    // The known limit (spec "As built (step 5)"): BodyMotion holds velocities and sleep, not Jolt's
-    // contact cache (the impulses it warm-starts the next step with). A snapshot taken while awake
-    // bodies rest on each other (the crates, one step after loading) replays them to within
-    // 0.1 mm, not bit for bit; the player, which the solver does not warm-start, replays exactly.
+static void t14_resting_contacts_replay_exactly() {
+    // Awake bodies resting on each other at the snapshot (the crates, one step after loading): the
+    // solver warm-starts their contacts from the last step's impulses, which BodyMotion does not
+    // hold; the snapshot's simulation (the backend's state) does, so they replay bit for bit.
     PlayerFixture f(true);
     const Snapshot base = takeSnapshot(f.world, engineTypes());
     (void)walkAndHash(f);
@@ -1272,8 +1271,30 @@ static void t14_resting_contacts_replay_within_0_1_mm() {
     const float db = glm::length(reg.get<Transform>(f.named("CrateB")).position - b1.position);
     std::printf("\n      crates differ by %.2e m and %.2e m", da, db);
     CHECK(samePose(p1, reg.get<Transform>(f.player)), "the player: bit for bit");
-    CHECK(da > 0.0f || db > 0.0f, "the crates resting in contact are not bit for bit (if they are, the limit is gone: say so)");
-    CHECK(da < 1e-4f && db < 1e-4f, "but within 0.1 mm");
+    CHECK(samePose(a1, reg.get<Transform>(f.named("CrateA"))) && samePose(b1, reg.get<Transform>(f.named("CrateB"))),
+          "the crates resting in contact: bit for bit");
+}
+
+static void t14_restore_after_a_rebuild_falls_back_to_body_motion() {
+    // A body rebuilt since the snapshot (its Collider edited) is not the snapshot's body: the saved
+    // simulation is not used, and the components' path (the teleport, then BodyMotion) still
+    // replays a free fall exactly.
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 15);
+    const Snapshot mid = takeSnapshot(f.world, engineTypes());
+    (void)runSteps(f.world, 10);
+    const Transform a1 = f.world.registry().get<Transform>(f.named("CrateA"));
+    const entt::entity a = f.named("CrateA");
+    const std::size_t builds = f.physics->bodyBuilds();
+    f.world.registry().patch<Collider>(a, [](Collider& c) { c.surface = "stone"; });   // rebuilt at the next sync
+    (void)runSteps(f.world, 5);
+    CHECK(f.physics->bodyBuilds() > builds, "the edit rebuilt CrateA's body");
+    restoreSnapshot(f.world, mid);
+    (void)runSteps(f.world, 10);
+    const Transform a2 = f.world.registry().get<Transform>(a);
+    std::printf("\n      CrateA y %.6f / %.6f", a1.position.y, a2.position.y);
+    CHECK(samePose(a1, a2), "the fall replays exactly through BodyMotion");
 }
 
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
@@ -1511,6 +1532,7 @@ int main(int argc, char** argv) {
     RUN(t14_restore_mid_jump_is_exact);
     RUN(t14_restore_from_spawn_replays_a_walk);
     RUN(t14_restore_puts_a_body_back_however_close);
-    RUN(t14_resting_contacts_replay_within_0_1_mm);
+    RUN(t14_resting_contacts_replay_exactly);
+    RUN(t14_restore_after_a_rebuild_falls_back_to_body_motion);
     return ohao::test::finish("level_physics_tests");
 }

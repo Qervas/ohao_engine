@@ -401,6 +401,14 @@ public:
     // the position through the centre of mass).
     virtual void setPose(BodyHandle h, const glm::vec3& pos, const glm::quat& rot) = 0;
 
+    // === SIMULATION STATE (snapshots) ===
+    // Everything the next step depends on: every body's pose, velocities and sleep, the contact
+    // cache (the impulses the solver warm-starts with), each character. restoreState needs the
+    // same bodies and characters as at saveState (the caller checks the bodies; a character set
+    // that differs is refused before anything changes) and returns false otherwise.
+    [[nodiscard]] virtual std::string saveState() const = 0;
+    virtual bool restoreState(const std::string& state) = 0;
+
     // === BODY VELOCITY ===
     virtual void setLinearVelocity(BodyHandle h, const glm::vec3& vel) = 0;
     virtual glm::vec3 getLinearVelocity(BodyHandle h) const = 0;
@@ -523,6 +531,8 @@ public:
     glm::vec3 getPosition(BodyHandle) const override { return glm::vec3(0.0f); }
     void setRotation(BodyHandle, const glm::quat&) override {}
     void setPose(BodyHandle, const glm::vec3&, const glm::quat&) override {}
+    [[nodiscard]] std::string saveState() const override { return {}; }
+    bool restoreState(const std::string&) override { return false; }
     glm::quat getRotation(BodyHandle) const override { return glm::quat(1, 0, 0, 0); }
 
     void setLinearVelocity(BodyHandle, const glm::vec3&) override {}

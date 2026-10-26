@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/instantiate.hpp"
+#include "ecs/snapshot_hook.hpp"
 #include "ecs/transform_system.hpp"
 #include "physics/world/physics_world.hpp"
 #include "scene/asset/model.hpp"
@@ -209,6 +210,13 @@ struct PhysicsScene::Impl {
     // Moved through a parent, a pose further than 1e-4 from the scene's own counts too.
     ankerl::unordered_dense::set<entt::entity> posedExternally;
     bool writingPose{false};
+
+    // The simulation a snapshot carries (SnapshotHook): the backend's state (bodies, contact
+    // cache, characters), which body is whose, the players and the contact bookkeeping. A restore
+    // hands it back; the next sync puts it in place if the bodies are the same ones, else the
+    // components' path (teleports and BodyMotion) does what it can.
+    struct SavedSimulation;
+    std::shared_ptr<const SavedSimulation> savedPending;
 
     // A player (spec "The player"): its character, and what the step last made of it.
     struct PlayerRecord {
@@ -617,7 +625,7 @@ struct PhysicsScene::Impl {
             else moved.push_back(e);
         }
         reg.clear<PhysicsMoved>();
-        if (rebuild.empty() && moved.empty()) return;
+        if (rebuild.empty() && moved.empty() && !savedPending) return;
 
         // 2. Rebuild, in creation order (bodies build in the same order on every run).
         std::sort(rebuild.begin(), rebuild.end(), [&](entt::entity a, entt::entity b) {
@@ -645,6 +653,11 @@ struct PhysicsScene::Impl {
             if (ownCollider(e) || !list.empty()) build(e, list);
         }
 
+        // A snapshot's simulation, restored: every body as it was, so a body whose entity the
+        // restore put back where its body now is stays (no teleport, which would drop the contact
+        // cache); one the snapshot had already moved without a step goes there below.
+        const bool restored = savedPending && restoreSaved();
+
         // 3. Moved bodies follow their entities. A dynamic body's entity moved by the write-back
         // (its world pose is the one written) stays; moved by anything else, the body jumps
         // there, at rest.
@@ -653,6 +666,10 @@ struct PhysicsScene::Impl {
             if (it == bodies.end() || !backend) continue;
             BodyRecord& r = it->second;
             const Placement p = decompose(reg.get<WorldTransform>(e).world);
+            if (restored && !differs(p.position, r.wpos, 1e-4f) && sameRotation(p.rotation, r.wrot, 1e-4f)) {
+                posedExternally.erase(e);
+                continue;
+            }
             if (r.motion == Motion::Dynamic) {
                 if (!posedExternally.erase(e) && !differs(p.position, r.wpos, 1e-4f) && sameRotation(p.rotation, r.wrot, 1e-4f))
                     continue;
@@ -674,6 +691,28 @@ struct PhysicsScene::Impl {
             backend->setPose(r.handle, p.position, p.rotation);
         }
     }
+
+    // ---- snapshots (SnapshotHook) ----------------------------------------------------------------
+
+    struct SavedPlayer {
+        uint64_t id{0}, headId{0}, groundId{0};
+        PlayerRecord record;
+    };
+
+    // Every body (players' inner bodies too) and its entity's id, by handle.
+    [[nodiscard]] std::vector<std::pair<pb::BodyHandle, uint64_t>> bodyIdentity() const {
+        std::vector<std::pair<pb::BodyHandle, uint64_t>> out;
+        out.reserve(entityOf.size());
+        for (const auto& [h, e] : entityOf) out.emplace_back(h, idOf(e));
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
+    [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
+    void restoreSimulation(const std::shared_ptr<const void>& state) {
+        savedPending = std::static_pointer_cast<const SavedSimulation>(state);
+    }
+    bool restoreSaved();
 
     // Bodies up to date, then the motion a restore wrote: into the bodies (after their
     // teleports); players take theirs in their step, after its own teleport.
@@ -1288,7 +1327,78 @@ struct PhysicsScene::Impl {
     }
 };
 
+struct PhysicsScene::Impl::SavedSimulation {
+    std::string backend;                                        // bodies, contact cache, characters
+    std::vector<std::pair<pb::BodyHandle, uint64_t>> bodies;    // which body is whose (bodyIdentity)
+    std::vector<SavedPlayer> players;
+    std::vector<std::pair<uint64_t, Pair>> pairs;               // the contact bookkeeping, entities by id
+    std::size_t dormant{0};
+};
+
+std::shared_ptr<const void> PhysicsScene::Impl::saveSimulation() const {
+    if (!backend) return nullptr;
+    auto s = std::make_shared<SavedSimulation>();
+    s->backend = backend->saveState();
+    s->bodies = bodyIdentity();
+    for (const auto& [e, p] : players) s->players.push_back(SavedPlayer{idOf(e), idOf(p.head), idOf(p.ground), p});
+    s->pairs.assign(pairs.begin(), pairs.end());
+    s->dormant = dormant;
+    return s;
+}
+
+// The saved simulation back in place, when its bodies and players are this world's (the same
+// handles for the same entities); else nothing changes and false.
+bool PhysicsScene::Impl::restoreSaved() {
+    const std::shared_ptr<const SavedSimulation> s = std::move(savedPending);
+    savedPending.reset();
+    if (!backend || !s || s->backend.empty() || bodyIdentity() != s->bodies || s->players.size() != players.size())
+        return false;
+    ankerl::unordered_dense::map<uint64_t, entt::entity> byId;
+    for (auto [e, id] : reg.view<const EntityId>().each()) byId.emplace(id.value, e);
+    const auto entityOfId = [&](uint64_t id) {
+        const auto it = byId.find(id);
+        return id != 0 && it != byId.end() ? it->second : entt::entity{entt::null};
+    };
+    for (const SavedPlayer& sp : s->players) {
+        const auto it = players.find(entityOfId(sp.id));
+        if (it == players.end() || it->second.character != sp.record.character) return false;
+    }
+    if (!backend->restoreState(s->backend)) {
+        OHAO_LOG(Warn, physics, "physics: a snapshot's simulation did not restore; bodies restart from their poses");
+        return false;
+    }
+    for (auto& [e, r] : bodies) {
+        r.wpos = backend->getPosition(r.handle);
+        r.wrot = backend->getRotation(r.handle);
+        r.awake = r.motion == Motion::Dynamic && backend->isAwake(r.handle);
+    }
+    for (const SavedPlayer& sp : s->players) {
+        const entt::entity e = entityOfId(sp.id);
+        PlayerRecord& p = players[e];
+        p = sp.record;
+        p.head = entityOfId(sp.headId);
+        p.ground = entityOfId(sp.groundId);
+        posedExternally.erase(e);
+        if (p.head != entt::null) posedExternally.erase(p.head);
+    }
+    pairs.clear();
+    for (const auto& [key, saved] : s->pairs) {
+        Pair p = saved;
+        p.a = entityOfId(p.aId);
+        p.b = entityOfId(p.bId);
+        pairs.emplace(key, p);
+    }
+    dormant = s->dormant;
+    movers.clear();          // placed, not moved: nothing to draw between
+    motionTouched.clear();   // the simulation carries every body's motion
+    playerMotion.clear();
+    return true;
+}
+
 PhysicsScene::PhysicsScene(entt::registry& reg, AssetResolver& assets) : m(std::make_unique<Impl>(reg, assets)) {}
+
+std::shared_ptr<const void> PhysicsScene::saveSimulation() const { return m->saveSimulation(); }
+void PhysicsScene::restoreSimulation(const std::shared_ptr<const void>& state) { m->restoreSimulation(state); }
 PhysicsScene::~PhysicsScene() = default;
 
 void PhysicsScene::sync(entt::registry&) { m->sync(); }
@@ -1425,6 +1535,10 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     // The system owns the scene: it goes with the World's systems, before the registry.
     auto scene = std::make_shared<PhysicsScene>(reg, assets);
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
+    // Snapshots carry the simulation, so a restore replays exactly (spec "Snapshots and replay").
+    PhysicsScene* raw = scene.get();
+    reg.ctx().emplace<SnapshotHook>(SnapshotHook{[raw] { return raw->saveSimulation(); },
+                                                 [raw](const std::shared_ptr<const void>& s) { raw->restoreSimulation(s); }});
     // Players spawn before the transform system, so a play scene's first frame is the spawn's.
     world.addSyncBefore("transform", "player_spawn", [scene](World&) { scene->spawnPlayers(); });
     world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
