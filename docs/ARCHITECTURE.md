@@ -19,17 +19,19 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_scene` | `scene/` | assimp, ufbx | asset loading into CPU `Model`s, procedural meshes |
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_scene`, `ohao_core`, Vulkan, VMA | device and queues, `VulkanRenderer` (the facade), frame resources, bindless textures, the allocator |
 | `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_scene`, `ohao_core` (NRD, OIDN, NGX optional) | `RenderScene` (the persistent GPU scene), deferred passes, path tracers, denoisers, the render graph |
-| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, EnTT (simdjson privately) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components, systems (spin, fly controller, transform, instantiate, render extract), the scene codec, snapshots, the world hash and diff, the scene view |
-| `ohao_api` | `api/` | `ohao_ecs`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox. GPU-free. |
+| `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components, systems (spin, fly controller, transform, instantiate, physics, render extract), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
+| `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
+| `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
+| `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
 | `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
-| `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics and audio, not yet driven by the ECS |
+| `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (the `IPhysicsBackend` the ECS's physics system builds bodies through; nothing steps them yet) and audio (not yet driven by the ECS) |
 | `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
-`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench` and `serve_bench`
-(`tools/bench`; they share the bench10k builder, `bench_world.hpp`, and `serve_bench`'s
-calibration and load record, `bench_env.hpp`).
+`env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
+`render_bench` and `level_bench` (`tools/bench`; they share the bench10k builder,
+`bench_world.hpp`, and the calibration and load record, `bench_env.hpp`).
 
 Dependency rules:
 
@@ -414,6 +416,40 @@ it is measured under its name and gated by a budget.
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
 28 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
+```
+
+## Recipe: add a level
+
+Followed for the blockout (`assets/levels/blockout_room.glb`, sub-project 5).
+
+1. **Author it in Blender** (meters; glTF's +Y up): one object per node, hints as Object
+   Properties → Custom Properties, which the exporter writes as the node's `extras`:
+   `col` (`box`, `sphere`, `capsule`, `convex`, `mesh`, `none`; mesh nodes default to
+   `mesh`), `body` (`static`, `dynamic`, `kinematic`), `mass`, `fric`, `rest`, `vis: 0`
+   (collision only), `spawn` (a tag: `player`, `enemy`, …) and `socket` on empties, any
+   saved component by name (`{"Spin": {...}}`). Unreal names work too: `UCX_<node>[_NN]`
+   hulls, `SOCKET_<name>` empties. Checked-in levels are generated by a script in
+   `tools/level/` (ours, MIT; `blockout_room.py` runs headless in Blender 5.2.2 and
+   rebuilds the file byte for byte); third-party art is staged under the git-ignored
+   `assets/local/` and never committed.
+2. **Check the hints:** `tests/level/check_level_assets.py` validates every checked-in
+   level's `extras` against `tests/level/extras_schema.json` (`ohao schema level-extras`);
+   pin the numbers later tests assert in its contract, as the blockout does.
+3. **Look at it without a scene:** `ohao level <file>` prints `level.info`: node, mesh
+   and triangle counts, colliders by shape, bodies by motion, spawns in node order with
+   their facing, and the warnings (`W_LEVEL_EXTRAS` for an unknown lower-case key,
+   `W_LEVEL_NO_PLAYER_SPAWN`, a dynamic mesh made convex). An unknown capitalised key or a
+   bad value is `E_LEVEL_EXTRAS` (exit 2): the node loads without it.
+4. **Place it:** a scene entity with `Level {asset: {path}, lightScale, collision}`; one
+   line places the whole file, and saving writes only that line.
+5. **Check that it collides:** `physics.raycast` down from above each spawn must hit the
+   ground at the spawn's height (the blockout's spawns: within 1 mm,
+   `level_physics_tests`); `physics.info` counts the bodies.
+6. **A golden** of the scene, as below (`cli_blockout_room_deferred`): deferred, exact.
+
+```console
+$ build/Release/ohao level assets/levels/blockout_room.glb > /dev/null
+$ python tests/level/check_level_assets.py > /dev/null
 ```
 
 ## Recipe: add a golden scene

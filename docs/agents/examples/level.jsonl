@@ -1,0 +1,6 @@
+{"method":"physics.raycast","params":{"from":[1.5,0.5,2.2],"dir":[0,-1,0],"max":2}}
+{"method":"physics.raycast","params":{"from":[1.5,1,2.5],"dir":[0,0,1],"max":3}}
+{"method":"physics.raycast","params":{"from":[2.7,2,-1],"dir":[0,-1,0]}}
+{"method":"physics.raycast","params":{"from":[0,1,0],"dir":[0,0,0]}}
+{"method":"world.hash","params":{}}
+{"method":"level.reload","params":{"entity":"5c0b10c000000003"}}

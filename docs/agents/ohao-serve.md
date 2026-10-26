@@ -76,6 +76,45 @@ events by step, counted from the next one: an axis keeps its `value` until chang
 the bindings like a real key, `mouse` is a delta. At most 10,000 events a call, 100,000
 waiting.
 
+## Load a level
+
+A level is a glTF file placed by one `Level` component (`assets/scenes/blockout_room.scene.json`
+holds the blockout). `scene_load` expands it into one entity per node, with colliders from the
+nodes' hints; then:
+- `level_info` → `{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders, bodies,
+  spawns: [{tag, entity, pos, yawDeg}], lights, cameras, warnings, loadMs}` (~480 bytes for
+  the blockout, budget 1 KB). Spawns are in the file's node order (the first 8; `world_query
+  {has: ["SpawnPoint"]}` for all); `yawDeg` is the facing about +Y, 0 looking down −Z.
+  `W_LEVEL_NO_PLAYER_SPAWN` when no spawn says `player`. One level: no params; several:
+  `{entity}`, else `E_COMMAND` naming them.
+- `physics_raycast {from, dir, max = 1000}` → `{hit, entity, name, point, normal, dist}` or
+  `{hit: false}` (~100 bytes, budget 200). `dir` is any nonzero length; a zero `dir` or `max`
+  outside (0, 100000] is `E_PARAMS`.
+- `physics_info` → bodies by motion, shapes by kind, `unstepped` (dynamic bodies are built,
+  not simulated yet), `buildMs`, and the collision warnings (`W_LEVEL_DYNAMIC_MESH`, …).
+- `level_reload {entity?}` re-reads the file and rebuilds the level's entities and bodies in
+  place; an unchanged file keeps `world_hash`. Meshes already on the GPU stay as they were.
+
+These need no renderer, and work right after `scene_load` or `world_apply` (they bring the
+level, transforms and bodies up to date first). No level is `E_NOT_FOUND`, as is an entity
+that is not one; a host without the level or physics system is `E_STATE`.
+
+A ray down at the player spawn, one through the doorway, one onto the ramp, and a zero
+direction:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --seed 0000000000000001 --script docs/agents/examples/level.jsonl   # exit 1
+{"method":"scene.load","result":{"entities":5}}
+{"method":"physics.raycast","result":{"hit":true,"entity":"fb31dd4d0994b3f6","name":"Floor","point":[1.5,0,2.2],"normal":[0,1,0],"dist":0.5}}
+{"method":"physics.raycast","result":{"hit":false}}
+{"method":"physics.raycast","result":{"hit":true,"entity":"36125b5b252b59a1","name":"Ramp","point":[2.7,0.3,-1],"normal":[0,0.9806,0.1961],"dist":1.7}}
+{"method":"physics.raycast","error":{"code":"E_PARAMS","message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
+{"method":"world.hash","result":{"hash":"a452d03a74939d30","frame":0}}
+{"method":"level.reload","error":{"code":"E_NOT_FOUND","message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}
+```
+
+Without a scene, `ohao level <file>` prints a file's `level_info` (the CLI guide).
+
 ## Record and replay
 
 `input_record {path}` writes every event that reaches the input map with its step, plus a
@@ -182,7 +221,8 @@ Over MCP, `logging/setLevel` also streams records at that level and above as
 window: initialize → load `helmet_game` → summary → an edit → snapshot → record → a
 61-step flight → step with `watch` → capture inline and to a file → log read → stop
 recording → restore → replay (every checkpoint matches) → capture again, bit-identical
-to the first.
+to the first → load the blockout level → `level_info` → a ray down at the player spawn →
+`physics_info`.
 
 ```console
 $ python tests/serve/e2e_mcp.py > /dev/null   # gpu

@@ -123,18 +123,18 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats` |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings) |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work |
-| `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
+| `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
 | `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes, Slang entry points and imports) and on the real tree; `--gpu` adds the device checks |
 | `check_layout.py` | `shaders/shared/layout.json`'s generated files current, std430 offsets asserted, bad layouts refused, the generated GLSL and Slang compiling |
 | `check_level_assets.py` | the checked-in levels (`assets/levels/`): every node's `extras` against the hint schema (`tests/level/extras_schema.json`), the blockout's nodes and hints (the contract the level pipeline's later tests assert), its Blender rebuild byte for byte (`skip` without Blender 5.2.2) |
-| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`), every tool schema through `jsonschema`, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
+| `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`; `loadMs` and `buildMs` compare as 0), every tool schema through `jsonschema`, `tools/list` at most 24 KB, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
 
 GPU suites and harnesses (each creates a Vulkan device):
 
@@ -472,6 +472,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     sub-project 6. The backend runs without worker threads and room for 65,536 bodies; Jolt
     takes each step's contact buffer (sized by that cap) from the temp allocator, which falls
     back to the heap past 10 MB (a fixed 10 MB block aborted the process on the first step).
+  - Agents read levels through `level.info`, `level.reload`, `physics.raycast` and
+    `physics.info` (`ohao/api/level.cpp`), which reach the level system and the physics
+    scene through what `installLevels` and `installPhysics` leave on the World
+    (`level::levelSummary`/`levelDiagnostics`/`reloadLevel`, `ecs::physicsScene`); a World
+    without them answers `E_STATE`. They run the `level`, `transform` and `physics` sync
+    systems first (never instantiate or the render extract), so they answer right after
+    `scene.load`. Recipe: look at a level file with `ohao level <file>`, in a session with
+    `level_info` and `physics_raycast` (`docs/agents/ohao-serve.md`, "Load a level"); add
+    one by `docs/ARCHITECTURE.md`, "add a level". Results stay small: `level.info` on the
+    blockout ~480 bytes (budget 1 KB, `level_bench`), a ray ~100 (200).
   - Loaders keep a file's normals. `repairMeshNormals` fills only vertices left without
     one (zero or not finite) with their faces' smooth normal; a loader that finds no normal
     writes zero for it, never a placeholder direction.

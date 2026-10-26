@@ -40,6 +40,7 @@ ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
                      [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]]
                     [--save OUT.scene.json]
+ohao level    LEVEL.glb   level.info for a level file: nodes, spawns, colliders, bodies (no GPU, no scene)
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
               [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]]
@@ -184,6 +185,23 @@ $ build/Release/ohao run build/doc_tmp/missing.scene.json --render build/doc_tmp
 {"method":"render.capture","error":{"code":"E_ASSET_NOT_FOUND","message":"entity 00000000000000b1: no file 'assets/nope.glb' in the project","data":[{"code":"E_ASSET_NOT_FOUND","path":"","entity":"00000000000000b1","message":"entity 00000000000000b1: no file 'assets/nope.glb' in the project"}]}}
 ```
 
+### A level file
+
+`ohao level` answers `level.info` for a glTF level without a scene or a GPU: the file
+becomes the only `Level` of an empty world (entity `0000000000000001`), its nodes and
+bodies are built, and one JSON line comes back. A file that does not load is its error
+(`E_ASSET_NOT_FOUND`, exit 2). Spawns are in the file's node order; `yawDeg` is the
+facing about +Y, 0 looking down −Z.
+
+```console
+$ build/Release/ohao level assets/levels/blockout_room.glb > build/doc_tmp/level.json
+$ python -c "import json; r = json.load(open('build/doc_tmp/level.json'))['result']; print(r['nodes'], r['meshes'], r['colliders'], r['bodies']); print([(s['tag'], s['pos'], s['yawDeg']) for s in r['spawns']])"
+17 13 {'box': 12, 'mesh': 1} {'static': 11, 'dynamic': 2}
+[('enemy', [-2.5, 0.3, -2], 180), ('enemy', [3, 0.5, -2], 180), ('player', [1.5, 0, 2.2], 0)]
+$ build/Release/ohao level assets/levels/no_such_level.glb   # exit 2
+{"error":{"code":"E_ASSET_NOT_FOUND","message":"no file 'assets/levels/no_such_level.glb' in the project","data":[{"code":"E_ASSET_NOT_FOUND","path":"","message":"no file 'assets/levels/no_such_level.glb' in the project"}]}}
+```
+
 ### The schema
 
 `ohao schema` writes `ohao_schema.json` (every component, field, unit, limit, enum,
@@ -264,7 +282,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 24 tools
+0 28 tools
 ```
 
 ## Methods
@@ -298,6 +316,14 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `render.stats` | `{frames = 1, passes = true}` → `{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?}` | What the host's frames cost: medians over the newest `frames` (1–120) finished frames of the GPU time (first pass to last), the CPU's recording and submission, and each pass in frame order, in ms to the microsecond. Pass names are the registry's (`ohao/render/frame/pass_registry.hpp`); a pass none of the frames ran is left out. `shadowLightsDropped`: pixels of the newest covered frame that had more lights worth an RT shadow than the 4 a pixel traces (those shade unshadowed); absent when no covered frame traced RT shadows. `lightsOverflow`: the lights the newest covered frame's clustered lighting left out of froxels that held more than 256 (those pixels miss them); absent when none was. `E_STATE` before the host has rendered (the CLI host before a capture). |
 | `render.settings` | `{set?: RenderSettings}` → the RenderSettings in effect: `{quality, rtShadows: {enabled, maxLights 0–4}, rtGI: {enabled, resolution half \| full, rays 1–32}, ssao, ssr, sss, geometry auto \| meshlets \| instances, occlusionCulling, csm: {cascades 1–4, size 512–4096}, exposure}` | The host's renderer settings: what its frames render with and what captures default to. `set` merges (members left out keep their values), is checked against the limits first (`E_RANGE`, nothing applied) and counts as a change. Defaults are the budgeted frame: realtime, 4 RT shadow lights, half-resolution GI at 2 rays, SSR and SSS on, SSAO off, auto geometry, occlusion culling, 4 cascades of 2048, exposure 0.6. A GI resolution or CSM size change rebuilds those images (the device idles once). A headless host keeps settings set before its first capture and applies them when the renderer starts. `E_STATE` on the CLI host (`ohao run` scripts). |
 | `log.read` | `{since?, level = info, channel?, limit = 50}` → `{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}` | Engine log records after `since` (pass the last `next`). |
+| `level.info` | `{entity?}` → `{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders: {box?, sphere?, capsule?, convex?, mesh?}, bodies: {static?, dynamic?, kinematic?}, spawns: [{tag, entity, pos, yawDeg}], moreSpawns?, lights, cameras, warnings: [{code, message}], errors?, loadMs}` | A `Level`'s summary (the only level without `entity`; several: `E_COMMAND` naming them). Counts are the file's default scene: mesh nodes, the glTF meshes they use, their triangles, light and camera nodes. Spawns in node order, the first 8; `yawDeg` about +Y from −Z. Warnings: the level's hints, `W_LEVEL_NO_PLAYER_SPAWN`, its nodes' collision warnings (the first 4, then `moreWarnings`). `loadMs`: the last expansion. No level, or an entity that is not one: `E_NOT_FOUND`; a file that did not load: its error. ~480 bytes for the blockout. |
+| `level.reload` | `{entity?}` → as `level.info` | Re-reads the level's file and rebuilds its entities (in place, same ids) and bodies; an unchanged file keeps `world.hash`. Meshes already uploaded to the GPU are kept. |
+| `physics.raycast` | `{from, dir, max = 1000}` → `{hit, entity?, name?, point?, normal?, dist?}` | The closest collider along the ray (`dir` any nonzero length): its entity, name (up to 40 bytes), the hit point and surface normal (to 1e-4) and distance. `{hit: false}` for none. A zero `dir` or `max` outside (0, 100000] is `E_PARAMS`. ~100 bytes. |
+| `physics.info` | `{}` → `{bodies: {static?, dynamic?, kinematic?}, shapes: {box?, sphere?, capsule?, convex?, mesh?, compound?}, unstepped, buildMs, warnings?: [{code, entity, name, message}], moreWarnings?}` | The physics scene. `unstepped`: dynamic bodies, which nothing simulates yet. |
+
+The four level and physics methods bring the level, transforms and bodies up to date
+first (no step, no render), so they answer right after `scene.load` or `world.apply`. A
+host without the level or physics system (none of OHAO's) is `E_STATE`.
 
 ## Edit commands
 
@@ -391,6 +417,9 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `W_LEVEL_DYNAMIC_MESH` | Warning: a dynamic body with a `Mesh` collider; it is built as the mesh's convex hull. |
 | `W_COLLIDER_NO_MESH` | Warning: a collider with no size on an entity whose mesh is missing or did not load; no collider. |
 | `W_COLLIDER_SCALE` | Warning: a sphere or capsule collider under a non-uniform scale (axes over 1% apart); it takes the largest axis. |
+| `W_LEVEL_NO_PLAYER_SPAWN` | Warning (`level.info`): no spawn of the level says `player`. Not an error: a prop kit has none. |
+| `E_NOT_FOUND` | `level.info` / `level.reload`: the world has no level, or the entity named is not one. |
+| `E_PARAMS` | Params that pass their schema but break the method's rule: `physics.raycast` with a zero `dir`, or `max` outside (0, 100000]. JSON-RPC -32602. |
 
 ## Habits that save tokens and mistakes
 

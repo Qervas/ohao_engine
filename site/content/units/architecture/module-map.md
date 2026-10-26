@@ -78,10 +78,13 @@ headers (`RenderScene`, `model_upload`, the camera framer) and calls into
 `ecs/` header, so the edge points one way.
 
 `ohao_api` is the agent API — the `Session` method table, edit commands and queries —
-over the ECS and reflect, and it never touches the GPU: rendering is an `api::Host`
-that the host program installs with `Session::setHost`.
+over the ECS, the level system and reflect, and it never touches the GPU: rendering is
+an `api::Host` that the host program installs with `Session::setHost`. Its level and
+physics methods read what the World's install hooks left behind (`level_system.hpp`'s
+summary and reload, `ecs::physicsScene`); the level archive links only level, ECS and
+reflect, so the edge points down:
 
-{{cite ohao/api/CMakeLists.txt "target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_reflect ohao_unordered_dense)"}}
+{{cite ohao/api/CMakeLists.txt "target_link_libraries(ohao_api PUBLIC ohao_ecs ohao_level_world ohao_reflect ohao_unordered_dense)"}}
 
 `ohao_runtime` — window, fixed-step clock, the live host's loop, the shared frame
 capture — is the host layer. It links the API, core, the ECS, the level system (which a

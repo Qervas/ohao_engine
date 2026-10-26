@@ -251,6 +251,7 @@
 - Modify: `ohao/api` (params structs, methods, `Host` access to the world's `PhysicsScene`), `tools/ohao/main.cpp` (`ohao level`)
 - Modify: `tests/api/api_tests.cpp`, `tests/serve/sessions/*` + `expected/*`, `tests/serve/e2e_mcp.py`, `tests/cli/*`
 - Modify: `docs/agents/ohao-cli.md`, `docs/agents/ohao-serve.md`, `AGENTS.md`, `docs/ARCHITECTURE.md` ("add a level")
+- As built: no `Host` change; `ohao_api` links `ohao_level_world` and reads the level system and the physics scene through the World's install hooks (`level::levelSummary`/`reloadLevel`, `ecs::physicsScene`); the methods are `ohao/api/level.cpp`; `E_NOT_FOUND`, `E_PARAMS` and `W_LEVEL_NO_PLAYER_SPAWN` are new codes; the serve and CLI goldens hold `loadMs`/`buildMs` as 0; `level_bench` measures `level_info_bytes`. See the spec's "As built (step 5)".
 
 **Interfaces:**
 - Produces: the methods:
@@ -260,14 +261,14 @@
   - `physics.info {}`.
   - Errors: `E_STATE` without a world, `E_NOT_FOUND` for a non-level entity, `E_PARAMS` for a zero direction or `max` out of (0, 1e5].
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - `api_tests`: `t08_level_info_counts_and_spawns`, `t08_level_info_is_small` (≤ 1,024 bytes), `t08_raycast_hits_floor`, `t08_raycast_params_refused`, `t08_physics_info_counts`.
   - A serve session `level.jsonl`.
   - `e2e_mcp.py`: load the blockout, read `level.info`, cast a ray down at the player spawn.
   - `check_cli.py`: `ohao level assets/levels/blockout_room.glb`.
-- [ ] **Step 2: Implement, then run.** Run `api_tests`, `check_serve.py --update` (look at the new expected output first), `check_cli.py`, `e2e_mcp.py`. Expected: PASS. `tools/list` ≤ 24 KB.
-- [ ] **Step 3: Docs.** The serve guide's "Load a level" section, the CLI guide's `ohao level`, the AGENTS.md recipe; `check_docs.py`.
-- [ ] **Step 4: Close the step.** `check.py --all`, change record, commits.
+- [x] **Step 2: Implement, then run.** Run `api_tests`, `check_serve.py --update` (look at the new expected output first), `check_cli.py`, `e2e_mcp.py`. Expected: PASS. `tools/list` ≤ 24 KB.
+- [x] **Step 3: Docs.** The serve guide's "Load a level" section, the CLI guide's `ohao level`, the AGENTS.md recipe; `check_docs.py`.
+- [x] **Step 4: Close the step.** `check.py --all`, change record, commits.
 
 ### Task 6: Scale and the kit (build step 6)
 

@@ -419,6 +419,35 @@ after `transform`):
 - `physics.raycast` ≤ 200 bytes.
 - `tools/list` stays ≤ 24 KB.
 
+**As built (step 5):**
+- The methods live in `ohao/api/level.cpp`. `ohao_api` links `ohao_level_world` (level, ecs,
+  reflect: no cycle) and reaches the level system through `level::levelSummary`,
+  `levelDiagnostics` and `reloadLevel`, and the physics scene through `ecs::physicsScene(world)`,
+  the accessors the install hooks leave on the World; no `Host` change was needed. A World
+  without them answers `E_STATE`.
+- Each method runs the `level`, `transform` and `physics` sync systems first (never
+  instantiate or the render extract), so a query right after `scene.load` sees the nodes and
+  bodies.
+- `level.info` result: `{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders:
+  {by shape}, bodies: {by motion}, spawns: [{tag, entity, pos, yawDeg}] (the first 8, then
+  moreSpawns), lights, cameras, warnings: [{code, message}] (the first 4, then moreWarnings),
+  errors?, loadMs}`; counts are of the file's default scene (mesh nodes, the glTF meshes they
+  use, their triangles, light and camera nodes); `loadMs` is the last expansion (bodies are
+  physics.info's `buildMs`). Warnings: the level's hint diagnostics, `W_LEVEL_NO_PLAYER_SPAWN`
+  and the physics warnings of its nodes. A level whose file did not load answers with its error.
+- `physics.raycast`: point and normal to 1e-4, `name` cut at 40 bytes. Errors as the plan
+  says: `E_PARAMS` (new; JSON-RPC -32602) for a zero `dir` or `max` outside (0, 1e5], so
+  `max` has no field limits in its schema; `E_NOT_FOUND` (new) for no level or an entity that
+  is not one; several levels without `entity` is `E_COMMAND`, naming them.
+- `level.reload` forgets the file's structure and the resolver's meshes of it
+  (`AssetResolver::forget`), re-expands in place and touches the nodes' colliders so their
+  bodies are rebuilt; meshes already uploaded to the GPU are kept (instantiate's cache).
+- `ohao level <file>` loads the file as the only `Level` (entity `0000000000000001`) of an
+  empty world and prints `level.info`.
+- The protocol and CLI goldens hold the timings (`loadMs`, `buildMs`) as 0.
+- Measured: `level.info` on the blockout 482 bytes, a ray 103, `tools/list` 19,756 bytes for
+  28 tools.
+
 ## Determinism
 
 - The same file and scene give the same entities, ids, components, bodies and image:
