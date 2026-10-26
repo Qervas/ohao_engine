@@ -95,7 +95,7 @@ void classify(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID, uint
         }
         else
         {
-            member = inFrustum;
+            member = inFrustum && (d.info.y & kDrawEmitter) == 0u;   // a light's mesh casts no shadow
         }
         uint k = 0u;
         if (pc.extra.y >= 2u && (d.info.y & kDrawOneSided) == 0u) k = 1u;

@@ -2,6 +2,7 @@
 #include "render/scene/render_scene_types.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace ohao::render {
@@ -9,6 +10,21 @@ namespace ohao::render {
 // Light-space matrix of a raster light: ortho for directional (type 0), perspective
 // for spot (type 2), identity otherwise. Shared with VulkanRenderer's fallback sun.
 [[nodiscard]] glm::mat4 lightSpaceMatrix(const LightData& light);
+
+// What the camera sees of a light: RenderScene draws it as an emitter instance
+// (kInstanceEmitter), pure emission that only camera rays and the G-buffer see.
+struct LightEmitter {
+    bool quad{false};          // the unit quad ([0,1]^2 at z = 0, facing +z); else the unit sphere
+    glm::mat4 world{1.0f};
+    glm::vec3 radiance{0.0f};  // emitted, on the front side
+};
+// A point or spot light is a sphere of its radius with radiance I / (pi r^2): seen from afar it
+// is a source of intensity I, the I / d^2 both renderers light with. An area light is its
+// rectangle (position + u edge1 + v edge2, emitting towards edge1 x edge2) at the path tracer's
+// radiance for it, I / (4 pi r^2). Radii below the path tracer's 0.01 m are raised to it.
+// Directional lights and emissive proxies (whose mesh already emits) have none, nor a point or
+// spot light of radius 0 or a degenerate rectangle.
+[[nodiscard]] std::optional<LightEmitter> lightEmitter(const LightDesc& light);
 
 // Light table: the light list resolved once per setLights into both consumers'
 // layouts -- the raster LightData array (host copy, <= MAX_LIGHTS = 65,536, for clustered

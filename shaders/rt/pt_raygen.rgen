@@ -195,7 +195,7 @@ void main() {
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
     // ================================================================
     payload.hitDist = -1.0;
-    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskCamera, 0, 0, 0,
                  rayOrigin, 0.001, rayDir, 10000.0, 0);
     firstHitPos  = payload.hitPos;
     firstHitDist = payload.hitDist;
@@ -389,7 +389,7 @@ void main() {
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xFF, 0, 0, 0,
+                    kRayMaskScene, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, L, shadowDist, 0);
 
                 if (payload.hitDist < 0.0) {
@@ -448,7 +448,7 @@ void main() {
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xFF, 0, 0, 0,
+                    kRayMaskScene, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, envDir, 10000.0, 0);
 
                 if (payload.hitDist < 0.0) {
@@ -548,7 +548,7 @@ void main() {
 
         for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
             payload.hitDist = -1.0;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskScene, 0, 0, 0,
                          specRayOrigin, 0.001, specRayDir, 10000.0, 0);
 
             // Sub-plan 3.D: accumulate specular hit-distance while the specular chain is unbroken
@@ -669,7 +669,7 @@ void main() {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                        0xFF, 0, 0, 0,
+                        kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
 
                     if (payload.hitDist < 0.0) {
@@ -715,7 +715,7 @@ void main() {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                        0xFF, 0, 0, 0,
+                        kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
 
                     if (payload.hitDist < 0.0) {
@@ -846,7 +846,7 @@ void main() {
 
         for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
             payload.hitDist = -1.0;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskScene, 0, 0, 0,
                          diffRayOrigin, 0.001, diffRayDir, 10000.0, 0);
 
             // Sub-plan 3.D: capture first secondary diffuse hit distance (single segment)
@@ -968,7 +968,7 @@ void main() {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                        0xFF, 0, 0, 0,
+                        kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
 
                     if (payload.hitDist < 0.0) {
@@ -1014,7 +1014,7 @@ void main() {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                        0xFF, 0, 0, 0,
+                        kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
 
                     if (payload.hitDist < 0.0) {

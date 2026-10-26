@@ -46,7 +46,14 @@ public:
     uint32_t createInstance(const InstanceDesc& desc);        // returns slot
     void updateInstance(uint32_t slot, const InstanceDesc& desc);
     void destroyInstance(uint32_t slot);
-    void setLights(std::span<const LightDesc> lights);        // sorted by order inside
+    // Sorted by order inside. Each point, spot and area light also gets an emitter instance
+    // (lightEmitter(): a sphere or its rectangle, kInstanceEmitter) that the camera sees as the
+    // light's own radiance; it shadows nothing and lights nothing (the light does).
+    void setLights(std::span<const LightDesc> lights);
+    // Lights without their emitter meshes (true by default): the light still lights.
+    void setLightEmitters(bool enabled);
+    // The emitter instances' slots, in light order (one per light that has one).
+    [[nodiscard]] std::span<const uint32_t> lightEmitterSlots() const;
     // Bindless index of the environment map, stamped into the RT light header.
     void setEnvMapTextureIndex(uint32_t texIdx);
     // HDRI scale stamped into the RT light header (pt_miss); default 1.
@@ -85,7 +92,7 @@ public:
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;
 
-    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; };
+    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; bool emitter; };
     // Visible instance x submesh draws, in slot order; rebuilt only when instances change.
     [[nodiscard]] std::span<const Draw> draws() const;
     // The same list on the GPU (gpu::shared::DrawRecord each), uploaded by recordUpdates:

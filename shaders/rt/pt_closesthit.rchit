@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "includes/scene/scene_data.glsl"
+#include "shared/layout.glsl"
 
 // Path Tracer Closest Hit Shader — Bindless PBR
 // Matches the GBuffer's bindless pattern: sampler2D textures[] + material indices
@@ -91,6 +92,18 @@ void main() {
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
+
+    // A light's emitter mesh (kInstanceEmitter; only camera rays reach it): its radiance on the
+    // front side, black behind, and the path ends there as at a miss. The light itself is the
+    // analytic one the raygen samples; this is what the camera sees of it.
+    if ((inst.flags & kInstanceEmitter) != 0u) {
+        payload.color = dot(worldNormal, gl_WorldRayDirectionEXT) < 0.0 ? inst.giAlbedoPacked.rgb : vec3(0.0);
+        payload.hitDist = -1.0;
+        payload.hitNormal = worldNormal;
+        payload.hitAlbedo = vec3(0.0);
+        payload.attenuation = vec3(1.0, 0.0, 0.0);
+        return;
+    }
 
     // 4.M: per-pixel curvature proxy from vertex-normal variance. High when
     // the 3 vertex normals diverge (corners, edges, ears, nostrils); near zero

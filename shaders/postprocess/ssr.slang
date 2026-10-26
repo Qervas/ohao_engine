@@ -6,7 +6,9 @@
 // there. Writes the radiance arriving along the reflection, premultiplied by the confidence c
 // in the hit (falling with the march's distance and the roughness, at most 0.8), and c: the
 // reflection weight (Fresnel, the split sum, specular occlusion) is the lighting pass's, applied
-// once in the resolve. Sky, a miss and rough non-metals write 0 (the environment stays).
+// once in the resolve. Sky, a miss and rough non-metals write 0 (the environment stays). So
+// does a hit on a light's emitter mesh: the light's reflection is the analytic light's
+// specular, and reflecting its mesh too would count it twice.
 import shared.layout;
 
 [[vk::binding(0, 0)]] Texture2D<float4> gPosition;   // xyz world position, w metallic; (0,0,0,0) sky
@@ -15,6 +17,7 @@ import shared.layout;
 [[vk::binding(3, 0)]] Texture2D<float4> litScene;
 [[vk::binding(4, 0)]] SamplerState linearSampler;
 [[vk::binding(5, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> ssrOut;
+[[vk::binding(6, 0)]] Texture2D<float4> gEmissive;   // a = 1 on a light's emitter mesh
 [[vk::push_constant]] ConstantBuffer<SSRPush> pc;
 
 static const uint kSteps = 64u;
@@ -69,6 +72,7 @@ void trace(uint3 id : SV_DispatchThreadID)
         const float sceneDepth = depthBuffer.Load(int3(sp, 0));
         if (ndc.z > sceneDepth && ndc.z < sceneDepth + pc.params.x)
         {
+            if (gEmissive.Load(int3(sp, 0)).a > 0.5) break;   // a light's mesh: the environment stays
             const float confidence = (1.0 - float(i) / float(kSteps)) * (1.0 - roughness) * 0.8;
             ssrOut[q] = float4(litScene.SampleLevel(linearSampler, uv, 0.0).rgb * confidence, confidence);
             return;

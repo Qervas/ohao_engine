@@ -37,6 +37,18 @@ inline constexpr uint32_t kCullOcclusion = 2u;
 inline constexpr uint32_t kCullCone = 8u;
 // DrawRecord.info.y bit: the material is one-sided (back faces culled)
 inline constexpr uint32_t kDrawOneSided = 1u;
+// DrawRecord.info.y bit: a light's emitter mesh, in no CSM cascade (it never shadows)
+inline constexpr uint32_t kDrawEmitter = 2u;
+// InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
+inline constexpr uint32_t kInstanceEmitter = 2u;
+// TLAS instance mask of every scene instance
+inline constexpr uint32_t kTlasMaskScene = 1u;
+// TLAS instance mask of a light's emitter mesh: only camera rays see it, so it shadows nothing and no bounce counts the light twice
+inline constexpr uint32_t kTlasMaskEmitter = 2u;
+// ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
+inline constexpr uint32_t kRayMaskScene = 1u;
+// ray mask of the path tracer's camera rays: scene instances and light emitters
+inline constexpr uint32_t kRayMaskCamera = 3u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 inline constexpr uint32_t kMeshletMaxVertices = 64u;
 // a meshlet's triangles at most (the mesh shader's output primitives)

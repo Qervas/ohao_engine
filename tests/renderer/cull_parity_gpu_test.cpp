@@ -219,7 +219,8 @@ void t06_occluded_and_offscreen_boxes_are_not_drawn() {
     std::printf("t06: hidden and off-screen boxes are in no list\n");
     const Run run = occlusionRun({true, true}, 3);
     if (run.image.empty()) return;
-    // Draw order: floor 0, wall 1, hidden 2..6, seen 7..9, off screen 10..11.
+    // Draw order: floor 0, wall 1, hidden 2..6, seen 7..9, off screen 10..11, then the light's
+    // emitter mesh (RenderScene::setLights), 12.
     std::vector<int> drawn(run.lists.drawCount, 0);
     for (uint32_t list = 0; list < kGBufferLists; ++list)
         for (const uint32_t d : listed(run.lists, list)) ++drawn[d];
@@ -229,7 +230,8 @@ void t06_occluded_and_offscreen_boxes_are_not_drawn() {
     for (int i = 0; i < kSeen; ++i) seen = seen && drawn[firstSeen + i] == 1;
     for (int i = 0; i < kOffscreen; ++i) off = off && drawn[firstOff + i] == 0;
     std::printf("  frame 3 draws: %s (of %u)\n", countsText(run).c_str(), run.lists.drawCount);
-    check(run.lists.drawCount == 2u + kHidden + kSeen + kOffscreen, "t06: one draw per instance");
+    check(run.lists.drawCount == 2u + kHidden + kSeen + kOffscreen + 1u,
+          "t06: one draw per instance, and one for the light's emitter mesh");
     check(drawn[0] == 1 && drawn[1] == 1, "t06: the floor and the wall are drawn once");
     check(hidden, "t06: the boxes behind the wall are not drawn (occluded)");
     check(seen, "t06: each box in view is drawn exactly once (early or late)");

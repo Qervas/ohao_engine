@@ -4,7 +4,6 @@
 #include "render/deferred/capture_preview_pass.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/frame/preview_extent.hpp"
-#include "render/rt/rt_visibility.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
 

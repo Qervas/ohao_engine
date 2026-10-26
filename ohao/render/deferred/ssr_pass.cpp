@@ -56,9 +56,10 @@ bool SSRPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     m_sampler = createSampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
     if (m_sampler == VK_NULL_HANDLE || !createOutputImage()) return false;
 
-    // The trace: 4 sampled images, the sampler and its output; the resolve: 4 sampled images
+    // The trace: 5 sampled images (the emissive target last), the sampler and its output; the
+    // resolve: 4 sampled images
     // (the trace, position, the environment's specular, its weight) and the lit image.
-    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8 * MAX_FRAMES_IN_FLIGHT},
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 9 * MAX_FRAMES_IN_FLIGHT},
                                           {VK_DESCRIPTOR_TYPE_SAMPLER, MAX_FRAMES_IN_FLIGHT},
                                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_FRAMES_IN_FLIGHT}};
     VkDescriptorPoolCreateInfo pi{};
@@ -72,12 +73,13 @@ bool SSRPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     const VkDescriptorSetLayoutBinding trace[] = {
         layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-        layoutBinding(4, VK_DESCRIPTOR_TYPE_SAMPLER),       layoutBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
+        layoutBinding(4, VK_DESCRIPTOR_TYPE_SAMPLER),       layoutBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        layoutBinding(6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)};
     const VkDescriptorSetLayoutBinding resolve[] = {
         layoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), layoutBinding(3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         layoutBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)};
-    if (!createSetLayout(trace, 6, m_descriptorLayout, m_descriptorSets) ||
+    if (!createSetLayout(trace, 7, m_descriptorLayout, m_descriptorSets) ||
         !createSetLayout(resolve, 5, m_resolveDescriptorLayout, m_resolveSets))
         return false;
 
@@ -139,22 +141,23 @@ void SSRPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     // The trace, at half resolution.
     {
         const VkDescriptorSet set = m_descriptorSets[frameIndex];
-        const VkDescriptorImageInfo infos[6] = {
+        const VkDescriptorImageInfo infos[7] = {
             {VK_NULL_HANDLE, m_gbuffer->getPositionView(), kReadOnly},
             {VK_NULL_HANDLE, m_gbuffer->getNormalView(), kReadOnly},
             {VK_NULL_HANDLE, m_gbuffer->getDepthView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
             {VK_NULL_HANDLE, m_litSceneView, kReadOnly},
             {m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED},
-            {VK_NULL_HANDLE, m_output.view, kGeneral}};
-        VkWriteDescriptorSet writes[6];
-        for (uint32_t i = 0; i < 6; ++i) {
-            const VkDescriptorType type = i < 4 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+            {VK_NULL_HANDLE, m_output.view, kGeneral},
+            {VK_NULL_HANDLE, m_gbuffer->getEmissiveView(), kReadOnly}};
+        VkWriteDescriptorSet writes[7];
+        for (uint32_t i = 0; i < 7; ++i) {
+            const VkDescriptorType type = i < 4 || i == 6 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
                                         : i == 4 ? VK_DESCRIPTOR_TYPE_SAMPLER
                                                  : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             writes[i] = rtc::descriptorWrite(set, i, type);
             writes[i].pImageInfo = &infos[i];
         }
-        vkUpdateDescriptorSets(m_device, 6, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
 
         rtc::transition(cmd, m_output, kGeneral, kCompute, VK_ACCESS_SHADER_READ_BIT, kCompute, VK_ACCESS_SHADER_WRITE_BIT,
                         true);

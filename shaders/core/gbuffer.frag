@@ -95,6 +95,26 @@ void main() {
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
 
+    // Velocity: Current - Previous screen position
+    // Convert from clip space to NDC ([-1,1])
+    vec2 currentNDC = fragCurrentPos.xy / fragCurrentPos.w;
+    vec2 prevNDC = fragPrevPos.xy / fragPrevPos.w;
+    // Velocity in NDC space (multiply by 0.5 to get screen-space UV difference)
+    outVelocity = (currentNDC - prevNDC) * 0.5;
+
+    // A light's emitter mesh (kInstanceEmitter): pure emission, its radiance in
+    // InstanceGpu.giAlbedoPacked.rgb, on the front side (black behind, as the path tracer's
+    // hit). Emissive alpha 1 tells lighting to add nothing and SSR to reflect nothing of it:
+    // the analytic light already lights and reflects.
+    if ((inst.flags & kInstanceEmitter) != 0u) {
+        const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);
+        outGBuffer0 = vec4(fragWorldPos, -1.0);   // metallic -1: RT shadows and GI skip it as sky
+        outGBuffer1 = vec4(encodeNormalOctahedron(N) * 0.5 + 0.5, 1.0, dot(radiance, vec3(0.2126, 0.7152, 0.0722)));
+        outGBuffer2 = vec4(0.0, 0.0, 0.0, 1.0);
+        outEmissive = vec4(radiance, 1.0);
+        return;
+    }
+
     // Albedo: the material's base colour, times the albedo texture when there is one, as the
     // path tracer's hit computes it (rt/pt_closesthit.rchit). The vertex colour is not a
     // factor: primitives carry their colour as vertex colour and base colour both, and
@@ -168,12 +188,4 @@ void main() {
 
     // GBuffer2: Albedo + AO
     outGBuffer2 = vec4(albedo, ao);
-
-    // Velocity: Current - Previous screen position
-    // Convert from clip space to NDC ([-1,1])
-    vec2 currentNDC = fragCurrentPos.xy / fragCurrentPos.w;
-    vec2 prevNDC = fragPrevPos.xy / fragPrevPos.w;
-
-    // Velocity in NDC space (multiply by 0.5 to get screen-space UV difference)
-    outVelocity = (currentNDC - prevNDC) * 0.5;
 }

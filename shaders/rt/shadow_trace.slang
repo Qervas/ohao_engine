@@ -31,7 +31,6 @@ import shared.layout;
 [[vk::push_constant]] ConstantBuffer<ShadowTracePush> pc;
 
 static const float kTwoPi = 6.2831853;
-static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)
 
 // PCG hash (Jarzynski & Olano 2020): integer in, integer out, no float state.
 uint pcg(uint v)
@@ -151,7 +150,7 @@ float traceOne(uint pixelKey, uint l, uint s, float3 p, float3 origin, float3 n)
     ray.TMax = tMax;
     // Any opaque hit occludes: the first one ends the search.
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
-    q.TraceRayInline(scene, 0, kRayMaskStatic, ray);
+    q.TraceRayInline(scene, 0, kRayMaskScene, ray);   // a light's emitter mesh never occludes
     q.Proceed();
     return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
@@ -166,7 +165,7 @@ void trace(uint3 id : SV_DispatchThreadID)
     const uint count = min(pc.extent.z, kShadowMaxLights);
 
     const float4 position = gPosition.Load(int3(pixel, 0));
-    if (all(position == float4(0.0)))   // sky: nothing to shadow
+    if (all(position == float4(0.0)) || position.w < 0.0)   // sky, or a light's emitter mesh: nothing to shadow
     {
         if (reference)
         {

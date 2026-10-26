@@ -84,7 +84,7 @@ void InstanceTable::write(uint32_t slot, const InstanceDesc& desc, uint32_t mate
     g.mesh = desc.mesh.index;
     g.materialRefOffset = slot * kMaxMaterialRefsPerInstance;
     g.materialRefCount = refCount;
-    g.flags = desc.visible ? kInstanceVisible : 0u;
+    g.flags = (desc.visible ? kInstanceVisible : 0u) | (desc.emitter ? kInstanceEmitter : 0u);
     g.giAlbedoPacked = desc.giAlbedoPacked;
 
     InstanceGpu& cur = m_gpu[slot];

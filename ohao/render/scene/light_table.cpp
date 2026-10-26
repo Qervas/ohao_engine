@@ -91,6 +91,32 @@ glm::mat4 lightSpaceMatrix(const LightData& light) {
     return glm::mat4(1.0f);
 }
 
+std::optional<LightEmitter> lightEmitter(const LightDesc& d) {
+    constexpr float kPi = glm::pi<float>();
+    const float r = std::max(d.radius, 0.01f);   // the path tracer's emitter radius
+    LightEmitter e;
+    switch (d.kind) {
+    case LightKind::Point:
+    case LightKind::Spot:
+        if (!(d.radius > 0.0f)) return std::nullopt;
+        e.world = glm::scale(glm::translate(glm::mat4(1.0f), d.position), glm::vec3(r));
+        e.radiance = d.color * (d.intensity / (kPi * r * r));
+        return e;
+    case LightKind::AreaRect: {
+        const glm::vec3 n = glm::cross(d.areaEdge1, d.areaEdge2);
+        const float len = glm::length(n);
+        if (!(len > 0.0f)) return std::nullopt;
+        e.quad = true;
+        e.world = glm::mat4(glm::vec4(d.areaEdge1, 0.0f), glm::vec4(d.areaEdge2, 0.0f), glm::vec4(n / len, 0.0f),
+                            glm::vec4(d.position, 1.0f));
+        e.radiance = d.color * (d.intensity / (4.0f * kPi * r * r));
+        return e;
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
 bool LightTable::initialize(GpuAllocator& allocator) {
     m_allocator = &allocator;
     m_rtBuffer = allocator.createBuffer(kHeaderBytes + VkDeviceSize{MAX_GPU_LIGHTS} * sizeof(GPULight),

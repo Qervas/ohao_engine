@@ -191,6 +191,16 @@ void main() {
         return;
     }
 
+    // A light's emitter mesh (emissive alpha 1, core/gbuffer.frag): its radiance and nothing
+    // else. No light, environment or GI reaches it, and with E = W = 0 SSR leaves it alone.
+    const vec4 emitted = texture(gBufferEmissive, inTexCoord);
+    if (emitted.a > 0.5) {
+        outColor = vec4(emitted.rgb, 1.0);
+        outEnvSpecular = vec4(0.0);
+        outSpecularWeight = vec4(0.0);
+        return;
+    }
+
     // Unpack G-Buffer
     vec3 fragPos = gBuffer0Sample.rgb;
     float metallic = gBuffer0Sample.a;
@@ -364,7 +374,7 @@ void main() {
 
     // Emitted radiance, as the G-buffer wrote it (the emissive texture times its strength, the
     // path tracer's hit emission): its own colour, independent of the albedo and the lighting
-    const vec3 emissive = texture(gBufferEmissive, inTexCoord).rgb;
+    const vec3 emissive = emitted.rgb;
 
     // Final color
     vec3 color = ambient + Lo + emissive;

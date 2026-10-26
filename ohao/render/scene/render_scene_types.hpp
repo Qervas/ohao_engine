@@ -4,6 +4,7 @@
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "scene/asset/model.hpp"   // Vertex
 #include "gpu/layout_meta.hpp"
+#include "gpu/shared_layout.hpp"
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
@@ -75,6 +76,9 @@ struct InstanceDesc {
     glm::mat4 world{1.0f};
     glm::mat4 prevWorld{1.0f};
     bool visible{true};
+    // A light's emitter mesh (RenderScene makes them from the lights; kInstanceEmitter):
+    // giAlbedoPacked.rgb is then its radiance.
+    bool emitter{false};
     glm::vec4 giAlbedoPacked{0.73f, 0.73f, 0.73f, 0.95f};   // see InstanceGpu
 };
 
@@ -124,16 +128,18 @@ struct InstanceGpu {
     uint32_t mesh;
     uint32_t materialRefOffset;
     uint32_t materialRefCount;
-    uint32_t flags;          // bit 0 visible
+    uint32_t flags;          // kInstanceVisible, kInstanceEmitter
     // RT GI's bounce albedo: rgb, read by rt/gi_trace.slang at a hit (kInstanceGpuGiAlbedoOffset
     // in shaders/shared/layout.json). a = the legacy packed word: metallic>0.5 ?
     // -(roughness+0.001) : roughness, then +/-10 when the mesh has > 100 vertices; nothing
-    // reads it.
+    // reads it. An emitter's rgb is its emitted radiance instead (no GI ray reaches one).
     glm::vec4 giAlbedoPacked;
 };
 static_assert(sizeof(InstanceGpu) == 160);
 
 inline constexpr uint32_t kInstanceVisible = 1u;
+// A light's emitter mesh: pure emission, seen by camera rays and the G-buffer only.
+inline constexpr uint32_t kInstanceEmitter = gpu::shared::kInstanceEmitter;
 
 struct MeshGpu {
     uint32_t vertexOffset;        // in vertices

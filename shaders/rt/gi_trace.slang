@@ -39,7 +39,6 @@ import shared.layout;
 
 static const float kPi = 3.14159265;
 static const float kTwoPi = 6.2831853;
-static const uint kRayMaskStatic = 0x01u;   // RT_RAY_MASK_STATIC (render/rt/rt_visibility.hpp)
 static const float kRayLength = 100.0;
 
 uint pcg(uint v)
@@ -124,7 +123,7 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
     ray.Direction = dir;
     ray.TMax = kRayLength;
     RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskStatic, ray);
+    q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskScene, ray);   // light emitters are camera-only
     while (q.Proceed()) {}
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
@@ -152,7 +151,7 @@ void trace(uint3 id : SV_DispatchThreadID)
     const uint2 full = min(reference ? pixel : pixel << pc.flags.w, pc.extent.zw - 1u);
 
     const float4 position = gPosition.Load(int3(full, 0));
-    if (all(position == float4(0.0)))   // sky: no indirect light
+    if (all(position == float4(0.0)) || position.w < 0.0)   // sky, or a light's emitter mesh: no indirect light
     {
         radianceOut[pixel] = float4(0.0);
         if (reference) refMean[pixel] = float4(0.0);

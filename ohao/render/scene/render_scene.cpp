@@ -5,6 +5,8 @@
 #include "render/scene/mesh_registry.hpp"
 #include "gpu/shared_layout.hpp"
 
+#include <glm/gtc/constants.hpp>
+
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -65,6 +67,14 @@ struct RenderScene::Impl {
     std::vector<gpu::shared::DrawRecord> drawRecords;
     uint32_t meshletEntries{0};   // the uploaded table's meshlets, all draws
 
+    // The lights' emitter instances (lightEmitter()), one per light that has one, in light
+    // order; their meshes and material are registered by the first light that needs them.
+    bool emittersEnabled{true};
+    std::vector<uint32_t> emitterSlots;
+    MeshHandle emitterSphere{}, emitterQuad{};
+    MaterialHandle emitterMaterial{};
+    bool emitterAssetsReady{false};
+
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
     void retire(std::vector<GpuBuffer>& bufs) {
@@ -109,7 +119,9 @@ struct RenderScene::Impl {
         const bool live = instances.live(slot);
         vi.accelerationStructureReference = mesh && live ? rtAccel->getBlasAddress(mesh->blas) : 0;
         const bool visible = live && (g.flags & kInstanceVisible) != 0;
-        vi.mask = visible ? 0xFFu : 0u;
+        // A light's emitter mesh is seen by the path tracer's camera rays only (kRayMaskCamera).
+        vi.mask = !visible ? 0u
+                : (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;
         vi.instanceShaderBindingTableRecordOffset = 0;
         vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 
@@ -215,7 +227,8 @@ struct RenderScene::Impl {
                                                                                    : std::array<uint32_t, 2>{0u, 0u};
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
-                                     mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1]});
+                                     mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1],
+                                     (g.flags & kInstanceEmitter) != 0});
             }
         }
         drawsDirty = false;
@@ -246,7 +259,9 @@ struct RenderScene::Impl {
             const Draw& d = draws[i];
             gpu::shared::DrawRecord& r = drawRecords[i];
             r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
-            r.info = {d.materialSlot, d.oneSided ? gpu::shared::kDrawOneSided : 0u, d.firstMeshlet, d.meshletCount};
+            r.info = {d.materialSlot,
+                      (d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u),
+                      d.firstMeshlet, d.meshletCount};
             r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};
             r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};
             entries += d.meshletCount;
@@ -258,6 +273,97 @@ struct RenderScene::Impl {
     }
 
     [[nodiscard]] bool drawTableStale() const noexcept { return uploadedVersion != drawsVersion && !draws.empty(); }
+
+    // The emitter meshes (the unit sphere, 24 x 12, and the unit quad, both counter-clockwise seen
+    // from outside, the side their normals face) and their material (black, lit by nothing:
+    // the shaders read an emitter's radiance from its instance).
+    bool ensureEmitterAssets() {
+        if (emitterAssetsReady) return true;
+        std::vector<Vertex> v;
+        std::vector<uint32_t> idx;
+        constexpr int kSectors = 24, kStacks = 12;
+        for (int i = 0; i <= kStacks; ++i) {
+            const float theta = glm::pi<float>() * static_cast<float>(i) / kStacks;
+            for (int j = 0; j <= kSectors; ++j) {
+                const float phi = glm::two_pi<float>() * static_cast<float>(j) / kSectors;
+                Vertex x{};
+                x.position = {std::sin(theta) * std::cos(phi), std::cos(theta), std::sin(theta) * std::sin(phi)};
+                x.normal = x.position;
+                x.color = glm::vec3(1.0f);
+                x.texCoord = {static_cast<float>(j) / kSectors, static_cast<float>(i) / kStacks};
+                v.push_back(x);
+            }
+        }
+        const auto tri = [&](uint32_t a, uint32_t b, uint32_t c) {
+            const glm::vec3 pa = v[a].position, pb = v[b].position, pc = v[c].position;
+            if (glm::dot(glm::cross(pb - pa, pc - pa), pa + pb + pc) < 0.0f) std::swap(b, c);   // outward
+            idx.insert(idx.end(), {a, b, c});
+        };
+        for (int i = 0; i < kStacks; ++i)
+            for (int j = 0; j < kSectors; ++j) {
+                const uint32_t a = static_cast<uint32_t>(i * (kSectors + 1) + j), b = a + kSectors + 1;
+                if (i != 0) tri(a, b, a + 1);                   // the poles' quads are triangles
+                if (i != kStacks - 1) tri(a + 1, b, b + 1);
+            }
+        MeshData sphere{v, idx, {}, {}, "light emitter sphere"};
+        std::vector<GpuBuffer> retired;
+        uint32_t grown = 0;
+        emitterSphere = meshes.registerMesh(sphere, retired, grown);
+
+        std::vector<Vertex> q(4);
+        const glm::vec3 corners[4] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}};
+        for (int i = 0; i < 4; ++i) {
+            q[i].position = corners[i];
+            q[i].normal = {0.0f, 0.0f, 1.0f};
+            q[i].color = glm::vec3(1.0f);
+            q[i].texCoord = glm::vec2(corners[i]);
+        }
+        const std::vector<uint32_t> qi = {0, 1, 2, 0, 2, 3};
+        MeshData quad{q, qi, {}, {}, "light emitter quad"};
+        emitterQuad = meshes.registerMesh(quad, retired, grown);
+        stats.arenaGrowths += grown;
+        retire(retired);
+
+        MaterialDesc black;
+        black.baseColor = glm::vec3(0.0f);
+        black.roughness = 1.0f;
+        emitterMaterial = materials.add(black);   // double-sided: an area light is black behind
+        emitterAssetsReady = meshes.info(emitterSphere) && meshes.info(emitterQuad);
+        if (!emitterAssetsReady) OHAO_LOG(Error, render, "RenderScene: the light emitter meshes could not be built");
+        return emitterAssetsReady;
+    }
+
+    // One emitter instance per light that has one, in light order, slots reused in that order:
+    // an unchanged light rewrites identical bytes and uploads nothing.
+    void syncEmitters() {
+        std::vector<LightEmitter> want;
+        if (emittersEnabled)
+            for (const LightDesc& d : lights.descs())
+                if (const auto e = lightEmitter(d)) want.push_back(*e);
+        if (!want.empty() && !ensureEmitterAssets()) want.clear();
+        const MaterialHandle mats[1] = {emitterMaterial};
+        for (std::size_t i = 0; i < want.size(); ++i) {
+            InstanceDesc d{};
+            d.mesh = want[i].quad ? emitterQuad : emitterSphere;
+            d.materials = mats;
+            d.world = d.prevWorld = want[i].world;
+            d.emitter = true;
+            d.giAlbedoPacked = glm::vec4(want[i].radiance, 1.0f);
+            if (i < emitterSlots.size()) {
+                instances.update(emitterSlots[i], d, materials.count());
+                stageTlasInstance(emitterSlots[i], false);
+            } else {
+                const uint32_t slot = instances.create(d, materials.count());
+                stageTlasInstance(slot, true);
+                emitterSlots.push_back(slot);
+            }
+        }
+        while (emitterSlots.size() > want.size()) {
+            instances.destroy(emitterSlots.back());
+            stageTlasInstance(emitterSlots.back(), true);
+            emitterSlots.pop_back();
+        }
+    }
 };
 
 RenderScene::RenderScene() : m(std::make_unique<Impl>()) {}
@@ -334,6 +440,8 @@ void RenderScene::shutdown() {
     }
     m->allocator.shutdown();
     m->draws.clear();
+    m->emitterSlots.clear();
+    m->emitterAssetsReady = false;
     m->initialized = false;
 }
 
@@ -394,7 +502,16 @@ void RenderScene::destroyInstance(uint32_t slot) {
 void RenderScene::setLights(std::span<const LightDesc> lights) {
     if (!m->initialized) return;
     m->lights.set(lights);
+    m->syncEmitters();
 }
+
+void RenderScene::setLightEmitters(bool enabled) {
+    if (!m->initialized || enabled == m->emittersEnabled) return;
+    m->emittersEnabled = enabled;
+    m->syncEmitters();
+}
+
+std::span<const uint32_t> RenderScene::lightEmitterSlots() const { return m->emitterSlots; }
 
 void RenderScene::setEnvMapTextureIndex(uint32_t texIdx) {
     if (!m->initialized) return;
