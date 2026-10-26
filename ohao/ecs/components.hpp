@@ -212,6 +212,7 @@ struct Collider {
     ColliderShape shape{ColliderShape::Box};
     glm::vec3 size{0.0f};     // box: half extents; sphere: x = radius; capsule: x = radius, y = half height
     glm::vec3 offset{0.0f};   // the shape's centre in the entity's frame (with an explicit size)
+    bool trigger{false};      // a sensor: reports bodies entering and leaving it, blocks nothing
 };
 
 // How the entity's body moves. A Collider without a RigidBody is static.

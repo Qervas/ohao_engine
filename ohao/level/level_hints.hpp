@@ -3,8 +3,8 @@
 // hint schema"): what a glTF node's extras, its name and the default scene's extras say about
 // the entity the node becomes.
 //
-//   - Keys: col, body, mass, fric, rest, vis, spawn, socket. The default scene's extras may
-//     set col and body for every node that does not.
+//   - Keys: col, body, mass, fric, rest, trig, vis, spawn, socket. The default scene's extras
+//     may set col and body for every node that does not.
 //   - Component passthrough: a capitalised key naming a saved component, with an object
 //     value, is that component, read as a scene file reads it (same diagnostics).
 //   - Unreal naming: a mesh node UCX_<target>[_NN] reads as {"col":"convex","vis":0}; an
@@ -35,6 +35,7 @@ struct LevelHints {
     std::optional<ecs::ColliderShape> col;   // unset: the default (mesh on mesh nodes, none elsewhere)
     std::optional<ecs::Motion> body;         // unset: static
     std::optional<float> mass, fric, rest;   // unset: 10 kg (dynamic only), 0.6, 0
+    bool trigger = false;                    // trig 1: the collider is a trigger volume
     bool visible = true;                     // vis 0: collision only, no MeshSource
     std::string spawn, socket;               // empty: none
     // Passed-through components, in key order: the type and its value as compact JSON.

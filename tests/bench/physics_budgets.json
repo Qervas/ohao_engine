@@ -1,0 +1,12 @@
+{
+  "comment": "Spec docs/specs/2026-10-26-player-physics-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep). Changing a budget needs Frank's OK.",
+  "currentStep": 1,
+  "budgets": {
+    "blockout_step_ms": { "max": 0.25, "gatedFrom": 1 },
+    "blockout_rest_step_ms": { "max": 0.02, "gatedFrom": 1 },
+    "events_1k_ms": { "max": 0.5, "gatedFrom": 1 },
+    "player_step_ms": { "max": 0.1, "gatedFrom": 2 },
+    "boxes1k_step_ms": { "max": 4, "gatedFrom": 5 }
+  },
+  "noise": { "maxCalibrationSlowdown": 1.25, "maxExternalCorePct": 50 }
+}

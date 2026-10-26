@@ -113,8 +113,12 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
          "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."},
         {"physics.info", p.find<PhysicsInfoParams>(),
-         "{bodies, shapes, unstepped, buildMs, warnings?: [{code, entity, name, message}]}",
-         "The physics scene: bodies by motion, shapes by kind. Dynamic bodies are built, not stepped yet."},
+         "{bodies, shapes, steps, awake, contacts, triggers?, buildMs, warnings?: [{code, entity, name, message}]}",
+         "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."},
+        {"physics.events", p.find<PhysicsEventsParams>(),
+         "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed}], next, dropped?}",
+         "Contacts begun/ended and triggers entered/exited (world.step runs physics), oldest first. Pass the reply's "
+         "next as since to read on."},
     };
 }
 
@@ -849,7 +853,7 @@ constexpr MethodEntry kDispatch[] = {
     {"world.restore", worldRestore, true}, {"render.capture", renderCapture},
     {"render.stats", renderStats},   {"render.settings", renderSettings}, {"log.read", logRead},
     {"level.info", methodLevelInfo}, {"level.reload", methodLevelReload, true},
-    {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo},
+    {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo}, {"physics.events", methodPhysicsEvents},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

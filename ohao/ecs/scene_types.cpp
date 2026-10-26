@@ -40,8 +40,8 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
     r.enumeration<Motion>("Motion")
         .doc("How a rigid body moves.")
         .value("Static", Motion::Static, "Never moves")
-        .value("Dynamic", Motion::Dynamic, "Moved by the simulation (not stepped yet: sub-project 6)")
-        .value("Kinematic", Motion::Kinematic, "Moved by its transform, pushing dynamic bodies");
+        .value("Dynamic", Motion::Dynamic, "Moved by the simulation; writes its entity's Transform each step")
+        .value("Kinematic", Motion::Kinematic, "Moved by its transform; dynamic bodies collide with it");
 
     // ---- authoring components (saved in scene files) -----------------------------------
 
@@ -218,10 +218,13 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .doc("Zero: fit to the mesh. Box: half extents; Sphere: x is the radius; Capsule: x the radius, y the half "
                  "height of its straight part")
             .unit("m").min(0.0)
-        .field("offset", &Collider::offset).doc("The shape's centre in the entity's frame, with an explicit size").unit("m");
+        .field("offset", &Collider::offset).doc("The shape's centre in the entity's frame, with an explicit size").unit("m")
+        .field("trigger", &Collider::trigger)
+            .doc("A trigger volume: reports bodies entering and leaving it (trigger_enter, trigger_exit) and blocks "
+                 "nothing");
     r.type<RigidBody>("RigidBody").component().host(makeComponentOps<RigidBody>())
-        .doc("How the entity's body moves. Dynamic bodies are built but not stepped until the simulation steps "
-             "physics (sub-project 6).")
+        .doc("How the entity's body moves. Dynamic bodies are simulated at the world's fixed step and move their "
+             "entity; static and kinematic ones follow it.")
         .field("motion", &RigidBody::motion).doc("Static, Dynamic or Kinematic")
         .field("mass", &RigidBody::mass).doc("Mass of a dynamic body").unit("kg").min(0.001)
         .field("friction", &RigidBody::friction).doc("Surface friction").unitless().min(0.0).max(1.0)

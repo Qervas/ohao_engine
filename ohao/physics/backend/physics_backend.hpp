@@ -201,6 +201,9 @@ struct BodyCreationInfo {
     // CCD - prevents fast objects from tunneling through thin surfaces
     bool useCCD = false;
 
+    // A sensor: reports contacts (to the contact listener) and blocks nothing
+    bool isSensor = false;
+
     // Collision layer (0 = auto-assign based on motionType)
     uint16_t layer = 0;
 };

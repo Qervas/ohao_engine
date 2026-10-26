@@ -335,6 +335,11 @@ bool JoltPhysicsBackend::initialize(const PhysicsWorldConfig& config) {
 
         m_physicsSystem->SetGravity(toJolt(config.gravity));
         m_physicsSystem->SetContactListener(m_contactListener.get());
+        // Jolt lets resting bodies sink up to 2 cm into each other by default: a dropped crate
+        // rested visibly in the floor. 5 mm keeps stacks steady and is not seen.
+        JPH::PhysicsSettings settings = m_physicsSystem->GetPhysicsSettings();
+        settings.mPenetrationSlop = 0.005f;
+        m_physicsSystem->SetPhysicsSettings(settings);
 
         m_collisionSteps = 1;
         m_initialized = true;
@@ -537,6 +542,7 @@ BodyHandle JoltPhysicsBackend::createBody(const BodyCreationInfo& info) {
         bodySettings.mAngularDamping = info.angularDamping;
         bodySettings.mGravityFactor = info.gravityEnabled ? info.gravityScale : 0.0f;
         bodySettings.mAllowSleeping = true;
+        bodySettings.mIsSensor = info.isSensor;
 
         // CCD
         if (info.useCCD) {

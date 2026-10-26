@@ -24,7 +24,7 @@ using reflect::JsonType;
 
 namespace {
 
-constexpr std::array<std::string_view, 8> kHintKeys = {"col", "body", "mass", "fric", "rest", "vis", "spawn", "socket"};
+constexpr std::array<std::string_view, 9> kHintKeys = {"col", "body", "mass", "fric", "rest", "trig", "vis", "spawn", "socket"};
 constexpr std::array<std::string_view, 6> kShapes = {"box", "sphere", "capsule", "convex", "mesh", "none"};   // ColliderShape order
 constexpr std::array<std::string_view, 3> kMotions = {"static", "dynamic", "kinematic"};                       // Motion order
 constexpr std::size_t kMaxSpawn = 32;    // SpawnPoint.tag's limit
@@ -179,6 +179,10 @@ LevelHints parseHints(const GltfStructure& s, int node, const reflect::TypeRegis
                     const auto v = number(m);
                     if (v && *v >= 0.0 && *v <= 1.0) (key == "fric" ? h.fric : h.rest) = static_cast<float>(*v);
                     else sink.add("E_LEVEL_EXTRAS", key, "is a number in [0, 1]; got " + shown(*d, m));
+                } else if (key == "trig") {
+                    const auto v = number(m);
+                    if (v && (*v == 0.0 || *v == 1.0)) h.trigger = *v != 0.0;
+                    else sink.add("E_LEVEL_EXTRAS", key, "is 1 (a trigger volume) or 0; got " + shown(*d, m));
                 } else if (key == "vis") {
                     const auto v = number(m);
                     if (v && (*v == 0.0 || *v == 1.0)) {
@@ -272,15 +276,19 @@ std::string extrasJsonSchema() {
         w.key("description"); w.string(what);
         w.endObject();
     }
-    w.key("vis");
-    w.beginObject();
-    w.key("enum");
-    w.beginArray();
-    w.int64(0);
-    w.int64(1);
-    w.endArray();
-    w.key("description"); w.string("0: collision only, not drawn");
-    w.endObject();
+    for (const auto& [key, what] : {std::pair{"trig", "1: the collider is a trigger volume (reports bodies entering and "
+                                                      "leaving, blocks nothing)"},
+                                    std::pair{"vis", "0: collision only, not drawn"}}) {
+        w.key(key);
+        w.beginObject();
+        w.key("enum");
+        w.beginArray();
+        w.int64(0);
+        w.int64(1);
+        w.endArray();
+        w.key("description"); w.string(what);
+        w.endObject();
+    }
     for (const auto& [key, limit, what] : {std::tuple{"spawn", kMaxSpawn, "SpawnPoint tag (player, enemy, ...)"},
                                            std::tuple{"socket", kMaxSocket, "Socket name (an attach point)"}}) {
         w.key(key);

@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/instantiate.hpp"
+#include "ecs/transform_system.hpp"
 #include "physics/world/physics_world.hpp"
 #include "scene/asset/model.hpp"
 
@@ -51,6 +52,23 @@ float maxAbs(glm::vec3 v) { return std::max({std::fabs(v.x), std::fabs(v.y), std
 bool nonUniform(glm::vec3 s) {
     const glm::vec3 a = glm::abs(s);
     return maxAbs(s) - std::min({a.x, a.y, a.z}) > 0.01f * maxAbs(s);
+}
+
+// The same rotation within eps per component (q and -q are the same rotation).
+bool sameRotation(glm::quat a, glm::quat b, float eps) {
+    if (glm::dot(a, b) < 0.0f) b = -b;
+    return std::fabs(a.x - b.x) <= eps && std::fabs(a.y - b.y) <= eps && std::fabs(a.z - b.z) <= eps &&
+           std::fabs(a.w - b.w) <= eps;
+}
+
+uint64_t pairKey(pb::BodyHandle x, pb::BodyHandle y) {
+    const pb::BodyHandle lo = std::min(x, y), hi = std::max(x, y);
+    return (uint64_t(lo) << 32) | hi;
+}
+
+// Begins and enters sort before ends and exits within a step.
+int kindRank(PhysicsEvent::Kind k) {
+    return k == PhysicsEvent::Kind::ContactBegin || k == PhysicsEvent::Kind::TriggerEnter ? 0 : 1;
 }
 
 pb::MotionType toBackend(Motion m) {
@@ -126,6 +144,23 @@ struct PhysicsScene::Impl {
         enum class Kind : uint8_t { Box, Sphere, Capsule, Convex, Mesh, Compound } kind{Kind::Box};
         glm::vec3 scale{1.0f};   // the world scale the shapes were baked with
         bool hasParts{false};
+        bool trigger{false};     // a sensor
+        // Dynamic bodies: the world pose last written to the entity (or the body was placed at),
+        // so physics' own write-back is told apart from a teleport; awake after the last step.
+        glm::vec3 wpos{0.0f};
+        glm::quat wrot{1, 0, 0, 0};
+        bool awake{true};
+    };
+    // A body pair in contact (or a body inside a trigger): its sub-shape contacts, who is a and b.
+    struct Pair {
+        uint32_t count{0};
+        bool trigger{false};
+        // Jolt removes a sleeping body's contacts (and adds them again when it wakes): such a
+        // pair stays, dormant, until its bodies wake apart.
+        bool dormant{false};
+        entt::entity a{entt::null}, b{entt::null};
+        uint64_t aId{0}, bId{0};
+        glm::vec3 point{0.0f}, normal{0.0f};
     };
 
     entt::registry& reg;
@@ -140,6 +175,17 @@ struct PhysicsScene::Impl {
     double buildMs{0.0};
     std::size_t builds{0};
     bool removing{false};
+    // Events (spec "Events").
+    ankerl::unordered_dense::map<uint64_t, Pair> pairs;
+    std::vector<PhysicsEvent> pending;      // ends from bodies removed since the last step
+    std::vector<PhysicsEvent> stepEvents;   // the latest step's, published
+    std::vector<PhysicsEvent> log;          // a ring of kEventLog, by seq
+    std::size_t dormant{0};                 // pairs kept through their bodies' sleep
+    uint64_t nextSeq{1};
+    uint64_t steps{0};
+    int lastSubsteps{0};
+    bool warnedLongStep{false};
+    PhysicsScene::StepTiming timing;
 
     Impl(entt::registry& r, AssetResolver& a) : reg(r), assets(a) {
         connect<Collider>();
@@ -312,11 +358,37 @@ struct PhysicsScene::Impl {
         return wrap;
     }
 
+    // A removed body's pairs end now (Jolt's later OnContactRemoved for it no longer maps).
+    void endPairsOf(pb::BodyHandle h) {
+        for (auto it = pairs.begin(); it != pairs.end();) {
+            if (pb::BodyHandle(it->first >> 32) != h && pb::BodyHandle(it->first & 0xffffffffu) != h) {
+                ++it;
+                continue;
+            }
+            if (it->second.dormant) --dormant;
+            pending.push_back(endEvent(it->second));
+            it = pairs.erase(it);
+        }
+    }
+
+    [[nodiscard]] PhysicsEvent endEvent(const Pair& p) const {
+        PhysicsEvent ev;
+        ev.kind = p.trigger ? PhysicsEvent::Kind::TriggerExit : PhysicsEvent::Kind::ContactEnd;
+        ev.a = p.a != entt::null && reg.valid(p.a) ? p.a : entt::entity{entt::null};
+        ev.b = p.b != entt::null && reg.valid(p.b) ? p.b : entt::entity{entt::null};
+        ev.aId = p.aId;
+        ev.bId = p.bId;
+        ev.point = p.point;
+        ev.normal = p.normal;
+        return ev;
+    }
+
     void destroyBody(entt::entity e) {
         const auto it = bodies.find(e);
         if (it == bodies.end()) return;
         const pb::BodyHandle h = it->second.handle;
         bodies.erase(it);
+        if (h != pb::INVALID_BODY && !pairs.empty()) endPairsOf(h);
         if (backend && h != pb::INVALID_BODY) {
             backend->destroyBody(h);
             entityOf.erase(h);
@@ -340,6 +412,9 @@ struct PhysicsScene::Impl {
         record.motion = rb.motion;
         record.scale = body.scale;
         record.hasParts = !parts.empty();
+        record.trigger = ownCollider(e) && reg.get<Collider>(e).trigger;
+        record.wpos = body.position;
+        record.wrot = body.rotation;
         if (ownCollider(e))
             if (auto s = shapeOf(e, reg.get<Collider>(e), body.scale, rb.motion, keep, record.kind))
                 children.push_back({std::move(*s), glm::vec3(0.0f), glm::quat(1, 0, 0, 0)});
@@ -363,6 +438,7 @@ struct PhysicsScene::Impl {
         info.mass = rb.mass;
         info.friction = rb.friction;
         info.restitution = rb.restitution;
+        info.isSensor = record.trigger;
         if (parts.empty() && children.size() == 1 && children[0].position == glm::vec3(0.0f) &&
             children[0].rotation == glm::quat(1, 0, 0, 0)) {
             info.shape = std::move(children[0].shape);
@@ -436,14 +512,219 @@ struct PhysicsScene::Impl {
             if (ownCollider(e) || !list.empty()) build(e, list);
         }
 
-        // 3. Moved bodies follow their entities.
+        // 3. Moved bodies follow their entities. A dynamic body's entity moved by the write-back
+        // (its world pose is the one written) stays; moved by anything else, the body jumps
+        // there, at rest.
         for (const entt::entity e : moved) {
             const auto it = bodies.find(e);
             if (it == bodies.end() || !backend) continue;
+            BodyRecord& r = it->second;
             const Placement p = decompose(reg.get<WorldTransform>(e).world);
-            backend->setPosition(it->second.handle, p.position);
-            backend->setRotation(it->second.handle, p.rotation);
+            if (r.motion == Motion::Dynamic) {
+                if (!differs(p.position, r.wpos, 1e-4f) && sameRotation(p.rotation, r.wrot, 1e-4f)) continue;
+                backend->setPosition(r.handle, p.position);
+                backend->setRotation(r.handle, p.rotation);
+                backend->setLinearVelocity(r.handle, glm::vec3(0.0f));
+                backend->setAngularVelocity(r.handle, glm::vec3(0.0f));
+                backend->setAwake(r.handle, true);
+                r.wpos = p.position;
+                r.wrot = p.rotation;
+                r.awake = true;
+                continue;
+            }
+            backend->setPosition(r.handle, p.position);
+            backend->setRotation(r.handle, p.rotation);
         }
+    }
+
+    // ---- the step (sub-project 6) ---------------------------------------------------------------
+
+    // The step's contact and trigger events, from the backend's queue (filled by Jolt's callbacks
+    // during the substeps, on whatever thread; drained here on the simulating one).
+    void drainContacts(std::vector<PhysicsEvent>& out) {
+        for (const pb::ContactEvent& ce : backend->getContactEvents()) {
+            if (ce.type == pb::ContactEvent::Type::PERSIST) continue;
+            if (ce.body1 == pb::INVALID_BODY || ce.body2 == pb::INVALID_BODY) continue;   // a removed body's
+            const uint64_t key = pairKey(ce.body1, ce.body2);
+            if (ce.type == pb::ContactEvent::Type::END) {
+                const auto it = pairs.find(key);
+                if (it == pairs.end() || it->second.count == 0) continue;   // ended when its body was removed
+                if (--it->second.count == 0) {
+                    if (asleep(key)) {
+                        it->second.dormant = true;   // removed because its bodies went to sleep
+                        ++dormant;
+                    } else {
+                        out.push_back(endEvent(it->second));
+                        pairs.erase(it);
+                    }
+                }
+                continue;
+            }
+            const auto e1 = entityOf.find(ce.body1), e2 = entityOf.find(ce.body2);
+            if (e1 == entityOf.end() || e2 == entityOf.end()) continue;
+            Pair& p = pairs[key];
+            if (p.count++ > 0) continue;
+            if (p.dormant) {   // woken still touching: the same contact
+                p.dormant = false;
+                --dormant;
+                continue;
+            }
+            const auto r1 = bodies.find(e1->second), r2 = bodies.find(e2->second);
+            const bool t1 = r1 != bodies.end() && r1->second.trigger, t2 = r2 != bodies.end() && r2->second.trigger;
+            p.trigger = t1 || t2;
+            const uint64_t id1 = idOf(e1->second), id2 = idOf(e2->second);
+            // Contacts: a has the lower id; triggers: a is the trigger. Jolt's normal points from
+            // body 1 toward body 2; ours from a toward b.
+            const bool swap = p.trigger ? (!t1 && t2) : id2 < id1;
+            p.a = swap ? e2->second : e1->second;
+            p.b = swap ? e1->second : e2->second;
+            p.aId = swap ? id2 : id1;
+            p.bId = swap ? id1 : id2;
+            p.point = ce.contactPoint;
+            const float n = glm::length(ce.contactNormal);
+            p.normal = n > 0.0f ? (swap ? -ce.contactNormal : ce.contactNormal) / n : glm::vec3(0.0f);
+            PhysicsEvent ev;
+            ev.kind = p.trigger ? PhysicsEvent::Kind::TriggerEnter : PhysicsEvent::Kind::ContactBegin;
+            ev.a = p.a;
+            ev.b = p.b;
+            ev.aId = p.aId;
+            ev.bId = p.bId;
+            ev.point = p.point;
+            ev.normal = p.normal;
+            ev.speed = std::fabs(glm::dot(ce.relativeVelocity, p.normal));
+            out.push_back(ev);
+        }
+        // Dormant pairs whose bodies woke and were not added again have come apart.
+        if (dormant == 0) return;
+        for (auto it = pairs.begin(); it != pairs.end();) {
+            if (!it->second.dormant || asleep(it->first)) {
+                ++it;
+                continue;
+            }
+            --dormant;
+            out.push_back(endEvent(it->second));
+            it = pairs.erase(it);
+        }
+    }
+
+    // Every moving body of the pair asleep (a static one never wakes).
+    [[nodiscard]] bool asleep(uint64_t key) const {
+        for (const pb::BodyHandle h : {pb::BodyHandle(key >> 32), pb::BodyHandle(key & 0xffffffffu)}) {
+            const auto e = entityOf.find(h);
+            if (e == entityOf.end()) continue;
+            const auto r = bodies.find(e->second);
+            if (r == bodies.end() || r->second.motion == Motion::Static) continue;
+            if (backend->isAwake(h)) return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] uint64_t idOf(entt::entity e) const {
+        const auto* id = reg.valid(e) ? reg.try_get<EntityId>(e) : nullptr;
+        return id ? id->value : 0;
+    }
+
+    // Every dynamic body awake now or at the end of the last step: its pose into its entity's
+    // Transform, through its parent's world transform (the local scale is kept).
+    void writeBack() {
+        for (auto& [e, r] : bodies) {
+            if (r.motion != Motion::Dynamic) continue;
+            const bool awake = backend->isAwake(r.handle);
+            if (!awake && !r.awake) continue;
+            r.awake = awake;
+            const glm::vec3 pos = backend->getPosition(r.handle);
+            const glm::quat rot = backend->getRotation(r.handle);
+            r.wpos = pos;
+            r.wrot = rot;
+            glm::vec3 localPos = pos;
+            glm::quat localRot = rot;
+            if (const auto* parent = reg.try_get<Parent>(e); parent && reg.valid(parent->entity))
+                if (const auto* pw = reg.try_get<WorldTransform>(parent->entity)) {
+                    const Placement pp = decompose(pw->world);
+                    if (nonUniform(pp.scale))
+                        warn(e, "W_PHYSICS_PARENT_SCALE",
+                             "a dynamic body under a parent scaled unevenly: its pose is written approximately");
+                    localPos = glm::vec3(glm::inverse(pw->world) * glm::vec4(pos, 1.0f));
+                    localRot = glm::normalize(glm::inverse(pp.rotation) * rot);
+                }
+            reg.patch<Transform>(e, [&](Transform& t) {
+                t.position = localPos;
+                t.rotation = localRot;
+            });
+            ++timing.writes;
+        }
+    }
+
+    void publish(std::vector<PhysicsEvent>& fresh) {
+        std::stable_sort(fresh.begin(), fresh.end(), [](const PhysicsEvent& x, const PhysicsEvent& y) {
+            const int kx = kindRank(x.kind), ky = kindRank(y.kind);
+            if (kx != ky) return kx < ky;
+            return x.aId != y.aId ? x.aId < y.aId : x.bId < y.bId;
+        });
+        stepEvents.clear();
+        stepEvents.swap(pending);   // removals first: they happened before the step
+        stepEvents.insert(stepEvents.end(), fresh.begin(), fresh.end());
+        if (log.size() < PhysicsScene::kEventLog) log.resize(PhysicsScene::kEventLog);
+        for (PhysicsEvent& ev : stepEvents) {
+            ev.step = steps;
+            ev.seq = nextSeq++;
+            log[(ev.seq - 1) % PhysicsScene::kEventLog] = ev;
+        }
+    }
+
+    void step(float dt) {
+        using Clock = std::chrono::steady_clock;
+        const auto ms = [](Clock::time_point a, Clock::time_point b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        const auto t0 = Clock::now();
+        ++steps;
+        lastSubsteps = 0;
+        timing = {};
+        std::vector<PhysicsEvent> fresh;
+        if (bodies.empty() && touched.empty() && pending.empty() && reg.view<PhysicsMoved>().empty()) {
+            stepEvents.clear();   // a world without colliders: no work at all
+            return;
+        }
+        propagateTransforms(reg);
+        sync();
+        auto t1 = Clock::now(), t2 = t1, t3 = t1;
+        if (backend && dt > 0.0f) {
+            constexpr float kMaxDt = 1.0f / 60.0f;
+            int n = static_cast<int>(std::ceil(dt / kMaxDt - 1e-4f));
+            if (n > PhysicsScene::kMaxSubsteps) {
+                if (!warnedLongStep)
+                    OHAO_LOG(Warn, physics, "physics: a step of {} s is integrated as {} updates of {} s", dt,
+                             PhysicsScene::kMaxSubsteps, dt / float(PhysicsScene::kMaxSubsteps));
+                warnedLongStep = true;
+                n = PhysicsScene::kMaxSubsteps;
+            }
+            n = std::max(n, 1);
+            t1 = Clock::now();
+            for (int i = 0; i < n; ++i) backend->step(dt / float(n));
+            lastSubsteps = n;
+            t2 = Clock::now();
+            drainContacts(fresh);
+            t3 = Clock::now();
+            writeBack();
+        }
+        const auto t4 = Clock::now();
+        publish(fresh);
+        const auto t5 = Clock::now();
+        timing.joltMs = ms(t1, t2);
+        timing.eventsMs = ms(t2, t3) + ms(t4, t5);
+        timing.writeMs = ms(t3, t4);
+        timing.totalMs = ms(t0, t5);
+    }
+
+    [[nodiscard]] std::vector<PhysicsEvent> since(uint64_t after, std::size_t max, uint64_t& dropped) const {
+        const uint64_t last = nextSeq - 1;
+        const uint64_t oldest = last > PhysicsScene::kEventLog ? last - PhysicsScene::kEventLog + 1 : 1;
+        const uint64_t first = std::max(after + 1, oldest);
+        dropped = first > after + 1 ? first - (after + 1) : 0;
+        std::vector<PhysicsEvent> out;
+        for (uint64_t s = first; s <= last && out.size() < max; ++s) out.push_back(log[(s - 1) % PhysicsScene::kEventLog]);
+        return out;
     }
 };
 
@@ -472,9 +753,13 @@ PhysicsInfo PhysicsScene::info() const {
     for (const auto& [e, r] : m->bodies) {
         switch (r.motion) {
             case Motion::Static: ++out.bodies.statics; break;
-            case Motion::Dynamic: ++out.bodies.dynamics; break;
+            case Motion::Dynamic:
+                ++out.bodies.dynamics;
+                if (m->backend && m->backend->isAwake(r.handle)) ++out.awake;
+                break;
             case Motion::Kinematic: ++out.bodies.kinematics; break;
         }
+        if (r.trigger) ++out.triggers;
         switch (r.kind) {
             case Kind::Box: ++out.shapes.box; break;
             case Kind::Sphere: ++out.shapes.sphere; break;
@@ -485,8 +770,34 @@ PhysicsInfo PhysicsScene::info() const {
         }
     }
     out.buildMs = m->buildMs;
-    out.unstepped = out.bodies.dynamics;
+    out.steps = m->steps;
+    out.contacts = static_cast<uint32_t>(m->pairs.size());
     return out;
+}
+
+void PhysicsScene::step(entt::registry&, float dt) { m->step(dt); }
+std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
+std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
+    return m->since(since, max, dropped);
+}
+uint64_t PhysicsScene::nextEventSeq() const noexcept { return m->nextSeq; }
+uint64_t PhysicsScene::steps() const noexcept { return m->steps; }
+int PhysicsScene::lastSubsteps() const noexcept { return m->lastSubsteps; }
+PhysicsScene::StepTiming PhysicsScene::lastStepTiming() const noexcept { return m->timing; }
+
+const char* physicsEventKindName(PhysicsEvent::Kind k) noexcept {
+    switch (k) {
+        case PhysicsEvent::Kind::ContactBegin: return "contact_begin";
+        case PhysicsEvent::Kind::ContactEnd: return "contact_end";
+        case PhysicsEvent::Kind::TriggerEnter: return "trigger_enter";
+        case PhysicsEvent::Kind::TriggerExit: return "trigger_exit";
+    }
+    return "?";
+}
+
+std::span<const PhysicsEvent> physicsEvents(const World& world) {
+    const PhysicsScene* s = physicsScene(world);
+    return s ? s->stepEvents() : std::span<const PhysicsEvent>{};
 }
 
 physics::backend::IPhysicsBackend& PhysicsScene::backend() { return m->ensureBackend(); }
@@ -507,6 +818,8 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     auto scene = std::make_shared<PhysicsScene>(reg, assets);
     reg.ctx().emplace<PhysicsInstalled>(PhysicsInstalled{scene.get()});
     world.addSyncAfter("transform", "physics", [scene](World& w) { scene->sync(w.registry()); });
+    // Once per fixed step, after the simulate systems added so far (spin, fly controller).
+    world.addSimulate("physics", [scene](World& w, float dt) { scene->step(w.registry(), dt); });
     return *scene;
 }
 

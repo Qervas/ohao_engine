@@ -342,7 +342,11 @@ private:
             // Collision: a collider on mesh nodes unless col says otherwise, a RigidBody only
             // when a body hint is given (no RigidBody is static). None for a render-only level.
             const ecs::ColliderShape col = hints.col.value_or(node.mesh >= 0 ? ecs::ColliderShape::Mesh : ecs::ColliderShape::None);
-            if (level.collision && col != ecs::ColliderShape::None) add(want, ecs::Collider{col});
+            if (level.collision && col != ecs::ColliderShape::None) {
+                ecs::Collider c{col};
+                c.trigger = hints.trigger;
+                add(want, c);
+            }
             if (level.collision && (hints.body || hints.mass || hints.fric || hints.rest)) {
                 ecs::RigidBody rb;
                 rb.motion = hints.body.value_or(ecs::Motion::Static);

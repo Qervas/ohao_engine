@@ -1,5 +1,6 @@
 // level.info, level.reload, physics.raycast, physics.info (sub-project 5, step 5;
-// docs/specs/2026-10-26-level-pipeline-design.md, "The agent-facing surface").
+// docs/specs/2026-10-26-level-pipeline-design.md, "The agent-facing surface"), physics.events
+// (sub-project 6, step 1).
 //
 // The session reaches level data and bodies through what the World's install hooks left on it:
 // level::levelSummary / levelDiagnostics / reloadLevel (installLevels, ohao_level_world) and
@@ -28,17 +29,26 @@ namespace {
 constexpr std::size_t kMaxSpawns = 8;     // level.info lists the first spawns (query --has SpawnPoint for all)
 constexpr std::size_t kMaxWarnings = 4;   // and the first warnings, then "moreWarnings"
 constexpr std::size_t kMaxName = 40;      // physics.raycast's name, in bytes (a whole UTF-8 sequence)
+constexpr std::size_t kMaxEventName = 24; // physics.events' an and bn, in bytes
 
-// Positions to 0.1 mm, directions to 1e-4: short numbers, and no -0.
+// Positions to 0.1 mm, directions to 1e-4: short numbers, and no -0 (tested by magnitude: under
+// /fp:fast `r == 0 ? 0 : r` folds to r and keeps the sign).
 float r4(float v) {
-    const float r = std::round(v * 1e4f) / 1e4f;
-    return r == 0.0f ? 0.0f : r;
+    if (std::fabs(v) < 0.5e-4f) return 0.0f;
+    return std::round(v * 1e4f) / 1e4f;
 }
 float ms3(double v) { return static_cast<float>(std::round(v * 1000.0) / 1000.0); }
 
 void writeVec(JsonWriter& out, glm::vec3 v) {
     out.beginArray();
     out.float32(r4(v.x)); out.float32(r4(v.y)); out.float32(r4(v.z));
+    out.endArray();
+}
+
+// Rounded to 1/scale (an event's point and normal to 1 mm and 1e-3).
+void writeVec3(JsonWriter& out, glm::vec3 v, float scale) {
+    out.beginArray();
+    for (int i = 0; i < 3; ++i) out.float32(std::fabs(v[i]) < 0.5f / scale ? 0.0f : std::round(v[i] * scale) / scale);
     out.endArray();
 }
 
@@ -303,7 +313,10 @@ bool methodPhysicsInfo(Session::Impl& s, const JsonDocument&, const JsonNode& pa
     for (const auto& [name, n] : shapes)
         if (n) { out.key(name); out.uint64(n); }
     out.endObject();
-    out.key("unstepped"); out.uint64(info.unstepped);
+    out.key("steps"); out.uint64(info.steps);
+    out.key("awake"); out.uint64(info.awake);
+    out.key("contacts"); out.uint64(info.contacts);
+    if (info.triggers) { out.key("triggers"); out.uint64(info.triggers); }
     out.key("buildMs"); out.float32(ms3(info.buildMs));
     const auto& warnings = physics->warnings();
     if (!warnings.empty()) {
@@ -324,6 +337,47 @@ bool methodPhysicsInfo(Session::Impl& s, const JsonDocument&, const JsonNode& pa
         out.endArray();
         if (warnings.size() > kMaxWarnings * 2) { out.key("moreWarnings"); out.uint64(warnings.size() - kMaxWarnings * 2); }
     }
+    out.endObject();
+    return true;
+}
+
+// physics.events (sub-project 6, step 1; docs/specs/2026-10-26-player-physics-design.md,
+// "Events"): the log after a cursor. Reading changes nothing, so it does not sync.
+bool methodPhysicsEvents(Session::Impl& s, const JsonDocument&, const JsonNode& params, DecodeContext& ctx,
+                         JsonWriter& out) {
+    PhysicsEventsParams p;
+    if (!decodeParams(s, params, ctx, p)) return false;
+    ecs::PhysicsScene* physics = needPhysics(s, params, ctx);
+    if (!physics) return false;
+    uint64_t dropped = 0;
+    const auto since = static_cast<uint64_t>(p.since);
+    const std::vector<ecs::PhysicsEvent> events = physics->eventsSince(since, static_cast<std::size_t>(p.max), dropped);
+    const auto& reg = s.world.registry();
+    const auto nameOf = [&](entt::entity e) {
+        const auto* n = e != entt::null && reg.valid(e) ? reg.try_get<ecs::Name>(e) : nullptr;
+        return n ? utf8Prefix(n->value, kMaxEventName) : std::string();
+    };
+    out.beginObject();
+    out.key("events");
+    out.beginArray();
+    for (const ecs::PhysicsEvent& e : events) {
+        out.beginObject();
+        out.key("seq"); out.uint64(e.seq);
+        out.key("step"); out.uint64(e.step);
+        out.key("kind"); out.string(ecs::physicsEventKindName(e.kind));
+        out.key("a"); out.string(hex16(e.aId));
+        out.key("b"); out.string(hex16(e.bId));
+        out.key("an"); out.string(nameOf(e.a));
+        out.key("bn"); out.string(nameOf(e.b));
+        out.key("point"); writeVec3(out, e.point, 1e3f);
+        out.key("normal"); writeVec3(out, e.normal, 1e3f);
+        out.key("speed"); out.float32(std::round(e.speed * 100.0f) / 100.0f);
+        out.endObject();
+    }
+    out.endArray();
+    // The cursor for the next call: the last event returned, else where the caller is (never past the log).
+    out.key("next"); out.uint64(events.empty() ? std::min(since, physics->nextEventSeq() - 1) : events.back().seq);
+    if (dropped) { out.key("dropped"); out.uint64(dropped); }
     out.endObject();
     return true;
 }

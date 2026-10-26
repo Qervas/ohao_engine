@@ -229,6 +229,10 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("dir", &PhysicsRaycastParams::dir).doc("Direction [x, y, z], any nonzero length").unitless().required()
         .field("max", &PhysicsRaycastParams::max).doc("Farthest hit, in (0, 100000]").unit("m");
     r.type<PhysicsInfoParams>("PhysicsInfoParams").doc("physics.info params");
+    r.type<PhysicsEventsParams>("PhysicsEventsParams").doc("physics.events params")
+        .field("since", &PhysicsEventsParams::since)
+            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
+        .field("max", &PhysicsEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
 }
 
 } // namespace

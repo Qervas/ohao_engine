@@ -231,6 +231,11 @@ struct PhysicsRaycastParams {
     float max{1000.0f};
 };
 struct PhysicsInfoParams {};
+// Sub-project 6, step 1.
+struct PhysicsEventsParams {
+    int64_t since{0};   // the seq of the last event already read (the previous reply's next)
+    int32_t max{32};    // 1..64
+};
 
 // The registry of every params struct and its enums, built once.
 [[nodiscard]] const reflect::TypeRegistry& paramsRegistry();

@@ -38,6 +38,19 @@ endif()
 ohao_add_test(level_bench LABEL bench SERIAL TIMEOUT 600
     COMMAND level_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/level_budgets.json)
 
+# The physics step's budgets (sub-project 6, step 1): the blockout's drop and rest, 1,000 events
+# in a step. CPU, headless. Exit 2 = noisy run (tools/check.py reruns it).
+add_executable(physics_bench physics_bench.cpp bench_env.hpp)
+target_compile_features(physics_bench PRIVATE cxx_std_20)
+target_link_libraries(physics_bench PRIVATE ohao_level_world ohao_ecs ohao_physics ohao_test_harness)
+target_compile_definitions(physics_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_link_options(physics_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+    target_link_libraries(physics_bench PRIVATE psapi)
+endif()
+ohao_add_test(physics_bench LABEL bench SERIAL TIMEOUT 600
+    COMMAND physics_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/physics_budgets.json)
+
 # The renderer's GPU budgets (sub-project 2b, step 1): headless captures of fixed scenes,
 # per-pass timestamps, a GPU calibration kernel. Exit 2 = noisy run (tools/check.py reruns it).
 add_executable(render_bench render_bench.cpp bench_env.hpp gpu_calibration.hpp)
