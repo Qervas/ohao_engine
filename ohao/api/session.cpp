@@ -103,6 +103,18 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "before the host has rendered a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
          "Engine log records after since (pass the last read's next), filtered by level and channel."},
+        {"level.info", p.find<LevelInfoParams>(),
+         "{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders, bodies, spawns: [{tag, entity, pos, yawDeg}], "
+         "lights, cameras, warnings, errors?, loadMs}",
+         "A Level's summary: counts, colliders by shape, bodies by motion, spawns in node order (first 8). "
+         "E_NOT_FOUND for no level or a non-level entity."},
+        {"level.reload", p.find<LevelReloadParams>(), "as level.info",
+         "Re-reads the level's file and rebuilds its entities and bodies in place; an unchanged file keeps world.hash."},
+        {"physics.raycast", p.find<PhysicsRaycastParams>(), "{hit, entity?, name?, point?, normal?, dist?}",
+         "The closest collider along a ray. E_PARAMS for a zero dir or max outside (0, 100000]."},
+        {"physics.info", p.find<PhysicsInfoParams>(),
+         "{bodies, shapes, unstepped, buildMs, warnings?: [{code, entity, name, message}]}",
+         "The physics scene: bodies by motion, shapes by kind. Dynamic bodies are built, not stepped yet."},
     };
 }
 
@@ -836,6 +848,8 @@ constexpr MethodEntry kDispatch[] = {
     {"world.snapshot", worldSnapshot},
     {"world.restore", worldRestore, true}, {"render.capture", renderCapture},
     {"render.stats", renderStats},   {"render.settings", renderSettings}, {"log.read", logRead},
+    {"level.info", methodLevelInfo}, {"level.reload", methodLevelReload, true},
+    {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

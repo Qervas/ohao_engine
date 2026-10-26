@@ -1,0 +1,16 @@
+{"jsonrpc":"2.0","id":1,"result":{"bodies":{},"shapes":{},"unstepped":0,"buildMs":0}}
+{"jsonrpc":"2.0","id":2,"error":{"code":1,"message":"the world has no level","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"","message":"the world has no level","expected":"scene.load a scene with a Level first"}]}}}
+{"jsonrpc":"2.0","id":3,"result":{"entities":5}}
+{"jsonrpc":"2.0","id":4,"result":{"entity":"5c0b10c000000005","path":"assets/levels/blockout_room.glb","nodes":17,"meshes":13,"uniqueMeshes":13,"triangles":152,"colliders":{"box":12,"mesh":1},"bodies":{"static":11,"dynamic":2},"spawns":[{"tag":"enemy","entity":"5aa4124464dec496","pos":[-2.5,0.3,-2],"yawDeg":180},{"tag":"enemy","entity":"4ab39b557083d07b","pos":[3,0.5,-2],"yawDeg":180},{"tag":"player","entity":"2e31f6fd3f3f41d8","pos":[1.5,0,2.2],"yawDeg":0}],"lights":0,"cameras":1,"warnings":[],"loadMs":0}}
+{"jsonrpc":"2.0","id":5,"error":{"code":1,"message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}}
+{"jsonrpc":"2.0","id":6,"result":{"hit":true,"entity":"fb31dd4d0994b3f6","name":"Floor","point":[1.5,0,2.2],"normal":[0,1,0],"dist":0.5}}
+{"jsonrpc":"2.0","id":7,"result":{"hit":false}}
+{"jsonrpc":"2.0","id":8,"result":{"hit":true,"entity":"7466a9fae193fa75","name":"WallSouthA","point":[0.6,1,3],"normal":[0,0,-1],"dist":0.5}}
+{"jsonrpc":"2.0","id":9,"error":{"code":-32602,"message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
+{"jsonrpc":"2.0","id":10,"error":{"code":-32602,"message":"max is outside (0, 100000]","data":[{"code":"E_PARAMS","path":"/max","message":"max is outside (0, 100000]","expected":"a distance in (0, 100000] m"}]}}
+{"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"max is outside (0, 100000]","data":[{"code":"E_PARAMS","path":"/max","message":"max is outside (0, 100000]","expected":"a distance in (0, 100000] m"}]}}
+{"jsonrpc":"2.0","id":12,"result":{"bodies":{"static":11,"dynamic":2},"shapes":{"box":12,"mesh":1},"unstepped":2,"buildMs":0}}
+{"jsonrpc":"2.0","id":13,"result":{"hash":"8faeae8fdbb3afb6","frame":0}}
+{"jsonrpc":"2.0","id":14,"result":{"entity":"5c0b10c000000005","path":"assets/levels/blockout_room.glb","nodes":17,"meshes":13,"uniqueMeshes":13,"triangles":152,"colliders":{"box":12,"mesh":1},"bodies":{"static":11,"dynamic":2},"spawns":[{"tag":"enemy","entity":"5aa4124464dec496","pos":[-2.5,0.3,-2],"yawDeg":180},{"tag":"enemy","entity":"4ab39b557083d07b","pos":[3,0.5,-2],"yawDeg":180},{"tag":"player","entity":"2e31f6fd3f3f41d8","pos":[1.5,0,2.2],"yawDeg":0}],"lights":0,"cameras":1,"warnings":[],"loadMs":0}}
+{"jsonrpc":"2.0","id":15,"result":{"hash":"8faeae8fdbb3afb6","frame":0}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":22,"frame":0,"schemaHash":"e9e1c34d831dc812","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}

@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "3b74cd52cc6e209e",
+  "schemaHash": "bceb25ccbcddc799",
   "units": [
     "m",
     "m/s",
@@ -152,6 +152,18 @@
     {
       "code": "W_COLLIDER_SCALE",
       "meaning": "Warning: a sphere or capsule collider under a scale whose axes differ by more than 1%; it takes the largest axis."
+    },
+    {
+      "code": "E_NOT_FOUND",
+      "meaning": "What a method was asked about is not there: no level in the world, or an entity that is not a level (level.info, level.reload)."
+    },
+    {
+      "code": "E_PARAMS",
+      "meaning": "Params that pass their schema but break a rule of the method: physics.raycast's zero direction, or max outside (0, 100000]."
+    },
+    {
+      "code": "W_LEVEL_NO_PLAYER_SPAWN",
+      "meaning": "Warning: a level without a \"player\" spawn (level.info). Not an error: a prop kit has none."
     }
   ],
   "methods": [],

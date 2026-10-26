@@ -7,7 +7,8 @@ check_serve -- `ohao serve` as a process, end to end (sub-project 4, step 5).
            the server does; tools/list is at most 24 KB.
   test 9   protocol goldens: each scripted session in tests/serve/sessions/*.jsonl runs
            against `ohao serve` (headless, CPU) twice; stdout must equal
-           tests/serve/expected/<name>.jsonl byte for byte both times.
+           tests/serve/expected/<name>.jsonl byte for byte both times, timings (loadMs,
+           buildMs) held as 0.
   test 10  stdout stays clean: rpc_print_server's test.print writes to stdout through every
            C and C++ path; every stdout line must still be a protocol message, and the
            prints must have reached stderr.
@@ -27,6 +28,7 @@ Scratch output goes under build/serve_tmp/ (per process). Needs `jsonschema`.
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -68,11 +70,26 @@ EXAMPLES = {
     "render_stats": {"frames": 30, "passes": True},
     "render_settings": {"set": {"rtGI": {"rays": 4}, "ssr": False}},
     "log_read": {"level": "warn", "channel": "rpc", "limit": 10},
+    "level_info": {"entity": "5c0b10c000000005"},
+    "level_reload": {},
+    "physics_raycast": {"from": [1.5, 0.5, 2.2], "dir": [0, -1, 0], "max": 2},
+    "physics_info": {},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests
-# replays recordings).
-CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay")]
+# replays recordings); the scene here has no level, so level_info and level_reload are
+# E_NOT_FOUND (the level session calls them on the blockout).
+CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay", "level_info", "level_reload")]
+# Timings in results (level.info's loadMs, physics.info's buildMs) vary run to run: the goldens
+# hold them as 0, the rest of each line byte for byte.
+MASKED = (b"loadMs", b"buildMs")
+
+
+def masked(data):
+    for key in MASKED:
+        data = re.sub(rb'"' + key + rb'":-?[0-9.eE+-]+', b'"' + key + b'":0', data)
+        data = re.sub(rb'\\"' + key + rb'\\":-?[0-9.eE+-]+', b'\\"' + key + b'\\":0', data)   # inside MCP text
+    return data
 
 passed = 0
 failed = 0
@@ -174,7 +191,7 @@ def run_session(name):
         s.send(l)
     done = s.wait_reply("end") is not None
     code = s.close()
-    return (b"".join(s.raw) if done and code == 0 else None), code
+    return (masked(b"".join(s.raw)) if done and code == 0 else None), code
 
 
 def test_goldens(update):

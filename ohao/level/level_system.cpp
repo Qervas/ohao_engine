@@ -10,6 +10,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <fstream>
 #include <iterator>
@@ -93,6 +94,7 @@ public:
     void run() {
         for (const entt::entity e : m_gone) {
             m_diags.erase(e);
+            m_info.erase(e);
             if (!m_reg.valid(e) || !m_reg.all_of<ecs::Level>(e)) removeNodes(e);
         }
         m_gone.clear();
@@ -103,8 +105,16 @@ public:
         }
         m_reg.clear<ecs::LevelDirty>();
         std::sort(m_dirty.begin(), m_dirty.end());
-        for (const auto& [seq, e] : m_dirty)
-            if (m_reg.valid(e) && m_reg.all_of<ecs::Level>(e)) expand(e);
+        for (const auto& [seq, e] : m_dirty) {
+            if (!m_reg.valid(e) || !m_reg.all_of<ecs::Level>(e)) continue;
+            const auto t0 = std::chrono::steady_clock::now();
+            expand(e);
+            m_info[e].loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (const auto it = std::find(m_rebuild.begin(), m_rebuild.end(), e); it != m_rebuild.end()) {
+                m_rebuild.erase(it);
+                touchColliders(e);
+            }
+        }
     }
 
     [[nodiscard]] std::vector<Diagnostic> diagnostics(entt::entity level) const {
@@ -112,7 +122,58 @@ public:
         return it == m_diags.end() ? std::vector<Diagnostic>{} : it->second;
     }
 
+    [[nodiscard]] std::optional<LevelSummary> summary(entt::entity level) const {
+        const auto it = m_info.find(level);
+        if (it == m_info.end()) return std::nullopt;
+        const Info& info = it->second;
+        LevelSummary out;
+        out.path = info.path;
+        out.loaded = info.structure != nullptr;
+        out.loadMs = info.loadMs;
+        if (!info.structure) return out;
+        const GltfStructure& s = *info.structure;
+        out.nodes = static_cast<uint32_t>(s.nodes.size());
+        std::vector<bool> used(s.meshes.size(), false);
+        for (const GltfNode& n : s.nodes) {
+            if (n.mesh >= 0 && static_cast<std::size_t>(n.mesh) < s.meshes.size()) {
+                ++out.meshes;
+                out.triangles += s.meshes[static_cast<std::size_t>(n.mesh)].triangles;
+                if (!used[static_cast<std::size_t>(n.mesh)]) {
+                    used[static_cast<std::size_t>(n.mesh)] = true;
+                    ++out.uniqueMeshes;
+                }
+            }
+            out.lights += n.light >= 0 ? 1u : 0u;
+            out.cameras += n.camera >= 0 ? 1u : 0u;
+        }
+        return out;
+    }
+
+    // Forgets the file (its structure here, its meshes in the resolver) and re-expands the level
+    // at the next run; its nodes' colliders are touched then, so the physics system rebuilds them.
+    void reload(entt::entity level) {
+        const ecs::Level& l = m_reg.get<ecs::Level>(level);
+        if (const auto path = m_assets.absolutePath(l.asset); !path.empty()) m_structures.erase(path.generic_string());
+        m_assets.forget(l.asset);
+        m_reg.emplace_or_replace<ecs::LevelDirty>(level);
+        if (std::find(m_rebuild.begin(), m_rebuild.end(), level) == m_rebuild.end()) m_rebuild.push_back(level);
+    }
+
 private:
+    struct Info {
+        std::shared_ptr<const GltfStructure> structure;   // null: the file did not load
+        std::string path;
+        double loadMs{0.0};
+    };
+
+    // An update signal on each collider of the level's nodes, values unchanged.
+    void touchColliders(entt::entity level) {
+        std::vector<entt::entity> nodes;
+        for (auto [e, ln] : m_reg.view<const ecs::LevelNode>().each())
+            if (ln.level == level && m_reg.all_of<ecs::Collider>(e)) nodes.push_back(e);
+        for (const entt::entity e : nodes) m_reg.patch<ecs::Collider>(e);
+    }
+
     void markDirty(entt::registry& r, entt::entity e) { r.emplace_or_replace<ecs::LevelDirty>(e); }
     void onGone(entt::registry&, entt::entity e) { m_gone.push_back(e); }   // only queued: e may be mid-destroy
 
@@ -187,6 +248,7 @@ private:
         diags.clear();
         std::string code, message;
         const auto s = structure(level.asset, code, message);
+        m_info[e] = Info{s, level.asset.path, 0.0};
         if (!s) {
             removeNodes(e);
             Diagnostic d;
@@ -360,6 +422,8 @@ private:
     ankerl::unordered_dense::map<entt::entity, std::vector<Diagnostic>> m_diags;
     std::vector<entt::entity> m_gone;
     std::vector<std::pair<uint64_t, entt::entity>> m_dirty;
+    ankerl::unordered_dense::map<entt::entity, Info> m_info;   // per level: its last expansion
+    std::vector<entt::entity> m_rebuild;                        // levels reloaded: touch their colliders
 };
 
 } // namespace
@@ -387,6 +451,25 @@ std::vector<Diagnostic> levelDiagnostics(const World& world, entt::entity level)
     if (!installed) return {};
     const auto state = installed->state.lock();
     return state ? state->diagnostics(level) : std::vector<Diagnostic>{};
+}
+
+bool levelsInstalled(const World& world) {
+    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    return installed && !installed->state.expired();
+}
+
+std::optional<LevelSummary> levelSummary(const World& world, entt::entity level) {
+    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto state = installed ? installed->state.lock() : nullptr;
+    return state ? state->summary(level) : std::nullopt;
+}
+
+bool reloadLevel(World& world, entt::entity level) {
+    const auto* installed = world.registry().ctx().find<LevelInstalled>();
+    const auto state = installed ? installed->state.lock() : nullptr;
+    if (!state || !world.registry().valid(level) || !world.registry().all_of<ecs::Level>(level)) return false;
+    state->reload(level);
+    return true;
 }
 
 } // namespace ohao::level

@@ -11,6 +11,7 @@
 #include "core/timeline.hpp"
 
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 #include "reflect/json_value.hpp"
 #include "reflect/registry.hpp"
 
@@ -214,6 +215,22 @@ struct LogReadParams {
     std::optional<LogChannelName> channel;
     int32_t limit{50};
 };
+
+// Levels and physics (sub-project 5, step 5).
+inline constexpr float kMaxRayLength = 100'000.0f;   // physics.raycast's max: (0, 1e5] m
+
+struct LevelInfoParams {
+    std::optional<uint64_t> entity;   // absent: the world's only level
+};
+struct LevelReloadParams {
+    std::optional<uint64_t> entity;
+};
+struct PhysicsRaycastParams {
+    glm::vec3 from{0.0f};
+    glm::vec3 dir{0.0f};
+    float max{1000.0f};
+};
+struct PhysicsInfoParams {};
 
 // The registry of every params struct and its enums, built once.
 [[nodiscard]] const reflect::TypeRegistry& paramsRegistry();

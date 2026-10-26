@@ -7,7 +7,10 @@
 #include "api/params.hpp"
 #include "api/session.hpp"
 #include "core/log.hpp"
+#include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
+#include "ecs/physics_scene.hpp"
+#include "level/level_system.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -173,7 +176,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 24, "twenty-four methods");
+    CHECK(api::methods().size() == 28, "twenty-eight methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -1953,6 +1956,164 @@ static void sp4_t13_a_realtime_recording_with_dropped_time_replays_exactly() {
     CHECK(worldHashOf(s) == played, "to the world the realtime session reached");
 }
 
+// ---- sub-project 5, test 8: the level and physics surface ---------------------------------------
+// level.info, level.reload, physics.raycast and physics.info on a session whose world has the
+// level and physics systems, as the CLI context and the window host install them.
+
+struct LevelWorld {
+    FileAssetResolver files{OHAO_SOURCE_DIR};   // outlives the world's systems
+    World w;
+    api::Session s{w, engineTypes()};
+    LevelWorld() {
+        ohao::level::installLevels(w, files, engineTypes());
+        ecs::installPhysics(w, files);
+        s.setAssetResolver(&files);
+    }
+    Reply load(const char* scene = "assets/scenes/blockout_room.scene.json") {
+        const std::string path = (fs::path(OHAO_SOURCE_DIR) / scene).generic_string();
+        return Reply(s.call("scene.load", "{\"path\":\"" + path + "\"}"));
+    }
+};
+
+constexpr const char* kBlockoutLevel = "5c0b10c000000005";   // the blockout scene's Level entity
+
+static void sp5_t08_level_info_counts_and_spawns() {
+    LevelWorld lw;
+    CHECK(Reply(lw.s.call("level.info")).code() == "E_NOT_FOUND", "no level in the world: E_NOT_FOUND");
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const Reply r(lw.s.call("level.info"));
+    std::printf("\n      %s", r.text.c_str());
+    CHECK(r.ok() && r.str("/result/entity") == kBlockoutLevel && r.str("/result/path") == "assets/levels/blockout_room.glb",
+          "the only level, by id and file");
+    CHECK(r.str("/result/nodes") == "17" && r.str("/result/meshes") == "13" && r.str("/result/uniqueMeshes") == "13" &&
+              r.str("/result/triangles") == "152" && r.str("/result/lights") == "0" && r.str("/result/cameras") == "1",
+          "17 nodes, 13 meshes (13 unique, 152 triangles), no light, one camera");
+    CHECK(r.json("/result/colliders") == R"({"box":12,"mesh":1})" && r.json("/result/bodies") == R"({"static":11,"dynamic":2})",
+          "12 box colliders and the ramp's mesh; 11 static bodies and the 2 crates");
+    CHECK(r.at("/result/spawns") && r.at("/result/spawns")->count == 3, "three spawns");
+    // Node order is the file's (Blender writes its objects by name): the enemies, then the player.
+    CHECK(r.str("/result/spawns/0/tag") == "enemy" && r.json("/result/spawns/0/pos") == "[-2.5,0.3,-2]" &&
+              r.str("/result/spawns/0/yawDeg") == "180" && r.str("/result/spawns/1/tag") == "enemy" &&
+              r.json("/result/spawns/1/pos") == "[3,0.5,-2]" && r.str("/result/spawns/1/yawDeg") == "180",
+          "the enemies in node order, at their authored places, facing +Z");
+    CHECK(r.str("/result/spawns/2/tag") == "player" && r.json("/result/spawns/2/pos") == "[1.5,0,2.2]" &&
+              r.str("/result/spawns/2/yawDeg") == "0",
+          "then the player, at (1.5, 0, 2.2), facing -Z");
+    const uint64_t player = std::stoull(r.str("/result/spawns/2/entity"), nullptr, 16);
+    const entt::entity pe = lw.w.findById(player);
+    CHECK(pe != entt::null && lw.w.registry().get<Name>(pe).value == "SpawnPlayer", "the spawn's entity is its node");
+    CHECK(r.at("/result/warnings") && r.at("/result/warnings")->count == 0, "no warnings");
+    CHECK(r.at("/result/loadMs") && std::stod(r.str("/result/loadMs")) > 0.0, "and its load time");
+    const Reply byId(lw.s.call("level.info", "{\"entity\":\"" + std::string(kBlockoutLevel) + "\"}"));
+    CHECK(byId.ok() && byId.json("/result/spawns") == r.json("/result/spawns"), "named by entity, the same level");
+    const Reply sun(lw.s.call("level.info", R"({"entity":"5c0b10c000000003"})"));
+    CHECK(sun.code() == "E_NOT_FOUND" && sun.str("/error/data/0/path") == "/entity", "a light is not a level: E_NOT_FOUND");
+    CHECK(Reply(lw.s.call("level.info", R"({"entity":"00000000000000ff"})")).code() == "E_NOT_FOUND",
+          "nor is an id no entity has");
+}
+
+static void sp5_t08_level_info_is_small() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const Reply r(lw.s.call("level.info"));
+    const std::string result = r.json("/result");
+    std::printf("\n      level.info: %zu bytes", result.size());
+    CHECK(r.ok() && result.size() <= 1024, "level.info on the blockout is at most 1,024 bytes (spec, token budget)");
+}
+
+static void sp5_t08_raycast_hits_floor() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    // Right after scene.load: the method builds the bodies it needs (no step, no render first).
+    const Reply r(lw.s.call("physics.raycast", R"({"from":[1.5,0.5,2.2],"dir":[0,-1,0],"max":2})"));
+    const std::string result = r.json("/result");
+    std::printf("\n      %s (%zu bytes)", result.c_str(), result.size());
+    CHECK(r.ok() && r.json("/result/hit") == "true" && r.str("/result/name") == "Floor", "a ray down at the player spawn hits the Floor");
+    CHECK(r.json("/result/point") == "[1.5,0,2.2]" && r.json("/result/normal") == "[0,1,0]" && r.str("/result/dist") == "0.5",
+          "at the spawn's height, facing up, 0.5 m down");
+    const entt::entity floor = lw.w.findById(std::stoull(r.str("/result/entity"), nullptr, 16));
+    CHECK(floor != entt::null && lw.w.registry().get<Name>(floor).value == "Floor", "naming the Floor's entity");
+    CHECK(result.size() <= 200, "at most 200 bytes (spec, token budget)");
+    const Reply miss(lw.s.call("physics.raycast", R"({"from":[1.5,1,2.5],"dir":[0,0,1],"max":3})"));
+    CHECK(miss.ok() && miss.json("/result") == R"({"hit":false})", "through the doorway: {hit: false}");
+    const Reply far(lw.s.call("physics.raycast", R"({"from":[0.6,1,2.5],"dir":[0,0,2]})"));
+    CHECK(far.ok() && far.str("/result/name") == "WallSouthA" && far.json("/result/point") == "[0.6,1,3]",
+          "max defaults to 1000; dir need not be unit length: beside the doorway, WallSouthA at z 3");
+}
+
+static void sp5_t08_raycast_params_refused() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("physics.raycast", R"({"from":[0,1,0],"dir":[0,-1,0]})")).code() == "E_STATE",
+              "a world without the physics system: E_STATE");
+        CHECK(Reply(s.call("physics.info")).code() == "E_STATE", "physics.info too");
+        CHECK(Reply(s.call("level.info")).code() == "E_STATE" && Reply(s.call("level.reload")).code() == "E_STATE",
+              "and level.info and level.reload without the level system");
+    }
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const Reply zero(lw.s.call("physics.raycast", R"({"from":[0,1,0],"dir":[0,0,0]})"));
+    CHECK(zero.code() == "E_PARAMS" && zero.str("/error/data/0/path") == "/dir", "a zero direction: E_PARAMS at /dir");
+    for (const char* max : {"0", "-1", "100000.5", "1e9"}) {
+        const Reply r(lw.s.call("physics.raycast", std::string(R"({"from":[0,1,0],"dir":[0,-1,0],"max":)") + max + "}"));
+        CHECK(r.code() == "E_PARAMS" && r.str("/error/data/0/path") == "/max", "max outside (0, 100000]: E_PARAMS at /max");
+    }
+    CHECK(Reply(lw.s.call("physics.raycast", R"({"from":[0,1,0],"dir":[0,-1,0],"max":100000})")).ok(),
+          "max 100000 is allowed");
+    CHECK(Reply(lw.s.call("physics.raycast", R"({"dir":[0,-1,0]})")).code() == "E_COMMAND", "from is required");
+    CHECK(Reply(lw.s.call("physics.raycast", R"({"from":[0,1],"dir":[0,-1,0]})")).code() == "E_TYPE",
+          "from is three numbers");
+    CHECK(Reply(lw.s.call("physics.raycast", R"({"from":[0,1,0],"dir":[0,-1,0],"mx":5})")).code() == "E_UNKNOWN_FIELD",
+          "an unknown member is refused");
+}
+
+static void sp5_t08_physics_info_counts() {
+    LevelWorld lw;
+    const Reply empty(lw.s.call("physics.info"));
+    CHECK(empty.ok() && empty.json("/result/bodies") == "{}" && empty.str("/result/unstepped") == "0",
+          "an empty world: no bodies");
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const Reply r(lw.s.call("physics.info"));
+    std::printf("\n      %s", r.text.c_str());
+    CHECK(r.ok() && r.json("/result/bodies") == R"({"static":11,"dynamic":2})" &&
+              r.json("/result/shapes") == R"({"box":12,"mesh":1})" && r.str("/result/unstepped") == "2",
+          "the blockout: 11 static bodies and 2 dynamic (unstepped); 12 boxes and a mesh");
+    CHECK(r.at("/result/buildMs") && !r.at("/result/warnings"), "its build time; no warnings");
+}
+
+static void sp5_t08_level_reload_keeps_world_hash() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    const std::string before = Reply(lw.s.call("world.hash")).str("/result/hash");
+    const Reply r(lw.s.call("level.reload"));
+    CHECK(r.ok() && r.str("/result/nodes") == "17" && r.json("/result/bodies") == R"({"static":11,"dynamic":2})",
+          "level.reload answers as level.info, after re-reading the file");
+    CHECK(Reply(lw.s.call("world.hash")).str("/result/hash") == before, "an unchanged file keeps world.hash");
+    const Reply hit(lw.s.call("physics.raycast", R"({"from":[1.5,0.5,2.2],"dir":[0,-1,0],"max":2})"));
+    CHECK(hit.ok() && hit.str("/result/name") == "Floor", "and the rebuilt bodies collide");
+    CHECK(Reply(lw.s.call("level.reload", R"({"entity":"5c0b10c000000003"})")).code() == "E_NOT_FOUND",
+          "a light is not a level: E_NOT_FOUND");
+}
+
+static void sp5_t08_warnings_reach_level_and_physics_info() {
+    LevelWorld lw;
+    const Reply loaded(lw.s.call("scene.load", R"({"scene":{"format":"ohao.scene","version":1,"entities":[
+        {"id":"00000000000000a1","Name":{"value":"Fixture"},
+         "Level":{"asset":{"path":"tests/level/fixtures/level_physics.gltf"}}}]}})"));
+    CHECK(loaded.ok(), "a level without spawns, with a dynamic mesh collider, loads");
+    const Reply info(lw.s.call("level.info"));
+    std::printf("\n      %s", info.json("/result/warnings").c_str());
+    const std::string warnings = info.json("/result/warnings");
+    CHECK(info.ok() && warnings.find("W_LEVEL_NO_PLAYER_SPAWN") != std::string::npos &&
+              warnings.find("W_LEVEL_DYNAMIC_MESH") != std::string::npos,
+          "level.info warns of the missing player spawn and the demoted mesh");
+    const Reply phys(lw.s.call("physics.info"));
+    CHECK(phys.ok() && phys.json("/result/warnings").find("W_LEVEL_DYNAMIC_MESH") != std::string::npos &&
+              phys.json("/result/warnings").find("DynMesh") != std::string::npos,
+          "physics.info lists the warning with its entity's name");
+}
+
 int main() {
     std::printf("api_tests\n");
     RUN(t09_method_table_dispatch_and_errors);
@@ -1998,6 +2159,13 @@ int main() {
     RUN(sp4_t13_record_then_replay_matches_every_checkpoint);
     RUN(sp4_t13_a_tampered_recording_fails_at_the_right_step);
     RUN(sp4_t13_a_realtime_recording_with_dropped_time_replays_exactly);
+    RUN(sp5_t08_level_info_counts_and_spawns);
+    RUN(sp5_t08_level_info_is_small);
+    RUN(sp5_t08_raycast_hits_floor);
+    RUN(sp5_t08_raycast_params_refused);
+    RUN(sp5_t08_physics_info_counts);
+    RUN(sp5_t08_level_reload_keeps_world_hash);
+    RUN(sp5_t08_warnings_reach_level_and_physics_info);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

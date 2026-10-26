@@ -13,7 +13,8 @@
 //                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--exposure E]
 //                  [--quality realtime|reference]]
 //                 [--save out.scene.json]
-//   ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
+//   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
+//   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 //                 the environment: {"result": {ok, cpuOnly, checks: [{id, ok, level, detail, fix?}]}};
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
@@ -529,6 +530,23 @@ int cmdSummary(const Args& a) {
     return replyExit(reply);
 }
 
+// level.info for a level file: a world with the file as its only Level (id 0000000000000001), no
+// scene, no GPU. A file that does not load is the level's error (E_ASSET_NOT_FOUND: exit 2).
+int cmdLevel(const Args& a) {
+    if (a.positional.size() != 1) return usage("level needs one level file (.glb or .gltf, project-relative)");
+    Context c(opt(a, "--root", "."));
+    const std::string scene = R"({"format":"ohao.scene","version":1,"entities":[{"id":"0000000000000001",)"
+                              R"("Name":{"value":"Level"},"Level":{"asset":{"path":)" +
+                              jsonString(a.positional[0]) + "}}}]}";
+    if (std::string reply = c.session->call("scene.load", params({{"scene", scene}})); isError(reply)) {
+        emit(reply);
+        return replyExit(reply);
+    }
+    const std::string reply = c.session->call("level.info");
+    emit(reply);
+    return replyExit(reply);
+}
+
 int cmdRun(const Args& a) {
     if (a.positional.size() != 1) return usage("run needs one scene file");
     // Everything is checked before the scene loads.
@@ -778,7 +796,7 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
 int run(int argc, char** argv) {
     if (argc < 2)
         return usage(
-            "usage: ohao <schema|validate|fmt|apply|query|summary|run|doctor|serve> ... (see tools/ohao/main.cpp)");
+            "usage: ohao <schema|validate|fmt|apply|query|summary|run|level|doctor|serve> ... (see tools/ohao/main.cpp)");
     const std::string_view cmd = argv[1];
     if (cmd == "serve") {
         // --allow-path may be given more than once and --window takes an optional WxH; the
@@ -852,8 +870,12 @@ int run(int argc, char** argv) {
         const Args a = parseArgs(argc, argv, 2, {"--cpu-only"}, {"--root", "--shader-dir", "--spirv-dir"});
         return a.error.empty() ? cmdDoctor(a) : usage(a.error);
     }
+    if (cmd == "level") {
+        const Args a = parseArgs(argc, argv, 2, {}, {"--root"});
+        return a.error.empty() ? cmdLevel(a) : usage(a.error);
+    }
     return usage("unknown command '" + std::string(cmd) +
-                 "'; one of: schema, validate, fmt, apply, query, summary, run, doctor, serve");
+                 "'; one of: schema, validate, fmt, apply, query, summary, run, level, doctor, serve");
 }
 
 } // namespace

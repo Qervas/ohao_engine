@@ -29,7 +29,7 @@ ohao_add_test(serve_bench LABEL bench SERIAL TIMEOUT 600
 # with step 6). CPU, headless. Exit 2 = noisy run (tools/check.py reruns it).
 add_executable(level_bench level_bench.cpp bench_env.hpp)
 target_compile_features(level_bench PRIVATE cxx_std_20)
-target_link_libraries(level_bench PRIVATE ohao_level_world ohao_ecs ohao_physics ohao_test_harness)
+target_link_libraries(level_bench PRIVATE ohao_api ohao_level_world ohao_ecs ohao_physics ohao_test_harness)
 target_compile_definitions(level_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(MSVC)
     target_link_options(level_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)

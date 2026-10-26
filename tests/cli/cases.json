@@ -10,6 +10,8 @@
     "equal byte for byte; `outputs` lists written files only checked across the two runs.",
     "`timed` cases print wall times (render.capture's ms), so their stdout is not compared;",
     "`contains` lists strings both runs must print instead. `env` adds environment variables.",
+    "`mask` names JSON keys whose number values are timings (loadMs, buildMs): they print as 0",
+    "in the comparison and the expected file, so the rest of the output is still compared exactly.",
     "Exit codes: 0 ok, 1 validation/usage/input, 2 asset or instantiate, 3 GPU or internal."
   ],
   "cases": [
@@ -58,6 +60,10 @@
      "exit": 1, "stdout": true},
     {"name": "summary", "argv": ["ohao", "summary", "assets/scenes/damaged_helmet.scene.json", "--max-nodes", "12"],
      "exit": 0, "stdout": true},
+    {"name": "level", "_note": "SP5 step 5: level.info for a level file, no scene and no GPU.",
+     "argv": ["ohao", "level", "assets/levels/blockout_room.glb"], "exit": 0, "stdout": true, "mask": ["loadMs"]},
+    {"name": "level_missing", "argv": ["ohao", "level", "assets/levels/no_such_level.glb"], "exit": 2, "stdout": true},
+    {"name": "level_usage", "argv": ["ohao", "level"], "exit": 1, "stdout": true},
     {"name": "run_steps",
      "argv": ["ohao", "run", "assets/scenes/cornell_box.scene.json", "--steps", "30", "--dt", "0.02",
               "--save", "build/cli_tmp/stepped.scene.json"],

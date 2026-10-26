@@ -33,6 +33,8 @@
 #include "reflect/decode.hpp"
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace ohao::reflect { class TypeRegistry; }
@@ -50,5 +52,28 @@ void installLevels(ecs::World& world, ecs::AssetResolver& assets, const reflect:
 // The warnings and errors of the level entity's last expansion (empty for none, or for a
 // world without the level system).
 [[nodiscard]] std::vector<reflect::Diagnostic> levelDiagnostics(const ecs::World& world, entt::entity level);
+
+// Whether installLevels ran on this World.
+[[nodiscard]] bool levelsInstalled(const ecs::World& world);
+
+// What level.info reports from the level's file and its last expansion (spawns, colliders and
+// bodies the caller reads from the world). Counts are of the default scene's nodes: meshes is
+// the mesh nodes, uniqueMeshes the glTF meshes they use, triangles over every mesh node.
+struct LevelSummary {
+    std::string path;            // the Level's asset path
+    bool loaded{false};          // false: the file did not load (its error is on the level entity)
+    uint32_t nodes{0}, meshes{0}, uniqueMeshes{0}, lights{0}, cameras{0};
+    uint64_t triangles{0};
+    double loadMs{0.0};          // the last expansion: the file's structure, the nodes and their components
+};
+// nullopt: no level system, or the entity has not been expanded (not a Level, or not synced yet).
+[[nodiscard]] std::optional<LevelSummary> levelSummary(const ecs::World& world, entt::entity level);
+
+// level.reload: forgets the level's file (its structure here, its meshes in the asset resolver),
+// so the next "level" sync re-reads it and re-expands the level in place, then touches its nodes'
+// colliders so the physics system rebuilds their bodies. An unchanged file keeps world.hash.
+// Meshes already uploaded to the GPU are kept (instantiate caches them per (file, mesh)).
+// False without the level system or when `level` has no Level.
+bool reloadLevel(ecs::World& world, entt::entity level);
 
 } // namespace ohao::level

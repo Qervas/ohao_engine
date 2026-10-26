@@ -9,7 +9,8 @@ the acceptance session of the spec's test 19:
   initialize -> load helmet_game -> summary -> apply an edit -> snapshot -> record ->
   inject a 61-step flight -> step with watch -> capture inline and to a file -> frame
   stats (sub-project 2b, test 14) -> log read ->
-  stop recording -> restore -> replay (every checkpoint matches) -> capture again
+  stop recording -> restore -> replay (every checkpoint matches) -> capture again ->
+  load the blockout level -> level.info -> a ray down at the player spawn -> physics.info
 
 and requires: the flight moves the camera as injected, the replay reaches the same world
 hash, the second capture is bit-identical to the first (the PNG files byte for byte, the
@@ -155,8 +156,8 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 24 and "render_capture" in names and "render_stats" in names and "render_settings" in names
-          and "input_replay" in names, "tools/list: 24 tools")
+    check(len(names) == 28 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+          and "input_replay" in names and "level_info" in names and "physics_raycast" in names, "tools/list: 28 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})
@@ -256,6 +257,28 @@ def main():
     check(not err and png1 and png1 == png2, "the capture after the replay equals the first, PNG byte for byte")
     check(image2 is not None and image1 is not None and image2["data"] == image1["data"],
           "and the inline JPEG too")
+
+    # A level (sub-project 5, step 5): load the blockout, read level.info, cast a ray down at
+    # the player spawn.
+    blockout, _, err = c.tool("scene_load", {"path": "assets/scenes/blockout_room.scene.json", "replace": True})
+    check(not err and blockout.get("entities", 0) > 0, "scene_load the blockout (replace)")
+    info, _, err = c.tool("level_info")
+    spawns = (info or {}).get("spawns", [])
+    player = next((sp for sp in spawns if sp.get("tag") == "player"), None)
+    info_bytes = len(json.dumps(info, separators=(",", ":")).encode("utf-8")) if info else 0
+    check(not err and info.get("nodes") == 17 and len(spawns) == 3 and player is not None and info_bytes <= 1024,
+          "level_info: 17 nodes, 3 spawns, a player spawn, %d bytes (at most 1,024)" % info_bytes)
+    if player:
+        x, y, z = player["pos"]
+        hit, _, err = c.tool("physics_raycast", {"from": [x, y + 0.5, z], "dir": [0, -1, 0], "max": 2})
+        hit_bytes = len(json.dumps(hit, separators=(",", ":")).encode("utf-8")) if hit else 0
+        check(not err and hit.get("hit") is True and hit.get("name") == "Floor" and abs(hit["point"][1] - y) <= 1e-3
+              and hit_bytes <= 200,
+              "physics_raycast down at the player spawn hits the Floor at %s (%d bytes, at most 200)"
+              % ((hit or {}).get("point"), hit_bytes))
+    bodies, _, err = c.tool("physics_info")
+    check(not err and bodies.get("bodies", {}).get("static") == 11 and bodies.get("bodies", {}).get("dynamic") == 2,
+          "physics_info: 11 static bodies and 2 dynamic")
 
     code, err_text = c.close()
     live = [l for l in err_text.splitlines() if "live host:" in l]

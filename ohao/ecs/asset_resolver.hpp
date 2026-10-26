@@ -30,6 +30,9 @@ public:
     [[nodiscard]] virtual bool exists(const AssetRef& ref) const = 0;   // no load
     // Empty for a path the resolver rejects (absolute, or outside the project).
     [[nodiscard]] virtual std::filesystem::path absolutePath(const AssetRef& ref) const = 0;
+    // Drops whatever is cached of this file (every mesh of it): the next load reads the disk
+    // (level.reload). A resolver without a cache has nothing to drop.
+    virtual void forget(const AssetRef& ref) { (void)ref; }
 };
 
 // Files under a project root. Paths are '/'-separated and relative; absolute paths and
@@ -43,6 +46,7 @@ public:
                                                                              std::string_view mesh = {}) override;
     [[nodiscard]] bool exists(const AssetRef& ref) const override;
     [[nodiscard]] std::filesystem::path absolutePath(const AssetRef& ref) const override;
+    void forget(const AssetRef& ref) override;
 
     [[nodiscard]] const std::filesystem::path& root() const noexcept { return m_root; }
     void clearCache();

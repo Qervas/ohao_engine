@@ -1,0 +1,16 @@
+{"jsonrpc":"2.0","id":1,"method":"physics.info"}
+{"jsonrpc":"2.0","id":2,"method":"level.info"}
+{"jsonrpc":"2.0","id":3,"method":"scene.load","params":{"path":"assets/scenes/blockout_room.scene.json","seed":"00000000000000aa"}}
+{"jsonrpc":"2.0","id":4,"method":"level.info"}
+{"jsonrpc":"2.0","id":5,"method":"level.info","params":{"entity":"5c0b10c000000003"}}
+{"jsonrpc":"2.0","id":6,"method":"physics.raycast","params":{"from":[1.5,0.5,2.2],"dir":[0,-1,0],"max":2}}
+{"jsonrpc":"2.0","id":7,"method":"physics.raycast","params":{"from":[1.5,1,2.5],"dir":[0,0,1],"max":3}}
+{"jsonrpc":"2.0","id":8,"method":"physics.raycast","params":{"from":[0.6,1,2.5],"dir":[0,0,1]}}
+{"jsonrpc":"2.0","id":9,"method":"physics.raycast","params":{"from":[0,1,0],"dir":[0,0,0]}}
+{"jsonrpc":"2.0","id":10,"method":"physics.raycast","params":{"from":[0,1,0],"dir":[0,-1,0],"max":0}}
+{"jsonrpc":"2.0","id":11,"method":"physics.raycast","params":{"from":[0,1,0],"dir":[0,-1,0],"max":200000}}
+{"jsonrpc":"2.0","id":12,"method":"physics.info"}
+{"jsonrpc":"2.0","id":13,"method":"world.hash"}
+{"jsonrpc":"2.0","id":14,"method":"level.reload","params":{"entity":"5c0b10c000000005"}}
+{"jsonrpc":"2.0","id":15,"method":"world.hash"}
+{"jsonrpc":"2.0","id":"end","method":"world.info"}

@@ -56,4 +56,15 @@ void FileAssetResolver::clearCache() {
     m_models.clear();
 }
 
+void FileAssetResolver::forget(const AssetRef& ref) {
+    const auto p = absolutePath(ref);
+    if (p.empty()) return;
+    const std::string file = p.generic_string();
+    std::lock_guard lock(m_mutex);
+    std::erase_if(m_models, [&](const auto& entry) {   // the whole file and each mesh of it ("file\nmesh")
+        return entry.first == file || (entry.first.size() > file.size() && entry.first.starts_with(file) &&
+                                       entry.first[file.size()] == '\n');
+    });
+}
+
 } // namespace ohao::ecs

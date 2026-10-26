@@ -11,6 +11,7 @@ The last line printed is a JSON summary: {"suite": "cli_tests", "passed", "faile
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,13 @@ def read(path):
         return f.read()
 
 
+def masked(out, keys):
+    """stdout with the number value of each "key": in `keys` replaced by 0 (timings)."""
+    for key in keys:
+        out = re.sub(rb'"' + re.escape(key.encode()) + rb'":-?[0-9.eE+-]+', b'"' + key.encode() + b'":0', out)
+    return out
+
+
 def run_once(case, exe):
     # A fresh build/cli_tmp per case, except where a case reads the one before it.
     if not case["name"].endswith("_back"):
@@ -44,11 +52,12 @@ def run_once(case, exe):
     env = dict(os.environ, **case.get("env", {}))
     proc = subprocess.run([exe] + case["argv"][1:], cwd=ROOT, env=env, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, timeout=600)
+    stdout = masked(proc.stdout, case.get("mask", []))
     files = {}
     for path in list(case.get("files", {})) + case.get("outputs", []):
         full = os.path.join(ROOT, path)
         files[path] = read(full) if os.path.isfile(full) else None
-    return proc.returncode, proc.stdout, files, proc.stderr
+    return proc.returncode, stdout, files, proc.stderr
 
 
 def check(case, exe, update):

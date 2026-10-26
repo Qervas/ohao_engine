@@ -1,6 +1,6 @@
 {
   "comment": "Spec docs/specs/2026-10-26-level-pipeline-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep). Changing a budget needs Frank's OK.",
-  "currentStep": 4,
+  "currentStep": 5,
   "budgets": {
     "blockout_load_ms": { "max": 20, "gatedFrom": 4 },
     "level_info_bytes": { "max": 1024, "gatedFrom": 5 },

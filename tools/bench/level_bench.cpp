@@ -7,15 +7,17 @@
 // Step 4 measures blockout_load_ms: a cold load of assets/levels/blockout_room.glb into a
 // fresh World with the level and physics systems (structure, 13 meshes through a fresh asset
 // resolver, expansion, colliders; no GPU upload), median and p95 of N rounds (30) after 5
-// warm-ups. The OS file cache is warm after the warm-ups; the engine's caches are not. The
-// kit2k budgets (step 6) and level_info_bytes (step 5) are reported as not measured until
-// their steps add them.
+// warm-ups. The OS file cache is warm after the warm-ups; the engine's caches are not.
+// level_info_bytes (step 5): the size of level.info's result on the blockout, through a Session
+// as an agent calls it; a size, so a noisy machine cannot excuse a miss. The kit2k budgets
+// (step 6) are reported as not measured until that step adds them.
 //
 // The machine is recorded as scene_bench records it (bench_env.hpp): a calibration loop before
 // and after against the reference, and every other process's CPU. A run >25% slower than the
 // reference or beside other processes using more than half a core is `noisy`: exit 2, neither
 // a pass nor a regression. Logging is at Warn during the rounds: the per-mesh Info lines would
 // time the console, not the loader.
+#include "api/session.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
@@ -81,6 +83,25 @@ LoadResult loadBlockout() {
     r.info = physics.info();
     r.nodes = world.registry().view<ecs::LevelNode>().size();
     return r;
+}
+
+// level.info's result on the blockout, in bytes (the token budget agents pay), and the result.
+std::size_t levelInfoBytes(std::string& result) {
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    ecs::World world;
+    level::installLevels(world, files, engineTypes());
+    (void)ecs::installPhysics(world, files);
+    api::Session session(world, engineTypes());
+    const entt::entity lv = world.createWithId(0x1e7e1, "Level");
+    world.registry().emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});
+    const std::string reply = session.call("level.info");
+    constexpr std::string_view kPrefix = "{\"result\":";
+    if (reply.rfind(kPrefix, 0) != 0) {
+        result = reply;
+        return 0;
+    }
+    result = reply.substr(kPrefix.size(), reply.size() - kPrefix.size() - 1);
+    return result.size();
 }
 
 } // namespace
@@ -172,8 +193,23 @@ int main(int argc, char** argv) {
         }
         std::printf("    budget %.3f ms, gated from step %d: %s\n", max, from, verdict.c_str());
     }
+    // level_info_bytes: a size, not a time, so the machine's load cannot move it.
+    std::string info;
+    const std::size_t infoBytes = levelInfoBytes(info);
+    if (infoBytes == 0) failures.push_back("level.info failed on the blockout: " + info);
+    std::printf("  level_info_bytes   %zu\n", infoBytes);
+    std::string infoVerdict = "reported";
+    if (budgets.contains("level_info_bytes")) {
+        const double max = budgets["level_info_bytes"].value("max", 0.0);
+        const int from = budgets["level_info_bytes"].value("gatedFrom", 0);
+        infoVerdict = currentStep < from ? "pending" : static_cast<double>(infoBytes) <= max ? "pass" : "fail";
+        if (infoVerdict == "fail")
+            failures.push_back("level_info_bytes: " + std::to_string(infoBytes) + " over its budget of " +
+                               std::to_string(static_cast<int>(max)));
+        std::printf("    budget %.0f bytes, gated from step %d: %s\n", max, from, infoVerdict.c_str());
+    }
     for (const auto& [name, b] : budgets.items())
-        if (name != "blockout_load_ms")
+        if (name != "blockout_load_ms" && name != "level_info_bytes")
             std::printf("  %-18s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -187,6 +223,7 @@ int main(int argc, char** argv) {
 
     nlohmann::json out;
     out["blockout_load_ms"] = {{"median", s.median}, {"p95", s.p95}, {"min", s.min}, {"samples", samples}, {"verdict", verdict}};
+    out["level_info_bytes"] = {{"bytes", infoBytes}, {"verdict", infoVerdict}, {"result", info}};
     out["blockout"] = {{"nodes", last.nodes},
                        {"static", last.info.bodies.statics},
                        {"dynamic", last.info.bodies.dynamics},
@@ -207,9 +244,9 @@ int main(int argc, char** argv) {
 
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
-        std::printf("  NOISY: %s%s; the timings above are not a verdict on the code\n",
-                    noisyCal ? "calibration over the reference by more than 25%; " : "",
-                    noisyLoad ? "other processes were busy" : "");
+        std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",
+                    noisyCal ? "calibration over the reference by more than 25%" : "",
+                    noisyCal && noisyLoad ? ", and " : "", noisyLoad ? "other processes were busy" : "");
     std::printf("%s (results in %s)\n", noisy ? "NOISY" : failures.empty() ? "PASS" : "FAIL", outPath.c_str());
     std::string line = "{\"suite\":\"level_bench\",\"passed\":" + std::to_string(failures.empty() && !noisy ? 1 : 0) +
                        ",\"failed\":" + std::to_string(failures.empty() && !noisy ? 0 : 1) + ",\"failures\":[";
@@ -218,7 +255,7 @@ int main(int argc, char** argv) {
     line += "]";
     if (noisy) line += ",\"noisy\":true";
     std::printf("%s}\n", line.c_str());
-    if (wrong) return 1;
+    if (wrong || infoBytes == 0 || infoVerdict == "fail") return 1;   // a size is no machine's noise
     if (noisy) return 2;
     return failures.empty() ? 0 : 1;
 }

@@ -105,6 +105,15 @@ bool methodInputRecord(Session::Impl& s, const JsonDocument& doc, const JsonNode
                        JsonWriter& out);
 bool methodInputReplay(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                        JsonWriter& out);
+// Levels and physics (level.cpp).
+bool methodLevelInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                     JsonWriter& out);
+bool methodLevelReload(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
+bool methodPhysicsRaycast(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                          JsonWriter& out);
+bool methodPhysicsInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                       JsonWriter& out);
 
 // One simulation step (input.cpp): the host's device events, then the events injected for
 // this step, into the world's input map (and the recording); the simulate systems with dt;

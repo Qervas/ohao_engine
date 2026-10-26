@@ -37,8 +37,8 @@ constexpr std::string_view kInstructions =
     "world_query: filter, then project fields such as [\"/Transform/position\"], with a limit. Edit with "
     "world_apply: one atomic batch of commands; keep its inverse to undo. Advance time with world_step. Load and "
     "save with scene_load and scene_save: paths are project-relative with '/', writes go under agent_out/. Look "
-    "with render_capture (needs a GPU host). Read engine logs with log_read. schema_get lists every component, "
-    "field, enum and error code.";
+    "with render_capture (needs a GPU host). Read engine logs with log_read. Levels: level_info, physics_raycast. "
+    "schema_get lists every component, field, enum and error code.";
 static_assert(kInstructions.size() <= 600, "the spec caps the instructions at 600 characters");
 
 const JsonDocument& emptyObject() {

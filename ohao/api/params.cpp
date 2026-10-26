@@ -218,6 +218,17 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("level", &LogReadParams::level).doc("Lowest level returned")
         .field("channel", &LogReadParams::channel).doc("Only this channel")
         .field("limit", &LogReadParams::limit).doc("Lines returned").unitless().min(1).max(1000);
+
+    r.type<LevelInfoParams>("LevelInfoParams").doc("level.info params")
+        .field("entity", &LevelInfoParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
+    r.type<LevelReloadParams>("LevelReloadParams").doc("level.reload params")
+        .field("entity", &LevelReloadParams::entity).doc("The Level entity's id, 16 hex digits; absent: the only level");
+    // max has no field limits: outside (0, 1e5] is E_PARAMS, as a zero dir is.
+    r.type<PhysicsRaycastParams>("PhysicsRaycastParams").doc("physics.raycast params")
+        .field("from", &PhysicsRaycastParams::from).doc("Ray origin [x, y, z]").unit("m").required()
+        .field("dir", &PhysicsRaycastParams::dir).doc("Direction [x, y, z], any nonzero length").unitless().required()
+        .field("max", &PhysicsRaycastParams::max).doc("Farthest hit, in (0, 100000]").unit("m");
+    r.type<PhysicsInfoParams>("PhysicsInfoParams").doc("physics.info params");
 }
 
 } // namespace
