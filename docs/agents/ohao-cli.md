@@ -282,7 +282,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 29 tools
+0 32 tools
 ```
 
 ## Methods
@@ -321,14 +321,19 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `physics.raycast` | `{from, dir, max = 1000}` → `{hit, entity?, name?, point?, normal?, dist?}` | The closest collider along the ray (`dir` any nonzero length): its entity, name (up to 40 bytes), the hit point and surface normal (to 1e-4) and distance. `{hit: false}` for none. A zero `dir` or `max` outside (0, 100000] is `E_PARAMS`. ~100 bytes. |
 | `physics.info` | `{}` → `{bodies: {static?, dynamic?, kinematic?}, shapes: {box?, sphere?, capsule?, convex?, mesh?, compound?}, steps, awake, contacts, triggers?, players?, buildMs, warnings?: [{code, entity, name, message}], moreWarnings?}` | The physics scene: `steps` run (the scene's count, across the session), dynamic bodies `awake`, body pairs in `contacts` now (a sleeping pair stays in contact), sensor bodies, players with a character. |
 | `physics.events` | `{since = 0, max = 32}` → `{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}` | What physics decided, oldest first, from a log of the last 1,024: `contact_begin`/`contact_end` per body pair (`a` the lower id), `trigger_enter`/`trigger_exit` (`a` the trigger), and a player's `footstep` (every 0.75 m walked, 0.95 m sprinted, on the ground) and `land` (touching the ground after a fall of more than 0.3 m): `a` the player, `b` the ground's entity, `point` the feet, `speed` its horizontal speed (a landing: its downward speed), `surface` the ground's `Collider.surface` (`default` when empty). `an`/`bn` names (24 bytes), `point` and `normal` (a toward b) to 1 mm and 1e-3, `speed` the impact's normal speed (m/s, 0 for an end). Pass `next` as `since` to read on; `dropped` counts events the log no longer holds. `max` 1–64. Under 200 bytes an event. |
+| `physics.contacts` | `{entity?, max = 32}` → `{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}` | The body pairs touching now (resting ones and sleeping ones included) and bodies inside triggers, by `a`'s id then `b`'s, as their begin event named them; `since` is the physics step the pair began in. `entity`: only its pairs (`E_NOT_FOUND` for an entity without a body). `max` 1–64; `more` counts the rest. |
+| `player.info` | `{entity?}` → `{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}` | The player (the world's only one, or the one named): its feet in world space (0.1 mm), facing and look (0.01°), velocity (1 mm/s), whether it stands on walkable `ground`, the body it stands `on` (name, else id) and its `surface`, footsteps since it was made. `E_STATE` with no player (or no physics); `E_NOT_FOUND` for an entity that is not one; two players and no `entity` is `E_COMMAND`. ~170 bytes. |
+| `player.teleport` | `{entity?, pos, yawDeg?}` → as `player.info` | Puts the player's feet at `pos` (each axis within ±100 km, else `E_RANGE`), at rest, facing `yawDeg` (−360..360; absent: as it faced); its ground is found there at once. Changes the world. |
 
 `world.step` runs physics: each step propagates transforms, brings bodies up to date, steps
 Jolt (substeps of at most 1/60 s), writes awake dynamic bodies back to their `Transform`s and
 records the step's events, so a `world.query` after it sees where things fell. An edit of a
-dynamic body's `Transform` (`field.set`, a restore) puts it there at rest. The level and
-physics query methods bring the level, transforms and bodies up to date first (no step, no
-render), so they answer right after `scene.load` or `world.apply`. A host without the level
-or physics system (none of OHAO's) is `E_STATE`.
+dynamic body's `Transform` (`field.set`) puts it there at rest. `scene.load` puts a scene's
+players at their spawns. A snapshot carries the simulation (velocities, sleep, the solver's
+contact cache, the characters), so `world.restore` and the same steps after it reach the same
+`world.hash`. The level and physics query methods bring the level, transforms and bodies up to
+date first (no step, no render), so they answer right after `scene.load` or `world.apply`. A
+host without the level or physics system (none of OHAO's) is `E_STATE`.
 
 ## Edit commands
 
@@ -411,7 +416,7 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `E_RENDER` | `render.capture` failed: no GPU, a failed frame, an unwritable image. Exit code 3. |
 | `E_INTERNAL` | A bug in a tool; the operation did not complete. Exit code 3. |
 | `E_ACCESS` | A path outside the server's sandbox: absolute, with `..`, or a write outside `--out`. |
-| `E_STATE` | A method not allowed in the current time mode or host. |
+| `E_STATE` | A method not allowed in the current time mode or host; `player.*` in a world without a player. |
 | `E_REPLAY` | An input recording that does not match the world it is replayed on. |
 | `E_LEVEL_NODE` | A level node whose transform is not translation, rotation and scale. Exit code 2. |
 | `E_LEVEL_UNSUPPORTED` | A level file that needs Draco or meshopt compression. Exit code 2. |
@@ -427,7 +432,7 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `W_PHYSICS_PARENT_SCALE` | Warning (`physics.info`): a dynamic body under an unevenly scaled parent; its written-back pose is approximate. |
 | `W_PLAYER_NO_SPAWN` | Warning (`physics.info`): a `PlayerController` in a world with no `SpawnPoint` tagged `player`; it starts where its entity is. |
 | `W_PLAYER_NO_CHARACTER` | Warning (`physics.info`): the physics backend could not make a player's character; it does not move. |
-| `E_NOT_FOUND` | `level.info` / `level.reload`: the world has no level, or the entity named is not one. |
+| `E_NOT_FOUND` | `level.info` / `level.reload`: the world has no level, or the entity named is not one. `player.*`: the entity named is not a player; `physics.contacts`: it has no body. |
 | `E_PARAMS` | Params that pass their schema but break the method's rule: `physics.raycast` with a zero `dir`, or `max` outside (0, 100000]. JSON-RPC -32602. |
 
 ## Habits that save tokens and mistakes

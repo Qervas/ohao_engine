@@ -1,0 +1,12 @@
+{"method":"player.info"}
+{"method":"world.snapshot","params":{"name":"spawn"}}
+{"method":"input.inject","params":{"events":[{"axis":"move_forward","value":1},{"step":20,"action":"jump","down":true},{"step":21,"action":"jump","down":false}]}}
+{"method":"world.step","params":{"frames":30}}
+{"method":"player.info"}
+{"method":"world.hash"}
+{"method":"world.restore","params":{"name":"spawn"}}
+{"method":"input.inject","params":{"events":[{"axis":"move_forward","value":1},{"step":20,"action":"jump","down":true},{"step":21,"action":"jump","down":false}]}}
+{"method":"world.step","params":{"frames":30}}
+{"method":"world.hash"}
+{"method":"player.teleport","params":{"pos":[-2.2,0.3,-2],"yawDeg":90}}
+{"method":"physics.contacts","params":{"max":2}}

@@ -77,7 +77,7 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     (PlayerController: input -> CharacterVirtual ->
                     Transform, PlayerState), Jolt in
                     substeps <= 1/60 s, awake dynamic bodies ->
-                    Transform (patch), the step's contact/trigger events
+                    Transform (patch) and BodyMotion, the step's contact/trigger events
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) (physicsEvents(world), the
                     log physics.events reads)
@@ -94,7 +94,9 @@ World::sync()
                   the spawn's view)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
   physics         dirty colliders -> Jolt bodies; moved entities move     installed by installPhysics
-                  their bodies (no step: that is the simulate system)
+                  their bodies (no step: that is the simulate system);
+                  after a restore, the snapshot's simulation back in
+                  place (Jolt's state, characters, players)
   interpolate     World::renderAlpha < 1: what the last step moved    installed by installPhysics
                   (players, heads, dynamic bodies) and its subtree ->
                   RenderPose between its last two step poses; at 1
@@ -198,7 +200,10 @@ give the same pixels for the same world; it checks the call's cancel flag betwee
 
 Scene files, snapshots and the API sit beside the frame, not in it: load/save
 (`ecs/scene_io`), snapshot/restore (`ecs/snapshot`) and commands (`api/commands`)
-change components through the same signals, and the next update carries them through.
+change components through the same signals, and the next update carries them through. A
+system with state outside components that a replay needs puts a `SnapshotHook`
+(`ecs/snapshot_hook.hpp`) in the registry's context; the physics scene does, so a snapshot
+carries the simulation and a restore replays bit for bit.
 
 ## Recipe: add a component
 

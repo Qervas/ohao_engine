@@ -492,6 +492,42 @@ adds to "Footsteps":
   `tools/audio/stage_somnabulate_footsteps.py` copies its wood and tile walks into git-ignored
   `assets/local/audio/footsteps/` (as `wood` and `concrete`), never committed.
 
+## As built (step 5)
+
+Built 2026-10-26 (`docs/changes/2026-10-26-player-physics-step5.md`). Where it differs from or
+adds to "The agent-facing surface" and "Snapshots and replay":
+- **`player.info {entity?}`** → `{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?,
+  surface?, footsteps}`: `ground` is whether it stands on walkable ground, `on` the body under it
+  (name, else id), `surface` that body's `Collider.surface`; the spec's `steps` is `footsteps`
+  (footstep events since the player was made: "steps" read as physics steps). ~170 bytes.
+- **`player.teleport {entity?, pos, yawDeg?}`** → as `player.info`; `pos` each axis within
+  ±100 km and `yawDeg` within ±360 (`E_RANGE`). The ground is found at the new place at once.
+  Both methods take `entity?` (the spec named it only for `player.info`); with two players and
+  none named, `E_COMMAND`, as `level.info` does with two levels.
+- **`physics.contacts {entity?, max = 32}`** → `{contacts: [{a, b, an, bn, trigger?, point,
+  normal, since}], count, more?}`, `max` 1–64; `since` is the physics step the pair began in.
+- **`scene.load` spawns players** (it runs `player_spawn` after `level`), so a snapshot taken
+  right after a load holds the spawned player and a restore replays from the spawn.
+- **Snapshots carry the simulation, not only `BodyMotion`.** `BodyMotion{linear, angular,
+  asleep}` is built as specified (runtime, snapshotted, never saved, hashed or diffed), but
+  velocities and sleep were not enough: Jolt warm-starts each contact from the previous step's
+  impulses, kept in its contact cache across a teleport, so crates resting on each other at the
+  snapshot replayed 2–4·10⁻⁵ m off and a world hash missed. A snapshot now also carries what an
+  `ecs::SnapshotHook` (`ecs/snapshot_hook.hpp`, in the registry's context) saves; the physics
+  scene's is Jolt's whole state (bodies with sleep timers, the contact cache), each
+  `CharacterVirtual`, the players' records and the contact bookkeeping. The next sync after a
+  restore puts it back if the bodies are the snapshot's (same handles for the same entities),
+  with no teleport; otherwise (a body rebuilt since) teleports and `BodyMotion` apply. Replays
+  are bit for bit mid-fall, mid-jump, from a loaded spawn and with resting contacts.
+- **Teleports**, found on the way: the scene marks its own `Transform` writes and treats any
+  other as a placement (a restore 4.2 µm from the settled pose was within the old 1e-4
+  write-back tolerance and was ignored); position and rotation are set at once; a new or
+  teleported character refreshes its contacts, so it stands at once (and a player placed before
+  the level's bodies existed is grounded again when they are built).
+- **`boxes1k_step_ms`** gated at 4 ms from step 5: one step while 1,000 0.4 m boxes fall and pile
+  into a walled 6 × 6 m pit, none leaving it; `boxes1k_snapshot_ms` (the simulation a snapshot
+  of that world carries) is reported without a budget.
+
 ## Decisions record
 
 - Physics steps inside `World::simulate`, not in a host loop: one clock for every host,
@@ -502,6 +538,8 @@ adds to "Footsteps":
 - The transform system is split, not called as is inside steps (motion vectors stay per
   frame).
 - `physics.info.unstepped` is removed (forward only): nothing is unstepped any more.
+- Snapshots carry the backend's whole state through a hook rather than a component per body
+  (step 5): exact replays need the contact cache, which belongs to pairs, not entities.
 
 ## Frank actions
 

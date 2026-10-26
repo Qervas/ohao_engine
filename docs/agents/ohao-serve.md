@@ -153,13 +153,44 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"scene.load","result":{"entities":7}}
 {"method":"input.inject","result":{"queued":4,"firstStep":0,"lastStep":26}}
 {"method":"world.step","result":{"frame":40}}
-{"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,-4.0978193e-08,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
+{"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,0,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
 ```
 
 The walk's footsteps are in `physics_events` as kind `footstep` (one every 0.75 m walked, 0.95 m
 sprinting) with the ground's `surface` (the blockout: `concrete` floor, `metal` step, platform
 and ramp, `wood` crates), and a fall of more than 0.3 m ends in a `land`. Only `ohao_game`
 sounds them; a server's window stays silent.
+
+`player_info {entity?}` says where the player is without a query: its feet (`pos`), facing and
+look (`yawDeg`, `pitchDeg`), `velocity`, whether it stands on the `ground`, what `on` and its
+`surface`, and its `footsteps` so far. `player_teleport {pos, yawDeg?}` puts its feet somewhere at
+rest (its ground is found at once; the reply is `player_info`'s). `physics_contacts {entity?,
+max?}` lists the body pairs touching now, resting ones included, with the physics step each
+began in (`since`, the count `physics_info` reports as `steps`). `scene_load` puts players at
+their spawns, so a snapshot taken right after it replays from the spawn: snapshots carry the
+simulation (velocities, sleep, the solver's contact cache, the characters), and a restore
+replays a walk, a jump or a pile of crates bit for bit. Snapshot the spawn, walk and jump,
+restore, walk again, then teleport onto the Step and list what touches:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 0000000000000001 --script docs/agents/examples/player.jsonl
+{"method":"scene.load","result":{"entities":7}}
+{"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,2.2],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Floor","surface":"concrete","footsteps":0}}
+{"method":"world.snapshot","result":{"name":"spawn","entities":24,"bytes":5680}}
+{"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
+{"method":"world.step","result":{"frame":30}}
+{"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
+{"method":"world.hash","result":{"hash":"10f1fdd1b04ebbed","frame":30}}
+{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":6,"frame":0}}
+{"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
+{"method":"world.step","result":{"frame":30}}
+{"method":"world.hash","result":{"hash":"10f1fdd1b04ebbed","frame":30}}
+{"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2.2,0.3,-2],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
+{"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
+```
+
+Without `--seed` a load seeds the id generator at random, and `world.hash` covers it: compare
+hashes within one session, or load with a seed.
 
 In a window (`ohao serve --window`, or `ohao_game` on the scene for a person to play) a realtime
 frame draws the player and moving bodies between their last two steps; in lockstep, and in
@@ -272,7 +303,10 @@ window: initialize → load `helmet_game` → summary → an edit → snapshot �
 61-step flight → step with `watch` → capture inline and to a file → log read → stop
 recording → restore → replay (every checkpoint matches) → capture again, bit-identical
 to the first → load the blockout level → `level_info` → a ray down at the player spawn →
-`physics_info`.
+`physics_info` → lift and drop the crates → `physics_events` → load the play scene →
+`player_info` → look → snapshot → walk, turn by the mouse and jump → `player_info` and the
+footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
+same hash and the same picture.
 
 ```console
 $ python tests/serve/e2e_mcp.py > /dev/null   # gpu

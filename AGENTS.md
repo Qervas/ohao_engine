@@ -123,10 +123,10 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params) |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params); `player.info` at the spawn and after a walk, `player.teleport` (onto the Step, at rest, refused params), `physics.contacts` (the resting crates, an entity's pairs, `max`), a restore mid-fall and a restored walk reaching the same `world.hash` |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
-| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air |
+| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -205,10 +205,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   window's capture is its next frame; minimized is `E_STATE`; closing stdin mid-step exits 0; validation and unrequested
   readbacks 0 through teardown; `helmet_game.scene.json` saves byte for byte and its fly
   camera moves 3 m in 60 injected steps; the window host over `--pipe` (a step, a capture,
-  the client's disconnect ends it cleanly). `e2e_mcp.py`: a stdlib-only MCP client runs a
-  whole session against a hidden window (load, edit, snapshot, record, a flight, step with
-  watch, captures, logs, restore, replay to the same hash, a capture bit-identical to the
-  first), validation clean through teardown.
+  the client's disconnect ends it cleanly); the play scene's player walks, turns by the mouse
+  and jumps on injected input, and the same walk headless reaches the same place,
+  `world.hash` and picture from its eyes, bit for bit (sp6 test 14). `e2e_mcp.py`: a
+  stdlib-only MCP client runs a whole session against a hidden window (load, edit, snapshot,
+  record, a flight, step with watch, captures, logs, restore, replay to the same hash, a
+  capture bit-identical to the first; the blockout's level and physics; the play scene walked,
+  `player_info`, `player_teleport`, `physics_contacts`, restored and walked again to the same
+  hash and picture), validation clean through teardown.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
@@ -266,8 +270,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   core for a minute (exit 1 at `--deadline`); run it before a bench whose verdict you need.
   `physics_bench --check`: the physics step's budgets in `tests/bench/physics_budgets.json`
   (the blockout's step while crates fall, its step at rest with zero writes, 1,000 contact
-  begins in one step, a walking player's part of the step, `player_step_ms`), CPU, results in
-  `build/physics_bench.json`; the same noisy-run rules.
+  begins in one step, a walking player's part of the step, `player_step_ms`, a step while
+  1,000 boxes pile into a pit, `boxes1k_step_ms`; reported without a budget: what a snapshot
+  of that world carries, `boxes1k_snapshot_ms`), CPU, results in `build/physics_bench.json`;
+  the same noisy-run rules.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -478,8 +484,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     backend runs without worker threads and room for 65,536 bodies; Jolt
     takes each step's contact buffer (sized by that cap) from the temp allocator, which falls
     back to the heap past 10 MB (a fixed 10 MB block aborted the process on the first step).
-  - Agents read levels through `level.info`, `level.reload`, `physics.raycast` and
-    `physics.info` (`ohao/api/level.cpp`), which reach the level system and the physics
+  - Agents read levels through `level.info`, `level.reload`, `physics.raycast`,
+    `physics.info`, `physics.events`, `physics.contacts`, `player.info` and `player.teleport`
+    (`ohao/api/level.cpp`), which reach the level system and the physics
     scene through what `installLevels` and `installPhysics` leave on the World
     (`level::levelSummary`/`levelDiagnostics`/`reloadLevel`, `ecs::physicsScene`); a World
     without them answers `E_STATE`. They run the `level`, `transform` and `physics` sync
@@ -502,9 +509,22 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     entity's `prevWorld` is captured at its first recompute after a render and kept until the
     next `updateTransforms`, so a frame of several steps still has motion vectors spanning them
     (`t10_two_steps_one_frame_motion`). Do not call `updateTransforms` inside a step.
-  - A dynamic body's entity moved by anything but the write-back (an edit, a restore, a moved
-    parent) puts the body there at rest; the scene tells its own write apart by the pose it
-    wrote (1e-4). Sleeping bodies are not written, so a settled level writes nothing.
+  - A dynamic body's entity moved by anything but the write-back (an edit, a moved parent)
+    puts the body there at rest, however close: the scene marks its own `Transform` writes
+    (`writePose`) and treats any other as a placement; through a parent, a pose more than 1e-4
+    from what it wrote. Teleports set position and rotation at once (`setPose`). Sleeping
+    bodies are not written, so a settled level writes nothing.
+  - Snapshots replay exactly (step 5). A snapshot carries the simulation: `installPhysics`
+    puts `PhysicsScene::saveSimulation`/`restoreSimulation` in the World's `SnapshotHook`
+    (`ecs/snapshot_hook.hpp`): Jolt's state (bodies with velocities and sleep timers, the
+    contact cache the solver warm-starts from), each character, the players' records, the
+    contact bookkeeping. The next sync after a restore puts it back if the bodies are the
+    snapshot's (same handles for the same entities) and skips their teleports; a body rebuilt
+    since falls back to teleports and `BodyMotion` (runtime, snapshotted, never saved or
+    hashed: what each step left a dynamic body or player moving at). Velocities alone are not
+    enough: resting contacts replayed 2-4e-5 m off without the contact cache. `scene.load`
+    runs `player_spawn`, so a snapshot after a load holds the spawned player. A new or
+    teleported character finds its ground at once (`RefreshContacts`).
   - Events (`ecs::physicsEvents(world)`, the latest step's; `PhysicsScene::eventsSince` and
     `physics.events`, a log of 1,024): `contact_begin`/`contact_end` per body pair (Jolt's
     per-sub-shape callbacks counted per pair), `trigger_enter`/`trigger_exit` for a

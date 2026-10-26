@@ -92,6 +92,8 @@
 
 ### Task 5: Agent surface and replay (build step 5)
 
-- [ ] **Step 1: Write failing tests.** `player.info`, `player.teleport`, `physics.contacts` (api_tests, serve goldens), `BodyMotion` restore exactness (restore mid-fall, replay, same hash), a `check_live.py` leg walking the blockout in a hidden window, an `e2e_mcp.py` walking leg.
-- [ ] **Step 2: Implement.** The methods, `BodyMotion`, `boxes1k_step_ms` gated.
-- [ ] **Step 3: Close.** The done demo (walk the level in `ohao_game` and over MCP), roadmap row, monograph unit, docs, gate, final change record, commits.
+- As built: snapshots carry the backend's whole simulation through an ecs::SnapshotHook (BodyMotion is the fallback when bodies were rebuilt); scene.load spawns players; player.* take entity?; see the spec's "As built (step 5)".
+
+- [x] **Step 1: Write failing tests.** `player.info`, `player.teleport`, `physics.contacts` (api_tests, serve goldens), `BodyMotion` restore exactness (restore mid-fall, replay, same hash), a `check_live.py` leg walking the blockout in a hidden window, an `e2e_mcp.py` walking leg.
+- [x] **Step 2: Implement.** The methods, `BodyMotion`, `boxes1k_step_ms` gated.
+- [x] **Step 3: Close.** The done demo (walk the level in `ohao_game` and over MCP), roadmap row, monograph unit, docs, gate, final change record, commits.
