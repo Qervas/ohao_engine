@@ -5,8 +5,11 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/scene_view.hpp"
 #include "ecs/world.hpp"
+#include "ecs/world_hash.hpp"
 #include "level/level_system.hpp"
 #include "physics/backend/physics_backend.hpp"
 #include "reflect/registry.hpp"
@@ -549,9 +552,18 @@ glm::quat yawRotation(float deg) { return glm::angleAxis(glm::radians(deg), glm:
 // The blockout with a player, spawned (one step), then placed where a test wants it.
 struct PlayerFixture : Fixture {
     entt::entity player{entt::null};
-    PlayerFixture() : Fixture(kBlockout) {
+    entt::entity head{entt::null};   // with `withHead`: a child holding the Camera (step 3)
+    explicit PlayerFixture(bool withHead = false) : Fixture(kBlockout) {
         player = world.createWithId(0xb1a7e2, "Player");
         world.registry().emplace<PlayerController>(player);
+        if (withHead) {
+            head = world.createWithId(0xb1a7e3, "Head");
+            world.registry().emplace<Camera>(head, Camera{75.0f, 0.05f, 100.0f, true});
+            world.setParent(head, player);
+            // The level expanded before the head existed, so its camera took the view; a play scene
+            // loads the head first and the level's camera stays inactive (the level system's rule).
+            for (auto [e, cam, ln] : world.registry().view<Camera, const LevelNode>().each()) cam.active = false;
+        }
         step();
     }
     // One world step with these input events (then none: actions stay held, axes stay set).
@@ -767,6 +779,165 @@ static void t11_kinematic_bodies_move_by_velocity() {
     CHECK(bp.x > 2.3f && bp.x < 2.45f, "a kinematic body moved by its entity pushes a box ahead of it (no gap, no overlap)");
     CHECK(near(v.x, 1.0f, 0.15f), "at its own speed: it moves by velocity, not by teleports");
     CHECK(glm::length(physics.backend().getLinearVelocity(physics.bodyOf(pusher))) == 0.0f, "and stops when its entity stops");
+}
+
+// ---- test 12: the camera (sub-project 6 step 3) ----------------------------------------------------
+// docs/specs/2026-10-26-player-physics-design.md, "The camera": the player's Head child holds the
+// Camera at eyeHeight, pitched by look_y within 89 degrees; yaw turns the body. Render interpolation
+// draws movers between their last two step poses (World::setRenderAlpha) without touching what is
+// saved or hashed.
+
+namespace {
+
+glm::vec3 forwardOf(const glm::quat& q) { return q * glm::vec3(0.0f, 0.0f, -1.0f); }
+
+uint64_t hashOf(const World& w) {
+    Snapshot table;
+    return hashWorld(w, engineTypes(), table);
+}
+
+std::string savedText(const World& w) {
+    auto text = saveScene(w, engineTypes());
+    return text ? text.value() : std::string("<save failed>");
+}
+
+} // namespace
+
+static void t12_head_at_eye_height() {
+    PlayerFixture f(true);
+    const Transform& h = f.world.registry().get<Transform>(f.head);
+    std::printf("\n      head local (%.4f, %.4f, %.4f)", h.position.x, h.position.y, h.position.z);
+    CHECK(nearVec(h.position, {0.0f, 1.62f, 0.0f}, 1e-6f) && nearVec(forwardOf(h.rotation), {0.0f, 0.0f, -1.0f}, 1e-6f),
+          "the head sits at eyeHeight above the feet, level");
+    const auto view = resolveSceneView(f.world).camera;
+    CHECK(view && nearVec(view->position, {1.5f, 1.62f, 2.2f}, 0.01f) && near(view->pitchDeg, 0.0f, 1e-3f) &&
+              near(view->yawDeg, -90.0f, 1e-3f),
+          "the view is the spawn's, 1.62 m up, facing -Z");
+    CHECK(view && near(view->fovDeg, 75.0f) && near(view->nearPlane, 0.05f), "through the head's Camera (fov 75, near 0.05)");
+    f.world.registry().patch<PlayerController>(f.player, [](PlayerController& pc) { pc.eyeHeight = 1.5f; });
+    f.step();
+    CHECK(near(f.world.registry().get<Transform>(f.head).position.y, 1.5f, 1e-6f), "a changed eyeHeight moves the head");
+}
+
+static void t12_pitch_clamps_at_89() {
+    PlayerFixture f(true);
+    f.step({axisSet("look_y", 200.0f)});   // 20 degrees down a step
+    f.steps(9);
+    const auto& reg = f.world.registry();
+    const float down = reg.get<PlayerState>(f.player).pitchDeg;
+    const glm::vec3 headFwd = forwardOf(reg.get<Transform>(f.head).rotation);
+    std::printf("\n      down: pitch %.3f, head forward (%.4f, %.4f, %.4f)", down, headFwd.x, headFwd.y, headFwd.z);
+    CHECK(near(down, -89.0f, 1e-4f), "looking down stops at -89 degrees");
+    CHECK(nearVec(headFwd, {0.0f, -std::sin(glm::radians(89.0f)), -std::cos(glm::radians(89.0f))}, 1e-5f),
+          "the head is pitched by it");
+    CHECK(near(forwardOf(reg.get<Transform>(f.player).rotation).y, 0.0f, 1e-6f), "the body is not");
+    const auto view = resolveSceneView(f.world).camera;
+    CHECK(view && near(view->pitchDeg, -89.0f, 1e-3f), "the view looks 89 degrees down");
+    f.step({axisSet("look_y", -400.0f)});
+    f.steps(9);
+    CHECK(near(reg.get<PlayerState>(f.player).pitchDeg, 89.0f, 1e-4f), "and up stops at +89");
+    f.step({axisSet("look_y", 0.0f)});
+    f.world.setTransform(f.head, Transform{{0.0f, 1.62f, 0.0f}, glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0))});
+    f.step();
+    CHECK(near(reg.get<PlayerState>(f.player).pitchDeg, 30.0f, 1e-3f), "an edited head rotation sets the pitch");
+}
+
+static void t12_yaw_turns_the_body() {
+    PlayerFixture f(true);
+    f.step({axisSet("look_x", 100.0f)});   // 10 degrees right a step
+    f.steps(8);
+    f.step({axisSet("look_x", 0.0f)});
+    const auto& reg = f.world.registry();
+    const glm::vec3 body = forwardOf(reg.get<Transform>(f.player).rotation);
+    const glm::vec3 headLocal = forwardOf(reg.get<Transform>(f.head).rotation);
+    std::printf("\n      body forward (%.4f, %.4f, %.4f), yaw %.3f", body.x, body.y, body.z, reg.get<PlayerState>(f.player).yawDeg);
+    CHECK(nearVec(body, {1.0f, 0.0f, 0.0f}, 1e-5f), "90 degrees right: the body faces +X");
+    CHECK(nearVec(headLocal, {0.0f, 0.0f, -1.0f}, 1e-6f), "the head turns with it, not by itself");
+    const auto view = resolveSceneView(f.world).camera;
+    CHECK(view && near(view->yawDeg, 0.0f, 1e-3f) && near(view->pitchDeg, 0.0f, 1e-3f), "the view faces +X");
+    const glm::vec3 a = f.pos();
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(20);
+    CHECK(f.pos().x > a.x + 1.0f && near(f.pos().z, a.z, 0.01f), "and forward is +X now");
+}
+
+static void t12_interpolation_leaves_hash_and_save() {
+    PlayerFixture f(true);
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    auto& reg = f.world.registry();
+    // CrateA lifted 1.5 m: it falls while the player walks.
+    const entt::entity crate = f.named("CrateA");
+    const Transform c0 = reg.get<Transform>(crate);
+    f.world.setTransform(crate, Transform{c0.position + glm::vec3(0.0f, 1.5f, 0.0f), c0.rotation, c0.scale});
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(10);
+    const glm::vec3 eyePrev = glm::vec3(reg.get<WorldTransform>(f.head).world[3]);
+    const glm::vec3 cratePrev = glm::vec3(reg.get<WorldTransform>(crate).world[3]);
+    f.step();
+    const glm::vec3 eyeCur = glm::vec3(reg.get<WorldTransform>(f.head).world[3]);
+    const glm::vec3 crateCur = glm::vec3(reg.get<WorldTransform>(crate).world[3]);
+    const uint64_t hash = hashOf(f.world);
+    const std::string saved = savedText(f.world);
+    const glm::mat4 playerWorld = reg.get<WorldTransform>(f.player).world;
+
+    f.world.setRenderAlpha(0.5f);
+    f.world.sync();
+    const auto* headPose = reg.try_get<RenderPose>(f.head);
+    const auto* cratePose = reg.try_get<RenderPose>(crate);
+    const glm::vec3 eyeMid = glm::mix(eyePrev, eyeCur, 0.5f), crateMid = glm::mix(cratePrev, crateCur, 0.5f);
+    std::printf("\n      eye (%.4f, %.4f, %.4f) -> (%.4f, %.4f, %.4f); drawn at (%.4f, %.4f, %.4f)", eyePrev.x, eyePrev.y,
+                eyePrev.z, eyeCur.x, eyeCur.y, eyeCur.z, headPose ? headPose->world[3].x : 0.0f,
+                headPose ? headPose->world[3].y : 0.0f, headPose ? headPose->world[3].z : 0.0f);
+    CHECK(eyeCur.z < eyePrev.z - 0.05f && crateCur.y < cratePrev.y - 0.01f, "the player walks and the crate falls");
+    CHECK(headPose && nearVec(glm::vec3(headPose->world[3]), eyeMid, 1e-4f), "alpha 0.5 draws the head halfway between its steps");
+    CHECK(cratePose && nearVec(glm::vec3(cratePose->world[3]), crateMid, 1e-4f), "and the falling crate halfway");
+    const auto view = resolveSceneView(f.world).camera;
+    CHECK(view && nearVec(view->position, eyeMid, 1e-4f), "the camera views from the drawn head");
+    CHECK(reg.get<WorldTransform>(f.player).world == playerWorld, "WorldTransform keeps the step's pose");
+    CHECK(hashOf(f.world) == hash, "world.hash is the step's");
+    CHECK(savedText(f.world) == saved, "the saved file is the step's, byte for byte");
+
+    f.world.setRenderAlpha(1.0f);
+    f.world.sync();
+    CHECK(reg.view<RenderPose>().empty(), "alpha 1 draws the step's poses: no render pose is left");
+    const auto exact = resolveSceneView(f.world).camera;
+    CHECK(exact && nearVec(exact->position, eyeCur, 1e-5f), "and the camera is at the step's eye");
+}
+
+static void t12_play_scene_loads_with_head_camera() {
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    ohao::level::installLevels(w, files, engineTypes());
+    installPhysics(w, files);
+    const auto loaded = loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
+                                      engineTypes());
+    CHECK(loaded, "blockout_play.scene.json loads");
+    if (!loaded) return;
+    w.sync();
+    auto& reg = w.registry();
+    entt::entity player = entt::null, camera = entt::null;
+    std::size_t active = 0;
+    for (const entt::entity e : reg.view<PlayerController>()) player = e;
+    for (auto [e, cam] : reg.view<const Camera>().each())
+        if (cam.active) camera = e, ++active;
+    const auto* parent = camera != entt::null ? reg.try_get<Parent>(camera) : nullptr;
+    CHECK(player != entt::null && reg.view<PlayerController>().size() == 1, "one player");
+    CHECK(active == 1 && parent && parent->entity == player, "one active Camera, the player's child (the level's stays off)");
+    const auto view = resolveSceneView(w).camera;
+    std::printf("\n      view at (%.4f, %.4f, %.4f) pitch %.3f yaw %.3f", view ? view->position.x : 0.0f,
+                view ? view->position.y : 0.0f, view ? view->position.z : 0.0f, view ? view->pitchDeg : 0.0f,
+                view ? view->yawDeg : 0.0f);
+    CHECK(view && nearVec(view->position, {1.5f, 1.62f, 2.2f}, 0.01f) && near(view->yawDeg, -90.0f, 1e-3f) &&
+              near(view->pitchDeg, 0.0f, 1e-3f),
+          "before any step, the view is the player spawn's at eye height, facing -Z");
+    CHECK(view && near(view->fovDeg, 75.0f) && near(view->nearPlane, 0.05f), "fov 75, near 0.05");
+    for (int i = 0; i < 30; ++i) {
+        w.stepInput({});
+        w.update(kDt);
+    }
+    const auto later = resolveSceneView(w).camera;
+    CHECK(later && nearVec(later->position, {1.5f, 1.62f, 2.2f}, 0.01f), "standing still, it stays there");
+    CHECK(reg.get<PlayerState>(player).onGround, "on the floor");
 }
 
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
@@ -987,5 +1158,10 @@ int main(int argc, char** argv) {
     RUN(t11_a_trigger_sees_the_player);
     RUN(t11_an_edited_controller_keeps_the_player_where_it_is);
     RUN(t11_kinematic_bodies_move_by_velocity);
+    RUN(t12_head_at_eye_height);
+    RUN(t12_pitch_clamps_at_89);
+    RUN(t12_yaw_turns_the_body);
+    RUN(t12_interpolation_leaves_hash_and_save);
+    RUN(t12_play_scene_loads_with_head_camera);
     return ohao::test::finish("level_physics_tests");
 }

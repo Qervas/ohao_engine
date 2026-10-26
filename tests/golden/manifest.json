@@ -249,6 +249,14 @@
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
       "_note": "Level pipeline (added 2026-10-26, sub-project 5 step 1): assets/levels/blockout_room.glb, the generated Blender blockout (tools/level/blockout_room.py), through today's whole-file ModelAsset path: one merged mesh, the loader's normal repair smoothing its hard edges (the spec's 'Why'). Sun, sky and a point lamp from the scene file. Exact. Step 2 keeps authored normals and step 3 loads it as a Level of per-node entities; both re-baseline this golden after looking."
+    },
+    {
+      "name": "cli_blockout_play_deferred",
+      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1",
+      "golden": "tests/golden/blockout_play_deferred.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The play scene (added 2026-10-26, sub-project 6 step 3): the blockout seen through the player's head camera before any step, at the player spawn (1.5, 0, 2.2) 1.62 m up, facing -Z, fov 75, near 0.05 (the player spawns in the player_spawn sync system). Exact."
     }
   ]
 }
