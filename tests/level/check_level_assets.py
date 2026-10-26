@@ -92,7 +92,7 @@ BLOCKOUT = {
     "CrateB": ([1.3, 0.8, -1.7], {"col": "box", "body": "dynamic", "mass": 8.0}),
     "SpawnPlayer": ([1.5, 0, 2.2], {"spawn": "player"}),
     "SpawnEnemyA": ([-2.5, 0.3, -2], {"spawn": "enemy"}),
-    "SpawnEnemyB": ([3, 0.6, -2], {"spawn": "enemy"}),
+    "SpawnEnemyB": ([3, 0.5, -2], {"spawn": "enemy"}),   # on the ramp (step 4: was 0.6, 0.1 m above it)
     "LevelCamera": ([1.5, 1.7, 5.5], None),
 }
 

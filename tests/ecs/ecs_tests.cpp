@@ -864,7 +864,7 @@ static void sp5_t09_spawns_in_node_order_with_facing() {
     CHECK(bs.size() == 3, "the blockout has three spawns");
     const char* names[] = {"SpawnEnemyA", "SpawnEnemyB", "SpawnPlayer"};
     const char* tags[] = {"enemy", "enemy", "player"};
-    const glm::vec3 pos[] = {{-2.5f, 0.3f, -2.0f}, {3.0f, 0.6f, -2.0f}, {1.5f, 0.0f, 2.2f}};
+    const glm::vec3 pos[] = {{-2.5f, 0.3f, -2.0f}, {3.0f, 0.5f, -2.0f}, {1.5f, 0.0f, 2.2f}};
     const glm::vec3 dir[] = {{0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}};
     for (int i = 0; i < 3; ++i)
         CHECK(breg.get<Name>(bs[i]).value == names[i] && breg.get<SpawnPoint>(bs[i]).tag == tags[i] &&

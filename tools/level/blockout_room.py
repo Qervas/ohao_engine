@@ -111,7 +111,7 @@ def build():
     # Spawn points: an arrow empty each, facing along its local +Y (yaw about Z).
     empty('SpawnPlayer', (1.5, -2.2, 0.0), yaw_deg=0.0, spawn='player')
     empty('SpawnEnemyA', (-2.5, 2.0, 0.3), yaw_deg=180.0, spawn='enemy')
-    empty('SpawnEnemyB', (3.0, 2.0, 0.6), yaw_deg=180.0, spawn='enemy')
+    empty('SpawnEnemyB', (3.0, 2.0, 0.5), yaw_deg=180.0, spawn='enemy')   # on the ramp: 0.6 * 2.5 / 3 m up
 
     # A camera at the doorway looking in, for captures (glTF camera node).
     cam = bpy.data.cameras.new('LevelCamera')
