@@ -15,6 +15,10 @@
 //                   filters (RT GI's and RT shadows' denoisers) take the mesh's depth among a
 //                   pixel's neighbours (deferred and path traced).
 //   spot            the spot turned toward the camera: from inside its cone its emitter is bright.
+//   motion          a moved point and area light: their emitters' prevWorld is last frame's
+//                   placement (the motion vector TAA reprojects with); a frame later, the world.
+//   taa             a point light moving ~1.5 px a frame under TAA: its mesh is as bright as the
+//                   same light held still (it was 4.9 darker, its history the background).
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "api/session.hpp"
@@ -372,6 +376,156 @@ void spot_seen_from_inside_its_cone_is_bright() {
     std::remove((std::string(OHAO_SOURCE_DIR) + "/" + scene).c_str());
 }
 
+// A light moved since the last frame: its emitter's prevWorld is last frame's placement, the
+// motion vector TAA reprojects with, as a mesh's is; one frame later it catches up.
+void moved_light_emitters_carry_their_motion() {
+    std::printf("motion: a moved light's emitter remembers where it was\n");
+    const std::string scene = roomScene(kLightsInView, "motion");
+    ecs::FileAssetResolver assets(OHAO_SOURCE_DIR);
+    host::RenderHost host(assets, api::HostKind::Headless);
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    session.setAssetResolver(&assets);
+    host.bind(world);
+    session.setHost(&host);
+    const std::string loaded = session.call("scene.load", std::string(R"({"replace":true,"path":")") + scene + "\"}");
+    std::remove((std::string(OHAO_SOURCE_DIR) + "/" + scene).c_str());
+    api::RenderRequest r;
+    r.mode = "deferred";
+    r.frames = 1;
+    r.width = kWidth;
+    r.height = kHeight;
+    (void)host.capture(r);
+    if (loaded.rfind("{\"result\"", 0) != 0 || !host.renderer()) {
+        check(false, "motion: the scene loaded and rendered");
+        return;
+    }
+    const render::RenderScene& rs = host.renderer()->renderScene();
+    const auto entity = [&](const char* name) {
+        for (auto [e, n] : world.registry().view<const ecs::Name>().each())
+            if (n.value == name) return e;
+        return entt::entity{entt::null};
+    };
+    // Emitter slots are in light order: point, spot, area (the sun has none).
+    const auto emitterAt = [&](std::size_t i) -> const render::InstanceGpu& { return rs.instance(rs.lightEmitterSlots()[i]); };
+    const auto near = [](const glm::vec3& a, const glm::vec3& b) { return glm::length(a - b) < 1e-4f; };
+    const auto origin = [](const glm::mat4& m) { return glm::vec3(m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)); };
+    if (rs.lightEmitterSlots().size() != 3) {
+        check(false, "motion: three emitter instances");
+        return;
+    }
+    const glm::vec3 step{0.5f, -0.25f, 0.4f};
+    const glm::vec3 areaWas = origin(emitterAt(2).world);
+    world.setTransform(entity("Point"), ecs::Transform{kPointPos + step});
+    world.setTransform(entity("Area"), ecs::Transform{kAreaPos + step});
+    world.sync();
+    const render::InstanceGpu& point = emitterAt(0);
+    const render::InstanceGpu& area = emitterAt(2);
+    std::printf("  point: world (%.2f %.2f %.2f) prev (%.2f %.2f %.2f)\n", point.world[3].x, point.world[3].y,
+                point.world[3].z, point.prevWorld[3].x, point.prevWorld[3].y, point.prevWorld[3].z);
+    check(near(origin(point.world), kPointPos + step), "motion: the point light's emitter is where the light is now");
+    check(near(origin(point.prevWorld), kPointPos), "motion: the point light's emitter's prevWorld is where it was");
+    check(near(glm::vec3(point.prevWorld[0]), glm::vec3(point.world[0])), "motion: the sphere's size is the same in both");
+    check(near(origin(area.world), areaWas + step) && near(origin(area.prevWorld), areaWas),
+          "motion: the area light's rectangle moved, and its prevWorld is where it was");
+    world.sync();   // not moved again: prevWorld catches up, as a mesh's does
+    check(emitterAt(0).prevWorld == emitterAt(0).world && emitterAt(2).prevWorld == emitterAt(2).world,
+          "motion: a frame later, the emitters' prevWorld is their world");
+}
+
+// TAA on a point light that moves sideways ~1.5 px a frame for 12 frames, against the same 12 frames
+// with the light still at its last position. With its motion vectors, TAA reprojects the mesh's own
+// history and its pixels match the still light's; without them the mesh's history is the floor and
+// wall behind it, and the moving mesh comes out darker, smeared toward where it was.
+struct MovingCapture { Image image; bool ok{false}; };
+constexpr int kTaaFrames = 12;
+const glm::vec3 kTaaStep{0.03f, 0.0f, 0.0f};   // ~1.5 px a frame
+
+MovingCapture taaCapture(const std::string& scene, bool moving) {
+    MovingCapture out;
+    ecs::FileAssetResolver assets(OHAO_SOURCE_DIR);
+    host::RenderHost host(assets, api::HostKind::Headless);
+    ecs::World world;
+    api::Session session(world, engineTypes());
+    session.setAssetResolver(&assets);
+    host.bind(world);
+    session.setHost(&host);
+    if (session.call("scene.load", std::string(R"({"replace":true,"path":")") + scene + "\"}").rfind("{\"result\"", 0) != 0)
+        return out;
+    entt::entity point{entt::null};
+    for (auto [e, n] : world.registry().view<const ecs::Name>().each())
+        if (n.value == "Point") point = e;
+    int frame = 0;
+    world.addSyncBefore("transform", "mover", [&](ecs::World& w) {
+        const int i = moving ? std::min(frame, kTaaFrames - 1) : kTaaFrames - 1;
+        w.setTransform(point, ecs::Transform{kPointPos + float(i) * kTaaStep});
+        ++frame;
+    });
+    api::RenderRequest r;
+    r.mode = "deferred";
+    r.frames = kTaaFrames;
+    r.width = kWidth;
+    r.height = kHeight;
+    r.post = {"taa"};
+    r.exposure = 0.03f;   // the mesh (radiance ~25) mid-range, not clipped: TAA's blend shows
+    const std::string png = std::string(OHAO_SOURCE_DIR) + "/" + scratch("taa") + ".png";
+    r.path = png;
+    const api::RenderOutcome o = host.capture(r);
+    if (!o.errors.empty()) return out;
+    int w = 0, h = 0, n = 0;
+    if (unsigned char* px = stbi_load(png.c_str(), &w, &h, &n, 4)) {
+        if (w == int(kWidth) && h == int(kHeight)) out.image.rgba.assign(px, px + std::size_t{kWidth} * kHeight * 4);
+        stbi_image_free(px);
+    }
+    std::remove(png.c_str());
+    out.ok = !out.image.rgba.empty() && frame >= kTaaFrames;
+    return out;
+}
+
+void moving_light_emitter_is_taa_stable() {
+    std::printf("taa: a moving light's mesh against the same light held still\n");
+    const std::string scene = roomScene(kLightsInView, "taa");
+    const MovingCapture moving = taaCapture(scene, true), still = taaCapture(scene, false);
+    std::remove((std::string(OHAO_SOURCE_DIR) + "/" + scene).c_str());
+    if (!moving.ok || !still.ok) {
+        check(false, "taa: the captures rendered");
+        return;
+    }
+    // The last frame's sphere and 4 px around it: inside, any history is clipped to the sphere's
+    // own radiance; the edge is where a mesh's history lags or leads.
+    const glm::vec3 c = project(kLightsInView, kPointPos + float(kTaaFrames - 1) * kTaaStep);
+    const float focal = 0.5f * kHeight / std::tan(glm::radians(kFov) * 0.5f);
+    const float rad = kPointRadius * focal / c.z + 4.0f;
+    double sum = 0.0, lumMoving = 0.0, lumStill = 0.0;
+    int count = 0, worst = 0;
+    for (int y = int(c.y - rad); y <= int(c.y + rad); ++y)
+        for (int x = int(c.x - rad); x <= int(c.x + rad); ++x) {
+            if ((x - c.x) * (x - c.x) + (y - c.y) * (y - c.y) > rad * rad || x < 0 || y < 0 || x >= int(kWidth) || y >= int(kHeight))
+                continue;
+            const std::size_t i = (std::size_t(y) * kWidth + std::size_t(x)) * 4;
+            for (int k = 0; k < 3; ++k) {
+                const int d = std::abs(int(moving.image.rgba[i + k]) - int(still.image.rgba[i + k]));
+                sum += d;
+                worst = std::max(worst, d);
+                lumMoving += moving.image.rgba[i + k];
+                lumStill += still.image.rgba[i + k];
+            }
+            ++count;
+        }
+    const double mean = count ? sum / (3.0 * count) : 255.0;
+    std::printf("  sphere (%d px): mean |moving - still| %.1f, max %d; mean value moving %.1f, still %.1f\n", count, mean,
+                worst, count ? lumMoving / (3.0 * count) : 0.0, count ? lumStill / (3.0 * count) : 0.0);
+    // Measured: with motion vectors the moving sphere's mean value is 0.9 under the still one's and
+    // the mean difference 12.1 (its edge, which TAA has had fewer frames to anti-alias); without them,
+    // 4.9 under (darker, its history the background) and 15.0.
+    const double bias = count ? (lumStill - lumMoving) / (3.0 * count) : 255.0;
+    check(count > 20, "taa: the sphere covers some pixels");
+    check(std::abs(bias) <= 2.5, "taa: the moving light's mesh is as bright as the still one's (its own history reprojected)");
+    check(mean <= 13.5, "taa: the moving light's mesh differs from the still one's by its edge's anti-aliasing only");
+    keep(moving.image, "taa_moving");
+    keep(still.image, "taa_still");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -380,5 +534,7 @@ int main(int argc, char** argv) {
     out_of_view_emitters_change_nothing();
     in_view_emitters_change_only_their_pixels();
     spot_seen_from_inside_its_cone_is_bright();
+    moved_light_emitters_carry_their_motion();
+    moving_light_emitter_is_taa_stable();
     return test::finish("light_emitter_gpu_test", g_passed, g_failed, g_failures);
 }

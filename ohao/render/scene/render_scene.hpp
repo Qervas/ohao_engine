@@ -57,6 +57,8 @@ public:
     void setViewerPosition(const glm::vec3& viewer);
     // The emitter instances' slots, in light order (one per light that has one).
     [[nodiscard]] std::span<const uint32_t> lightEmitterSlots() const;
+    // A live slot's instance as last written (host copy; uploaded by recordUpdates).
+    [[nodiscard]] const InstanceGpu& instance(uint32_t slot) const;
     // Bindless index of the environment map, stamped into the RT light header.
     void setEnvMapTextureIndex(uint32_t texIdx);
     // HDRI scale stamped into the RT light header (pt_miss); default 1.

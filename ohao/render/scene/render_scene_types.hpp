@@ -100,6 +100,10 @@ struct LightDesc {
     glm::vec3 areaEdge2{0, 0, 1};
     bool castShadows{true};   // emissive proxies never do
     uint64_t order{0};
+    // Where the light was last frame, as the transform taking this frame's world space to it
+    // (the entity's prevWorld * inverse(world)): its emitter mesh's prevWorld is this times its
+    // world, so the mesh writes motion vectors as any moved mesh does. Identity when still.
+    glm::mat4 lastFrameMotion{1.0f};
 };
 
 // RT shadows know at most this many lights, one visibility channel each (LightData::params.w

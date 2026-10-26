@@ -340,11 +340,13 @@ struct RenderScene::Impl {
     // an unchanged light rewrites identical bytes and uploads nothing.
     void syncEmitters() {
         std::vector<LightEmitter> want;
+        std::vector<glm::mat4> motion;   // each emitter's light's lastFrameMotion
         spotEmitters = false;
         if (emittersEnabled)
             for (const LightDesc& d : lights.descs())
                 if (const auto e = lightEmitter(d, viewer)) {
                     want.push_back(*e);
+                    motion.push_back(d.lastFrameMotion);
                     spotEmitters = spotEmitters || d.kind == LightKind::Spot;
                 }
         if (!want.empty() && !ensureEmitterAssets()) want.clear();
@@ -353,7 +355,8 @@ struct RenderScene::Impl {
             InstanceDesc d{};
             d.mesh = want[i].quad ? emitterQuad : emitterSphere;
             d.materials = mats;
-            d.world = d.prevWorld = want[i].world;
+            d.world = want[i].world;
+            d.prevWorld = motion[i] * want[i].world;   // where the light was: its motion vectors
             d.emitter = true;
             d.giAlbedoPacked = glm::vec4(want[i].radiance, 1.0f);
             if (i < emitterSlots.size()) {
@@ -525,6 +528,8 @@ void RenderScene::setViewerPosition(const glm::vec3& viewer) {
 }
 
 std::span<const uint32_t> RenderScene::lightEmitterSlots() const { return m->emitterSlots; }
+
+const InstanceGpu& RenderScene::instance(uint32_t slot) const { return m->instances.gpu(slot); }
 
 void RenderScene::setEnvMapTextureIndex(uint32_t texIdx) {
     if (!m->initialized) return;
