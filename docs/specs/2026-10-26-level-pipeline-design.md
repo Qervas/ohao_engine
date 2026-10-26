@@ -356,6 +356,30 @@ after `transform`):
   - `physics.info` reports dynamic bodies as `unstepped` until 6.
 - `Level.collision: false` builds none of a level's bodies (a render-only level).
 
+**As built (step 4):**
+- The physics system is installed by `ecs::installPhysics(world, assets)`, beside
+  `level::installLevels` in the CLI context and `LiveHost`, not by `World` itself: it needs
+  the asset resolver to load meshes, as instantiate does. `ohao_ecs` links `ohao_physics`
+  (core, glm and Jolt only, so no cycle).
+- The backend interface is `physics::backend::IPhysicsBackend`; `ShapeInfo::COMPOUND`
+  holds `children` (shape, position, rotation in the body's frame), built as a Jolt
+  `StaticCompoundShape`. A single shape off the body's origin (a fitted box's offset, a
+  capsule's turn) is a one-child compound.
+- Dirty state is EnTT signals (`Collider`, `RigidBody`, `ColliderPart`, `CollisionMesh`,
+  `MeshSource`, a destroyed body) plus the transform system's `PhysicsMoved` tag: a moved
+  body is moved, a body whose scale changed (or whose hulls moved) is rebuilt.
+- Runtime components: `ColliderPart{body}` (a `UCX_` hull, the target found by name, with or
+  without its `_NN` suffix), `CollisionMesh{source}` (the mesh of an undrawn node),
+  `PhysicsBody{handle}`.
+- A level gives a node a `RigidBody` only when one of `body`, `mass`, `fric`, `rest` is set.
+- The backend is created at the first body, single-threaded, with room for 65,536 bodies;
+  its temp allocator falls back to the heap past 10 MB (Jolt's per-step contact buffer is
+  sized by the body cap).
+- Shapes are not yet cached per `(mesh, shape, scale)`: each body fits its own (the
+  resolver caches the meshes). Left for step 6's kit2k budgets.
+- Warnings `W_LEVEL_DYNAMIC_MESH`, `W_COLLIDER_NO_MESH`, `W_COLLIDER_SCALE` are in the
+  catalogue and on `PhysicsScene::warnings()`; step 5 surfaces them in `physics.info`.
+
 **Queries:**
 - `physics.raycast {from, dir, max = 1000}` →
   `{hit, entity, name, point, normal, dist}`, or `{hit: false}`.

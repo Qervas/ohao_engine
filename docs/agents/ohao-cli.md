@@ -335,8 +335,10 @@ that id.
 | `Level` | A glTF level (`asset`, `lightScale`, `collision`). At load (and whenever it changes) it becomes one child entity per node of the file's default scene: meshes, KHR lights, cameras, and its nodes' `extras` hints (`spawn`, `socket`, `vis`, components by name). Those entities carry `LevelNode`, keep the same ids on every load, and are never saved: a scene holds only the `Level` line. |
 | `SpawnPoint` | A named place to spawn something (`tag`, ≤ 32 characters), facing its −Z; `query --has SpawnPoint` lists them in node order. |
 | `Socket` | An attach point (`name`, ≤ 64 characters): a level's `SOCKET_` empties. |
+| `Collider` | The entity collides: `shape` (`Box`, `Sphere`, `Capsule`, `Convex`, `Mesh`, `None`), `size` (zero: fitted to the entity's mesh at its world scale), `offset`. A level's mesh nodes get one from their `col` hint (`Mesh` by default). |
+| `RigidBody` | How its body moves: `motion` (`Static`, `Dynamic`, `Kinematic`), `mass` (kg), `friction`, `restitution`. No RigidBody is static. Dynamic bodies are built but not stepped yet (sub-project 6). |
 
-Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, …) are
+Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, `PhysicsBody`, …) are
 derived, appear in the catalogue for reference, and are refused in files and commands.
 
 `ohao schema level-extras [-o file]` writes the level hint keys (`col`, `body`, `mass`,
@@ -386,6 +388,9 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `W_UNSAVEABLE_MESH` | Warning: a mesh made in code, with no MeshSource, is not saved. |
 | `W_LEVEL_EXTRAS` | Warning: an unknown lower-case key in a level node's extras (another tool's property). |
 | `W_LEVEL_UNSUPPORTED` | Warning: level content OHAO ignores (skins, animations, morph targets, `KHR_materials_*`, orthographic cameras). |
+| `W_LEVEL_DYNAMIC_MESH` | Warning: a dynamic body with a `Mesh` collider; it is built as the mesh's convex hull. |
+| `W_COLLIDER_NO_MESH` | Warning: a collider with no size on an entity whose mesh is missing or did not load; no collider. |
+| `W_COLLIDER_SCALE` | Warning: a sphere or capsule collider under a non-uniform scale (axes over 1% apart); it takes the largest axis. |
 
 ## Habits that save tokens and mistakes
 

@@ -106,6 +106,7 @@ $ build/Release/force_generator_tests.exe > /dev/null
 $ build/Release/env_cdf_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
+$ build/Release/level_physics_tests.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
@@ -125,6 +126,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats` |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
+| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -157,6 +159,7 @@ $ python tests/golden/render_golden.py tests/golden/manifest.json > /dev/null   
 $ build/Release/scene_bench.exe --check tests/bench/scene_budgets.json > /dev/null   # slow
 $ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/null   # slow
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
+$ build/Release/level_bench.exe --check tests/bench/level_budgets.json > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -459,6 +462,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     `scene.load` expands levels at once (`World::runSync("level")`). Node entities are never
     saved, and a changed `Level` re-expands in place (same entities, the file's state back),
     so an unchanged file keeps `world.hash`.
+  - Collision (`ecs/physics_scene.hpp`): `Collider` and `RigidBody` are saved components; the
+    `physics` sync system (right after `transform`, installed by `ecs::installPhysics`, which
+    the CLI context and `LiveHost` call next to `installLevels`) builds one Jolt body per
+    entity with a `Collider`, fitted to its mesh at its world scale, plus `UCX_` hulls
+    (`ColliderPart`) as one compound body on their target. It works from dirty state (signals
+    and the transform system's `PhysicsMoved` tag), so a still world builds nothing; a moved
+    body is moved, a rescaled one rebuilt. Dynamic bodies are built, never stepped, until
+    sub-project 6. The backend runs without worker threads and room for 65,536 bodies; Jolt
+    takes each step's contact buffer (sized by that cap) from the temp allocator, which falls
+    back to the heap past 10 MB (a fixed 10 MB block aborted the process on the first step).
   - Loaders keep a file's normals. `repairMeshNormals` fills only vertices left without
     one (zero or not finite) with their faces' smooth normal; a loader that finds no normal
     writes zero for it, never a placeholder direction.

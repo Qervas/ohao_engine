@@ -80,7 +80,7 @@
 - Create: `docs/changes/2026-10-26-level-pipeline-step1.md`
 
 **Interfaces:**
-- Produces: `assets/levels/blockout_room.glb`. Its node names, extras and transforms are the contract tests 7 and 9 assert against: `Floor` top at y 0, `Step` top at 0.3, `Platform` and the ramp top at 0.6, the doorway x ∈ [0.9, 2.1] in the south wall at z ∈ [3.0, 3.2], spawns `SpawnPlayer` (1.5, 0, 2.2), `SpawnEnemyA` (−2.5, 0.3, −2), `SpawnEnemyB` (3, 0.6, −2), crates `CrateA` (dynamic, 20 kg) and `CrateB` (dynamic, 8 kg) stacked.
+- Produces: `assets/levels/blockout_room.glb`. Its node names, extras and transforms are the contract tests 7 and 9 assert against: `Floor` top at y 0, `Step` top at 0.3, `Platform` and the ramp top at 0.6, the doorway x ∈ [0.9, 2.1] in the south wall at z ∈ [3.0, 3.2], spawns `SpawnPlayer` (1.5, 0, 2.2), `SpawnEnemyA` (−2.5, 0.3, −2), `SpawnEnemyB` (3, 0.5, −2) on the ramp (0.6 until step 4 found it 0.1 m above the ramp), crates `CrateA` (dynamic, 20 kg) and `CrateB` (dynamic, 8 kg) stacked.
 - Produces: `tests/level/extras_schema.json`, a JSON Schema for a node's `extras` (the spec's hint table: `col`, `body`, `mass`, `fric`, `rest`, `vis`, `spawn`, `socket`; additional properties allowed, since passthrough and other tools' keys are checked by the engine in Task 3).
 
 - [x] **Step 1: Write `check_level_assets.py` first.** In the `check_layout.py` style (`run(fn)`, final JSON line), with these tests:
@@ -214,6 +214,7 @@
 - Create: `ohao/ecs/physics_scene.{hpp,cpp}`; modify `ohao/ecs/CMakeLists.txt` (link `ohao_physics`), `world.cpp` (register `physics` after `transform`)
 - Modify: `components.hpp`, `scene_types.cpp`, `scene_writers.cpp` (`Collider`, `RigidBody`); `level_system.cpp` (hints → components)
 - Test: new `tests/level/level_physics_tests.cpp` (`ohao_add_test(level_physics_tests LABEL quick …)`): t06, t07
+- As built: the system is installed by `ecs::installPhysics(world, assets)` (beside `installLevels` in the hosts), not in `world.cpp`; the backend is `physics::backend::IPhysicsBackend`; a minimal `tools/bench/level_bench.cpp` and `tests/bench/level_budgets.json` measure `blockout_load_ms` (Task 6 adds the rest). See the spec's "As built (step 4)".
 
 **Interfaces:**
 - Produces:
@@ -231,7 +232,7 @@
   };
   ```
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - t06: `fit_box_sphere_capsule_from_mesh`, `convex_hull_of_mesh`, `static_mesh_shape`, `ucx_hulls_are_one_compound_body`, `dynamic_mesh_becomes_convex_with_warning`, `non_uniform_scale_baked`, `mirrored_node_collides_outward`.
   - t07 on the blockout:
     - `ray_down_at_each_spawn_hits_authored_height` (±1 mm);
@@ -240,9 +241,9 @@
     - `ray_on_ramp_returns_slope_normal`;
     - `crates_come_to_rest_when_stepped`: `backend().step(1/60)` 120 times; crate centres at y 0.3 and 0.8 ±2 cm, statics unmoved.
   Expected: FAIL to compile.
-- [ ] **Step 2: Implement.** `COMPOUND` in the backend, the fitting functions (`fitCollider(const MeshData&, ColliderShape, glm::vec3 scale)`), `PhysicsScene`, the hints → `Collider`/`RigidBody` in the level system. Run `level_physics_tests`; expected: PASS. Run `physics_backend_tests`; expected: PASS.
-- [ ] **Step 3: Measure the load budget.** `blockout_load_ms` in a minimal `level_bench --only blockout` (completed in Task 6). Record the median and p95.
-- [ ] **Step 4: Close the step.** `check.py --all`, change record, commits.
+- [x] **Step 2: Implement.** `COMPOUND` in the backend, the fitting functions (`fitCollider(const MeshData&, ColliderShape, glm::vec3 scale)`), `PhysicsScene`, the hints → `Collider`/`RigidBody` in the level system. Run `level_physics_tests`; expected: PASS. Run `physics_backend_tests`; expected: PASS.
+- [x] **Step 3: Measure the load budget.** `blockout_load_ms` in a minimal `level_bench --only blockout` (completed in Task 6). Record the median and p95.
+- [x] **Step 4: Close the step.** `check.py --all`, change record, commits.
 
 ### Task 5: Agent surface (build step 5)
 

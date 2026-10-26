@@ -42,20 +42,20 @@ the `STATIC` keyword, so `ohao_renderer`'s type follows `BUILD_SHARED_LIBS` — 
 in this configuration, hence static in practice.
 
 `ohao_core` is the true leaf: zero includes of scene, gpu, render, physics, audio
-or Vulkan anywhere under `ohao/core/`. `ohao_audio` and `ohao_physics` are the
-true peripherals. Audio is core, glm and miniaudio, plus `Threads::Threads`, `dl`
-and `m` on UNIX:
+or Vulkan anywhere under `ohao/core/`. `ohao_audio` and `ohao_physics` are leaves
+on the other side: they depend on core and third-party code only. Audio is core, glm
+and miniaudio, plus `Threads::Threads`, `dl` and `m` on UNIX, and nothing under
+`ohao/` includes an `audio/` header:
 
 {{cite ohao/audio/CMakeLists.txt "Threads::Threads"}}
 
 Physics is core, glm, nlohmann_json and Jolt, and its sources include nothing from
-scene, gpu, render or ecs — a rigid body is addressed by name and handle, not by a
-component pointer. Nothing under `ohao/` and no example includes a `physics/` or
-`audio/` header either, so deleting either archive would leave the rest of the
-tree untouched. That is not the same as free: every example names both in the
-`--start-group` list above, `tests/audio/` and the physics suites exist only to
-exercise them, and the physics archive is where that module's mass is — it carries
-194 distinct undefined `JPH::` symbols that only Jolt resolves.
+scene, gpu, render or ecs — a rigid body is addressed by its handle, not by a
+component pointer. Its one client in the engine is the ECS's physics system
+(`ecs/physics_scene.cpp`), which builds a level's colliders through the backend
+interface; the edge points from the ECS down, never back. The physics archive is
+where that module's mass is — it carries 194 distinct undefined `JPH::` symbols that
+only Jolt resolves.
 
 {{cite ohao/physics/CMakeLists.txt "target_link_libraries(ohao_physics PUBLIC Jolt)"}}
 
@@ -64,10 +64,11 @@ reader and writer, with no engine dependency at all (glm, and fast_float private
 
 The next three archives sit above the rest and add no edge back down. `ohao_ecs` is
 the game world — an EnTT registry, the ordered systems (spin, transform, instantiate,
-the render extract), the scene codec and snapshots. It links core, the renderer,
-scene and reflect, and it is the only engine archive that sees EnTT:
+physics, the render extract), the scene codec and snapshots. It links core, the
+renderer, scene, reflect and physics, and it is the only engine archive that sees
+EnTT:
 
-{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect glm EnTT::EnTT"}}
+{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect ohao_physics glm EnTT::EnTT"}}
 
 Every `<entt/entt.hpp>` include in the engine sits under `ohao/ecs/` (and above it, in
 `api/` and the tools); the renderer's side of the seam is `render::RenderScene`, a
