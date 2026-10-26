@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash bceb25ccbcddc799. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 058e0f5dadc6e377. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -815,12 +815,17 @@
           "allOf": [
             { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
           ]
+        },
+        "trigger": {
+          "description": "A trigger volume: reports bodies entering and leaving it (trigger_enter, trigger_exit) and blocks nothing",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false
     },
     "RigidBody": {
-      "description": "How the entity's body moves. Dynamic bodies are built but not stepped until the simulation steps physics (sub-project 6).",
+      "description": "How the entity's body moves. Dynamic bodies are simulated at the world's fixed step and move their entity; static and kinematic ones follow it.",
       "type": "object",
       "properties": {
         "motion": {

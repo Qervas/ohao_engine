@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "525f04d23b00fef9",
+  "schemaHash": "bedd2e0083307201",
   "units": [
     "m",
     "m/s",
@@ -164,6 +164,10 @@
     {
       "code": "W_LEVEL_NO_PLAYER_SPAWN",
       "meaning": "Warning: a level without a \"player\" spawn (level.info). Not an error: a prop kit has none."
+    },
+    {
+      "code": "W_PHYSICS_PARENT_SCALE",
+      "meaning": "Warning: a dynamic body under a parent scaled unevenly; the pose physics writes back to its Transform is approximate (physics.info)."
     }
   ],
   "methods": [],

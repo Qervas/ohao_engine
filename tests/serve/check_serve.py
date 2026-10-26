@@ -74,6 +74,7 @@ EXAMPLES = {
     "level_reload": {},
     "physics_raycast": {"from": [1.5, 0.5, 2.2], "dir": [0, -1, 0], "max": 2},
     "physics_info": {},
+    "physics_events": {"since": 0, "max": 8},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests

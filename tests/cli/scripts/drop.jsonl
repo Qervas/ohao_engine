@@ -1,0 +1,5 @@
+{"method":"world.apply","params":{"commands":[{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,1.3,-1.7]},{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,2.8,-1.7]}]}}
+{"method":"world.step","params":{"frames":90}}
+{"method":"physics.events"}
+{"method":"world.query","params":{"names":["CrateA","CrateB"],"fields":["/Transform/position"]}}
+{"method":"physics.info"}

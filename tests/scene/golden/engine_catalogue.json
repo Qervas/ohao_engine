@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "bceb25ccbcddc799",
+  "schemaHash": "058e0f5dadc6e377",
   "units": [
     "m",
     "m/s",
@@ -164,6 +164,10 @@
     {
       "code": "W_LEVEL_NO_PLAYER_SPAWN",
       "meaning": "Warning: a level without a \"player\" spawn (level.info). Not an error: a prop kit has none."
+    },
+    {
+      "code": "W_PHYSICS_PARENT_SCALE",
+      "meaning": "Warning: a dynamic body under a parent scaled unevenly; the pose physics writes back to its Transform is approximate (physics.info)."
     }
   ],
   "methods": [],
@@ -312,9 +316,13 @@
         {
           "name": "Dynamic",
           "value": 1,
-          "doc": "Moved by the simulation (not stepped yet: sub-project 6)"
+          "doc": "Moved by the simulation; writes its entity's Transform each step"
         },
-        { "name": "Kinematic", "value": 2, "doc": "Moved by its transform, pushing dynamic bodies" }
+        {
+          "name": "Kinematic",
+          "value": 2,
+          "doc": "Moved by its transform; dynamic bodies collide with it"
+        }
       ]
     }
   ],
@@ -1935,13 +1943,30 @@
           "hidden": false,
           "readOnly": false,
           "aliases": []
+        },
+        {
+          "name": "trigger",
+          "type": "bool",
+          "default": false,
+          "doc": "A trigger volume: reports bodies entering and leaving it (trigger_enter, trigger_exit) and blocks nothing",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
         }
       ],
       "skipped": []
     },
     {
       "name": "RigidBody",
-      "doc": "How the entity's body moves. Dynamic bodies are built but not stepped until the simulation steps physics (sub-project 6).",
+      "doc": "How the entity's body moves. Dynamic bodies are simulated at the world's fixed step and move their entity; static and kinematic ones follow it.",
       "role": "component",
       "serialized": true,
       "singleton": false,

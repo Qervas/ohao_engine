@@ -140,8 +140,8 @@ static void t06_ucx_hulls_are_one_compound_body() {
               !reg.any_of<MeshSource>(f.named("UCX_Prop_00")),
           "the hull nodes have no body of their own and are not drawn");
     const PhysicsInfo info = f.physics->info();
-    CHECK(info.shapes.compound == 1 && info.bodies.dynamics == 2 && info.unstepped == 2,
-          "one compound shape; Prop and DynMesh are the dynamic bodies, unstepped");
+    CHECK(info.shapes.compound == 1 && info.bodies.dynamics == 2 && info.steps == 0,
+          "one compound shape; Prop and DynMesh are the dynamic bodies (not stepped: nothing simulated)");
     const auto* rb = reg.try_get<RigidBody>(prop);
     CHECK(rb && rb->motion == Motion::Dynamic && rb->mass == 3.0f, "the target's body hints are its RigidBody");
 }
@@ -272,6 +272,250 @@ static void t07_still_world_does_no_work() {
     f.world.sync();
     const auto h = f.ray({1.0f, 5.0f, -0.5f}, {0.0f, -1.0f, 0.0f});
     CHECK(h && h->entity == f.named("Pillar") && f.physics->bodyBuilds() == rebuilds, "a moved node's body follows it, no rebuild");
+}
+
+// ---- test 10: physics in the world's fixed step (sub-project 6 step 1) ---------------------------
+// docs/specs/2026-10-26-player-physics-design.md, "Test plan". The world steps as every host
+// steps it: World::update(dt) is simulate(dt) (the physics simulate system) and sync().
+
+namespace {
+
+constexpr float kDt = 1.0f / 60.0f;
+using Kind = PhysicsEvent::Kind;
+
+// CrateA up 1 m and CrateB up 2 m from where they rest (stacked), so they start apart.
+void liftCrates(Fixture& f) {
+    for (const auto& [name, lift] : {std::pair{"CrateA", 1.0f}, std::pair{"CrateB", 2.0f}}) {
+        const entt::entity e = f.named(name);
+        Transform t = f.world.registry().get<Transform>(e);
+        t.position.y += lift;
+        f.world.setTransform(e, t);
+    }
+}
+
+// steps world updates; every step's events, in order.
+std::vector<PhysicsEvent> runSteps(World& w, int steps) {
+    std::vector<PhysicsEvent> all;
+    for (int i = 0; i < steps; ++i) {
+        w.update(kDt);
+        const auto ev = physicsEvents(w);
+        all.insert(all.end(), ev.begin(), ev.end());
+    }
+    return all;
+}
+
+uint64_t idOf(const Fixture& f, const char* name) { return f.world.idOf(f.named(name)); }
+
+// The first event of this kind between the two named entities (either order), or null.
+const PhysicsEvent* findEvent(const std::vector<PhysicsEvent>& ev, Kind kind, uint64_t x, uint64_t y) {
+    for (const PhysicsEvent& e : ev)
+        if (e.kind == kind && ((e.aId == x && e.bId == y) || (e.aId == y && e.bId == x))) return &e;
+    return nullptr;
+}
+
+glm::vec3 worldPos(const World& w, entt::entity e) { return glm::vec3(w.registry().get<WorldTransform>(e).world[3]); }
+
+float tiltDeg(const World& w, entt::entity e) {
+    const glm::vec3 up = glm::normalize(glm::vec3(w.registry().get<WorldTransform>(e).world[1]));
+    return glm::degrees(std::acos(std::clamp(up.y, -1.0f, 1.0f)));
+}
+
+} // namespace
+
+static void t10_crates_fall_and_rest() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 180);
+    const entt::entity a = f.named("CrateA"), b = f.named("CrateB");
+    const glm::vec3 pa = worldPos(f.world, a), pb = worldPos(f.world, b);
+    std::printf("\n      CrateA (%.4f, %.4f, %.4f) tilt %.2f, CrateB (%.4f, %.4f, %.4f) tilt %.2f after 180 steps", pa.x, pa.y,
+                pa.z, tiltDeg(f.world, a), pb.x, pb.y, pb.z, tiltDeg(f.world, b));
+    CHECK(nearVec(pa, {1.3f, 0.3f, -1.7f}, 0.01f) && nearVec(pb, {1.3f, 0.8f, -1.7f}, 0.015f),
+          "the dropped crates rest stacked at their authored places (Jolt's penetration slop is 5 mm a contact: 1 cm for "
+          "CrateA, 1.5 cm for CrateB on top of it), in their entities' world transforms");
+    CHECK(tiltDeg(f.world, a) < 1.0f && tiltDeg(f.world, b) < 1.0f, "upright (1 degree)");
+    const Transform& ta = f.world.registry().get<Transform>(a);
+    CHECK(nearVec(ta.position, pa, 1e-4f), "the entity's own Transform says so (the level root is at the origin)");
+    auto& be = f.physics->backend();
+    CHECK(!be.isAwake(f.physics->bodyOf(a)) && !be.isAwake(f.physics->bodyOf(b)), "both asleep");
+    CHECK(f.physics->steps() == 180 && f.physics->info().steps == 180, "180 physics steps ran");
+}
+
+static void t10_contact_begin_events() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    const auto ev = runSteps(f.world, 180);
+    const uint64_t a = idOf(f, "CrateA"), b = idOf(f, "CrateB"), floor = idOf(f, "Floor");
+    const PhysicsEvent* af = findEvent(ev, Kind::ContactBegin, a, floor);
+    const PhysicsEvent* ab = findEvent(ev, Kind::ContactBegin, a, b);
+    if (af) std::printf("\n      CrateA-Floor begins at step %llu, %.2f m/s", (unsigned long long)af->step, af->speed);
+    if (ab) std::printf("\n      CrateA-CrateB begins at step %llu, %.2f m/s", (unsigned long long)ab->step, ab->speed);
+    CHECK(af && af->step >= 26 && af->step <= 29 && af->speed >= 4.0f && af->speed <= 4.9f,
+          "CrateA lands on the floor at step 26-29 at 4.0-4.9 m/s (a 1 m fall: 0.45 s, 4.43 m/s)");
+    CHECK(ab && ab->step >= 36 && ab->step <= 40, "CrateB lands on CrateA at step 36-40 (a 2 m fall: 0.64 s)");
+    CHECK(af && af->a == (a < floor ? f.named("CrateA") : f.named("Floor")) && af->aId < af->bId,
+          "a contact's a is the lower entity id");
+    CHECK(af && af->normal.y != 0.0f && std::fabs(glm::length(af->normal) - 1.0f) < 1e-3f && af->point.y > -0.05f &&
+              af->point.y < 0.05f,
+          "the begin's point is on the floor and its normal is a unit vector");
+    bool lateEnd = false;
+    for (const PhysicsEvent& e : ev)
+        if (e.kind == Kind::ContactEnd && e.step > 60) lateEnd = true;
+    CHECK(!lateEnd, "no contact ends while they rest");
+    bool sorted = true;
+    for (std::size_t i = 1; i < ev.size(); ++i) sorted &= ev[i - 1].seq < ev[i].seq && ev[i - 1].step <= ev[i].step;
+    CHECK(sorted && !ev.empty() && ev.front().seq == 1, "events are numbered from 1 in step order");
+}
+
+static void t10_rest_writes_nothing() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    (void)runSteps(f.world, 180);
+    std::size_t patches = 0;
+    struct Counter {
+        std::size_t* n;
+        void on(entt::registry&, entt::entity) { ++*n; }
+    } counter{&patches};
+    f.world.registry().on_update<Transform>().connect<&Counter::on>(counter);
+    const std::size_t builds = f.physics->bodyBuilds();
+    const auto ev = runSteps(f.world, 60);
+    f.world.registry().on_update<Transform>().disconnect(&counter);
+    CHECK(patches == 0 && f.physics->bodyBuilds() == builds && ev.empty() && f.physics->info().awake == 0,
+          "a settled world: 60 steps patch no Transform, build no body, raise no event");
+}
+
+static void t10_edit_teleports_dynamic() {
+    Fixture f(kBlockout);
+    (void)runSteps(f.world, 60);   // the crates settle where they were authored
+    const entt::entity b = f.named("CrateB");
+    const std::size_t builds = f.physics->bodyBuilds();
+    f.world.setTransform(b, Transform{{-1.0f, 1.0f, 1.5f}});
+    f.world.update(kDt);
+    auto& be = f.physics->backend();
+    const auto h = f.physics->bodyOf(b);
+    const glm::vec3 p = be.getPosition(h);
+    CHECK(nearVec(p, {-1.0f, 1.0f, 1.5f}, 0.01f) && glm::length(be.getLinearVelocity(h)) < 0.2f,
+          "an edited dynamic body jumps to its entity, from rest (one step of gravity at most)");
+    (void)runSteps(f.world, 120);
+    const glm::vec3 r = worldPos(f.world, b);
+    std::printf("\n      CrateB rests at (%.4f, %.4f, %.4f)", r.x, r.y, r.z);
+    CHECK(nearVec(r, {-1.0f, 0.2f, 1.5f}, 0.01f), "and falls to the floor there (its half height 0.2 m, 1 cm)");
+    CHECK(f.physics->bodyBuilds() == builds, "moved, not rebuilt");
+}
+
+static void t10_two_steps_one_frame_motion() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    for (int i = 0; i < 10; ++i) f.world.update(kDt);   // falling
+    const entt::entity a = f.named("CrateA");
+    const glm::mat4 start = f.world.registry().get<WorldTransform>(a).world;
+    f.world.simulate(kDt);
+    f.world.simulate(kDt);
+    f.world.sync();
+    const auto& wt = f.world.registry().get<WorldTransform>(a);
+    CHECK(wt.prevWorld == start, "two steps in one frame: prevWorld is the frame's start, not the last step's");
+    CHECK(wt.world[3].y < start[3].y - 0.01f, "and world is where the second step left it");
+    f.world.sync();
+    CHECK(f.world.registry().get<WorldTransform>(a).prevWorld == f.world.registry().get<WorldTransform>(a).world,
+          "a frame without steps: motion returns to zero");
+}
+
+static void t10_destroy_ends_contacts() {
+    Fixture f(kBlockout);
+    (void)runSteps(f.world, 60);
+    const uint64_t a = idOf(f, "CrateA"), b = idOf(f, "CrateB");
+    CHECK(f.physics->info().contacts > 0, "the resting crates are in contact");
+    f.world.destroy(f.named("CrateB"));
+    f.world.update(kDt);
+    const auto ev = physicsEvents(f.world);
+    const std::vector<PhysicsEvent> list(ev.begin(), ev.end());
+    const PhysicsEvent* end = findEvent(list, Kind::ContactEnd, a, b);
+    CHECK(end != nullptr, "destroying CrateB ends its contact with CrateA");
+    CHECK(end && end->b == entt::null && end->bId == b, "the gone entity is null, its id kept");
+}
+
+static void t10_trigger_enter_exit() {
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    w.seedIds(11);
+    PhysicsScene& physics = installPhysics(w, files);
+    auto& reg = w.registry();
+    const entt::entity floor = w.create("Floor", Transform{{0.0f, -0.5f, 0.0f}});
+    reg.emplace<Collider>(floor, Collider{ColliderShape::Box, {10.0f, 0.5f, 10.0f}});
+    const entt::entity zone = w.create("Zone", Transform{{0.0f, 1.0f, 0.0f}});
+    Collider trigger{ColliderShape::Box, {1.0f, 1.0f, 1.0f}};
+    trigger.trigger = true;
+    reg.emplace<Collider>(zone, trigger);
+    const entt::entity ball = w.create("Ball", Transform{{0.0f, 4.0f, 0.0f}});
+    reg.emplace<Collider>(ball, Collider{ColliderShape::Sphere, {0.25f, 0.0f, 0.0f}});
+    reg.emplace<RigidBody>(ball, RigidBody{Motion::Dynamic, 1.0f});
+    std::vector<PhysicsEvent> ev;
+    for (int i = 0; i < 120; ++i) {
+        w.update(kDt);
+        const auto s = physicsEvents(w);
+        ev.insert(ev.end(), s.begin(), s.end());
+    }
+    const uint64_t z = w.idOf(zone), bl = w.idOf(ball);
+    const PhysicsEvent* enter = findEvent(ev, Kind::TriggerEnter, z, bl);
+    if (enter) std::printf("\n      Ball enters Zone at step %llu", (unsigned long long)enter->step);
+    CHECK(enter && enter->a == zone && enter->b == ball && enter->step >= 30 && enter->step <= 38,
+          "trigger_enter (the trigger, the body) as the ball reaches the zone's top (1.75 m of fall: step ~36)");
+    CHECK(near(worldPos(w, ball).y, 0.25f, 0.02f), "the trigger blocks nothing: the ball rests on the floor inside it");
+    CHECK(!findEvent(ev, Kind::ContactBegin, z, bl) && findEvent(ev, Kind::ContactBegin, bl, w.idOf(floor)),
+          "a trigger's overlap is not a contact; the floor's is");
+    CHECK(physics.info().triggers == 1, "one sensor body");
+    w.setTransform(ball, Transform{{5.0f, 0.3f, 5.0f}});
+    std::vector<PhysicsEvent> after;
+    for (int i = 0; i < 3; ++i) {
+        w.update(kDt);
+        const auto s = physicsEvents(w);
+        after.insert(after.end(), s.begin(), s.end());
+    }
+    const PhysicsEvent* exit = findEvent(after, Kind::TriggerExit, z, bl);
+    CHECK(exit && exit->a == zone, "teleported out: trigger_exit");
+}
+
+static void t10_substeps() {
+    Fixture coarse(kBlockout), fine(kBlockout);
+    liftCrates(coarse);
+    liftCrates(fine);
+    for (int i = 0; i < 6; ++i) coarse.world.update(0.05f);
+    CHECK(coarse.physics->lastSubsteps() == 3, "a step of 0.05 s runs 3 Jolt updates");
+    for (int i = 0; i < 18; ++i) fine.world.update(kDt);
+    const glm::vec3 c = worldPos(coarse.world, coarse.named("CrateA")), d = worldPos(fine.world, fine.named("CrateA"));
+    std::printf("\n      CrateA after 0.3 s: (%.5f, %.5f, %.5f) in 6 steps, (%.5f, %.5f, %.5f) in 18", c.x, c.y, c.z, d.x, d.y, d.z);
+    CHECK(nearVec(c, d, 1e-3f), "and lands where 1/60 s steps do (1 mm)");
+    CHECK(coarse.physics->steps() == 6, "the substeps are one step");
+}
+
+static void t10_runs_are_identical() {
+    Fixture one(kBlockout), two(kBlockout);
+    liftCrates(one);
+    liftCrates(two);
+    const auto e1 = runSteps(one.world, 120), e2 = runSteps(two.world, 120);
+    bool same = e1.size() == e2.size();
+    for (std::size_t i = 0; same && i < e1.size(); ++i)
+        same = e1[i].kind == e2[i].kind && e1[i].aId == e2[i].aId && e1[i].bId == e2[i].bId && e1[i].step == e2[i].step &&
+               e1[i].seq == e2[i].seq && e1[i].point == e2[i].point && e1[i].normal == e2[i].normal &&
+               e1[i].speed == e2[i].speed;
+    CHECK(same && !e1.empty(), "two runs of the same drop give the same events, bit for bit");
+    bool poses = true;
+    for (const char* n : {"CrateA", "CrateB"})
+        poses &= one.world.registry().get<Transform>(one.named(n)).position == two.world.registry().get<Transform>(two.named(n)).position &&
+                 one.world.registry().get<Transform>(one.named(n)).rotation == two.world.registry().get<Transform>(two.named(n)).rotation;
+    CHECK(poses, "and the same poses");
+}
+
+static void t10_event_log_cursor() {
+    Fixture f(kBlockout);
+    liftCrates(f);
+    const auto ev = runSteps(f.world, 120);
+    uint64_t dropped = 99;
+    const auto all = f.physics->eventsSince(0, 1000, dropped);
+    CHECK(all.size() == ev.size() && dropped == 0 && f.physics->nextEventSeq() == ev.size() + 1,
+          "the log holds every event so far, none dropped");
+    const auto tail = f.physics->eventsSince(1, 1, dropped);
+    CHECK(tail.size() == 1 && tail[0].seq == 2, "since 1, max 1: event 2");
 }
 
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
@@ -472,5 +716,15 @@ int main(int argc, char** argv) {
     RUN(t07_crates_come_to_rest_when_stepped);
     RUN(t07_render_only_level_builds_no_bodies);
     RUN(t07_still_world_does_no_work);
+    RUN(t10_crates_fall_and_rest);
+    RUN(t10_contact_begin_events);
+    RUN(t10_rest_writes_nothing);
+    RUN(t10_edit_teleports_dynamic);
+    RUN(t10_two_steps_one_frame_motion);
+    RUN(t10_destroy_ends_contacts);
+    RUN(t10_trigger_enter_exit);
+    RUN(t10_substeps);
+    RUN(t10_runs_are_identical);
+    RUN(t10_event_log_cursor);
     return ohao::test::finish("level_physics_tests");
 }

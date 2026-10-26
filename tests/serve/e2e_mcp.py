@@ -156,8 +156,9 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 28 and "render_capture" in names and "render_stats" in names and "render_settings" in names
-          and "input_replay" in names and "level_info" in names and "physics_raycast" in names, "tools/list: 28 tools")
+    check(len(names) == 29 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+          and "input_replay" in names and "level_info" in names and "physics_raycast" in names
+          and "physics_events" in names, "tools/list: 29 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})
@@ -279,6 +280,30 @@ def main():
     bodies, _, err = c.tool("physics_info")
     check(not err and bodies.get("bodies", {}).get("static") == 11 and bodies.get("bodies", {}).get("dynamic") == 2,
           "physics_info: 11 static bodies and 2 dynamic")
+
+    # Physics in the step (sub-project 6, step 1): lift the crates apart (CrateA 1 m, CrateB 2 m: CrateB
+    # stands on CrateA), step, read the landing as an event.
+    crates, _, err = c.tool("world_query", {"names": ["CrateA", "CrateB"], "fields": ["/Name/value"]})
+    ids = {e["Name"]["value"]: e["id"] for e in (crates or {}).get("entities", [])}
+    check(not err and set(ids) == {"CrateA", "CrateB"}, "world_query finds CrateA and CrateB")
+    if len(ids) == 2:
+        _, _, err = c.tool("world_apply", {"commands": [
+            {"op": "field.set", "id": ids["CrateA"], "path": "/Transform/position", "value": [1.3, 1.3, -1.7]},
+            {"op": "field.set", "id": ids["CrateB"], "path": "/Transform/position", "value": [1.3, 2.8, -1.7]}]})
+        check(not err, "world_apply lifts the crates")
+        before, _, _ = c.tool("physics_info")
+        start = (before or {}).get("steps", 0)   # the scene's step count runs across the session
+        _, _, err = c.tool("world_step", {"frames": 60})
+        events, _, err2 = c.tool("physics_events", {"since": 0})
+        landed = [e for e in (events or {}).get("events", [])
+                  if e.get("kind") == "contact_begin" and {e.get("an"), e.get("bn")} == {"CrateA", "Floor"}
+                  and e.get("step", 0) > start]
+        after_lift = landed[0]["step"] - start if landed else None
+        check(not err and not err2 and len(landed) == 1 and 26 <= after_lift <= 29,
+              "physics_events: CrateA lands on the Floor %s steps after the lift" % after_lift)
+        after, _, err = c.tool("world_query", {"names": ["CrateA"], "fields": ["/Transform/position"]})
+        y = ((after or {}).get("entities") or [{}])[0].get("Transform", {}).get("position", [0, 9, 0])[1]
+        check(not err and abs(y - 0.3) < 0.01, "and its Transform rests at y %.4f (0.3, 1 cm)" % y)
 
     code, err_text = c.close()
     live = [l for l in err_text.splitlines() if "live host:" in l]

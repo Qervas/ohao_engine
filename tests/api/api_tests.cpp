@@ -176,7 +176,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 28, "twenty-eight methods");
+    CHECK(api::methods().size() == 29, "twenty-nine methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -2071,15 +2071,107 @@ static void sp5_t08_raycast_params_refused() {
 static void sp5_t08_physics_info_counts() {
     LevelWorld lw;
     const Reply empty(lw.s.call("physics.info"));
-    CHECK(empty.ok() && empty.json("/result/bodies") == "{}" && empty.str("/result/unstepped") == "0",
+    CHECK(empty.ok() && empty.json("/result/bodies") == "{}" && empty.str("/result/steps") == "0",
           "an empty world: no bodies");
     CHECK(lw.load().ok(), "the blockout scene loads");
     const Reply r(lw.s.call("physics.info"));
     std::printf("\n      %s", r.text.c_str());
     CHECK(r.ok() && r.json("/result/bodies") == R"({"static":11,"dynamic":2})" &&
-              r.json("/result/shapes") == R"({"box":12,"mesh":1})" && r.str("/result/unstepped") == "2",
-          "the blockout: 11 static bodies and 2 dynamic (unstepped); 12 boxes and a mesh");
+              r.json("/result/shapes") == R"({"box":12,"mesh":1})" && r.str("/result/steps") == "0",
+          "the blockout: 11 static bodies and 2 dynamic; 12 boxes and a mesh; nothing stepped yet");
     CHECK(r.at("/result/buildMs") && !r.at("/result/warnings"), "its build time; no warnings");
+}
+
+// ---- sub-project 6, step 1: physics in world.step, physics.events -------------------------------
+
+// The blockout loaded, its crates lifted (CrateA 1 m, CrateB 2 m) by world.apply as an agent would.
+static void liftBlockoutCrates(LevelWorld& lw) {
+    std::string commands;
+    for (const auto& [name, y] : {std::pair{"CrateA", 1.3f}, std::pair{"CrateB", 2.8f}}) {
+        entt::entity e = entt::null;
+        for (auto [ent, n] : lw.w.registry().view<const Name>().each())
+            if (n.value == name) e = ent;
+        char line[200];
+        std::snprintf(line, sizeof line, R"(%s{"op":"field.set","id":"%016llx","path":"/Transform/position","value":[1.3,%g,-1.7]})",
+                      commands.empty() ? "" : ",", static_cast<unsigned long long>(lw.w.idOf(e)), y);
+        commands += line;
+    }
+    CHECK(Reply(lw.s.call("world.apply", "{\"commands\":[" + commands + "]}")).ok(), "world.apply lifts the crates");
+}
+
+static void sp6_t11_physics_events_after_drop() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    liftBlockoutCrates(lw);
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":60})")).ok(), "60 steps");
+    const Reply r(lw.s.call("physics.events"));
+    std::printf("\n      %.400s", r.text.c_str());
+    CHECK(r.ok() && r.at("/result/events") && r.at("/result/events")->count >= 2, "the drop's events");
+    CHECK(r.str("/result/events/0/kind") == "contact_begin" &&
+              ((r.str("/result/events/0/an") == "CrateA" && r.str("/result/events/0/bn") == "Floor") ||
+               (r.str("/result/events/0/an") == "Floor" && r.str("/result/events/0/bn") == "CrateA")),
+          "first CrateA lands on the Floor");
+    const int step0 = std::stoi(r.str("/result/events/0/step"));
+    CHECK(step0 >= 26 && step0 <= 29 && r.str("/result/events/0/seq") == "1", "at step 26-29, seq 1");
+    std::size_t largest = 0;
+    for (uint32_t i = 0; i < r.at("/result/events")->count; ++i)
+        largest = std::max(largest, r.json("/result/events/" + std::to_string(i)).size());
+    std::printf("\n      largest event %zu bytes", largest);
+    CHECK(largest < 200, "every event is under 200 bytes");
+    const Reply info(lw.s.call("physics.info"));
+    CHECK(info.str("/result/steps") == "60" && std::stoi(info.str("/result/contacts")) >= 2, "60 steps; the crates are in contact");
+    const Reply q(lw.s.call("world.query", R"({"names":["CrateA"],"fields":["/Transform/position"]})"));
+    std::printf("\n      %s", q.json("/result").c_str());
+    const std::string y = q.str("/result/entities/0/Transform/position/1");
+    CHECK(q.ok() && !y.empty() && std::fabs(std::stod(y) - 0.3) < 0.01, "CrateA's Transform rests at y 0.3 (1 cm; agents see it)");
+    CHECK(r.text.find("-0,") == std::string::npos && r.text.find("-0]") == std::string::npos, "no -0 in the events");
+}
+
+static void sp6_t11_events_cursor_and_dropped() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    liftBlockoutCrates(lw);
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":60})")).ok(), "60 steps");
+    const Reply all(lw.s.call("physics.events", R"({"max":64})"));
+    const std::string next = all.str("/result/next");
+    const std::size_t count = all.at("/result/events")->count;
+    CHECK(next == std::to_string(count), "next is the last event's seq");
+    const Reply none(lw.s.call("physics.events", "{\"since\":" + next + "}"));
+    CHECK(none.ok() && none.at("/result/events")->count == 0 && none.str("/result/next") == next && !none.at("/result/dropped"),
+          "nothing after next; next stays");
+    const Reply one(lw.s.call("physics.events", R"({"since":1,"max":1})"));
+    CHECK(one.ok() && one.at("/result/events")->count == 1 && one.str("/result/events/0/seq") == "2" &&
+              one.str("/result/next") == "2",
+          "since 1, max 1: event 2, next 2");
+    const Reply ahead(lw.s.call("physics.events", R"({"since":100000})"));
+    CHECK(ahead.ok() && ahead.str("/result/next") == next, "a cursor past the log comes back as the log's end");
+}
+
+static void sp6_t11_events_params_refused() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("physics.events")).code() == "E_STATE", "a world without the physics system: E_STATE");
+    }
+    LevelWorld lw;
+    for (const char* bad : {R"({"max":0})", R"({"max":65})"}) {
+        const Reply r(lw.s.call("physics.events", bad));
+        CHECK(r.code() == "E_RANGE" && r.str("/error/data/0/path") == "/max", "max outside 1..64: E_RANGE at /max");
+    }
+    CHECK(Reply(lw.s.call("physics.events", R"({"since":-1})")).code() == "E_RANGE", "since below 0: E_RANGE");
+    CHECK(Reply(lw.s.call("physics.events", R"({"sinse":1})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
+    const Reply empty(lw.s.call("physics.events"));
+    CHECK(empty.ok() && empty.json("/result") == R"({"events":[],"next":0})", "no events yet: {events: [], next: 0}");
+}
+
+static void sp6_t11_physics_info_counts_steps() {
+    LevelWorld lw;
+    CHECK(lw.load().ok(), "the blockout scene loads");
+    CHECK(Reply(lw.s.call("world.step", R"({"frames":5})")).ok(), "5 steps");
+    const Reply r(lw.s.call("physics.info"));
+    std::printf("\n      %s", r.text.c_str());
+    CHECK(r.ok() && r.str("/result/steps") == "5", "physics.info counts the steps world.step ran");
+    CHECK(r.at("/result/awake") && r.at("/result/contacts") && !r.at("/result/triggers"), "awake and contacts; no triggers");
 }
 
 static void sp5_t08_level_reload_keeps_world_hash() {
@@ -2166,6 +2258,10 @@ int main() {
     RUN(sp5_t08_physics_info_counts);
     RUN(sp5_t08_level_reload_keeps_world_hash);
     RUN(sp5_t08_warnings_reach_level_and_physics_info);
+    RUN(sp6_t11_physics_events_after_drop);
+    RUN(sp6_t11_events_cursor_and_dropped);
+    RUN(sp6_t11_events_params_refused);
+    RUN(sp6_t11_physics_info_counts_steps);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

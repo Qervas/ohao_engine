@@ -30,6 +30,10 @@
       "maximum": 1,
       "description": "Restitution, default 0"
     },
+    "trig": {
+      "enum": [0, 1],
+      "description": "1: the collider is a trigger volume (reports bodies entering and leaving, blocks nothing)"
+    },
     "vis": { "enum": [0, 1], "description": "0: collision only, not drawn" },
     "spawn": {
       "type": "string",
