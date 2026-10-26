@@ -45,7 +45,8 @@
 <p>`world.hash` covers the authoring state, exactly what a snapshot captures, read straight from the live storages without copying values:</p>
 <div class="citation-chip"><code class="citation-code">// It hashes what a snapshot (ecs/snapshot.hpp) captures, read straight from the live</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.hpp#L5" target="_blank" rel="noopener">ohao/ecs/world_hash.hpp:5</a></div>
 <p>In order, it hashes the entity table (ids, creation sequence, parent rows, child rows), then every saved component type in the snapshot&#x27;s column order, and last the id generator and the next creation sequence:</p>
-<div class="citation-chip"><code class="citation-code">for (const reflect::TypeInfo* t : snapshotTypes(types)) componentOps(*t)-&gt;hash(reg, rowOf, *t, h);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.cpp#L32" target="_blank" rel="noopener">ohao/ecs/world_hash.cpp:32</a></div>
+<div class="citation-chip"><code class="citation-code">for (const reflect::TypeInfo* t : snapshotTypes(types, false)) componentOps(*t)-&gt;hash(reg, rowOf, *t, h);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.cpp#L32" target="_blank" rel="noopener">ohao/ecs/world_hash.cpp:32</a></div>
+<p>The `false` leaves out the one runtime column a snapshot does hold, `BodyMotion`: the velocities and sleep state physics carries into the next step (sub-project 6, step 5). A restore needs them to replay a fall exactly; the hash does not, since it is about the saved state, and `world.diff` skips that column for the same reason.</p>
 <div class="citation-chip"><code class="citation-code">h.u64(table.idGen.counter);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world_hash.cpp#L34" target="_blank" rel="noopener">ohao/ecs/world_hash.cpp:34</a></div>
 <p>The order is the snapshot&#x27;s row order, which is creation order, not the order of EnTT&#x27;s packed storage. Packed order depends on the pools&#x27; history (a destroy swaps the last element into the hole), so two worlds in the same state could store their components differently; the hash must not see that. The id generator is in the hash because it decides the ids of entities created later: two worlds that look the same but would hand out different ids are not the same world.</p>
 <p>Runtime state is left out: `WorldTransform`, render slots and dirty tags are derived from the authoring state, so hashing them would add nothing but cost. The frame number is left out too, and `world.hash` reports it beside the hash, so &quot;the same world at another frame&quot; stays a meaningful answer.</p>
@@ -90,7 +91,7 @@
 <li>A diff&#x27;s snapshot must come from a world with the same registrations.</li>
 <li>Runtime components and the frame number are not part of the hash. Read the frame from</li>
 </ul>
-<p>`world.hash`&#x27;s `frame`.</p>
+<p>`world.hash`&#x27;s `frame`. `BodyMotion` is runtime too: snapshotted and restored, never hashed or diffed, so two worlds with one hash can still differ in what is moving.</p>
 <ul>
 <li>Deferred determinism holds for deferred captures in lockstep. A realtime capture is the</li>
 </ul>

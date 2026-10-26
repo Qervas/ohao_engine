@@ -1239,7 +1239,7 @@ static void t14_restore_from_spawn_replays_a_walk() {
 
 static void t14_restore_puts_a_body_back_however_close() {
     // A restore moves a body back even when it settled less than the 1e-4 the scene uses to know
-    // its own write-back (the crates sink 20 micrometres into the floor): the Transform was
+    // its own write-back (CrateA sinks 4.2 micrometres into the floor): the Transform was
     // written by the restore, not by the step.
     PlayerFixture f(false, false);
     const Snapshot base = takeSnapshot(f.world, engineTypes());

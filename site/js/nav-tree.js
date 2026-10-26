@@ -586,6 +586,11 @@ window.OHAO_NAV_TREE = [
         "href": "m/physics/math-constants.html"
       },
       {
+        "id": "physics/play",
+        "title": "Step, player and replay",
+        "href": "m/physics/play.html"
+      },
+      {
         "id": "physics/debug",
         "title": "Force debugger",
         "href": "m/physics/debug.html"

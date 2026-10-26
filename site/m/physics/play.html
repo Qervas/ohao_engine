@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>11 · Physics · Step, player and replay — OHAO Monograph</title>
+  <meta name="description" content="Physics in the world step, the player, snapshots that replay exactly." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="physics/play" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../physics.html">← Module hub</a> · Step, player and replay</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">physics</p>
+          <h1>Step, player and replay</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Physics in the world step, the player, snapshots that replay exactly.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-clock-inside-the-world">One clock, inside the world</a></li><li><a href="#telling-its-own-writes-from-everyone-else-s">Telling its own writes from everyone else&#x27;s</a></li><li><a href="#the-player">The player</a></li><li><a href="#snapshots-carry-the-simulation">Snapshots carry the simulation</a></li><li><a href="#what-an-agent-drives">What an agent drives</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-clock-inside-the-world">One clock, inside the world</h2></div>
+<div class="prose reveal">
+<p>Physics does not have a loop of its own. `installPhysics` adds a `physics` simulate system, so every `World::simulate(dt)` steps it: the window&#x27;s fixed step, an agent&#x27;s `world.step`, a headless `ohao run --steps`. A step propagates dirty transforms, brings bodies up to date with the entities, moves the players, then steps Jolt in substeps of at most 1/60 s:</p>
+<div class="citation-chip"><code class="citation-code">for (int i = 0; i &lt; n; ++i) backend-&gt;step(dt / float(n));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1257" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1257</a></div>
+<p>Awake dynamic bodies are written back to their entities&#x27; `Transform`s, and the step&#x27;s contact, trigger, footstep and landing events are sorted and logged for `physics.events`. Because there is one clock, record and replay, lockstep captures and `world.hash` all see physics the way they see any other system.</p>
+</div>
+<div class="section-rule"><h2 id="telling-its-own-writes-from-everyone-else-s">Telling its own writes from everyone else&#x27;s</h2></div>
+<div class="prose reveal">
+<p>The scene writes `Transform`s (the write-back, the player) and so does everything else: an agent&#x27;s `world.apply`, a snapshot restore, a parent moving. A body whose entity was moved by anyone but the scene must jump there at rest; one the scene moved must not be touched. The first build compared the entity&#x27;s pose with the one last written, within 1e-4. A restore found that wrong: a crate settles 4.2 micrometres into the floor, a restore puts its `Transform` back to the snapshot&#x27;s, and the difference fell inside the tolerance, so the body stayed asleep where it was. The scene now marks its own writes and treats any other as a placement:</p>
+<div class="citation-chip"><code class="citation-code">if (!posedExternally.erase(e) &amp;&amp; !differs(p.position, r.wpos, 1e-4f) &amp;&amp; sameRotation(p.rotation, r.wrot, 1e-4f))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L674" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:674</a></div>
+<p>The tolerance is left only for poses that change through a parent.</p>
+</div>
+<div class="section-rule"><h2 id="the-player">The player</h2></div>
+<div class="prose reveal">
+<p>A `PlayerController` is a Jolt `CharacterVirtual` whose position is the feet, moved in the step before Jolt&#x27;s substeps by the actions it names. Vertical motion is integrated exactly: the move takes the step&#x27;s average vertical velocity,</p>
+<div class="citation-chip"><code class="citation-code">const float vMove = falling ? p.vy + 0.5f * gravity.y * dt : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1182" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1182</a></div>
+<p>so a jump follows the parabola it would in continuous time and peaks where the formula says:</p>
+<div class="math-block">$$
+h = \frac{v_0^2}{2g} = \frac{4.9^2}{2 \cdot 9.81} \approx 1.22\ \text{m}
+$$</div>
+<p>$v_0$ is `jumpSpeed` (4.9 m/s), $g$ gravity and $h$ the rise of the feet; `t11_jumps_one_point_two_two_metres` measures 1.2238 m. A character placed anywhere (made, teleported, restored) finds its ground at once, not at its next move:</p>
+<div class="citation-chip"><code class="citation-code">character.RefreshContacts({}, layerFilter, {}, {}, *m_tempAllocator);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L1485" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:1485</a></div>
+<p>Without it, `player.info` right after a load said the player was in the air, and a replay from the spawn started one step differently from the run it replayed.</p>
+</div>
+<div class="section-rule"><h2 id="snapshots-carry-the-simulation">Snapshots carry the simulation</h2></div>
+<div class="prose reveal">
+<p>A snapshot holds the saved components, the entity table and the id generator. That is not enough to replay physics. The first answer was `BodyMotion` (velocities and sleep, a runtime component snapshots hold), and it replays free falls and jumps exactly. It does not replay crates resting on each other: Jolt warm-starts each contact from the previous step&#x27;s impulses, kept in its contact cache, and a teleport keeps the cache. Resting crates replayed two to four hundredths of a millimetre off, and a world hash missed.</p>
+<p>So a snapshot also carries what a system cannot express as components. A system puts an `ecs::SnapshotHook` in the registry&#x27;s context, and `restoreSnapshot` hands back what `save` returned, after the components:</p>
+<div class="citation-chip"><code class="citation-code">if (const auto* hook = world.registry().ctx().find&lt;SnapshotHook&gt;(); hook &amp;&amp; hook-&gt;restore) hook-&gt;restore(s.systems);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/snapshot.cpp#L168" target="_blank" rel="noopener">ohao/ecs/snapshot.cpp:168</a></div>
+<p>The physics scene&#x27;s is Jolt&#x27;s whole state, bodies (with sleep timers) and the contact cache, then each character:</p>
+<div class="citation-chip"><code class="citation-code">m_physicsSystem-&gt;SaveState(rec, JPH::EStateRecorderState::All);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L666" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:666</a></div>
+<p>plus the players&#x27; records and the contact bookkeeping the events are built from. The next sync after a restore puts it back, before any teleport, if the bodies are still the snapshot&#x27;s:</p>
+<div class="citation-chip"><code class="citation-code">if (!backend || !s || s-&gt;backend.empty() || bodyIdentity() != s-&gt;bodies || s-&gt;players.size() != players.size())</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1354" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1354</a></div>
+<p>A body rebuilt since (its collider edited) has a new handle; then nothing is restored from the saved state and the components&#x27; path applies: teleports at rest, then `BodyMotion`. Saving the state of 1,000 boxes costs about half a millisecond (`boxes1k_snapshot_ms`).</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>A component per body was the spec&#x27;s plan, and it is still what agents read and what a partial restore falls back to. But the state that decides a resting contact belongs to the pair, not to either body, and Jolt already knows how to save and restore all of it consistently. Carrying Jolt&#x27;s own state through one hook keeps the snapshot module free of physics and makes &quot;restore, then the same input&quot; a bit-for-bit replay. That is what `input.replay` checkpoints and agents&#x27; `world.hash` comparisons rely on.</p></div>
+</div>
+<div class="section-rule"><h2 id="what-an-agent-drives">What an agent drives</h2></div>
+<div class="prose reveal">
+<p>`player.info`, `player.teleport` and `physics.contacts` sit beside `physics.events` and `physics.raycast`. `scene.load` spawns players, so the snapshot an agent takes after a load is the spawn:</p>
+<div class="citation-chip"><code class="citation-code">// their nodes, and one with physics puts its players at their spawns, so a snapshot taken</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L297" target="_blank" rel="noopener">ohao/api/session.cpp:297</a></div>
+<p>A teleport goes through the scene, not through `Transform`, so the reply already says where the player stands and on what:</p>
+<div class="citation-chip"><code class="citation-code">physics-&gt;teleportPlayer(e, p.pos, p.yawDeg);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/level.cpp#L530" target="_blank" rel="noopener">ohao/api/level.cpp:530</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Physics steps inside `World::simulate`. The scene tells its own `Transform` writes from placements by marking them, not by comparing poses. Players are characters moved before the substeps with exact vertical integration, grounded at once wherever they are put. Snapshots carry Jolt&#x27;s whole state through a `SnapshotHook`, so restores replay bit for bit, resting contacts included, and fall back to teleports and `BodyMotion` when bodies were rebuilt.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>A restore uses the saved simulation only when every body has the snapshot&#x27;s handle and entity.</li>
+</ul>
+<p>A rebuilt body, or a player made or removed since, means teleports at rest plus `BodyMotion`: exact for free motion, not for resting contacts.</p>
+<ul>
+<li>`world.hash` and `world.diff` cover the saved state only: `BodyMotion` and the saved</li>
+</ul>
+<p>simulation are neither hashed nor diffed.</p>
+<ul>
+<li>Without a seed, a load seeds the id generator at random and `world.hash` covers it, so compare</li>
+</ul>
+<p>hashes within one session or load with a seed.</p>
+<ul>
+<li>`Snapshot::bytes()` counts the columns, not the saved simulation.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/ecs/physics_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/backend/jolt/jolt_backend.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/snapshot.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/session.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/level.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/physics_scene.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/snapshot_hook.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="math-constants.html"><div class="label">← Prev</div><div class="title">Physics math &amp; constants</div></a><a class="next" href="debug.html"><div class="label">Next →</div><div class="title">Force debugger</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

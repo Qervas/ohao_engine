@@ -39,16 +39,16 @@
 <div class="section-rule"><h2 id="a-registry-written-out-by-hand">A registry written out by hand</h2></div>
 <div class="prose reveal">
 <p>Scene files, validation, commands, snapshots and the agent catalogue all need to know what a component is, field by field. That knowledge lives in a `reflect::TypeRegistry`, an ordinary object filled by `ecs::registerSceneTypes`. There is no global instance and no static registration. Each field is one call in a builder chain, a template over the member pointer:</p>
-<div class="citation-chip"><code class="citation-code">f.ops = std::make_unique&lt;MemberOps&lt;T, M&gt;&gt;(member);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L275" target="_blank" rel="noopener">ohao/reflect/registry.hpp:275</a></div>
+<div class="citation-chip"><code class="citation-code">f.ops = std::make_unique&lt;MemberOps&lt;T, M&gt;&gt;(member);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L277" target="_blank" rel="noopener">ohao/reflect/registry.hpp:277</a></div>
 <p>`MemberOps&lt;T, M&gt;` implements `FieldOps` (write, tree read, streaming read, bit-exact equality, limit check, address) by calling `writeValue&lt;M&gt;`, `readValue&lt;M&gt;` and so on directly. A field operation is therefore one virtual call into code compiled for the member&#x27;s exact C++ type, with no switch over field kinds. `kindOf&lt;V&gt;()` maps the member type to one of 18 kinds and `static_assert`s on anything it cannot serialize, so an unsupported member fails to compile at its registration line.</p>
 <p>The design record states the choice (decision 1: own registry, member-pointer registration) without arguing against named alternatives, but the registrations show why the struct alone could not be enough. Most of a registration is information the C++ type does not contain:</p>
-<div class="citation-chip"><code class="citation-code">.field(&quot;intensity&quot;, &amp;Light::intensity).doc(&quot;Brightness multiplier on color&quot;).unitless().min(0.0).uiRange(0.0, 100.0)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.cpp#L54" target="_blank" rel="noopener">ohao/ecs/scene_types.cpp:54</a></div>
+<div class="citation-chip"><code class="citation-code">.field(&quot;intensity&quot;, &amp;Light::intensity).doc(&quot;Brightness multiplier on color&quot;).unitless().min(0.0).uiRange(0.0, 100.0)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/scene_types.cpp#L68" target="_blank" rel="noopener">ohao/ecs/scene_types.cpp:68</a></div>
 <p>That line goes on to say the value is dimensionless, has a hard minimum of 0 and an editor range of 0 to 100. Automatic aggregate reflection could enumerate `Light`&#x27;s members, but it could not supply any of that.</p>
 </div>
 <div class="section-rule"><h2 id="what-the-hand-written-chain-gives-up-and-the-test-that-buys-it-back">What the hand-written chain gives up, and the test that buys it back</h2></div>
 <div class="prose reveal">
 <p>Nothing ties the chain to the struct. Add a member to `Light` and forget the `.field` call, and the member is never saved or loaded, with no warning. Boost.PFR is used for the one thing it does well, counting an aggregate&#x27;s members, and it is linked into the tests only:</p>
-<div class="citation-chip"><code class="citation-code">const bool ok = t-&gt;fields.size() + t-&gt;skipped.size() == boost::pfr::tuple_size_v&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L245" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:245</a></div>
+<div class="citation-chip"><code class="citation-code">const bool ok = t-&gt;fields.size() + t-&gt;skipped.size() == boost::pfr::tuple_size_v&lt;T&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/scene/scene_tests.cpp#L254" target="_blank" rel="noopener">tests/scene/scene_tests.cpp:254</a></div>
 <p>Each member must be either a field or an explicit `.skip(name, &amp;T::m, reason)`, and a skip needs a non-empty reason that the catalogue publishes. The test lists types by hand, and it also checks `checked == r.types().size()`, so a registered type cannot be left out of the list. It has two blind spots. It compares counts, not identities: a member registered twice under two names, with another one forgotten, still balances. And a component struct that was never registered at all is invisible to it.</p>
 </div>
 <div class="section-rule"><h2 id="what-a-registration-carries">What a registration carries</h2></div>
@@ -56,9 +56,9 @@
 <p>A `TypeInfo` holds the name, doc, version, role flags, the fields in registration order (also the key order in files), the skipped members, the upgrades, and what reflection needs to treat the type as raw memory: size, alignment, construct, destroy, copy, and a shared default instance. Per field, `FieldAttrs` carries:</p>
 <ul>
 <li>`doc` and `tooltip`.</li>
-<li>`unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 18 names, from `m` and `deg/s` to `linear-rgb`, `lux` and `nits`:</li>
+<li>`unit`, which must come from a fixed vocabulary, or `unitless()` for an explicitly dimensionless value. The vocabulary is 19 names, from `m`, `rad/s` and `deg/s` to `linear-rgb`, `lux` and `nits`:</li>
 </ul>
-<div class="citation-chip"><code class="citation-code">constexpr std::array&lt;std::string_view, 18&gt; kUnits = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.cpp#L10" target="_blank" rel="noopener">ohao/reflect/registry.cpp:10</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr std::array&lt;std::string_view, 19&gt; kUnits = {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.cpp#L10" target="_blank" rel="noopener">ohao/reflect/registry.cpp:10</a></div>
 <ul>
 <li>`min` and `max`, which are hard limits enforced by validation and commands, per component for vectors. `uiRange` and `step` are editor hints and are not enforced.</li>
 <li>`color()` (only on vec3 and vec4), `angle()` (only on float), `hidden`, `readOnly`, and `alias`, an older name that is still accepted on load.</li>
@@ -76,9 +76,9 @@
 <div class="section-rule"><h2 id="what-the-registry-refuses">What the registry refuses</h2></div>
 <div class="prose reveal">
 <p>Builder mistakes are recorded in `errors()` rather than thrown. They include names that are not identifiers, duplicate type, enum, field or alias names, a C++ type registered twice, a field whose nested type is not registered yet (nested types must come first), a unit outside the vocabulary or on a non-numeric field, `min &gt; max`, `uiRange` with lo &gt; hi, a step that is not positive, an upgrade outside `[1, version)`, and a default that its own limits reject:</p>
-<div class="citation-chip"><code class="citation-code">m_r.error(&quot;field &quot; + m_t.name + &quot;.&quot; + f.name + &quot;: default value is outside [min, max]&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L306" target="_blank" rel="noopener">ohao/reflect/registry.hpp:306</a></div>
+<div class="citation-chip"><code class="citation-code">m_r.error(&quot;field &quot; + m_t.name + &quot;.&quot; + f.name + &quot;: default value is outside [min, max]&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/registry.hpp#L308" target="_blank" rel="noopener">ohao/reflect/registry.hpp:308</a></div>
 <p>That last check runs against the default-constructed instance, so a type&#x27;s defaults can never fail the type&#x27;s own validation. `lint()` adds the rules agents depend on: docs on every type, field, enum and enum value; no empty enums; no serialized component without fields; an upgrade for every older version; and a unit or `unitless()` on every numeric field of a serialized type:</p>
-<div class="citation-chip"><code class="citation-code">issues.push_back(t-&gt;name + &quot;.&quot; + f.name + &quot;: numeric field needs .unit() or .unitless()&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L428" target="_blank" rel="noopener">ohao/reflect/schema.cpp:428</a></div>
+<div class="citation-chip"><code class="citation-code">issues.push_back(t-&gt;name + &quot;.&quot; + f.name + &quot;: numeric field needs .unit() or .unitless()&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L432" target="_blank" rel="noopener">ohao/reflect/schema.cpp:432</a></div>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>No engine code calls `lint()` or `errors()`. The only gate is `t01_registrations_lint_clean`. If a field is rejected in a build that skipped the tests, the field is simply absent from the registry: its member is never written or read, and nothing at runtime says so.</p></div>
 </div>
 <div class="section-rule"><h2 id="type-erased-component-operations">Type-erased component operations</h2></div>
@@ -99,7 +99,7 @@
 <div class="section-rule"><h2 id="two-exports-and-one-hash">Two exports and one hash</h2></div>
 <div class="prose reveal">
 <p>`exportCatalogue` writes `ohao_schema.json`: the unit vocabulary, the error-code table, the API method table, and every enum and type in registration order with every attribute, its default and its skipped members. A field shows unit `&quot;1&quot;` when it is `unitless()` and `null` when it has no unit. `schemaHash` is a 64-bit FNV-1a of the compact catalogue body, without the `schemaHash` member itself:</p>
-<div class="citation-chip"><code class="citation-code">return fnv1a64(w.str());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L437" target="_blank" rel="noopener">ohao/reflect/schema.cpp:437</a></div>
+<div class="citation-chip"><code class="citation-code">return fnv1a64(w.str());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L441" target="_blank" rel="noopener">ohao/reflect/schema.cpp:441</a></div>
 <p>Every byte of that body counts, so rewording a doc string changes the hash just as a new field does (`t12_catalogue_is_deterministic_and_hashed` tests exactly that). An agent comparing hashes sees any edit to the registry as a changed engine.</p>
 <p>`exportSceneJsonSchema` writes a draft 2020-12 schema for `*.scene.json` from the serialized types only:</p>
 <ul>
@@ -110,9 +110,9 @@
 <li>Cross-entity rules (unique ids, parents, cycles, singletons) stay with the engine&#x27;s validator.</li>
 </ul>
 <p>There is a sharp edge between the two exports. `ohao schema` writes the catalogue with the API method table:</p>
-<div class="citation-chip"><code class="citation-code">const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L332" target="_blank" rel="noopener">tools/ohao/main.cpp:332</a></div>
+<div class="citation-chip"><code class="citation-code">const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L352" target="_blank" rel="noopener">tools/ohao/main.cpp:352</a></div>
 <p>The scene schema, however, embeds a hash computed with no methods:</p>
-<div class="citation-chip"><code class="citation-code">h.hex64(schemaHash(r));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L458" target="_blank" rel="noopener">ohao/reflect/schema.cpp:458</a></div>
+<div class="citation-chip"><code class="citation-code">h.hex64(schemaHash(r));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L462" target="_blank" rel="noopener">ohao/reflect/schema.cpp:462</a></div>
 <p>So one `ohao schema` run writes two files that name different hashes: the catalogue&#x27;s covers the method table, the scene schema&#x27;s does not (a scene file does not depend on the API). A cache keyed on one cannot be checked against the other.</p>
 </div>
 <div class="section-rule"><h2 id="never-on-a-frame">Never on a frame</h2></div>

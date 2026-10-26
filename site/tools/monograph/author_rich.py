@@ -734,6 +734,11 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["physics_constants + physics_math."],
         "why": "Avoid magic numbers across forces and backend helpers.",
     },
+    "physics/play": {
+        "what": ["Physics in the world's fixed step, the first-person player, and snapshots that replay physics exactly."],
+        "how": ["physics simulate system in PhysicsScene::step; CharacterVirtual players; SnapshotHook carrying Jolt state; player.* and physics.contacts."],
+        "why": "One clock for every host, and agents' restore-and-replay reaching the same world hash.",
+    },
     "physics/debug": {
         "what": ["Force debugger visualization hooks."],
         "how": ["force_debugger integrates with gizmo/draw paths."],

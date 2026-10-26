@@ -50,6 +50,13 @@ MODULE = {
             files=['ohao/physics/common/physics_constants.hpp', 'ohao/physics/common/physics_constants.cpp', 'ohao/physics/utils/physics_math.hpp', 'ohao/physics/utils/physics_math.cpp'],
         ),
         page(
+            'play',
+            'Step, player and replay',
+            'Physics in the world step, the player, snapshots that replay exactly.',
+            files=['ohao/ecs/physics_scene.hpp', 'ohao/ecs/physics_scene.cpp', 'ohao/ecs/snapshot_hook.hpp', 'ohao/ecs/snapshot.cpp', 'ohao/api/level.cpp'],
+            design=['The physics simulate system steps Jolt inside World::simulate: one clock for every host.', 'The scene marks its own Transform writes; any other write is a placement.', 'Snapshots carry Jolt state through a SnapshotHook; BodyMotion is the fallback.'],
+        ),
+        page(
             'debug',
             'Force debugger',
             'Debug visualization hooks.',
