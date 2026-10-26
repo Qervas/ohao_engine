@@ -72,7 +72,10 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
     physics         propagateTransforms (dirty subtrees; prevWorld kept   installed with the physics
                     at the frame's start), PhysicsScene::sync (bodies     scene (installPhysics);
                     for changed colliders, moved entities move bodies,    nothing for a world
-                    an edited dynamic body teleports at rest), Jolt in    without a collider
+                    an edited dynamic body teleports at rest, a moved     without a collider
+                    kinematic one by MoveKinematic), the players          or a player
+                    (PlayerController: input -> CharacterVirtual ->
+                    Transform, PlayerState), Jolt in
                     substeps <= 1/60 s, awake dynamic bodies ->
                     Transform (patch), the step's contact/trigger events
                     (physicsEvents(world), the log physics.events reads)

@@ -384,6 +384,40 @@ adds to the sections above:
   touch a floor.
 - **Kinematic bodies** still teleport to their entity (as in SP5); `MoveKinematic` is step 2.
 
+## As built (step 2)
+
+Built 2026-10-26 (`docs/changes/2026-10-26-player-physics-step2.md`). Where it differs from or
+adds to "The player":
+- **No separate `player` system.** The players move inside the `physics` simulate system's
+  step, after its sync and before Jolt's substeps (the order the spec asks for, without a
+  second system to keep in order); `StepTiming::playerMs` is their part, which
+  `player_step_ms` measures.
+- **Jolt layers.** The inner body is kinematic, on `CHARACTER`, and never sleeps. `CHARACTER`
+  no longer collides with `DYNAMIC` (the inner body would shove crates with infinite mass; the
+  virtual character pushes them, limited by `pushForce` as Jolt's `mMaxStrength`) or with
+  itself. A static sensor sees it as it sees any kinematic body, so triggers and rays do.
+- **Vertical motion.** `grounded` is Jolt's `ON_GROUND` with vertical velocity under
+  0.1 m/s (so the step a jump leaves the floor is not grounded). The move takes the step's
+  average vertical velocity, `vy + g·dt/2`, and `vy` after it is the move's result plus
+  another half step, so a jump follows the exact parabola (apex `jumpSpeed²/2g` = 1.225 m;
+  measured 1.2238). On the ground it sticks down by 0.5 m (`mStickToFloorStepDown`) and walks
+  stairs up to `stepHeight` (`mWalkStairsStepUp`).
+- **Spawn** happens when the `PlayerController` is created (by `SpawnPoint` creation order:
+  a level's nodes are created in node order). A re-expanded level does not respawn the player
+  (conservative: a `level.reload` mid-play leaves the player where it stands; a game respawns
+  by writing its `Transform`). Editing a `PlayerController` rebuilds its character where the
+  player stands, facing as it faced, at rest.
+- **The player is a root entity**: its `Transform` is written as its world pose. A `Transform`
+  written by anything else (an edit, a restore) teleports the character there, at rest; an
+  edited rotation sets the yaw.
+- **Look** is always on (the mouse delta plus `look_x`/`look_y`): mouse capture and Esc are
+  the window's, step 3. Pitch is kept in `PlayerState.pitchDeg` until the head exists (step 3).
+- **Kinematic bodies** moved during a step move by `moveKinematic` (Jolt's `MoveKinematic`:
+  a velocity that reaches the entity's pose at the step's end, so what they meet is pushed),
+  and are stopped after the step; moved outside a step (an edit between steps) they teleport.
+- **Agent surface.** `physics.info` reports `players` (non-zero only). New warnings:
+  `W_PLAYER_NO_SPAWN`, `W_PLAYER_NO_CHARACTER`.
+
 ## Decisions record
 
 - Physics steps inside `World::simulate`, not in a host loop: one clock for every host,

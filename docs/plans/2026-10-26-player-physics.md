@@ -68,9 +68,11 @@
 
 ### Task 2: The player (build step 2)
 
-- [ ] **Step 1: Write failing tests.** Walking the blockout from the player spawn with injected input: forward 60 steps moves 4.0 m ± 5 cm; the north wall stops it; the step (0.3 m) and the ramp climb; a crate is pushed; jump apex 1.22 m ± 5 cm; a trigger sees the player; spawn facing the spawn's yaw.
-- [ ] **Step 2: Implement.** `PlayerController` (registered with docs/units/limits), the backend character with an inner body, `moveKinematic`, the `player` simulate system, spawn at `SpawnPoint` `player`. `player_step_ms` gated.
-- [ ] **Step 3: Close.** Goldens, docs, `check.py --all`, change record, commits.
+- As built: the players move inside the `physics` simulate system (no separate `player` system); see the spec's "As built (step 2)".
+
+- [x] **Step 1: Write failing tests.** Walking the blockout from the player spawn with injected input: forward 60 steps moves 4.0 m ± 5 cm; the north wall stops it; the step (0.3 m) and the ramp climb; a crate is pushed; jump apex 1.22 m ± 5 cm; a trigger sees the player; spawn facing the spawn's yaw.
+- [x] **Step 2: Implement.** `PlayerController` (registered with docs/units/limits), the backend character with an inner body, `moveKinematic`, the `player` simulate system, spawn at `SpawnPoint` `player`. `player_step_ms` gated.
+- [x] **Step 3: Close.** Goldens, docs, `check.py --all`, change record, commits.
 
 ### Task 3: The camera (build step 3)
 

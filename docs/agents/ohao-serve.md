@@ -109,7 +109,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --seed 00000
 {"method":"physics.raycast","result":{"hit":false}}
 {"method":"physics.raycast","result":{"hit":true,"entity":"36125b5b252b59a1","name":"Ramp","point":[2.7,0.3,-1],"normal":[0,0.9806,0.1961],"dist":1.7}}
 {"method":"physics.raycast","error":{"code":"E_PARAMS","message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
-{"method":"world.hash","result":{"hash":"d5953866926e28c5","frame":0}}
+{"method":"world.hash","result":{"hash":"281300e97b39cc62","frame":0}}
 {"method":"level.reload","error":{"code":"E_NOT_FOUND","message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}
 ```
 
@@ -161,11 +161,11 @@ $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":61,"events":2}}
-{"method":"world.hash","result":{"hash":"c8571c8108f90c68","frame":61}}
+{"method":"world.hash","result":{"hash":"de58b90ecaf3841c","frame":61}}
 {"method":"world.diff","result":{"changed":[{"id":"0c6901342a294695","name":"MainCamera","fields":{"/Transform/position":[[0,-6.891139,30.534174],[0,-6.891139,27.53422]]}}],"created":[],"destroyed":[],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":2,"frame":0}}
 {"method":"input.replay","result":{"steps":61,"events":2,"checkpoints":2,"frame":61}}
-{"method":"world.hash","result":{"hash":"c8571c8108f90c68","frame":61}}
+{"method":"world.hash","result":{"hash":"de58b90ecaf3841c","frame":61}}
 ```
 
 ## Look

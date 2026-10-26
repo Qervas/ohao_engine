@@ -126,7 +126,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params) |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
-| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor |
+| `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -265,7 +265,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   core for a minute (exit 1 at `--deadline`); run it before a bench whose verdict you need.
   `physics_bench --check`: the physics step's budgets in `tests/bench/physics_budgets.json`
   (the blockout's step while crates fall, its step at rest with zero writes, 1,000 contact
-  begins in one step), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
+  begins in one step, a walking player's part of the step, `player_step_ms`), CPU, results in
+  `build/physics_bench.json`; the same noisy-run rules.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -512,6 +513,18 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     bodies wake apart. Removing a body ends its pairs in the next step's events.
   - Jolt's penetration slop is 5 mm (its 2 cm default left dropped crates visibly in the
     floor): a resting body sits up to 5 mm into each support.
+  - The player (`PlayerController`, saved; `PlayerState`, runtime): a Jolt `CharacterVirtual`
+    whose position is the feet, moved in the step before Jolt's substeps by the actions it
+    names (`move_forward`, `move_right`, `jump`, `sprint`, `look_x`, `look_y`; mouse look
+    always on). Its kinematic inner body (layer `CHARACTER`, never asleep) is what dynamic
+    bodies and sensors touch: `CHARACTER` does not collide with `DYNAMIC` or itself (the
+    virtual character pushes crates by `pushForce`), and a trigger sees the inner body as it
+    sees any kinematic body. Vertical motion is integrated exactly (`vy + g·dt/2` per step),
+    so a jump of `jumpSpeed` 4.9 peaks at 1.22 m. It spawns once, when created, at the first
+    `SpawnPoint` tagged `player` (by creation order; `W_PLAYER_NO_SPAWN` else); a write to
+    its `Transform` by anything but the step teleports it. It must be a root entity. A
+    kinematic body moved during a step moves by `moveKinematic` (velocity, so it pushes what
+    it meets) and stops after the step; moved outside a step it teleports.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
