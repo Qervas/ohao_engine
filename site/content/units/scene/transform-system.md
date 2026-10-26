@@ -41,7 +41,11 @@ An entity whose parent is gone, or has no `WorldTransform` yet, composes against
 
 Each recompute of an entity that already has a `WorldTransform` copies the old matrix into `prevWorld` before writing the new one, and tags `MovedLastFrame`:
 
-{{cite ohao/ecs/transform_system.cpp "wt->prevWorld = wt->world;"}}
+{{cite ohao/ecs/transform_system.cpp "} else if (!kept || !kept->entities.contains(e)) {"}}
+
+The exception is an entity a simulation step already recomputed this frame. The physics system needs current world transforms before it steps Jolt, so `propagateTransforms` runs the same recompute inside a step, without settling. It copies `prevWorld` only the first time it touches an entity after a render and records the entity; later propagations in the same frame, and the frame's `updateTransforms`, leave that `prevWorld` alone. A frame of three steps therefore still carries motion vectors spanning all three, not the last step's alone:
+
+{{cite ohao/ecs/transform_system.cpp "if (step->entities.insert(e).second) wt->prevWorld = wt->world;"}}
 
 The G-buffer vertex shader projects the vertex through both, so an object's own displacement between frames lands in the velocity buffer:
 

@@ -90,8 +90,8 @@ nodes' hints; then:
 - `physics_raycast {from, dir, max = 1000}` → `{hit, entity, name, point, normal, dist}` or
   `{hit: false}` (~100 bytes, budget 200). `dir` is any nonzero length; a zero `dir` or `max`
   outside (0, 100000] is `E_PARAMS`.
-- `physics_info` → bodies by motion, shapes by kind, `unstepped` (dynamic bodies are built,
-  not simulated yet), `buildMs`, and the collision warnings (`W_LEVEL_DYNAMIC_MESH`, …).
+- `physics_info` → bodies by motion, shapes by kind, `steps` run, dynamic bodies `awake`,
+  pairs in `contacts`, `buildMs`, and the collision warnings (`W_LEVEL_DYNAMIC_MESH`, …).
 - `level_reload {entity?}` re-reads the file and rebuilds the level's entities and bodies in
   place; an unchanged file keeps `world_hash`. Meshes already on the GPU stay as they were.
 
@@ -109,11 +109,36 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --seed 00000
 {"method":"physics.raycast","result":{"hit":false}}
 {"method":"physics.raycast","result":{"hit":true,"entity":"36125b5b252b59a1","name":"Ramp","point":[2.7,0.3,-1],"normal":[0,0.9806,0.1961],"dist":1.7}}
 {"method":"physics.raycast","error":{"code":"E_PARAMS","message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
-{"method":"world.hash","result":{"hash":"a452d03a74939d30","frame":0}}
+{"method":"world.hash","result":{"hash":"d5953866926e28c5","frame":0}}
 {"method":"level.reload","error":{"code":"E_NOT_FOUND","message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}
 ```
 
 Without a scene, `ohao level <file>` prints a file's `level_info` (the CLI guide).
+
+## Drop something: physics in the step
+
+`world_step` runs physics. Each step brings bodies up to date with edits, steps Jolt (1/60 s
+substeps), writes awake dynamic bodies back to their `Transform`s and records what happened:
+`contact_begin`/`contact_end` per body pair and `trigger_enter`/`trigger_exit` for a
+`Collider` with `trigger` (hint `"trig": 1`). Move a dynamic body with `world_apply` and it
+starts from rest there; read what followed with `physics_events {since?, max?}` (pass the
+reply's `next` as `since` to read on; `step` is the physics scene's own step count). Sleeping
+bodies keep their contacts and cost nothing.
+
+Lift the blockout's crates (CrateA 1 m, CrateB 2 m), step 90 frames, read the landings and
+where they came to rest:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --script docs/agents/examples/drop.jsonl
+{"method":"scene.load","result":{"entities":5}}
+{"method":"world.apply","result":{"applied":2,"results":[null,null],"inverse":[{"op":"field.set","id":"506f14503a54ecba","path":"/Transform/position","value":[1.3,0.8,-1.7]},{"op":"field.set","id":"5cfbb21776b390b8","path":"/Transform/position","value":[1.3,0.3,-1.7]}]}}
+{"method":"world.step","result":{"frame":90}}
+{"method":"physics.events","result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
+{"method":"world.query","result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29499808,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.78999555,-1.700009]}}],"count":2}}
+```
+
+A 1 m fall lands at 4.57 m/s in step 28 (0.45 s), the 2 m one at 6.19 m/s in step 39. Resting
+crates sit up to 5 mm into what they rest on (Jolt's penetration slop) per contact.
 
 ## Record and replay
 

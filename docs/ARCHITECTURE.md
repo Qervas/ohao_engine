@@ -69,12 +69,21 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
   World::simulate(fixedDt)
     spin            engine-provided: Spin -> Transform (patch)        every World
     fly_controller  engine-provided: input + FlyController -> Transform   every World
+    physics         propagateTransforms (dirty subtrees; prevWorld kept   installed with the physics
+                    at the frame's start), PhysicsScene::sync (bodies     scene (installPhysics);
+                    for changed colliders, moved entities move bodies,    nothing for a world
+                    an edited dynamic body teleports at rest), Jolt in    without a collider
+                    substeps <= 1/60 s, awake dynamic bodies ->
+                    Transform (patch), the step's contact/trigger events
+                    (physicsEvents(world), the log physics.events reads)
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
                   meshes and materials registered in the RenderScene   a renderer (addSyncBefore)
   transform       Transform + Parent -> WorldTransform; tags RenderDirty, MovedLastFrame
+  physics         dirty colliders -> Jolt bodies; moved entities move     installed by installPhysics
+                  their bodies (no step: that is the simulate system)
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
                   and the light list; setLights gives each point,      a renderer (addSyncAfter)
                   spot and area light an emitter instance (its

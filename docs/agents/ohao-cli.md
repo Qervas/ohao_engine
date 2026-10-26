@@ -282,7 +282,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 28 tools
+0 29 tools
 ```
 
 ## Methods
@@ -319,11 +319,16 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `level.info` | `{entity?}` → `{entity, path, nodes, meshes, uniqueMeshes, triangles, colliders: {box?, sphere?, capsule?, convex?, mesh?}, bodies: {static?, dynamic?, kinematic?}, spawns: [{tag, entity, pos, yawDeg}], moreSpawns?, lights, cameras, warnings: [{code, message}], errors?, loadMs}` | A `Level`'s summary (the only level without `entity`; several: `E_COMMAND` naming them). Counts are the file's default scene: mesh nodes, the glTF meshes they use, their triangles, light and camera nodes. Spawns in node order, the first 8; `yawDeg` about +Y from −Z. Warnings: the level's hints, `W_LEVEL_NO_PLAYER_SPAWN`, its nodes' collision warnings (the first 4, then `moreWarnings`). `loadMs`: the last expansion. No level, or an entity that is not one: `E_NOT_FOUND`; a file that did not load: its error. ~480 bytes for the blockout. |
 | `level.reload` | `{entity?}` → as `level.info` | Re-reads the level's file and rebuilds its entities (in place, same ids) and bodies; an unchanged file keeps `world.hash`. Meshes already uploaded to the GPU are kept. |
 | `physics.raycast` | `{from, dir, max = 1000}` → `{hit, entity?, name?, point?, normal?, dist?}` | The closest collider along the ray (`dir` any nonzero length): its entity, name (up to 40 bytes), the hit point and surface normal (to 1e-4) and distance. `{hit: false}` for none. A zero `dir` or `max` outside (0, 100000] is `E_PARAMS`. ~100 bytes. |
-| `physics.info` | `{}` → `{bodies: {static?, dynamic?, kinematic?}, shapes: {box?, sphere?, capsule?, convex?, mesh?, compound?}, unstepped, buildMs, warnings?: [{code, entity, name, message}], moreWarnings?}` | The physics scene. `unstepped`: dynamic bodies, which nothing simulates yet. |
+| `physics.info` | `{}` → `{bodies: {static?, dynamic?, kinematic?}, shapes: {box?, sphere?, capsule?, convex?, mesh?, compound?}, steps, awake, contacts, triggers?, buildMs, warnings?: [{code, entity, name, message}], moreWarnings?}` | The physics scene: `steps` run (the scene's count, across the session), dynamic bodies `awake`, body pairs in `contacts` now (a sleeping pair stays in contact), sensor bodies. |
+| `physics.events` | `{since = 0, max = 32}` → `{events: [{seq, step, kind, a, b, an, bn, point, normal, speed}], next, dropped?}` | What physics decided, oldest first, from a log of the last 1,024: `contact_begin`/`contact_end` per body pair (`a` the lower id), `trigger_enter`/`trigger_exit` (`a` the trigger). `an`/`bn` names (24 bytes), `point` and `normal` (a toward b) to 1 mm and 1e-3, `speed` the impact's normal speed (m/s, 0 for an end). Pass `next` as `since` to read on; `dropped` counts events the log no longer holds. `max` 1–64. Under 200 bytes an event. |
 
-The four level and physics methods bring the level, transforms and bodies up to date
-first (no step, no render), so they answer right after `scene.load` or `world.apply`. A
-host without the level or physics system (none of OHAO's) is `E_STATE`.
+`world.step` runs physics: each step propagates transforms, brings bodies up to date, steps
+Jolt (substeps of at most 1/60 s), writes awake dynamic bodies back to their `Transform`s and
+records the step's events, so a `world.query` after it sees where things fell. An edit of a
+dynamic body's `Transform` (`field.set`, a restore) puts it there at rest. The level and
+physics query methods bring the level, transforms and bodies up to date first (no step, no
+render), so they answer right after `scene.load` or `world.apply`. A host without the level
+or physics system (none of OHAO's) is `E_STATE`.
 
 ## Edit commands
 
@@ -361,8 +366,8 @@ that id.
 | `Level` | A glTF level (`asset`, `lightScale`, `collision`). At load (and whenever it changes) it becomes one child entity per node of the file's default scene: meshes, KHR lights, cameras, and its nodes' `extras` hints (`spawn`, `socket`, `vis`, components by name). Those entities carry `LevelNode`, keep the same ids on every load, and are never saved: a scene holds only the `Level` line. |
 | `SpawnPoint` | A named place to spawn something (`tag`, ≤ 32 characters), facing its −Z; `query --has SpawnPoint` lists them in node order. |
 | `Socket` | An attach point (`name`, ≤ 64 characters): a level's `SOCKET_` empties. |
-| `Collider` | The entity collides: `shape` (`Box`, `Sphere`, `Capsule`, `Convex`, `Mesh`, `None`), `size` (zero: fitted to the entity's mesh at its world scale), `offset`. A level's mesh nodes get one from their `col` hint (`Mesh` by default). |
-| `RigidBody` | How its body moves: `motion` (`Static`, `Dynamic`, `Kinematic`), `mass` (kg), `friction`, `restitution`. No RigidBody is static. Dynamic bodies are built but not stepped yet (sub-project 6). |
+| `Collider` | The entity collides: `shape` (`Box`, `Sphere`, `Capsule`, `Convex`, `Mesh`, `None`), `size` (zero: fitted to the entity's mesh at its world scale), `offset`, `trigger` (a sensor: `trigger_enter`/`trigger_exit`, blocks nothing). A level's mesh nodes get one from their `col` hint (`Mesh` by default; `"trig": 1` makes it a trigger). |
+| `RigidBody` | How its body moves: `motion` (`Static`, `Dynamic`, `Kinematic`), `mass` (kg), `friction`, `restitution`. No RigidBody is static. Dynamic bodies are simulated in each step and write their `Transform`; static and kinematic ones follow theirs. |
 
 Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, `PhysicsBody`, …) are
 derived, appear in the catalogue for reference, and are refused in files and commands.

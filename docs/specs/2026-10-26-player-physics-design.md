@@ -355,6 +355,35 @@ Each step ends with the engine running, every gate green, a change record
   detects; tested in step 1 only as static.
 - Events past the log's 1,024: `dropped` is right and the cursor never repeats an event.
 
+## As built (step 1)
+
+Built 2026-10-26 (`docs/changes/2026-10-26-player-physics-step1.md`). Where it differs from or
+adds to the sections above:
+- **`step` in events** is the physics scene's own step count (steps run since `installPhysics`,
+  across `scene.load`s), not the world's frame; `physics.info.steps` gives it, so an agent
+  takes it before stepping and compares. The world frame resets on `scene.load`; the scene
+  outlives it.
+- **Sleep and contacts.** Jolt reports a sleeping body's contacts removed (and added again on
+  wake). The scene keeps such a pair, dormant: no end, no second begin; it ends the pair only
+  if the bodies wake and are not touching. `physics.info.contacts` counts dormant pairs.
+- **Removals between steps** (a destroyed entity, a rebuilt collider, `level.reload`) end their
+  pairs at once into a pending list, published first in the next step's events (with that
+  step's number).
+- **Penetration slop** set to 5 mm in the Jolt backend (Jolt's default 2 cm left dropped crates
+  visibly in the floor): a resting body sits up to 5 mm into each support (two stacked crates:
+  10 mm for the top one).
+- **A world without a collider** skips the whole system (not even `propagateTransforms`), so
+  worlds without physics behave exactly as before.
+- **`physics.info`** gains `steps`, `awake`, `contacts` and `triggers` (non-zero only);
+  `unstepped` is gone. **`physics.events`** takes `since` (an integer seq) and `max` 1–64
+  (default 32); out of range is `E_RANGE` from the params limits. Event names are cut at 24
+  bytes; point and normal at 1 mm and 1e-3.
+- **Timing.** `PhysicsScene::lastStepTiming()` splits a step into Jolt, events and write-back
+  (`physics_bench` reads it). `blockout_step_ms` is the median of the first 90 steps after the
+  lift in 10 fresh worlds; `events_1k_ms` is the events part of the step where 1,000 spheres
+  touch a floor.
+- **Kinematic bodies** still teleport to their entity (as in SP5); `MoveKinematic` is step 2.
+
 ## Decisions record
 
 - Physics steps inside `World::simulate`, not in a host loop: one clock for every host,
