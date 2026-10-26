@@ -95,16 +95,14 @@ void main() {
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
 
-    // Check for bindless albedo texture
+    // Albedo: the material's base colour, times the albedo texture when there is one, as the
+    // path tracer's hit computes it (rt/pt_closesthit.rchit). The vertex colour is not a
+    // factor: primitives carry their colour as vertex colour and base colour both, and
+    // multiplying the two squared it.
     uint albedoTexIdx = floatBitsToUint(row0.w);
-    vec3 albedo;
-    if (albedoTexIdx != 0xFFFFFFFFu) {
-        vec4 texColor = texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord);
-        albedo = texColor.rgb * fragColor;
-    } else {
-        // Combine vertex color with material base color
-        albedo = fragColor * row0.rgb;
-    }
+    vec3 albedo = row0.rgb;
+    if (albedoTexIdx != 0xFFFFFFFFu)
+        albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;
 
     // Check for bindless normal map
     uint normalTexIdx = floatBitsToUint(row1.z);

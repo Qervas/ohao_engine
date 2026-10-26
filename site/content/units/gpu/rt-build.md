@@ -132,15 +132,15 @@ and no decode appears in the shader:
 {{cite ohao/render/scene/model_upload.cpp "upload(model.materialTextureIndex, model.albedoTextures, VK_FORMAT_R8G8B8A8_SRGB,"}}
 
 An untextured material is therefore its base colour, once, in the path tracer as in the
-G-buffer, which writes the base colour times the vertex colour:
+G-buffer, which computes the same product and ignores the vertex colour:
 
-{{cite shaders/core/gbuffer.frag "albedo = fragColor * row0.rgb;"}}
+{{cite shaders/core/gbuffer.frag "albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;"}}
 
 No per-material fallback texture is created for it: `modelMaterials` uploads only the
 textures the model carries, and row 2 of the material table has no texture slot beyond
-the roughness/metal index. With an albedo texture the two renderers still differ: the
-G-buffer multiplies the texture by the vertex colour and drops the base-colour factor
-that the path tracer keeps.
+the roughness/metal index. The G-buffer used to multiply in the vertex colour as well;
+primitives carry their colour as vertex colour and base colour both, so every primitive
+was shaded with its colour squared (a 0.5 wall at 0.25).
 
 :::key
 The diffuse sentinel is the whole rule: a valid albedo index multiplies the base colour,

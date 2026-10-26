@@ -95,7 +95,7 @@ shader, which validation reports at pipeline creation.
 float bit pattern (`std::bit_cast`), and the shader recovers it with
 `floatBitsToUint`. Albedo and normal are guarded against exactly that sentinel.
 
-{{cite shaders/core/gbuffer.frag "if (albedoTexIdx != 0xFFFFFFFFu) {"}}
+{{cite shaders/core/gbuffer.frag "if (albedoTexIdx != 0xFFFFFFFFu)"}}
 
 Roughness/metallic and emissive are not. They use a range test instead:
 
