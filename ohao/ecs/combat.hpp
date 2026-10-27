@@ -83,6 +83,8 @@ CombatSystem& installCombat(World& world);
 [[nodiscard]] const CombatSystem* combatSystem(const World& world);
 // The latest step's events (empty without combat).
 [[nodiscard]] std::span<const CombatEvent> combatEvents(const World& world);
+// shot, hit, damage, death, reload, reloaded, round_start, restart, win.
+[[nodiscard]] const char* combatEventKindName(CombatEvent::Kind kind) noexcept;
 
 namespace combat {
 // Counter-based random numbers: a function of (seed, shot, i), in [0, 1).

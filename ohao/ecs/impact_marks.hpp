@@ -5,8 +5,10 @@
 // its marks); a round that hit a character is marked on the character's mesh box (a BoxPrim child)
 // along the round's path, or not at all if the path misses the box; none on the input-driven
 // player (it would hang in front of its own eyes). A restart clears them. Runtime only: nothing
-// in the registry, never saved or hashed; the render side (installImpactMarks) draws them as
-// RenderScene instances of its own.
+// in the registry, never saved or hashed. installCombat adds the `impact_marks` simulate system
+// after `combat`, which takes the step's hits against the step's poses (so every host, its
+// renderer made early or late, has the same marks); the render side (installImpactMarks) draws
+// them as RenderScene instances of its own.
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 

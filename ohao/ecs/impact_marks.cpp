@@ -31,6 +31,18 @@ glm::mat4 drawnWorld(const entt::registry& reg, entt::entity e) {
     return glm::mat4(1.0f);
 }
 
+// Where `e` stands at this step: its Transforms up the chain (WorldTransform can be a step behind
+// inside one, and RenderPose is a window's). A mark is measured against this, so every host, made
+// early or late, attaches it alike.
+glm::mat4 stepWorld(const entt::registry& reg, entt::entity e) {
+    const auto* t = reg.try_get<Transform>(e);
+    glm::mat4 m = t ? t->matrix() : glm::mat4(1.0f);
+    int depth = 0;
+    for (const auto* p = reg.try_get<Parent>(e); p && reg.valid(p->entity) && depth < 64; p = reg.try_get<Parent>(p->entity), ++depth)
+        if (const auto* pt = reg.try_get<Transform>(p->entity)) m = pt->matrix() * m;
+    return m;
+}
+
 // The quad's pose: 8 cm across, facing `normal` (its +Z), 2 mm off `point`.
 glm::mat4 markPose(glm::vec3 point, glm::vec3 normal) {
     const glm::vec3 n = glm::length(normal) > 0.0f ? glm::normalize(normal) : glm::vec3(0.0f, 1.0f, 0.0f);
@@ -52,7 +64,7 @@ void hitBoxes(const entt::registry& reg, entt::entity e, glm::vec3 origin, glm::
     if (depth > 4 || !reg.valid(e)) return;
     if (const auto* ms = reg.try_get<MeshSource>(e))
         if (const auto* box = std::get_if<BoxPrim>(&ms->source)) {
-            const glm::mat4 world = drawnWorld(reg, e);
+            const glm::mat4 world = stepWorld(reg, e);
             const glm::mat4 toLocal = glm::inverse(world);
             const glm::vec3 o(toLocal * glm::vec4(origin, 1.0f));
             const glm::vec3 d(toLocal * glm::vec4(dir, 0.0f));
@@ -104,7 +116,7 @@ void ImpactMarks::add(const World& world, entt::entity on, glm::vec3 point, glm:
     m.world = markPose(point, normal);
     if (on != entt::null && reg.valid(on)) {
         m.on = on;
-        m.local = glm::inverse(drawnWorld(reg, on)) * m.world;
+        m.local = glm::inverse(stepWorld(reg, on)) * m.world;
     } else {
         m.local = m.world;
     }

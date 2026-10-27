@@ -3,6 +3,7 @@
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/enemy_ai.hpp"
+#include "ecs/impact_marks.hpp"
 #include "ecs/round_hook.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/world.hpp"
@@ -416,6 +417,9 @@ CombatSystem& installCombat(World& world) {
     auto system = std::make_shared<CombatSystem>(world);
     reg.ctx().emplace<CombatInstalled>(CombatInstalled{system.get()});
     world.addSimulate("combat", [system](World&, float dt) { system->step(dt); });
+    // Impact marks are taken from the log at the step they happen, against the step's poses, so
+    // a host whose renderer starts late (a headless capture) draws the marks a window drew.
+    world.addSimulate("impact_marks", [](World& w, float) { impactMarksOf(w).observe(w); });
     return *system;
 }
 
@@ -432,6 +436,21 @@ const CombatSystem* combatSystem(const World& world) {
 std::span<const CombatEvent> combatEvents(const World& world) {
     const CombatSystem* s = combatSystem(world);
     return s ? s->stepEvents() : std::span<const CombatEvent>{};
+}
+
+const char* combatEventKindName(CombatEvent::Kind kind) noexcept {
+    switch (kind) {
+        case CombatEvent::Kind::Shot: return "shot";
+        case CombatEvent::Kind::Hit: return "hit";
+        case CombatEvent::Kind::Damage: return "damage";
+        case CombatEvent::Kind::Death: return "death";
+        case CombatEvent::Kind::Reload: return "reload";
+        case CombatEvent::Kind::Reloaded: return "reloaded";
+        case CombatEvent::Kind::RoundStart: return "round_start";
+        case CombatEvent::Kind::Restart: return "restart";
+        case CombatEvent::Kind::Win: return "win";
+    }
+    return "?";
 }
 
 } // namespace ohao::ecs
