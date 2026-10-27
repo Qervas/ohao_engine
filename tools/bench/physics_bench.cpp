@@ -31,6 +31,7 @@
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
@@ -437,6 +438,46 @@ int main(int argc, char** argv) {
             after += glm::length(reg.get<ecs::Transform>(h).position - reg.get<ecs::Transform>(pl).position);
         chased = (before - after) / 16.0f;
     }
+    // 8. The round's restart (step 3): the blockout, the player and two enemies with a Round; after
+    // 30 steps of a fight, `restart` pressed: what restoring the round's start takes (the whole
+    // world's snapshot through the RoundHook), 50 restarts after 5, N rounds / 5.
+    std::vector<double> restartMs;
+    uint32_t restarts = 0;
+    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+        Blockout b;
+        ecs::installCombat(b.world);
+        ecs::CombatSystem& combat = *ecs::combatSystem(b.world);
+        ecs::installRoundHook(b.world, engineTypes());
+        (void)addPlayer(b.world, true);
+        addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
+        addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
+        const entt::entity roundEntity = b.world.createWithId(0x40a1d, "Round");
+        b.world.registry().emplace<ecs::Round>(roundEntity);
+        b.world.sync();
+        std::vector<InputEvent> fire(1), restart(1);
+        fire[0].type = InputEvent::Type::ActionDown;
+        fire[0].name = "fire";
+        restart[0].type = InputEvent::Type::ActionDown;
+        restart[0].name = "restart";
+        for (int k = 0; k < 55; ++k) {
+            for (int i = 0; i < 30; ++i) {
+                b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+                b.world.simulate(kDt);
+                b.world.sync();
+            }
+            b.world.stepInput(restart);
+            b.world.simulate(kDt);
+            b.world.sync();
+            restart[0].type = InputEvent::Type::ActionUp;
+            b.world.stepInput(restart);   // released, for the next press
+            restart[0].type = InputEvent::Type::ActionDown;
+            if (r > 0 && k >= 5) restartMs.push_back(combat.round().lastRestartMs);
+        }
+        restarts = combat.round().restarts;
+    }
+    const bool restarted = restarts == 55;
+    if (!restarted) failures.push_back("round: " + std::to_string(restarts) + " restarts of 55 pressed");
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -475,12 +516,16 @@ int main(int argc, char** argv) {
     std::printf("  enemies16_step_ms       median %8.4f   p95 %8.4f   (%zu steps, closed in %.2f m on average)\n", s16.median,
                 s16.p95, enemies16Ms.size(), chased);
     const Verdict v16 = judge(budgets, combatStep, "enemies16_step_ms", s16.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16})
+    const Stats srs = stats(restartMs);
+    std::printf("  round_restart_ms        median %8.4f   p95 %8.4f   (%zu restarts)\n", srs.median, srs.p95, restartMs.size());
+    const Verdict vrs = judge(budgets, combatStep, "round_restart_ms", srs.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
-            name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms")
+            name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
+            name != "round_restart_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -506,6 +551,8 @@ int main(int argc, char** argv) {
                              {"enemyRounds", enemyRounds}, {"verdict", vk.verdict}};
     out["enemies16_step_ms"] = {{"median", s16.median}, {"p95", s16.p95}, {"min", s16.min}, {"steps", enemies16Ms.size()},
                                 {"closedInM", chased}, {"verdict", v16.verdict}};
+    out["round_restart_ms"] = {{"median", srs.median}, {"p95", srs.p95}, {"min", srs.min}, {"restarts", restartMs.size()},
+                               {"verdict", vrs.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -521,7 +568,8 @@ int main(int argc, char** argv) {
     std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
 
     const bool wrong =
-        !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted;   // no machine excuses these
+        !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted ||
+        !restarted;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",

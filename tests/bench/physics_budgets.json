@@ -1,7 +1,7 @@
 {
   "comment": "Specs docs/specs/2026-10-26-player-physics-design.md and docs/specs/2026-10-27-combat-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat). Changing a budget needs Frank's OK.",
   "currentStep": 5,
-  "combatStep": 2,
+  "combatStep": 3,
   "budgets": {
     "combat_shot_ms": { "max": 0.02, "gatedFrom": 1 },
     "combat_step_ms": { "max": 0.05, "gatedFrom": 2 },
