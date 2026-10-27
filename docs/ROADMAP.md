@@ -20,7 +20,9 @@ surface is the foundation, and the editor will be one more client of it.
 **The first proof is a small first-person vertical slice** (sub-projects 5–7): one level, a
 character controller, a hitscan weapon, a few enemies, built with the engine's own tools
 and agents. The slice proves the engine; it is not the goal. Every sub-project leaves the
-engine more general, and the slice pulls on whatever it needs.
+engine more general, and the slice pulls on whatever it needs. With the slice playable (7),
+sub-projects 9–15 take it to the bar, IW/CoD-quality feel: latency and the view first, then
+animation, audio, effects, ragdolls, a game module and an asset database.
 
 ## Principles
 
@@ -64,11 +66,27 @@ measurable.
 | 5 | **Level pipeline** — glTF-from-Blender loader, `extras` → components, collision generation, spawn points | a Blender blockout level loads, renders and collides | [spec](specs/2026-10-26-level-pipeline-design.md) · [plan](plans/2026-10-26-level-pipeline.md) |
 | 6 | **Player** — Jolt at fixed step in the ECS, physics ↔ transform sync, first-person controller, camera, footsteps | you can walk the level | [spec](specs/2026-10-26-player-physics-design.md) · [plan](plans/2026-10-26-player-physics.md) · **done** |
 | 7 | **Combat** — hitscan weapon (recoil, spread, muzzle flash, impact decals), health/damage, enemy AI, death/restart, HUD | the slice is playable | [spec](specs/2026-10-27-combat-design.md) · [plan](plans/2026-10-27-combat.md) · **done** (2026-10-27; `blockout_play.scene.json` is a round: fire, reload, recoil and bloom, flash, marks, sounds, a HUD; two enemies that see, chase and shoot; kill both and win, die and restart to the round's start bit for bit; an agent plays the same fight over MCP through `combat.info`, `combat.events`, `combat.damage` and input, a window and a headless host reaching the same `world.hash` and HUD picture. Open: every bench run noisy from outside load) |
-| 8 | **OpenUSD interop** — USDA/USDC import and export for robotics and world-model pipelines (Omniverse, Isaac Sim): UsdGeom transforms and meshes, UsdLux lights, UsdPhysics where it maps, and every other OHAO component as namespaced custom attributes generated from the type registry | a scene goes OHAO → USD → OHAO with every mapped component identical, and the exported stage opens in usdview / Omniverse | — |
+| 8 | **OpenUSD interop** (by need, after 15) — USDA/USDC import and export for robotics and world-model pipelines (Omniverse, Isaac Sim): UsdGeom transforms and meshes, UsdLux lights, UsdPhysics where it maps, and every other OHAO component as namespaced custom attributes generated from the type registry | a scene goes OHAO → USD → OHAO with every mapped component identical, and the exported stage opens in usdview / Omniverse | — |
+| 9 | **Feel** — input-to-present latency measured and reported (`render.stats`); the camera turned at render rate by a presentation-only look lead the step consumes with the same arithmetic (the step's aim stays authoritative, the lead never hashed); present modes and late input sampling; frame pacing; the gun's own field of view and depth placement, sway, bob and kick (render side; its animations are 10's); GPU particles from combat events; audio distance curves, a voice cap and one occlusion ray; SP7's leftovers and Frank's hand test | a mouse movement reaches the screen within 15 ms (median, poll to present, 144 Hz, vsync off); the camera turns every frame; frame time p99 ≤ 1.5 × median; every simulation test and golden unchanged; Frank's hand-test list closed | [spec](specs/2026-10-27-feel-design.md) · [plan](plans/2026-10-27-feel.md) |
+| 10 | **Animation** — skeleton and animator components, glTF skins and clips, GPU skinning feeding the G-buffer, meshlets, a refitted BLAS and previous-pose motion vectors; enemy full body (locomotion, aim, fire, reload, hit reactions, death, events driving sounds); then the player's arms and gun (idle, fire, reload, ADS, sprint); clip time from the step count. Face, cinematics and a third-person player are out | two skinned enemies run, aim, shoot, flinch and die, validation clean in raster and RT (shadows and GI see the deformed mesh); culling and determinism tests cover skinned meshes; a skinning budget; the viewmodel's reload matches the weapon's | — |
+| 11 | **Audio system** — a mixer with buses, ducking and snapshots; voice priority; occlusion; reverb zones from level hints; scheduling from step events; `audio.*` for agents; a local staging path for real recordings beside a committed generated or CC0 set | the same fight gives the same voice schedule; occlusion audibly changes behind cover; a mix-cost budget; Frank signs off the mix by ear | — |
+| 12 | **VFX and transparency** — lit and soft particles through the clustered lights, sorted forward transparency, projected decals replacing the quad marks, tracers, smoke that reads in RT GI | a muzzle, impact and smoke set authored as scene data; a VFX budget; transparency goldens exact | — |
+| 13 | **Joints and ragdoll** — the backend's constraints as ECS components and scene data; a death ragdoll blended from the last animated pose; hit impulses; exact replay from snapshots | a shot enemy falls as a ragdoll and replays bit for bit from a mid-fall snapshot; a budget for 16 ragdolls | — |
+| 14 | **Game module and hot reload** — combat, enemy AI and the round moved out of `ohao/ecs` into a game module of native C++ systems; reload as save, unload, load, restore | an edited enemy AI is picked up mid-fight in a running window with the same `world.hash`; the engine builds without the game | — |
+| 15 | **Asset database and cooking** (absorbs 5's deferred kit2k) — content hashes and a cooked cache: compressed textures with mips, meshlets, BLAS-ready buffers, clips; streaming at load; `asset.*` for agents | kit2k's budgets met (load ≤ 400 ms, collision build ≤ 150 ms, a ray ≤ 5 µs, an idle sync ≤ 10 µs); a real kit loads cooked with at least 4× less VRAM | — |
+| 16 | **Render to budget** (by need) — upscaling behind one interface (FSR first), virtual shadow maps, ReSTIR DI and GI, when a real level's frame asks; the standing Cornell lighting miss and quiet bench windows | a real level's 1440p frame within budget at high settings | — |
 
-**Order:** 5–7 built (2b 2026-10-25, 6 and 7 2026-10-27; 5's step 6, a kit of 2,000 pieces, deferred). 8 is scheduled by need, when a robotics or
-world-model pipeline asks for it; it builds on 5's import path and the asset database.
-`.scene.json` stays the native authoring format; USD is the interchange format.
+**Order:** 5–7 built (2b 2026-10-25, 6 and 7 2026-10-27). Next (Frank, 2026-10-27, adopting the
+post-SP7 suggestions): **9 Feel**, then 10 Animation, 11 Audio, 12 VFX, 13 Ragdoll, 14 Game module,
+15 Asset database. Feel goes first because the slice's largest feel defect is structural, not
+content: the camera turns at the step's 60 Hz and is drawn a step late, and every later visual
+system (arms, ADS, recoil, camera animation) sits on that path. Animation comes before audio
+because skinning changes how geometry reaches the G-buffer, BLAS, culling and motion vectors
+("structure before effects"), and its events time the sounds; audio's cheap wins ride in 9. 5's
+step 6, a kit of 2,000 pieces, folds into 15. 16 and 8 are scheduled by need: 16 when a real
+level's frame asks for it; 8 when a robotics or world-model pipeline does, after 15, on 5's import
+path and the asset database. `.scene.json` stays the native authoring format; USD is the
+interchange format.
 
 Why 4 before 2b: 2b is a large renderer change, and every later sub-project is built and
 checked by agents. 4 gives them the live engine, the one-command check, golden diffs they
@@ -142,8 +160,9 @@ plugs into a finished flow (schedule it when the slice needs it)? Frank widened 
 
 ## Next, scheduled by need
 
-Pulled in as their own sub-projects when the slice or a user needs them: upscalers,
-virtual shadow maps, ReSTIR DI and ReSTIR / probe GI (reasoned above); the editor UI (an
-in-process `ohao/api` client: ImGui docking on the Vulkan backend); the asset database and
-cooked formats; gameplay code with hot reload; the C ABI; network transports for the
-control surface.
+Upscalers, virtual shadow maps, ReSTIR DI and ReSTIR / probe GI (reasoned above) are row 16;
+the asset database and cooked formats row 15; gameplay code with hot reload row 14. Pulled in
+as their own sub-projects when the slice or a user needs them: soft bodies, water and cloth;
+the editor UI (an in-process `ohao/api` client: ImGui docking on the Vulkan backend); a
+sandboxed WebAssembly tier for agent- and mod-written code; the C ABI; network transports for
+the control surface.
