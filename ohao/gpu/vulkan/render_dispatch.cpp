@@ -226,10 +226,11 @@ void VulkanRenderer::renderDeferred() {
     }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
     m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
+    m_lastSubmitAt = std::chrono::steady_clock::now();
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     if (m_swapchain) {
-        const VkResult pr = m_swapchain->present(m_graphicsQueue, imageIndex);
+        const VkResult pr = presentFrame(imageIndex);
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) m_swapchainDirty = true;
     }
 
@@ -414,10 +415,11 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     }
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
     m_slotSubmitted[m_currentFrame] = ++m_framesSubmitted;
+    m_lastSubmitAt = std::chrono::steady_clock::now();
     m_passTimer.endFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count());
 
     if (m_swapchain) {
-        const VkResult pr = m_swapchain->present(m_graphicsQueue, imageIndex);
+        const VkResult pr = presentFrame(imageIndex);
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) m_swapchainDirty = true;
     }
 

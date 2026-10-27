@@ -14,6 +14,8 @@
 #include "runtime/scene_view_apply.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <utility>
 
 namespace ohao::runtime {
@@ -49,10 +51,11 @@ struct PostState {
 bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& types) {
     m_cfg = cfg;
     m_time = Timeline(cfg.timeMode, cfg.clock);
+    m_frameLog = FrameLog(cfg.frameLogCapacity);
     if (!m_window.create(cfg.window)) return false;
     const VkExtent2D ext = m_window.framebufferExtent();
     m_renderer = std::make_unique<VulkanRenderer>(ext.width, ext.height);
-    if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {
+    if (!m_renderer->initialize(m_window.presentTarget(cfg.present))) {
         OHAO_LOG(Error, runtime, "live host: renderer initialization failed");
         return false;
     }
@@ -91,12 +94,15 @@ void LiveHost::renderFrame() {
     m_world->sync();   // instantiate, transforms, the render extract: never a simulation step
     for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)
         OHAO_LOG(Warn, runtime, "live host: {}", w);
+    m_frameView = Clock::now();   // the camera this frame draws is set
     // The path tracer restarts its accumulation when the view may have moved (it notices
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
     if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
     m_liveSamples = changed ? 1 : m_liveSamples + 1;
     // The window always draws the combat HUD (empty without a player: no pass).
-    m_renderer->setHud(ecs::combatHud(*m_world, m_renderer->getWidth(), m_renderer->getHeight()));
+    render::HudList hud = ecs::combatHud(*m_world, m_renderer->getWidth(), m_renderer->getHeight());
+    if (m_cfg.latencyReadout) drawLatencyReadout(hud);
+    m_renderer->setHud(hud);
     m_renderer->render();
     ++m_rendered;
     m_renderedChange = m_session->changeCount();
@@ -113,11 +119,20 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         if (static_cast<int64_t>(frame) == m_cfg.resizeAtFrame)
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
+        const FrameTime frameStart = Clock::now();
+        FrameTime polledAt{};
         {
             std::vector<InputEvent> polled;
             m_window.poll(polled);
+            polled.insert(polled.end(), m_fed.begin(), m_fed.end());   // a program's device (feel_bench)
+            m_fed.clear();
+            polledAt = Clock::now();
             // A play window: the click on a free cursor only takes the cursor (it never fires).
             if (m_clickToCapture && m_clickCapture.filter(polled, m_window.cursorCaptured())) m_captureClicked = true;
+            const bool look = std::any_of(polled.begin(), polled.end(), [](const InputEvent& e) {
+                return e.type == InputEvent::Type::MouseDelta && (e.x != 0.0f || e.y != 0.0f);
+            });
+            if (look) m_lookPolls.push_back(polledAt);
             m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
         }
         if (m_window.consumeResized()) {
@@ -134,6 +149,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         last = now;
         if (!m_time.running()) {   // lockstep or paused: the window's input reaches no step
             m_events.clear();
+            m_lookPolls.clear();
+            m_lookConsumed.clear();
             m_releaseOnResume = true;
         }
         const float fixedDt = m_time.fixedDt();
@@ -142,6 +159,13 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
                 m_events.insert(m_events.begin(), InputEvent{InputEvent::Type::FocusLost});
             m_session->step(m_events, fixedDt);
             m_events.clear();
+            // The look this step applied (the window's and input.inject's) is shown in full by the
+            // first frame drawn from this step's pose onward: once the next step has run.
+            const FrameTime consumed = Clock::now();
+            const uint64_t shownAt = m_session->frame() + 1;
+            for (const FrameTime p : m_lookPolls) m_lookConsumed.push_back({{p, consumed}, shownAt});
+            m_lookPolls.clear();
+            for (const FrameTime p : m_session->lastStepInjectedLook()) m_lookConsumed.push_back({{p, consumed}, shownAt});
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
         }
         if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
@@ -158,12 +182,33 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         const bool due =
             m_time.running() || m_needRender || m_session->changeCount() != m_renderedChange || converging;
         if (ext.width != 0 && ext.height != 0 && due) {   // minimized: simulate, don't render
+            const uint64_t submittedBefore = m_renderer->framesSubmitted();
             renderFrame();
             // Whole frame time (input + simulation + render submit), so fps is the real
             // frame rate; GPU time comes from the deferred timestamp queries.
             m_stats.record(std::chrono::duration<double, std::milli>(tick.frameDt).count(), m_renderer->gpuFrameMs());
             m_time.setFps(static_cast<float>(m_stats.fps()));
+            if (m_time.running() && m_renderer->framesSubmitted() != submittedBefore) {
+                FrameStamps f;
+                f.frame = m_renderer->framesSubmitted();
+                f.start = frameStart;
+                f.poll = polledAt;
+                f.view = m_frameView;
+                f.submit = m_renderer->lastSubmitTime();
+                f.frameMs = m_lastFrameStart == FrameTime{} ? 0.0 : std::chrono::duration<double, std::milli>(frameStart - m_lastFrameStart).count();
+                f.steps = tick.steps;
+                f.discardedSteps = static_cast<int>(tick.discarded / m_time.fixedStep());
+                const uint64_t step = m_session->frame();
+                for (auto it = m_lookConsumed.begin(); it != m_lookConsumed.end();) {
+                    if (it->shownAtStep > step) { ++it; continue; }
+                    f.looks.push_back(it->sample);
+                    it = m_lookConsumed.erase(it);
+                }
+                m_frameLog.record(std::move(f));
+            }
         }
+        m_lastFrameStart = frameStart;
+        collectPresents();
         if (pump && pump->flush) pump->flush();   // replies after the frame they caused
         ++frame;
     }
@@ -187,9 +232,58 @@ uint64_t LiveHost::unrequestedReadbacks() const noexcept {
     return copies > m_readbackRequests ? copies - m_readbackRequests : 0;
 }
 
+void LiveHost::collectPresents() {
+    for (const PresentStamp& s : m_renderer->takePresentStamps()) (void)m_frameLog.present(s.frame, s.at, s.waited);
+}
+
+void LiveHost::drawLatencyReadout(render::HudList& hud) const {
+    const auto lat = m_frameLog.latency(240);
+    const auto pace = m_frameLog.pacing(240);
+    const auto num = [](double v) {
+        char b[24];
+        const auto r = std::to_chars(b, b + sizeof(b), std::min(v, 99999.0), std::chars_format::fixed, 1);
+        return std::string(b, r.ptr);
+    };
+    std::string text = "LAT " + (lat ? num(lat->medianMs) + " P95 " + num(lat->p95Ms) : std::string("/")) + "  FT " +
+                       (pace ? num(pace->medianMs) + " P99 " + num(pace->p99Ms) : std::string("/"));
+    const float px = std::max(1.0f, std::round(2.0f * static_cast<float>(m_renderer->getHeight()) / 720.0f));
+    const glm::vec2 at{std::round(12.0f * px / 2.0f), std::round(12.0f * px / 2.0f)};
+    render::hudRect(hud, {at.x - px * 2, at.y - px * 2, at.x + render::hudTextWidth(text, px) + px * 2,
+                          at.y + px * (render::kHudGlyphHeight + 2)},
+                    {0.0f, 0.0f, 0.0f, 0.55f});
+    render::hudText(hud, text, at, px, lat && !lat->presentWait ? glm::vec4(1.0f, 0.85f, 0.4f, 1.0f) : glm::vec4(1.0f));
+}
+
 std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
     if (!m_renderer) return std::nullopt;
-    return runtime::renderStats(*m_renderer, frames);
+    std::optional<api::RenderStats> st = runtime::renderStats(*m_renderer, frames);
+    if (!st || !m_time.running()) return st;   // latency and pacing are a realtime window's
+    collectPresents();
+    if (const auto l = m_frameLog.latency(frames)) {
+        api::RenderStats::Latency out;
+        out.frames = l->frames;
+        out.samples = l->samples;
+        out.medianMs = l->medianMs;
+        out.p95Ms = l->p95Ms;
+        out.presentWait = l->presentWait;
+        out.pollToConsumeMs = l->pollToConsumeMs;
+        out.pollToViewMs = l->pollToViewMs;
+        out.viewToSubmitMs = l->viewToSubmitMs;
+        out.submitToPresentMs = l->submitToPresentMs;
+        out.present = std::string(presentModeName(m_renderer->presentMode()));
+        st->latency = out;
+    }
+    if (const auto p = m_frameLog.pacing(frames)) {
+        api::RenderStats::Pacing out;
+        out.frames = p->frames;
+        out.medianMs = p->medianMs;
+        out.p95Ms = p->p95Ms;
+        out.p99Ms = p->p99Ms;
+        out.steps = p->steps;
+        out.discardedSteps = p->discardedSteps;
+        st->pacing = out;
+    }
+    return st;
 }
 
 std::optional<api::RenderSettings> LiveHost::renderSettings() {

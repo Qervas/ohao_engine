@@ -31,12 +31,14 @@
 #include "runtime/clock.hpp"
 #include "runtime/combat_sounds.hpp"
 #include "runtime/footsteps.hpp"
+#include "runtime/frame_log.hpp"
 #include "runtime/window.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -61,7 +63,9 @@ struct RequestPump {
 
 struct LiveConfig {
     WindowConfig window;
-    bool vsync{false};
+    // How the window presents (immediate, mailbox, fifo = vsync), falling back down that list
+    // when the surface lacks it (sub-project 9).
+    PresentMode present{PresentMode::Mailbox};
     ClockConfig clock;
     TimeMode timeMode{TimeMode::realtime};   // a game steps from wall time; a server waits
     std::string root{"."};                   // the project root asset paths are relative to
@@ -78,6 +82,10 @@ struct LiveConfig {
     // device (runtime/footsteps.hpp, runtime/combat_sounds.hpp). ohao_game turns it on; a server's
     // window stays silent.
     bool footsteps{false};
+    // Draws the measured latency and frame time top left (ohao_game --latency; sub-project 9).
+    bool latencyReadout{false};
+    // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
+    std::size_t frameLogCapacity{FrameLog::kCapacity};
 };
 
 struct RunReport {
@@ -124,6 +132,11 @@ public:
     void setClickToCapture(bool on) noexcept { m_clickToCapture = on; }
     // True once after such a click: the game captures the cursor.
     [[nodiscard]] bool takeCaptureClick() noexcept { return std::exchange(m_captureClicked, false); }
+    // Events a program supplies as a device would (feel_bench's scripted mouse and keys): they
+    // join the next poll's events, stamped with that poll, and are measured as the window's own.
+    void feedEvents(std::span<const InputEvent> events) { m_fed.insert(m_fed.end(), events.begin(), events.end()); }
+    // The window's frame timing (sub-project 9): realtime frames only.
+    [[nodiscard]] const FrameLog& frameLog() const noexcept { return m_frameLog; }
 
     // api::Host: render.capture, render.stats (the frames the window presented).
     [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
@@ -136,6 +149,10 @@ public:
 
 private:
     void renderFrame();   // world.sync, the world's view, render + present
+    // The present stamps the renderer resolved, into the frame log.
+    void collectPresents();
+    // ohao_game --latency: the measured numbers as HUD text, top left.
+    void drawLatencyReadout(render::HudList& hud) const;
     // Readback copies the renderer made beyond the host's own requests (a bug if not 0).
     [[nodiscard]] uint64_t unrequestedReadbacks() const noexcept;
 
@@ -153,6 +170,19 @@ private:
     Timeline m_time;
     FrameStats m_stats;
     std::vector<InputEvent> m_events;   // polled, not yet consumed by a step
+    std::vector<InputEvent> m_fed;      // feedEvents, for the next poll
+    // Frame timing (sub-project 9). A look movement is polled (m_lookPolls: the polls whose
+    // events held mouse motion, not yet stepped), consumed by a step, then shown in full by the
+    // first frame whose interpolation starts at that step (once the step after it has run).
+    struct LookInFlight {
+        LookSample sample;
+        uint64_t shownAtStep{0};   // the session's frame at which the frame shows it in full
+    };
+    FrameLog m_frameLog;
+    std::vector<FrameTime> m_lookPolls;
+    std::vector<LookInFlight> m_lookConsumed;
+    FrameTime m_lastFrameStart{};
+    FrameTime m_frameView{};   // this frame's view resolve (renderFrame)
     bool m_releaseOnResume{false};      // stepping stopped: the next step starts with a focus loss
     bool m_needRender{true};            // a resize, a capture, the first frame
     uint64_t m_renderedChange{~0ull};   // the session's changeCount at the last render

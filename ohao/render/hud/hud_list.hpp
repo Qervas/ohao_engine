@@ -35,7 +35,7 @@ struct HudList {
 // The most items a frame draws; the rest are dropped.
 constexpr std::size_t kHudMaxItems = 2048;
 
-// The font: digits, A-Z and '/', 5 columns by 7 rows. Glyph g's row r is hudFontRows()[g * 7 + r],
+// The font: digits, A-Z, '/' and '.', 5 columns by 7 rows. Glyph g's row r is hudFontRows()[g * 7 + r],
 // bit 4 its leftmost column.
 constexpr int kHudGlyphWidth = 5;
 constexpr int kHudGlyphHeight = 7;

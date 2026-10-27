@@ -93,7 +93,11 @@ void stepOnce(Session::Impl& s, std::span<const InputEvent> deviceEvents, float 
     // The queue is in apply order; events stamped for earlier steps cannot remain (the
     // queue is dropped whenever the frame is reset), so the due ones are at its front.
     std::size_t due = 0;
-    while (due < s.injected.size() && s.injected[due].step <= step) events.push_back(s.injected[due++].event);
+    s.lastStepInjectedLook.clear();
+    while (due < s.injected.size() && s.injected[due].step <= step) {
+        if (s.injected[due].event.type == InputEvent::Type::MouseDelta) s.lastStepInjectedLook.push_back(s.injected[due].queuedAt);
+        events.push_back(s.injected[due++].event);
+    }
     if (due) s.injected.erase(s.injected.begin(), s.injected.begin() + static_cast<std::ptrdiff_t>(due));
     if (s.recording) {
         if (dt != s.recording->fixedDt) {   // a step of another length: the replay must know
@@ -176,7 +180,7 @@ bool methodInputInject(Session::Impl& s, const JsonDocument& doc, const JsonNode
         } else {
             e.type = InputEvent::Type::FocusLost;
         }
-        if (ok) add.push_back({next + static_cast<uint64_t>(ev.step), std::move(e)});
+        if (ok) add.push_back({next + static_cast<uint64_t>(ev.step), std::move(e), std::chrono::steady_clock::now()});
         ctx.pop();
     }
     ctx.pop();

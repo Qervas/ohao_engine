@@ -15,6 +15,7 @@
 #include "runtime/combat_sounds.hpp"
 #include "runtime/footsteps.hpp"
 #include "runtime/frame_capture.hpp"
+#include "runtime/frame_log.hpp"
 #include "runtime/image.hpp"
 #include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
@@ -343,14 +344,120 @@ static void sp4_t13_a_rebind_counts_at_the_next_step_without_an_event() {
     CHECK(m.held("fire") && m.pressed("fire"), "bound to a key already down: pressed at the next step");
 }
 
-static void choose_present_mode() {
-    VkPresentModeKHR all[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
-                              VK_PRESENT_MODE_IMMEDIATE_KHR};
-    CHECK(ohao::Swapchain::choosePresentMode(all, false) == VK_PRESENT_MODE_MAILBOX_KHR, "mailbox when free");
-    CHECK(ohao::Swapchain::choosePresentMode(all, true) == VK_PRESENT_MODE_FIFO_KHR, "vsync forces fifo");
-    VkPresentModeKHR fifo[] = {VK_PRESENT_MODE_FIFO_KHR};
-    CHECK(ohao::Swapchain::choosePresentMode(fifo, false) == VK_PRESENT_MODE_FIFO_KHR,
-          "fifo is the guaranteed fallback");
+// Sub-project 9, test 20: the present mode asked for, else the next one down (immediate, then
+// mailbox, then fifo, which every surface offers).
+static void sp9_t20_present_mode_choice() {
+    using M = ohao::PresentMode;
+    const auto pick = [](std::span<const VkPresentModeKHR> offered, M want) {
+        return ohao::Swapchain::choosePresentMode(offered, want);
+    };
+    const VkPresentModeKHR all[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR};
+    const VkPresentModeKHR noImmediate[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
+    const VkPresentModeKHR fifoOnly[] = {VK_PRESENT_MODE_FIFO_KHR};
+    CHECK(pick(all, M::Immediate) == VK_PRESENT_MODE_IMMEDIATE_KHR, "immediate when offered");
+    CHECK(pick(all, M::Mailbox) == VK_PRESENT_MODE_MAILBOX_KHR, "mailbox when asked and offered");
+    CHECK(pick(all, M::Fifo) == VK_PRESENT_MODE_FIFO_KHR, "fifo when asked, whatever else is offered");
+    CHECK(pick(noImmediate, M::Immediate) == VK_PRESENT_MODE_MAILBOX_KHR, "immediate falls back to mailbox");
+    CHECK(pick(fifoOnly, M::Immediate) == VK_PRESENT_MODE_FIFO_KHR, "then to fifo");
+    CHECK(pick(fifoOnly, M::Mailbox) == VK_PRESENT_MODE_FIFO_KHR, "mailbox falls back to fifo");
+    const VkPresentModeKHR immediateOnly[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR};
+    CHECK(pick(immediateOnly, M::Mailbox) == VK_PRESENT_MODE_FIFO_KHR, "mailbox never tears: fifo, not immediate");
+    CHECK(ohao::presentModeFromName("immediate") == M::Immediate && ohao::presentModeFromName("mailbox") == M::Mailbox &&
+              ohao::presentModeFromName("fifo") == M::Fifo && !ohao::presentModeFromName("vsync"),
+          "the names --present takes");
+    CHECK(ohao::presentModeName(M::Immediate) == "immediate", "and back");
+}
+
+// ---- sub-project 9, step 1: frame timing (runtime/frame_log.hpp) -----------------------------
+
+using FrameTime = std::chrono::steady_clock::time_point;
+
+static FrameStamps stampedFrame(uint64_t frame, FrameTime start, double frameMs) {
+    FrameStamps f;
+    f.frame = frame;
+    f.start = start;
+    f.poll = start + 100us;
+    f.view = start + 300us;
+    f.submit = start + 1500us;
+    f.frameMs = frameMs;
+    return f;
+}
+
+// Test 19: a mouse movement's latency is poll to present of the first frame showing it in full;
+// frames without look carry no sample, and a frame whose present is not known yet counts once it is.
+static void sp9_t19_latency_stages_ordered() {
+    CHECK(percentile({}, 0.5) == 0.0, "no values: 0");
+    CHECK(percentile({3.0}, 0.95) == 3.0, "one value: itself");
+    CHECK(std::abs(percentile({1.0, 2.0, 3.0, 4.0}, 0.5) - 2.5) < 1e-12, "the median of an even count: the mean of the middle two");
+
+    FrameLog log;
+    CHECK(!log.latency(60) && !log.pacing(60), "nothing recorded: no stats");
+    const FrameTime t0{};
+    // Ten frames with look: frame i shows a movement polled (5 + i) ms before its present, consumed
+    // by a step 2 ms after the poll. Ten frames without look between them.
+    for (int i = 0; i < 10; ++i) {
+        FrameStamps look = stampedFrame(100 + 2 * i, t0 + std::chrono::milliseconds(20 * i), 6.9);
+        const FrameTime present = look.submit + 3ms;
+        look.looks.push_back({present - std::chrono::microseconds(5000 + 1000 * i),
+                              present - std::chrono::microseconds(3000 + 1000 * i)});
+        log.record(look);
+        CHECK(log.present(look.frame, present, true), "the present of a recorded frame is kept");
+        log.record(stampedFrame(101 + 2 * i, t0 + std::chrono::milliseconds(20 * i + 10), 6.9));
+    }
+    // A frame with look whose present never arrived: no sample.
+    FrameStamps unpresented = stampedFrame(200, t0 + 300ms, 6.9);
+    unpresented.looks.push_back({unpresented.poll, unpresented.poll + 1ms});
+    log.record(unpresented);
+    CHECK(!log.present(999, t0, true), "a frame never recorded: nothing to stamp");
+
+    const auto lat = log.latency(1024);
+    CHECK(lat && lat->samples == 10 && lat->frames == 10, "ten samples from ten presented frames with look");
+    CHECK(lat && std::abs(lat->medianMs - 9.5) < 1e-6, "median of 5..14 ms: 9.5");
+    CHECK(lat && std::abs(lat->p95Ms - 13.55) < 1e-6, "p95 by linear interpolation between ranks: 13.55");
+    CHECK(lat && lat->presentWait, "every sample's present came from present wait");
+    CHECK(lat && std::abs(lat->pollToConsumeMs - 2.0) < 1e-6, "poll to the consuming step: 2 ms");
+    CHECK(lat && std::abs(lat->viewToSubmitMs - 1.2) < 1e-6 && std::abs(lat->submitToPresentMs - 3.0) < 1e-6,
+          "view to submit 1.2 ms, submit to present 3 ms");
+    CHECK(lat && std::abs(lat->pollToViewMs - (9.5 - 4.2)) < 1e-6, "poll to view: the latency less view to present");
+
+    // The newest frames only: the last 5 records hold 2 presented frames with look (14 and 13 ms).
+    const auto newest = log.latency(5);
+    CHECK(newest && newest->samples == 2 && std::abs(newest->medianMs - 13.5) < 1e-6, "frames counts the newest records");
+
+    // A present known only from the present call (no present wait) makes the whole set unconfirmed.
+    FrameStamps late = stampedFrame(300, t0 + 400ms, 6.9);
+    late.looks.push_back({late.poll, late.poll + 1ms});
+    log.record(late);
+    CHECK(log.present(300, late.submit + 1ms, false), "a present-call stamp");
+    const auto mixed = log.latency(1024);
+    CHECK(mixed && mixed->samples == 11 && !mixed->presentWait, "one sample without present wait: presentWait false");
+
+    // The ring keeps the newest kCapacity frames.
+    for (uint64_t i = 0; i < FrameLog::kCapacity + 10; ++i) log.record(stampedFrame(1000 + i, t0 + 1s, 6.9));
+    CHECK(log.size() == FrameLog::kCapacity && !log.latency(1024), "older frames fall out of the ring");
+}
+
+// Test 20: frame pacing over the newest frames: the frame time's percentiles, steps per frame, and
+// the steps the clock's cap discarded.
+static void sp9_t20_pacing_stats() {
+    FrameLog log;
+    const FrameTime t0{};
+    for (int i = 0; i < 1010; ++i) {
+        FrameStamps f = stampedFrame(static_cast<uint64_t>(i + 1), t0 + std::chrono::milliseconds(7 * i),
+                                     i < 980 ? 6.9 : 20.0);
+        f.steps = i < 980 ? (i % 2) : 2 + (i % 3 == 0 ? 1 : 0);
+        f.discardedSteps = i == 1009 ? 3 : 0;
+        log.record(f);
+    }
+    const auto p = log.pacing(1024);
+    CHECK(p && p->frames == 1010, "every recorded frame up to the ring");
+    CHECK(p && std::abs(p->medianMs - 6.9) < 1e-9 && std::abs(p->p95Ms - 6.9) < 1e-9, "median and p95 6.9 ms");
+    CHECK(p && std::abs(p->p99Ms - 20.0) < 1e-9, "p99 20 ms: the 30 slow frames are the top 3 %");
+    CHECK(p && p->steps[0] == 490 && p->steps[1] == 490 && p->steps[2] == 20 && p->steps[3] == 10,
+          "frames that ran 0, 1, 2 and 3+ steps");
+    CHECK(p && p->discardedSteps == 3, "steps the cap discarded");
+    const auto last = log.pacing(30);
+    CHECK(last && last->frames == 30 && last->medianMs == 20.0, "the newest 30 frames only");
 }
 
 static void choose_image_count_unlimited_max() {
@@ -704,10 +811,13 @@ int main() {
     RUN(sp4_t13_a_rebind_counts_at_the_next_step_without_an_event);
     std::printf("[swapchain choice]\n");
     RUN(choose_format_prefers_unorm_bgra);
-    RUN(choose_present_mode);
+    RUN(sp9_t20_present_mode_choice);
     RUN(choose_image_count_unlimited_max);
     RUN(choose_extent_uses_desired_when_surface_defers);
     RUN(zero_extent_means_minimized);
+    std::printf("[frame timing]\n");
+    RUN(sp9_t19_latency_stages_ordered);
+    RUN(sp9_t20_pacing_stats);
     std::printf("\n");
     return ohao::test::finish("runtime_tests");
 }

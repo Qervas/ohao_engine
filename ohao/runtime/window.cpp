@@ -83,7 +83,14 @@ void Window::setSize(uint32_t w, uint32_t h) {
     glfwSetWindowSize(m_window, static_cast<int>(w), static_cast<int>(h));
 }
 
-ohao::PresentTarget Window::presentTarget(bool vsync) const {
+int Window::refreshRate() const {
+    GLFWmonitor* m = m_window ? glfwGetWindowMonitor(m_window) : nullptr;
+    if (!m) m = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = m ? glfwGetVideoMode(m) : nullptr;
+    return mode ? mode->refreshRate : 0;
+}
+
+ohao::PresentTarget Window::presentTarget(ohao::PresentMode mode) const {
     ohao::PresentTarget t;
     uint32_t n = 0;
     const char** ext = glfwGetRequiredInstanceExtensions(&n);
@@ -95,7 +102,7 @@ ohao::PresentTarget Window::presentTarget(bool vsync) const {
         return s;
     };
     t.extent = framebufferExtent();
-    t.vsync = vsync;
+    t.mode = mode;
     return t;
 }
 

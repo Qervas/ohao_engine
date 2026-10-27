@@ -497,6 +497,39 @@ def test_walk():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+def test_render_stats_latency():
+    print("sp9 tests 19, 20: latency and pacing in render.stats (a realtime window)")
+    scene = "assets/scenes/blockout_play.scene.json"
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--realtime", "--out", out_dir("latency"),
+                "--seed", SEED, scene], "latency", env=validation_env())
+    # Mouse movements injected one at a time while the window runs: each is applied by the next
+    # step and measured from its injection to the present of the first frame showing it in full.
+    for i in range(60):
+        s.call("input.inject", {"events": [{"mouse": [4 if i % 2 else -4, 0]}]})
+        time.sleep(0.02)
+    time.sleep(0.1)   # the last movements reach a frame (two steps)
+    stats = result(s.call("render.stats", {"frames": 120})) or {}
+    lat, pac = stats.get("latency") or {}, stats.get("pacing") or {}
+    stages = lat.get("stages") or {}
+    check(lat.get("frames", 0) > 0 and lat.get("source") in ("present_wait", "present_call") and
+          0 < lat.get("medianMs", 0) <= lat.get("p95Ms", 0) < 1000,
+          "a realtime window reports latency after injected look: %s frames, median %s ms, p95 %s ms (%s)" %
+          (lat.get("frames"), lat.get("medianMs"), lat.get("p95Ms"), lat.get("source")))
+    check(len(stages) == 4 and all(v >= 0 for v in stages.values()),
+          "its stages, poll to consume, view, submit and present, none negative: %s" % stages)
+    steps = pac.get("steps") or {}
+    frame_ms = pac.get("frameMs") or {}
+    check(0 < frame_ms.get("median", 0) <= frame_ms.get("p95", 0) <= frame_ms.get("p99", 0) and
+          sorted(steps.keys()) == ["0", "1", "2", "3+"] and sum(steps.values()) > 0,
+          "and pacing: frame time %s, steps per frame %s" % (frame_ms, steps))
+    s.call("time.set", {"mode": "lockstep"})
+    idle = result(s.call("render.stats", {"frames": 120})) or {}
+    check(idle.get("frames", 0) > 0 and "latency" not in idle and "pacing" not in idle,
+          "a lockstep window reports neither (its GPU timings still)")
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+
 PLAYER, ENEMY_A, ENEMY_B = "5c0b1a7e00000001", "5c0b1a7e00000010", "5c0b1a7e00000020"
 
 
@@ -643,6 +676,7 @@ def main():
     test_game_scene()
     test_walk()
     test_fight()
+    test_render_stats_latency()
     if os.name == "nt":
         test_window_pipe()
     print("Results: %d/%d passed" % (passed, passed + failed))

@@ -4,7 +4,9 @@
 #include <array>
 #include "gpu/vulkan/swapchain.hpp"
 #include "gpu/vulkan/present_target.hpp"
+#include "gpu/vulkan/present_waiter.hpp"
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <vulkan/vulkan.h>
 #include <algorithm>
@@ -104,6 +106,16 @@ public:
     // blit into the acquired swapchain image; nothing is read back to the CPU.
     [[nodiscard]] bool initialize(const PresentTarget& target);
     [[nodiscard]] bool isPresenting() const noexcept { return m_swapchain != nullptr; }
+    // Sub-project 9: the present mode the surface gave, whether presents are confirmed by the
+    // presentation engine (VK_KHR_present_wait), and when each presented frame was presented
+    // (gpu/vulkan/present_waiter.hpp), resolved since the last call, oldest first.
+    [[nodiscard]] PresentMode presentMode() const noexcept {
+        return m_swapchain ? m_swapchain->presentMode() : PresentMode::Fifo;
+    }
+    [[nodiscard]] bool presentWaitEnabled() const noexcept { return m_presentWaitEnabled; }
+    [[nodiscard]] std::vector<PresentStamp> takePresentStamps() { return m_presentWaiter.take(); }
+    // When the newest frame's command buffers were submitted (framesSubmitted()'s frame).
+    [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { return m_lastSubmitAt; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
     void setPresentExtent(VkExtent2D extent);
     // The HUD the next deferred frames draw over their final image, before present and readback
@@ -482,6 +494,14 @@ private:
     std::optional<PresentTarget> m_presentTarget;
     VkSurfaceKHR m_surface{VK_NULL_HANDLE};
     std::unique_ptr<Swapchain> m_swapchain;
+    // VK_KHR_present_id + VK_KHR_present_wait were enabled (a window on a device with both).
+    bool m_presentWaitEnabled{false};
+    std::chrono::steady_clock::time_point m_lastSubmitAt{};
+    PFN_vkWaitForPresentKHR m_waitForPresent{nullptr};
+    PresentWaiter m_presentWaiter;   // stopped before the swapchain goes
+    // Presents the window's swapchain image, tagging it with the frame's number when presents
+    // are waited on, and hands the frame to the waiter. Returns the present's result.
+    VkResult presentFrame(uint32_t imageIndex);
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAcquired{};
     bool m_swapchainDirty{false};
     // Readback on request (requestReadback / readback).

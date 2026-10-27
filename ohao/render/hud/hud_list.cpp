@@ -6,8 +6,9 @@ namespace ohao::render {
 
 namespace {
 
-// 0-9, A-Z, '/': seven rows of five columns each, bit 4 the leftmost.
-constexpr std::array<uint32_t, 37 * kHudGlyphHeight> kFont = {
+// 0-9, A-Z, '/', '.': seven rows of five columns each, bit 4 the leftmost.
+constexpr int kGlyphs = 38;
+constexpr std::array<uint32_t, kGlyphs * kHudGlyphHeight> kFont = {
     0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E,   // 0
     0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E,   // 1
     0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F,   // 2
@@ -45,6 +46,7 @@ constexpr std::array<uint32_t, 37 * kHudGlyphHeight> kFont = {
     0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04,   // Y
     0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F,   // Z
     0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10,   // /
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C,   // .
 };
 
 } // namespace
@@ -54,13 +56,14 @@ int hudGlyph(char c) noexcept {
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     if (c >= 'A' && c <= 'Z') return 10 + (c - 'A');
     if (c == '/') return 36;
+    if (c == '.') return 37;
     return -1;
 }
 
 std::span<const uint32_t> hudFontRows() noexcept { return kFont; }
 
 uint32_t hudGlyphRow(int glyph, int row) noexcept {
-    if (glyph < 0 || glyph >= 37 || row < 0 || row >= kHudGlyphHeight) return 0;
+    if (glyph < 0 || glyph >= kGlyphs || row < 0 || row >= kHudGlyphHeight) return 0;
     return kFont[static_cast<std::size_t>(glyph * kHudGlyphHeight + row)];
 }
 

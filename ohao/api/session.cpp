@@ -97,9 +97,10 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "geometry path, occlusion culling, the CSM fallback, exposure. Members of set left out keep their value. "
          "Host state, never saved in scene files; captures take them as defaults. The defaults are the budgeted "
          "frame. E_STATE on a host that renders nothing (the CLI)."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?}",
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, latency?, pacing?}",
          "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
-         "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). E_STATE "
+         "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). A "
+         "realtime window adds latency (look input to present) and pacing (frame time, steps). E_STATE "
          "before the host has rendered a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
          "Engine log records after since (pass the last read's next), filtered by level and channel."},
@@ -835,6 +836,42 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
     }
     if (st->shadowLightsDropped) { out.key("shadowLightsDropped"); out.uint64(*st->shadowLightsDropped); }
     if (st->lightsOverflow) { out.key("lightsOverflow"); out.uint64(*st->lightsOverflow); }
+    if (const auto& l = st->latency) {
+        out.key("latency");
+        out.beginObject();
+        out.key("frames"); out.int64(l->frames);
+        out.key("samples"); out.int64(l->samples);
+        out.key("medianMs"); out.float32(ms(l->medianMs));
+        out.key("p95Ms"); out.float32(ms(l->p95Ms));
+        out.key("source"); out.string(l->presentWait ? "present_wait" : "present_call");
+        out.key("present"); out.string(l->present);
+        out.key("stages");
+        out.beginObject();
+        out.key("pollToConsumeMs"); out.float32(ms(l->pollToConsumeMs));
+        out.key("pollToViewMs"); out.float32(ms(l->pollToViewMs));
+        out.key("viewToSubmitMs"); out.float32(ms(l->viewToSubmitMs));
+        out.key("submitToPresentMs"); out.float32(ms(l->submitToPresentMs));
+        out.endObject();
+        out.endObject();
+    }
+    if (const auto& pc = st->pacing) {
+        out.key("pacing");
+        out.beginObject();
+        out.key("frames"); out.int64(pc->frames);
+        out.key("frameMs");
+        out.beginObject();
+        out.key("median"); out.float32(ms(pc->medianMs));
+        out.key("p95"); out.float32(ms(pc->p95Ms));
+        out.key("p99"); out.float32(ms(pc->p99Ms));
+        out.endObject();
+        out.key("steps");
+        out.beginObject();
+        static constexpr const char* kSteps[] = {"0", "1", "2", "3+"};
+        for (std::size_t i = 0; i < 4; ++i) { out.key(kSteps[i]); out.uint64(pc->steps[i]); }
+        out.endObject();
+        out.key("discardedSteps"); out.uint64(pc->discardedSteps);
+        out.endObject();
+    }
     out.endObject();
     return true;
 }
@@ -1128,6 +1165,9 @@ void Session::setTimeline(Timeline& timeline) noexcept { m->time = &timeline; }
 void Session::step(std::span<const InputEvent> deviceEvents, float dt) {
     ++m->changes;
     stepOnce(*m, deviceEvents, dt);
+}
+std::span<const std::chrono::steady_clock::time_point> Session::lastStepInjectedLook() const noexcept {
+    return m->lastStepInjectedLook;
 }
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }

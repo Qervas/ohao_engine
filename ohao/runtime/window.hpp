@@ -44,7 +44,10 @@ public:
     [[nodiscard]] bool cursorCaptured() const noexcept { return m_cursorCaptured; }
     [[nodiscard]] bool focused() const;
     void setSize(uint32_t w, uint32_t h);
-    [[nodiscard]] ohao::PresentTarget presentTarget(bool vsync) const;
+    [[nodiscard]] ohao::PresentTarget presentTarget(ohao::PresentMode mode) const;
+    // The refresh rate of the display the window is on (the primary display while windowed), Hz;
+    // 0 when unknown.
+    [[nodiscard]] int refreshRate() const;
 
 private:
     static void onKey(GLFWwindow*, int key, int scancode, int action, int mods);

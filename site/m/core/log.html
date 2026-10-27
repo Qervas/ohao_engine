@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="one-path-for-every-engine-message">One path for every engine message</h2></div>
 <div class="prose reveal">
 <p>Every message the engine writes goes through one macro, with a level, a channel and a `std::format` string checked at compile time. The renderer, the GPU layer, physics, asset loading, audio, the ECS and the runtime all use it; nothing under `ohao/` writes to `std::cout`, `std::cerr` or `printf` any more, and a test keeps it that way:</p>
-<div class="citation-chip"><code class="citation-code">static void sp4_t02_engine_prints_only_through_the_logger() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L1082" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:1082</a></div>
+<div class="citation-chip"><code class="citation-code">static void sp4_t02_engine_prints_only_through_the_logger() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reflect/reflect_tests.cpp#L1084" target="_blank" rel="noopener">tests/reflect/reflect_tests.cpp:1084</a></div>
 <p>The reason is the agent server that follows it: `ohao serve` owns stdout for its protocol, and a message an agent cannot query is a message it never sees. So the logger keeps the last records in memory, where `log.read` can page them, and sends them on to whatever sinks are attached.</p>
 </div>
 <div class="section-rule"><h2 id="below-the-threshold-one-load-and-a-compare">Below the threshold, one load and a compare</h2></div>
@@ -61,7 +61,7 @@
 <p>Reading is by sequence number: `read(since, minLevel, channel, limit)` returns what came after `since`, and a reader that fell behind is told how many records it missed:</p>
 <div class="citation-chip"><code class="citation-code">page.dropped = oldest - seq;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L191" target="_blank" rel="noopener">ohao/core/log.cpp:191</a></div>
 <p>The frame is stamped by the renderer as each deferred or RT frame starts, so a validation message carries the frame it happened in:</p>
-<div class="citation-chip"><code class="citation-code">uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L422" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:422</a></div>
+<div class="citation-chip"><code class="citation-code">uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L434" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:434</a></div>
 </div>
 <div class="section-rule"><h2 id="sinks">Sinks</h2></div>
 <div class="prose reveal">

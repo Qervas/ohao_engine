@@ -3,8 +3,13 @@
 // data: the scene's InputActions bind the keys, its FlyController flies the camera, its
 // Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
-//   ohao_game [scene] [--vsync] [--frames N] [--resize-at F] [--mode deferred|rt_realtime|rt_offline] [--mute]
+//   ohao_game [scene] [--present immediate|mailbox|fifo] [--vsync] [--latency] [--frames N] [--resize-at F]
+//             [--mode deferred|rt_realtime|rt_offline] [--mute]
 //
+//   --present: how the window presents (default mailbox; immediate tears for the least latency,
+//   fifo waits for the display; a surface without the mode falls back down that list); --vsync
+//   is --present fifo. --latency draws the measured latency and frame time top left (the same
+//   numbers render.stats reports; sub-project 9).
 //   default scene: assets/scenes/helmet_game.scene.json; --mode: what the window presents
 //   (the path tracer needs ray tracing; rt_offline accumulates while the view stands still)
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
@@ -56,7 +61,7 @@ bool argFlag(int argc, char** argv, const char* name) {
 std::string sceneArg(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--frames" || a == "--resize-at" || a == "--mode") { ++i; continue; }
+        if (a == "--frames" || a == "--resize-at" || a == "--mode" || a == "--present") { ++i; continue; }
         if (a.rfind("--", 0) == 0) continue;
         return a;
     }
@@ -75,7 +80,17 @@ const reflect::TypeRegistry& engineTypes() {
 int main(int argc, char** argv) {
     LiveConfig cfg;
     cfg.window.title = "OHAO";
-    cfg.vsync = argFlag(argc, argv, "--vsync");
+    if (argFlag(argc, argv, "--vsync")) cfg.present = PresentMode::Fifo;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--present") != 0) continue;
+        const auto m = i + 1 < argc ? presentModeFromName(argv[i + 1]) : std::nullopt;
+        if (!m) {
+            std::cerr << "[ohao_game] --present is one of: immediate, mailbox, fifo" << std::endl;
+            return 1;
+        }
+        cfg.present = *m;
+    }
+    cfg.latencyReadout = argFlag(argc, argv, "--latency");
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;

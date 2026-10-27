@@ -29,7 +29,7 @@ to a swapchain instead of reading pixels back. `LiveHost` also owns the
 `ecs::World` and an `api::Session` on it, and installs the extract and instantiate
 itself:
 
-{{cite ohao/runtime/live_host.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.vsync))) {"}}
+{{cite ohao/runtime/live_host.cpp "if (!m_renderer->initialize(m_window.presentTarget(cfg.present))) {"}}
 
 Scene construction takes one of two forms. `cornell_box` and `model_viewer` build
 the entities a scene file holds — a `MeshSource` naming a primitive or a model path,

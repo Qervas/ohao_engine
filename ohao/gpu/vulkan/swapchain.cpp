@@ -1,5 +1,6 @@
 #include "gpu/vulkan/swapchain.hpp"
 #include <algorithm>
+#include <utility>
 #include "core/log.hpp"
 
 namespace ohao {
@@ -15,10 +16,10 @@ VkSurfaceFormatKHR Swapchain::chooseFormat(std::span<const VkSurfaceFormatKHR> f
                : formats.front();
 }
 
-VkPresentModeKHR Swapchain::choosePresentMode(std::span<const VkPresentModeKHR> modes, bool vsync) {
-    if (!vsync)
-        for (auto m : modes)
-            if (m == VK_PRESENT_MODE_MAILBOX_KHR) return m;
+VkPresentModeKHR Swapchain::choosePresentMode(std::span<const VkPresentModeKHR> modes, PresentMode want) {
+    const auto offered = [&](VkPresentModeKHR m) { return std::find(modes.begin(), modes.end(), m) != modes.end(); };
+    if (want == PresentMode::Immediate && offered(VK_PRESENT_MODE_IMMEDIATE_KHR)) return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (want != PresentMode::Fifo && offered(VK_PRESENT_MODE_MAILBOX_KHR)) return VK_PRESENT_MODE_MAILBOX_KHR;
     return VK_PRESENT_MODE_FIFO_KHR;   // the only mode the spec guarantees
 }
 
@@ -35,11 +36,11 @@ VkExtent2D Swapchain::chooseExtent(const VkSurfaceCapabilitiesKHR& caps, VkExten
 }
 
 bool Swapchain::create(VkPhysicalDevice physical, VkDevice device, VkSurfaceKHR surface,
-                       VkExtent2D desired, bool vsync) {
+                       VkExtent2D desired, PresentMode mode) {
     m_physical = physical;
     m_device = device;
     m_surface = surface;
-    m_vsync = vsync;
+    m_want = mode;
     return build(desired, VK_NULL_HANDLE);
 }
 
@@ -81,15 +82,26 @@ bool Swapchain::build(VkExtent2D desired, VkSwapchainKHR old) {
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.preTransform     = caps.currentTransform;
     ci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    ci.presentMode      = choosePresentMode(modes, m_vsync);
+    ci.presentMode      = choosePresentMode(modes, m_want);
     ci.clipped          = VK_TRUE;
     ci.oldSwapchain     = old;
+    m_chosen = ci.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? PresentMode::Immediate
+               : ci.presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? PresentMode::Mailbox
+                                                               : PresentMode::Fifo;
+    if (!std::exchange(m_loggedMode, true)) {
+        if (m_chosen != m_want)
+            OHAO_LOG(Info, gpu, "present: {} asked for, the surface offers {}", presentModeName(m_want),
+                     presentModeName(m_chosen));
+        else
+            OHAO_LOG(Info, gpu, "present: {}", presentModeName(m_chosen));
+    }
 
     VkSwapchainKHR sc = VK_NULL_HANDLE;
     const VkResult r = vkCreateSwapchainKHR(m_device, &ci, nullptr, &sc);
     retire();
     if (r != VK_SUCCESS) return false;
     m_swapchain = sc;
+    ++m_generation;
     m_format = fmt.format;
     m_extent = extent;
 
@@ -108,6 +120,7 @@ bool Swapchain::build(VkExtent2D desired, VkSwapchainKHR old) {
 
 bool Swapchain::recreate(VkExtent2D desired) {
     vkDeviceWaitIdle(m_device);
+    std::lock_guard lock(m_hostMutex);
     VkSwapchainKHR old = m_swapchain;
     m_swapchain = VK_NULL_HANDLE;
     m_images.clear();
@@ -127,14 +140,20 @@ Swapchain::Acquire Swapchain::acquire(VkSemaphore imageAcquired, uint32_t& image
     return Acquire::Error;
 }
 
-VkResult Swapchain::present(VkQueue queue, uint32_t imageIndex) {
+VkResult Swapchain::present(VkQueue queue, uint32_t imageIndex, uint64_t presentId) {
+    VkPresentIdKHR id{};
+    id.sType          = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+    id.swapchainCount = 1;
+    id.pPresentIds    = &presentId;
     VkPresentInfoKHR pi{};
     pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    pi.pNext              = presentId > 0 ? &id : nullptr;
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores    = &m_renderFinished[imageIndex];
     pi.swapchainCount     = 1;
     pi.pSwapchains        = &m_swapchain;
     pi.pImageIndices      = &imageIndex;
+    std::lock_guard lock(m_hostMutex);
     return vkQueuePresentKHR(queue, &pi);
 }
 
@@ -146,6 +165,7 @@ void Swapchain::destroySemaphores() {
 
 void Swapchain::destroy() {
     if (m_device == VK_NULL_HANDLE) return;
+    std::lock_guard lock(m_hostMutex);
     destroySemaphores();
     if (m_swapchain != VK_NULL_HANDLE) vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
     m_swapchain = VK_NULL_HANDLE;

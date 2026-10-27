@@ -19,7 +19,8 @@
 //                 exit 1 when an error-level check fails (tools/ohao/doctor.hpp)
 //   ohao serve    [scene] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
 //                 [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
-//                                [--mode deferred|rt_realtime|rt_offline] [--spp N]]
+//                                [--mode deferred|rt_realtime|rt_offline] [--spp N]
+//                                [--present immediate|mailbox|fifo]]
 //                 the engine as a JSON-RPC 2.0 / MCP server on stdio: native methods and MCP tools
 //                 over newline-delimited JSON until stdin closes (ohao/rpc). --pipe NAME serves
 //                 \\.\pipe\ohao-NAME instead: one local client of the current user, until it
@@ -697,7 +698,8 @@ int serveWindow(const Args& a, const std::vector<std::string>& allowPaths, const
     cfg.window.height = win.height;
     cfg.window.title = "OHAO serve";
     cfg.window.visible = !has(a, "--hidden");
-    cfg.vsync = has(a, "--vsync");
+    if (has(a, "--vsync")) cfg.present = PresentMode::Fifo;
+    if (has(a, "--present")) cfg.present = *presentModeFromName(opt(a, "--present"));   // checked by cmdServe
     cfg.timeMode = has(a, "--realtime") ? TimeMode::realtime : TimeMode::lockstep;
     cfg.root = opt(a, "--root", ".");
     const std::string mode = opt(a, "--mode", "deferred");
@@ -746,9 +748,11 @@ int cmdServe(const Args& a, const std::vector<std::string>& allowPaths, const Wi
     if (!intOpt(a, "--max-message", 1024, 1ll << 30, maxMessage, err)) return usage(err);
     if (has(a, "--seed") && a.positional.empty()) return usage("--seed needs a scene");
     if (has(a, "--lockstep") && has(a, "--realtime")) return usage("--lockstep and --realtime exclude each other");
-    for (const char* o : {"--realtime", "--vsync", "--hidden", "--mode", "--spp"})
+    for (const char* o : {"--realtime", "--vsync", "--hidden", "--mode", "--spp", "--present"})
         if (has(a, o) && !win.on)
             return usage(std::string(o) + " needs --window (a headless host is lockstep; its captures name their mode)");
+    if (has(a, "--present") && !presentModeFromName(opt(a, "--present")))
+        return usage("--present is one of: immediate, mailbox, fifo");
     if (has(a, "--mode")) {
         const std::string m = opt(a, "--mode");
         if (m != "deferred" && m != "rt_realtime" && m != "rt_offline")
@@ -835,7 +839,8 @@ int run(int argc, char** argv) {
         }
         const Args a = parseArgs(static_cast<int>(rest.size()), rest.data(), 2,
                                  {"--lockstep", "--realtime", "--vsync", "--hidden"},
-                                 {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp"});
+                                 {"--root", "--out", "--seed", "--log-level", "--max-message", "--pipe", "--mode", "--spp",
+                                  "--present"});
         return a.error.empty() ? cmdServe(a, allow, win) : usage(a.error);
     }
     if (cmd == "schema") {

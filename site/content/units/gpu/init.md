@@ -23,9 +23,11 @@ list is empty unless `OHAO_VALIDATION` is set in the environment (which adds
 merged in first, de-duplicated by name. The surface is created immediately after the
 instance, because it has to exist before a device is picked: device selection skips
 any graphics queue family that cannot present to it, and `VK_KHR_swapchain` joins the
-device extension list only when a surface exists.
+device extension list only when a surface exists, with `VK_KHR_present_id` and
+`VK_KHR_present_wait` beside it when the device has both, so a window can learn when each
+frame was presented.
 
-{{cite ohao/gpu/vulkan/device_setup.cpp "if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);"}}
+{{cite ohao/gpu/vulkan/device_setup.cpp "m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);"}}
 
 Frame resources are sized for the headless contract either way — one
 persistently-mapped host-visible staging buffer per in-flight frame, width × height ×

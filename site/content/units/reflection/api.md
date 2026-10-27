@@ -116,7 +116,7 @@ Without that line a removed binding left its action held until some key changed.
 
 Every step, whoever asks for it, goes through one function, `stepOnce`: the step's device events, then the injections due at this step (queued by absolute step, same-step events in the order given), then the recording, the simulate phase and the frame counter.
 
-{{cite ohao/api/input.cpp "while (due < s.injected.size() && s.injected[due].step <= step) events.push_back(s.injected[due++].event);"}}
+{{cite ohao/api/input.cpp "while (due < s.injected.size() && s.injected[due].step <= step) {"}}
 
 `input.record` writes those events as JSON Lines with a world hash every 60 steps; `input.replay` feeds them back in lockstep and compares each checkpoint before the step it was taken at, so `E_REPLAY` names the first step whose world differs:
 

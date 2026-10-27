@@ -229,6 +229,7 @@ void VulkanRenderer::shutdown() {
             if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_device, sem, nullptr);
             sem = VK_NULL_HANDLE;
         }
+        m_presentWaiter.stop();   // its thread reads the swapchain
         m_swapchain.reset();
 
         // Cleanup multi-frame resources
@@ -618,9 +619,10 @@ bool VulkanRenderer::createPresentation() {
     }
     m_swapchain = std::make_unique<Swapchain>();
     if (!m_swapchain->create(m_physicalDevice, m_device, m_surface, m_presentTarget->extent,
-                             m_presentTarget->vsync)) {
+                             m_presentTarget->mode)) {
         return false;
     }
+    m_presentWaiter.start(m_device, *m_swapchain, m_presentWaitEnabled ? m_waitForPresent : nullptr);
     VkSemaphoreCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     for (auto& sem : m_imageAcquired)
@@ -628,6 +630,14 @@ bool VulkanRenderer::createPresentation() {
     OHAO_LOG(Info, gpu, "present: swapchain {}x{}, {} images", m_swapchain->extent().width,
              m_swapchain->extent().height, m_swapchain->imageCount());
     return true;
+}
+
+VkResult VulkanRenderer::presentFrame(uint32_t imageIndex) {
+    const uint64_t id = m_presentWaitEnabled ? m_framesSubmitted : 0;
+    const VkResult r = m_swapchain->present(m_graphicsQueue, imageIndex, id);
+    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)
+        m_presentWaiter.presented(m_framesSubmitted, id);
+    return r;
 }
 
 bool VulkanRenderer::recreatePresentation() {

@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -141,6 +142,24 @@ struct RenderStats {
     // Clustered lighting: lights the newest frame covered left out of full froxels (a froxel
     // keeps its first 256); absent when none was.
     std::optional<uint32_t> lightsOverflow;
+    // Sub-project 9, a window host in realtime only (absent headless and in lockstep): a look
+    // movement's latency, poll to the present of the first frame showing it in full, over the
+    // newest `frames` frames that carried look; and the frames' pacing.
+    struct Latency {
+        int frames{0}, samples{0};
+        double medianMs{0.0}, p95Ms{0.0};
+        bool presentWait{false};   // "present_wait"; false: "present_call" (an underestimate)
+        double pollToConsumeMs{0.0}, pollToViewMs{0.0}, viewToSubmitMs{0.0}, submitToPresentMs{0.0};
+        std::string present;       // the window's present mode
+    };
+    struct Pacing {
+        int frames{0};
+        double medianMs{0.0}, p95Ms{0.0}, p99Ms{0.0};
+        std::array<uint64_t, 4> steps{};   // frames that ran 0, 1, 2, 3+ steps
+        uint64_t discardedSteps{0};
+    };
+    std::optional<Latency> latency;
+    std::optional<Pacing> pacing;
 };
 
 // What a session runs inside, beyond its kind: render.capture's renderer.
@@ -203,6 +222,10 @@ public:
     // recording in progress gets the events and its checkpoints. world.step and
     // input.replay step through it too. The caller runs World::sync() before rendering.
     void step(std::span<const InputEvent> deviceEvents, float dt);
+    // When each injected mouse movement the last step() applied was injected (input.inject's
+    // call), oldest first: a window host measures their latency as it does the device's
+    // (sub-project 9). Empty when the step applied none.
+    [[nodiscard]] std::span<const std::chrono::steady_clock::time_point> lastStepInjectedLook() const noexcept;
     [[nodiscard]] uint64_t schemaHash() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;

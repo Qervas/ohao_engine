@@ -340,7 +340,40 @@ bool VulkanRenderer::createLogicalDevice() {
             m_enabledDeviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     }
 
-    if (m_surface != VK_NULL_HANDLE) m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    // A window's presents can be confirmed (sub-project 9: when each frame was presented) with
+    // VK_KHR_present_id and VK_KHR_present_wait; both or neither, feature bits included.
+    VkPhysicalDevicePresentIdFeaturesKHR presentIdFeatures{};
+    presentIdFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
+    VkPhysicalDevicePresentWaitFeaturesKHR presentWaitFeatures{};
+    presentWaitFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR;
+    m_presentWaitEnabled = false;
+    if (m_surface != VK_NULL_HANDLE) {
+        m_enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        uint32_t availCount = 0;
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, nullptr);
+        std::vector<VkExtensionProperties> avail(availCount);
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, avail.data());
+        const auto has = [&](const char* n) {
+            for (const auto& e : avail) if (std::strcmp(e.extensionName, n) == 0) return true;
+            return false;
+        };
+        if (has(VK_KHR_PRESENT_ID_EXTENSION_NAME) && has(VK_KHR_PRESENT_WAIT_EXTENSION_NAME)) {
+            presentIdFeatures.pNext = &presentWaitFeatures;
+            VkPhysicalDeviceFeatures2 probe{};
+            probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            probe.pNext = &presentIdFeatures;
+            vkGetPhysicalDeviceFeatures2(m_physicalDevice, &probe);
+            m_presentWaitEnabled = presentIdFeatures.presentId == VK_TRUE && presentWaitFeatures.presentWait == VK_TRUE;
+        }
+        if (m_presentWaitEnabled) {
+            m_enabledDeviceExtensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+            m_enabledDeviceExtensions.push_back(VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+            OHAO_LOG(Info, gpu, "caps: present wait: presents are confirmed by the presentation engine");
+        } else {
+            OHAO_LOG(Info, gpu, "caps: no present wait ({} + {}): a present is stamped at its call",
+                     VK_KHR_PRESENT_ID_EXTENSION_NAME, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+        }
+    }
     const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
     // Vulkan 1.1 features: the meshlet task shader reads its draw's index (DrawIndex, the
@@ -420,6 +453,15 @@ bool VulkanRenderer::createLogicalDevice() {
         optionalChainTail = &meshShaderFeatures;
     }
 
+    // Present id and present wait (a window, both supported). Same conditional-chain rule.
+    if (m_presentWaitEnabled) {
+        presentIdFeatures.presentId = VK_TRUE;
+        presentWaitFeatures.presentWait = VK_TRUE;
+        presentWaitFeatures.pNext = optionalChainTail;
+        presentIdFeatures.pNext = &presentWaitFeatures;
+        optionalChainTail = &presentIdFeatures;
+    }
+
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     deviceFeatures2.pNext = optionalChainTail;
@@ -453,6 +495,10 @@ bool VulkanRenderer::createLogicalDevice() {
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
+    if (m_presentWaitEnabled) {
+        m_waitForPresent = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(m_device, "vkWaitForPresentKHR"));
+        if (!m_waitForPresent) m_presentWaitEnabled = false;
+    }
     OHAO_LOG(Info, gpu, "logical device created with RT extensions");
     return true;
 }

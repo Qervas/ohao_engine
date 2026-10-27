@@ -58,8 +58,11 @@ struct Session::Impl {
     struct PendingInput {
         uint64_t step;
         InputEvent event;
+        std::chrono::steady_clock::time_point queuedAt{};   // input.inject's call (latency, never stepped)
     };
     std::vector<PendingInput> injected;
+    // When the injected mouse movements the last step applied were injected (Session::lastStepInjectedLook).
+    std::vector<std::chrono::steady_clock::time_point> lastStepInjectedLook;
     struct Recording {
         std::ofstream file;
         std::string path;        // as given
