@@ -57,6 +57,13 @@ MODULE = {
             design=['The physics simulate system steps Jolt inside World::simulate: one clock for every host.', 'The scene marks its own Transform writes; any other write is a placement.', 'Snapshots carry Jolt state through a SnapshotHook; BodyMotion is the fallback.'],
         ),
         page(
+            'combat',
+            'Combat: rounds, enemies, the round',
+            'Hitscan rounds in the step, enemies on the player code, an exact restart, the agent fight.',
+            files=['ohao/ecs/combat.hpp', 'ohao/ecs/combat.cpp', 'ohao/ecs/enemy_ai.cpp', 'ohao/ecs/impact_marks.cpp', 'ohao/api/combat.cpp'],
+            design=['Combat is a simulate system after physics: one ray a round, past the shooter and triggers.', 'Spread is a hash of (seed, shot): no generator state to save.', 'A round restarts by restoring the snapshot of its first step, bit for bit.'],
+        ),
+        page(
             'debug',
             'Force debugger',
             'Debug visualization hooks.',

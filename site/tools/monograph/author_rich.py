@@ -739,6 +739,11 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["physics simulate system in PhysicsScene::step; CharacterVirtual players; SnapshotHook carrying Jolt state; player.* and physics.contacts."],
         "why": "One clock for every host, and agents' restore-and-replay reaching the same world hash.",
     },
+    "physics/combat": {
+        "what": ["Hitscan weapons, health and damage, enemies, the round's death, restart and win, and the agent's fight."],
+        "how": ["combat simulate system after physics; raycastFrom; hashed spread; enemy AI writing saved intents; RoundHook snapshot; combat.* methods."],
+        "why": "A fight held in saved components and one clock replays bit for bit, in a window, headless and over MCP.",
+    },
     "physics/debug": {
         "what": ["Force debugger visualization hooks."],
         "how": ["force_debugger integrates with gizmo/draw paths."],

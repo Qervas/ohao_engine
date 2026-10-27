@@ -80,7 +80,7 @@
 <div class="section-rule"><h2 id="the-eight-byte-image-the-readback-cannot-hold">The eight-byte image the readback cannot hold</h2></div>
 <div class="prose reveal">
 <p>`DeferredRenderer::getFinalOutputImage()` returns the post-processing output only when post-processing actually executed; otherwise it falls back to the lighting pass&#x27;s own image.</p>
-<div class="citation-chip"><code class="citation-code">return m_lightingPass-&gt;getOutputImage();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L784" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:784</a></div>
+<div class="citation-chip"><code class="citation-code">return m_lightingPass-&gt;getOutputImage();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L804" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:804</a></div>
 <p>Those two images do not have the same format. The tonemapped output is `R8G8B8A8_UNORM`; the lighting pass output is the HDR target.</p>
 <div class="citation-chip"><code class="citation-code">target.format = VK_FORMAT_R16G16B16A16_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L378" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:378</a></div>
 <p>Every staging buffer in the ring is sized for four bytes per pixel.</p>

@@ -591,6 +591,11 @@ window.OHAO_NAV_TREE = [
         "href": "m/physics/play.html"
       },
       {
+        "id": "physics/combat",
+        "title": "Combat: rounds, enemies, the round",
+        "href": "m/physics/combat.html"
+      },
+      {
         "id": "physics/debug",
         "title": "Force debugger",
         "href": "m/physics/debug.html"
