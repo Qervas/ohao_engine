@@ -15,7 +15,9 @@
 //                          scene's own timing of that part); median of N rounds.
 // Step 2 adds player_step_ms (the player part of a step walking the blockout), step 5
 // boxes1k_step_ms (one step while 1,000 dynamic boxes fall and pile up in a walled pit, awake;
-// none may leave it).
+// none may leave it). Combat (sub-project 7, gated by the budgets' `combatStep`): step 1
+// combat_shot_ms (the combat system's part of a step in which the player fires a round into a box
+// with Health; every round must damage it).
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -25,6 +27,7 @@
 #include "common/harness.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_types.hpp"
@@ -142,7 +145,7 @@ int main(int argc, char** argv) {
     }
 
     nlohmann::json budgets;
-    int currentStep = 0;
+    int currentStep = 0, combatStep = 0;   // physics' build step (sub-project 6), combat's (7)
     double maxSlowdown = 1.25, maxExternal = 50.0;
     if (!checkPath.empty()) {
         std::ifstream f(checkPath);
@@ -157,6 +160,7 @@ int main(int argc, char** argv) {
         }
         budgets = doc.value("budgets", nlohmann::json::object());
         currentStep = doc.value("currentStep", 0);
+        combatStep = doc.value("combatStep", 0);
         if (doc.contains("noise")) {
             maxSlowdown = doc["noise"].value("maxCalibrationSlowdown", maxSlowdown);
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
@@ -301,6 +305,55 @@ int main(int argc, char** argv) {
     }
     if (!contained) failures.push_back("a box of the 1,000 left the pit");
 
+    // 6. Combat (sub-project 7 step 1): the player fires one round a step (60 Hz, a 1,000-round
+    // magazine, so no reload; no spread or kick, so every round lands) from (-2, 0, 2) into a box
+    // with Health 3 m ahead; the combat system's
+    // part of each step that fired (the ray, the hit, the damage, the events), 200 after 10.
+    std::vector<double> shotMs;
+    std::size_t damaged = 0;
+    for (int r = 0; r < rounds + 1; ++r) {
+        Blockout b;
+        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        auto& reg = b.world.registry();
+        const entt::entity pl = b.world.createWithId(0xb1a7e2, "Player");
+        reg.emplace<ecs::PlayerController>(pl);
+        reg.emplace<ecs::Health>(pl);
+        ecs::Weapon w;
+        w.fireRate = 60.0f;
+        w.magazine = 1000;
+        // Every round on the target: without an idle interval the kick never recovers and 200
+        // rounds would climb the view 70 degrees. The kick is still applied (zero degrees).
+        w.spreadDeg = w.bloomPerShotDeg = 0.0f;
+        w.recoilPitchDeg = w.recoilYawDeg = 0.0f;
+        reg.emplace<ecs::Weapon>(pl, w);
+        const entt::entity target = b.world.create("Target", ecs::Transform{{-2.0f, 1.62f, -1.0f}});
+        reg.emplace<ecs::Collider>(target, ecs::Collider{ecs::ColliderShape::Box, {0.4f, 0.4f, 0.4f}});
+        reg.emplace<ecs::Health>(target, ecs::Health{1.0e6f, 1.0e6f});
+        b.world.sync();   // the player spawns, then is placed
+        b.world.setTransform(pl, ecs::Transform{{-2.0f, 0.0f, 2.0f}});
+        for (int i = 0; i < 10; ++i) {
+            b.world.simulate(kDt);
+            b.world.sync();
+        }
+        std::vector<InputEvent> fire(1);
+        fire[0].type = InputEvent::Type::ActionDown;
+        fire[0].name = "fire";
+        for (int i = 0; i < 210; ++i) {
+            b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            b.world.simulate(kDt);
+            b.world.sync();
+            bool shot = false;
+            for (const ecs::CombatEvent& e : combat.stepEvents()) {
+                shot |= e.kind == ecs::CombatEvent::Kind::Shot;
+                if (r > 0 && i >= 10 && e.kind == ecs::CombatEvent::Kind::Damage) ++damaged;
+            }
+            if (r > 0 && i >= 10 && shot) shotMs.push_back(combat.lastStepMs());
+        }
+    }
+    const bool fought = !shotMs.empty() && damaged == shotMs.size();
+    if (!fought)
+        failures.push_back("combat: " + std::to_string(damaged) + " of " + std::to_string(shotMs.size()) + " rounds damaged the target");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
@@ -323,12 +376,16 @@ int main(int argc, char** argv) {
     const Stats ss = stats(snapshotMs);
     std::printf("  boxes1k_snapshot_ms     median %8.4f   (reported: the simulation a snapshot of that world carries)\n",
                 ss.median);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb})
+    const Stats sc = stats(shotMs);
+    std::printf("  combat_shot_ms          median %8.4f   p95 %8.4f   (%zu rounds, %zu damaged)\n", sc.median, sc.p95, shotMs.size(),
+                damaged);
+    const Verdict vc = judge(budgets, combatStep, "combat_shot_ms", sc.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
-            name != "boxes1k_step_ms")
+            name != "boxes1k_step_ms" && name != "combat_shot_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -348,6 +405,8 @@ int main(int argc, char** argv) {
     out["boxes1k_step_ms"] = {{"median", sb.median}, {"p95", sb.p95}, {"min", sb.min}, {"steps", boxes.size()},
                               {"awakeAtEnd", boxesAwake}, {"verdict", vb.verdict}};
     out["boxes1k_snapshot_ms"] = {{"median", ss.median}, {"min", ss.min}, {"verdict", "reported"}};
+    out["combat_shot_ms"] = {{"median", sc.median}, {"p95", sc.p95}, {"min", sc.min}, {"rounds", shotMs.size()},
+                             {"damaged", damaged}, {"verdict", vc.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -362,7 +421,7 @@ int main(int argc, char** argv) {
     }
     std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
 
-    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked || !contained;   // no machine excuses these
+    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",
