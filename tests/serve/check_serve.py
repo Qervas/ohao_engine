@@ -78,14 +78,17 @@ EXAMPLES = {
     "physics_contacts": {"max": 8},
     "player_info": {"entity": "5c0b1a7e00000001"},
     "player_teleport": {"pos": [-2, 0.3, -1.35], "yawDeg": 90},
+    "combat_info": {},
+    "combat_events": {"since": 0, "max": 8},
+    "combat_damage": {"entity": "5c0b1a7e00000010", "amount": 25, "source": "5c0b1a7e00000001"},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests
 # replays recordings); the scene here has no level, so level_info and level_reload are
-# E_NOT_FOUND, and no player, so the player methods are E_STATE (the level and player
-# sessions call them on the blockout).
+# E_NOT_FOUND, no player, so the player methods are E_STATE, and no combatant, so
+# combat_damage is E_NOT_FOUND (the level, player and combat sessions call them on the blockout).
 CALL = [n for n in EXAMPLES if n not in ("render_capture", "render_stats", "input_replay", "level_info", "level_reload",
-                                         "player_info", "player_teleport")]
+                                         "player_info", "player_teleport", "combat_damage")]
 # Timings in results (level.info's loadMs, physics.info's buildMs) vary run to run: the goldens
 # hold them as 0, the rest of each line byte for byte.
 MASKED = (b"loadMs", b"buildMs")

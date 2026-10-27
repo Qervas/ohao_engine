@@ -8,6 +8,7 @@
 #include "api/session.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "level/level_system.hpp"
@@ -176,7 +177,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 32, "thirty-two methods");
+    CHECK(api::methods().size() == 35, "thirty-five methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -450,6 +451,8 @@ static void sp4_t16_change_count_rises_only_for_methods_that_change_the_world() 
     (void)s.call("world.snapshot", R"({"name":"a"})");
     (void)s.call("time.get");
     (void)s.call("input.state");
+    (void)s.call("combat.info");
+    (void)s.call("combat.events");
     CHECK(!moved(), "reads, snapshots and time.get do not count");
     (void)s.call("world.apply", R"({"commands":[{"op":"entity.create","name":"A"}]})");
     CHECK(moved(), "world.apply counts");
@@ -2378,6 +2381,198 @@ static void sp6_t14_restore_and_replay_a_walk_through_the_api() {
     CHECK(!first.empty() && first == second && pos2 == pos1, "the same world.hash and the same place");
 }
 
+// ---- sub-project 7, step 5: combat.info, combat.events, combat.damage (test 18) --------------------
+// docs/specs/2026-10-27-combat-design.md, "The agent-facing surface". The play scene's player is
+// 5c0b1a7e00000001, its enemies EnemyA 5c0b1a7e00000010 (body 5c0b1a7e00000011) and EnemyB
+// 5c0b1a7e00000020; the Sun 5c0b10c000000003 has no Health.
+
+struct CombatWorld : LevelWorld {
+    CombatWorld() { ecs::installCombat(w); }   // as the CLI context and the window host do
+};
+
+constexpr const char* kEnemyA = "5c0b1a7e00000010";
+constexpr const char* kEnemyB = "5c0b1a7e00000020";
+
+static std::string hashOf(api::Session& s) { return Reply(s.call("world.hash")).str("/result/hash"); }
+
+static void sp7_t18_combat_info() {
+    CombatWorld cw;
+    const Reply empty(cw.s.call("combat.info"));
+    CHECK(empty.ok() && empty.json("/result") == R"({"steps":0,"combatants":[]})", "an empty world: no combatant, no round");
+    CHECK(cw.load(kPlayScene).ok(), "the play scene loads");
+    const Reply r(cw.s.call("combat.info"));
+    std::printf("\n      %s (%zu bytes)", r.json("/result").c_str(), r.json("/result").size());
+    CHECK(r.ok() && r.str("/result/steps") == "0" &&
+              r.json("/result/round") == R"({"started":false,"phase":"playing","restarts":0})",
+          "before any step: the round not started");
+    CHECK(r.at("/result/combatants") && r.at("/result/combatants")->count == 3, "three combatants: the player and two enemies");
+    CHECK(r.str("/result/combatants/0/entity") == kPlayer && r.str("/result/combatants/0/name") == "Player" &&
+              r.json("/result/combatants/0/player") == "true" && r.str("/result/combatants/0/health") == "100" &&
+              r.str("/result/combatants/0/max") == "100" && r.json("/result/combatants/0/dead") == "false" &&
+              r.json("/result/combatants/0/pos") == "[1.5,0,2.2]",
+          "in id order: the player first, at the spawn, 100 of 100");
+    CHECK(r.json("/result/combatants/0/weapon") ==
+              R"({"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0})",
+          "its rifle full before the first step");
+    CHECK(!r.at("/result/combatants/0/enemy"), "the player is no enemy");
+    CHECK(r.str("/result/combatants/1/entity") == kEnemyA && r.str("/result/combatants/1/name") == "EnemyA" &&
+              r.json("/result/combatants/1/pos") == "[-2.5,0.3,-2]" && r.str("/result/combatants/1/weapon/magazine") == "12" &&
+              r.str("/result/combatants/1/enemy/state") == "idle" && !r.at("/result/combatants/1/player"),
+          "EnemyA at its spawn, idle, a 12-round magazine");
+    CHECK(r.str("/result/combatants/2/entity") == kEnemyB && r.str("/result/combatants/2/enemy/state") == "idle", "then EnemyB");
+    CHECK(r.json("/result").size() < 1024, "under 1 KB");
+
+    CHECK(Reply(cw.s.call("world.step", R"({"frames":30})")).ok(), "30 steps");
+    const Reply a(cw.s.call("combat.info"));
+    std::printf("\n      %s", a.json("/result").c_str());
+    CHECK(a.str("/result/steps") == "30" && a.json("/result/round/started") == "true" && a.str("/result/round/phase") == "playing",
+          "30 combat steps; the round started");
+    const std::string sa = a.str("/result/combatants/1/enemy/state"), sb = a.str("/result/combatants/2/enemy/state");
+    CHECK((sa == "attack" || sa == "chase") && (sb == "attack" || sb == "chase") && a.at("/result/combatants/1/enemy/lastSeen"),
+          "both enemies have seen the player; where, as lastSeen");
+    CHECK(Reply(cw.s.call("combat.info", R"({"all":true})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
+}
+
+static void sp7_t18_combat_events_cursor() {
+    CombatWorld cw;
+    CHECK(cw.load(kPlayScene).ok(), "the play scene loads");
+    const Reply none(cw.s.call("combat.events"));
+    CHECK(none.ok() && none.json("/result") == R"({"events":[],"next":0})", "no step yet: {events: [], next: 0}");
+    // The rifle at 10 Hz, held 13 steps: rounds on steps 1, 7 and 13.
+    CHECK(Reply(cw.s.call("input.inject", R"({"events":[{"action":"fire","down":true}]})")).ok() &&
+              Reply(cw.s.call("world.step", R"({"frames":13})")).ok() &&
+              Reply(cw.s.call("input.inject", R"({"events":[{"action":"fire","down":false}]})")).ok() &&
+              Reply(cw.s.call("world.step", R"({"frames":1})")).ok(),
+          "fire held 13 steps");
+    const Reply all(cw.s.call("combat.events", R"({"max":64})"));
+    std::printf("\n      %.700s", all.text.c_str());
+    CHECK(all.ok() && all.at("/result/events") && all.at("/result/events")->count >= 4, "the burst's events");
+    int shots = 0, starts = 0;
+    std::size_t largest = 0;
+    bool shotShape = true, seqs = true;
+    for (uint32_t i = 0; i < all.at("/result/events")->count; ++i) {
+        const std::string at = "/result/events/" + std::to_string(i);
+        largest = std::max(largest, all.json(at).size());
+        seqs &= all.str(at + "/seq") == std::to_string(i + 1);
+        const std::string kind = all.str(at + "/kind");
+        starts += kind == "round_start";
+        if (kind != "shot" || all.str(at + "/source") != kPlayer) continue;
+        ++shots;
+        shotShape &= all.str(at + "/sn") == "Player" && all.at(at + "/point") && all.at(at + "/dir") && all.at(at + "/coneDeg");
+    }
+    CHECK(shots == 3 && shotShape, "three rounds by the player, each with its eye, direction and cone");
+    CHECK(starts == 1 && seqs, "one round_start; seqs 1, 2, 3, ... (as physics.events)");
+    CHECK(largest < 220, "every event under 220 bytes");
+    const std::string next = all.str("/result/next");
+    CHECK(next == std::to_string(all.at("/result/events")->count), "next is the last event's seq");
+    const Reply after(cw.s.call("combat.events", "{\"since\":" + next + "}"));
+    CHECK(after.ok() && after.at("/result/events")->count == 0 && after.str("/result/next") == next && !after.at("/result/dropped"),
+          "nothing after next; next stays");
+    const Reply one(cw.s.call("combat.events", R"({"since":1,"max":1})"));
+    CHECK(one.ok() && one.at("/result/events")->count == 1 && one.str("/result/events/0/seq") == "2" && one.str("/result/next") == "2",
+          "since 1, max 1: event 2, next 2");
+    const Reply ahead(cw.s.call("combat.events", R"({"since":100000})"));
+    CHECK(ahead.ok() && ahead.str("/result/next") == next, "a cursor past the log comes back as the log's end");
+}
+
+static void sp7_t18_combat_damage_kills() {
+    CombatWorld cw;
+    CHECK(cw.load(kPlayScene).ok() && Reply(cw.s.call("world.step", R"({"frames":1})")).ok(), "the play scene, one step");
+    const std::string start = hashOf(cw.s);   // the round's start: the world after its first step
+    CHECK(Reply(cw.s.call("world.snapshot", R"({"name":"start"})")).ok(), "a snapshot of it");
+    const uint64_t before = cw.s.changeCount();
+    const Reply d(cw.s.call("combat.damage", "{\"entity\":\"" + std::string(kEnemyA) + "\",\"amount\":30,\"source\":\"" +
+                                                 kPlayer + "\"}"));
+    std::printf("\n      %s", d.json("/result").c_str());
+    CHECK(d.ok() && d.json("/result") == R"({"entity":"5c0b1a7e00000010","name":"EnemyA","health":70,"max":100,"dead":false,"taken":30})",
+          "30 off EnemyA: 70 of 100");
+    CHECK(cw.s.changeCount() > before, "it changes the world");
+    const Reply body(cw.s.call("combat.damage", R"({"entity":"5c0b1a7e00000011","amount":80})"));
+    CHECK(body.ok() && body.str("/result/entity") == kEnemyA && body.str("/result/health") == "0" &&
+              body.json("/result/dead") == "true" && body.str("/result/taken") == "70",
+          "damage to its body goes to EnemyA's Health (an ancestor's): 70 taken, dead");
+    const Reply again(cw.s.call("combat.damage", "{\"entity\":\"" + std::string(kEnemyA) + "\",\"amount\":10}"));
+    CHECK(again.ok() && again.str("/result/taken") == "0" && again.str("/result/health") == "0", "the dead take none");
+    const Reply ev(cw.s.call("combat.events", R"({"max":64})"));
+    int damages = 0, deaths = 0;
+    bool sourced = false;
+    for (uint32_t i = 0; ev.at("/result/events") && i < ev.at("/result/events")->count; ++i) {
+        const std::string at = "/result/events/" + std::to_string(i);
+        if (ev.str(at + "/target") != kEnemyA) continue;
+        if (ev.str(at + "/kind") == "damage") {
+            ++damages;
+            sourced |= ev.str(at + "/source") == kPlayer && ev.str(at + "/amount") == "30" && ev.str(at + "/health") == "70";
+        }
+        deaths += ev.str(at + "/kind") == "death";
+    }
+    CHECK(damages == 2 && deaths == 1 && sourced, "two damage events (the first from the player) and one death in the log");
+    CHECK(Reply(cw.s.call("world.step", R"({"frames":1})")).ok(), "a step");
+    const Reply i1(cw.s.call("combat.info"));
+    CHECK(i1.str("/result/combatants/1/enemy/state") == "dead" && i1.json("/result/combatants/1/dead") == "true",
+          "the next step lays EnemyA down: state dead");
+
+    CHECK(Reply(cw.s.call("combat.damage", "{\"entity\":\"" + std::string(kEnemyB) + "\",\"amount\":100}")).ok() &&
+              Reply(cw.s.call("world.step", R"({"frames":1})")).ok(),
+          "EnemyB killed, a step");
+    const Reply won(cw.s.call("combat.info"));
+    CHECK(won.str("/result/round/phase") == "won", "both enemies dead: the round is won");
+    const Reply wins(cw.s.call("combat.events", R"({"since":0,"max":64})"));
+    CHECK(wins.text.find("\"kind\":\"win\"") != std::string::npos, "a win event");
+
+    const Reply killed(cw.s.call("combat.damage", "{\"entity\":\"" + std::string(kPlayer) + "\",\"amount\":1000}"));
+    CHECK(killed.ok() && killed.json("/result/dead") == "true" && killed.str("/result/taken") == "100", "the player killed");
+    CHECK(Reply(cw.s.call("world.step", R"({"frames":1})")).ok(), "a step");
+    const Reply dead(cw.s.call("combat.info"));
+    std::printf("\n      %s", dead.json("/result/round").c_str());
+    CHECK(dead.str("/result/round/phase") == "dead" && dead.at("/result/round/restartIn") &&
+              std::fabs(std::stod(dead.str("/result/round/restartIn")) - 2.98) < 0.011,
+          "the round: dead, restarting in 2.98 s");
+    CHECK(Reply(cw.s.call("world.step", R"({"frames":179})")).ok(), "179 more steps: 3 s dead");
+    const Reply back(cw.s.call("combat.info"));
+    std::printf("\n      %s", back.json("/result").c_str());
+    CHECK(back.str("/result/round/phase") == "playing" && back.str("/result/round/restarts") == "1",
+          "the round restarted once");
+    CHECK(back.str("/result/combatants/0/health") == "100" && back.str("/result/combatants/1/health") == "100" &&
+              back.str("/result/combatants/2/health") == "100" && back.str("/result/combatants/1/enemy/state") != "dead",
+          "everyone back at 100, EnemyA up again");
+    const Reply diff(cw.s.call("world.diff", R"({"snapshot":"start"})"));
+    if (hashOf(cw.s) != start) std::printf("\n      diff from the start: %.1500s", diff.json("/result").c_str());
+    CHECK(hashOf(cw.s) == start, "world.hash is the round start's again");
+}
+
+static void sp7_t18_combat_params_refused() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("combat.info")).code() == "E_STATE" && Reply(s.call("combat.events")).code() == "E_STATE" &&
+                  Reply(s.call("combat.damage", R"({"entity":"5c0b1a7e00000010","amount":1})")).code() == "E_STATE",
+              "a world without the combat system: E_STATE for all three");
+    }
+    CombatWorld cw;
+    CHECK(cw.load(kPlayScene).ok(), "the play scene loads");
+    for (const char* amount : {"-1", "10000.5", "1e9"}) {
+        const Reply r(cw.s.call("combat.damage", std::string(R"({"entity":"5c0b1a7e00000020","amount":)") + amount + "}"));
+        CHECK(r.code() == "E_RANGE" && r.str("/error/data/0/path") == "/amount", "amount outside [0, 10000]: E_RANGE at /amount");
+    }
+    CHECK(Reply(cw.s.call("combat.damage", R"({"entity":"5c0b1a7e00000020","amount":10000})")).ok(), "10000 is allowed");
+    CHECK(Reply(cw.s.call("combat.damage", R"({"amount":5})")).code() == "E_COMMAND", "entity is required");
+    CHECK(Reply(cw.s.call("combat.damage", R"({"entity":"5c0b1a7e00000010"})")).code() == "E_COMMAND", "amount is required");
+    const Reply missing(cw.s.call("combat.damage", R"({"entity":"00000000000000ff","amount":5})"));
+    CHECK(missing.code() == "E_NOT_FOUND" && missing.str("/error/data/0/path") == "/entity", "an id no entity has: E_NOT_FOUND");
+    const Reply sun(cw.s.call("combat.damage", R"({"entity":"5c0b10c000000003","amount":5})"));
+    CHECK(sun.code() == "E_NOT_FOUND" && sun.str("/error/data/0/path") == "/entity", "the Sun has no Health: E_NOT_FOUND");
+    const Reply src(cw.s.call("combat.damage", R"({"entity":"5c0b1a7e00000010","amount":5,"source":"00000000000000ff"})"));
+    CHECK(src.code() == "E_NOT_FOUND" && src.str("/error/data/0/path") == "/source", "a source no entity has: E_NOT_FOUND at /source");
+    CHECK(Reply(cw.s.call("combat.damage", R"({"entity":"5c0b1a7e00000010","amount":5,"hp":1})")).code() == "E_UNKNOWN_FIELD",
+          "an unknown member is refused");
+    const Reply untouched(cw.s.call("combat.info"));
+    CHECK(untouched.str("/result/combatants/1/health") == "100", "no refused call took any health");
+    for (const char* bad : {R"({"max":0})", R"({"max":65})", R"({"since":-1})"}) {
+        const Reply r(cw.s.call("combat.events", bad));
+        CHECK(r.code() == "E_RANGE", "combat.events: max outside 1..64, since below 0: E_RANGE");
+    }
+}
+
 static void sp5_t08_level_reload_keeps_world_hash() {
     LevelWorld lw;
     CHECK(lw.load().ok(), "the blockout scene loads");
@@ -2472,6 +2667,10 @@ int main() {
     RUN(sp6_t14_physics_contacts_lists_pairs_in_contact);
     RUN(sp6_t14_restore_mid_fall_replays_to_the_same_hash);
     RUN(sp6_t14_restore_and_replay_a_walk_through_the_api);
+    RUN(sp7_t18_combat_info);
+    RUN(sp7_t18_combat_events_cursor);
+    RUN(sp7_t18_combat_damage_kills);
+    RUN(sp7_t18_combat_params_refused);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

@@ -122,6 +122,13 @@ bool methodPlayerInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode&
                       JsonWriter& out);
 bool methodPlayerTeleport(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                           JsonWriter& out);
+// Combat (sub-project 7, step 5; combat.cpp).
+bool methodCombatInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                      JsonWriter& out);
+bool methodCombatEvents(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                        JsonWriter& out);
+bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                        JsonWriter& out);
 
 // One simulation step (input.cpp): the host's device events, then the events injected for
 // this step, into the world's input map (and the recording); the simulate systems with dt;

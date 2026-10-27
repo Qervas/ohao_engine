@@ -251,6 +251,18 @@ struct PlayerTeleportParams {
     glm::vec3 pos{0.0f};
     std::optional<float> yawDeg;      // absent: it keeps its facing
 };
+// Sub-project 7, step 5.
+inline constexpr float kMaxDamage = 10'000.0f;   // combat.damage's amount: [0, 1e4] hp
+struct CombatInfoParams {};
+struct CombatEventsParams {
+    int64_t since{0};   // the seq of the last event already read (the previous reply's next)
+    int32_t max{32};    // 1..64
+};
+struct CombatDamageParams {
+    std::optional<uint64_t> entity;   // required: the entity hit (its Health, or its nearest ancestor's)
+    float amount{0.0f};               // required
+    std::optional<uint64_t> source;   // who dealt it (the events' source)
+};
 
 // The registry of every params struct and its enums, built once.
 [[nodiscard]] const reflect::TypeRegistry& paramsRegistry();

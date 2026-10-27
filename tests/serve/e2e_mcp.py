@@ -13,7 +13,10 @@ the acceptance session of the spec's test 19:
   load the blockout level -> level.info -> a ray down at the player spawn -> physics.info ->
   (sub-project 6) lift and drop the crates -> physics.events -> load the play scene ->
   player.info -> look -> snapshot -> walk, turn and jump on injected input -> player.info,
-  footsteps -> look -> player.teleport -> physics.contacts -> restore -> the same walk
+  footsteps -> look -> player.teleport -> physics.contacts -> restore -> the same walk ->
+  (sub-project 7) load the play scene again -> combat.info -> shoot EnemyA down ->
+  combat.events -> look with the HUD -> combat.damage kills the player -> the restart ->
+  clear the room -> won
 
 and requires: the flight moves the camera as injected, the replay reaches the same world
 hash, the second capture is bit-identical to the first (the PNG files byte for byte, the
@@ -26,6 +29,7 @@ Needs a GPU; no Python packages.
 """
 import base64
 import json
+import math
 import os
 import queue
 import shutil
@@ -205,6 +209,70 @@ def walk_the_level(c):
           "and the same view, byte for byte")
 
 
+PLAYER, ENEMY_A, ENEMY_B = "5c0b1a7e00000001", "5c0b1a7e00000010", "5c0b1a7e00000020"
+
+
+def combatant(info, eid):
+    return next((c for c in (info or {}).get("combatants", []) if c.get("entity") == eid), {})
+
+
+def shoot_down(c, eid, tries=20):
+    """Faces the enemy (player_teleport where the player stands) and fires bursts of three rounds
+    until combat_info says it is dead. Returns the bursts it took, None if it still lives."""
+    for n in range(tries):
+        info = c.tool("combat_info")[0]
+        me, foe = combatant(info, PLAYER), combatant(info, eid)
+        if foe.get("dead"):
+            return n
+        if me.get("dead") or not me.get("pos") or not foe.get("pos"):
+            return None
+        p, q = me["pos"], foe["pos"]
+        yaw = round(math.degrees(math.atan2(-(q[0] - p[0]), -(q[2] - p[2]))), 2)
+        c.tool("player_teleport", {"pos": p, "yawDeg": yaw})
+        c.tool("input_inject", {"events": [{"action": "fire", "down": True}]})
+        c.tool("world_step", {"frames": 13})   # rounds on steps 1, 7 and 13 (10 Hz)
+        c.tool("input_inject", {"events": [{"action": "fire", "down": False}]})
+        c.tool("world_step", {"frames": 1})
+    return None
+
+
+def fight_the_round(c):
+    """An agent plays the play scene's round (sub-project 7, step 5): shoots EnemyA down, is killed,
+    waits out the restart, clears the room and wins, reading combat_info and combat_events and
+    looking through the player's eyes with the HUD."""
+    loaded, _, err = c.tool("scene_load", {"path": "assets/scenes/blockout_play.scene.json", "replace": True})
+    check(not err and loaded.get("entities", 0) > 0, "scene_load the play scene for a fight (replace)")
+    info, _, err = c.tool("combat_info")
+    check(not err and len(info.get("combatants", [])) == 3 and combatant(info, PLAYER).get("player") is True and
+          combatant(info, ENEMY_A).get("enemy", {}).get("state") == "idle",
+          "combat_info: the player and two idle enemies")
+    events0 = (c.tool("combat_events", {"max": 64})[0] or {}).get("next", 0)   # the session's log so far
+    c.tool("world_step", {"frames": 1})
+    bursts = shoot_down(c, ENEMY_A)
+    events, _, err = c.tool("combat_events", {"since": events0, "max": 64})
+    kinds = [e.get("kind") for e in (events or {}).get("events", [])]
+    check(bursts is not None and not err and "shot" in kinds and "hit" in kinds and "death" in kinds,
+          "EnemyA shot down in %s bursts: combat_events has its shots, hits and death" % bursts)
+    _, hud, err = c.tool("render_capture", {"inline": True, "hud": True, "path": OUT + "/fight_hud.png"})
+    check(not err and hud is not None, "render_capture with the HUD after the kill")
+    killed, _, err = c.tool("combat_damage", {"entity": PLAYER, "amount": 1000, "source": ENEMY_B})
+    check(not err and killed.get("dead") is True and killed.get("health") == 0, "combat_damage kills the player")
+    c.tool("world_step", {"frames": 181})
+    after, _, _ = c.tool("combat_info")
+    check(after.get("round", {}).get("restarts") == 1 and
+          all(x.get("health") == 100 for x in after.get("combatants", [])),
+          "3 s later the round restarted: everyone at 100")
+    a2, b = shoot_down(c, ENEMY_A), shoot_down(c, ENEMY_B)
+    c.tool("world_step", {"frames": 1})
+    won, _, _ = c.tool("combat_info")
+    check(a2 is not None and b is not None and won.get("round", {}).get("phase") == "won",
+          "the room cleared (EnemyA in %s bursts, EnemyB in %s): the round is won" % (a2, b))
+    # Refused params are a JSON-RPC error (-32602), not a tool result.
+    refused = c.request("tools/call", {"name": "combat_damage", "arguments": {"entity": ENEMY_A, "amount": 20000}})
+    check(refused is not None and refused.get("error", {}).get("code") == -32602 and "E_RANGE" in json.dumps(refused),
+          "combat_damage with an amount past 10,000: -32602, E_RANGE")
+
+
 def main():
     if not os.path.exists(OHAO):
         print("ohao is not built: " + OHAO)
@@ -223,10 +291,11 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 32 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+    check(len(names) == 35 and "render_capture" in names and "render_stats" in names and "render_settings" in names
           and "input_replay" in names and "level_info" in names and "physics_raycast" in names
           and "physics_events" in names and "physics_contacts" in names and "player_info" in names
-          and "player_teleport" in names, "tools/list: 32 tools")
+          and "player_teleport" in names and "combat_info" in names and "combat_events" in names
+          and "combat_damage" in names, "tools/list: 35 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})
@@ -374,6 +443,7 @@ def main():
         check(not err and abs(y - 0.3) < 0.01, "and its Transform rests at y %.4f (0.3, 1 cm)" % y)
 
     walk_the_level(c)
+    fight_the_round(c)
 
     code, err_text = c.close()
     live = [l for l in err_text.splitlines() if "live host:" in l]

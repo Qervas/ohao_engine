@@ -23,6 +23,10 @@ check_live -- `ohao serve --window`, the live host, end to end (sub-project 4, s
   sp6 14   walking the level: the play scene's player in a hidden window walks, turns by the
            mouse and jumps on injected input; player.info says where; the same walk headless
            reaches the same place, world.hash and picture from the player's eyes, bit for bit.
+  sp7 18   a fight (the done demo): in a hidden window an agent shoots EnemyA down (combat.info
+           for where, player.teleport to face, fire bursts), kills the player with
+           combat.damage, waits out the round's restart, clears the room and wins; the same
+           fight headless reaches the same world.hash, combat.info, events and HUD picture.
   test 15  (the window host's part, Windows) `ohao serve --window --pipe NAME`: a step and
            an inline capture over the pipe; the client's disconnect ends the session with
            exit 0 and a clean teardown.
@@ -35,6 +39,7 @@ import base64
 import ctypes
 import io
 import json
+import math
 import os
 import queue
 import subprocess
@@ -492,6 +497,93 @@ def test_walk():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+PLAYER, ENEMY_A, ENEMY_B = "5c0b1a7e00000001", "5c0b1a7e00000010", "5c0b1a7e00000020"
+
+
+def combatant(info, eid):
+    return next((c for c in (info or {}).get("combatants", []) if c.get("entity") == eid), {})
+
+
+def shoot_down(call, eid, tries=20):
+    """Faces the enemy (player.teleport where the player stands) and fires bursts of three rounds
+    until combat.info says it is dead. Returns the bursts it took, None if it still lives."""
+    for n in range(tries):
+        info = call("combat.info", {})
+        me, foe = combatant(info, PLAYER), combatant(info, eid)
+        if foe.get("dead"):
+            return n
+        if me.get("dead") or not me.get("pos") or not foe.get("pos"):
+            return None
+        p, q = me["pos"], foe["pos"]
+        yaw = round(math.degrees(math.atan2(-(q[0] - p[0]), -(q[2] - p[2]))), 2)
+        call("player.teleport", {"pos": p, "yawDeg": yaw})
+        call("input.inject", {"events": [{"action": "fire", "down": True}]})
+        call("world.step", {"frames": 13})   # rounds on steps 1, 7 and 13 (10 Hz)
+        call("input.inject", {"events": [{"action": "fire", "down": False}]})
+        call("world.step", {"frames": 1})
+    return None
+
+
+def fight(call):
+    """The done demo's fight (sub-project 7, step 5), the same in any host: the round starts; EnemyA
+    shot down; the player killed; the round restarts 3 s later; both enemies shot down: won. `call`
+    is (method, params) -> result or None. Returns what each stage left."""
+    out = {}
+    call("world.step", {"frames": 1})
+    out["killA"] = shoot_down(call, ENEMY_A)
+    out["hurt"] = combatant(call("combat.info", {}), PLAYER).get("health")
+    out["killed"] = call("combat.damage", {"entity": PLAYER, "amount": 1000, "source": ENEMY_B}) or {}
+    call("world.step", {"frames": 1})
+    out["dead"] = (call("combat.info", {}) or {}).get("round", {})
+    call("world.step", {"frames": 180})
+    out["restarted"] = call("combat.info", {}) or {}
+    out["killA2"] = shoot_down(call, ENEMY_A)
+    out["killB"] = shoot_down(call, ENEMY_B)
+    call("world.step", {"frames": 1})
+    out["final"] = call("combat.info", {}) or {}
+    events = call("combat.events", {"since": 0, "max": 64}) or {}
+    out["kinds"] = [e.get("kind") for e in events.get("events", [])]
+    out["hash"] = (call("world.hash", {}) or {}).get("hash")
+    return out
+
+
+def check_fight(f, where):
+    check(f["killA"] is not None and isinstance(f["hurt"], (int, float)) and f["hurt"] <= 100,
+          "%s: EnemyA shot down in %s bursts; the player at %s hp" % (where, f["killA"], f["hurt"]))
+    check(f["killed"].get("dead") is True and f["dead"].get("phase") == "dead" and f["dead"].get("restartIn", 0) > 2.9,
+          "%s: combat.damage kills the player; the round is dead, restarting in %s s" % (where, f["dead"].get("restartIn")))
+    r = f["restarted"]
+    check(r.get("round", {}).get("restarts") == 1 and r.get("round", {}).get("phase") == "playing" and
+          all(c.get("health") == 100 and not c.get("dead") for c in r.get("combatants", [])),
+          "%s: 3 s later the round restarted: everyone back at 100" % where)
+    won = f["final"].get("round", {})
+    check(f["killA2"] is not None and f["killB"] is not None and won.get("phase") == "won" and "win" in f["kinds"],
+          "%s: the room cleared (EnemyA in %s bursts, EnemyB in %s): won, a win event" % (where, f["killA2"], f["killB"]))
+
+
+def test_fight():
+    print("sp7 test 18: a fight in a hidden window, and the same fight headless")
+    out = out_dir("fight")
+    scene = "assets/scenes/blockout_play.scene.json"
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--out", out, "--seed", SEED, scene], "fight",
+               env=validation_env())
+    f = fight(lambda m, p: result(s.call(m, p)))
+    check_fight(f, "window")
+    shot = result(s.call("render.capture", {"path": out + "/fight_window.png", "post": [], "hud": True})) or {}
+    check(shot.get("deterministic") is True, "a lockstep capture of the won round with its HUD")
+    h = Server([OHAO, "serve", "--out", out, "--seed", SEED, scene], "fight_headless")
+    g = fight(lambda m, p: result(h.call(m, p)))
+    check(f["hash"] is not None and f["hash"] == g["hash"] and f["final"] == g["final"] and f["kinds"] == g["kinds"],
+          "the same fight headless: the same world.hash (%s), combat.info and events" % f["hash"])
+    shot2 = result(h.call("render.capture", {"path": out + "/fight_headless.png", "post": [], "hud": True,
+                                              "width": shot.get("width", 960), "height": shot.get("height", 540)})) or {}
+    same = bool(shot2.get("path") and shot.get("path")) and pixels(out + "/fight_window.png") == pixels(out + "/fight_headless.png")
+    check(same, "and the same picture with the HUD, bit for bit")
+    h.close()
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+
 def test_window_pipe():
     print("test 15: the window host over the named pipe")
     out = out_dir("pipe")
@@ -550,6 +642,7 @@ def main():
     test_path_tracer_window()
     test_game_scene()
     test_walk()
+    test_fight()
     if os.name == "nt":
         test_window_pipe()
     print("Results: %d/%d passed" % (passed, passed + failed))

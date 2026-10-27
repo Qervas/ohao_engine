@@ -246,6 +246,18 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("yawDeg", &PlayerTeleportParams::yawDeg)
             .doc("Facing about +Y from -Z, counter-clockwise seen from above; absent: as it faced").unit("deg")
             .min(-360.0).max(360.0);
+
+    r.type<CombatInfoParams>("CombatInfoParams").doc("combat.info params");
+    r.type<CombatEventsParams>("CombatEventsParams").doc("combat.events params")
+        .field("since", &CombatEventsParams::since)
+            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
+        .field("max", &CombatEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
+    r.type<CombatDamageParams>("CombatDamageParams").doc("combat.damage params")
+        .field("entity", &CombatDamageParams::entity).doc("Who takes it, 16 hex digits (its Health or an ancestor's)")
+            .required()
+        .field("amount", &CombatDamageParams::amount).doc("Hit points to take").unitless().min(0.0).max(kMaxDamage)
+            .required()
+        .field("source", &CombatDamageParams::source).doc("Who dealt it, 16 hex digits");
 }
 
 } // namespace

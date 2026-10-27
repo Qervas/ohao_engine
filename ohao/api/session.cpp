@@ -129,6 +129,18 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "input.inject (move_forward, move_right, jump, sprint, mouse) and world.step. E_STATE without a player."},
         {"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
          "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."},
+        {"combat.info", p.find<CombatInfoParams>(),
+         "{steps, round?: {started, phase, restartIn?, restarts}, combatants: [{entity, name, player?, health?, max?, "
+         "dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}",
+         "The fight: the round (playing, dead, won) and everything with Health or a Weapon, in id order. Fire with "
+         "input.inject (fire, reload) and world.step."},
+        {"combat.events", p.find<CombatEventsParams>(),
+         "{events: [{seq, step, kind, source?, sn?, target?, tn?, ...}], next, dropped?}",
+         "Shots (point, dir, coneDeg), hits (point, normal, dist, surface), damage (amount, health), deaths, "
+         "reloads (ammo), round_start, restart, win; oldest first. Pass next as since to read on."},
+        {"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
+         "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
+         "events; a dead enemy lies down at the next step."},
     };
 }
 
@@ -874,6 +886,8 @@ constexpr MethodEntry kDispatch[] = {
     {"physics.raycast", methodPhysicsRaycast}, {"physics.info", methodPhysicsInfo}, {"physics.events", methodPhysicsEvents},
     {"physics.contacts", methodPhysicsContacts}, {"player.info", methodPlayerInfo},
     {"player.teleport", methodPlayerTeleport, true},
+    {"combat.info", methodCombatInfo}, {"combat.events", methodCombatEvents},
+    {"combat.damage", methodCombatDamage, true},
 };
 
 const MethodEntry* findMethod(std::string_view name) {
