@@ -113,6 +113,13 @@ public:
     // headless hosts leave it there; a realtime host sets the timeline's alpha each frame.
     void setRenderAlpha(float alpha) noexcept { m_renderAlpha = alpha; }
     [[nodiscard]] float renderAlpha() const noexcept { return m_renderAlpha; }
+    // The look the steps have not consumed yet (the mouse's movement since the last step, in look
+    // units): the next render draws the input-driven player turned by it (the look lead, sub-project
+    // 9), as the next step will turn it. Presentation only: no step reads it, and it is never saved,
+    // hashed or snapshotted. A realtime host sets it each frame; simulate() clears it (the step
+    // consumed it); lockstep and headless hosts leave it at 0.
+    void setPendingLook(glm::vec2 units) noexcept { m_pendingLook = units; }
+    [[nodiscard]] glm::vec2 pendingLook() const noexcept { return m_pendingLook; }
     // Debug builds: before running sync systems, sync() checks every untagged entity's
     // WorldTransform against its local Transform (verifyTransforms) and logs the first
     // nonzero result once per World. This is that result (0: none seen; always 0 in
@@ -140,6 +147,7 @@ private:
     InputMap m_input;
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
+    glm::vec2 m_pendingLook{0.0f};
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };

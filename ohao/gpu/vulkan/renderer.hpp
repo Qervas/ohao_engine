@@ -114,6 +114,13 @@ public:
     }
     [[nodiscard]] bool presentWaitEnabled() const noexcept { return m_presentWaitEnabled; }
     [[nodiscard]] std::vector<PresentStamp> takePresentStamps() { return m_presentWaiter.take(); }
+    // Late input sampling: returns once frame `frame` (a framesSubmitted() number) has been
+    // presented, as the presentation engine confirms it (at most `timeout`), or without present
+    // wait once its GPU work is done.
+    void waitForPresentOf(uint64_t frame, std::chrono::microseconds timeout) {
+        if (m_presentWaitEnabled) (void)m_presentWaiter.waitResolved(frame, timeout);
+        else waitForSubmitted(frame);
+    }
     // When the newest frame's command buffers were submitted (framesSubmitted()'s frame).
     [[nodiscard]] std::chrono::steady_clock::time_point lastSubmitTime() const noexcept { return m_lastSubmitAt; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.

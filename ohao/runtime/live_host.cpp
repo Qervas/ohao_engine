@@ -120,6 +120,11 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
         const FrameTime frameStart = Clock::now();
+        // Late input sampling (spec "Present mode and late input sampling"): the input is polled
+        // only once the frames queued ahead are few enough, so it goes into the very next frame.
+        if (m_time.running())
+            if (const uint64_t wait = presentToAwait(m_renderer->framesSubmitted(), framesAhead()))
+                m_renderer->waitForPresentOf(wait, kFramesAheadTimeout);
         FrameTime polledAt{};
         {
             std::vector<InputEvent> polled;
@@ -132,7 +137,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             const bool look = std::any_of(polled.begin(), polled.end(), [](const InputEvent& e) {
                 return e.type == InputEvent::Type::MouseDelta && (e.x != 0.0f || e.y != 0.0f);
             });
-            if (look) m_lookPolls.push_back(polledAt);
+            if (look) trackLook(polledAt, false);
             m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
         }
         if (m_window.consumeResized()) {
@@ -149,8 +154,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         last = now;
         if (!m_time.running()) {   // lockstep or paused: the window's input reaches no step
             m_events.clear();
-            m_lookPolls.clear();
-            m_lookConsumed.clear();
+            m_looks.clear();
             m_releaseOnResume = true;
         }
         const float fixedDt = m_time.fixedDt();
@@ -159,15 +163,32 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
                 m_events.insert(m_events.begin(), InputEvent{InputEvent::Type::FocusLost});
             m_session->step(m_events, fixedDt);
             m_events.clear();
-            // The look this step applied (the window's and input.inject's) is shown in full by the
-            // first frame drawn from this step's pose onward: once the next step has run.
-            const FrameTime consumed = Clock::now();
-            const uint64_t shownAt = m_session->frame() + 1;
-            for (const FrameTime p : m_lookPolls) m_lookConsumed.push_back({{p, consumed}, shownAt});
-            m_lookPolls.clear();
-            for (const FrameTime p : m_session->lastStepInjectedLook()) m_lookConsumed.push_back({{p, consumed}, shownAt});
+            // The look this step applied: the window's (all it held) and input.inject's.
+            const FrameTime now = Clock::now();
+            for (LookInFlight& l : m_looks)
+                if (!l.injected && !l.consumed) lookConsumed(l, now);
+            for (const FrameTime q : m_session->lastStepInjectedLook()) {
+                auto it = std::find_if(m_looks.begin(), m_looks.end(),
+                                       [&](const LookInFlight& l) { return l.injected && !l.consumed && l.poll == q; });
+                if (it == m_looks.end()) it = m_looks.insert(m_looks.end(), LookInFlight{q, {}, true});
+                lookConsumed(*it, now);
+            }
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
         }
+        // The look lead (sub-project 9): the next render draws the player turned by the look no step
+        // has consumed yet, the window's and the injected movements due at the next step, summed in
+        // the order that step's input map will sum them. Realtime only.
+        glm::vec2 pending(0.0f);
+        if (m_time.running()) {
+            for (const InputEvent& e : m_events)
+                if (e.type == InputEvent::Type::MouseDelta) pending += glm::vec2(static_cast<float>(e.x), static_cast<float>(e.y));
+            std::vector<FrameTime> due;
+            m_session->injectedLookDue(pending, due);
+            for (const FrameTime q : due)
+                if (std::none_of(m_looks.begin(), m_looks.end(), [&](const LookInFlight& l) { return l.injected && l.poll == q; }))
+                    trackLook(q, true);
+        }
+        m_world->setPendingLook(pending);
         if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
         if (m_combatSounds) m_combatSounds->update(*m_world);
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
@@ -198,12 +219,19 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
                 f.frameMs = m_lastFrameStart == FrameTime{} ? 0.0 : std::chrono::duration<double, std::milli>(frameStart - m_lastFrameStart).count();
                 f.steps = tick.steps;
                 f.discardedSteps = static_cast<int>(tick.discarded / m_time.fixedStep());
+                // Which look this frame is the first to show in full. With the lead, every movement
+                // polled before its view; without (no input-driven player), one a step consumed once
+                // the frame's interpolation starts at that step (the step after it has run).
+                const auto* physics = ecs::physicsScene(*m_world);
+                const bool lead = physics && physics->leadsLook();
                 const uint64_t step = m_session->frame();
-                for (auto it = m_lookConsumed.begin(); it != m_lookConsumed.end();) {
-                    if (it->shownAtStep > step) { ++it; continue; }
-                    f.looks.push_back(it->sample);
-                    it = m_lookConsumed.erase(it);
+                for (LookInFlight& l : m_looks) {
+                    if (l.shownFrame != 0) continue;
+                    if (lead ? l.poll > f.view : !(l.consumed && l.consumedAtStep + 1 <= step)) continue;
+                    l.shownFrame = f.frame;
+                    f.looks.push_back(LookSample{l.poll, l.consume, l.consumed});
                 }
+                std::erase_if(m_looks, [](const LookInFlight& l) { return l.shownFrame != 0 && l.consumed; });
                 m_frameLog.record(std::move(f));
             }
         }
@@ -230,6 +258,24 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
 uint64_t LiveHost::unrequestedReadbacks() const noexcept {
     const uint64_t copies = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     return copies > m_readbackRequests ? copies - m_readbackRequests : 0;
+}
+
+int LiveHost::framesAhead() const {
+    if (m_cfg.framesAhead >= 0) return m_cfg.framesAhead;
+    const auto* physics = ecs::physicsScene(*m_world);
+    return physics && physics->leadsLook() ? 1 : -1;   // a play window keeps one frame ahead
+}
+
+void LiveHost::trackLook(FrameTime poll, bool injected) {
+    if (m_looks.size() >= kMaxLooksInFlight) m_looks.erase(m_looks.begin());   // a window that does not render
+    m_looks.push_back(LookInFlight{poll, {}, injected});
+}
+
+void LiveHost::lookConsumed(LookInFlight& l, FrameTime at) {
+    l.consumed = true;
+    l.consume = at;
+    l.consumedAtStep = m_session->frame();
+    if (l.shownFrame != 0) (void)m_frameLog.consumed(l.shownFrame, l.poll, at);
 }
 
 void LiveHost::collectPresents() {
@@ -373,6 +419,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         // A pending resize (the swapchain rebuilds at the next frame) is applied first, so
         // the capture is at the window's size.
         m_world->setRenderAlpha(1.0f);
+        m_world->setPendingLook(glm::vec2(0.0f));   // no look lead: the step's view
         if (m_renderer->getWidth() != ext.width || m_renderer->getHeight() != ext.height) {
             m_world->sync();
             m_renderer->render();

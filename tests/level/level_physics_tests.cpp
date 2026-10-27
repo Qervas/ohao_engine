@@ -1299,6 +1299,165 @@ static void t14_restore_after_a_rebuild_falls_back_to_body_motion() {
     CHECK(samePose(a1, a2), "the fall replays exactly through BodyMotion");
 }
 
+// ---- test 19: the look lead (sub-project 9 step 2) -----------------------------------------------
+// docs/specs/2026-10-27-feel-design.md, "The look lead": the drawn camera leads the step by the look
+// the steps have not consumed (World::setPendingLook), through the step's own arithmetic, so the step
+// lands where the frame already was; the lead is presentation only, and absent in lockstep, for the
+// dead and for characters not moved by the world's input.
+
+namespace {
+
+InputEvent mouseMove(float x, float y) {
+    InputEvent e;
+    e.type = InputEvent::Type::MouseDelta;
+    e.x = x;
+    e.y = y;
+    return e;
+}
+
+// The upper 3x3 (rotation and scale) of two matrices, compared bit for bit.
+bool sameBasis(const glm::mat4& a, const glm::mat4& b) {
+    for (int c = 0; c < 3; ++c)
+        for (int r = 0; r < 3; ++r)
+            if (!(a[c][r] == b[c][r])) return false;
+    return true;
+}
+
+// What a frame draws with `pending` look not yet stepped (alpha as given), then the step that
+// consumes the same look: the drawn bases of the player and its head against the stepped ones.
+struct LeadCheck {
+    bool drawn{false};
+    glm::mat4 playerDrawn{1.0f}, headDrawn{1.0f}, playerStepped{1.0f}, headStepped{1.0f};
+};
+
+LeadCheck leadThenStep(PlayerFixture& f, glm::vec2 pending, float alpha = 1.0f) {
+    auto& reg = f.world.registry();
+    LeadCheck out;
+    f.world.setRenderAlpha(alpha);
+    f.world.setPendingLook(pending);
+    f.world.sync();
+    const auto* pp = reg.try_get<RenderPose>(f.player);
+    const auto* hp = reg.try_get<RenderPose>(f.head);
+    out.drawn = pp && hp;
+    if (pp) out.playerDrawn = pp->world;
+    if (hp) out.headDrawn = hp->world;
+    f.world.setRenderAlpha(1.0f);
+    f.world.setPendingLook(glm::vec2(0.0f));
+    f.step({mouseMove(pending.x, pending.y)});
+    out.playerStepped = reg.get<WorldTransform>(f.player).world;
+    out.headStepped = reg.get<WorldTransform>(f.head).world;
+    return out;
+}
+
+} // namespace
+
+static void sp9_t19_lead_matches_next_step() {
+    PlayerFixture f(true);
+    f.steps(5);
+    const LeadCheck a = leadThenStep(f, {37.5f, -12.25f});
+    CHECK(a.drawn, "a pending look gives the player and its head a drawn pose");
+    CHECK(sameBasis(a.playerDrawn, a.playerStepped) && sameBasis(a.headDrawn, a.headStepped),
+          "the drawn turn is the step's turn, bit for bit (body yaw and head pitch)");
+    const LeadCheck b = leadThenStep(f, {0.0f, -2000.0f});   // 200 degrees up: the clamp
+    const float pitch = f.world.registry().get<PlayerState>(f.player).pitchDeg;
+    std::printf("\n      after the clamped look: pitch %.4f", pitch);
+    CHECK(near(pitch, 89.0f, 1e-4f) && sameBasis(b.headDrawn, b.headStepped),
+          "a lead past 89 degrees stops where the step stops it");
+}
+
+static void sp9_t19_lead_split_across_steps() {
+    PlayerFixture f(true);
+    f.steps(5);
+    f.step({mouseMove(20.0f, 4.0f)});   // A, consumed
+    const LeadCheck b = leadThenStep(f, {-55.0f, 9.5f});   // B, pending, then consumed
+    CHECK(b.drawn && sameBasis(b.playerDrawn, b.playerStepped) && sameBasis(b.headDrawn, b.headStepped),
+          "after a step consumed A, the lead is B alone: the drawn view equals the view after B's step");
+}
+
+static void sp9_t19_lead_never_in_world() {
+    PlayerFixture f(true);
+    f.steps(5);
+    auto& reg = f.world.registry();
+    const uint64_t hash = hashOf(f.world);
+    const std::string saved = savedText(f.world);
+    const Transform player = reg.get<Transform>(f.player), head = reg.get<Transform>(f.head);
+    const glm::mat4 playerWorld = reg.get<WorldTransform>(f.player).world;
+    f.world.setRenderAlpha(0.4f);
+    f.world.setPendingLook({120.0f, -30.0f});
+    f.world.sync();
+    CHECK(reg.try_get<RenderPose>(f.head) != nullptr, "the lead is drawn");
+    CHECK(hashOf(f.world) == hash && savedText(f.world) == saved, "world.hash and the saved file are the step's");
+    CHECK(samePose(reg.get<Transform>(f.player), player) && samePose(reg.get<Transform>(f.head), head) &&
+              reg.get<WorldTransform>(f.player).world == playerWorld,
+          "Transform and WorldTransform keep the step's pose");
+    const Snapshot snap = takeSnapshot(f.world, engineTypes());
+    bool drawnInSnapshot = false;
+    for (const SnapshotColumn& c : snap.columns) drawnInSnapshot |= c.type == engineTypes().find<RenderPose>();
+    CHECK(!drawnInSnapshot, "and a snapshot holds no drawn pose");
+    f.world.setRenderAlpha(1.0f);
+    f.world.setPendingLook(glm::vec2(0.0f));
+    f.world.sync();
+    CHECK(reg.view<RenderPose>().empty(), "with nothing pending at alpha 1 nothing is drawn but the step's poses");
+}
+
+static void sp9_t19_no_lead_lockstep_dead_or_enemy() {
+    {
+        PlayerFixture f(true);
+        f.steps(5);
+        f.world.setRenderAlpha(1.0f);
+        f.world.setPendingLook(glm::vec2(0.0f));
+        f.world.sync();
+        CHECK(f.world.registry().view<RenderPose>().empty(), "lockstep (alpha 1, nothing pending): no lead");
+    }
+    {
+        PlayerFixture f(true);
+        f.steps(5);
+        f.world.registry().emplace_or_replace<Health>(f.player, Health{100.0f, 0.0f});
+        f.steps(1);
+        f.world.setPendingLook({80.0f, 0.0f});
+        f.world.sync();
+        CHECK(f.world.registry().try_get<RenderPose>(f.head) == nullptr, "a dead player: no lead (it does not turn)");
+    }
+    {
+        PlayerFixture f(true);
+        f.steps(5);
+        f.world.registry().patch<PlayerController>(f.player, [](PlayerController& pc) { pc.input = false; });
+        f.steps(1);
+        f.world.setPendingLook({80.0f, 0.0f});
+        f.world.sync();
+        CHECK(f.world.registry().try_get<RenderPose>(f.head) == nullptr, "a character moved by its intent (an enemy): no lead");
+    }
+}
+
+static void sp9_t19_rotation_drawn_from_newest_step() {
+    PlayerFixture f(true);
+    f.place({-1.0f, 0.0f, 2.5f}, 0.0f);
+    f.step({axisSet("move_forward", 1.0f), axisSet("look_x", 50.0f)});   // walking and turning 5 degrees a step
+    f.steps(3);
+    auto& reg = f.world.registry();
+    const glm::mat4 head = reg.get<WorldTransform>(f.head).world;
+    f.world.setRenderAlpha(0.5f);
+    f.world.setPendingLook(glm::vec2(0.0f));
+    f.world.sync();
+    const auto* hp = reg.try_get<RenderPose>(f.head);
+    CHECK(hp && sameBasis(hp->world, head), "between steps the turn is drawn at the newest step's, not halfway");
+    CHECK(hp && !nearVec(glm::vec3(hp->world[3]), glm::vec3(head[3]), 1e-4f),
+          "while the position is still drawn between the steps");
+}
+
+static void sp9_t19_lead_across_placement() {
+    PlayerFixture f(true);
+    f.steps(5);
+    f.world.setTransform(f.player, Transform{{-1.0f, 0.0f, 1.5f}, yawRotation(30.0f)});
+    f.step();   // the placement: nothing to interpolate across
+    auto& reg = f.world.registry();
+    const glm::vec3 eye = glm::vec3(reg.get<WorldTransform>(f.head).world[3]);
+    const LeadCheck c = leadThenStep(f, {25.0f, 0.0f}, 0.3f);
+    CHECK(c.drawn && nearVec(glm::vec3(c.headDrawn[3]), eye, 1e-6f),
+          "after a placement the eye is drawn where the step put it (not between the old place and the new)");
+    CHECK(sameBasis(c.headDrawn, c.headStepped), "with the lead on top of the placed yaw");
+}
+
 // ---- --look DIR: pictures of the blockout's collision, from rays --------------------------------
 // Every pixel is one ray against the physics scene (nothing is drawn from the meshes): a top-down
 // view (rays straight down, 2 cm apart) and a view from inside the east wall looking west. A hit
@@ -1536,5 +1695,11 @@ int main(int argc, char** argv) {
     RUN(t14_restore_puts_a_body_back_however_close);
     RUN(t14_resting_contacts_replay_exactly);
     RUN(t14_restore_after_a_rebuild_falls_back_to_body_motion);
+    RUN(sp9_t19_lead_matches_next_step);
+    RUN(sp9_t19_lead_split_across_steps);
+    RUN(sp9_t19_lead_never_in_world);
+    RUN(sp9_t19_no_lead_lockstep_dead_or_enemy);
+    RUN(sp9_t19_rotation_drawn_from_newest_step);
+    RUN(sp9_t19_lead_across_placement);
     return ohao::test::finish("level_physics_tests");
 }

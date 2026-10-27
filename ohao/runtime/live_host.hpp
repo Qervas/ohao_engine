@@ -86,6 +86,11 @@ struct LiveConfig {
     bool latencyReadout{false};
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
     std::size_t frameLogCapacity{FrameLog::kCapacity};
+    // Late input sampling: at most this many submitted frames not yet presented when a realtime
+    // frame polls its input (presentToAwait). -1: automatic, 1 while the world has a look-led
+    // player (a play window), unbounded otherwise; a larger number than MAX_FRAMES_IN_FLIGHT never
+    // waits.
+    int framesAhead{-1};
 };
 
 struct RunReport {
@@ -151,6 +156,8 @@ private:
     void renderFrame();   // world.sync, the world's view, render + present
     // The present stamps the renderer resolved, into the frame log.
     void collectPresents();
+    // LiveConfig::framesAhead resolved for this frame.
+    [[nodiscard]] int framesAhead() const;
     // ohao_game --latency: the measured numbers as HUD text, top left.
     void drawLatencyReadout(render::HudList& hud) const;
     // Readback copies the renderer made beyond the host's own requests (a bug if not 0).
@@ -171,16 +178,24 @@ private:
     FrameStats m_stats;
     std::vector<InputEvent> m_events;   // polled, not yet consumed by a step
     std::vector<InputEvent> m_fed;      // feedEvents, for the next poll
-    // Frame timing (sub-project 9). A look movement is polled (m_lookPolls: the polls whose
-    // events held mouse motion, not yet stepped), consumed by a step, then shown in full by the
-    // first frame whose interpolation starts at that step (once the step after it has run).
+    // Frame timing (sub-project 9). A look movement (a poll whose events held mouse motion, or an
+    // input.inject call's mouse event) is shown in full by a frame and consumed by a step, in
+    // either order: with the look lead the frame after its poll shows it, before any step; without
+    // it, the first frame whose interpolation starts at the step that consumed it.
     struct LookInFlight {
-        LookSample sample;
-        uint64_t shownAtStep{0};   // the session's frame at which the frame shows it in full
+        FrameTime poll{};
+        FrameTime consume{};
+        bool injected{false};
+        bool consumed{false};
+        uint64_t consumedAtStep{0};   // the session's frame right after the step that applied it
+        uint64_t shownFrame{0};       // the frame that first showed it in full (0: none yet)
     };
+    static constexpr std::size_t kMaxLooksInFlight = 4096;
+    static constexpr std::chrono::microseconds kFramesAheadTimeout{20000};
+    void trackLook(FrameTime poll, bool injected);
+    void lookConsumed(LookInFlight& l, FrameTime at);
     FrameLog m_frameLog;
-    std::vector<FrameTime> m_lookPolls;
-    std::vector<LookInFlight> m_lookConsumed;
+    std::vector<LookInFlight> m_looks;
     FrameTime m_lastFrameStart{};
     FrameTime m_frameView{};   // this frame's view resolve (renderFrame)
     bool m_releaseOnResume{false};      // stepping stopped: the next step starts with a focus loss

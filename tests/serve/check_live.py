@@ -530,6 +530,46 @@ def test_render_stats_latency():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+def test_view_turns_next_frame():
+    print("sp9 test 19: the look lead (a realtime window shows a movement on the next frame)")
+    scene = "assets/scenes/blockout_play.scene.json"
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--realtime", "--out", out_dir("lead"),
+                "--seed", SEED, scene], "lead", env=validation_env())
+    for i in range(60):
+        s.call("input.inject", {"events": [{"mouse": [6 if i % 2 else -6, 0]}]})
+        time.sleep(0.02)
+    time.sleep(0.1)
+    lat = (result(s.call("render.stats", {"frames": 120})) or {}).get("latency") or {}
+    stages = lat.get("stages") or {}
+    check(lat.get("frames", 0) > 0 and stages.get("pollToViewMs", 99) < 4.0,
+          "a movement is in the very next frame's view: poll to view %s ms (median), latency %s ms" %
+          (stages.get("pollToViewMs"), lat.get("medianMs")))
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+
+def test_lead_dropped_in_lockstep():
+    print("sp9 test 19: no lead in lockstep (a capture shows the step's view, whatever is injected)")
+    scene = "assets/scenes/blockout_play.scene.json"
+    out = out_dir("lead_lockstep")
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--realtime", "--out", out, "--seed", SEED, scene],
+               "lead_lockstep", env=validation_env())
+    s.call("input.inject", {"events": [{"mouse": [40, 0]}]})
+    time.sleep(0.2)
+    s.call("time.set", {"mode": "lockstep"})
+    a = result(s.call("render.capture", {"path": out + "/a.png", "post": []})) or {}
+    s.call("input.inject", {"events": [{"mouse": [300, 0]}]})   # 30 degrees, due at the next step
+    b = result(s.call("render.capture", {"path": out + "/b.png", "post": []})) or {}
+    s.call("world.step", {"frames": 1})
+    c = result(s.call("render.capture", {"path": out + "/c.png", "post": []})) or {}
+    same = bool(a.get("path") and b.get("path")) and pixels(out + "/a.png") == pixels(out + "/b.png")
+    turned = bool(c.get("path")) and pixels(out + "/a.png") != pixels(out + "/c.png")
+    check(same, "an injected movement not yet stepped changes no pixel of a lockstep capture")
+    check(turned, "the step that applies it turns the view")
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
+
+
 PLAYER, ENEMY_A, ENEMY_B = "5c0b1a7e00000001", "5c0b1a7e00000010", "5c0b1a7e00000020"
 
 
@@ -677,6 +717,8 @@ def main():
     test_walk()
     test_fight()
     test_render_stats_latency()
+    test_view_turns_next_frame()
+    test_lead_dropped_in_lockstep()
     if os.name == "nt":
         test_window_pipe()
     print("Results: %d/%d passed" % (passed, passed + failed))

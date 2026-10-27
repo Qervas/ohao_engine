@@ -43,6 +43,9 @@ public:
     void presented(uint64_t frame, uint64_t presentId);
     // The stamps resolved since the last call, oldest first.
     [[nodiscard]] std::vector<PresentStamp> take();
+    // Blocks until `frame`'s present is resolved (confirmed, or given up on) or `timeout` passes;
+    // true when it was confirmed presented. Late input sampling waits here.
+    bool waitResolved(uint64_t frame, std::chrono::microseconds timeout);
     [[nodiscard]] bool waits() const noexcept { return m_wait != nullptr; }
 
 private:
@@ -58,8 +61,11 @@ private:
     PFN_vkWaitForPresentKHR m_wait{nullptr};
     std::mutex m_mutex;   // the queues below
     std::condition_variable m_wake;
+    std::condition_variable m_resolved;   // a present was resolved
     std::deque<Pending> m_pending;
     std::vector<PresentStamp> m_done;
+    uint64_t m_resolvedUpTo{0};       // the newest frame resolved (they resolve in order)
+    uint64_t m_confirmedUpTo{0};      // the newest frame the engine confirmed
     bool m_stop{false};
     std::thread m_thread;
 };

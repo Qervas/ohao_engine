@@ -43,6 +43,20 @@ bool FrameLog::present(uint64_t frame, FrameTime at, bool waited) {
     return false;
 }
 
+bool FrameLog::consumed(uint64_t frame, FrameTime poll, FrameTime at) {
+    for (auto it = m_frames.rbegin(); it != m_frames.rend(); ++it) {
+        if (it->frame != frame) continue;
+        for (LookSample& l : it->looks)
+            if (l.poll == poll && !l.consumed) {
+                l.consume = at;
+                l.consumed = true;
+                return true;
+            }
+        return false;
+    }
+    return false;
+}
+
 std::optional<LatencyStats> FrameLog::latency(int frames) const {
     if (m_frames.empty()) return std::nullopt;
     std::vector<double> total, consume, view, submit, present;
@@ -54,7 +68,7 @@ std::optional<LatencyStats> FrameLog::latency(int frames) const {
         st.presentWait = st.presentWait && it->presentWait;
         for (const LookSample& l : it->looks) {
             total.push_back(ms(*it->present - l.poll));
-            consume.push_back(ms(l.consume - l.poll));
+            if (l.consumed) consume.push_back(ms(l.consume - l.poll));
             view.push_back(ms(it->view - l.poll));
             submit.push_back(ms(it->submit - it->view));
             present.push_back(ms(*it->present - it->submit));

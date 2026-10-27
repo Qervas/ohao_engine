@@ -226,6 +226,10 @@ public:
     // call), oldest first: a window host measures their latency as it does the device's
     // (sub-project 9). Empty when the step applied none.
     [[nodiscard]] std::span<const std::chrono::steady_clock::time_point> lastStepInjectedLook() const noexcept;
+    // The injected mouse movements the next step will apply, added to `sum` in the order that
+    // step's input map will add them (after the device's), and their input.inject call times: a
+    // window's look lead draws them before that step runs.
+    void injectedLookDue(glm::vec2& sum, std::vector<std::chrono::steady_clock::time_point>& queuedAt) const;
     [[nodiscard]] uint64_t schemaHash() const noexcept;
     // Lets scene.validate {checkAssets: true} ask whether asset files exist. Not owned.
     void setAssetResolver(ecs::AssetResolver* assets) noexcept;

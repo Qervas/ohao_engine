@@ -1169,6 +1169,15 @@ void Session::step(std::span<const InputEvent> deviceEvents, float dt) {
 std::span<const std::chrono::steady_clock::time_point> Session::lastStepInjectedLook() const noexcept {
     return m->lastStepInjectedLook;
 }
+void Session::injectedLookDue(glm::vec2& sum, std::vector<std::chrono::steady_clock::time_point>& queuedAt) const {
+    const uint64_t next = m->time->frame();
+    for (const auto& p : m->injected) {
+        if (p.step > next) break;   // in apply order: the rest are for later steps
+        if (p.event.type != InputEvent::Type::MouseDelta) continue;
+        sum += glm::vec2(static_cast<float>(p.event.x), static_cast<float>(p.event.y));   // as InputMap adds it
+        queuedAt.push_back(p.queuedAt);
+    }
+}
 uint64_t Session::schemaHash() const noexcept { return m->schemaHash; }
 void Session::setAssetResolver(ecs::AssetResolver* assets) noexcept { m->assets = assets; }
 void Session::setHost(Host* host) noexcept {

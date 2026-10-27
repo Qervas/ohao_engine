@@ -16,11 +16,23 @@ namespace ohao::runtime {
 
 using FrameTime = std::chrono::steady_clock::time_point;
 
-// One look movement: when it was polled (or injected) and when the step that applied it ran.
+// One look movement: when it was polled (or injected) and when the step that applied it ran. With
+// the look lead a frame shows a movement before a step consumes it: `consumed` is false until
+// FrameLog::consumed fills the step in.
 struct LookSample {
     FrameTime poll{};
     FrameTime consume{};
+    bool consumed{true};
 };
+
+// Late input sampling (spec "Present mode and late input sampling"): the frame whose present a host
+// waits for before it polls the next frame's input, so at most `framesAhead` submitted frames are not
+// yet presented when it polls; 0: none to wait for (too few frames yet, or a negative framesAhead:
+// unbounded).
+[[nodiscard]] constexpr uint64_t presentToAwait(uint64_t submitted, int framesAhead) noexcept {
+    if (framesAhead < 0 || submitted <= static_cast<uint64_t>(framesAhead)) return 0;
+    return submitted - static_cast<uint64_t>(framesAhead);
+}
 
 struct FrameStamps {
     uint64_t frame{0};   // the renderer's submitted-frame number
@@ -65,6 +77,8 @@ public:
     void record(FrameStamps frame);
     // A recorded frame's present; false when the frame is not (or no longer) in the log.
     bool present(uint64_t frame, FrameTime at, bool waited);
+    // The step that consumed a look a recorded frame showed before it (polled at `poll`).
+    bool consumed(uint64_t frame, FrameTime poll, FrameTime at);
     // Over the newest `frames` records: nullopt when none of them is a presented frame with look.
     [[nodiscard]] std::optional<LatencyStats> latency(int frames) const;
     // Over the newest `frames` records: nullopt when there are none.

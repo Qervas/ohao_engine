@@ -179,8 +179,13 @@ public:
     void spawnPlayers();
     // RenderPose for what the last step moved (players, their heads, dynamic bodies) and their
     // subtrees, between the last two step poses at alpha; alpha 1 removes them (the `interpolate`
-    // sync system, with World::renderAlpha).
-    void interpolate(float alpha);
+    // sync system, with World::renderAlpha). The look lead (sub-project 9): an input-driven, living
+    // player and its subtree are drawn turned by `pendingLook` through applyLook, its turn the
+    // newest step's (never slerped) whenever alpha < 1 or a look is pending.
+    void interpolate(float alpha, glm::vec2 pendingLook = glm::vec2(0.0f));
+    // Whether the last interpolate saw an input-driven, living player (a window measures its look
+    // latency by the lead's rule then, and keeps one frame ahead).
+    [[nodiscard]] bool leadsLook() const noexcept;
     // The latest step's events, sorted (removals since the step before it first).
     [[nodiscard]] std::span<const PhysicsEvent> stepEvents() const noexcept;
     // Up to max logged events with seq > since, oldest first; dropped is how many of those the

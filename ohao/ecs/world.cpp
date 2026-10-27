@@ -245,6 +245,7 @@ void World::addSync(std::string name, SyncSystem fn) {
 
 void World::simulate(float dt) {
     for (auto& [name, fn] : m_simulate) fn(*this, dt);
+    m_pendingLook = glm::vec2(0.0f);   // the step took it
 }
 
 void World::sync() {

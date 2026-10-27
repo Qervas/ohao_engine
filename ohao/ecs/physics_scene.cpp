@@ -1431,10 +1431,11 @@ struct PhysicsScene::Impl {
     // RenderPose for what the last step moved, between its last two step poses at alpha, and for
     // their subtrees (a descendant that moves by itself has its own entry). Alpha 1 (or outside
     // [0, 1)) draws the step's poses: every RenderPose goes. The step's state is not touched.
-    void interpolate(float alpha) {
+    void interpolate(float alpha, glm::vec2 pendingLook) {
         ankerl::unordered_dense::set<entt::entity> was;
         was.swap(drawn);
-        if (alpha >= 0.0f && alpha < 1.0f) {
+        const bool between = alpha >= 0.0f && alpha < 1.0f;
+        if (between) {
             std::vector<entt::entity> stack;
             for (const auto& [e, mv] : movers) {
                 if (!reg.valid(e) || !reg.all_of<WorldTransform>(e)) continue;
@@ -1459,11 +1460,71 @@ struct PhysicsScene::Impl {
                 }
             }
         }
+        lookLead(between, alpha, pendingLook, was);
         for (const entt::entity x : was) {
             if (drawn.contains(x) || !reg.valid(x)) continue;
             reg.remove<RenderPose>(x);
             reg.emplace_or_replace<RenderDirty>(x);
         }
+    }
+
+    // The look lead (sub-project 9, spec "The look lead"): an input-driven, living player is drawn
+    // turned by the look its steps have not consumed, through applyLook, the step's own arithmetic:
+    // its yaw on the body, its pitch on the head, the rest of the subtree carried along. Between
+    // steps (realtime) its turn is drawn at the newest step's, never slerped: only the position is
+    // interpolated. In lockstep (alpha 1) with nothing pending, nothing is drawn but the step's poses.
+    // Presentation only: RenderPose, never Transform.
+    bool leadsLook{false};   // an input-driven, living player exists (the last interpolate saw one)
+
+    void lookLead(bool between, float alpha, glm::vec2 pending, const ankerl::unordered_dense::set<entt::entity>& was) {
+        leadsLook = false;
+        const bool lead = between || pending != glm::vec2(0.0f);
+        std::vector<std::pair<entt::entity, glm::mat4>> stack;
+        for (auto& [e, p] : players) {
+            if (!reg.valid(e)) continue;
+            const auto* pc = reg.try_get<PlayerController>(e);
+            const auto* t = reg.try_get<Transform>(e);
+            if (!pc || !pc->input || !t) continue;
+            if (const auto* h = reg.try_get<Health>(e); h && !(h->current > 0.0f)) continue;
+            leadsLook = true;
+            if (!lead) continue;
+            const LookResult look = applyLook(p.yawDeg, p.pitchDeg, pending, *pc);
+            glm::vec3 pos = t->position;
+            if (between)
+                if (const auto mv = movers.find(e); mv != movers.end() && mv->second.fromPos != mv->second.toPos)
+                    pos = glm::mix(mv->second.fromPos, mv->second.toPos, alpha);
+            // As the transform system composes it (a player is a root: identity times its local).
+            const glm::mat4 body = glm::mat4(1.0f) * Transform{pos, yawQuat(look.yawDeg), t->scale}.matrix();
+            setDrawn(e, body, was);
+            stack.clear();
+            if (const auto* ch = reg.try_get<Children>(e))
+                for (const entt::entity c : ch->entities) stack.emplace_back(c, body);
+            while (!stack.empty()) {
+                const auto [x, parent] = stack.back();
+                stack.pop_back();
+                const auto* xt = reg.try_get<Transform>(x);
+                if (!reg.valid(x) || !xt) continue;
+                const glm::mat4 local = x == p.head ? Transform{xt->position, pitchQuat(look.pitchDeg), xt->scale}.matrix()
+                                                    : xt->matrix();
+                const glm::mat4 world = parent * local;
+                setDrawn(x, world, was);
+                if (const auto* ch = reg.try_get<Children>(x))
+                    for (const entt::entity c : ch->entities) stack.emplace_back(c, world);
+            }
+        }
+    }
+
+    // A drawn pose for x this frame; its previous one is what the last frame drew of it.
+    void setDrawn(entt::entity x, const glm::mat4& world, const ankerl::unordered_dense::set<entt::entity>& was) {
+        const auto* wt = reg.try_get<WorldTransform>(x);
+        if (!wt) return;
+        const auto* last = reg.try_get<RenderPose>(x);
+        const glm::mat4 prev = drawn.contains(x) && last ? last->prevWorld          // set by the movers this frame
+                               : last && was.contains(x) ? last->world                // drawn last frame
+                                                         : wt->prevWorld;
+        reg.emplace_or_replace<RenderPose>(x, RenderPose{world, prev});
+        reg.emplace_or_replace<RenderDirty>(x);
+        drawn.insert(x);
     }
 
     [[nodiscard]] std::vector<PhysicsEvent> since(uint64_t after, std::size_t max, uint64_t& dropped) const {
@@ -1663,7 +1724,8 @@ bool PhysicsScene::teleportPlayer(entt::entity e, glm::vec3 pos, std::optional<f
 
 void PhysicsScene::step(World& world, float dt) { m->step(world.input(), dt); }
 void PhysicsScene::spawnPlayers() { m->spawnPlayers(); }
-void PhysicsScene::interpolate(float alpha) { m->interpolate(alpha); }
+void PhysicsScene::interpolate(float alpha, glm::vec2 pendingLook) { m->interpolate(alpha, pendingLook); }
+bool PhysicsScene::leadsLook() const noexcept { return m->leadsLook; }
 std::span<const PhysicsEvent> PhysicsScene::stepEvents() const noexcept { return m->stepEvents; }
 std::vector<PhysicsEvent> PhysicsScene::eventsSince(uint64_t since, std::size_t max, uint64_t& dropped) const {
     return m->since(since, max, dropped);
@@ -1723,7 +1785,7 @@ PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     // Render interpolation, before the render extract reads the poses (installRenderExtract
     // places itself after it when it comes later).
     const auto names = world.syncNames();
-    const auto interpolate = [scene](World& w) { scene->interpolate(w.renderAlpha()); };
+    const auto interpolate = [scene](World& w) { scene->interpolate(w.renderAlpha(), w.pendingLook()); };
     if (std::find(names.begin(), names.end(), "render_extract") != names.end())
         world.addSyncBefore("render_extract", "interpolate", interpolate);
     else

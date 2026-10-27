@@ -437,6 +437,29 @@ static void sp9_t19_latency_stages_ordered() {
     CHECK(log.size() == FrameLog::kCapacity && !log.latency(1024), "older frames fall out of the ring");
 }
 
+// Test 20: late input sampling. Before a frame polls its input, the frame `framesAhead + 1` back
+// must have been presented, so at most `framesAhead` earlier frames are submitted and not presented.
+static void sp9_t20_frames_ahead_bounded() {
+    CHECK(presentToAwait(10, 1) == 9, "one frame ahead: frame 11 polls once frame 9 is presented");
+    CHECK(presentToAwait(10, 0) == 10, "none ahead: once the previous frame is presented");
+    CHECK(presentToAwait(10, 2) == 8, "two ahead");
+    CHECK(presentToAwait(1, 1) == 0 && presentToAwait(0, 0) == 0, "nothing to wait for before enough frames exist");
+    CHECK(presentToAwait(10, -1) == 0, "unbounded (a negative count): never waits");
+    // Simulated: a frame is presented 3 submits after it is made unless the host waits.
+    for (int ahead = 0; ahead <= 2; ++ahead) {
+        uint64_t submitted = 0, presented = 0;
+        int worst = 0;
+        for (int frame = 0; frame < 50; ++frame) {
+            const uint64_t need = presentToAwait(submitted, ahead);
+            if (presented < need) presented = need;   // the host waits for it
+            worst = std::max(worst, static_cast<int>(submitted - presented));
+            ++submitted;
+            if (submitted >= 3 && presented < submitted - 3) presented = submitted - 3;   // the queue drains
+        }
+        CHECK(worst <= ahead, "at most framesAhead frames unpresented when a frame polls");
+    }
+}
+
 // Test 20: frame pacing over the newest frames: the frame time's percentiles, steps per frame, and
 // the steps the clock's cap discarded.
 static void sp9_t20_pacing_stats() {
@@ -818,6 +841,7 @@ int main() {
     std::printf("[frame timing]\n");
     RUN(sp9_t19_latency_stages_ordered);
     RUN(sp9_t20_pacing_stats);
+    RUN(sp9_t20_frames_ahead_bounded);
     std::printf("\n");
     return ohao::test::finish("runtime_tests");
 }
