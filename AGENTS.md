@@ -120,7 +120,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, which footstep sound plays (round robin, the local folder first, `default`) |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, which footstep sound plays (round robin, the local folder first, `default`), which weapon sound each combat event plays (by shooter and surface), the click that captures the cursor never reaching the input map |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
@@ -128,7 +128,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
-| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones lying down with no character, their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies; the round (test 17): `round_start` once, a restart 180 steps after the player's death equal to the round's start (`world.hash`, poses, health, ammo, a knocked crate), the `restart` key, a dead player neither walking, turning nor firing, a win once both enemies die (waiting for `restart`, which brings both back), no round without `Round`, the same play after a restart, and after a won round's restart, bit for bit |
+| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones lying down with no character, their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies; the round (test 17): `round_start` once, a restart 180 steps after the player's death equal to the round's start (`world.hash`, poses, health, ammo, a knocked crate), the `restart` key, a dead player neither walking, turning nor firing, a win once both enemies die (waiting for `restart`, which brings both back), no round without `Round`, the same play after a restart, and after a won round's restart, bit for bit; presentation (`fx_*`): the muzzle light on for its 3 steps then off, impact marks (64 at most, the oldest reused, never saved or hashed, on an enemy's body box and following it, none on the player, cleared by a restart), the HUD list (health, ammunition, the crosshair opened by bloom, the hit marker for 0.15 s and the vignette for 0.3 s, DEAD with the restart countdown, CLEARED, nothing without a player) |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -173,7 +173,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   the CPU box filter's bytes and is all a preview request copies), the render settings
   (`sp2b_t14_*`: a fresh renderer starts at the defaults and reads back what was set; the
   SSR, SSS, SSAO, RT GI and RT shadow switches drop their passes; GI resolution and rays
-  reach the trace; CSM cascades and size rebuild the map). `ecs_tests`: world, hierarchy, transforms and the render extract
+  reach the trace; CSM cascades and size rebuild the map), the HUD (`sp7_hud_*`: a capture
+  with a HUD list differs from one without only inside the listed rectangles, and an empty
+  list leaves the frame byte for byte). `ecs_tests`: world, hierarchy, transforms and the render extract
   against a real RenderScene. The `*_gpu_test`s: instantiate, scene view and
   snapshot/restore through the renderer; `deferred_determinism_gpu_test`: deferred frames,
   post effects included, bit-identical across fresh renderers, processes and repeated
@@ -223,11 +225,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 26 scenes: 8 examples, 18 through
+- **Render goldens** (`tests/golden/manifest.json`, 27 scenes: 8 examples, 19 through
   `ohao run`; seven at the deferred frame's `reference` quality; eight of them the Khronos
   validation pack, `assets/khronos/README.md`; two an area light, `area_light.scene.json`;
-  one the level pipeline's blockout, `blockout_room.scene.json`; one the play scene through
-  the player's head, `blockout_play.scene.json`): `--only NAME`, `--update` after a deliberate change (look at what drifted
+  one the level pipeline's blockout, `blockout_room.scene.json`; two the play scene through
+  the player's head, `blockout_play.scene.json`, one of them with the HUD after 45 steps of the
+  fight, `cli_blockout_play_hud`): `--only NAME`, `--update` after a deliberate change (look at what drifted
   first). `--json FILE` writes one object per scene (statistics, tolerance, up to 4
   regions where the image changed); a failing scene also gets
   `build/golden_diff/<name>.heat.png` (where and how much) and `<name>.crop.png`
@@ -249,8 +252,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
   `tests/bench/render_budgets.json`, each tagged `gatedFrom` the 2b step that delivers it
   (gated once `currentStep` reaches it, else reported `pending` with its measurement);
-  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p` and
-  `bench10k_1080p`/`bench100k_1080p`, 5 warm-up and 100 timed frames each, every pass's median
+  headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p`,
+  `bench10k_1080p`/`bench100k_1080p` and `play_hud_1080p` (the play scene with its HUD: the
+  `hud` pass, 0.05 ms), 5 warm-up and 100 timed frames each, every pass's median
   and p95 from GPU timestamps, and `meshlet_build_1m` (the meshlet builder on a million
   triangles, CPU, median of 9), results in `build/render_bench.json` (the per-pass baseline
   every renderer change is judged by); `--only SCENE`, `--frames N`, `--geometry
@@ -565,7 +569,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     interpolated across. A capture syncs before it resolves the view.
   - The window reports look input only from a captured cursor, as `MouseDelta`;
     `ohao_game` on a scene with a `PlayerController` captures the mouse while focused,
-    `release_mouse` (Esc) frees it, `capture_mouse` (click) takes it back.
+    `release_mouse` (Esc) frees it, and a click on the window takes it back
+    (`LiveHost::setClickToCapture`, `runtime/click_capture.hpp`): that press and its release
+    are swallowed before the input map sees them, so the capturing click never fires.
   - Footsteps: the player's step logs a `footstep` event every 0.75 m walked (0.95 m
     sprinting) on the ground and a `land` after a fall of more than 0.3 m, in the physics
     event log (`physics.events`), with the ground's `Collider.surface` (hint `surf`; empty is
@@ -618,6 +624,21 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     that step is the start's. Every enemy dead is `win` once, then the round waits for
     `restart`. A dead player neither walks, turns, jumps nor fires. A character a restore
     creates starts where its restored entity stands, never at a spawn.
+  - Presentation (step 4). The muzzle flash is a `Light` with a saved `Muzzle {intensity,
+    time}` below the weapon's entity: the combat step sets it to `intensity` for `time` after a
+    round (`WeaponState.flash` counts the steps) and back to 0; a light at intensity 0 has no
+    emitter mesh (`render::lightEmitter`). Impact marks (`ecs/impact_marks.hpp`, the
+    `impact_marks` sync system after `render_extract`, installed by `installImpactMarks` where
+    a RenderScene exists) are 64 runtime quads made from `hit` events, attached to what was hit
+    (on a character, to the body box the round crossed; none on the player), drawn as
+    RenderScene instances, never in the registry, so never saved or hashed; a restart clears
+    them. The HUD (`ecs/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
+    `render/hud/`) is laid out from combat state and the log; marks and HUD read the log from
+    its oldest event, so a renderer created late (a headless host's first capture) misses no
+    hit. A window always draws the HUD; `render.capture` and `ohao run --render` only with
+    `hud: true`/`--hud`, and only on deferred frames. Sounds (`runtime/combat_sounds.hpp`,
+    `assets/audio/weapons/`, ours: `tools/audio/make_weapons.py`) play beside the footsteps,
+    under the same `LiveConfig::footsteps`.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

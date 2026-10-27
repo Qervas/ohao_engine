@@ -25,7 +25,11 @@ Members are declared so that they are destroyed in the right order. The session 
 
 Each loop iteration does six things, always in the same order. First it polls the window. Events are appended to a list that survives the frame, because a realtime frame shorter than the fixed step runs no step, and the next step must still see those events:
 
-{{cite ohao/runtime/live_host.cpp "m_window.poll(m_events);   // appended: kept until a step consumes them"}}
+{{cite ohao/runtime/live_host.cpp "m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them"}}
+
+In a play window (`setClickToCapture(true)`, which `ohao_game` sets when the scene has a player) the newly polled events first pass through `ClickToCapture`: a mouse press while the cursor is free, and its release, are dropped and only ask for the cursor, so the click that takes the mouse back never fires a round:
+
+{{cite ohao/runtime/live_host.cpp "if (m_clickToCapture && m_clickCapture.filter(polled, m_window.cursorCaptured())) m_captureClicked = true;"}}
 
 Second, it pumps requests. `RequestPump` is two callbacks, `poll` and `flush`, which `serveWindow` binds to `rpc::Server`. `poll` runs everything queued, on this thread, at this point in the frame. While the clock is not running, it waits up to 16 ms for the first message. That keeps an idle lockstep window from spinning a core, while it still services the OS event queue about 60 times a second:
 

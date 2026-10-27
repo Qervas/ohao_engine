@@ -38,7 +38,8 @@ ohao summary  SCENE [--depth D] [--max-children N] [--max-nodes N]
 ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                     [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
-                     [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]]
+                     [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]
+                     [--hud]]
                     [--save OUT.scene.json]
 ohao level    LEVEL.glb   level.info for a level file: nodes, spawns, colliders, bodies (no GPU, no scene)
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
@@ -162,6 +163,9 @@ the result includes that. A capture renders `--frames` frames from a reset and k
 last: by default 1 deferred frame (10 with TAA) or `--spp` path-traced ones. The hybrid's
 RT GI keeps a history, so give `--frames` (about 10) for converged indirect light. Without
 `--post` no post effect is on; `model_viewer` turns on `--post taa,ssao,bloom --exposure 1`.
+`--hud` (`render.capture {hud: true}`) draws the combat HUD over a deferred frame: the
+player's health, ammunition and crosshair, the hit marker, the damage vignette, the round's
+end. Without it no capture has a HUD.
 
 The deferred frame has two qualities. `realtime` (the default) is the budgeted frame: RT
 shadows trace one ray to each of a pixel's 4 most important lights, and RT GI 2 rays a

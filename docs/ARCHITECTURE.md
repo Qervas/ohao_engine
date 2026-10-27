@@ -97,11 +97,15 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     at its first step's end; the player dead for
                     restartDelay, or `restart` pressed -> the snapshot
                     restored at this step's end (restart); every Enemy
-                    dead -> win, then waits for `restart`
+                    dead -> win, then waits for `restart`; within each
+                    weapon, a round lights its Muzzle light for
+                    Muzzle.time (WeaponState.flash), then intensity 0
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
   runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,
                       <surface>_<n>.wav (assets/local/audio/footsteps, then assets/audio/footsteps)
+  runtime::CombatSounds  the combat log's events since the last frame -> fire, enemy_fire,
+                      impact_<surface>, hurt, death, reload, empty (assets/audio/weapons)
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
@@ -125,6 +129,10 @@ World::sync()
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
+  impact_marks    the combat log's hits -> up to 64 mark quads        installed by a host with
+                  (RenderScene instances, never in the registry),      a renderer
+                  each following the entity it hit; a restart clears   (installImpactMarks)
+                  them
 host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
       any; Environment -> renderer camera, HDRI)
 VulkanRenderer::render()
@@ -182,6 +190,8 @@ sss                 subsurface blur on classified tiles   [sss]
 ssr                 half-res trace; resolve replaces env specular in place   [ssr]
 post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]  (bloom's input clamped at luminance 4)
 gizmo               transform handles
+hud                 the HudList over the final image (only when the list has items:      [capture hud]
+                    a window always; a capture with hud: true)
 capture.preview     only for an inline capture: box filter into staging
 present | readback  window: blit to the swapchain (+ requested copy); headless: copy to staging
 ```
@@ -193,7 +203,8 @@ A path-traced frame is `scene.upload`, `pt.render`, then `pt.present` or `pt.rea
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
 frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
 to 16 ms while nothing steps); the timeline's steps (`Session::step` each, then the
-`fixedUpdate` hook); the `update` hook; render and present in its live mode (`--mode`:
+`fixedUpdate` hook); the `update` hook; the combat sounds and the HUD list (`ecs::combatHud`
+at the window's size); render and present in its live mode (`--mode`:
 deferred, `rt_realtime` or `rt_offline`; realtime: every frame; lockstep or paused: only
 when `Session::changeCount()` moved or the window resized, and an `rt_offline` window
 until `--spp` samples have accumulated); then send the replies those requests produced
@@ -462,7 +473,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-28 passes registered; budget names matching none: []
+29 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 
