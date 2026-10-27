@@ -354,6 +354,94 @@ int main(int argc, char** argv) {
     if (!fought)
         failures.push_back("combat: " + std::to_string(damaged) + " of " + std::to_string(shotMs.size()) + " rounds damaged the target");
 
+    // 7. Enemies (sub-project 7 step 2). combat_step_ms: the combat system's part of a step (the
+    // enemy AI and the weapons) with the blockout's two enemies attacking the player, who fires
+    // back; 200 steps after 40. enemies16_step_ms: the whole step (physics and combat) with 16
+    // enemies chasing the player across the blockout; 200 steps after 20. N rounds each.
+    const auto addEnemy = [](ecs::World& w, uint64_t id, const std::string& spawn, glm::vec3 at, float attackRange) {
+        const entt::entity e = w.createWithId(id, "Enemy");
+        auto& reg = w.registry();
+        ecs::PlayerController pc;
+        pc.spawn = spawn;
+        pc.input = false;
+        pc.walkSpeed = 2.5f;
+        reg.emplace<ecs::PlayerController>(e, pc);
+        reg.emplace<ecs::Health>(e, ecs::Health{1.0e6f, 1.0e6f});
+        ecs::Weapon w8;
+        w8.damage = 8.0f;
+        w8.fireRate = 4.0f;
+        w8.magazine = 12;
+        w8.recoilPitchDeg = w8.recoilYawDeg = 0.0f;
+        reg.emplace<ecs::Weapon>(e, w8);
+        ecs::Enemy ai;
+        ai.attackRange = attackRange;
+        reg.emplace<ecs::Enemy>(e, ai);
+        if (spawn.empty()) w.setTransform(e, ecs::Transform{at});   // facing -Z, north
+
+    };
+    const auto addPlayer = [](ecs::World& w, bool firing) {
+        const entt::entity pl = w.createWithId(0xb1a7e2, "Player");
+        w.registry().emplace<ecs::PlayerController>(pl);
+        w.registry().emplace<ecs::Health>(pl, ecs::Health{1.0e6f, 1.0e6f});
+        if (firing) w.registry().emplace<ecs::Weapon>(pl);
+        return pl;
+    };
+    std::vector<double> combatMs, enemies16Ms;
+    std::size_t enemyRounds = 0;
+    float chased = 0.0f;
+    for (int r = 0; r < rounds + 1; ++r) {
+        Blockout b;
+        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        (void)addPlayer(b.world, true);
+        addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
+        addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
+        b.world.sync();
+        std::vector<InputEvent> fire(1);
+        fire[0].type = InputEvent::Type::ActionDown;
+        fire[0].name = "fire";
+        for (int i = 0; i < 240; ++i) {
+            b.world.stepInput(i == 0 ? std::span<const InputEvent>(fire) : std::span<const InputEvent>());
+            b.world.simulate(kDt);
+            b.world.sync();
+            if (r > 0 && i >= 40) combatMs.push_back(combat.lastStepMs());
+            for (const ecs::CombatEvent& e : combat.stepEvents())
+                if (r > 0 && e.kind == ecs::CombatEvent::Kind::Shot && (e.sourceId == 0xe1 || e.sourceId == 0xe2)) ++enemyRounds;
+        }
+    }
+    for (int r = 0; r < std::max(1, rounds / 5) + 1; ++r) {
+        Blockout b;
+        ecs::CombatSystem& combat = ecs::installCombat(b.world);
+        const entt::entity pl = addPlayer(b.world, false);
+        std::vector<entt::entity> hunters;
+        for (int i = 0; i < 16; ++i) {
+            // A 4 x 4 grid on the clear floor of the room's south half (no step, pillar or crate
+            // there; 0.7 m apart, wider than a capsule), facing north at the player by the north
+            // wall: the front rows see it at once, the rows behind as the front ones move off.
+            const glm::vec3 at(-2.6f + 1.2f * float(i % 4), 0.0f, 0.6f + 0.7f * float(i / 4));
+            addEnemy(b.world, 0x100 + static_cast<uint64_t>(i), "", at, 0.5f);
+            hunters.push_back(b.world.findById(0x100 + static_cast<uint64_t>(i)));
+        }
+        b.world.sync();
+        b.physics->teleportPlayer(pl, {-0.8f, 0.0f, -2.6f}, 180.0f);   // by the north wall, facing them
+        auto& reg = b.world.registry();
+        float before = 0.0f;
+        for (const entt::entity h : hunters)
+            before += glm::length(reg.get<ecs::Transform>(h).position - reg.get<ecs::Transform>(pl).position);
+        for (int i = 0; i < 220; ++i) {
+            b.world.simulate(kDt);
+            b.world.sync();
+            if (r > 0 && i >= 20) enemies16Ms.push_back(b.physics->lastStepTiming().totalMs + combat.lastStepMs());
+        }
+        float after = 0.0f;
+        for (const entt::entity h : hunters)
+            after += glm::length(reg.get<ecs::Transform>(h).position - reg.get<ecs::Transform>(pl).position);
+        chased = (before - after) / 16.0f;
+    }
+    const bool hunted = enemyRounds > 0 && chased > 0.5f;
+    if (!hunted)
+        failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
+                           std::to_string(chased) + " m on average (want rounds and > 0.5 m)");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
@@ -380,12 +468,19 @@ int main(int argc, char** argv) {
     std::printf("  combat_shot_ms          median %8.4f   p95 %8.4f   (%zu rounds, %zu damaged)\n", sc.median, sc.p95, shotMs.size(),
                 damaged);
     const Verdict vc = judge(budgets, combatStep, "combat_shot_ms", sc.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc})
+    const Stats sk = stats(combatMs), s16 = stats(enemies16Ms);
+    std::printf("  combat_step_ms          median %8.4f   p95 %8.4f   (%zu steps, %zu enemy rounds)\n", sk.median, sk.p95,
+                combatMs.size(), enemyRounds);
+    const Verdict vk = judge(budgets, combatStep, "combat_step_ms", sk.median, failures);
+    std::printf("  enemies16_step_ms       median %8.4f   p95 %8.4f   (%zu steps, closed in %.2f m on average)\n", s16.median,
+                s16.p95, enemies16Ms.size(), chased);
+    const Verdict v16 = judge(budgets, combatStep, "enemies16_step_ms", s16.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
-            name != "boxes1k_step_ms" && name != "combat_shot_ms")
+            name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -407,6 +502,10 @@ int main(int argc, char** argv) {
     out["boxes1k_snapshot_ms"] = {{"median", ss.median}, {"min", ss.min}, {"verdict", "reported"}};
     out["combat_shot_ms"] = {{"median", sc.median}, {"p95", sc.p95}, {"min", sc.min}, {"rounds", shotMs.size()},
                              {"damaged", damaged}, {"verdict", vc.verdict}};
+    out["combat_step_ms"] = {{"median", sk.median}, {"p95", sk.p95}, {"min", sk.min}, {"steps", combatMs.size()},
+                             {"enemyRounds", enemyRounds}, {"verdict", vk.verdict}};
+    out["enemies16_step_ms"] = {{"median", s16.median}, {"p95", s16.p95}, {"min", s16.min}, {"steps", enemies16Ms.size()},
+                                {"closedInM", chased}, {"verdict", v16.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -421,7 +520,8 @@ int main(int argc, char** argv) {
     }
     std::ofstream(outPath, std::ios::binary) << out.dump(2) << '\n';
 
-    const bool wrong = !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought;   // no machine excuses these
+    const bool wrong =
+        !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",
