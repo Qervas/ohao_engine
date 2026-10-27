@@ -46,7 +46,7 @@ ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
               [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
                              [--mode deferred|rt_realtime|rt_offline] [--spp N]
-                             [--present immediate|mailbox|fifo]]
+                             [--present immediate|mailbox|fifo] [--fx]]
 every scene command: [--root DIR]  the project root that asset paths resolve against (default .)
 ```
 
@@ -273,7 +273,9 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 - **`--window [WxH]`** (default 1280x720) serves from the live host: a window a human can
   watch, lockstep by default (`--realtime` to play; `time.set` switches), `--hidden` for
   tests, `--present immediate|mailbox|fifo` (how it presents, default mailbox; a surface without
-  the mode falls back down that list; `--vsync` is `--present fifo`). Requests run once per frame, and each reply is sent after the frame
+  the mode falls back down that list; `--vsync` is `--present fifo`), `--fx` (combat's sparks, dust
+  and muzzle bursts while the timeline runs, as `ohao_game` draws them; a lockstep capture draws
+  none). Requests run once per frame, and each reply is sent after the frame
   it caused was presented. In lockstep the window renders only when the world changed;
   `render.capture` renders the world as a headless host would (the same pixels, deferred
   only, at the window's size), in realtime it returns the next presented frame

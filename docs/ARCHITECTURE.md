@@ -106,11 +106,18 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     made early or late, holds the same marks; a restart
                     clears them; never in the registry
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
-after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
+after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game), through one
+AudioSystem capped at 24 SFX voices (runtime/game_audio.hpp):
   runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,
                       <surface>_<n>.wav (assets/local/audio/footsteps, then assets/audio/footsteps)
   runtime::CombatSounds  the combat log's events since the last frame -> fire, enemy_fire,
                       impact_<surface>, hurt, death, reload, empty (assets/audio/weapons)
+                      each with its kind's distance curve (SoundShape); an enemy's round or
+                      footstep casts one occlusion ray (soundOccluded): blocked, -8 dB and a
+                      1.2 kHz low-pass
+  runtime::CombatFx   (LiveConfig::effects) the combat log's shots and hits -> particle emits
+                      (a muzzle burst at the drawn muzzle, sparks and the surface's dust),
+                      realtime only; a lockstep capture draws none
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
@@ -131,6 +138,12 @@ World::sync()
                   subtree turned by World::pendingLook through
                   applyLook (the newest step's turn plus the lead,
                   never interpolated; nothing in lockstep)
+  view_model      a ViewModel's subtree (the first-person gun) ->      installed by installCombat
+                  RenderPose in the drawn view: viewModelRemap (within
+                  depthScale of the eye, on screen as through fovDeg),
+                  sway, bob and kick at World::presentationDt (0: the
+                  rest pose); drawn as kDrawViewModel (no CSM cascade,
+                  TLAS mask 4: camera rays only)
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
                   (at RenderPose when there is one)
                   and the light list; setLights gives each point,      a renderer (addSyncAfter)

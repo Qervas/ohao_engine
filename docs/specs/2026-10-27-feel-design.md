@@ -507,6 +507,54 @@ Proposed for ruling 7: **`ohao_game` keeps `mailbox` as its default.** In a wind
 the same latency as immediate (4.81 against 4.80 ms) without tearing; fifo costs 2.8 ms of
 latency and paces worst.
 
+## As built (step 3)
+
+Corrections to the sections above, as built (`docs/changes/2026-10-27-feel-step3.md`):
+
+- **`depthScale` is 0.55, not 0.25.** The projection is `glm::perspective` without
+  `GLM_FORCE_DEPTH_ZERO_TO_ONE`, so under Vulkan's [0, 1] depth everything nearer than about
+  twice the near plane is clipped (0.1 m at the play scene's 0.05 m). At 0.25 the gun's near end
+  fell inside that and the gun vanished from every capture; at 0.55 it spans 0.108–0.27 m,
+  inside the 0.3 m capsule, so it still never reaches a wall. The depth range itself is renderer
+  work (row 16), not changed here. The "a quarter of its distance" in "Placement" reads "0.55 of
+  its distance".
+- **The remap** is S·view with S = diag(d, d, d/k), k = tan(scene/2)/tan(fov/2) (`viewModelRemap`,
+  `ecs/view_model.hpp`): x and y shrink with depth, so the gun projects through the scene's 75°
+  where the original lands through 60°, and every point stays within `d` of its distance
+  (`t21_view_model_placement`).
+- **`view_model` runs after `interpolate`** (the lead lives there, step 2), installed by
+  `installCombat`; the render extract runs after it. Its motion reads `World::presentationDt()`
+  (the window's frame time, clamped to 0.1 s; 0 in lockstep, headless and every capture: the rest
+  pose). Kick comes from the combat log by cursor (`shot` by the gun's owner), a `restart` resets.
+- **The muzzle light follows the drawn gun:** the play scene's Muzzle is now the Gun's child, and
+  the render extract places lights at their `RenderPose` (an emitter sphere scaled by the remap).
+- **The TLAS mask:** `kTlasMaskViewModel` 4; `kRayMaskCamera` is 7 (scene, emitters, the gun), so
+  only path-traced camera rays and a near-mirror's first specular ray see the gun; shadow, GI and
+  bounce rays (`kRayMaskScene` 1) never do.
+- **"Every golden image unchanged" was wrong for the play scene:** both play-scene goldens show
+  the gun, which is now drawn through the remap and no longer stands in the world shadowing the
+  ramp (max_abs 136 on 5,170 px and 133 on 5,067 px, looked at, re-baselined in their own commit).
+  Every other golden is exact. The gun's GPU test is in `light_emitter_gpu_test` (the room scene
+  with the gun, a plain box and neither), not `engine_tests`.
+- **Particles:** `runtime/combat_fx.hpp` (`CombatFx`, `LiveConfig::effects`), emitted through
+  `DeferredRenderer::emitParticles` (a preset configuration), not `spawnParticles`. `ohao serve
+  --window --fx` turns them on for an agent's window. `render_bench play_fx_1080p`: 2,000
+  particles, `particles` pass 0.040 ms median (budget 0.1).
+- **Audio:** one `AudioSystem` for footsteps and combat (`runtime/game_audio.hpp`; each had its
+  own device before, so a cap would have been per player); `AudioSystem::initialize(true)` gives
+  a mixer without a device for tests. The occlusion ray passes through characters by skipping the
+  one it met and going on (at most 4 hops). `physics_bench occlusion_ray_us`: 0.57 µs median
+  (budget 5, a noisy run).
+- **The won screen** hides the crosshair and the hit marker (`combat_hud.cpp`).
+- **The doorway speckles move to 16.** They are RT GI's: gone with `rtGI` off, unchanged with SSR,
+  RT shadows or post off, or at full resolution. The outdoor HDRI's sun covers 0.003% of the
+  sphere and carries half its energy (texels up to 60,450), so a 2-ray half-resolution trace hits
+  it rarely and enormously; the scene's directional light already brings the sun, so those rays
+  count it twice. Clamping an escaped ray's luminance at 16 removes them but moves ten deferred and
+  reference goldens up to 82 on a third of their pixels (metal spheres lose the sun's reflection
+  GI carries): a look change, not a cheap fix. Reverted; for 16: take the sun out of the GI rays'
+  environment where a directional light stands for it (or sample it as a light).
+
 ## Rulings for Frank
 
 Decided (by Frank adopting the roadmap, 2026-10-27):
@@ -561,3 +609,11 @@ Open (judgment calls made here, each conservative; any can be reversed):
     iterations; (c) cap a play window's frames at the display's rate. None is taken here.
 22. **Step 2: `feel_bench` leaves dwm.exe out of its load probe:** it is the process presenting
     the bench's own window.
+23. **Step 3: `depthScale` 0.55** (not 0.25) until the renderer's depth range is fixed (row 16);
+    then it can come down.
+24. **Step 3: the play-scene goldens are re-baselined** with the gun drawn through the remap; the
+    spec's "no golden image moves" did not foresee the gun's own pixels.
+25. **Step 3: the doorway speckles go to 16** with the finding in "As built (step 3)"; the cheap
+    clamp is a look change across every HDRI scene.
+26. **Step 3: the hand test (H1–H7) stays open,** and with it ruling 21 (pacing). Frank is away;
+    both wait for him.
