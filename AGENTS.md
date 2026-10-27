@@ -120,7 +120,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices, capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, which footstep sound plays (round robin, the local folder first, `default`), which weapon sound each combat event plays (by shooter and surface), the click that captures the cursor never reaching the input map |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices (the present mode asked for, else the next one down: immediate, mailbox, fifo), the frame log (`sp9_t19_*`, `sp9_t20_*`: a look movement's latency from its poll to the present of the frame showing it, the stage medians, p95 by linear interpolation, the newest frames only, the ring; frame time percentiles and steps per frame), capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, which footstep sound plays (round robin, the local folder first, `default`), which weapon sound each combat event plays (by shooter and surface), the click that captures the cursor never reaching the input map |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
@@ -163,6 +163,7 @@ $ build/Release/serve_bench.exe --check tests/bench/serve_budgets.json > /dev/nu
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 $ build/Release/level_bench.exe --check tests/bench/level_budgets.json > /dev/null   # slow
 $ build/Release/physics_bench.exe --check tests/bench/physics_budgets.json > /dev/null   # slow
+$ build/Release/feel_bench.exe --check tests/bench/feel_budgets.json --seconds 10 > /dev/null   # slow
 $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 ```
 
@@ -214,7 +215,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `world.hash` and picture from its eyes, bit for bit (sp6 test 14); a fight (sp7 test 18):
   EnemyA shot down (`combat.info` for where, `player.teleport` to face, bursts of `fire`), the
   player killed by `combat.damage`, the restart 3 s later, the room cleared and won, and the same
-  fight headless reaching the same `world.hash`, `combat.info`, events and HUD picture. `e2e_mcp.py`: a
+  fight headless reaching the same `world.hash`, `combat.info`, events and HUD picture; a realtime
+  window's `render.stats` reports `latency` and `pacing` after injected mouse movements, a lockstep
+  one neither (sp9 tests 19, 20). `e2e_mcp.py`: a
   stdlib-only MCP client runs a whole session against a hidden window (load, edit, snapshot,
   record, a flight, step with watch, captures, logs, restore, replay to the same hash, a
   capture bit-identical to the first; the blockout's level and physics; the play scene walked,
@@ -288,6 +291,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `combat_shot_ms`, with two enemies attacking, `combat_step_ms`, and a whole step with 16
   enemies chasing, `enemies16_step_ms`; restoring the play scene's round start, `round_restart_ms`),
   CPU, results in `build/physics_bench.json`; the same noisy-run rules.
+  `feel_bench --check`: input-to-present latency and frame pacing (sub-project 9) in a *visible*
+  1920x1080 window (a hidden one may never present), the play scene played for a scripted minute
+  per present mode (`--modes`, `--seconds`, `--warmup`) while a mouse movement is fed every 40–60
+  ms; budgets in `tests/bench/feel_budgets.json` (`look_latency_ms` median, gated only on a display
+  of at least `minRefreshHz` with present wait, and `frame_p99_over_median`, each in the present
+  mode it names, both pending until Feel step 2), results in `build/feel_bench.json` and a CSV per
+  mode (`feel_bench_<mode>.csv`: every frame's time and steps, every movement's latency). No noise
+  detection yet: it shares the GPU and the display with whatever else runs.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -654,6 +665,17 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     from the yaw read back (`yawOf` gives +180 for a quaternion stored at -180: the same
     rotation, another hash). Any code that re-derives a pose from a restored one must keep it
     exact, or `world.hash` after a restart stops being the round start's.
+- **Frame timing** (sub-project 9, `runtime/frame_log.hpp`): a window host stamps each realtime
+  frame (poll, view, submit, present) and the look movements it shows, in a `FrameLog` that
+  `render.stats` (`latency`, `pacing`), `ohao_game --latency` and `feel_bench` read. Presents are
+  confirmed with `VK_KHR_present_id` + `VK_KHR_present_wait` where the device has both: a thread
+  (`gpu/vulkan/present_waiter.hpp`) polls `vkWaitForPresentKHR` with a zero timeout about every
+  0.25 ms, holding `Swapchain::hostMutex()`, which every host access to the swapchain (present,
+  rebuild, destroy) takes, as Vulkan requires; a present unconfirmed after 250 ms, or without
+  present wait, keeps its call stamp (`source: present_call`, an underestimate). Today a look
+  movement counts as shown once the step after the one that applied it has run (the frame
+  interpolates from that step's pose). `ohao_game --present immediate|mailbox|fifo` and `ohao
+  serve --window --present` choose the present mode (`--vsync` is fifo).
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

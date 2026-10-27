@@ -167,6 +167,11 @@ VulkanRenderer::render()
   every pass between two GPU timestamps (render/frame/gpu_pass_timer.hpp), named in the
   pass registry; a frame slot's times are read when the slot comes round, after its fence:
   render.stats, render_bench, never a stall
+  a window's presents: the mode asked for (immediate, mailbox, fifo; Swapchain), each tagged
+  with its frame number (VK_KHR_present_id) and confirmed by a waiter thread
+  (vkWaitForPresentKHR, gpu/vulkan/present_waiter.hpp); a realtime window host stamps each
+  frame (poll, view, submit, present) and the look movements it shows into its FrameLog
+  (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench
 ```
 
 The deferred frame, pass by pass, under its registry names (`render/frame/pass_registry.hpp`,

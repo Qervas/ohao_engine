@@ -322,6 +322,17 @@ lights worth an RT shadow than the 4 they trace) and `lightsOverflow` (lights le
 froxels that held more than 256; those pixels miss them). Seeing `lightsOverflow` means the
 scene packs too many lights' ranges into one place: shorten the ranges.
 
+A realtime window (`--realtime`, or `time_set {mode: "realtime"}`) also reports how it
+feels: `latency` (a look movement's time from the poll that read it, or the `input_inject`
+call that queued it, to the present of the first frame showing it in full: `medianMs`,
+`p95Ms`, how many movements and frames, `source` `present_wait` when the presentation engine
+confirmed the presents, `present` the window's present mode, and `stages`: poll to the step
+that applied it, to the frame's view, to its submit, to its present) and `pacing` (the
+frames' wall time `median`/`p95`/`p99`, how many ran 0, 1, 2 and 3+ steps, the steps the
+clock dropped). Inject a few `mouse` movements, wait a moment, then read `render_stats`; a
+lockstep window has neither. Today a movement waits for a step and is drawn a step late
+(about 32 ms median at 240 Hz); `feel_bench` measures it on a visible window per present mode.
+
 A capture measures itself: every `render_capture` result carries `gpuMs`, its last frame's
 GPU time, and `timings: true` adds that frame's passes as `[[name, ms], ...]`, the numbers
 `render_stats {frames: 1}` would give for it, without the second call. `engine_info` names

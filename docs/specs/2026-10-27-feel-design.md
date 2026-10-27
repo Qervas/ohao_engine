@@ -382,6 +382,67 @@ steps 1 and 2).
   dropped with the events, the next capture equals headless.
 - The gun's motion across a restart: the kick and sway reset with the round, no carry-over.
 
+## As built (step 1)
+
+- **Present modes:** `PresentMode {Fifo, Mailbox, Immediate}` in `gpu/vulkan/present_target.hpp`
+  (`presentModeName`, `presentModeFromName`); `PresentTarget::mode` replaced `vsync`;
+  `Swapchain::choosePresentMode(modes, want)` falls back immediate → mailbox → fifo (mailbox never
+  to immediate) and logs what the surface gave once. `ohao_game --present`, `ohao serve --window
+  --present`; `--vsync` is `--present fifo`; the default stays mailbox (ruling 7).
+- **Present id and wait:** enabled when the device has both extensions and feature bits (this
+  machine: RTX 5070 Laptop, yes). Every window present carries its frame number as its present id.
+  `PresentWaiter` (`gpu/vulkan/present_waiter.{hpp,cpp}`) is a thread that polls
+  `vkWaitForPresentKHR` with a zero timeout about every 0.25 ms (a high-resolution waitable timer)
+  while a present is pending, under `Swapchain::hostMutex()`: the swapchain must be externally
+  synchronized for that call, so present, rebuild and destroy take the mutex too. A present the
+  engine has not confirmed after 250 ms, or any present without the extensions, keeps the time its
+  present call returned (`source: present_call`; corrected from the spec's "fence": waiting on a
+  frame's fence from another thread would race its reset). Validation stays clean: the play scene
+  600 frames with a resize, 0 messages; check_live's realtime window under validation, 0.
+- **Frame log:** `runtime/frame_log.{hpp,cpp}`: `FrameStamps` (frame, start, poll, view, submit,
+  present, presentWait, the look movements it shows, frame time, steps, discarded steps),
+  `FrameLog` (a ring, 1,024 frames by default, `LiveConfig::frameLogCapacity`), `latency(frames)`,
+  `pacing(frames)`, `percentile` (linear between closest ranks; the median as `render.stats` has
+  always computed it). Named `FrameLog`, not the plan's `FrameTiming`: `render::FrameTiming`
+  already names the GPU pass timings.
+- **Stamps:** `LiveHost` stamps poll after the window's events (and a program's, `feedEvents`)
+  are read, view after the scene view is applied, submit from `VulkanRenderer::lastSubmitTime()`
+  (right after `vkQueueSubmit`), present from the waiter. Look movements are the polls whose
+  events held mouse motion and the `input.inject` calls whose mouse events a step applied
+  (`Session::lastStepInjectedLook()`, stamped at the call); each is consumed by the step that
+  applied it and shown in full, today, by the first frame drawn once the step after it has run.
+  Realtime frames only; a lockstep or paused window drops its pending movements with its events.
+- **`render.stats`:** `latency {frames, samples, medianMs, p95Ms, source, present, stages}` and
+  `pacing {frames, frameMs {median, p95, p99}, steps {"0", "1", "2", "3+"}, discardedSteps}` for a
+  realtime window over the newest `frames` (1–120) frames; `present` (the window's present mode) is
+  an addition. The method's description changed, so `schemaHash` moved (`e88e580b9f990ac2` →
+  `7c1e934a206eeff1`): the serve and CLI expectations re-baselined for that alone.
+- **`ohao_game --latency`:** `LAT <median> P95 <p95>  FT <median> P99 <p99>` over the newest 240
+  frames, top left on a dark band, amber when the presents are unconfirmed; `/` until there is a
+  sample. The HUD font gained `.`.
+- **`feel_bench`** (`tools/bench/feel_bench.cpp`, label `bench`, GPU, serial): a visible 1920x1080
+  window on the play scene with ohao_game's post effects, 2 s of warm-up, then a scripted minute
+  per present mode: forward and back, fire 1 s in 3, a mouse movement every 40–60 ms. The spacing
+  follows a golden-ratio sequence: a first run fed one every 50 ms, three 1/60 s steps, so every
+  movement met the step clock at the same phase and poll → consume read 15 ms instead of a spread
+  around 8. Budgets in `tests/bench/feel_budgets.json` (`currentStep` 1: both pending).
+
+**Baseline** (2026-10-27, `feel_bench`, RTX 5070 Laptop, a 240 Hz display, present wait; the
+spec's 144 Hz condition is met, so `look_latency_ms` is gated on this machine from step 2):
+
+| Present | Look latency median / p95 | Stages: poll→consume, poll→view, view→submit, submit→present | Frame time median / p95 / p99 (p99/median) | Steps a frame 0 / 1 / 2 / 3+, discarded |
+|---|---|---|---|---|
+| immediate | 32.14 / 40.38 ms (1,155 movements) | 8.44, 25.08, 0.25, 6.00 ms | 1.725 / 2.620 / 3.062 ms (1.78) | 36,893 / 3,450 / 0 / 5, 126 |
+| mailbox | 32.07 / 42.89 ms (1,110) | 7.89, 25.11, 0.29, 5.27 ms | 2.001 / 3.288 / 5.007 ms (2.50) | 31,069 / 3,301 / 1 / 10, 248 |
+| fifo | 53.24 / 64.27 ms (1,117) | 9.03, 24.35, 2.91, 27.45 ms | 4.137 / 9.015 / 10.140 ms (2.45) | 9,933 / 3,330 / 0 / 9, 226 |
+
+What it says for step 2: of immediate's 32 ms, about 8 is the wait for a step, about 17 the step
+the interpolation draws behind (poll → view less poll → consume), and about 6 the frames queued
+ahead of presentation; the render itself is under a millisecond of CPU. Every mode has a few
+hitches of about half a second a minute (the frames that ran 3+ steps, the discarded steps, the
+500–780 ms latency outliers); their cause is step 2's to find. fifo settles into two-refresh
+frames (8.3 ms) after about 20 s.
+
 ## Rulings for Frank
 
 Decided (by Frank adopting the roadmap, 2026-10-27):
@@ -415,3 +476,12 @@ Open (judgment calls made here, each conservative; any can be reversed):
     the engine/game boundary) stay for those rows' specs. The post-SP7 suggestions recommended
     compute skinning, in-place animation with the controller in charge, and bit-exact
     determinism; those are recommendations, not rulings.
+15. **Step 1: the fallback present stamp is the present call's return** (`present_call`), not a
+    fence observed from another thread; it is an underestimate, labelled, and never passes a gate.
+16. **Step 1: the waiter polls** `vkWaitForPresentKHR` with a zero timeout every ~0.25 ms under the
+    swapchain's mutex rather than blocking in it (a blocking wait would hold the mutex the next
+    present needs); the stamp's resolution is about 0.25 ms.
+17. **Step 1: `feel_bench` has no noise detection** (no calibration, no busy-process probe): its
+    budgets are pending in step 1; step 2 adds a probe before they gate.
+18. **Step 1: injected look counts from its `input.inject` call,** so agents and check_live
+    measure the same latency the device path does (both wait for the next step).
