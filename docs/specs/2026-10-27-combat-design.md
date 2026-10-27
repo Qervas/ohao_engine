@@ -102,7 +102,8 @@ The system does nothing for a world without a `Weapon` or `Health`.
 The round leaves within a cone of half angle `spreadDeg + bloomDeg` around the aim, uniform
 over the cone's disc (radius `tan(angle)·sqrt(u1)`, angle `2π·u2`). Each round adds
 `bloomPerShotDeg` to `bloomDeg`, up to `bloomMaxDeg`; bloom falls at `bloomRecoveryDegPerSec`
-on every step without a round.
+once the fire interval has passed without a round (corrected in step 1: falling on every step
+without a round, five of every six at 10 Hz, recovered faster than sustained fire bloomed).
 
 The random numbers are counter-based: `u = hash(seed, shot, i)` (`WeaponState.shots` is the
 shot index), so a weapon needs no generator state, two worlds with the same seed fire the same
@@ -315,6 +316,31 @@ Each step ends with the engine running, every gate green, a change record
 - An edit of `Weapon.magazine` below the current ammo: ammo clamps to the magazine on the next
   step.
 
+## As built (step 1)
+
+- `ohao/ecs/combat.{hpp,cpp}`: `CombatSystem` (the step, `damage`, the log), `installCombat`,
+  `combatSystem(world)`, `combatEvents(world)`, `combat::unitRandom` (lowbias32 of seed, shot and
+  draw index) and `combat::spreadDirection`. `installCombat` does not check for physics at
+  install; a step without a `PhysicsScene` fires nothing. The CLI context and `LiveHost` install
+  it after `installPhysics`.
+- `PhysicsScene::raycastFrom(from, dir, max, ignore)` walks the backend's `castRayAll` (sorted)
+  and returns the first hit that is neither `ignore`'s body (a character's inner body maps to its
+  entity) nor a trigger. A plain `raycast` from the eye stops in the shooter's capsule (tested).
+- `PhysicsScene::turnPlayer(e, yaw, pitch)` writes the player's yaw and the head's pitch as the
+  step does (`writePlayer`), keeping the step's interpolated move's start, so a kick neither
+  teleports the player nor breaks interpolation. A turn outside a step is a placement.
+- The cooldown counts down by `dt` and compares within 1e-5 s; a round adds `1/fireRate`, so
+  10 Hz fires on steps 1, 7, 13, … exactly. Order in a weapon's step: the reload counts down
+  (and ends), a `reload` request starts one, a round fires (the magazine emptying starts the
+  reload in the same step), else (idle) bloom and kick recover; at most one round a step.
+- Events carry `amount` as the shot's cone (Shot), the distance (Hit), the hp taken (Damage);
+  `Reload`/`Reloaded` carry the ammo before/after. `damage()` outside a step goes to the log and
+  the current step's list.
+- Tuning seen in the look shots: a full 30-round magazine climbs the view 10.5°; at 6°/s the kick
+  takes 1.75 s to come back, so a second after release it is half recovered (5.0°). Within the
+  spec's numbers; a faster recovery is a one-field change (`recoilRecoveryDegPerSec`).
+- Until step 4 the click that captures the cursor in `ohao_game` also fires one round (ruling 1).
+
 ## Rulings for Frank
 
 Judgment calls made without Frank, each conservative; any can be reversed.
@@ -345,3 +371,11 @@ Judgment calls made without Frank, each conservative; any can be reversed.
     `round_restart_ms` 2, `hud` 0.05) are targets set here; they change only by Frank's ruling.
 15. **Sounds are generated** by a script of ours (MIT), like the footsteps; nothing from
     Somnabulate.
+16. **Step 1: bloom and kick recover only when idle** (the fire interval passed without a
+    round), not on every step without a round (a spec correction; see "Spread").
+17. **Step 1: a dead player's trigger does nothing, and so does a reload request;** the
+    `WeaponState.triggerHeld` edge still tracks the button, so a semi-automatic does not fire
+    on the step it is revived with the button held.
+18. **Step 1: combat budgets gate on their own `combatStep`** in `physics_budgets.json`, beside
+    physics' `currentStep`, so physics' gating is unchanged; `combat_shot_ms` is measured with
+    spread and kick off so every round lands (the cost of a round, not aim).

@@ -107,6 +107,7 @@ $ build/Release/env_cdf_test.exe > /dev/null
 $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
 $ build/Release/level_physics_tests.exe > /dev/null
+$ build/Release/combat_tests.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
@@ -127,6 +128,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
+| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -272,8 +274,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (the blockout's step while crates fall, its step at rest with zero writes, 1,000 contact
   begins in one step, a walking player's part of the step, `player_step_ms`, a step while
   1,000 boxes pile into a pit, `boxes1k_step_ms`; reported without a budget: what a snapshot
-  of that world carries, `boxes1k_snapshot_ms`), CPU, results in `build/physics_bench.json`;
-  the same noisy-run rules.
+  of that world carries, `boxes1k_snapshot_ms`; and combat's, gated by `combatStep`: the
+  combat system's part of a step in which the player fires a round in the blockout,
+  `combat_shot_ms`), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -568,6 +571,27 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     them (`runtime/footsteps.hpp`): `<surface>_<n>.wav` from git-ignored
     `assets/local/audio/footsteps/` (Somnabulate's, staged for local listening only, never
     committed) else `assets/audio/footsteps/` (ours, `tools/audio/make_footsteps.py`).
+- **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`). `ecs::installCombat`
+  (the CLI context and `LiveHost` call it after `installPhysics`) adds a `combat` simulate system
+  after `physics`: every `Weapon`, in id order, reads its trigger (a player's from the World's
+  input, `fire`/`reload`; anything else's from `WeaponTrigger`), advances cooldown, reload, bloom
+  and recoil, and fires at most one round a step. A round is one ray from the eye (a character:
+  feet + `eyeHeight` along this step's yaw and pitch; anything else: its origin along −Z) through
+  `PhysicsScene::raycastFrom`, which skips the shooter's own bodies and triggers (a plain
+  `raycast` from the eye stops inside the shooter's capsule). What it hits, or its nearest
+  ancestor, with `Health` takes the damage; at 0 it is dead and neither takes damage nor fires.
+  - `Health`, `Weapon`, `WeaponState` and `WeaponTrigger` are saved, so files, `world.hash` and
+    snapshots hold a fight exactly; the step emplaces `WeaponState` (a full magazine). Spread
+    and recoil draw counter-based random numbers, `hash(seed, shots, i)`: no generator state.
+  - The cooldown carries its remainder and compares within 1e-5 s, so 10 Hz fires on every
+    sixth 60 Hz step. Bloom and the vertical kick recover only once the fire interval passes
+    without a round (else sustained fire would never bloom).
+  - Recoil turns the view through `PhysicsScene::turnPlayer`: the step's own write of the
+    player's yaw and the head's pitch (not a placement), kept inside this step's interpolated
+    move. Events (`combatEvents(world)`, the step's; `CombatSystem::eventsSince`, a log of
+    1,024): `shot`, `hit`, `damage`, `death`, `reload`, `reloaded`.
+  - Saved types hash their names even with no instances, so a new saved component moves every
+    `world.hash` in the serve and CLI expectations, not only scenes that use it.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

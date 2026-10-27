@@ -81,6 +81,14 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) (physicsEvents(world), the
                     log physics.events reads)
+    combat          every Weapon in id order: trigger (a player's input  installed by installCombat
+                    fire/reload, else WeaponTrigger), cooldown, reload,  (after installPhysics);
+                    bloom and recoil recovery, at most one round: a ray  nothing for a world
+                    from the eye (PhysicsScene::raycastFrom: not the     without a Weapon
+                    shooter, not triggers) -> Health of what it hit or
+                    its ancestor; recoil -> PhysicsScene::turnPlayer;
+                    WeaponState written; shot/hit/damage/death/reload
+                    events (combatEvents(world), a log of 1,024)
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
   runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,

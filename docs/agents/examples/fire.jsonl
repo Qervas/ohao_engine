@@ -1,0 +1,5 @@
+{"method":"input.inject","params":{"events":[{"step":0,"action":"fire","down":true},{"step":15,"action":"fire","down":false}]}}
+{"method":"world.step","params":{"frames":15}}
+{"method":"world.query","params":{"names":["Player"],"fields":["/WeaponState","/Health","/PlayerState/pitchDeg"]}}
+{"method":"world.step","params":{"frames":60}}
+{"method":"world.query","params":{"names":["Player"],"fields":["/WeaponState","/PlayerState/pitchDeg"]}}
