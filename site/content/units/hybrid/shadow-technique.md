@@ -397,16 +397,20 @@ for.
 
 Finally the ray mask. The trace queries with `kRayMaskScene`; the `RenderScene`
 builds every visible scene instance with `kTlasMaskScene`, a light's emitter mesh
-with `kTlasMaskEmitter`, and a hidden or released slot with zero:
+with `kTlasMaskEmitter`, a first-person gun's mesh with `kTlasMaskViewModel`, and a
+hidden or released slot with zero:
 
 {{cite shaders/rt/shadow_trace.slang "q.TraceRayInline(scene, 0, kRayMaskScene, ray);"}}
 
-{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0   ? gpu::shared::kTlasMaskEmitter"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel"}}
 
-so the query sees every visible scene instance and neither hidden ones nor the
-light meshes. The second matters: a light's emitter mesh surrounds the light's
-own position, and a shadow ray aimed at the light would hit it and shadow every
-pixel the light reaches (hybrid/visibility).
+so the query sees every visible scene instance and neither hidden ones, the
+light meshes nor the gun. The light meshes matter: a light's emitter mesh surrounds
+the light's own position, and a shadow ray aimed at the light would hit it and
+shadow every pixel the light reaches (hybrid/visibility). The gun is drawn shrunk
+toward the eye, away from where it would stand in the world, so a shadow it cast
+would fall in the wrong place; it casts none.
 
 :::key
 Each channel is a boolean visibility average, not a shadow with radiance in it.

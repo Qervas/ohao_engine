@@ -61,7 +61,7 @@
 <p>Reading is by sequence number: `read(since, minLevel, channel, limit)` returns what came after `since`, and a reader that fell behind is told how many records it missed:</p>
 <div class="citation-chip"><code class="citation-code">page.dropped = oldest - seq;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/log.cpp#L191" target="_blank" rel="noopener">ohao/core/log.cpp:191</a></div>
 <p>The frame is stamped by the renderer as each deferred or RT frame starts, so a validation message carries the frame it happened in:</p>
-<div class="citation-chip"><code class="citation-code">uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L434" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:434</a></div>
+<div class="citation-chip"><code class="citation-code">uint64_t m_framesStarted{0};   // stamped on log records (log::setFrame) as each frame starts</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L441" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:441</a></div>
 </div>
 <div class="section-rule"><h2 id="sinks">Sinks</h2></div>
 <div class="prose reveal">

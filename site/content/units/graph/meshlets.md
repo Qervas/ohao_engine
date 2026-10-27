@@ -149,7 +149,7 @@ Ray tracing does not use them: each mesh's BLAS is built from its original trian
 `RenderScene` carries a submesh's meshlets into its draw: `DrawRecord.info.z` is the first
 meshlet and `info.w` the count:
 
-{{cite ohao/render/scene/render_scene.cpp "(d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u),"}}
+{{cite ohao/render/scene/render_scene.cpp "d.firstMeshlet, d.meshletCount};"}}
 
 and `aabbMin.w`, as a uint's bits, the draw's first *meshlet entry*: the number of
 meshlets of all the draws before it. Entries number every meshlet of every draw in draw

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>14 · Runtime feel · Feel: the look lead, frame timing and the first-person gun — OHAO Monograph</title>
+  <meta name="description" content="The look no step has taken drawn through the step&#x27;s own arithmetic, present-confirmed latency and pacing, a view-space gun that never shadows, and sparks and sounds from the combat log." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="runtime/feel" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · Feel: the look lead, frame timing and the first-person gun</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">runtime</p>
+          <h1>Feel: the look lead, frame timing and the first-person gun</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>The look no step has taken drawn through the step&#x27;s own arithmetic, present-confirmed latency and pacing, a view-space gun that never shadows, and sparks and sounds from the combat log.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-frame-shows-the-look-before-a-step-takes-it">The frame shows the look before a step takes it</a></li><li><a href="#timing-a-frame">Timing a frame</a></li><li><a href="#the-gun-is-drawn-not-placed">The gun is drawn, not placed</a></li><li><a href="#why-0-55-and-not-smaller">Why 0.55 and not smaller</a></li><li><a href="#motion-at-render-rate">Motion at render rate</a></li><li><a href="#no-shadow-no-bounce">No shadow, no bounce</a></li><li><a href="#sparks-and-sounds-from-the-combat-log">Sparks and sounds from the combat log</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-frame-shows-the-look-before-a-step-takes-it">The frame shows the look before a step takes it</h2></div>
+<div class="prose reveal">
+<p>A realtime window steps at a fixed 60 Hz and renders as fast as it can, so most frames run no step. Before sub-project 9 a mouse movement waited for the next step to turn the player, and the frames in between showed the old view. The look lead shows it at once. Each frame the host sums the look no step has consumed yet, the window&#x27;s `MouseDelta` events since the last step and the `input.inject` movements due at the next one, in the order that step&#x27;s input map will sum them:</p>
+<div class="citation-chip"><code class="citation-code">if (e.type == InputEvent::Type::MouseDelta) pending += glm::vec2(static_cast&lt;float&gt;(e.x), static_cast&lt;float&gt;(e.y));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L193" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:193</a></div>
+<p>and hands it to the World, which keeps it beside the render alpha and clears it when a step runs:</p>
+<div class="citation-chip"><code class="citation-code">void setPendingLook(glm::vec2 units) noexcept { m_pendingLook = units; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.hpp#L121" target="_blank" rel="noopener">ohao/ecs/world.hpp:121</a></div>
+<div class="citation-chip"><code class="citation-code">m_pendingLook = glm::vec2(0.0f);   // the step took it</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/world.cpp#L248" target="_blank" rel="noopener">ohao/ecs/world.cpp:248</a></div>
+<p>The `interpolate` sync system draws the input-driven, living player turned by that look. It does not approximate the turn: it calls `applyLook`, the function the step itself calls, on the newest step&#x27;s yaw and pitch:</p>
+<div class="citation-chip"><code class="citation-code">const LookResult look = applyLook(p.yawDeg, p.pitchDeg, pending, *pc);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1491" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1491</a></div>
+<div class="citation-chip"><code class="citation-code">yawDeg -= delta.x * pc.lookDegPerUnit;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1767" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1767</a></div>
+<p>So the next step lands exactly where the frame already was (`sp9_t19_lead_matches_next_step`, and `sp9_t19_lead_split_across_steps` for a look the clock splits over two steps). The yaw goes on the body and the pitch on the head; the rest of the subtree is carried along. Only the player&#x27;s position is interpolated between its last two step poses:</p>
+<div class="citation-chip"><code class="citation-code">pos = glm::mix(mv-&gt;second.fromPos, mv-&gt;second.toPos, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1495" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1495</a></div>
+<p>Its rotation is drawn from the newest step plus the lead, never slerped from the step before: interpolating the turn would put back the latency the lead removes. All of it is `RenderPose`. `Transform`, `world.hash`, saved files and snapshots stay the step&#x27;s (`sp9_t19_lead_never_in_world`), and there is no lead in lockstep (alpha 1, nothing pending), for a dead player, or for characters moved by a `MoveIntent`.</p>
+</div>
+<div class="section-rule"><h2 id="timing-a-frame">Timing a frame</h2></div>
+<div class="prose reveal">
+<p>A latency claim needs a clock on both ends. `FrameLog` stamps every realtime frame on one steady clock: when its input was polled, when the view it draws was resolved, when it was submitted and when it was presented, with the look movements it is the first to show in full and the steps it ran:</p>
+<div class="citation-chip"><code class="citation-code">struct FrameStamps {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/frame_log.hpp#L37" target="_blank" rel="noopener">ohao/runtime/frame_log.hpp:37</a></div>
+<p>Latency is a movement&#x27;s poll to the present of that frame. The present is the hard end: a `vkQueuePresentKHR` that returns has only queued the image. Where the device has `VK_KHR_present_id` and `VK_KHR_present_wait`, every present carries an id and a `PresentWaiter` thread asks the presentation engine when that id reached the display, polling with a zero timeout about every 0.25 ms. Vulkan requires host access to a swapchain to be externally synchronized, so the poll holds the swapchain&#x27;s host mutex, which present, rebuild and destroy also take:</p>
+<div class="citation-chip"><code class="citation-code">std::lock_guard host(m_swapchain-&gt;hostMutex());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/present_waiter.cpp#L127" target="_blank" rel="noopener">ohao/gpu/vulkan/present_waiter.cpp:127</a></div>
+<div class="citation-chip"><code class="citation-code">r = m_wait(m_device, m_swapchain-&gt;handle(), p.id, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/present_waiter.cpp#L129" target="_blank" rel="noopener">ohao/gpu/vulkan/present_waiter.cpp:129</a></div>
+<p>A present the engine has not confirmed after 250 ms (a hidden window), or any present without present wait, keeps the stamp of its call and is marked not waited: `source: present_call`, an underestimate. `render.stats` reports the log&#x27;s newest frames as `latency` (median, p95 and each stage&#x27;s median) and `pacing` (frame time median, p95, p99 and how many frames ran 0, 1, 2 or 3+ steps):</p>
+<div class="citation-chip"><code class="citation-code">out.key(&quot;latency&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/session.cpp#L840" target="_blank" rel="noopener">ohao/api/session.cpp:840</a></div>
+<p>The stamps also showed where the latency was. Late input sampling bounds it: a realtime frame polls only once at most `LiveConfig::framesAhead` submitted frames are unpresented, so the input goes into the very next frame instead of waiting behind a queue:</p>
+<div class="citation-chip"><code class="citation-code">return submitted - static_cast&lt;uint64_t&gt;(framesAhead);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/frame_log.hpp#L34" target="_blank" rel="noopener">ohao/runtime/frame_log.hpp:34</a></div>
+<div class="citation-chip"><code class="citation-code">m_renderer-&gt;waitForPresentOf(wait, kFramesAheadTimeout);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L136" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:136</a></div>
+<p>Automatic (-1) is one frame ahead while a player leads its look, unbounded otherwise:</p>
+<div class="citation-chip"><code class="citation-code">return physics &amp;&amp; physics-&gt;leadsLook() ? 1 : -1;   // a play window keeps one frame ahead</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L280" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:280</a></div>
+<p>`feel_bench` plays the play scene for a scripted minute per present mode in a visible window while a mouse movement is fed every 40 to 60 ms. With the lead and late sampling the median look latency fell from 32.14 ms to 4.80 ms (immediate; budget 15 ms, a pass). Frame p99 over median measured 1.99 against a budget of 1.5, a miss on the record, and `feel_bench` counts the 330 to 500 ms presentation stalls every window on this laptop shows.</p>
+</div>
+<div class="section-rule"><h2 id="the-gun-is-drawn-not-placed">The gun is drawn, not placed</h2></div>
+<div class="prose reveal">
+<p>A first-person gun placed in the world at arm&#x27;s length goes through a wall the player stands against, and through the scene&#x27;s 75 degree lens it looks stretched. A `ViewModel` on the gun&#x27;s root, below the entity that holds the view&#x27;s `Camera`, has its subtree drawn remapped in view space by `viewModelRemap`:</p>
+<div class="citation-chip"><code class="citation-code">const float k = std::tan(glm::radians(sceneFovDeg) * 0.5f) / std::tan(glm::radians(fovDeg) * 0.5f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L21" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:21</a></div>
+<div class="citation-chip"><code class="citation-code">s[2][2] = depthScale / k;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L25" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:25</a></div>
+<p>The remap is $S \cdot \text{view}$ with a scale in view space, where $d$ is `depthScale` (0.55), $\theta_s$ the scene&#x27;s field of view and $\theta_g$ the gun&#x27;s `fovDeg` (60):</p>
+<div class="math-block">$$
+S = \operatorname{diag}\!\left(d,\ d,\ \frac{d}{k}\right), \qquad k = \frac{\tan(\theta_s/2)}{\tan(\theta_g/2)}
+$$</div>
+<p>A view-space point $(x, y, z)$ goes to $(dx, dy, dz/k)$. Its screen coordinate through the scene&#x27;s lens is $\frac{dx}{-dz/k} \cdot \frac{1}{\tan(\theta_s/2)} = \frac{x}{-z} \cdot \frac{1}{\tan(\theta_g/2)}$: exactly where the unremapped point lands through the gun&#x27;s 60 degrees. With $\theta_s &gt; \theta_g$, $k &gt; 1$, so every point is at most $d$ of its distance from the eye. `t21_view_model_placement` checks both over 1,000 points.</p>
+</div>
+<div class="section-rule"><h2 id="why-0-55-and-not-smaller">Why 0.55 and not smaller</h2></div>
+<div class="prose reveal">
+<p>The spec asked for 0.25, which would keep the gun a quarter of its distance from the eye. It vanished from every capture. The projection is `glm::perspective` without `GLM_FORCE_DEPTH_ZERO_TO_ONE`, an OpenGL projection whose depth runs over $[-1, 1]$:</p>
+<div class="citation-chip"><code class="citation-code">projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L44" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:44</a></div>
+<p>At view distance $\delta$, with near plane $n$ and far plane $f$, the depth it writes is</p>
+<div class="math-block">$$
+z_{\text{ndc}}(\delta) = \frac{f+n}{f-n} - \frac{2fn}{(f-n)\,\delta}, \qquad z_{\text{ndc}} = 0 \iff \delta = \frac{2fn}{f+n} \approx 2n
+$$</div>
+<p>Vulkan clips depth below 0, so everything nearer than about twice the near plane is cut: 0.1 m at the play scene&#x27;s 0.05 m. At 0.25 the gun&#x27;s near end fell inside that. At 0.55 it spans 0.108 to 0.27 m, past the clip and still inside the 0.3 m capsule radius, so no wall can reach it:</p>
+<div class="citation-chip"><code class="citation-code">// depth buffer&#x27;s clip at about twice the camera&#x27;s 0.05 m near plane (an OpenGL-style projection</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/components.hpp#L378" target="_blank" rel="noopener">ohao/ecs/components.hpp:378</a></div>
+<div class="citation-chip"><code class="citation-code">fell inside that and the gun vanished from every capture; at 0.55 it spans 0.108–0.27 m,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/specs/2026-10-27-feel-design.md#L517" target="_blank" rel="noopener">docs/specs/2026-10-27-feel-design.md:517</a></div>
+<p>The depth range itself is renderer work for later; the default changed instead.</p>
+</div>
+<div class="section-rule"><h2 id="motion-at-render-rate">Motion at render rate</h2></div>
+<div class="prose reveal">
+<p>The `view_model` sync system runs after `interpolate`, so it sees the look lead&#x27;s drawn view, and before the render extract. `installCombat` installs it:</p>
+<div class="citation-chip"><code class="citation-code">installViewModel(world);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L425" target="_blank" rel="noopener">ohao/ecs/combat.cpp:425</a></div>
+<p>It moves the gun by the window&#x27;s frame time, not the step: the view it hangs from is drawn every frame (the lead and interpolation), so motion advanced only at 60 Hz steps would stutter against it. The host gives the World that time in realtime, clamped to 0.1 s, and 0 in lockstep:</p>
+<div class="citation-chip"><code class="citation-code">m_world-&gt;setPresentationDt(m_time.running() ? std::clamp(frameDt, 0.0f, 0.1f) : 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L211" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:211</a></div>
+<div class="citation-chip"><code class="citation-code">const float dt = world.presentationDt();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L84" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:84</a></div>
+<p>Sway lags the drawn view&#x27;s turn (0.08 degrees a degree, at most 3) and returns exponentially; bob is one cycle per `bobStride` (0.75 m) walked on the ground; kick is 0.03 m back and 2.5 degrees up for each `shot` event in the combat log whose source is the gun&#x27;s owner:</p>
+<div class="citation-chip"><code class="citation-code">m.swayYawDeg = std::clamp(m.swayYawDeg - wrapDeg(yaw - gun.lastYawDeg) * vm.swayDegPerDeg,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L135" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:135</a></div>
+<div class="citation-chip"><code class="citation-code">m.bobPhase = std::fmod(m.bobPhase + speed * dt / std::max(vm.bobStride, 0.01f), 1.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L149" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:149</a></div>
+<div class="citation-chip"><code class="citation-code">m.kickBack += n * vm.kickBack;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/view_model.cpp#L141" target="_blank" rel="noopener">ohao/ecs/view_model.cpp:141</a></div>
+<p>A frame with no presentation time (lockstep, headless, every capture) draws the rest pose, the remap alone, and a round&#x27;s restart resets the motion. The motion is written as `RenderPose` only and held in the registry&#x27;s context, so it is never saved, hashed or snapshotted (`t21_view_model_never_in_world`).</p>
+</div>
+<div class="section-rule"><h2 id="no-shadow-no-bounce">No shadow, no bounce</h2></div>
+<div class="prose reveal">
+<p>The gun is drawn shrunk toward the eye, so anything that sees it as world geometry sees it in the wrong place: a CSM cascade would cast a gun-shaped shadow on the floor, and a GI ray would bounce light off a gun 20 cm from the camera. The render extract marks every instance under a `ViewModel`:</p>
+<div class="citation-chip"><code class="citation-code">d.viewModel = inViewModel(e);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L150" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:150</a></div>
+<p>The draw carries `kDrawViewModel`, and no cascade lists it:</p>
+<div class="citation-chip"><code class="citation-code">member = inFrustum &amp;&amp; (d.info.y &amp; (kDrawEmitter | kDrawViewModel)) == 0u;   // a light&#x27;s mesh, a first-person gun: no shadow</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/cull/instances.slang#L98" target="_blank" rel="noopener">shaders/cull/instances.slang:98</a></div>
+<p>Its TLAS instance gets mask `kTlasMaskViewModel` (4). Only the path tracer&#x27;s camera rays and a near-mirror&#x27;s first specular ray use `kRayMaskCamera` (7); shadow, GI and bounce rays use `kRayMaskScene` (1) and never meet it. The values live in `shaders/shared/layout.json`:</p>
+<div class="citation-chip"><code class="citation-code">: (g.flags &amp; kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L128" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:128</a></div>
+<div class="citation-chip"><code class="citation-code">&quot;doc&quot;: &quot;TLAS instance mask of a first-person gun&#x27;s mesh (ViewModel): only camera rays and a near-mirror&#x27;s first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L55" target="_blank" rel="noopener">shaders/shared/layout.json:55</a></div>
+<p>It is lit like any surface. `light_emitter_gpu_test`&#x27;s gun section holds it: the gun changes no pixel more than 24 px from its footprint, while the same box placed in the world at its drawn pose does shadow the room.</p>
+</div>
+<div class="section-rule"><h2 id="sparks-and-sounds-from-the-combat-log">Sparks and sounds from the combat log</h2></div>
+<div class="prose reveal">
+<p>A window also turns the combat log into particles and audio, beside the footsteps. `CombatFx` reads the log by cursor each frame: a round is a muzzle burst at the drawn muzzle (the light below the gun, so the burst leaves the gun the player sees), a hit is sparks along the normal and a puff by the surface hit (concrete, metal, wood, default):</p>
+<div class="citation-chip"><code class="citation-code">return {ParticleSystem::presetImpactSpark(e.point, e.normal), dustFor(surface, e.point, e.normal)};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/combat_fx.cpp#L79" target="_blank" rel="noopener">ohao/runtime/combat_fx.cpp:79</a></div>
+<p>It emits only while the timeline runs, and a lockstep capture turns the window&#x27;s particles off, so a window capture equals a headless one:</p>
+<div class="citation-chip"><code class="citation-code">if (!realtime) continue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/combat_fx.cpp#L103" target="_blank" rel="noopener">ohao/runtime/combat_fx.cpp:103</a></div>
+<div class="citation-chip"><code class="citation-code">if (deferred) deferred-&gt;setParticlesDrawn(false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L454" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:454</a></div>
+<p>Audio is one `AudioSystem` capped at 24 SFX voices. A sound over the cap replaces the quietest at the listener, or is dropped if it would be the quietest, and either way is counted in `voicesDropped`:</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t kVoiceLimit = 24;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/game_audio.hpp#L15" target="_blank" rel="noopener">ohao/runtime/game_audio.hpp:15</a></div>
+<p>Each kind of sound has its own distance curve, rounds carrying to 60 m and footsteps and impacts to 20 m:</p>
+<div class="citation-chip"><code class="citation-code">case SoundKind::Gunfire: return {1.0f, 60.0f, 1.0f, false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/game_audio.cpp#L28" target="_blank" rel="noopener">ohao/runtime/game_audio.cpp:28</a></div>
+<p>A sound an enemy starts gets one occlusion ray from the listener, never one per frame and never for the player&#x27;s own. Characters on the way are passed through; anything else is a wall, and the sound plays `kOccludedGainDb` (-8 dB) quieter through a low-pass at `kOccludedLowPassHz` (1,200 Hz):</p>
+<div class="citation-chip"><code class="citation-code">if (character == entt::null) return true;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/game_audio.cpp#L63" target="_blank" rel="noopener">ohao/runtime/game_audio.cpp:63</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr float kOccludedGainDb = -8.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.hpp#L95" target="_blank" rel="noopener">ohao/audio/audio_system.hpp:95</a></div>
+<p>`runtime_tests`&#x27; `sp9_t21_particles_from_events`, `sp9_t21_voice_cap`, `sp9_t21_distance_curves` and `sp9_t21_occlusion_ray` cover this half without a window or a device.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Each piece here changes what the player sees and nothing the world is. The lead, the gun&#x27;s remap and motion, the particles and the sounds are all presentation: `RenderPose`, a renderer&#x27;s emitter list, an audio voice. None enters a step, `world.hash`, a file or a snapshot. That is what lets the feel work land without touching the determinism contract: a lockstep window, a headless capture and an agent&#x27;s replay still agree bit for bit, because every one of them draws the step&#x27;s world at rest.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>A realtime window draws the player turned by the look no step has taken, through the step&#x27;s own `applyLook`, so the next step lands where the frame was. `FrameLog` and present wait measure a look&#x27;s poll to its present: 4.80 ms median. The gun is a view-space remap `diag(d, d, d/k)` at `d` 0.55 (anything nearer than about twice the near plane is clipped), moved at render rate, in no shadow, cascade, GI or bounce ray. Particles and sounds come from the combat log, in a realtime window only.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The look lead, the gun&#x27;s motion, particles and sounds are presentation only: never `Transform`,</li>
+</ul>
+<p>`world.hash`, a saved file or a snapshot.</p>
+<ul>
+<li>A frame with `presentationDt` 0 (lockstep, headless, every capture) draws the gun at rest and no</li>
+</ul>
+<p>particles.</p>
+<ul>
+<li>A new ray that should not see the gun passes `kRayMaskScene`; a new shadow pass must skip</li>
+</ul>
+<p>`kDrawViewModel` draws, as the CSM cascades do.</p>
+<ul>
+<li>`depthScale` must keep the gun&#x27;s near end beyond about twice the camera&#x27;s near plane until the</li>
+</ul>
+<p>projection&#x27;s depth range is fixed.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/runtime/live_host.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/world.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/world.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/physics_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_log.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/present_waiter.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/session.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/view_model.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/components.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>docs/specs/2026-10-27-feel-design.md</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/combat.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/render_extract.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/cull/instances.slang</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/shared/layout.json</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/combat_fx.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/game_audio.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/game_audio.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/audio/audio_system.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/frame_log.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/present_waiter.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/view_model.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/runtime/combat_fx.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tools/bench/feel_bench.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="index.html"><div class="label">← Hub</div><div class="title">14 · Runtime feel</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

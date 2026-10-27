@@ -744,6 +744,11 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["combat simulate system after physics; raycastFrom; hashed spread; enemy AI writing saved intents; RoundHook snapshot; combat.* methods."],
         "why": "A fight held in saved components and one clock replays bit for bit, in a window, headless and over MCP.",
     },
+    "runtime/feel": {
+        "what": ["The look lead, frame timing (latency and pacing to the confirmed present), the first-person gun, and particles and sounds from the combat log: a realtime window's presentation."],
+        "how": ["World::setPendingLook + interpolate through applyLook; FrameLog and PresentWaiter (present id/wait, the swapchain's host mutex); late input sampling (framesAhead); ViewModel and the view_model sync system (viewModelRemap, presentationDt); kDrawViewModel and kTlasMaskViewModel; CombatFx; game_audio's voice cap, distance curves and occlusion ray."],
+        "why": "The window answers the hand within a frame while the step, world.hash, files and snapshots stay exactly what they were.",
+    },
     "physics/debug": {
         "what": ["Force debugger visualization hooks."],
         "how": ["force_debugger integrates with gizmo/draw paths."],

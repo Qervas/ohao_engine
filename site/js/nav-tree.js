@@ -161,6 +161,18 @@ window.OHAO_NAV_TREE = [
     ]
   },
   {
+    "id": "runtime",
+    "title": "14 \u00b7 Runtime feel",
+    "href": "m/runtime/index.html",
+    "children": [
+      {
+        "id": "runtime/feel",
+        "title": "Feel: the look lead, frame timing and the first-person gun",
+        "href": "m/runtime/feel.html"
+      }
+    ]
+  },
+  {
     "id": "gpu",
     "title": "03 \u00b7 GPU / Vulkan",
     "href": "m/gpu.html",

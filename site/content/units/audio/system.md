@@ -36,25 +36,37 @@ ducking music under dialogue, or putting a limiter on the SFX bus, is not a
 feature you add later — it is a topology change.
 :::
 
-## Three scalars, and no limiter
+## Four factors, a voice cap, and no limiter
 
-Each voice's gain is a bare three-way product, computed in C++ and pushed down
+Each voice's gain is a bare four-way product, computed in C++ and pushed down
 with a single `ma_sound_set_volume`:
 
-$$v = v_b\,v_c\,v_m$$
+$$v = v_b\,o\,v_c\,v_m, \qquad o = \begin{cases} 10^{-8/20} \approx 0.40 & \text{occluded} \\ 1 & \text{otherwise} \end{cases}$$
 
-{{cite ohao/audio/audio_system.cpp "instance.baseVolume * m_categoryVolumes"}}
+{{cite ohao/audio/audio_system.cpp "const float finalVolume = instance.baseVolume * occlusion *"}}
 
-$v_b$ is the per-sound base volume passed to `playSound`, $v_c$ the category
-scalar, $v_m$ the master. `updateSoundVolume` clamps nothing itself; the clamp
-sits at the entry points, where `clampVolume` applies $\mathrm{cl}(x) =
-\min(\max(x,0),1)$ to whatever the caller supplies — in both play paths, in
-`setSoundVolume`, in `setCategoryVolume` and in `setMasterVolume`. Every factor
-is therefore already in $[0,1]$ before the multiply, and so is the product: a
-voice can be attenuated, never amplified. That ceiling is per voice, not per
-mix — the endpoint sums N voices with nothing after it, so a dozen simultaneous
-unity-gain effects clip the output while every individual gain is legally "at
-most 1".
+$v_b$ is the per-sound base volume passed to `playSound`, $o$ the occlusion cut
+(`kOccludedGainDb`, −8 dB, for a sound its `SoundShape` marks as behind a wall),
+$v_c$ the category scalar, $v_m$ the master. `updateSoundVolume` clamps nothing
+itself; the clamp sits at the entry points, where `clampVolume` applies
+$\mathrm{cl}(x) = \min(\max(x,0),1)$ to whatever the caller supplies — in both
+play paths, in `setSoundVolume`, in `setCategoryVolume` and in
+`setMasterVolume`. Every factor is therefore already in $[0,1]$ before the
+multiply, and so is the product: a voice can be attenuated, never amplified.
+That ceiling is per voice, not per mix — the endpoint sums N voices with nothing
+after it, so a dozen simultaneous unity-gain effects clip the output while every
+individual gain is legally "at most 1".
+
+What bounds N is a voice cap, not a limiter. `setVoiceLimit` (0, the default,
+is none; the window host sets 24) caps the SFX sounds playing at once. A new one
+over the cap takes the place of the quietest at the listener, or is dropped when
+it would be the quietest itself, and either way one sound is counted in
+`voicesDropped`:
+
+{{cite ohao/audio/audio_system.cpp "if (quietest == m_sounds.end() || audible <= quietestAudible) return false;   // the new one is the quietest"}}
+
+Twenty-four unity-gain voices can still clip the sum; the cap only stops the
+count growing without bound in a firefight.
 
 The clamp is the only shaping in the chain, and it is linear amplitude rather
 than perceptual: a master slider at 0.5 is −6 dB, which reads as "somewhat
@@ -71,42 +83,46 @@ panned and attenuated according to wherever the listener happens to be standing:
 
 That line is load-bearing, not defensive. The positional path sets the same flag
 to `MA_TRUE` — already the default — and then writes the distance model out
-longhand:
+longhand, from the `SoundShape` the caller passes:
 
-{{cite ohao/audio/audio_system.cpp "ma_sound_set_min_distance(sound.get(), 1.0f);"}}
-{{cite ohao/audio/audio_system.cpp "ma_sound_set_max_distance(sound.get(), 50.0f);"}}
+{{cite ohao/audio/audio_system.cpp "ma_sound_set_min_distance(sound.get(), shape.minDistance);"}}
+{{cite ohao/audio/audio_system.cpp "ma_sound_set_max_distance(sound.get(), shape.maxDistance);"}}
+{{cite ohao/audio/audio_system.cpp "ma_sound_set_rolloff(sound.get(), shape.rolloff);"}}
 {{cite ohao/audio/audio_system.cpp "ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);"}}
 
-Only one of those three calls changes miniaudio's behaviour.
-`ma_spatializer_config_init` already selects the inverse model, already sets a
-minimum distance of 1, and already sets rolloff to 1 — the last of which the
-facade never touches. The library's default *maximum* distance is `MA_FLT_MAX`,
-so 50 is the one constant the facade actually owns; the other two are defaults
-written down, which is worth something as a pin against a library upgrade but is
-not a design decision.
+A default `SoundShape` is 1 m, 50 m and rolloff 1. Against
+`ma_spatializer_config_init`, which already selects the inverse model, a minimum
+distance of 1 and rolloff 1, only the maximum changes miniaudio's behaviour (its
+default is `MA_FLT_MAX`); the rest are defaults written down. The shape makes
+them a choice per sound: the window host gives gunfire 1 to 60 m and footsteps,
+landings and impacts 0.5 to 20 m at rolloff 1.5 (`runtime/game_audio.cpp`). A
+shape marked `occluded` also routes the sound through a low-pass node at
+`kOccludedLowPassHz` (1,200 Hz) on its way to the endpoint, beside the −8 dB cut
+in the gain above — the one place a node now sits between a voice and the mix.
 
 miniaudio's inverse model (OpenAL's `AL_INVERSE_DISTANCE_CLAMPED`) computes a
 scalar gain from the listener-to-source distance $d$:
 
 $$g(d) = \frac{d_{\min}}{d_{\min} + \rho\,\big(\mathrm{clamp}(d,\,d_{\min},\,d_{\max}) - d_{\min}\big)}$$
 
-With $d_{\min}=1$ and $d_{\max}=50$ world units as set above and rolloff $\rho=1$
-inherited, the expression collapses to $g(d) = 1/\mathrm{clamp}(d,1,50)$: flat
+With the default shape, $d_{\min}=1$, $d_{\max}=50$ world units and rolloff
+$\rho=1$, the expression collapses to $g(d) = 1/\mathrm{clamp}(d,1,50)$: flat
 unity inside one unit, honest inverse-distance out to fifty, then a hard floor of
-$1/50 = 0.02$, roughly −34 dB.
+$1/50 = 0.02$, roughly −34 dB. The facade computes the same curve itself
+(`distanceGain`) to rank voices for the cap.
 
 The floor is the sharp edge. A looping ambient a kilometre away is neither culled
-nor silenced; it is held at 2% gain, still decoded, still mixed, forever. Culling
-by distance would be the caller's job.
+nor silenced; it is held at $g(d_{\max})$, still decoded, still mixed, forever.
+Culling by distance would be the caller's job.
 
 ## Where the mutex stops
 
 `m_mutex` guards `m_sounds` and nothing else. That is a narrower promise than the
 class's shape implies, and it shows in four places.
 
-The handle counter is bumped outside the lock — both play paths call
-`nextHandle()` before entering the critical section, and the counter is a plain
-non-atomic read-modify-write:
+The handle counter is bumped outside the lock — both play paths end in
+`start()`, which calls `nextHandle()` before entering the critical section, and
+the counter is a plain non-atomic read-modify-write:
 
 {{cite ohao/audio/audio_system.cpp "return m_nextHandle++;"}}
 
@@ -120,7 +136,7 @@ the same shape:
 {{cite ohao/audio/audio_system.cpp "m_masterVolume = clampVolume(volume);"}}
 
 The reads are not symmetric, and the asymmetry does not save it.
-`updateSoundVolume` reads both scalars with the mutex held — all five of its call
+`updateSoundVolume` reads both scalars with the mutex held — all four of its call
 sites are inside locked regions — but a reader holding a lock the writer never
 takes is still racing. The two public getters do not even have that:
 `getMasterVolume` is an inline return in the header, and `getCategoryVolume` is
@@ -165,9 +181,10 @@ by the inline `isInitialized()`. Single-threaded teardown is the only regime in
 which this is safe, and nothing in the class enforces it.
 
 :::key
-There is no audio graph here beyond a flat fan-in to one endpoint. Every "bus"
-behaviour — category volume, category stop, master volume — is C++ iterating a
-map and calling `ma_sound_set_volume` per voice. The mutex covers that map while
+There is no audio graph here beyond a flat fan-in to one endpoint, with a
+low-pass node in front of an occluded voice. Every "bus" behaviour — category
+volume, category stop, master volume — is C++ iterating a map and calling
+`ma_sound_set_volume` per voice; the voice cap bounds how many there are. The mutex covers that map while
 it is being walked; it does not cover the writes to the mixer scalars, the handle
 counter, or `shutdown()`.
 :::
@@ -212,29 +229,30 @@ Finished one-shots are not freed when they end; they are freed when someone asks
 {{cite ohao/audio/audio_system.cpp "ma_sound_at_end(instance.sound.get())"}}
 
 Skip it and every fired one-shot stays in the map, attached to the endpoint,
-being mixed as silence. Which leads to the honest part: nothing in the engine
-calls it. `ohao_audio` is on the link line of every example —
+being mixed as silence. The voice cap reaps too, before it counts voices, but
+only when a capped SFX sound starts. The one caller that runs every frame is the
+window host, which owns the engine's single `AudioSystem` (footsteps and combat
+sounds play through it) and reaps after the frame's steps:
+
+{{cite ohao/runtime/live_host.cpp "if (m_audio) m_audio->update();   // finished sounds free their voices"}}
+
+`ohao_audio` is on the link line of every example —
 
 {{cite examples/CMakeLists.txt "ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group"}}
 
-— but no example, renderer, or scene source references `AudioSystem` at all. The
-only code that drives the facade is its own test suite, which pins the handle
-contract — a missing file returns `INVALID_SOUND_HANDLE` rather than throwing —
-and skips every device-dependent case when `initialize()` fails, so machines with
-no audio device still pass:
+— but the examples themselves never touch `AudioSystem`; only `ohao/runtime`
+does, and only in a window host with sound on (headless hosts play nothing). The
+facade's own test suite pins the handle contract — a missing file returns
+`INVALID_SOUND_HANDLE` rather than throwing — and skips every device-dependent
+case when `initialize()` fails, so machines with no audio device still pass:
 
 {{cite tests/audio/audio_system_tests.cpp "bool testPlayInvalidPath() {"}}
 
-The suite does call `update()` and `setListenerPosition` — but never with a sound
-alive:
-
-{{cite tests/audio/audio_system_tests.cpp "Calling update with no active sounds should be fine"}}
-
-The one `playSound` in the file points at a path that does not exist, so no test
-ever creates a voice. The reaper's predicate never runs, the gain product is
-never applied to a real `ma_sound`, and distance attenuation — the thing the
-50-unit floor is about — is not touched at all. This page describes a facade that
-is built, linked and tested, and not yet wired to a frame.
+That suite still never creates a voice. The ones that do are in `runtime_tests`:
+`initialize(true)` builds a mixer without a device, and `sp9_t21_voice_cap`
+starts 30 positioned sounds under the 24-voice cap and checks that the 24 loudest
+at the listener play and that the 6 lost are counted, while
+`sp9_t21_distance_curves` checks the shapes against `distanceGain`.
 
 ## Contracts
 

@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="one-clock-inside-the-world">One clock, inside the world</h2></div>
 <div class="prose reveal">
 <p>Physics does not have a loop of its own. `installPhysics` adds a `physics` simulate system, so every `World::simulate(dt)` steps it: the window&#x27;s fixed step, an agent&#x27;s `world.step`, a headless `ohao run --steps`. A step propagates dirty transforms, brings bodies up to date with the entities, moves the players, then steps Jolt in substeps of at most 1/60 s:</p>
-<div class="citation-chip"><code class="citation-code">for (int i = 0; i &lt; n; ++i) backend-&gt;step(dt / float(n));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1406" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1406</a></div>
+<div class="citation-chip"><code class="citation-code">for (int i = 0; i &lt; n; ++i) backend-&gt;step(dt / float(n));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1407" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1407</a></div>
 <p>Awake dynamic bodies are written back to their entities&#x27; `Transform`s, and the step&#x27;s contact, trigger, footstep and landing events are sorted and logged for `physics.events`. Because there is one clock, record and replay, lockstep captures and `world.hash` all see physics the way they see any other system.</p>
 </div>
 <div class="section-rule"><h2 id="telling-its-own-writes-from-everyone-else-s">Telling its own writes from everyone else&#x27;s</h2></div>
@@ -51,7 +51,7 @@
 <div class="section-rule"><h2 id="the-player">The player</h2></div>
 <div class="prose reveal">
 <p>A `PlayerController` is a Jolt `CharacterVirtual` whose position is the feet, moved in the step before Jolt&#x27;s substeps by the actions it names. Vertical motion is integrated exactly: the move takes the step&#x27;s average vertical velocity,</p>
-<div class="citation-chip"><code class="citation-code">const float vMove = falling ? p.vy + 0.5f * gravity.y * dt : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1331" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1331</a></div>
+<div class="citation-chip"><code class="citation-code">const float vMove = falling ? p.vy + 0.5f * gravity.y * dt : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1332" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1332</a></div>
 <p>so a jump follows the parabola it would in continuous time and peaks where the formula says:</p>
 <div class="math-block">$$
 h = \frac{v_0^2}{2g} = \frac{4.9^2}{2 \cdot 9.81} \approx 1.22\ \text{m}
@@ -68,7 +68,7 @@ $$</div>
 <p>The physics scene&#x27;s is Jolt&#x27;s whole state, bodies (with sleep timers) and the contact cache, then each character:</p>
 <div class="citation-chip"><code class="citation-code">m_physicsSystem-&gt;SaveState(rec, JPH::EStateRecorderState::All);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L667" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:667</a></div>
 <p>plus the players&#x27; records and the contact bookkeeping the events are built from. The next sync after a restore puts it back, before any teleport, if the bodies are still the snapshot&#x27;s:</p>
-<div class="citation-chip"><code class="citation-code">if (!backend || !s || s-&gt;backend.empty() || bodyIdentity() != s-&gt;bodies || s-&gt;players.size() != players.size())</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1503" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1503</a></div>
+<div class="citation-chip"><code class="citation-code">if (!backend || !s || s-&gt;backend.empty() || bodyIdentity() != s-&gt;bodies || s-&gt;players.size() != players.size())</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1565" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1565</a></div>
 <p>A body rebuilt since (its collider edited) has a new handle; then nothing is restored from the saved state and the components&#x27; path applies: teleports at rest, then `BodyMotion`. Saving the state of 1,000 boxes costs about half a millisecond (`boxes1k_snapshot_ms`).</p>
 <div class="why-callout reveal"><div class="why-label">Why</div><p>A component per body was the spec&#x27;s plan, and it is still what agents read and what a partial restore falls back to. But the state that decides a resting contact belongs to the pair, not to either body, and Jolt already knows how to save and restore all of it consistently. Carrying Jolt&#x27;s own state through one hook keeps the snapshot module free of physics and makes &quot;restore, then the same input&quot; a bit-for-bit replay. That is what `input.replay` checkpoints and agents&#x27; `world.hash` comparisons rely on.</p></div>
 </div>

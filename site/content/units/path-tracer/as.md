@@ -171,13 +171,15 @@ would never have dropped it.
 
 The mask is the other per-instance field: who may hit the instance.
 
-{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceEmitter) != 0   ? gpu::shared::kTlasMaskEmitter"}}
+{{cite ohao/render/scene/render_scene.cpp ": (g.flags & kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel"}}
 
 An instance that is hidden, or whose slot was released, keeps its place in the TLAS
 with mask zero, so no ray can hit it and the slot numbers of the instances around it
-stay valid. A light's emitter mesh is hit only by the camera ray, the one trace that
-passes `kRayMaskCamera`; the light samples, bounces and specular chains pass
-`kRayMaskScene` (hybrid/visibility).
+stay valid. A light's emitter mesh (`kTlasMaskEmitter`) and a first-person gun's mesh
+(`kTlasMaskViewModel`) are hit only by the camera ray and a near-mirror's first
+specular ray, the traces that pass `kRayMaskCamera` (7); the light samples, bounces
+and other specular rays pass `kRayMaskScene` (1) (hybrid/visibility).
 
 ## Everything is opaque, so the any-hit cannot run
 

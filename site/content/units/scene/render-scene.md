@@ -64,14 +64,14 @@ Slots come from a free list that always returns the lowest released slot, and th
 
 `draws()` — the raster draw list, one entry per visible instance × submesh, in slot order — is rebuilt only when the table reports a change that alters it: a create, a destroy, a visibility or mesh change, or host storage growth. The last one is in the list because each `Draw` holds a pointer into the host instance array, which growth reallocates. Each `Draw` also records whether its submesh's material is one-sided, resolved through the instance's material list the way the shader resolves it, and the submesh's meshlets in the meshlet arena (first and count, from `MeshInfo::submeshMeshlets`).
 
-Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided and emitter flags, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
+Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided, emitter and view-model flags, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
 
-{{cite ohao/render/scene/render_scene.cpp "(d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u),"}}
+{{cite ohao/render/scene/render_scene.cpp "(d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u) |"}}
+{{cite ohao/render/scene/render_scene.cpp "(d.viewModel ? gpu::shared::kDrawViewModel : 0u),"}}
 
-An emitter draw is a light's mesh, and the cascade lists leave it out: a light's sphere would
-otherwise cast the sun's shadow.
+An emitter draw is a light's mesh, and a view-model draw a first-person gun's (a mesh under a `ViewModel`, drawn shrunk toward the eye). The cascade lists leave both out: a light's sphere would otherwise cast the sun's shadow, and the gun would cast one from a pose that is not where it stands in the world.
 
-{{cite shaders/cull/instances.slang "member = inFrustum && (d.info.y & kDrawEmitter) == 0u;"}}
+{{cite shaders/cull/instances.slang "member = inFrustum && (d.info.y & (kDrawEmitter | kDrawViewModel)) == 0u;"}}
 
 The box's spare `w` carries one more number, as a uint's bits: the draw's first *meshlet entry*, the meshlets of every draw before it. `meshletEntryCount()` is the total, what the mesh-shader fallback culls one entry a thread:
 

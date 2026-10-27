@@ -20,6 +20,7 @@ from . import (
     systems,
     reflection,
     agent,
+    runtime,
 )
 
 MODULES = [
@@ -28,6 +29,7 @@ MODULES = [
     scene.MODULE,
     reflection.MODULE,
     agent.MODULE,
+    runtime.MODULE,
     gpu.MODULE,
     materials.MODULE,
     deferred.MODULE,
