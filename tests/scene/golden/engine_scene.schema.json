@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 5a3481357bee4b05. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 9a90b74e98d2d96c. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -46,7 +46,11 @@
         "SpawnPoint": { "$ref": "#/$defs/SpawnPoint" },
         "Socket": { "$ref": "#/$defs/Socket" },
         "Collider": { "$ref": "#/$defs/Collider" },
-        "RigidBody": { "$ref": "#/$defs/RigidBody" }
+        "RigidBody": { "$ref": "#/$defs/RigidBody" },
+        "Health": { "$ref": "#/$defs/Health" },
+        "Weapon": { "$ref": "#/$defs/Weapon" },
+        "WeaponState": { "$ref": "#/$defs/WeaponState" },
+        "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -956,6 +960,167 @@
           "description": "Bounciness: 0 none, 1 elastic",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Health": {
+      "description": "Hit points. Damage (a weapon's round, combat.damage) takes current down to 0, which is dead: the dead take no more damage and do not fire.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "description": "Hit points when whole",
+          "default": 100,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+06 }]
+        },
+        "current": {
+          "description": "Hit points now; 0 is dead",
+          "default": 100,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+06 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Weapon": {
+      "description": "A hitscan weapon, fired once per fixed step at most, after physics. A player fires it from its eye along its look by the world's input (`fire`, `reload`); anything else from its origin along its -Z by its WeaponTrigger. Each round is one ray within the spread cone; what it hits takes `damage` if it or an ancestor has Health. Recoil turns a player's view.",
+      "type": "object",
+      "properties": {
+        "damage": {
+          "description": "Hit points a round takes",
+          "default": 25,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+05 }]
+        },
+        "fireRate": {
+          "description": "Rounds a second",
+          "default": 10,
+          "allOf": [{ "type": "number", "minimum": 0.1, "maximum": 60 }]
+        },
+        "automatic": {
+          "description": "Fires while `fire` is held; false: one round a press",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
+        },
+        "magazine": {
+          "description": "Rounds a magazine (the reserve is unlimited)",
+          "default": 30,
+          "allOf": [{ "type": "integer", "minimum": 1, "maximum": 1000 }]
+        },
+        "reloadTime": {
+          "description": "Time to reload",
+          "default": 1.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 60 }]
+        },
+        "range": {
+          "description": "How far a round reaches",
+          "default": 100,
+          "allOf": [{ "type": "number", "minimum": 0.1, "maximum": 10000 }]
+        },
+        "spreadDeg": {
+          "description": "Half angle of the spread cone at rest",
+          "default": 0.25,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "bloomPerShotDeg": {
+          "description": "Added to the cone by each round",
+          "default": 0.35,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "bloomMaxDeg": {
+          "description": "The most bloom adds to the cone",
+          "default": 3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "bloomRecoveryDegPerSec": {
+          "description": "How fast bloom falls once the fire interval passes without a round",
+          "default": 6,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 10000 }]
+        },
+        "recoilPitchDeg": {
+          "description": "View kick up a round",
+          "default": 0.35,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "recoilYawDeg": {
+          "description": "View kick sideways a round, at most, either way (seeded)",
+          "default": 0.15,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "recoilRecoveryDegPerSec": {
+          "description": "How fast the vertical kick comes back down once the fire interval passes without a round",
+          "default": 6,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 10000 }]
+        },
+        "seed": {
+          "description": "Seed of the spread's and recoil's random numbers",
+          "default": 1,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "fire": {
+          "description": "Action that fires (a player's)",
+          "default": "fire",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
+        },
+        "reload": {
+          "description": "Action that reloads (a player's)",
+          "default": "reload",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "WeaponState": {
+      "description": "What a weapon has and is doing. Written by the combat step, which adds it (a full magazine) to a Weapon without one.",
+      "type": "object",
+      "properties": {
+        "ammo": {
+          "description": "Rounds in the magazine",
+          "default": 30,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "cooldown": {
+          "description": "Time until the next round may fire",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "reloading": {
+          "description": "Reload time left; 0: not reloading",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "bloomDeg": {
+          "description": "Added to the spread cone now",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "kickDeg": {
+          "description": "Vertical view kick not yet recovered",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "shots": {
+          "description": "Rounds fired: the index of the next round's random numbers",
+          "default": 0,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "triggerHeld": {
+          "description": "The trigger at the last step (one round a press)",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WeaponTrigger": {
+      "description": "The trigger of a weapon that is not a player's: an AI, a turret or an agent pulls it.",
+      "type": "object",
+      "properties": {
+        "pull": { "description": "Held", "default": false, "allOf": [{ "type": "boolean" }] },
+        "reload": {
+          "description": "Reload now; cleared when acted on",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false

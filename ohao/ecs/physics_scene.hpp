@@ -193,6 +193,13 @@ public:
     [[nodiscard]] StepTiming lastStepTiming() const noexcept;
     // The closest body along the ray within max (dir need not be normalized).
     [[nodiscard]] std::optional<RayHit> raycast(glm::vec3 from, glm::vec3 dir, float max) const;
+    // The nearest body along the ray that is neither `ignore`'s (its body, a character's capsule)
+    // nor a trigger: a shot or a line of sight from inside the shooter.
+    [[nodiscard]] std::optional<RayHit> raycastFrom(glm::vec3 from, glm::vec3 dir, float max, entt::entity ignore) const;
+    // Turns a player's view by these angles now (pitch kept within 89 degrees), written as the step
+    // writes it (recoil): not a placement, and drawn as part of this step's move. False for an entity
+    // without a character.
+    bool turnPlayer(entt::entity e, float yawDeg, float pitchDeg);
     [[nodiscard]] PhysicsInfo info() const;
     // The pairs in contact now, by a's id then b's.
     [[nodiscard]] std::vector<PhysicsContact> contacts() const;

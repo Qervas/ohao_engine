@@ -1050,6 +1050,36 @@ struct PhysicsScene::Impl {
         writeMotion(e, BodyMotion{velocity, glm::vec3(0.0f), false});
     }
 
+    // Recoil: the view turned after the step moved the player. A turn inside a step keeps the step's
+    // move (drawn from where the step started to the turned pose); outside one it is a placement.
+    bool turnPlayer(entt::entity e, float dYaw, float dPitch) {
+        const auto it = players.find(e);
+        if (it == players.end() || !reg.valid(e)) return false;
+        PlayerRecord& p = it->second;
+        p.yawDeg = std::remainder(p.yawDeg + dYaw, 360.0f);
+        p.pitchDeg = std::clamp(p.pitchDeg + dPitch, -89.0f, 89.0f);
+        if (backend) backend->setCharacterRotation(p.character, yawQuat(p.yawDeg));
+        const auto mv = movers.find(e);
+        const bool moving = mv != movers.end() && mv->second.moved;
+        std::optional<Mover> body, head;
+        if (moving) {
+            body = mv->second;
+            if (const auto h = movers.find(p.head); p.head != entt::null && h != movers.end()) head = h->second;
+        }
+        const PlayerState* st = reg.try_get<PlayerState>(e);
+        writePlayer(e, p, p.written, st ? st->velocity : glm::vec3(0.0f), st && st->onGround, moving);
+        const auto keepFrom = [&](entt::entity who, const std::optional<Mover>& was) {
+            if (!was) return;
+            if (const auto m2 = movers.find(who); m2 != movers.end()) {
+                m2->second.fromPos = was->fromPos;
+                m2->second.fromRot = was->fromRot;
+            }
+        };
+        keepFrom(e, body);
+        keepFrom(p.head, head);
+        return true;
+    }
+
     // The head at eyeHeight above the feet, pitched; written only when it changes.
     void writeHead(entt::entity e, PlayerRecord& p, glm::vec3 fromPos, glm::quat fromRot, bool track) {
         const entt::entity head = headOf(e);
@@ -1416,6 +1446,28 @@ std::optional<RayHit> PhysicsScene::raycast(glm::vec3 from, glm::vec3 dir, float
     out.dist = hit.fraction * max;
     return out;
 }
+
+std::optional<RayHit> PhysicsScene::raycastFrom(glm::vec3 from, glm::vec3 dir, float max, entt::entity ignore) const {
+    if (!m->backend || glm::dot(dir, dir) == 0.0f || !(max > 0.0f)) return std::nullopt;
+    const glm::vec3 d = glm::normalize(dir);
+    for (const pb::RaycastHit& hit : m->backend->castRayAll(from, d, max)) {
+        const auto it = m->entityOf.find(hit.bodyHandle);
+        const entt::entity e = it == m->entityOf.end() ? entt::entity{entt::null} : it->second;
+        if (e != entt::null) {
+            if (e == ignore) continue;
+            if (const auto r = m->bodies.find(e); r != m->bodies.end() && r->second.trigger) continue;
+        }
+        RayHit out;
+        out.entity = e;
+        out.point = hit.position;
+        out.normal = hit.normal;
+        out.dist = hit.fraction * max;
+        return out;
+    }
+    return std::nullopt;
+}
+
+bool PhysicsScene::turnPlayer(entt::entity e, float yawDeg, float pitchDeg) { return m->turnPlayer(e, yawDeg, pitchDeg); }
 
 PhysicsInfo PhysicsScene::info() const {
     PhysicsInfo out;

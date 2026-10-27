@@ -329,4 +329,51 @@ void writeFields(const PlayerController& v, const PlayerController* omit, FieldS
     s("\"lookY\"", &PlayerController::lookY);
 }
 
+void writeFields(const Health& v, const Health* omit, FieldSink& out) {
+    if (!omit || !same(v.max, omit->max)) out.tree.f32("\"max\"", v.max);
+    if (!omit || !same(v.current, omit->current)) out.tree.f32("\"current\"", v.current);
+}
+
+void writeFields(const Weapon& v, const Weapon* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    const auto f = [&](std::string_view key, float Weapon::*m) {
+        if (!omit || !same(v.*m, omit->*m)) t.f32(key, v.*m);
+    };
+    f("\"damage\"", &Weapon::damage);
+    f("\"fireRate\"", &Weapon::fireRate);
+    if (!omit || v.automatic != omit->automatic) t.boolean("\"automatic\"", v.automatic);
+    if (!omit || v.magazine != omit->magazine) t.i64("\"magazine\"", v.magazine);
+    f("\"reloadTime\"", &Weapon::reloadTime);
+    f("\"range\"", &Weapon::range);
+    f("\"spreadDeg\"", &Weapon::spreadDeg);
+    f("\"bloomPerShotDeg\"", &Weapon::bloomPerShotDeg);
+    f("\"bloomMaxDeg\"", &Weapon::bloomMaxDeg);
+    f("\"bloomRecoveryDegPerSec\"", &Weapon::bloomRecoveryDegPerSec);
+    f("\"recoilPitchDeg\"", &Weapon::recoilPitchDeg);
+    f("\"recoilYawDeg\"", &Weapon::recoilYawDeg);
+    f("\"recoilRecoveryDegPerSec\"", &Weapon::recoilRecoveryDegPerSec);
+    if (!omit || v.seed != omit->seed) t.i64("\"seed\"", v.seed);
+    if (!omit || v.fire != omit->fire) t.string("\"fire\"", v.fire);
+    if (!omit || v.reload != omit->reload) t.string("\"reload\"", v.reload);
+}
+
+void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    const auto f = [&](std::string_view key, float WeaponState::*m) {
+        if (!omit || !same(v.*m, omit->*m)) t.f32(key, v.*m);
+    };
+    if (!omit || v.ammo != omit->ammo) t.i64("\"ammo\"", v.ammo);
+    f("\"cooldown\"", &WeaponState::cooldown);
+    f("\"reloading\"", &WeaponState::reloading);
+    f("\"bloomDeg\"", &WeaponState::bloomDeg);
+    f("\"kickDeg\"", &WeaponState::kickDeg);
+    if (!omit || v.shots != omit->shots) t.i64("\"shots\"", v.shots);
+    if (!omit || v.triggerHeld != omit->triggerHeld) t.boolean("\"triggerHeld\"", v.triggerHeld);
+}
+
+void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out) {
+    if (!omit || v.pull != omit->pull) out.tree.boolean("\"pull\"", v.pull);
+    if (!omit || v.reload != omit->reload) out.tree.boolean("\"reload\"", v.reload);
+}
+
 } // namespace ohao::ecs

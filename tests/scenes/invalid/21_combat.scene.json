@@ -1,0 +1,12 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    { "id": "0000000000000211", "Health": { "curent": 50 } },
+    { "id": "0000000000000212", "Health": { "max": -10 } },
+    { "id": "0000000000000213", "Weapon": { "fireRate": 0, "magazine": 0 } },
+    { "id": "0000000000000214", "Weapon": { "spreadDeg": 120 } },
+    { "id": "0000000000000215", "WeaponState": { "ammo": 2.5 } },
+    { "id": "0000000000000216", "WeaponTrigger": { "pull": "yes" } }
+  ]
+}

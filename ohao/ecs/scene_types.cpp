@@ -267,6 +267,57 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("friction", &RigidBody::friction).doc("Surface friction").unitless().min(0.0).max(1.0)
         .field("restitution", &RigidBody::restitution).doc("Bounciness: 0 none, 1 elastic").unitless().min(0.0).max(1.0);
 
+    r.type<Health>("Health").component().host(makeComponentOps<Health>())
+        .doc("Hit points. Damage (a weapon's round, combat.damage) takes current down to 0, which is dead: the dead "
+             "take no more damage and do not fire.")
+        .field("max", &Health::max).doc("Hit points when whole").unitless().min(0.0).max(1000000.0)
+        .field("current", &Health::current).doc("Hit points now; 0 is dead").unitless().min(0.0).max(1000000.0);
+    r.type<Weapon>("Weapon").component().host(makeComponentOps<Weapon>())
+        .doc("A hitscan weapon, fired once per fixed step at most, after physics. A player fires it from its eye along "
+             "its look by the world's input (`fire`, `reload`); anything else from its origin along its -Z by its "
+             "WeaponTrigger. Each round is one ray within the spread cone; what it hits takes `damage` if it or an "
+             "ancestor has Health. Recoil turns a player's view.")
+        .field("damage", &Weapon::damage).doc("Hit points a round takes").unitless().min(0.0).max(100000.0)
+        .field("fireRate", &Weapon::fireRate).doc("Rounds a second").unit("Hz").min(0.1).max(60.0)
+        .field("automatic", &Weapon::automatic).doc("Fires while `fire` is held; false: one round a press")
+        .field("magazine", &Weapon::magazine).doc("Rounds a magazine (the reserve is unlimited)").unitless().min(1.0)
+            .max(1000.0)
+        .field("reloadTime", &Weapon::reloadTime).doc("Time to reload").unit("s").min(0.0).max(60.0)
+        .field("range", &Weapon::range).doc("How far a round reaches").unit("m").min(0.1).max(10000.0)
+        .field("spreadDeg", &Weapon::spreadDeg).doc("Half angle of the spread cone at rest").unit("deg").min(0.0)
+            .max(45.0)
+        .field("bloomPerShotDeg", &Weapon::bloomPerShotDeg).doc("Added to the cone by each round").unit("deg")
+            .min(0.0).max(45.0)
+        .field("bloomMaxDeg", &Weapon::bloomMaxDeg).doc("The most bloom adds to the cone").unit("deg").min(0.0)
+            .max(45.0)
+        .field("bloomRecoveryDegPerSec", &Weapon::bloomRecoveryDegPerSec)
+            .doc("How fast bloom falls once the fire interval passes without a round").unit("deg/s").min(0.0)
+            .max(10000.0)
+        .field("recoilPitchDeg", &Weapon::recoilPitchDeg).doc("View kick up a round").unit("deg").min(0.0).max(45.0)
+        .field("recoilYawDeg", &Weapon::recoilYawDeg).doc("View kick sideways a round, at most, either way (seeded)")
+            .unit("deg").min(0.0).max(45.0)
+        .field("recoilRecoveryDegPerSec", &Weapon::recoilRecoveryDegPerSec)
+            .doc("How fast the vertical kick comes back down once the fire interval passes without a round")
+            .unit("deg/s").min(0.0).max(10000.0)
+        .field("seed", &Weapon::seed).doc("Seed of the spread's and recoil's random numbers").unitless()
+        .field("fire", &Weapon::fire).doc("Action that fires (a player's)").maxLength(64)
+        .field("reload", &Weapon::reload).doc("Action that reloads (a player's)").maxLength(64);
+    r.type<WeaponState>("WeaponState").component().host(makeComponentOps<WeaponState>())
+        .doc("What a weapon has and is doing. Written by the combat step, which adds it (a full magazine) to a Weapon "
+             "without one.")
+        .field("ammo", &WeaponState::ammo).doc("Rounds in the magazine").unitless()
+        .field("cooldown", &WeaponState::cooldown).doc("Time until the next round may fire").unit("s").min(0.0)
+        .field("reloading", &WeaponState::reloading).doc("Reload time left; 0: not reloading").unit("s").min(0.0)
+        .field("bloomDeg", &WeaponState::bloomDeg).doc("Added to the spread cone now").unit("deg").min(0.0)
+        .field("kickDeg", &WeaponState::kickDeg).doc("Vertical view kick not yet recovered").unit("deg").min(0.0)
+        .field("shots", &WeaponState::shots).doc("Rounds fired: the index of the next round's random numbers")
+            .unitless()
+        .field("triggerHeld", &WeaponState::triggerHeld).doc("The trigger at the last step (one round a press)");
+    r.type<WeaponTrigger>("WeaponTrigger").component().host(makeComponentOps<WeaponTrigger>())
+        .doc("The trigger of a weapon that is not a player's: an AI, a turret or an agent pulls it.")
+        .field("pull", &WeaponTrigger::pull).doc("Held")
+        .field("reload", &WeaponTrigger::reload).doc("Reload now; cleared when acted on");
+
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 
     r.type<MeshHandle>("MeshHandle").runtime()

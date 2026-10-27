@@ -313,7 +313,11 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<PlayerController>(r, checked);
     ok &= complete<PlayerState>(r, checked);
     ok &= complete<BodyMotion>(r, checked);
-    CHECK(ok, "every member of every registered type is registered or skipped");
+    ok &= complete<Health>(r, checked);
+    ok &= complete<Weapon>(r, checked);
+    ok &= complete<WeaponState>(r, checked);
+    ok &= complete<WeaponTrigger>(r, checked);
+    CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
 
@@ -330,7 +334,8 @@ static void t01_authoring_and_runtime_split() {
     registerSceneTypes(r);
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
-                              "Collider", "RigidBody", "PlayerController"}) {
+                              "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
+                              "WeaponTrigger"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -535,6 +540,31 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             pc.jump = pickName(rng, 1);
             pc.lookY = pickName(rng, 2);
             if (!w.registry().all_of<PlayerController>(e)) w.registry().emplace<PlayerController>(e, pc);
+        }
+        // Combat (sub-project 7 step 1).
+        if (rng() % 2) {
+            const auto e = es[rng() % es.size()];
+            const float max = 1.0f + 200.0f * unit();
+            if (!w.registry().all_of<Health>(e)) w.registry().emplace<Health>(e, Health{max, max * unit()});
+            Weapon wp;
+            wp.damage = 100.0f * unit();
+            wp.automatic = rng() % 2 == 0;
+            wp.magazine = 1 + static_cast<uint32_t>(rng() % 100);
+            wp.spreadDeg = 5.0f * unit();
+            wp.seed = static_cast<uint32_t>(rng());
+            wp.fire = pickName(rng, 3);
+            if (!w.registry().all_of<Weapon>(e)) w.registry().emplace<Weapon>(e, wp);
+            if (rng() % 2 && !w.registry().all_of<WeaponState>(e)) {
+                WeaponState ws;
+                ws.ammo = static_cast<uint32_t>(rng() % 100);
+                ws.cooldown = 0.1f * unit();
+                ws.bloomDeg = unit();
+                ws.shots = static_cast<uint32_t>(rng());
+                ws.triggerHeld = rng() % 2 == 0;
+                w.registry().emplace<WeaponState>(e, ws);
+            }
+            if (rng() % 2 && !w.registry().all_of<WeaponTrigger>(e))
+                w.registry().emplace<WeaponTrigger>(e, WeaponTrigger{rng() % 2 == 0, rng() % 2 == 0});
         }
     }
 }

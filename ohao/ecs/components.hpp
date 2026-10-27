@@ -299,6 +299,56 @@ struct BodyMotion {
     bool asleep{false};        // the body sleeps (its velocities are then zero)
 };
 
+// ---- combat (sub-project 7; ecs/combat.hpp, the `combat` simulate system after `physics`) ------
+
+// Hit points. Damage takes current down to 0, which is dead: the dead take no more damage and
+// do not fire.
+struct Health {
+    float max{100.0f};
+    float current{100.0f};
+};
+
+// A hitscan weapon. A player fires it from its eye along its look, by the World's input (`fire`
+// held or pressed, `reload` pressed); anything else from its own origin along its -Z, by its
+// WeaponTrigger. Each round is one ray to `range`; what it hits takes `damage` if it (or an
+// ancestor) has Health.
+struct Weapon {
+    float damage{25.0f};                   // hp a round
+    float fireRate{10.0f};                 // Hz, rounds a second
+    bool automatic{true};                  // fires while held; false: one round a press
+    uint32_t magazine{30};                 // rounds a magazine (reserve is unlimited)
+    float reloadTime{1.5f};                // s
+    float range{100.0f};                   // m
+    float spreadDeg{0.25f};                // the cone's half angle at rest
+    float bloomPerShotDeg{0.35f};          // added to the cone by each round
+    float bloomMaxDeg{3.0f};               // the most bloom adds
+    float bloomRecoveryDegPerSec{6.0f};    // how fast bloom falls once the weapon is idle
+    float recoilPitchDeg{0.35f};           // view kick up a round
+    float recoilYawDeg{0.15f};             // view kick sideways a round, at most (seeded, either way)
+    float recoilRecoveryDegPerSec{6.0f};   // how fast the vertical kick comes back once idle
+    uint32_t seed{1};                      // the spread's and recoil's random numbers
+    std::string fire{"fire"};
+    std::string reload{"reload"};
+};
+
+// What the weapon has and is doing. The combat step writes it (and emplaces it, a full magazine,
+// for a Weapon without one); saved, so files, world.hash and snapshots hold a fight exactly.
+struct WeaponState {
+    uint32_t ammo{30};          // rounds in the magazine
+    float cooldown{0.0f};       // s until the next round may fire
+    float reloading{0.0f};      // s of reload left; 0: not reloading
+    float bloomDeg{0.0f};       // added to the spread cone now
+    float kickDeg{0.0f};        // vertical view kick not yet recovered
+    uint32_t shots{0};          // rounds fired: the index of the next round's random numbers
+    bool triggerHeld{false};    // the trigger at the last step (one round a press)
+};
+
+// The trigger of a weapon that is not a player's: an enemy's AI, a turret, a test pulls it.
+struct WeaponTrigger {
+    bool pull{false};     // held
+    bool reload{false};   // reload now (cleared when acted on)
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

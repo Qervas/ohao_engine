@@ -37,5 +37,9 @@ void writeFields(const RigidBody& v, const RigidBody* omit, FieldSink& out);
 void writeFields(const SpawnPoint& v, const SpawnPoint* omit, FieldSink& out);
 void writeFields(const Socket& v, const Socket* omit, FieldSink& out);
 void writeFields(const PlayerController& v, const PlayerController* omit, FieldSink& out);
+void writeFields(const Health& v, const Health* omit, FieldSink& out);
+void writeFields(const Weapon& v, const Weapon* omit, FieldSink& out);
+void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out);
+void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out);
 
 } // namespace ohao::ecs
