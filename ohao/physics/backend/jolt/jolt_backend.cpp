@@ -371,7 +371,8 @@ bool JoltPhysicsBackend::initialize(const PhysicsWorldConfig& config) {
 // ============================================================================
 
 void JoltPhysicsBackend::shutdown() {
-    // Destroy characters
+    // Destroy characters (each removes its inner body: one out of the world goes back in first)
+    for (auto& [handle, data] : m_characters) setCharacterInWorld(handle, true);
     m_characters.clear();
 
     // Destroy constraints
@@ -1415,12 +1416,24 @@ void JoltPhysicsBackend::destroyCharacter(CharacterHandle handle) {
     if (it == m_characters.end()) return;
     if (it->second.innerBody != INVALID_BODY)
         m_bodyIdToHandle.erase(it->second.character->GetInnerBodyID().GetIndexAndSequenceNumber());
+    if (!it->second.inWorld) setCharacterInWorld(handle, true);   // the character removes its body
     m_characters.erase(it);
 }
 
 BodyHandle JoltPhysicsBackend::getCharacterInnerBody(CharacterHandle handle) const {
     const auto it = m_characters.find(handle);
     return it == m_characters.end() ? INVALID_BODY : it->second.innerBody;
+}
+
+void JoltPhysicsBackend::setCharacterInWorld(CharacterHandle handle, bool inWorld) {
+    const auto it = m_characters.find(handle);
+    if (it == m_characters.end() || it->second.inWorld == inWorld || !m_physicsSystem) return;
+    it->second.inWorld = inWorld;
+    const JPH::BodyID inner = it->second.character->GetInnerBodyID();
+    if (inner.IsInvalid()) return;
+    JPH::BodyInterface& bi = m_physicsSystem->GetBodyInterface();
+    if (inWorld) bi.AddBody(inner, JPH::EActivation::Activate);
+    else bi.RemoveBody(inner);
 }
 
 void JoltPhysicsBackend::moveCharacter(CharacterHandle handle, float deltaTime, const glm::vec3& velocity,

@@ -140,6 +140,7 @@ public:
     void moveCharacter(CharacterHandle handle, float deltaTime, const glm::vec3& velocity, const glm::vec3& gravity,
                        float stepUp, float stickDown) override;
     [[nodiscard]] BodyHandle getCharacterInnerBody(CharacterHandle handle) const override;
+    void setCharacterInWorld(CharacterHandle handle, bool inWorld) override;
     size_t getCharacterCount() const override;
     void moveKinematic(BodyHandle h, const glm::vec3& pos, const glm::quat& rot, float deltaTime) override;
 
@@ -209,6 +210,7 @@ private:
         JPH::Ref<JPH::CharacterVirtual> character;
         uint16_t layer = CollisionLayer::CHARACTER;
         BodyHandle innerBody = INVALID_BODY;   // in m_bodyIdToHandle only: the character owns the body
+        bool inWorld = true;                   // its inner body in the broadphase (setCharacterInWorld)
     };
     std::unordered_map<CharacterHandle, CharacterData> m_characters;
     CharacterHandle m_nextCharacterHandle = 0;

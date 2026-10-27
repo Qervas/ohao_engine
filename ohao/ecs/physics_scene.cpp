@@ -217,6 +217,9 @@ struct PhysicsScene::Impl {
     // components' path (teleports and BodyMotion) does what it can.
     struct SavedSimulation;
     std::shared_ptr<const SavedSimulation> savedPending;
+    // A restore since the players last spawned: a PlayerController it put back (a dead enemy's,
+    // combat's round restart) gets its character where the restored entity stands, not at a spawn.
+    bool restoredSinceSpawn{false};
 
     // A player (spec "The player"): its character, and what the step last made of it.
     struct PlayerRecord {
@@ -247,6 +250,14 @@ struct PhysicsScene::Impl {
     static constexpr float kLandDrop = 0.3f;        // m fallen before touching the ground is a land
     ankerl::unordered_dense::map<entt::entity, PlayerRecord> players;
     std::vector<entt::entity> playersTouched;  // PlayerController added or changed
+    // Characters whose PlayerController went (a dead enemy's), out of the world but kept with the
+    // controller they were made for: a restore that puts the controller back gets the same
+    // character, so the snapshot's simulation restores exactly. Destroyed with their entity.
+    struct Parked {
+        PlayerRecord record;
+        PlayerController made;
+    };
+    ankerl::unordered_dense::map<entt::entity, Parked> parked;
 
     // Render interpolation (spec "Interpolation"): what the last step moved, from where to where
     // (world poses, without scale). An entry the next step does not move is dropped after it.
@@ -289,8 +300,10 @@ struct PhysicsScene::Impl {
         reg.on_construct<BodyMotion>().disconnect(this);
         reg.on_update<BodyMotion>().disconnect(this);
         reg.on_update<Transform>().disconnect(this);
-        if (backend)
+        if (backend) {
             for (auto& [e, p] : players) backend->destroyCharacter(p.character);
+            for (auto& [e, k] : parked) backend->destroyCharacter(k.record.character);
+        }
     }
 
     void touchPlayer(entt::registry&, entt::entity e) { playersTouched.push_back(e); }
@@ -335,17 +348,49 @@ struct PhysicsScene::Impl {
         }
         r.awake = !m->asleep;
     }
-    // A player's character goes with its PlayerController (or entity); its trigger pairs end.
-    void onPlayerGone(entt::registry&, entt::entity e) { removePlayer(e); }
-    void removePlayer(entt::entity e) {
+    // A player's character leaves the world with its PlayerController (parked; destroyed with its
+    // entity); its trigger pairs end.
+    void onPlayerGone(entt::registry&, entt::entity e) { removePlayer(e, true); }
+    void removePlayer(entt::entity e, bool park) {
         const auto it = players.find(e);
         if (it == players.end()) return;
         if (it->second.inner != pb::INVALID_BODY) {
             if (!pairs.empty()) endPairsOf(it->second.inner);
             entityOf.erase(it->second.inner);
         }
-        if (backend) backend->destroyCharacter(it->second.character);
+        if (backend) {
+            if (park && reg.all_of<PlayerController>(e)) {
+                backend->setCharacterInWorld(it->second.character, false);
+                dropParked(e);
+                parked[e] = Parked{it->second, reg.get<PlayerController>(e)};
+            } else {
+                backend->destroyCharacter(it->second.character);
+            }
+        }
         players.erase(it);
+    }
+    void dropParked(entt::entity e) {
+        const auto it = parked.find(e);
+        if (it == parked.end()) return;
+        if (backend) backend->destroyCharacter(it->second.record.character);
+        parked.erase(it);
+    }
+    // A parked character for a controller like the one it was made for (a restore's), back in the
+    // world; else the parked one goes and false.
+    bool unpark(entt::entity e, const PlayerController& pc, PlayerRecord& out) {
+        const auto it = parked.find(e);
+        if (it == parked.end()) return false;
+        const PlayerController& m = it->second.made;
+        const bool same = m.radius == pc.radius && m.height == pc.height && m.maxSlopeDeg == pc.maxSlopeDeg &&
+                          m.mass == pc.mass && m.pushForce == pc.pushForce;
+        if (!same || !backend) {
+            dropParked(e);
+            return false;
+        }
+        out = it->second.record;
+        parked.erase(it);
+        backend->setCharacterInWorld(out.character, true);
+        return true;
     }
 
     template <class T>
@@ -711,6 +756,7 @@ struct PhysicsScene::Impl {
     [[nodiscard]] std::shared_ptr<const void> saveSimulation() const;
     void restoreSimulation(const std::shared_ptr<const void>& state) {
         savedPending = std::static_pointer_cast<const SavedSimulation>(state);
+        restoredSinceSpawn = true;
     }
     bool restoreSaved();
 
@@ -947,24 +993,33 @@ struct PhysicsScene::Impl {
     }
 
     // A character for a new PlayerController, at the player spawn (or where the entity is, with
-    // W_PLAYER_NO_SPAWN); for a changed one, where the player stands, facing as it faced.
-    void createPlayer(entt::entity e) {
+    // W_PLAYER_NO_SPAWN); for a changed one, where the player stands, facing as it faced; for one
+    // a restore put back (`restored`), as the restored entity and its head stand.
+    void createPlayer(entt::entity e, bool restored) {
         const auto old = players.find(e);
         const bool existed = old != players.end();
-        const float oldPitch = existed ? old->second.pitchDeg : 0.0f;
+        float oldPitch = existed ? old->second.pitchDeg : 0.0f;
         // Its yaw, unless its rotation was edited too.
         const glm::quat& rotNow = reg.get<Transform>(e).rotation;
         const float oldYaw = !existed ? 0.0f
                              : sameRotation(rotNow, old->second.writtenRot, 1e-4f) ? old->second.yawDeg
                                                                                    : yawOf(rotNow);
-        removePlayer(e);
+        removePlayer(e, false);
         const PlayerController& pc = reg.get<PlayerController>(e);
+        PlayerRecord back;
+        const bool same = !existed && restored && unpark(e, pc, back);
+        if (!same) dropParked(e);
         glm::vec3 pos(0.0f);
         float yaw = 0.0f;
-        const entt::entity spawn = existed ? entt::null : spawnFor(e);
+        const entt::entity spawn = existed || restored ? entt::null : spawnFor(e);
         if (existed) {
             pos = reg.get<Transform>(e).position;
             yaw = oldYaw;
+        } else if (restored) {
+            pos = reg.get<Transform>(e).position;   // a character is a root entity: its world pose
+            yaw = yawOf(rotNow);
+            if (const entt::entity head = headOf(e); head != entt::null)
+                oldPitch = std::clamp(pitchOf(reg.get<Transform>(head).rotation), -89.0f, 89.0f);
         } else if (spawn != entt::null) {
             const glm::mat4 w = worldOf(spawn);
             pos = glm::vec3(w[3]);
@@ -990,12 +1045,22 @@ struct PhysicsScene::Impl {
         ci.innerBody = true;
         pb::IPhysicsBackend& be = ensureBackend();
         PlayerRecord p;
-        p.character = be.createCharacter(ci);
-        if (p.character == pb::INVALID_CHARACTER) {
-            warn(e, "W_PLAYER_NO_CHARACTER", "the physics backend could not make the player's character");
-            return;
+        if (same) {
+            // The character it had (a restore puts the snapshot's simulation back over it), placed
+            // where the restored entity stands.
+            p.character = back.character;
+            p.inner = back.inner;
+            be.setCharacterRotation(p.character, ci.rotation);
+            be.setCharacterPosition(p.character, pos);
+            be.setCharacterLinearVelocity(p.character, glm::vec3(0.0f));
+        } else {
+            p.character = be.createCharacter(ci);
+            if (p.character == pb::INVALID_CHARACTER) {
+                warn(e, "W_PLAYER_NO_CHARACTER", "the physics backend could not make the player's character");
+                return;
+            }
+            p.inner = be.getCharacterInnerBody(p.character);
         }
-        p.inner = be.getCharacterInnerBody(p.character);
         if (p.inner != pb::INVALID_BODY) entityOf[p.inner] = e;
         p.yawDeg = yaw;
         p.pitchDeg = oldPitch;
@@ -1118,11 +1183,20 @@ struct PhysicsScene::Impl {
     // Characters for PlayerControllers added or changed since: the `player_spawn` sync system
     // (before `transform`, so a play scene's first frame is drawn from the spawn) and each step.
     void spawnPlayers() {
+        const bool restored = std::exchange(restoredSinceSpawn, false);
+        for (auto it = parked.begin(); it != parked.end();) {   // characters of destroyed entities go
+            if (reg.valid(it->first)) {
+                ++it;
+                continue;
+            }
+            if (backend) backend->destroyCharacter(it->second.record.character);
+            it = parked.erase(it);
+        }
         if (playersTouched.empty()) return;
         std::vector<entt::entity> list;
         list.swap(playersTouched);
         for (const entt::entity e : list)
-            if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e);
+            if (reg.valid(e) && reg.all_of<PlayerController>(e)) createPlayer(e, restored);
     }
 
     // A player's footstep or landing on the ground body `ground` (spec "Footsteps").

@@ -500,6 +500,10 @@ public:
                                const glm::vec3& gravity, float stepUp, float stickDown) = 0;
     // The character's inner body (CharacterCreationInfo::innerBody), or INVALID_BODY.
     [[nodiscard]] virtual BodyHandle getCharacterInnerBody(CharacterHandle handle) const = 0;
+    // A character out of the world: its inner body leaves the broadphase (rays, bodies and other
+    // characters pass where it was); it keeps its handles and state, and saveState/restoreState
+    // carry it, so it can come back as the same character.
+    virtual void setCharacterInWorld(CharacterHandle handle, bool inWorld) = 0;
     virtual size_t getCharacterCount() const = 0;
 
     // A kinematic body set moving so that it reaches this pose after deltaTime (its velocity
@@ -603,6 +607,7 @@ public:
     void updateCharacter(CharacterHandle, float, const glm::vec3&, const glm::vec3&) override {}
     void moveCharacter(CharacterHandle, float, const glm::vec3&, const glm::vec3&, float, float) override {}
     [[nodiscard]] BodyHandle getCharacterInnerBody(CharacterHandle) const override { return INVALID_BODY; }
+    void setCharacterInWorld(CharacterHandle, bool) override {}
     size_t getCharacterCount() const override { return 0; }
     void moveKinematic(BodyHandle, const glm::vec3&, const glm::quat&, float) override {}
 

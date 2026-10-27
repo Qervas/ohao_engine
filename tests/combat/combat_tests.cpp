@@ -869,7 +869,7 @@ static void t17_dead_player_cannot_move_or_fire() {
 static void t17_win_when_all_enemies_dead() {
     Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
     toughen(a);
-    (void)startRound(a);
+    const uint64_t h0 = startRound(a);
     a.combat->damage(byId(a, kEnemyA), 1000.0f, a.player, {});
     auto ev = a.run(5);
     CHECK(only(ev, Kind::Win).empty() && a.combat->round().phase == RoundPhase::Playing, "one enemy left: no win");
@@ -881,6 +881,7 @@ static void t17_win_when_all_enemies_dead() {
     CHECK(only(ev, Kind::Restart).size() == 1 && modeOf(a, kEnemyA) != EnemyMode::Dead &&
               a.world.registry().all_of<PlayerController>(byId(a, kEnemyB)),
           "restart: both enemies back, characters and all");
+    CHECK(hashOf(a.world) == h0, "the world after the restart step is the round's start: world.hash");
     CHECK(a.combat->round().phase == RoundPhase::Playing, "playing again");
 }
 
@@ -910,6 +911,32 @@ static void t17_restart_replays_identically() {
     const auto again = play();
     std::printf("\n      %zu events in the round's first 120 steps", first.size());
     CHECK(!first.empty() && sameEvents(first, again, false), "after a restart the same play gives the same fight, bit for bit");
+    CHECK(hashOf(a.world) == h1, "and the same world.hash");
+}
+
+// A won round's restart brings the dead enemies' characters back (the ones they had, parked while
+// they lay dead, where the round's start has them, not at their spawns), so the snapshot's
+// simulation restores and the same play gives the same fight.
+static void t17_restart_after_win_replays_identically() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    (void)startRound(a);
+    const auto play = [&] {
+        std::vector<CombatEvent> all;
+        const auto add = [&](std::vector<CombatEvent> e) { all.insert(all.end(), e.begin(), e.end()); };
+        add(a.run(30, {actionEvent("fire", true), axisSet("look_x", 2.0f)}));
+        add(a.run(60, {axisSet("look_x", 0.0f), axisSet("move_forward", -1.0f)}));
+        add(a.run(30, {actionEvent("fire", false), axisSet("move_forward", 0.0f)}));
+        return all;
+    };
+    const auto first = play();
+    const uint64_t h1 = hashOf(a.world);
+    a.combat->damage(byId(a, kEnemyA), 1000.0f, a.player, {});
+    a.combat->damage(byId(a, kEnemyB), 1000.0f, a.player, {});
+    CHECK(!only(a.run(30), Kind::Win).empty(), "both dead: won");
+    (void)a.run(1, {actionEvent("restart", true)});
+    const auto again = play();
+    CHECK(!first.empty() && sameEvents(first, again, false), "after the won round's restart the same play gives the same fight");
     CHECK(hashOf(a.world) == h1, "and the same world.hash");
 }
 
@@ -985,5 +1012,6 @@ int main(int argc, char** argv) {
     RUN(t17_win_when_all_enemies_dead);
     RUN(t17_no_round_no_restart);
     RUN(t17_restart_replays_identically);
+    RUN(t17_restart_after_win_replays_identically);
     return ohao::test::finish("combat_tests");
 }
