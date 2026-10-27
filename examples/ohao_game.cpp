@@ -4,7 +4,7 @@
 // Spin turns the cube, its PlayerController walks. No host code moves anything.
 //
 //   ohao_game [scene] [--present immediate|mailbox|fifo] [--vsync] [--latency] [--frames N] [--resize-at F]
-//             [--mode deferred|rt_realtime|rt_offline] [--mute]
+//             [--mode deferred|rt_realtime|rt_offline] [--mute] [--no-fx]
 //
 //   --present: how the window presents (default mailbox; immediate tears for the least latency,
 //   fifo waits for the display; a surface without the mode falls back down that list); --vsync
@@ -19,7 +19,8 @@
 //                 Esc (release_mouse) frees the mouse, a click takes it again (that click
 //                 never fires); close the window to quit. Footsteps and weapons sound
 //                 (assets/audio/footsteps, assets/audio/weapons; --mute silences them); a HUD
-//                 shows health, ammunition, the crosshair, hits, damage and the round's end
+//                 shows health, ammunition, the crosshair, hits, damage and the round's end; the
+//                 gun sways, bobs and kicks; hits throw sparks and dust (--no-fx turns them off)
 //
 // --frames N runs N frames and exits non-zero if any frame did an unrequested GPU->CPU
 // readback, or if validation was on (OHAO_VALIDATION=1) and reported anything. --resize-at
@@ -95,6 +96,7 @@ int main(int argc, char** argv) {
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;
     cfg.footsteps = !argFlag(argc, argv, "--mute");   // a player's footsteps, through the default audio device
+    cfg.effects = !argFlag(argc, argv, "--no-fx");    // sparks, dust and muzzle bursts from combat
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") != 0) continue;
         const std::string m = argv[i + 1];

@@ -29,6 +29,7 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "runtime/click_capture.hpp"
 #include "runtime/clock.hpp"
+#include "runtime/combat_fx.hpp"
 #include "runtime/combat_sounds.hpp"
 #include "runtime/footsteps.hpp"
 #include "runtime/frame_log.hpp"
@@ -82,6 +83,10 @@ struct LiveConfig {
     // device (runtime/footsteps.hpp, runtime/combat_sounds.hpp). ohao_game turns it on; a server's
     // window stays silent.
     bool footsteps{false};
+    // Sparks, dust and muzzle bursts from the combat log as GPU particles (runtime/combat_fx.hpp):
+    // emitted only while the timeline runs; a lockstep capture draws none. ohao_game turns it on
+    // (--no-fx off); a server's window stays without.
+    bool effects{false};
     // Draws the measured latency and frame time top left (ohao_game --latency; sub-project 9).
     bool latencyReadout{false};
     // Frames the frame log keeps (render.stats reads the newest; feel_bench keeps a whole run).
@@ -171,6 +176,7 @@ private:
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
     std::unique_ptr<Footsteps> m_footsteps;     // LiveConfig::footsteps
     std::unique_ptr<CombatSounds> m_combatSounds;   // LiveConfig::footsteps too
+    std::unique_ptr<CombatFx> m_combatFx;           // LiveConfig::effects
     ClickToCapture m_clickCapture;
     bool m_clickToCapture{false};
     bool m_captureClicked{false};

@@ -34,6 +34,7 @@
 #include "common/harness.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -44,6 +45,7 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/gpu_culling.hpp"
 #include "render/frame/pass_registry.hpp"
+#include "render/particles/particle_system.hpp"
 #include "render/scene/meshlet_builder.hpp"
 
 #include <algorithm>
@@ -79,7 +81,13 @@ struct SceneSpec {
     std::vector<std::string> post;
     std::optional<float> exposure;
     bool hud{false};   // the combat HUD over the frame (sub-project 7: the hud pass)
+    bool fx{false};    // a burst of kFxParticles in front of the camera (sub-project 9: the particles pass)
 };
+
+// play_fx_1080p's burst: alive through every warm-up and timed frame (the renderer's fixed
+// 1/60 s frame step: 105 frames are 1.75 s), so each timed frame updates and draws all of them.
+constexpr uint32_t kFxParticles = 2000;
+constexpr float kFxLifetime = 4.0f;
 
 // The spec's table. The bench scenes are built in code (bench_world.hpp) and written to
 // build/render_bench/ by writeBenchScenes before the run.
@@ -92,6 +100,8 @@ const std::vector<SceneSpec>& sceneSpecs() {
         {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
         // The play scene through the player's eyes with its HUD (health, ammo, crosshair).
         {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, true},
+        // The same view with 2,000 sparks in front of the eye: the only capture drawing particles.
+        {"play_fx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true},
     };
     return s;
 }
@@ -673,6 +683,33 @@ struct Gpu {
         const std::string loaded =
             session->call("scene.load", std::string(R"({"replace":true,"path":")") + spec.path + "\"}");
         if (loaded.rfind("{\"result\"", 0) != 0) return "scene.load failed: " + loaded.substr(0, 300);
+        if (spec.fx) {
+            DeferredRenderer* deferred = host->renderer() ? host->renderer()->getDeferredRenderer() : nullptr;
+            if (!deferred) return "no deferred renderer for the particle burst";
+            world->sync();   // the head's WorldTransform after the load's spawn
+            glm::vec3 eye{0.0f}, forward{0.0f, 0.0f, -1.0f};
+            for (auto [e, cam, wt] : world->registry().view<ecs::Camera, ecs::WorldTransform>().each()) {
+                if (!cam.active) continue;
+                eye = glm::vec3(wt.world[3]);
+                forward = -glm::normalize(glm::vec3(wt.world[2]));
+                break;
+            }
+            ParticleEmitterConfig burst;
+            burst.position = eye + forward * 2.0f;
+            burst.direction = glm::vec3(0.0f, 1.0f, 0.0f);
+            burst.spreadAngle = 1.2f;
+            burst.minSpeed = 0.5f;
+            burst.maxSpeed = 2.0f;
+            burst.minLifetime = burst.maxLifetime = kFxLifetime;
+            burst.startSize = 0.03f;
+            burst.endSize = 0.01f;
+            burst.colorStart = glm::vec4(4.0f, 2.4f, 0.8f, 1.0f);
+            burst.colorEnd = glm::vec4(1.0f, 0.3f, 0.05f, 0.0f);
+            burst.gravity = 0.5f;
+            burst.drag = 0.5f;
+            burst.emitCount = kFxParticles;
+            deferred->emitParticles(burst);
+        }
         api::RenderRequest r;
         r.mode = "deferred";
         r.frames = frames;

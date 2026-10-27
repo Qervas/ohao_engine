@@ -175,6 +175,12 @@ public:
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
+    // An emit as given (runtime/combat_fx.hpp builds them); emitted by the next drawn frame.
+    void emitParticles(const ParticleEmitterConfig& config);
+    // False: the frames rendered draw no particles, run none and drop the emits queued (a lockstep
+    // capture: a window's particles are its presentation, never in a capture). True by default.
+    void setParticlesDrawn(bool drawn);
+    [[nodiscard]] bool particlesDrawn() const noexcept { return m_particlesDrawn; }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
     // Get final output for display/readback
@@ -284,6 +290,7 @@ private:
     // m_totalTime until which an emitted particle can still be alive (the particles pass
     // runs only until then); below zero: nothing was ever emitted.
     float m_particlesLiveUntil{-1.0f};
+    bool m_particlesDrawn{true};   // setParticlesDrawn
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};

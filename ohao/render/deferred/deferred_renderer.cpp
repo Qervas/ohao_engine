@@ -539,7 +539,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Only while a particle can be alive: since the last emit plus its longest lifetime.
     m_totalTime += m_deltaTime;
     const bool particlesLive = !m_pendingEmits.empty() || m_totalTime <= m_particlesLiveUntil;
-    const bool particlesRun = m_particleSystem && m_lightingPass && particlesLive;
+    const bool particlesRun = m_particleSystem && m_lightingPass && particlesLive && m_particlesDrawn;
     if (particlesRun) {
         timerBegin("particles");
 
@@ -915,6 +915,16 @@ void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType ty
     }
 
     m_pendingEmits.push(config);
+}
+
+void DeferredRenderer::emitParticles(const ParticleEmitterConfig& config) {
+    if (!m_particleSystem || !m_particlesDrawn) return;
+    m_pendingEmits.push(config);
+}
+
+void DeferredRenderer::setParticlesDrawn(bool drawn) {
+    m_particlesDrawn = drawn;
+    if (!drawn) m_pendingEmits = {};
 }
 
 void DeferredRenderer::setRTGIRealtime(bool fullResolution, uint32_t rays) {
