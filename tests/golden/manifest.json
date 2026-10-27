@@ -256,7 +256,15 @@
       "golden": "tests/golden/blockout_play_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "The play scene (added 2026-10-26, sub-project 6 step 3): the blockout seen through the player's head camera before any step, at the player spawn (1.5, 0, 2.2) 1.62 m up, facing -Z, fov 75, near 0.05 (the player spawns in the player_spawn sync system). Exact. Re-baselined 2026-10-27 (sub-project 7 step 2): the scene's two enemies (red bodies, at the level's enemy spawns on the Step and the Ramp) are in view; the rest of the frame moves only by the RT GI, shadow and SSAO noise their geometry perturbs (looked at: heat map bright only on the enemies)."
+      "_note": "The play scene (added 2026-10-26, sub-project 6 step 3): the blockout seen through the player's head camera before any step, at the player spawn (1.5, 0, 2.2) 1.62 m up, facing -Z, fov 75, near 0.05 (the player spawns in the player_spawn sync system). Exact. Re-baselined 2026-10-27 (sub-project 7 step 2): the scene's two enemies (red bodies, at the level's enemy spawns on the Step and the Ramp) are in view; the rest of the frame moves only by the RT GI, shadow and SSAO noise their geometry perturbs (looked at: heat map bright only on the enemies). Re-baselined 2026-10-27 (sub-project 7 step 4): the player's stand-in gun (a dark box under the head, lower right) and the enemies' guns are in view, with their shadows; the muzzle lights are off (intensity 0, no emitter mesh); the rest moves only by RT GI, shadow and SSAO noise (looked at: max_abs 164 on the guns)."
+    },
+    {
+      "name": "cli_blockout_play_hud",
+      "command": "./build/ohao run assets/scenes/blockout_play.scene.json --steps 45 --render {out} --mode deferred --frames 30 --post taa,ssao,bloom --exposure 1 --hud",
+      "golden": "tests/golden/blockout_play_hud.png",
+      "max_abs_diff": 0,
+      "max_diff_frac": 0.0,
+      "_note": "The combat HUD (added 2026-10-27, sub-project 7 step 4): the play scene after 45 steps (0.75 s: the enemies have seen the player and fired), captured with hud: true, the hud pass over the final image: the health bar and number, the magazine, the crosshair. Exact."
     }
   ]
 }
