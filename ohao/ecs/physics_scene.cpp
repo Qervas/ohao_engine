@@ -1287,9 +1287,10 @@ struct PhysicsScene::Impl {
             const auto* health = reg.try_get<Health>(e);
             const bool dead = health && !(health->current > 0.0f);
             if (pc.input && !dead) {
-                // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
-                p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
-                p.pitchDeg -= (mouse.y + input.axis(pc.lookY)) * pc.lookDegPerUnit;
+                const LookResult look =
+                    applyLook(p.yawDeg, p.pitchDeg, mouse + glm::vec2(input.axis(pc.lookX), input.axis(pc.lookY)), pc);
+                p.yawDeg = look.yawDeg;
+                p.pitchDeg = look.pitchDeg;
                 wish = glm::vec2(input.axis(pc.moveRight), input.axis(pc.moveForward));
                 sprinting = input.held(pc.sprint);
                 jumpPressed = input.pressed(pc.jump);
@@ -1699,6 +1700,12 @@ physics::backend::BodyHandle PhysicsScene::bodyOf(entt::entity e) const {
 const std::vector<PhysicsWarning>& PhysicsScene::warnings() const noexcept { return m->warnings; }
 
 std::size_t PhysicsScene::bodyBuilds() const noexcept { return m->builds; }
+
+LookResult applyLook(float yawDeg, float pitchDeg, glm::vec2 delta, const PlayerController& pc) noexcept {
+    yawDeg -= delta.x * pc.lookDegPerUnit;
+    pitchDeg -= delta.y * pc.lookDegPerUnit;
+    return {std::remainder(yawDeg, 360.0f), std::clamp(pitchDeg, -89.0f, 89.0f)};
+}
 
 PhysicsScene& installPhysics(World& world, AssetResolver& assets) {
     auto& reg = world.registry();

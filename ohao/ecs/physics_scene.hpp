@@ -147,6 +147,16 @@ struct PhysicsInfo {
     uint32_t players{0};    // PlayerControllers with a character
 };
 
+// A player's look after a turn of `delta` look units (the mouse's movement, a look axis): yaw about
+// +Y (positive delta.x turns right), pitch up for negative delta.y, kept within 89 degrees, yaw
+// wrapped to [-180, 180]. The step turns players with it and the look lead (sub-project 9) draws
+// with it, so a frame drawn with a look not yet stepped equals the step that takes it, bit for bit.
+struct LookResult {
+    float yawDeg{0.0f};
+    float pitchDeg{0.0f};
+};
+[[nodiscard]] LookResult applyLook(float yawDeg, float pitchDeg, glm::vec2 delta, const PlayerController& pc) noexcept;
+
 class PhysicsScene {
 public:
     PhysicsScene(entt::registry& reg, AssetResolver& assets);
