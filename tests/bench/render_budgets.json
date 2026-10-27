@@ -26,6 +26,7 @@
     {"scene": "bench100k_1080p", "name": "cpu", "measure": "cpu", "budgetMs": 0.5, "gatedFrom": 11},
     {"scene": "bench100k_1080p", "name": "cpu / bench10k_1080p", "measure": "cpuRatio", "of": "bench10k_1080p", "budgetRatio": 1.2, "gatedFrom": 11},
     {"scene": "bench100k_1080p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.10, "gatedFrom": 13},
-    {"scene": "meshlet_build_1m", "name": "build (CPU)", "measure": "meshletBuild", "budgetMs": 60, "gatedFrom": 12}
+    {"scene": "meshlet_build_1m", "name": "build (CPU)", "measure": "meshletBuild", "budgetMs": 60, "gatedFrom": 12},
+    {"scene": "play_hud_1080p", "name": "hud", "passes": ["hud"], "budgetMs": 0.05, "gatedFrom": 15, "source": "sub-project 7 spec, 'Performance budgets': the hud pass at 1080p"}
   ]
 }

@@ -78,6 +78,7 @@ struct SceneSpec {
     uint32_t width, height;
     std::vector<std::string> post;
     std::optional<float> exposure;
+    bool hud{false};   // the combat HUD over the frame (sub-project 7: the hud pass)
 };
 
 // The spec's table. The bench scenes are built in code (bench_world.hpp) and written to
@@ -89,6 +90,8 @@ const std::vector<SceneSpec>& sceneSpecs() {
         {"helmet_game_1080p", "assets/scenes/helmet_game.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
         {"bench10k_1080p", "build/render_bench/bench10k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
         {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
+        // The play scene through the player's eyes with its HUD (health, ammo, crosshair).
+        {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, true},
     };
     return s;
 }
@@ -677,6 +680,7 @@ struct Gpu {
         r.height = spec.height;
         r.post = spec.post;
         r.exposure = spec.exposure;
+        r.hud = spec.hud;
         const api::RenderOutcome o = host->capture(r);
         if (!o.errors.empty()) return o.errors.front().code + ": " + o.errors.front().message;
         return {};
