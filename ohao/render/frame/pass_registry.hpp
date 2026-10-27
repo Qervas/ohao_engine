@@ -40,6 +40,7 @@ inline constexpr PassInfo kPasses[] = {
     {"post.taa", PassKind::Raster, "temporal anti-aliasing (the taa post effect)"},
     {"post.tonemap", PassKind::Raster, "HDR to the RGBA8 final image"},
     {"gizmo", PassKind::Raster, "transform handles"},
+    {"hud", PassKind::Raster, "the HUD over the final image (a window always; a capture with hud: true)"},
     {"capture.preview", PassKind::Compute, "only during an inline capture: the final image box-filtered to the preview's size, into the frame's staging buffer"},
     {"present", PassKind::Transfer, "the final image blitted to the swapchain, and a requested readback copy"},
     {"readback", PassKind::Transfer, "headless: the final image copied to the frame's staging buffer"},

@@ -639,6 +639,10 @@ bool VulkanRenderer::recreatePresentation() {
     return true;
 }
 
+void VulkanRenderer::setHud(const render::HudList& hud) {
+    if (m_deferredRenderer) m_deferredRenderer->setHud(hud.items);
+}
+
 void VulkanRenderer::setPresentExtent(VkExtent2D extent) {
     if (!m_presentTarget) return;
     m_presentTarget->extent = extent;

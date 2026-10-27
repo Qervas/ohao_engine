@@ -114,6 +114,13 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         OHAO_LOG(Debug, render, "DeferredRenderer: GizmoPass OK");
     }
 
+    // The HUD over the final image (sub-project 7): drawn only on frames with a list.
+    m_hudPass = std::make_unique<HudPass>();
+    if (!m_hudPass->initialize(device, physicalDevice)) {
+        OHAO_LOG(Warn, render, "DeferredRenderer: HudPass failed (non-fatal: no HUD)");
+        m_hudPass.reset();
+    }
+
     // Connect depth/normal/velocity/albedo/position for post-processing
     m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
@@ -203,6 +210,10 @@ void DeferredRenderer::cleanup() {
     if (m_gizmoPass) {
         m_gizmoPass->cleanup();
         m_gizmoPass.reset();
+    }
+    if (m_hudPass) {
+        m_hudPass->cleanup();
+        m_hudPass.reset();
     }
     if (m_postProcessing) {
         m_postProcessing->cleanup();
@@ -643,6 +654,14 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         timerEnd();  // gizmo
     }
 
+    // 7. The HUD, over the final RGBA8 image (a frame without a list records nothing).
+    if (m_hudPass && m_hudPass->hasItems() && m_postProcessing && m_postProcessing->didExecute()) {
+        timerBegin("hud");
+        m_hudPass->setTarget(m_postProcessing->getOutputImage(), m_postProcessing->getOutputView(), m_width, m_height);
+        m_hudPass->execute(cmd, frameIndex);
+        timerEnd();
+    }
+
     // Store current view-proj for next frame's motion vectors
     m_prevViewProj = m_proj * m_view;   // unjittered: next frame's velocity carries its own jitter
 }
@@ -674,6 +693,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
+    if (m_hudPass) m_hudPass->onResize(width, height);
     if (m_skyPass) {
         m_skyPass->onResize(width, height);
         // Reconnect to reallocated lighting output image/view
@@ -837,6 +857,10 @@ void DeferredRenderer::setWireframeEnabled(bool enabled) {
     if (m_gbufferPass) {
         m_gbufferPass->setWireframeEnabled(enabled);
     }
+}
+
+void DeferredRenderer::setHud(std::span<const render::HudItem> items) {
+    if (m_hudPass) m_hudPass->setItems(items);
 }
 
 void DeferredRenderer::setGizmoEnabled(bool enabled) {

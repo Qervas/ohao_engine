@@ -34,6 +34,7 @@
 #include "render/deferred/light_clusters.hpp"
 #include "render/deferred/gpu_culling.hpp"
 #include "render/deferred/env_prefilter.hpp"
+#include "render/hud/hud_list.hpp"
 
 namespace ohao {
 
@@ -105,6 +106,9 @@ public:
     [[nodiscard]] bool isPresenting() const noexcept { return m_swapchain != nullptr; }
     // The window's drawable size changed; the swapchain is rebuilt next frame.
     void setPresentExtent(VkExtent2D extent);
+    // The HUD the next deferred frames draw over their final image, before present and readback
+    // (sub-project 7, the `hud` pass); an empty list draws none. Path-traced frames draw no HUD.
+    void setHud(const render::HudList& hud);
     // The only way to read a frame. requestReadback() marks the next frame render()
     // records: it alone copies its final RGBA8 image into its slot's persistently mapped
     // staging buffer (no other frame, headless or windowed, copies anything). readback()

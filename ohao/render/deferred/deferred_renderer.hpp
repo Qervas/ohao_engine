@@ -8,6 +8,7 @@
 #include "csm_pass.hpp"
 #include "post_processing_pipeline.hpp"
 #include "gizmo_pass.hpp"
+#include "render/hud/hud_pass.hpp"
 #include "sky_pass.hpp"
 #include "render/particles/particle_system.hpp"
 #include "ssr_pass.hpp"
@@ -141,6 +142,9 @@ public:
     void setWireframeEnabled(bool enabled);
     [[nodiscard]] bool getWireframeEnabled() const { return m_wireframeEnabled; }
 
+    // The HUD the next frames draw over the final image (sub-project 7; empty: none, no pass).
+    void setHud(std::span<const render::HudItem> items);
+
     // Gizmo controls
     void setGizmoEnabled(bool enabled);
     [[nodiscard]] bool getGizmoEnabled() const { return m_gizmoEnabled; }
@@ -217,6 +221,7 @@ private:
     std::unique_ptr<SSSPass> m_sssPass;
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
     std::unique_ptr<GizmoPass> m_gizmoPass;
+    std::unique_ptr<HudPass> m_hudPass;
     std::unique_ptr<SkyPass>   m_skyPass;
 
     // Scene the passes draw (owned by VulkanRenderer)

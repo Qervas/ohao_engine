@@ -32,6 +32,7 @@
 #include "physics/world/physics_world.hpp"
 #include "render/deferred/post_processing_pipeline.hpp"
 #include "render/graph/resource_handle.hpp"
+#include "render/hud/hud_list.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_gi_technique.hpp"
@@ -2589,12 +2590,105 @@ static void sp2b_s10_a_preview_request_reads_back_only_the_preview() {
     TEST_PASS();
 }
 
+// ---- the HUD (sub-project 7, step 4: the hud pass) -------------------------------------------
+
+struct HudRun {
+    std::vector<uint8_t> plain, hud, after;   // the frame without, with and again without the list
+    bool hudPass{false}, hudPassAfter{true};
+    double hudMs{0.0};
+};
+
+// The spin scene's frame (after a reset each time, so the same frame) without a HUD, with `list`,
+// and without again.
+static HudRun hudRun(uint32_t w, uint32_t h, const ohao::render::HudList& list) {
+    ohao::VulkanRenderer r(w, h);
+    if (!r.initialize()) return {};
+    HudRun out;
+    {
+        ohao::ecs::World world;   // after the renderer: released first
+        ohao::ecs::installRenderExtract(world, r.renderScene());
+        buildSpinScene(world, r);
+        const auto frame = [&](std::vector<uint8_t>& px) {
+            r.resetAccumulation();
+            world.sync();
+            r.requestReadback();
+            r.render();
+            const auto got = r.readback();
+            px.assign(got.begin(), got.end());
+        };
+        frame(out.plain);
+        r.setHud(list);
+        frame(out.hud);
+        for (const auto& f : r.frameTimings(1)) {
+            out.hudPass = hasPass(f, "hud");
+            for (uint32_t i = 0; i < f.count; ++i)
+                if (f.pass[i] == ohao::render::passIndex("hud")) out.hudMs = f.ms[i];
+        }
+        r.setHud({});
+        frame(out.after);
+        for (const auto& f : r.frameTimings(1)) out.hudPassAfter = hasPass(f, "hud");
+    }
+    return out;
+}
+
+static void sp7_hud_draws_its_items_and_nothing_else() {
+    TEST_BEGIN("sp7: the hud pass blends its items over the final image and touches no other pixel");
+    constexpr uint32_t W = 320, H = 240;
+    ohao::render::HudList list;
+    ohao::render::hudRect(list, {10.0f, 10.0f, 30.0f, 20.0f}, {1.0f, 0.0f, 0.0f, 1.0f});          // opaque red
+    ohao::render::hudText(list, "A", {50.0f, 10.0f}, 4.0f, {0.0f, 1.0f, 0.0f, 1.0f});              // a green A, 20x28
+    ohao::render::hudRect(list, {100.0f, 100.0f, 120.0f, 120.0f}, {0.0f, 0.0f, 1.0f, 0.5f});      // half blue
+    const HudRun run = hudRun(W, H, list);
+    if (run.plain.empty()) {
+        std::cout << "(no Vulkan device -- skipped) ";
+        TEST_PASS();
+        return;
+    }
+    const auto at = [&](const std::vector<uint8_t>& px, uint32_t x, uint32_t y) { return &px[(y * W + x) * 4]; };
+    const auto inside = [](uint32_t x, uint32_t y, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+        return x >= x0 && x < x1 && y >= y0 && y < y1;
+    };
+    std::size_t outsideChanged = 0, redWrong = 0, glyphWrong = 0, blueWrong = 0;
+    const int a = ohao::render::hudGlyph('A');
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            const uint8_t* p = at(run.plain, x, y);
+            const uint8_t* q = at(run.hud, x, y);
+            if (inside(x, y, 10, 10, 30, 20)) {
+                redWrong += !(q[0] == 255 && q[1] == 0 && q[2] == 0);
+            } else if (inside(x, y, 50, 10, 70, 38)) {
+                const int col = static_cast<int>(x - 50) / 4, row = static_cast<int>(y - 10) / 4;
+                const bool lit = (ohao::render::hudGlyphRow(a, row) >> (4 - col)) & 1u;
+                glyphWrong += lit ? !(q[0] == 0 && q[1] == 255 && q[2] == 0) : std::memcmp(p, q, 3) != 0;
+            } else if (inside(x, y, 100, 100, 120, 120)) {
+                for (int c = 0; c < 3; ++c) {
+                    const float want = 0.5f * p[c] + 0.5f * (c == 2 ? 255.0f : 0.0f);
+                    blueWrong += std::fabs(q[c] - want) > 1.0f;
+                }
+            } else {
+                outsideChanged += std::memcmp(p, q, 4) != 0;
+            }
+        }
+    const int afterDiff = maxAbsDiff(run.plain, run.after);
+    std::cout << "(hud " << run.hudMs << " ms; outside changed " << outsideChanged << ", after clearing max_abs "
+              << afterDiff << ") ";
+    EXPECT(run.hudPass, "the frame with a list ran the hud pass");
+    EXPECT_EQ(redWrong, std::size_t{0}, "the opaque rectangle is its colour, edge to edge");
+    EXPECT_EQ(glyphWrong, std::size_t{0}, "the glyph's lit cells are its colour, its unlit cells the scene");
+    EXPECT_EQ(blueWrong, std::size_t{0}, "a half-alpha rectangle blends half over the scene (within 1)");
+    EXPECT_EQ(outsideChanged, std::size_t{0}, "no pixel outside the items changes");
+    EXPECT(!run.hudPassAfter && afterDiff == 0, "an empty list: no pass, the plain frame");
+    TEST_PASS();
+}
+
 static void runCapturePathTests() {
     std::cout << "\n=== Capture path ===" << std::endl;
     sp2b_s10_a_capture_after_a_reset_is_the_same_from_any_frame_slot();
     sp2b_s10_the_reset_does_not_wait_for_the_gpu();
     sp2b_s10_gpu_preview_matches_the_cpu_downscale();
     sp2b_s10_a_preview_request_reads_back_only_the_preview();
+    std::cout << "\n=== HUD ===" << std::endl;
+    sp7_hud_draws_its_items_and_nothing_else();
 }
 
 static void runRTGITests() {
