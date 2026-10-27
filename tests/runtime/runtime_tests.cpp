@@ -17,6 +17,7 @@
 #include "runtime/footsteps.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/frame_log.hpp"
+#include "runtime/game_audio.hpp"
 #include "runtime/image.hpp"
 #include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
@@ -687,12 +688,10 @@ static void sp6_t13_footstep_sounds_round_robin_and_fallback() {
 
 // The window host's player: a walk's footsteps, read from the physics log and played (at volume 0).
 static void sp6_t13_footsteps_play_the_walk() {
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
     Footsteps steps;
-    if (!steps.initialize(OHAO_SOURCE_DIR)) {
-        std::printf("\n      skip: no audio device");
-        return;
-    }
-    steps.setVolume(0.0f);
+    CHECK(steps.initialize(OHAO_SOURCE_DIR, audio), "footsteps on it");
     ecs::World w;
     ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
     ecs::installPhysics(w, files);
@@ -807,6 +806,132 @@ static void sp9_t21_particles_from_events() {
     CHECK(sparks, "and the round's sparks on the wall");
 }
 
+// ---- sub-project 9, step 3: audio quick wins (audio/audio_system.hpp, runtime/game_audio.hpp) -----
+
+// 30 sounds started under a cap of 24: the 24 loudest at the listener play, the 6 quietest are lost.
+static void sp9_t21_voice_cap() {
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
+    audio.setVoiceLimit(kVoiceLimit);
+    audio.setListenerPosition(glm::vec3(0.0f), {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f});
+    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/fire.wav";
+    // Sounds at 1..30 m alternately near and far: a quieter one starting over the cap is dropped, a
+    // louder one replaces the quietest playing.
+    std::vector<std::pair<float, SoundHandle>> started;
+    for (int i = 0; i < 30; ++i) {
+        const float d = static_cast<float>(i % 2 == 0 ? 1 + i / 2 : 30 - i / 2);
+        const SoundHandle h = audio.playSoundAt(wav, {0.0f, 0.0f, -d}, SoundCategory::SFX, false, 1.0f, shapeFor(SoundKind::Gunfire));
+        started.emplace_back(d, h);
+    }
+    std::size_t playing = 0;
+    float loudestLost = 0.0f, quietestKept = 1.0f;
+    for (const auto& [d, h] : started) {
+        const auto v = audio.voice(h);
+        const float gain = AudioSystem::distanceGain(d, shapeFor(SoundKind::Gunfire));
+        if (v && v->playing) {
+            ++playing;
+            quietestKept = std::min(quietestKept, gain);
+        } else {
+            loudestLost = std::max(loudestLost, gain);
+        }
+    }
+    std::printf("\n      %zu playing, %llu dropped", playing, static_cast<unsigned long long>(audio.voicesDropped()));
+    CHECK(playing == 24 && audio.sfxVoices() == 24, "24 play");
+    CHECK(audio.voicesDropped() == 6, "voicesDropped 6");
+    CHECK(loudestLost < quietestKept, "the ones lost are the quietest at the listener");
+    // A sound not positioned (the player's own, at full volume) always gets a voice.
+    CHECK(isValidSoundHandle(audio.playSound(wav)) && audio.sfxVoices() == 24 && audio.voicesDropped() == 7,
+          "a louder sound takes the quietest's voice");
+}
+
+static void sp9_t21_distance_curves() {
+    const SoundShape gun = shapeFor(SoundKind::Gunfire), near = shapeFor(SoundKind::Near);
+    CHECK(gun.minDistance == 1.0f && gun.maxDistance == 60.0f && gun.rolloff == 1.0f && !gun.occluded,
+          "gunfire: inverse, 1 m to 60 m, rolloff 1");
+    CHECK(near.minDistance == 0.5f && near.maxDistance == 20.0f && near.rolloff == 1.5f, "near: 0.5 m to 20 m, rolloff 1.5");
+    CHECK(AudioSystem::distanceGain(0.5f, gun) == 1.0f && std::abs(AudioSystem::distanceGain(10.0f, gun) - 0.1f) < 1e-6f &&
+              AudioSystem::distanceGain(100.0f, gun) == AudioSystem::distanceGain(60.0f, gun),
+          "full within the minimum, 1/d beyond it, held past the maximum");
+    CHECK(std::abs(AudioSystem::distanceGain(10.0f, near) - 0.5f / (0.5f + 1.5f * 9.5f)) < 1e-6f, "near falls faster");
+
+    // Each player sets its kind's shape on the sound it starts.
+    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
+    Listener l;
+    l.position = {0.0f, 1.62f, 0.0f};
+    l.playerId = player;
+    ecs::CombatEvent shot;
+    shot.kind = ecs::CombatEvent::Kind::Shot;
+    shot.sourceId = enemy;
+    shot.point = {0.0f, 1.6f, -12.0f};
+    const SoundPlan enemyRound = planCombatSound("enemy_fire", shot, l);
+    CHECK(enemyRound.shape.maxDistance == 60.0f && enemyRound.at == shot.point && enemyRound.enemy,
+          "an enemy's round: gunfire, at its eye, an enemy's sound");
+    shot.sourceId = player;
+    const SoundPlan ownRound = planCombatSound("fire", shot, l);
+    CHECK(ownRound.shape.maxDistance == 60.0f && ownRound.at == l.position && !ownRound.enemy,
+          "the player's own: gunfire at the ear, no ray");
+    ecs::CombatEvent hit;
+    hit.kind = ecs::CombatEvent::Kind::Hit;
+    hit.sourceId = enemy;
+    hit.point = {1.0f, 1.0f, -3.0f};
+    const SoundPlan impact = planCombatSound("impact_metal", hit, l);
+    CHECK(impact.shape.maxDistance == 20.0f && impact.shape.rolloff == 1.5f && !impact.enemy, "an impact: near, no ray");
+
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
+    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/fire.wav";
+    const auto v = audio.voice(audio.playSoundAt(wav, shot.point, SoundCategory::SFX, false, 0.7f, gun));
+    CHECK(v && v->spatial && v->shape.maxDistance == 60.0f && v->shape.rolloff == 1.0f && v->lowPassHz == 0.0,
+          "the shape reaches the sound; no low-pass in the open");
+}
+
+// A wall between the listener and an enemy's round: occluded, 8 dB down through a 1.2 kHz low-pass.
+static void sp9_t21_occlusion_ray() {
+    ecs::World w;
+    ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
+    ecs::installPhysics(w, files);
+    const entt::entity ground = w.create("Ground", ecs::Transform{{0.0f, -0.5f, 0.0f}});
+    w.registry().emplace<ecs::Collider>(ground, ecs::Collider{ecs::ColliderShape::Box, {30.0f, 0.5f, 30.0f}});
+    const entt::entity p = w.create("Player");
+    w.registry().emplace<ecs::PlayerController>(p);
+    const entt::entity head = w.create("Head", ecs::Transform{{0.0f, 1.62f, 0.0f}});
+    w.setParent(head, p);
+    w.registry().emplace<ecs::Camera>(head, ecs::Camera{75.0f, 0.05f, 100.0f, true});
+    ecs::PlayerController enemyPc;
+    enemyPc.input = false;
+    const entt::entity enemy = w.create("Enemy", ecs::Transform{{0.0f, 0.0f, -10.0f}});
+    w.registry().emplace<ecs::PlayerController>(enemy, enemyPc);
+    w.update(1.0f / 60.0f);
+    const auto listener = listenerOf(w);
+    CHECK(listener && listener->body == p, "the listener: the camera, the input player's head");
+    if (!listener) return;
+    const glm::vec3 enemyEye = glm::vec3(w.registry().get<ecs::WorldTransform>(enemy).world[3]) + glm::vec3(0.0f, 1.6f, 0.0f);
+    CHECK(!soundOccluded(w, *listener, enemyEye), "in the open: heard (the source's own capsule passed through)");
+    const entt::entity wall = w.create("Wall", ecs::Transform{{0.0f, 1.5f, -5.0f}});
+    w.registry().emplace<ecs::Collider>(wall, ecs::Collider{ecs::ColliderShape::Box, {4.0f, 2.0f, 0.1f}});
+    w.update(1.0f / 60.0f);
+    CHECK(soundOccluded(w, *listener, enemyEye), "a wall between: occluded");
+
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
+    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/enemy_fire.wav";
+    SoundShape blocked = shapeFor(SoundKind::Gunfire);
+    blocked.occluded = true;
+    const auto v = audio.voice(audio.playSoundAt(wav, enemyEye, SoundCategory::SFX, false, 0.7f, blocked));
+    std::printf("\n      occluded volume %.4f (asked 0.7), low-pass %.0f Hz", v ? v->volume : -1.0f, v ? v->lowPassHz : -1.0);
+    CHECK(v && std::abs(v->volume - 0.7f * std::pow(10.0f, -8.0f / 20.0f)) < 1e-5f && v->lowPassHz == 1200.0,
+          "-8 dB and the 1.2 kHz low-pass");
+
+    // The combat player casts a ray for each enemy round it starts and none for the player's own.
+    ecs::CombatEvent own;
+    own.kind = ecs::CombatEvent::Kind::Shot;
+    own.sourceId = listener->playerId;
+    CHECK(!planCombatSound("fire", own, *listener).enemy, "the player's own round: no ray");
+    ecs::CombatEvent theirs = own;
+    theirs.sourceId = w.idOf(enemy);
+    CHECK(planCombatSound("enemy_fire", theirs, *listener).enemy, "an enemy's round: one ray");
+}
+
 // ---- sub-project 7, step 4: combat sounds and the capturing click (runtime/combat_sounds.hpp,
 // runtime/click_capture.hpp) -------------------------------------------------------------------
 
@@ -894,6 +1019,10 @@ int main() {
     std::printf("[footsteps]\n");
     RUN(sp6_t13_footstep_sounds_round_robin_and_fallback);
     RUN(sp6_t13_footsteps_play_the_walk);
+    std::printf("[audio: voices, curves, occlusion]\n");
+    RUN(sp9_t21_voice_cap);
+    RUN(sp9_t21_distance_curves);
+    RUN(sp9_t21_occlusion_ray);
     std::printf("[render stats]\n");
     RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");

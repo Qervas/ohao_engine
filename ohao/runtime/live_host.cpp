@@ -81,10 +81,18 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     m_session->setTimeline(m_time);
     m_session->setHost(this);
     if (cfg.footsteps) {
-        m_footsteps = std::make_unique<Footsteps>();
-        if (!m_footsteps->initialize(cfg.root)) m_footsteps.reset();   // no audio device: silent
-        m_combatSounds = std::make_unique<CombatSounds>();
-        if (!m_combatSounds->initialize(cfg.root)) m_combatSounds.reset();
+        // One device and one voice cap for every sound the window plays (game_audio.hpp).
+        m_audio = std::make_unique<AudioSystem>();
+        if (m_audio->initialize()) {
+            m_audio->setVoiceLimit(kVoiceLimit);
+            m_footsteps = std::make_unique<Footsteps>();
+            if (!m_footsteps->initialize(cfg.root, *m_audio)) m_footsteps.reset();
+            m_combatSounds = std::make_unique<CombatSounds>();
+            if (!m_combatSounds->initialize(cfg.root, *m_audio)) m_combatSounds.reset();
+        } else {
+            OHAO_LOG(Warn, audio, "live host: no audio device; the window is silent");
+            m_audio.reset();
+        }
     }
     if (cfg.effects) m_combatFx = std::make_unique<CombatFx>();
     return true;
@@ -192,6 +200,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         m_world->setPendingLook(pending);
         if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
         if (m_combatSounds) m_combatSounds->update(*m_world);
+        if (m_audio) m_audio->update();   // finished sounds free their voices
         if (m_combatFx)   // sparks and muzzle bursts: realtime only, at the poses this frame draws
             if (auto* deferred = m_renderer->getDeferredRenderer()) m_combatFx->update(*m_world, *deferred, m_time.running());
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
@@ -480,6 +489,7 @@ uint64_t LiveHost::shutdown() {
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     m_footsteps.reset();
     m_combatSounds.reset();
+    m_audio.reset();
     m_combatFx.reset();
     m_session.reset();
     m_world.reset();   // releases its RenderScene slots while the RenderScene exists

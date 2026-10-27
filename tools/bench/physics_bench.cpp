@@ -17,7 +17,8 @@
 // boxes1k_step_ms (one step while 1,000 dynamic boxes fall and pile up in a walled pit, awake;
 // none may leave it). Combat (sub-project 7, gated by the budgets' `combatStep`): step 1
 // combat_shot_ms (the combat system's part of a step in which the player fires a round into a box
-// with Health; every round must damage it).
+// with Health; every round must damage it). Feel (sub-project 9, gated by `feelStep`): step 3
+// occlusion_ray_us (the window host's occlusion ray for an enemy's sound, per ray).
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -35,6 +36,7 @@
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
+#include "runtime/game_audio.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -147,6 +149,7 @@ int main(int argc, char** argv) {
 
     nlohmann::json budgets;
     int currentStep = 0, combatStep = 0;   // physics' build step (sub-project 6), combat's (7)
+    int feelStep = 0;                       // feel's (9): the occlusion ray
     double maxSlowdown = 1.25, maxExternal = 50.0;
     if (!checkPath.empty()) {
         std::ifstream f(checkPath);
@@ -162,6 +165,7 @@ int main(int argc, char** argv) {
         budgets = doc.value("budgets", nlohmann::json::object());
         currentStep = doc.value("currentStep", 0);
         combatStep = doc.value("combatStep", 0);
+        feelStep = doc.value("feelStep", 0);
         if (doc.contains("noise")) {
             maxSlowdown = doc["noise"].value("maxCalibrationSlowdown", maxSlowdown);
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
@@ -478,6 +482,44 @@ int main(int argc, char** argv) {
     const bool restarted = restarts == 55;
     if (!restarted) failures.push_back("round: " + std::to_string(restarts) + " restarts of 55 pressed");
 
+    // 9. The occlusion ray (sub-project 9 step 3, gated by the budgets' `feelStep`): what the window
+    // host spends deciding whether a wall stands between the listener and an enemy's sound
+    // (runtime::soundOccluded: one ray from the eye, passing through characters), against the level
+    // ray budget of 5 us. The blockout with the player at its spawn and the two enemies at theirs;
+    // rays to both enemies' eyes and to 62 points around the room, 64 a batch, N rounds of 100 batches.
+    std::vector<double> occlusionUs;
+    std::size_t occludedRays = 0, totalRays = 0;
+    for (int r = 0; r < rounds + 1; ++r) {
+        Blockout b;
+        ecs::installCombat(b.world);
+        const entt::entity pl = addPlayer(b.world, false);
+        addEnemy(b.world, 0xe1, "enemy", {}, 14.0f);
+        addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
+        b.world.sync();
+        auto& reg = b.world.registry();
+        runtime::Listener listener;
+        listener.body = pl;
+        listener.playerId = 0xb1a7e2;
+        listener.position = reg.get<ecs::Transform>(pl).position + glm::vec3(0.0f, 1.62f, 0.0f);
+        std::vector<glm::vec3> sources;
+        for (const uint64_t id : {0xe1ull, 0xe2ull})
+            sources.push_back(reg.get<ecs::Transform>(b.world.findById(id)).position + glm::vec3(0.0f, 1.6f, 0.0f));
+        for (int i = 0; sources.size() < 64; ++i)
+            sources.emplace_back(-3.5f + 7.0f * float((i * 37) % 62) / 61.0f, 0.3f + 2.0f * float((i * 11) % 7) / 6.0f,
+                                 -3.5f + 7.0f * float((i * 23) % 62) / 61.0f);
+        for (int batch = 0; batch < 100; ++batch) {
+            std::size_t blocked = 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            for (const glm::vec3& s : sources) blocked += runtime::soundOccluded(b.world, listener, s);
+            const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+            if (r > 0) {
+                occlusionUs.push_back(us / double(sources.size()));
+                occludedRays += blocked;
+                totalRays += sources.size();
+            }
+        }
+    }
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -519,13 +561,18 @@ int main(int argc, char** argv) {
     const Stats srs = stats(restartMs);
     std::printf("  round_restart_ms        median %8.4f   p95 %8.4f   (%zu restarts)\n", srs.median, srs.p95, restartMs.size());
     const Verdict vrs = judge(budgets, combatStep, "round_restart_ms", srs.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs})
+    const Stats so = stats(occlusionUs);
+    std::printf("  occlusion_ray_us        median %8.4f   p95 %8.4f   (%zu rays, %zu blocked)\n", so.median, so.p95, totalRays,
+                occludedRays);
+    const Verdict vo = judge(budgets, feelStep, "occlusion_ray_us", so.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo})
         if (v->verdict != "reported")
-            std::printf("    %-22s budget %.4f ms, gated from step %d: %s\n", v->name.c_str(), v->max, v->from, v->verdict.c_str());
+            std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
+                        v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
-            name != "round_restart_ms")
+            name != "round_restart_ms" && name != "occlusion_ray_us")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -553,6 +600,8 @@ int main(int argc, char** argv) {
                                 {"closedInM", chased}, {"verdict", v16.verdict}};
     out["round_restart_ms"] = {{"median", srs.median}, {"p95", srs.p95}, {"min", srs.min}, {"restarts", restartMs.size()},
                                {"verdict", vrs.verdict}};
+    out["occlusion_ray_us"] = {{"median", so.median}, {"p95", so.p95}, {"min", so.min}, {"rays", totalRays},
+                               {"blocked", occludedRays}, {"verdict", vo.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},

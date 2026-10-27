@@ -5,6 +5,7 @@
 #include "core/log.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -22,19 +23,34 @@ void MaSoundDeleter::operator()(ma_sound* sound) const {
     delete sound;
 }
 
+struct AudioLowPass {
+    ma_lpf_node node;
+};
+
+void MaLpfNodeDeleter::operator()(AudioLowPass* lowPass) const {
+    if (!lowPass) return;
+    ma_lpf_node_uninit(&lowPass->node, nullptr);
+    delete lowPass;
+}
+
 AudioSystem::AudioSystem() = default;
 
 AudioSystem::~AudioSystem() {
     shutdown();
 }
 
-bool AudioSystem::initialize() {
+bool AudioSystem::initialize(bool withoutDevice) {
     if (m_initialized) return true;
 
     auto engine = MaEnginePtr(new ma_engine());
 
     ma_engine_config config = ma_engine_config_init();
     config.listenerCount = 1;
+    if (withoutDevice) {
+        config.noDevice = MA_TRUE;
+        config.channels = 2;
+        config.sampleRate = 48000;
+    }
 
     const ma_result result = ma_engine_init(&config, engine.get());
     if (result != MA_SUCCESS) {
@@ -58,6 +74,7 @@ void AudioSystem::shutdown() {
 void AudioSystem::setListenerPosition(const glm::vec3& pos, const glm::vec3& forward, const glm::vec3& up) {
     if (!m_initialized || !m_engine) return;
 
+    m_listener = pos;
     ma_engine_listener_set_position(m_engine.get(), 0, pos.x, pos.y, pos.z);
     ma_engine_listener_set_direction(m_engine.get(), 0, forward.x, forward.y, forward.z);
     ma_engine_listener_set_world_up(m_engine.get(), 0, up.x, up.y, up.z);
@@ -68,6 +85,11 @@ SoundHandle AudioSystem::playSound(std::string_view path, SoundCategory category
     if (!m_initialized || !m_engine || path.empty()) return INVALID_SOUND_HANDLE;
     if (!isValidSoundCategory(category)) category = SoundCategory::SFX;
     volume = clampVolume(volume);
+
+    if (category == SoundCategory::SFX) {
+        std::lock_guard lock(m_mutex);
+        if (!admitVoice(audibleVolume(volume, nullptr, SoundShape{}))) return INVALID_SOUND_HANDLE;
+    }
 
     const std::string pathStr(path);
     auto sound = MaSoundPtr(new ma_sound());
@@ -86,29 +108,25 @@ SoundHandle AudioSystem::playSound(std::string_view path, SoundCategory category
         ma_sound_set_looping(sound.get(), MA_TRUE);
     }
 
-    const SoundHandle handle = nextHandle();
-    ma_sound* raw = sound.get();
-
-    {
-        std::lock_guard lock(m_mutex);
-        SoundInstance instance;
-        instance.sound = std::move(sound);
-        instance.category = category;
-        instance.baseVolume = volume;
-        instance.spatial = false;
-        updateSoundVolume(instance);
-        m_sounds[handle] = std::move(instance);
-    }
-
-    ma_sound_start(raw);
-    return handle;
+    SoundInstance instance;
+    instance.sound = std::move(sound);
+    instance.category = category;
+    instance.baseVolume = volume;
+    instance.spatial = false;
+    return start(std::move(instance));
 }
 
 SoundHandle AudioSystem::playSoundAt(std::string_view path, const glm::vec3& position,
-                                     SoundCategory category, bool loop, float volume) {
+                                     SoundCategory category, bool loop, float volume,
+                                     const SoundShape& shape) {
     if (!m_initialized || !m_engine || path.empty()) return INVALID_SOUND_HANDLE;
     if (!isValidSoundCategory(category)) category = SoundCategory::SFX;
     volume = clampVolume(volume);
+
+    if (category == SoundCategory::SFX) {
+        std::lock_guard lock(m_mutex);
+        if (!admitVoice(audibleVolume(volume, &position, shape))) return INVALID_SOUND_HANDLE;
+    }
 
     const std::string pathStr(path);
     auto sound = MaSoundPtr(new ma_sound());
@@ -122,30 +140,115 @@ SoundHandle AudioSystem::playSoundAt(std::string_view path, const glm::vec3& pos
 
     ma_sound_set_spatialization_enabled(sound.get(), MA_TRUE);
     ma_sound_set_position(sound.get(), position.x, position.y, position.z);
-    ma_sound_set_min_distance(sound.get(), 1.0f);
-    ma_sound_set_max_distance(sound.get(), 50.0f);
+    ma_sound_set_min_distance(sound.get(), shape.minDistance);
+    ma_sound_set_max_distance(sound.get(), shape.maxDistance);
+    ma_sound_set_rolloff(sound.get(), shape.rolloff);
     ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);
 
     if (loop) {
         ma_sound_set_looping(sound.get(), MA_TRUE);
     }
 
-    const SoundHandle handle = nextHandle();
-    ma_sound* raw = sound.get();
+    SoundInstance instance;
+    // Behind a wall: the sound feeds a low-pass node, which feeds the mix (the cut is in the volume).
+    if (shape.occluded) {
+        auto lowPass = MaLpfNodePtr(new AudioLowPass());
+        const ma_lpf_node_config config = ma_lpf_node_config_init(
+            ma_engine_get_channels(m_engine.get()), ma_engine_get_sample_rate(m_engine.get()), kOccludedLowPassHz, 2);
+        if (ma_lpf_node_init(ma_engine_get_node_graph(m_engine.get()), &config, nullptr, &lowPass->node) == MA_SUCCESS) {
+            ma_node_attach_output_bus(&lowPass->node, 0, ma_engine_get_endpoint(m_engine.get()), 0);
+            ma_node_attach_output_bus(sound.get(), 0, &lowPass->node, 0);
+            instance.lowPass = std::move(lowPass);
+        } else {
+            delete lowPass.release();   // never initialized: freed without an uninit
+            OHAO_LOG(Warn, audio, "an occluded sound plays without its low-pass (ma_lpf_node_init failed)");
+        }
+    }
+    instance.sound = std::move(sound);
+    instance.category = category;
+    instance.baseVolume = volume;
+    instance.spatial = true;
+    instance.position = position;
+    instance.shape = shape;
+    return start(std::move(instance));
+}
 
+SoundHandle AudioSystem::start(SoundInstance instance) {
+    const SoundHandle handle = nextHandle();
+    ma_sound* raw = instance.sound.get();
     {
         std::lock_guard lock(m_mutex);
-        SoundInstance instance;
-        instance.sound = std::move(sound);
-        instance.category = category;
-        instance.baseVolume = volume;
-        instance.spatial = true;
         updateSoundVolume(instance);
         m_sounds[handle] = std::move(instance);
     }
-
     ma_sound_start(raw);
     return handle;
+}
+
+float AudioSystem::distanceGain(float distance, const SoundShape& shape) noexcept {
+    if (shape.minDistance >= shape.maxDistance) return 1.0f;
+    const float d = std::clamp(distance, shape.minDistance, shape.maxDistance);
+    return shape.minDistance / (shape.minDistance + shape.rolloff * (d - shape.minDistance));
+}
+
+float AudioSystem::audibleVolume(float volume, const glm::vec3* position, const SoundShape& shape) const noexcept {
+    if (!position) return volume;
+    const float cut = shape.occluded ? std::pow(10.0f, kOccludedGainDb / 20.0f) : 1.0f;
+    return volume * cut * distanceGain(glm::length(*position - m_listener), shape);
+}
+
+bool AudioSystem::admitVoice(float audible) {
+    if (m_voiceLimit == 0) return true;
+    // Finished sounds free their voices first.
+    std::erase_if(m_sounds, [](auto& entry) {
+        const auto& s = entry.second;
+        return s.sound && !ma_sound_is_looping(s.sound.get()) && ma_sound_at_end(s.sound.get());
+    });
+    std::size_t voices = 0;
+    auto quietest = m_sounds.end();
+    float quietestAudible = 0.0f;
+    for (auto it = m_sounds.begin(); it != m_sounds.end(); ++it) {
+        const SoundInstance& s = it->second;
+        if (s.category != SoundCategory::SFX || !s.sound) continue;
+        ++voices;
+        const float a = audibleVolume(s.baseVolume, s.spatial ? &s.position : nullptr, s.shape);
+        // Ties go to the older sound (the lower handle) being replaced.
+        if (quietest == m_sounds.end() || a < quietestAudible || (a == quietestAudible && it->first < quietest->first)) {
+            quietest = it;
+            quietestAudible = a;
+        }
+    }
+    if (voices < m_voiceLimit) return true;
+    ++m_voicesDropped;
+    if (quietest == m_sounds.end() || audible <= quietestAudible) return false;   // the new one is the quietest
+    ma_sound_stop(quietest->second.sound.get());
+    m_sounds.erase(quietest);
+    return true;
+}
+
+std::size_t AudioSystem::sfxVoices() const {
+    std::lock_guard lock(m_mutex);
+    std::size_t n = 0;
+    for (const auto& [handle, s] : m_sounds)
+        n += s.category == SoundCategory::SFX && s.sound && ma_sound_is_playing(s.sound.get()) == MA_TRUE;
+    return n;
+}
+
+std::optional<VoiceInfo> AudioSystem::voice(SoundHandle handle) const {
+    std::lock_guard lock(m_mutex);
+    const auto it = m_sounds.find(handle);
+    if (it == m_sounds.end() || !it->second.sound) return std::nullopt;
+    const SoundInstance& s = it->second;
+    VoiceInfo v;
+    v.playing = ma_sound_is_playing(s.sound.get()) == MA_TRUE;
+    v.spatial = s.spatial;
+    v.category = s.category;
+    v.position = s.position;
+    v.shape = s.shape;
+    v.baseVolume = s.baseVolume;
+    v.volume = ma_sound_get_volume(s.sound.get());
+    v.lowPassHz = s.lowPass ? kOccludedLowPassHz : 0.0;
+    return v;
 }
 
 void AudioSystem::stopSound(SoundHandle handle) {
@@ -296,8 +399,9 @@ void AudioSystem::update() {
 void AudioSystem::updateSoundVolume(SoundInstance& instance) {
     if (!instance.sound) return;
     const int catIdx = soundCategoryIndex(instance.category);
-    const float finalVolume =
-        instance.baseVolume * m_categoryVolumes[static_cast<std::size_t>(catIdx)] * m_masterVolume;
+    const float occlusion = instance.shape.occluded ? std::pow(10.0f, kOccludedGainDb / 20.0f) : 1.0f;
+    const float finalVolume = instance.baseVolume * occlusion *
+                              m_categoryVolumes[static_cast<std::size_t>(catIdx)] * m_masterVolume;
     ma_sound_set_volume(instance.sound.get(), finalVolume);
 }
 

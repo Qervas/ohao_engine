@@ -2,10 +2,8 @@
 
 #include "core/log.hpp"
 #include "ecs/physics_scene.hpp"
-#include "ecs/scene_view.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 namespace ohao::runtime {
@@ -57,29 +55,27 @@ std::string FootstepSounds::next(std::string_view surface) {
     return set.files[set.next++ % set.files.size()];
 }
 
-bool Footsteps::initialize(const std::filesystem::path& root) {
+bool Footsteps::initialize(const std::filesystem::path& root, AudioSystem& audio) {
     m_sounds = std::make_unique<FootstepSounds>(std::vector<std::filesystem::path>{
         root / "assets" / "local" / "audio" / "footsteps", root / "assets" / "audio" / "footsteps"});
-    if (!m_audio.initialize()) {
+    if (!audio.isInitialized()) {
         OHAO_LOG(Warn, audio, "footsteps: no audio device; footsteps are silent");
         return false;
     }
+    m_audio = &audio;
     OHAO_LOG(Info, audio, "footsteps: {} sounds", m_sounds->sounds());
     return true;
 }
 
 void Footsteps::update(ecs::World& world) {
-    if (!m_audio.isInitialized() || !m_sounds) return;
+    if (!m_audio || !m_audio->isInitialized() || !m_sounds) return;
     const ecs::PhysicsScene* physics = ecs::physicsScene(world);
     if (!physics) return;
     if (!std::exchange(m_started, true)) m_cursor = physics->nextEventSeq() - 1;   // nothing from before
 
-    // Heard from the camera: the renderer's pitch and yaw back to a direction.
-    if (const auto view = ecs::resolveSceneView(world).camera) {
-        const float p = glm::radians(view->pitchDeg), y = glm::radians(view->yawDeg);
-        const glm::vec3 forward(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p));
-        m_audio.setListenerPosition(view->position, forward, glm::vec3(0.0f, 1.0f, 0.0f));
-    }
+    // Heard from the camera.
+    const Listener listener = listenerOf(world).value_or(Listener{});
+    m_audio->setListenerPosition(listener.position, listener.forward, glm::vec3(0.0f, 1.0f, 0.0f));
     for (;;) {
         uint64_t dropped = 0;
         const auto events = physics->eventsSince(m_cursor, 64, dropped);
@@ -92,10 +88,14 @@ void Footsteps::update(ecs::World& world) {
             if (path.empty()) continue;
             // Louder with speed: a walk (4 m/s) 0.65, a sprint (6.5) 0.9; a landing by its impact.
             const float volume = land ? std::clamp(e.speed / 6.0f, 0.4f, 1.0f) : std::clamp(0.25f + 0.1f * e.speed, 0.2f, 1.0f);
-            if (isValidSoundHandle(m_audio.playSoundAt(path, e.point, SoundCategory::SFX, false, volume))) ++m_played;
+            SoundShape shape = shapeFor(SoundKind::Near);
+            if (e.aId != 0 && e.aId != listener.playerId) {   // an enemy's step: one ray
+                ++m_rays;
+                shape.occluded = soundOccluded(world, listener, e.point);
+            }
+            if (isValidSoundHandle(m_audio->playSoundAt(path, e.point, SoundCategory::SFX, false, volume, shape))) ++m_played;
         }
     }
-    m_audio.update();   // finished sounds go
 }
 
 } // namespace ohao::runtime

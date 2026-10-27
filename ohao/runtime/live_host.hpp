@@ -174,6 +174,7 @@ private:
     std::unique_ptr<ecs::FileAssetResolver> m_assets;
     std::unique_ptr<ecs::World> m_world;       // destroyed before the renderer (it holds RenderScene slots)
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
+    std::unique_ptr<AudioSystem> m_audio;       // LiveConfig::footsteps: the players' shared device
     std::unique_ptr<Footsteps> m_footsteps;     // LiveConfig::footsteps
     std::unique_ptr<CombatSounds> m_combatSounds;   // LiveConfig::footsteps too
     std::unique_ptr<CombatFx> m_combatFx;           // LiveConfig::effects
