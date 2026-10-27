@@ -81,7 +81,10 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     and the players' footsteps and landings (with the
                     ground's Collider.surface) (physicsEvents(world), the
                     log physics.events reads)
-    combat          every Weapon in id order: trigger (a player's input  installed by installCombat
+    combat          first the enemy AI (every Enemy in id order: sight   installed by installCombat
+                    ray, Idle/Chase/Attack/Dead, MoveIntent for the next
+                    step, WeaponTrigger for this one); then
+                    every Weapon in id order: trigger (a player's input
                     fire/reload, else WeaponTrigger), cooldown, reload,  (after installPhysics);
                     bloom and recoil recovery, at most one round: a ray  nothing for a world
                     from the eye (PhysicsScene::raycastFrom: not the     without a Weapon

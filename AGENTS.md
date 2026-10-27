@@ -128,7 +128,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
-| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle |
+| `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones lying down with no character, their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -276,7 +276,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   1,000 boxes pile into a pit, `boxes1k_step_ms`; reported without a budget: what a snapshot
   of that world carries, `boxes1k_snapshot_ms`; and combat's, gated by `combatStep`: the
   combat system's part of a step in which the player fires a round in the blockout,
-  `combat_shot_ms`), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
+  `combat_shot_ms`, with two enemies attacking, `combat_step_ms`, and a whole step with 16
+  enemies chasing, `enemies16_step_ms`), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -592,6 +593,19 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     1,024): `shot`, `hit`, `damage`, `death`, `reload`, `reloaded`.
   - Saved types hash their names even with no instances, so a new saved component moves every
     `world.hash` in the serve and CLI expectations, not only scenes that use it.
+  - Enemies (step 2) are characters on the player's code: `PlayerController` with `spawn`
+    (the k-th character with a tag takes the k-th `SpawnPoint` with it, creation order; empty:
+    where it stands) and `input: false` (moved by its saved `MoveIntent`, not the world's
+    input; weapons fire by input only for `input: true`). The enemy AI (`ecs/enemy_ai.cpp`)
+    runs at the start of the combat step, before the weapons: sight is a `raycastFrom` from its
+    eye to the player's chest (in its cone only while idle); it writes `EnemyState`,
+    `MoveIntent` (the next step walks it) and `WeaponTrigger` (this step fires it), all saved.
+    A dead enemy loses its `PlayerController` (no character: it blocks nothing, rays pass) and
+    is tipped over. Characters block each other: a player teleported into an enemy is pushed
+    out. `player.info` and friends without `entity` mean the input-driven character.
+  - `scene.load` runs `level`, `player_spawn`, `transform` and `physics` sync, so a snapshot
+    right after a load holds the built bodies; a restore of one taken before the bodies existed
+    rebuilt them, and a character standing on a slope replayed one float off.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

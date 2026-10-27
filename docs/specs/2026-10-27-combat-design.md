@@ -341,6 +341,35 @@ Each step ends with the engine running, every gate green, a change record
   spec's numbers; a faster recovery is a one-field change (`recoilRecoveryDegPerSec`).
 - Until step 4 the click that captures the cursor in `ohao_game` also fires one round (ruling 1).
 
+## As built (step 2)
+
+- The AI is not a separate simulate system before `physics`: `stepEnemies` (`ohao/ecs/enemy_ai.cpp`)
+  runs at the start of the combat step, after physics. It sees from this step's poses; its
+  `WeaponTrigger` fires in this step's weapons and its `MoveIntent` is walked by the next step's
+  physics (one step, 17 ms, of movement latency). World has no "add a simulate system before"
+  and the order within combat keeps the AI and the weapons in one deterministic pass.
+- `MoveIntent` and `EnemyState` are saved components (the spec said `EnemyState` runtime,
+  snapshotted): so files, `world.hash` and snapshots hold the AI with no new snapshot code.
+  `EnemyState.shotsSeen` counts a burst by the weapon's `WeaponState.shots`.
+- Without a `MoveIntent` an input-less character stands, facing as it faces; the AI adds one
+  at its first step with the character's yaw and pitch. With one, physics takes its yaw and
+  pitch as given (the AI turns them at `turnRateDegPerSec`).
+- The warning for a character without a free spawn point keeps the code `W_PLAYER_NO_SPAWN`
+  (named in SP6's tests and docs) with the tag in its message, not a new `W_NO_SPAWN`.
+- Aim error: each round the AI's aim is off by a seeded amount within `aimErrorDeg` in yaw and
+  pitch (`unitRandom(seed ^ 0x5eed, shots, 5|6)`); the weapon's own spread adds to it.
+- Dead: `PlayerController` removed (the character goes with it), the entity tipped 90° back
+  about its own X and lifted by the capsule radius, mode `Dead`; its weapon never fires again.
+- Characters (the player and enemies) collide with each other's capsules: a teleport into an
+  enemy pushes the player out. The SP6 teleport target on the Step moved to (-2, 0.3, -1.35),
+  clear of EnemyA, in the API test, the serve session and e2e, and the guide's example.
+- `scene.load` now builds the bodies too (spec "Snapshots and replay" of SP6): a snapshot taken
+  right after a load, before any step, held characters but no level bodies, so its restore
+  rebuilt them and EnemyB, on the ramp, replayed one float off (found by SP6's
+  `sp6_t14_restore_and_replay_a_walk_through_the_api` once enemies were in the scene).
+- The play scene's enemies: `5c0b1a7e00000010` EnemyA and `…20` EnemyB, each with a red box
+  body and a head as children, weapon seeds 17 and 29, recoil 0.
+
 ## Rulings for Frank
 
 Judgment calls made without Frank, each conservative; any can be reversed.
@@ -379,3 +408,12 @@ Judgment calls made without Frank, each conservative; any can be reversed.
 18. **Step 1: combat budgets gate on their own `combatStep`** in `physics_budgets.json`, beside
     physics' `currentStep`, so physics' gating is unchanged; `combat_shot_ms` is measured with
     spread and kick off so every round lands (the cost of a round, not aim).
+19. **Build order: Task 2 before Tasks 3 and 4.** The step-3 and step-4 requests arrived with
+    Task 2 still open; Task 3's win and restart and Task 4's fights need enemies, so the tasks
+    are built in plan order, each closed with its own commits and change record.
+20. **Step 2: the enemy AI runs inside the combat step, after physics** (not a system before
+    physics): one step of movement latency, firing in the step it decides.
+21. **Step 2: `EnemyState` and `MoveIntent` are saved**, like `WeaponState`.
+22. **Step 2: `scene.load` builds bodies,** so snapshots taken right after a load replay
+    exactly (an SP6 fix the enemies exposed).
+23. **Step 2: characters block each other;** enemies can shove the player (and each other).
