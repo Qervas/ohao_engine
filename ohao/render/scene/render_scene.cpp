@@ -121,10 +121,12 @@ struct RenderScene::Impl {
         const bool live = instances.live(slot);
         vi.accelerationStructureReference = mesh && live ? rtAccel->getBlasAddress(mesh->blas) : 0;
         const bool visible = live && (g.flags & kInstanceVisible) != 0;
-        // A light's emitter mesh is seen by the path tracer's camera rays and its near-mirrors'
-        // first specular rays only (kRayMaskCamera).
+        // A light's emitter mesh and a first-person gun are seen by the path tracer's camera rays
+        // and its near-mirrors' first specular rays only (kRayMaskCamera).
         vi.mask = !visible ? 0u
-                : (g.flags & kInstanceEmitter) != 0 ? gpu::shared::kTlasMaskEmitter : gpu::shared::kTlasMaskScene;
+                : (g.flags & kInstanceEmitter) != 0   ? gpu::shared::kTlasMaskEmitter
+                : (g.flags & kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel
+                                                      : gpu::shared::kTlasMaskScene;
         vi.instanceShaderBindingTableRecordOffset = 0;
         vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 
@@ -231,7 +233,7 @@ struct RenderScene::Impl {
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
                                      mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1],
-                                     (g.flags & kInstanceEmitter) != 0});
+                                     (g.flags & kInstanceEmitter) != 0, (g.flags & kInstanceViewModel) != 0});
             }
         }
         drawsDirty = false;
@@ -263,7 +265,8 @@ struct RenderScene::Impl {
             gpu::shared::DrawRecord& r = drawRecords[i];
             r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
             r.info = {d.materialSlot,
-                      (d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u),
+                      (d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u) |
+                          (d.viewModel ? gpu::shared::kDrawViewModel : 0u),
                       d.firstMeshlet, d.meshletCount};
             r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};
             r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};

@@ -79,6 +79,9 @@ struct InstanceDesc {
     // A light's emitter mesh (RenderScene makes them from the lights; kInstanceEmitter):
     // giAlbedoPacked.rgb is then its radiance.
     bool emitter{false};
+    // A first-person gun's mesh (ecs ViewModel; kInstanceViewModel): drawn and lit as any mesh, but
+    // in no CSM cascade and no shadow, GI or bounce ray (its pose is shrunk toward the eye).
+    bool viewModel{false};
     glm::vec4 giAlbedoPacked{0.73f, 0.73f, 0.73f, 0.95f};   // see InstanceGpu
 };
 
@@ -132,7 +135,7 @@ struct InstanceGpu {
     uint32_t mesh;
     uint32_t materialRefOffset;
     uint32_t materialRefCount;
-    uint32_t flags;          // kInstanceVisible, kInstanceEmitter
+    uint32_t flags;          // kInstanceVisible, kInstanceEmitter, kInstanceViewModel
     // RT GI's bounce albedo: rgb, read by rt/gi_trace.slang at a hit (kInstanceGpuGiAlbedoOffset
     // in shaders/shared/layout.json). a = the legacy packed word: metallic>0.5 ?
     // -(roughness+0.001) : roughness, then +/-10 when the mesh has > 100 vertices; nothing
@@ -144,6 +147,8 @@ static_assert(sizeof(InstanceGpu) == 160);
 inline constexpr uint32_t kInstanceVisible = 1u;
 // A light's emitter mesh: pure emission, seen by camera rays and the G-buffer only.
 inline constexpr uint32_t kInstanceEmitter = gpu::shared::kInstanceEmitter;
+// A first-person gun's mesh: no CSM cascade, no shadow, GI or bounce ray.
+inline constexpr uint32_t kInstanceViewModel = gpu::shared::kInstanceViewModel;
 
 struct MeshGpu {
     uint32_t vertexOffset;        // in vertices

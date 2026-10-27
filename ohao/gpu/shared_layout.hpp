@@ -39,16 +39,22 @@ inline constexpr uint32_t kCullCone = 8u;
 inline constexpr uint32_t kDrawOneSided = 1u;
 // DrawRecord.info.y bit: a light's emitter mesh, in no CSM cascade (it never shadows)
 inline constexpr uint32_t kDrawEmitter = 2u;
+// DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
+inline constexpr uint32_t kDrawViewModel = 4u;
+// InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
+inline constexpr uint32_t kInstanceViewModel = 4u;
 // InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
 inline constexpr uint32_t kInstanceEmitter = 2u;
 // TLAS instance mask of every scene instance
 inline constexpr uint32_t kTlasMaskScene = 1u;
 // TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it, so it shadows nothing and no bounce counts the light twice
 inline constexpr uint32_t kTlasMaskEmitter = 2u;
+// TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
+inline constexpr uint32_t kTlasMaskViewModel = 4u;
 // ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
 inline constexpr uint32_t kRayMaskScene = 1u;
-// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances and light emitters
-inline constexpr uint32_t kRayMaskCamera = 3u;
+// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters and first-person guns
+inline constexpr uint32_t kRayMaskCamera = 7u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 inline constexpr uint32_t kMeshletMaxVertices = 64u;
 // a meshlet's triangles at most (the mesh shader's output primitives)

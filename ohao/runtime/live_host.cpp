@@ -195,6 +195,8 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         // Realtime frames draw what the steps move between their last two poses; lockstep and
         // paused ones the last step's exactly (so a lockstep window matches a headless capture).
         m_world->setRenderAlpha(m_time.running() ? tick.alpha : 1.0f);
+        // The gun's sway, bob and kick move at render rate in realtime; lockstep draws them at rest.
+        m_world->setPresentationDt(m_time.running() ? std::clamp(frameDt, 0.0f, 0.1f) : 0.0f);
         if (hooks.update) hooks.update(*this, frameDt, tick.alpha);
 
         const VkExtent2D ext = m_window.framebufferExtent();
@@ -420,6 +422,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         // the capture is at the window's size.
         m_world->setRenderAlpha(1.0f);
         m_world->setPendingLook(glm::vec2(0.0f));   // no look lead: the step's view
+        m_world->setPresentationDt(0.0f);           // the gun at rest, as headless
         if (m_renderer->getWidth() != ext.width || m_renderer->getHeight() != ext.height) {
             m_world->sync();
             m_renderer->render();

@@ -19,6 +19,9 @@
 //                   placement (the motion vector TAA reprojects with); a frame later, the world.
 //   taa             a point light moving ~1.5 px a frame under TAA: its mesh is as bright as the
 //                   same light held still (it was 4.9 darker, its history the background).
+//   gun             a first-person gun (ViewModel, sub-project 9 test 21) changes no pixel past 24 px of
+//                   its footprint: no CSM cascade, shadow or GI ray sees it; the same box placed in
+//                   the world at its drawn pose does shadow the room.
 //
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "api/session.hpp"
@@ -26,6 +29,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/view_model.hpp"
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "ohao/render_host.hpp"
@@ -43,6 +47,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -95,7 +100,8 @@ const View kLightsOutOfView{{0.0f, 2.5f, 6.0f}, -50.0f};
 
 // A floor, a back wall and a box, lit by a point, a spot and an area light and a sun, seen from
 // `view`: saved as a scene file (relative to the source root, where the asset resolver looks).
-std::string roomScene(const View& view, const std::string& tag, bool spotAtCamera = false) {
+std::string roomScene(const View& view, const std::string& tag, bool spotAtCamera = false,
+                      const std::function<void(ecs::World&, entt::entity camera)>& extra = {}) {
     using namespace ecs;
     World w;
     w.seedIds(11);
@@ -149,7 +155,9 @@ std::string roomScene(const View& view, const std::string& tag, bool spotAtCamer
 
     Transform cam{view.position};
     cam.rotation = glm::angleAxis(glm::radians(view.pitchDeg), glm::vec3(1.0f, 0.0f, 0.0f));
-    w.registry().emplace<ecs::Camera>(w.create("MainCamera", cam), ecs::Camera{kFov, 0.1f, 200.0f, true});
+    const entt::entity camera = w.create("MainCamera", cam);
+    w.registry().emplace<ecs::Camera>(camera, ecs::Camera{kFov, 0.1f, 200.0f, true});
+    if (extra) extra(w, camera);
 
     const std::string rel = scratch(tag) + ".scene.json";
     auto text = saveScene(w, engineTypes(), SaveOptions{reflect::JsonLayout::Compact});
@@ -166,12 +174,13 @@ struct Image {
 enum class Mode { Deferred, DeferredCsm, PathTraced };
 
 // The scene as `ohao run` captures it, emitters on or off (switched after a warm-up capture that
-// starts the renderer).
-Image capture(const std::string& scenePath, Mode mode, bool emitters) {
+// starts the renderer). `viewModel`: the first-person gun's system installed, as the CLI context does.
+Image capture(const std::string& scenePath, Mode mode, bool emitters, bool viewModel = false) {
     ecs::FileAssetResolver assets(OHAO_SOURCE_DIR);
     host::RenderHost host(assets, api::HostKind::Headless);
     Image out;
     ecs::World world;
+    if (viewModel) ecs::installViewModel(world);
     api::Session session(world, engineTypes());
     session.setAssetResolver(&assets);
     host.bind(world);
@@ -526,6 +535,101 @@ void moving_light_emitter_is_taa_stable() {
     keep(still.image, "taa_still");
 }
 
+// ---- the first-person gun (sub-project 9, test 21) -------------------------------------------------
+// A ViewModel's mesh is drawn shrunk toward the eye: kept out of every CSM cascade and every shadow,
+// GI and bounce ray, it changes nothing but its own pixels; the same box placed in the world where the
+// gun is drawn, as an ordinary mesh, shadows the room.
+
+const glm::vec3 kGunAt{0.25f, -0.25f, -0.6f};          // below the camera, in its space
+const glm::vec3 kGunLo{-0.06f, -0.06f, -0.7f}, kGunHi{0.06f, 0.06f, 0.0f};
+constexpr float kGunDepth = 0.55f;                     // ViewModel depthScale; fovDeg = the scene's
+
+glm::mat4 cameraWorld(const View& view) {
+    return glm::translate(glm::mat4(1.0f), view.position) *
+           glm::mat4_cast(glm::angleAxis(glm::radians(view.pitchDeg), glm::vec3(1.0f, 0.0f, 0.0f)));
+}
+
+// Where the gun is drawn: the camera's world times the remap (uniform, the lens being the scene's)
+// times its pose below the camera.
+glm::mat4 gunDrawn(const View& view) {
+    return cameraWorld(view) * ecs::viewModelRemap(glm::translate(glm::mat4(1.0f), kGunAt), kFov, kFov, kGunDepth);
+}
+
+enum class Gun { None, ViewModel, PlainAtDrawn };
+
+std::string gunScene(const View& view, const std::string& tag, Gun gun) {
+    return roomScene(view, tag, false, [&](ecs::World& w, entt::entity camera) {
+        using namespace ecs;
+        // A lamp just behind and above the eye: a box near the eye throws a large shadow ahead.
+        Light lamp;
+        lamp.intensity = 6.0f;
+        lamp.range = 30.0f;
+        lamp.radius = 0.02f;
+        w.registry().emplace<Light>(w.create("Lamp behind", Transform{view.position + glm::vec3(0.25f, 0.35f, 0.5f)}), lamp);
+        if (gun == Gun::None) return;
+        const MaterialOverride metal{{0.09f, 0.09f, 0.1f}, 0.45f, 0.6f, 0.0f};
+        const MeshSource box{BoxPrim{kGunLo, kGunHi, glm::vec3(0.09f)}};
+        if (gun == Gun::ViewModel) {
+            const auto e = w.create("Gun", Transform{kGunAt});
+            w.setParent(e, camera);
+            w.registry().emplace<MeshSource>(e, box);
+            w.registry().emplace<MaterialOverride>(e, metal);
+            ViewModel vm;
+            vm.fovDeg = kFov;
+            vm.depthScale = kGunDepth;
+            w.registry().emplace<ViewModel>(e, vm);
+        } else {   // the same box at the gun's drawn pose, an ordinary mesh in the world
+            const glm::mat4 m = gunDrawn(view);
+            Transform t;
+            t.position = glm::vec3(m[3]);
+            t.rotation = glm::quat_cast(glm::mat3(cameraWorld(view)));
+            t.scale = glm::vec3(kGunDepth);
+            const auto e = w.create("Box at the gun", t);
+            w.registry().emplace<MeshSource>(e, box);
+            w.registry().emplace<MaterialOverride>(e, metal);
+        }
+    });
+}
+
+void view_model_changes_only_its_pixels() {
+    std::printf("gun: a ViewModel's mesh shadows nothing; the same box in the world does\n");
+    const View view = kLightsInView;
+    const std::string none = gunScene(view, "gun_none", Gun::None), gun = gunScene(view, "gun_vm", Gun::ViewModel),
+                      plain = gunScene(view, "gun_plain", Gun::PlainAtDrawn);
+    const Image off = capture(none, Mode::Deferred, true, true), on = capture(gun, Mode::Deferred, true, true),
+                inWorld = capture(plain, Mode::Deferred, true, true);
+    for (const auto& s : {none, gun, plain}) std::remove((std::string(OHAO_SOURCE_DIR) + "/" + s).c_str());
+    if (off.rgba.empty() || on.rgba.empty() || inWorld.rgba.empty()) {
+        check(false, "gun: the captures rendered");
+        return;
+    }
+    keep(on, "gun_vm");
+    keep(inWorld, "gun_plain");
+    // The gun's footprint: its drawn corners' bounding box, grown by the screen-space filters' 24 px.
+    Footprint fp{0, 0, 0, 1e9f, 1e9f, -1e9f, -1e9f, true};
+    const glm::mat4 drawn = gunDrawn(view);
+    for (int k = 0; k < 8; ++k) {
+        const glm::vec3 c((k & 1) ? kGunHi.x : kGunLo.x, (k & 2) ? kGunHi.y : kGunLo.y, (k & 4) ? kGunHi.z : kGunLo.z);
+        const glm::vec3 p = project(view, glm::vec3(drawn * glm::vec4(c, 1.0f)));
+        fp.x0 = std::min(fp.x0, p.x - 24.0f);
+        fp.y0 = std::min(fp.y0, p.y - 24.0f);
+        fp.x1 = std::max(fp.x1, p.x + 24.0f);
+        fp.y1 = std::max(fp.y1, p.y + 24.0f);
+    }
+    const std::vector<Footprint> fps{fp};
+    const Diff outside = diffOutside(on, off, fps);
+    const Diff all = diffOutside(on, off, {});
+    const Diff plainOutside = diffOutside(inWorld, off, fps);
+    std::printf("  footprint x %.0f..%.0f y %.0f..%.0f; gun: %zu px changed, %zu outside (max %d); the plain box: %zu "
+                "outside (max %d)\n",
+                fp.x0, fp.x1, fp.y0, fp.y1, all.changed, outside.changed, outside.maxAbs, plainOutside.changed,
+                plainOutside.maxAbs);
+    check(all.changed > 200, "gun: drawn (its pixels changed)");
+    check(withinBvhFloor(outside), "gun: nothing past 24 px of its footprint changed (no shadow, no GI)");
+    check(plainOutside.changed > outside.changed + 50 && plainOutside.maxAbs > 2,
+          "gun: the same box as a world mesh shadows the room (the comparison sees a shadow)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -536,5 +640,6 @@ int main(int argc, char** argv) {
     spot_seen_from_inside_its_cone_is_bright();
     moved_light_emitters_carry_their_motion();
     moving_light_emitter_is_taa_stable();
+    view_model_changes_only_its_pixels();
     return test::finish("light_emitter_gpu_test", g_passed, g_failed, g_failures);
 }

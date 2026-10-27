@@ -437,6 +437,23 @@ void writeFields(const Muzzle& v, const Muzzle* omit, FieldSink& out) {
     if (!omit || !same(v.time, omit->time)) t.f32("\"time\"", v.time);
 }
 
+void writeFields(const ViewModel& v, const ViewModel* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    const auto f = [&](const char* key, float ViewModel::*m) {
+        if (!omit || !same(v.*m, omit->*m)) t.f32(key, v.*m);
+    };
+    f("\"fovDeg\"", &ViewModel::fovDeg);
+    f("\"depthScale\"", &ViewModel::depthScale);
+    f("\"swayDegPerDeg\"", &ViewModel::swayDegPerDeg);
+    f("\"swayMaxDeg\"", &ViewModel::swayMaxDeg);
+    f("\"swayReturnPerSec\"", &ViewModel::swayReturnPerSec);
+    f("\"bobAmplitude\"", &ViewModel::bobAmplitude);
+    f("\"bobStride\"", &ViewModel::bobStride);
+    f("\"kickBack\"", &ViewModel::kickBack);
+    f("\"kickPitchDeg\"", &ViewModel::kickPitchDeg);
+    f("\"kickReturnPerSec\"", &ViewModel::kickReturnPerSec);
+}
+
 void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out) {
     if (!omit || v.pull != omit->pull) out.tree.boolean("\"pull\"", v.pull);
     if (!omit || v.reload != omit->reload) out.tree.boolean("\"reload\"", v.reload);

@@ -366,6 +366,28 @@ struct Muzzle {
     float time{0.05f};       // s the flash stays on after a round
 };
 
+// A first-person gun, on its root below the camera's entity (sub-project 9, "The gun"): its subtree
+// is drawn remapped in view space, toward the eye by depthScale and as if through a fovDeg lens, and
+// moved at render rate by sway (the view's turn, lagged), bob (the player's walk) and kick (its
+// rounds). The view_model sync system (ecs/view_model.hpp) writes only RenderPose: the motion is
+// never saved, hashed or snapshotted, and a lockstep or headless frame draws the rest pose.
+struct ViewModel {
+    float fovDeg{60.0f};              // the lens the gun is drawn through
+    // View-space shrink toward the eye (never further than this of its distance). 0.55 keeps the play
+    // scene's gun within the 0.3 m a wall can come to the eye (the capsule's radius) and beyond the
+    // depth buffer's clip at about twice the camera's 0.05 m near plane (an OpenGL-style projection
+    // under Vulkan's [0, 1] depth clips there).
+    float depthScale{0.55f};
+    float swayDegPerDeg{0.08f};       // lag per degree the view turns
+    float swayMaxDeg{3.0f};
+    float swayReturnPerSec{8.0f};     // exponential return rate
+    float bobAmplitude{0.012f};       // m
+    float bobStride{0.75f};           // m walked a cycle
+    float kickBack{0.03f};            // m back a round
+    float kickPitchDeg{2.5f};         // up a round
+    float kickReturnPerSec{14.0f};    // exponential return rate
+};
+
 // The trigger of a weapon that is not a player's: an enemy's AI, a turret, a test pulls it.
 struct WeaponTrigger {
     bool pull{false};     // held

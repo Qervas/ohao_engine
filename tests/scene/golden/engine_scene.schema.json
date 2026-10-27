@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash c6dd4dc42b3fede5. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 4f47d2381b732278. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -52,6 +52,7 @@
         "Weapon": { "$ref": "#/$defs/Weapon" },
         "WeaponState": { "$ref": "#/$defs/WeaponState" },
         "Muzzle": { "$ref": "#/$defs/Muzzle" },
+        "ViewModel": { "$ref": "#/$defs/ViewModel" },
         "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" },
         "Enemy": { "$ref": "#/$defs/Enemy" },
         "EnemyState": { "$ref": "#/$defs/EnemyState" },
@@ -1189,6 +1190,63 @@
           "description": "How long the flash stays on after a round",
           "default": 0.05,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ViewModel": {
+      "description": "A first-person gun, on its root below the camera's entity: its subtree is drawn remapped in view space (toward the eye by depthScale, as if through a fovDeg lens, so it never reaches a wall) and moved at render rate by sway, bob and kick. Presentation only: the motion is never saved or hashed, and lockstep and headless frames draw the rest pose.",
+      "type": "object",
+      "properties": {
+        "fovDeg": {
+          "description": "The lens the gun is drawn through",
+          "default": 60,
+          "allOf": [{ "type": "number", "minimum": 10, "maximum": 170 }]
+        },
+        "depthScale": {
+          "description": "Shrink toward the eye in view space",
+          "default": 0.55,
+          "allOf": [{ "type": "number", "minimum": 0.01, "maximum": 1 }]
+        },
+        "swayDegPerDeg": {
+          "description": "Lag per degree the view turns",
+          "default": 0.08,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "swayMaxDeg": {
+          "description": "The most the sway lags",
+          "default": 3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "swayReturnPerSec": {
+          "description": "How fast the sway returns (exponential rate)",
+          "default": 8,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
+        },
+        "bobAmplitude": {
+          "description": "Up and down while walking",
+          "default": 0.012,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 0.5 }]
+        },
+        "bobStride": {
+          "description": "Walked a bob cycle",
+          "default": 0.75,
+          "allOf": [{ "type": "number", "minimum": 0.01, "maximum": 100 }]
+        },
+        "kickBack": {
+          "description": "Back a round",
+          "default": 0.03,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "kickPitchDeg": {
+          "description": "Up a round",
+          "default": 2.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "kickReturnPerSec": {
+          "description": "How fast the kick returns (exponential rate)",
+          "default": 14,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
         }
       },
       "additionalProperties": false

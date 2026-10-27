@@ -33,16 +33,22 @@ static const uint kCullCone = 8u;
 static const uint kDrawOneSided = 1u;
 // DrawRecord.info.y bit: a light's emitter mesh, in no CSM cascade (it never shadows)
 static const uint kDrawEmitter = 2u;
+// DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
+static const uint kDrawViewModel = 4u;
+// InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
+static const uint kInstanceViewModel = 4u;
 // InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
 static const uint kInstanceEmitter = 2u;
 // TLAS instance mask of every scene instance
 static const uint kTlasMaskScene = 1u;
 // TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it, so it shadows nothing and no bounce counts the light twice
 static const uint kTlasMaskEmitter = 2u;
+// TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
+static const uint kTlasMaskViewModel = 4u;
 // ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
 static const uint kRayMaskScene = 1u;
-// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances and light emitters
-static const uint kRayMaskCamera = 3u;
+// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters and first-person guns
+static const uint kRayMaskCamera = 7u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 static const uint kMeshletMaxVertices = 64u;
 // a meshlet's triangles at most (the mesh shader's output primitives)

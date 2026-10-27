@@ -4,6 +4,7 @@
 #include "core/log.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <unordered_set>
@@ -146,13 +147,28 @@ private:
             d.prevWorld = wt.prevWorld;
         }
         d.visible = mr.visible;
+        d.viewModel = inViewModel(e);
         if (const auto* gi = m_reg.try_get<GiMaterialLegacy>(e)) d.giAlbedoPacked = gi->packed;
         return d;
     }
 
+    // A first-person gun's part: the entity or an ancestor has a ViewModel.
+    [[nodiscard]] bool inViewModel(entt::entity e) const {
+        for (int depth = 0; e != entt::null && m_reg.valid(e) && depth < 64; ++depth) {
+            if (m_reg.all_of<ViewModel>(e)) return true;
+            const auto* p = m_reg.try_get<Parent>(e);
+            e = p ? p->entity : entt::null;
+        }
+        return false;
+    }
+
     void rebuildLights() {
         m_lights.clear();
-        for (auto [e, l, wt] : m_reg.view<const Light, const WorldTransform>().each()) {
+        for (auto [e, l, wtStep] : m_reg.view<const Light, const WorldTransform>().each()) {
+            // Where the frame draws it: between two steps, or with a first-person gun (a muzzle
+            // light below a ViewModel follows the drawn gun), else the step's pose.
+            const auto* rp = m_reg.try_get<RenderPose>(e);
+            const WorldTransform wt = rp ? WorldTransform{rp->world, rp->prevWorld} : wtStep;
             render::LightDesc d{};
             d.kind = toKind(l.type);
             const glm::mat3 basis(wt.world);
@@ -162,6 +178,12 @@ private:
             d.intensity = l.intensity;
             d.range = l.range;
             d.radius = l.radius;
+            // A drawn pose that scales (a gun's view-space remap) scales the emitter mesh with it.
+            if (rp) {
+                const float stepVolume = std::abs(glm::determinant(glm::mat3(wtStep.world)));
+                const float drawnVolume = std::abs(glm::determinant(basis));
+                if (stepVolume > 0.0f && drawnVolume != stepVolume) d.radius *= std::cbrt(drawnVolume / stepVolume);
+            }
             d.innerConeDeg = l.innerConeDeg;
             d.outerConeDeg = l.outerConeDeg;
             d.areaEdge1 = basis * l.areaEdge1;
@@ -239,8 +261,10 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
     auto state = std::make_shared<ExtractState>(reg, scene);
     // After the transform system, and after render interpolation when physics installed it first.
     const auto names = world.syncNames();
-    const bool interpolate = std::find(names.begin(), names.end(), "interpolate") != names.end();
-    world.addSyncAfter(interpolate ? "interpolate" : "transform", "render_extract", [state](World&) { state->run(); });
+    // After the first-person gun's drawn poses too (view_model, after interpolate).
+    const auto has = [&](const char* n) { return std::find(names.begin(), names.end(), n) != names.end(); };
+    const char* anchor = has("view_model") ? "view_model" : has("interpolate") ? "interpolate" : "transform";
+    world.addSyncAfter(anchor, "render_extract", [state](World&) { state->run(); });
 }
 
 } // namespace ohao::ecs

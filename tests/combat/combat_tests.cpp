@@ -10,12 +10,14 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
+#include "ecs/view_model.hpp"
 #include "ecs/world.hpp"
 #include "ecs/world_hash.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
 #include "render/scene/light_table.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
@@ -1313,6 +1315,181 @@ static void fx_hud_without_a_player_is_empty() {
 
 // --dump-burst FILE: a 30-round burst at the north wall from (-2, 0, 2), as JSON (each round's step,
 // cone, eye, direction, hit point; the view's pitch and yaw each step), for the look shots' plot.
+// ---- test 21: the first-person gun (sub-project 9) ----------------------------------------------
+// docs/specs/2026-10-27-feel-design.md, "The gun: placement and procedural motion".
+
+namespace {
+
+constexpr glm::vec3 kGunAt{0.22f, -0.21f, -0.26f};   // the play scene's gun, below the head
+
+// The arena's player with the play scene's gun (a ViewModel below the head) and its muzzle.
+struct GunArena : Arena {
+    entt::entity gun{entt::null};
+    entt::entity muzzle{entt::null};
+    explicit GunArena(Weapon weapon = {}) : Arena({-2.0f, 0.0f, 2.0f}, 0.0f, weapon) {
+        gun = world.createWithId(0xb1a7e4, "Gun");
+        world.setTransform(gun, Transform{kGunAt});
+        world.setParent(gun, head);
+        world.registry().emplace<ViewModel>(gun);
+        muzzle = world.createWithId(0xb1a7e5, "Muzzle");
+        world.setTransform(muzzle, Transform{{0.0f, 0.01f, -0.26f}});
+        world.setParent(muzzle, gun);
+        frame(0.0f);
+    }
+    // One drawn frame: `dt` seconds since the last (0: lockstep, the rest pose).
+    void frame(float dt) {
+        world.setPresentationDt(dt);
+        world.sync();
+    }
+    // A step as a window runs it: simulate only (the frame syncs).
+    std::vector<CombatEvent> stepOnly(std::vector<InputEvent> events = {}) {
+        world.stepInput(events);
+        world.simulate(kDt);
+        const auto ev = combatEvents(world);
+        return {ev.begin(), ev.end()};
+    }
+    const ViewModelMotion& motion() const { return *viewModelMotion(world, gun); }
+    glm::mat4 drawn(entt::entity e) const {
+        const auto* rp = world.registry().try_get<RenderPose>(e);
+        return rp ? rp->world : world.registry().get<WorldTransform>(e).world;
+    }
+    glm::mat4 headWorld() const { return world.registry().get<WorldTransform>(head).world; }
+};
+
+bool nearMat(const glm::mat4& a, const glm::mat4& b, float eps) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            if (std::fabs(a[c][r] - b[c][r]) > eps) return false;
+    return true;
+}
+
+} // namespace
+
+static void t21_view_model_rest_pose() {
+    GunArena a;
+    const ViewModel vm;
+    const glm::mat4 local = Transform{kGunAt}.matrix();
+    const glm::mat4 expect = a.headWorld() * viewModelRemap(local, 75.0f, vm.fovDeg, vm.depthScale);
+    CHECK(nearMat(a.drawn(a.gun), expect, 1e-6f), "no turn, walk or round: the gun is drawn at the remap of its pose");
+    const glm::mat4 muzzleExpect =
+        a.headWorld() * viewModelRemap(local * Transform{{0.0f, 0.01f, -0.26f}}.matrix(), 75.0f, vm.fovDeg, vm.depthScale);
+    CHECK(nearMat(a.drawn(a.muzzle), muzzleExpect, 1e-6f), "its subtree (the muzzle) with it");
+    a.frame(0.0f);
+    const auto& rp = a.world.registry().get<RenderPose>(a.gun);
+    CHECK(rp.prevWorld == rp.world, "a still frame: no motion vector");
+    CHECK(a.motion().swayYawDeg == 0.0f && a.motion().kickBack == 0.0f && a.motion().bobWeight == 0.0f, "motion at rest");
+}
+
+static void t21_view_model_placement() {
+    // Points in front of the eye, in view space: shrunk to at most depthScale of their distance, and
+    // through the scene's 75 degrees they land where they land unremapped through the gun's 60.
+    bool closer = true, sameImage = true;
+    const float sceneHalf = std::tan(glm::radians(37.5f)), gunHalf = std::tan(glm::radians(30.0f));
+    for (int i = 0; i < 1000; ++i) {
+        const float u = std::fmod(i * 0.6180339887f, 1.0f), v = std::fmod(i * 0.7548776662f, 1.0f);
+        const glm::vec3 p(u - 0.5f, (v - 0.5f) * 0.8f, -0.1f - 0.9f * std::fmod(i * 0.5698402910f, 1.0f));
+        const glm::vec3 q(viewModelRemap(glm::translate(glm::mat4(1.0f), p), 75.0f, 60.0f, 0.25f)[3]);
+        closer = closer && glm::length(q) <= 0.25f * glm::length(p) * (1.0f + 1e-6f);
+        sameImage = sameImage && near(q.x / -q.z / sceneHalf, p.x / -p.z / gunHalf, 1e-5f) &&
+                    near(q.y / -q.z / sceneHalf, p.y / -p.z / gunHalf, 1e-5f);
+    }
+    CHECK(closer, "every remapped point within depthScale of its distance from the eye");
+    CHECK(sameImage, "projected through 75 degrees it lands where the original lands through 60");
+}
+
+static void t21_sway_lags_and_returns() {
+    GunArena a;
+    a.frame(kDt);   // the first live frame sees the view
+    Transform t = a.world.registry().get<Transform>(a.player);
+    t.rotation = yawRotation(10.0f) * t.rotation;   // a 10 degree turn left in one frame
+    a.world.setTransform(a.player, t);
+    a.frame(kDt);
+    const float lag = a.motion().swayYawDeg;
+    std::printf("\n      after a 10 degree turn: sway %.4f degrees", lag);
+    CHECK(near(lag, -0.8f, 1e-3f), "the gun lags 0.8 degrees (swayDegPerDeg 0.08), turned the other way");
+    CHECK(!nearMat(a.drawn(a.gun), a.headWorld() * viewModelRemap(Transform{kGunAt}.matrix(), 75.0f, 60.0f, 0.25f), 1e-5f),
+          "and is drawn swayed");
+    for (int i = 0; i < 30; ++i) a.frame(kDt);
+    CHECK(std::fabs(a.motion().swayYawDeg) < 0.1f, "back within 0.1 degrees after 0.5 s");
+}
+
+static void t21_bob_follows_distance() {
+    GunArena a;
+    auto& ps = a.world.registry().get<PlayerState>(a.player);
+    const float dt = 0.05f;
+    a.frame(dt);
+    ps.onGround = true;
+    ps.velocity = {1.5f, 0.0f, 0.0f};   // 0.075 m a frame: a tenth of a stride
+    for (int i = 0; i < 5; ++i) a.frame(dt);
+    CHECK(near(a.motion().bobPhase, 0.5f, 1e-4f), "half a cycle after 0.375 m walked (one a 0.75 m stride)");
+    CHECK(a.motion().bobWeight > 0.5f, "the bob eased in");
+    for (int i = 0; i < 5; ++i) a.frame(dt);
+    CHECK(a.motion().bobPhase < 1e-3f || a.motion().bobPhase > 1.0f - 1e-3f, "a whole cycle after 0.75 m");
+    const float phase = a.motion().bobPhase;
+    ps.velocity = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 10; ++i) a.frame(dt);
+    CHECK(a.motion().bobPhase == phase && a.motion().bobWeight < 0.01f, "none standing: the phase holds, the bob eases out");
+    ps.velocity = {1.5f, 0.0f, 0.0f};
+    ps.onGround = false;
+    for (int i = 0; i < 10; ++i) a.frame(dt);
+    CHECK(a.motion().bobPhase == phase, "none in the air");
+}
+
+static void t21_kick_per_round_returns() {
+    GunArena a(steadyRifle());
+    a.frame(kDt);
+    (void)a.stepOnly({actionEvent("fire", true)});
+    a.frame(kDt);
+    const ViewModel vm;
+    std::printf("\n      after a round: back %.4f m, up %.3f degrees", a.motion().kickBack, a.motion().kickPitchDeg);
+    CHECK(near(a.motion().kickBack, vm.kickBack, 1e-6f) && near(a.motion().kickPitchDeg, vm.kickPitchDeg, 1e-5f),
+          "a round kicks the gun back 0.03 m and up 2.5 degrees");
+    CHECK(a.motion().rounds == 1, "one round seen");
+    (void)a.stepOnly({actionEvent("fire", false)});
+    for (int i = 0; i < 30; ++i) a.frame(kDt);
+    CHECK(a.motion().kickBack < 0.01f * vm.kickBack && a.motion().kickPitchDeg < 0.01f * vm.kickPitchDeg,
+          "and returns within 0.5 s");
+}
+
+static void t21_view_model_resets_on_restart() {
+    GunArena a(steadyRifle());
+    installRoundHook(a.world, engineTypes());
+    a.world.registry().emplace<Round>(a.world.createWithId(0x40a1d, "Round"));
+    (void)a.stepOnly();   // the round's first step: its start
+    a.frame(kDt);
+    (void)a.stepOnly({actionEvent("fire", true)});
+    Transform t = a.world.registry().get<Transform>(a.player);
+    t.rotation = yawRotation(20.0f) * t.rotation;
+    a.world.setTransform(a.player, t);
+    a.frame(kDt);
+    CHECK(a.motion().kickBack > 0.0f && a.motion().swayYawDeg != 0.0f, "mid-burst: kicked and swayed");
+    const auto ev = a.stepOnly({actionEvent("fire", false), actionEvent("restart", true)});
+    CHECK(only(ev, Kind::Restart).size() == 1, "restart pressed");
+    a.frame(kDt);
+    CHECK(a.motion().kickBack == 0.0f && a.motion().kickPitchDeg == 0.0f && a.motion().swayYawDeg == 0.0f,
+          "the restored round starts with the gun at rest: no kick or sway carried over");
+}
+
+static void t21_view_model_never_in_world() {
+    GunArena a;
+    const uint64_t h0 = hashOf(a.world);
+    const auto saved0 = saveScene(a.world, engineTypes());
+    const glm::mat4 rest = a.drawn(a.gun);
+    auto& ps = a.world.registry().get<PlayerState>(a.player);
+    ps.onGround = true;
+    ps.velocity = {2.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 20; ++i) a.frame(kDt);
+    CHECK(!nearMat(a.drawn(a.gun), rest, 1e-5f), "the gun moved (bob)");
+    const auto saved1 = saveScene(a.world, engineTypes());
+    CHECK(hashOf(a.world) == h0, "world.hash unchanged by the motion");
+    CHECK(saved0 && saved1 && saved0.value() == saved1.value(), "the saved file unchanged");
+    const Snapshot s = takeSnapshot(a.world, engineTypes());
+    a.frame(0.0f);
+    CHECK(nearMat(a.drawn(a.gun), rest, 1e-6f), "a lockstep frame draws the rest pose again");
+    restoreSnapshot(a.world, s);
+    CHECK(hashOf(a.world) == h0, "a snapshot carries none of it");
+}
+
 static int dumpBurst(const char* path) {
     Arena a;
     std::FILE* f = std::fopen(path, "wb");
@@ -1395,5 +1572,13 @@ int main(int argc, char** argv) {
     RUN(fx_hud_hit_marker_and_damage_vignette_timing);
     RUN(fx_hud_dead_and_cleared_screens);
     RUN(fx_hud_without_a_player_is_empty);
+    // test 21: the first-person gun
+    RUN(t21_view_model_rest_pose);
+    RUN(t21_view_model_placement);
+    RUN(t21_sway_lags_and_returns);
+    RUN(t21_bob_follows_distance);
+    RUN(t21_kick_per_round_returns);
+    RUN(t21_view_model_resets_on_restart);
+    RUN(t21_view_model_never_in_world);
     return ohao::test::finish("combat_tests");
 }

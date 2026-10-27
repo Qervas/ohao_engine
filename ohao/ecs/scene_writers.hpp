@@ -42,6 +42,7 @@ void writeFields(const Weapon& v, const Weapon* omit, FieldSink& out);
 void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out);
 void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out);
 void writeFields(const Muzzle& v, const Muzzle* omit, FieldSink& out);
+void writeFields(const ViewModel& v, const ViewModel* omit, FieldSink& out);
 void writeFields(const MoveIntent& v, const MoveIntent* omit, FieldSink& out);
 void writeFields(const Enemy& v, const Enemy* omit, FieldSink& out);
 void writeFields(const EnemyState& v, const EnemyState* omit, FieldSink& out);

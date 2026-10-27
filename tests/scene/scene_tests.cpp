@@ -318,6 +318,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<WeaponState>(r, checked);
     ok &= complete<WeaponTrigger>(r, checked);
     ok &= complete<Muzzle>(r, checked);
+    ok &= complete<ViewModel>(r, checked);
     ok &= complete<MoveIntent>(r, checked);
     ok &= complete<Enemy>(r, checked);
     ok &= complete<EnemyState>(r, checked);
@@ -340,7 +341,7 @@ static void t01_authoring_and_runtime_split() {
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
-                              "WeaponTrigger", "Muzzle", "MoveIntent", "Enemy", "EnemyState", "Round"}) {
+                              "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -574,6 +575,16 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             // Presentation (sub-project 7 step 4).
             if (rng() % 2 && !w.registry().all_of<Muzzle>(e))
                 w.registry().emplace<Muzzle>(e, Muzzle{20.0f * unit(), 0.1f * unit()});
+            // The first-person gun (sub-project 9 step 3).
+            if (rng() % 2 && !w.registry().all_of<ViewModel>(e)) {
+                ViewModel vm;
+                vm.fovDeg = 40.0f + 40.0f * unit();
+                vm.depthScale = 0.1f + 0.5f * unit();
+                vm.swayDegPerDeg = 0.2f * unit();
+                vm.kickBack = 0.05f * unit();
+                vm.kickReturnPerSec = 20.0f * unit();
+                w.registry().emplace<ViewModel>(e, vm);
+            }
             // Enemies (sub-project 7 step 2).
             if (rng() % 2 && !w.registry().all_of<MoveIntent>(e))
                 w.registry().emplace<MoveIntent>(e, MoveIntent{{unit() * 2.0f - 1.0f, unit()}, 90.0f * unit(),

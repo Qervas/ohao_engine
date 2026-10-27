@@ -120,6 +120,11 @@ public:
     // consumed it); lockstep and headless hosts leave it at 0.
     void setPendingLook(glm::vec2 units) noexcept { m_pendingLook = units; }
     [[nodiscard]] glm::vec2 pendingLook() const noexcept { return m_pendingLook; }
+    // The wall time (s) since the last frame a realtime host drew, for presentation that moves at
+    // render rate (the gun's sway, bob and kick, ecs/view_model.hpp). 0, the default, is a lockstep
+    // or headless frame: presentation at rest, so captures stay the step's.
+    void setPresentationDt(float seconds) noexcept { m_presentationDt = seconds; }
+    [[nodiscard]] float presentationDt() const noexcept { return m_presentationDt; }
     // Debug builds: before running sync systems, sync() checks every untagged entity's
     // WorldTransform against its local Transform (verifyTransforms) and logs the first
     // nonzero result once per World. This is that result (0: none seen; always 0 in
@@ -148,6 +153,7 @@ private:
     bool m_bindingsDirty{false};
     float m_renderAlpha{1.0f};
     glm::vec2 m_pendingLook{0.0f};
+    float m_presentationDt{0.0f};
     uint64_t m_nextSeq{0};
     std::size_t m_transformMismatches{0};
 };

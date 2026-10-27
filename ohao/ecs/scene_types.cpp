@@ -338,6 +338,25 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("intensity", &Muzzle::intensity).doc("The Light's intensity while the flash is on").unitless()
             .min(0.0).max(100000.0)
         .field("time", &Muzzle::time).doc("How long the flash stays on after a round").unit("s").min(0.0).max(1.0);
+    r.type<ViewModel>("ViewModel").component().host(makeComponentOps<ViewModel>())
+        .doc("A first-person gun, on its root below the camera's entity: its subtree is drawn remapped in view space "
+             "(toward the eye by depthScale, as if through a fovDeg lens, so it never reaches a wall) and moved at render "
+             "rate by sway, bob and kick. Presentation only: the motion is never saved or hashed, and lockstep and "
+             "headless frames draw the rest pose.")
+        .field("fovDeg", &ViewModel::fovDeg).doc("The lens the gun is drawn through").unit("deg").min(10.0).max(170.0)
+        .field("depthScale", &ViewModel::depthScale).doc("Shrink toward the eye in view space").unitless().min(0.01)
+            .max(1.0)
+        .field("swayDegPerDeg", &ViewModel::swayDegPerDeg).doc("Lag per degree the view turns").unitless().min(0.0)
+            .max(1.0)
+        .field("swayMaxDeg", &ViewModel::swayMaxDeg).doc("The most the sway lags").unit("deg").min(0.0).max(45.0)
+        .field("swayReturnPerSec", &ViewModel::swayReturnPerSec).doc("How fast the sway returns (exponential rate)")
+            .unit("Hz").min(0.0).max(1000.0)
+        .field("bobAmplitude", &ViewModel::bobAmplitude).doc("Up and down while walking").unit("m").min(0.0).max(0.5)
+        .field("bobStride", &ViewModel::bobStride).doc("Walked a bob cycle").unit("m").min(0.01).max(100.0)
+        .field("kickBack", &ViewModel::kickBack).doc("Back a round").unit("m").min(0.0).max(1.0)
+        .field("kickPitchDeg", &ViewModel::kickPitchDeg).doc("Up a round").unit("deg").min(0.0).max(45.0)
+        .field("kickReturnPerSec", &ViewModel::kickReturnPerSec).doc("How fast the kick returns (exponential rate)")
+            .unit("Hz").min(0.0).max(1000.0);
     r.type<WeaponTrigger>("WeaponTrigger").component().host(makeComponentOps<WeaponTrigger>())
         .doc("The trigger of a weapon that is not a player's: an AI, a turret or an agent pulls it.")
         .field("pull", &WeaponTrigger::pull).doc("Held")

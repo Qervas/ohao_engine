@@ -6,6 +6,7 @@
 #include "ecs/impact_marks.hpp"
 #include "ecs/round_hook.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/view_model.hpp"
 #include "ecs/world.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -420,6 +421,8 @@ CombatSystem& installCombat(World& world) {
     // Impact marks are taken from the log at the step they happen, against the step's poses, so
     // a host whose renderer starts late (a headless capture) draws the marks a window drew.
     world.addSimulate("impact_marks", [](World& w, float) { impactMarksOf(w).observe(w); });
+    // The first-person gun's placement and motion (presentation, render rate).
+    installViewModel(world);
     return *system;
 }
 

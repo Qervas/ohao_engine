@@ -17,6 +17,7 @@
     "PlayerController": 1,
     "Round": 1,
     "Transform": 1,
+    "ViewModel": 1,
     "Weapon": 1
   },
   "entities": [
@@ -40,13 +41,14 @@
       "Transform": { "position": [0.22, -0.21, -0.26] },
       "Parent": { "entity": "5c0b1a7e00000002" },
       "MeshSource": { "source": { "BoxPrim": { "lo": [-0.016, -0.026, -0.24], "hi": [0.016, 0.018, 0], "color": [0.09, 0.09, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.09, 0.09, 0.1], "roughness": 0.45, "metallic": 0.6 }
+      "MaterialOverride": { "baseColor": [0.09, 0.09, 0.1], "roughness": 0.45, "metallic": 0.6 },
+      "ViewModel": {}
     },
     {
       "id": "5c0b1a7e00000005",
       "Name": { "value": "Muzzle" },
-      "Transform": { "position": [0.22, -0.2, -0.52] },
-      "Parent": { "entity": "5c0b1a7e00000002" },
+      "Transform": { "position": [0, 0.01, -0.26] },
+      "Parent": { "entity": "5c0b1a7e00000004" },
       "Light": { "color": [1, 0.72, 0.38], "intensity": 0, "range": 6, "radius": 0.03, "castShadows": false },
       "Muzzle": {}
     },
