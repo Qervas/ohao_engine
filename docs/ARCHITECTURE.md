@@ -91,7 +91,13 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     shooter, not triggers) -> Health of what it hit or
                     its ancestor; recoil -> PhysicsScene::turnPlayer;
                     WeaponState written; shot/hit/damage/death/reload
-                    events (combatEvents(world), a log of 1,024)
+                    events (combatEvents(world), a log of 1,024); last
+                    the round (a world with Round and the RoundHook       RoundHook: api::Session
+                    api::Session installs): round_start and a snapshot   (ecs::installRoundHook)
+                    at its first step's end; the player dead for
+                    restartDelay, or `restart` pressed -> the snapshot
+                    restored at this step's end (restart); every Enemy
+                    dead -> win, then waits for `restart`
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
   runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,

@@ -370,6 +370,42 @@ Each step ends with the engine running, every gate green, a change record
 - The play scene's enemies: `5c0b1a7e00000010` EnemyA and `…20` EnemyB, each with a red box
   body and a head as children, weapon seeds 17 and 29, recoil 0.
 
+## As built (step 3)
+
+- `Round` is a saved singleton (`restartDelay` 3 s, `restart` "restart"); the play scene puts
+  it on its Controls entity and binds `restart` to Enter.
+- `RoundHook` (`ohao/ecs/round_hook.hpp`: `save`, `restore`, type-erased snapshots) lives in the
+  registry's context. `ecs::installRoundHook(world, types)` (`ecs/snapshot.cpp`) is the one
+  implementation (`takeSnapshot`/`restoreSnapshot`, physics' `SnapshotHook` included);
+  `api::Session`'s constructor installs it, so every host that has a session (the CLI, `ohao
+  serve`, `LiveHost`, `ohao_game`) has rounds. A world with a `Round` and no hook warns once and
+  runs no round.
+- The round's last phase is in the combat step, after the AI and the weapons: the first step
+  with a `Round` pushes `round_start` and snapshots the world at that step's end, so the start
+  is the world after that step (enemies already looking). A restart restores it at the end of
+  the step that triggers it (`restart` pressed in any phase, or the player dead for
+  `restartDelay`: 180 steps at 60 Hz), so the sync systems after it see the restored world and
+  `world.hash` after that step equals the start's.
+- The player is the input-driven character with the lowest id. Dead (health 0) it neither
+  walks, turns, jumps (physics skips its input) nor fires; it stands where it died.
+- Every `Enemy` dead (the player alive) pushes `win` once; the round then waits for `restart`
+  (no automatic restart after a win).
+- `CombatSystem::round()` gives `{started, phase (Playing, Dead, Won), restartIn, restarts,
+  lastRestartMs}` (runtime; the log and the counter survive restarts).
+- A dead enemy's character is parked, not destroyed: when its `PlayerController` goes, the
+  character's inner body leaves the broadphase (`IPhysicsBackend::setCharacterInWorld`; rays,
+  bodies and characters pass where it was) and the scene keeps it with the controller it was
+  made for. When a restore puts the controller back, the same character returns, so the
+  snapshot's simulation (bodies, contact cache, characters) restores and a won round's restart
+  replays bit for bit. A destroyed entity's parked character goes at the next sync. A character
+  a restore makes (none parked, or a different controller) starts where the restored entity
+  stands, facing its restored yaw and its head's pitch, not at a spawn. Found by the look shots:
+  a won round's restart put the enemies back at their spawn yaw (one step's turn off), and with
+  new characters the resting crates replayed 3e-5 m off.
+- `round_restart_ms` measures `hook->restore` alone (the components' restore; the bodies'
+  return happens in the next sync): median 0.0060 ms over 100 restarts in the step's gate (a
+  noisy run), against 2 ms.
+
 ## Rulings for Frank
 
 Judgment calls made without Frank, each conservative; any can be reversed.
@@ -417,3 +453,14 @@ Judgment calls made without Frank, each conservative; any can be reversed.
 22. **Step 2: `scene.load` builds bodies,** so snapshots taken right after a load replay
     exactly (an SP6 fix the enemies exposed).
 23. **Step 2: characters block each other;** enemies can shove the player (and each other).
+24. **Step 3: the round starts at the end of its first step and a restart lands at the end of
+    the step that triggers it,** both inside the combat step (the last simulate system), so the
+    restored world is what the sync systems and the next step see.
+25. **Step 3: a won round waits for `restart`;** only death restarts on its own.
+26. **Step 3: `api::Session` installs the `RoundHook`,** so every host with a session has rounds
+    with no per-host code; a bare `World` (tests, benches) installs it itself.
+27. **Step 3: a removed `PlayerController`'s character is parked out of the world, not
+    destroyed,** so a restore brings back the same character and replays exactly. A parked
+    character costs a Jolt body outside the broadphase until its entity is destroyed.
+28. **Step 3: `restart` pressed while playing restarts too** (the spec named it for after death
+    and after a win; a mid-round restart is the same restore).
