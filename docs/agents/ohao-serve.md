@@ -11,8 +11,8 @@ session. `python tests/docs/check_docs.py` runs every `console` command here.
 line, on stdin/stdout. MCP clients `initialize`, then call tools: one per method, named
 with `.` → `_` (`world.step` is `world_step`), each with its params struct's JSON Schema
 as `inputSchema`. Native clients call the method names directly. Connecting costs
-`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (14,543 bytes
-for 22 tools).
+`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (23,419 bytes
+for 35 tools; the cap is 24 KB).
 
 | Host | Command | For |
 |---|---|---|
@@ -210,8 +210,44 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","WeaponState":{"ammo":27,"shots":3},"PlayerState":{"pitchDeg":0}}],"count":1}}
 ```
 
-Combat's methods (`combat.info`, `combat.events`, `combat.damage`) come with SP7 step 5; until
-then read a fight through `world.query` on `WeaponState` and `Health`.
+## Fight
+
+The play scene is a round: two enemies (EnemyA `5c0b1a7e00000010`, EnemyB `5c0b1a7e00000020`)
+that see the player, chase and shoot in bursts; the player dead, the round restarts 3 s later
+at its start; both enemies dead, it is won and waits for `restart` (Enter). Three tools read and
+drive it, beside `input.inject` (fire with `fire` down and up, `reload`, `restart`):
+
+- `combat_info {}`: the combat steps, the round (`phase` playing, dead or won, `restartIn` while
+  dead, `restarts`) and every combatant in id order: `health`, `max`, `dead`, `pos` (its feet),
+  `weapon` (`ammo`, `magazine`, `reloading`, `bloomDeg`, `kickDeg`, `shots`), `enemy` (`state`
+  idle, chase, attack or dead; `lastSeen`, where it last saw the player). Aim with
+  `player_teleport {pos: its own pos, yawDeg}` toward an enemy's `pos`, then fire.
+- `combat_events {since, max}`: shots (eye, `dir`, `coneDeg`), hits (what, where, `surface`),
+  damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`;
+  read on with the reply's `next`, as `physics_events`.
+- `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
+  entity's `Health` or its nearest ancestor's (an enemy's body box is fine); a dead enemy lies
+  down at the next step. 0 to 10,000; `E_NOT_FOUND` for what has no `Health`.
+
+Kill both enemies by hand and read what the round says:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/fight.jsonl
+{"method":"scene.load","result":{"entities":19}}
+{"method":"world.step","result":{"frame":1}}
+{"method":"combat.damage","result":{"entity":"5c0b1a7e00000010","name":"EnemyA","health":40,"max":100,"dead":false,"taken":60}}
+{"method":"combat.damage","result":{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"taken":40}}
+{"method":"combat.damage","result":{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"taken":100}}
+{"method":"world.step","result":{"frame":2}}
+{"method":"combat.info","result":{"steps":2,"round":{"started":true,"phase":"won","restarts":0},"combatants":[{"entity":"5c0b1a7e00000001","name":"Player","player":true,"health":100,"max":100,"dead":false,"pos":[1.5,0,2.2],"weapon":{"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0}},{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"pos":[-2.5,0.6,-2],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}},{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"pos":[3,0.806,-1.999],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}}]}}
+{"method":"combat.events","result":{"events":[{"seq":1,"step":1,"kind":"round_start"},{"seq":2,"step":1,"kind":"damage","source":"5c0b1a7e00000001","sn":"Player","target":"5c0b1a7e00000010","tn":"EnemyA","amount":60,"health":40},{"seq":3,"step":1,"kind":"damage","target":"5c0b1a7e00000010","tn":"EnemyA","amount":40,"health":0},{"seq":4,"step":1,"kind":"death","target":"5c0b1a7e00000010","tn":"EnemyA"},{"seq":5,"step":1,"kind":"damage","target":"5c0b1a7e00000020","tn":"EnemyB","amount":100,"health":0},{"seq":6,"step":1,"kind":"death","target":"5c0b1a7e00000020","tn":"EnemyB"},{"seq":7,"step":2,"kind":"win"}],"next":7}}
+```
+
+Step once before damaging anyone: the round's start is the world at the end of its first step,
+and a restart goes back there. A real fight (`tests/serve/check_live.py`'s `fight`) faces each
+enemy with `player_teleport` and fires bursts of three (`fire` down for 13 steps) until
+`combat_info` says it is dead; the same fight in a window and headless reaches the same
+`world_hash` and HUD picture.
 
 To see a fight as the player does, capture with `hud: true` (deferred frames only): health and
 its bar bottom left, the magazine bottom right, the crosshair opened by the weapon's bloom, red
@@ -337,7 +373,9 @@ to the first → load the blockout level → `level_info` → a ray down at the 
 `physics_info` → lift and drop the crates → `physics_events` → load the play scene →
 `player_info` → look → snapshot → walk, turn by the mouse and jump → `player_info` and the
 footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
-same hash and the same picture.
+same hash and the same picture → load the play scene again → `combat_info` → shoot EnemyA
+down → `combat_events` → look with the HUD → `combat_damage` kills the player → the restart
+→ clear the room → won.
 
 ```console
 $ python tests/serve/e2e_mcp.py > /dev/null   # gpu

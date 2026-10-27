@@ -286,7 +286,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 32 tools
+0 35 tools
 ```
 
 ## Methods
@@ -328,6 +328,9 @@ catalogue (`schema.get`) gives each method's params as a JSON Schema.
 | `physics.contacts` | `{entity?, max = 32}` → `{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}` | The body pairs touching now (resting ones and sleeping ones included) and bodies inside triggers, by `a`'s id then `b`'s, as their begin event named them; `since` is the physics step the pair began in. `entity`: only its pairs (`E_NOT_FOUND` for an entity without a body). `max` 1–64; `more` counts the rest. |
 | `player.info` | `{entity?}` → `{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}` | The player (the world's only one, or the one named): its feet in world space (0.1 mm), facing and look (0.01°), velocity (1 mm/s), whether it stands on walkable `ground`, the body it stands `on` (name, else id) and its `surface`, footsteps since it was made. `E_STATE` with no player (or no physics); `E_NOT_FOUND` for an entity that is not one; two players and no `entity` is `E_COMMAND`. ~170 bytes. |
 | `player.teleport` | `{entity?, pos, yawDeg?}` → as `player.info` | Puts the player's feet at `pos` (each axis within ±100 km, else `E_RANGE`), at rest, facing `yawDeg` (−360..360; absent: as it faced); its ground is found there at once. Changes the world. |
+| `combat.info` | `{}` → `{steps, round?: {started, phase, restartIn?, restarts}, combatants: [{entity, name, player?, health?, max?, dead?, pos, weapon?: {ammo, magazine, reloading, bloomDeg, kickDeg, shots}, enemy?: {state, lastSeen?}}], more?}` | The fight: combat steps run, the round (a world with `Round`: `phase` playing, dead or won; `restartIn` while dead), and every entity with `Health` or a `Weapon` in id order (16, then `more`): `pos` its feet (1 mm), `enemy.state` idle, chase, attack or dead, `lastSeen` where it last saw the player. Answers right after `scene.load` (before a step a weapon reads full). |
+| `combat.events` | `{since = 0, max = 32}` → `{events: [{seq, step, kind, source?, sn?, target?, tn?, …}], next, dropped?}` | The combat log, as `physics.events`: `shot` (`point` the eye, `dir`, `coneDeg`), `hit` (`target` the body hit, `point`, `normal`, `dist`, `surface`), `damage` (`amount`, `health` after), `death`, `reload` / `reloaded` (`ammo`), `round_start`, `restart`, `win`; `sn`/`tn` the names. `max` 1–64. |
+| `combat.damage` | `{entity, amount, source?}` → `{entity, name, health, max, dead, taken}` | Takes `amount` (0–10,000, else `E_RANGE`) from the entity's `Health` or its nearest ancestor's, as a round does: damage and death events; a dead enemy lies down at the next step; the dead take none. `entity` is the one with the `Health`. Changes the world. |
 
 `world.step` runs physics: each step propagates transforms, brings bodies up to date, steps
 Jolt (substeps of at most 1/60 s), writes awake dynamic bodies back to their `Transform`s and
@@ -337,7 +340,9 @@ players at their spawns. A snapshot carries the simulation (velocities, sleep, t
 contact cache, the characters), so `world.restore` and the same steps after it reach the same
 `world.hash`. The level and physics query methods bring the level, transforms and bodies up to
 date first (no step, no render), so they answer right after `scene.load` or `world.apply`. A
-host without the level or physics system (none of OHAO's) is `E_STATE`.
+host without the level or physics system (none of OHAO's) is `E_STATE`. `world.step` runs
+combat after physics (rounds, hits, damage, the enemies, the round's restart and win): fire with
+`input.inject` (`fire` down and up), read the fight with `combat.info` and `combat.events`.
 
 ## Edit commands
 
@@ -424,7 +429,7 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `E_RENDER` | `render.capture` failed: no GPU, a failed frame, an unwritable image. Exit code 3. |
 | `E_INTERNAL` | A bug in a tool; the operation did not complete. Exit code 3. |
 | `E_ACCESS` | A path outside the server's sandbox: absolute, with `..`, or a write outside `--out`. |
-| `E_STATE` | A method not allowed in the current time mode or host; `player.*` in a world without a player. |
+| `E_STATE` | A method not allowed in the current time mode or host; `player.*` in a world without a player; `combat.*` in a world without the combat system. |
 | `E_REPLAY` | An input recording that does not match the world it is replayed on. |
 | `E_LEVEL_NODE` | A level node whose transform is not translation, rotation and scale. Exit code 2. |
 | `E_LEVEL_UNSUPPORTED` | A level file that needs Draco or meshopt compression. Exit code 2. |
@@ -440,7 +445,7 @@ derived, appear in the catalogue for reference, and are refused in files and com
 | `W_PHYSICS_PARENT_SCALE` | Warning (`physics.info`): a dynamic body under an unevenly scaled parent; its written-back pose is approximate. |
 | `W_PLAYER_NO_SPAWN` | Warning (`physics.info`): a `PlayerController` in a world with no `SpawnPoint` tagged `player`; it starts where its entity is. |
 | `W_PLAYER_NO_CHARACTER` | Warning (`physics.info`): the physics backend could not make a player's character; it does not move. |
-| `E_NOT_FOUND` | `level.info` / `level.reload`: the world has no level, or the entity named is not one. `player.*`: the entity named is not a player; `physics.contacts`: it has no body. |
+| `E_NOT_FOUND` | `level.info` / `level.reload`: the world has no level, or the entity named is not one. `player.*`: the entity named is not a player; `physics.contacts`: it has no body; `combat.damage`: no such entity, neither it nor an ancestor has `Health`, or no such `source`. |
 | `E_PARAMS` | Params that pass their schema but break the method's rule: `physics.raycast` with a zero `dir`, or `max` outside (0, 100000]. JSON-RPC -32602. |
 
 ## Habits that save tokens and mistakes

@@ -215,11 +215,14 @@ and hashed like the player, and an agent can add one with `entity.create`.
 ## The agent-facing surface (step 5)
 
 Three tools (the 24 KB `tools/list` cap leaves room for about three):
-- `combat.info {}` → the round (state, steps, restarts) and every combatant (id, name, health,
-  max, dead, weapon: ammo, magazine, reloading, bloomDeg, kickDeg, shots; enemy: state,
-  target), in id order.
-- `combat.events {since?, max?}` → the log, as `physics.events`.
-- `combat.damage {entity, amount, source?}` (mutates) → the target's health after; `E_STATE`
+- `combat.info {}` → the combat steps, the round (started, phase, restartIn while dead,
+  restarts) and every combatant (id, name, player?, health, max, dead, pos: its feet; weapon:
+  ammo, magazine, reloading, bloomDeg, kickDeg, shots; enemy: state, lastSeen), in id order, 16
+  listed then `more`. (Corrected in step 5: `pos` added, so an agent can aim from this reply
+  alone, and the enemy's `target`, always the player, is `lastSeen`, where it last saw it.)
+- `combat.events {since?, max?}` → the log, as `physics.events` (seq from 1, since = after).
+- `combat.damage {entity, amount, source?}` (mutates) → the target's health after
+  (`{entity, name, health, max, dead, taken}`, the entity with the `Health`); `E_STATE`
   without combat, `E_NOT_FOUND`, `E_RANGE` for an amount outside 0..10,000.
 Firing is `input.inject` (`fire` down/up), the same path the window takes; no `weapon.fire`.
 
@@ -473,6 +476,38 @@ Each step ends with the engine running, every gate green, a change record
   type `Muzzle` and field `WeaponState.flash` move the schema hash and every `world.hash` in the
   serve and CLI expectations; the play scene has 19 entities (snapshot 36 entities, 9,408 bytes).
 
+## As built (step 5)
+
+- **The methods** (`ohao/api/combat.cpp`): `combat.info`, `combat.events` and `combat.damage` as
+  "The agent-facing surface (step 5)" says. `combat.info` runs the `level`, `player_spawn`,
+  `transform` and `physics` syncs first, so it answers right after `scene.load`; before a
+  weapon's first step it reads a full magazine (what the step will emplace). The play scene's
+  reply is 700 bytes. `combat.events` numbers the log from 1 (the log's seq + 1) and reads after
+  `since`, so it pages exactly as `physics.events`; an event carries `source`/`sn` and
+  `target`/`tn` where it has them and its kind's fields (shot: `point`, `dir`, `coneDeg`; hit:
+  `point`, `normal`, `dist`, `surface`; damage: `amount`, `health`; reload/reloaded: `ammo`).
+  `combat.damage` is a mutating method (it moves `changeCount`, so a lockstep window renders).
+  `combatEventKindName` names the kinds (`shot` … `round_start`, `restart`, `win`).
+- **`tools/list`**: 35 tools, 23,419 bytes (cap 24,576).
+- **Impact marks at the step**: `installCombat` adds the `impact_marks` simulate system after
+  `combat`; marks are measured against the step's poses (Transforms up the chain). The
+  `impact_marks` sync system only draws. Found by check_live's fight: window and headless
+  pictures of the same fought round differed until then; now equal bit for bit.
+- **Restored rotations**: `PhysicsScene`'s `createPlayer`, for an entity a restore put back,
+  keeps the restored rotation (and its head's) when it is the rotation it would write, and
+  `rotNow` is a copy, not a reference into the storage `writePlayer` rewrites. Found by
+  `sp7_t18_combat_damage_kills`: the play scene's enemies face exactly 180 degrees; after a won
+  round the restart wrote yaw +180 for a start stored at -180. `t17_restart_after_kills_keeps_
+  restored_rotations` holds it.
+- **Tests**: `api_tests` `sp7_t18_combat_info`, `_events_cursor`, `_damage_kills`,
+  `_params_refused`; `tests/serve/sessions/combat.jsonl`; check_serve's examples; check_live sp7
+  test 18 (a fight in a hidden window and the same headless: the same `world.hash`,
+  `combat.info`, events and HUD picture); e2e_mcp's fight leg over MCP;
+  `combat_tests` `t17_restart_after_kills_keeps_restored_rotations`.
+- **The done demo**: look shots `step5_demo_00..07` and `step5_demo_strip.png`, a round played
+  by an agent through `ohao serve --window`: engage, fire, EnemyA down, hit by EnemyB, dead,
+  the restart, the room cleared, won.
+
 ## Rulings for Frank
 
 Judgment calls made without Frank, each conservative; any can be reversed.
@@ -550,4 +585,26 @@ Judgment calls made without Frank, each conservative; any can be reversed.
 35. **Step 4: weapon sounds share the footsteps' switch** (`LiveConfig::footsteps`, `--mute`).
 36. **Step 4: impact marks and the HUD read the combat log from its oldest event,** so a host
     whose renderer starts late (a headless host's first capture) still shows the hits so far
-    (up to the log's 1,024 events).
+    (up to the log's 1,024 events). For marks, superseded by ruling 39.
+37. **Step 5: `combat.info` gives each combatant's `pos` (its feet) and an enemy's `lastSeen`**
+    (the spec's `target`, which is always the player): an agent aims from one reply.
+38. **Step 5: `combat.damage` acts as a round does:** on the entity's `Health` or its nearest
+    ancestor's (an enemy's body box reaches the enemy), damage and death events, the dead take
+    none; a dead enemy lies down at the next step (the AI's), not inside the call. No undo
+    (`world.apply` has inverses; this is a gameplay act, as `player.teleport` is).
+39. **Step 5: impact marks are taken at the step** (an `impact_marks` simulate system after
+    `combat`, added by `installCombat`) against the step's poses, not by the renderer when it
+    first draws: a headless host's renderer starts at its first capture, and marks taken then
+    were attached by the targets' poses at that time (a tipped-over enemy carried its marks
+    elsewhere). The renderer only draws the pool.
+40. **Step 5: a restored character keeps its restored rotation bit for bit** (a fix in the
+    physics scene, not in combat): the restart after a win was one quaternion sign off the round
+    start's `world.hash`.
+41. **Step 5: the done demo is played over MCP through `ohao serve --window`** (the live host
+    `ohao_game` runs), by the combat tools and injected input: a script cannot hold keys in
+    `ohao_game`. `ohao_game` itself ran the play scene for 600 frames under validation (0
+    messages); the by-hand checklist is in the change record.
+42. **Step 5: damage before the round's first step is part of the round's start.** The round
+    snapshots the world at the end of its first step; a player killed before it starts the
+    round dead and restarts dead. Left as it is (a round starts where its world is); documented
+    in the guide ("step once before damaging anyone").

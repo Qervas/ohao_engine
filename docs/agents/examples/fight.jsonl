@@ -1,0 +1,7 @@
+{"method":"world.step","params":{"frames":1}}
+{"method":"combat.damage","params":{"entity":"5c0b1a7e00000010","amount":60,"source":"5c0b1a7e00000001"}}
+{"method":"combat.damage","params":{"entity":"5c0b1a7e00000011","amount":60}}
+{"method":"combat.damage","params":{"entity":"5c0b1a7e00000020","amount":100}}
+{"method":"world.step","params":{"frames":1}}
+{"method":"combat.info"}
+{"method":"combat.events","params":{"since":0,"max":8}}

@@ -100,6 +100,11 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     dead -> win, then waits for `restart`; within each
                     weapon, a round lights its Muzzle light for
                     Muzzle.time (WeaponState.flash), then intensity 0
+    impact_marks    the step's hits -> the World's mark pool (64, the   installed by installCombat
+                    oldest reused), each measured against the step's
+                    pose of what it hit, so every host, its renderer
+                    made early or late, holds the same marks; a restart
+                    clears them; never in the registry
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game):
   runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,
@@ -129,10 +134,9 @@ World::sync()
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
                   setViewerPosition)
-  impact_marks    the combat log's hits -> up to 64 mark quads        installed by a host with
-                  (RenderScene instances, never in the registry),      a renderer
-                  each following the entity it hit; a restart clears   (installImpactMarks)
-                  them
+  impact_marks    the mark pool -> up to 64 quads (RenderScene         installed by a host with
+                  instances, never in the registry), each following    a renderer
+                  the entity it hit                                    (installImpactMarks)
 host: applySceneView (the first active Camera, at its RenderPose if  runtime/scene_view_apply.hpp
       any; Environment -> renderer camera, HDRI)
 VulkanRenderer::render()
