@@ -1000,7 +1000,7 @@ struct PhysicsScene::Impl {
         const bool existed = old != players.end();
         float oldPitch = existed ? old->second.pitchDeg : 0.0f;
         // Its yaw, unless its rotation was edited too.
-        const glm::quat& rotNow = reg.get<Transform>(e).rotation;
+        const glm::quat rotNow = reg.get<Transform>(e).rotation;   // a copy: writePlayer rewrites it
         const float oldYaw = !existed ? 0.0f
                              : sameRotation(rotNow, old->second.writtenRot, 1e-4f) ? old->second.yawDeg
                                                                                    : yawOf(rotNow);
@@ -1069,7 +1069,24 @@ struct PhysicsScene::Impl {
         p.airTop = pos.y;
         standWhereItIs(p);   // the backend found its ground at creation
         movers.erase(e);     // placed, not moved: nothing to draw between
+        const entt::entity headNow = restored ? headOf(e) : entt::entity{entt::null};
+        const glm::quat headRotNow = headNow != entt::null ? reg.get<Transform>(headNow).rotation : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         writePlayer(e, p, pos, glm::vec3(0.0f), p.grounded, false);
+        if (restored) {
+            // A restore's entity keeps the rotation it was restored with, bit for bit: the yaw and
+            // pitch read back from it give the same rotation but not always the same quaternion (a
+            // yaw of -180 reads back as +180), and world.hash after a restart is the round start's.
+            if (sameRotation(rotNow, p.writtenRot, 1e-4f) && rotNow != p.writtenRot) {
+                const glm::quat keep = rotNow;
+                p.writtenRot = keep;
+                writePose(e, [&](Transform& t) { t.rotation = keep; });
+            }
+            if (headNow != entt::null && headNow == p.head && sameRotation(headRotNow, p.headRot, 1e-4f) &&
+                headRotNow != p.headRot) {
+                p.headRot = headRotNow;
+                writePose(headNow, [&](Transform& t) { t.rotation = headRotNow; });
+            }
+        }
         players[e] = p;
     }
 

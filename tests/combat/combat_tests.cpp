@@ -944,6 +944,40 @@ static void t17_restart_after_win_replays_identically() {
     CHECK(hashOf(a.world) == h1, "and the same world.hash");
 }
 
+// The play scene's enemies stand at their spawns' yaw, exactly 180 degrees. A restart that brings
+// them back from the dead keeps the rotation the snapshot restored, bit for bit: the yaw read back
+// from it is +180 where the round start held -180 (the same rotation, another quaternion), and
+// world.hash after the restart step must be the round start's (found by step 5's api tests).
+static void t17_restart_after_kills_keeps_restored_rotations() {
+    World w;
+    w.seedIds(7);
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    ohao::level::installLevels(w, files, engineTypes());
+    installPhysics(w, files);
+    CombatSystem& combat = installCombat(w);
+    installRoundHook(w, engineTypes());
+    const auto loaded = loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
+                                      engineTypes());
+    CHECK(loaded, "blockout_play.scene.json loads");
+    if (!loaded) return;
+    for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);   // as scene.load does
+    const auto step = [&](int n, std::vector<InputEvent> first = {}) {
+        for (int i = 0; i < n; ++i) {
+            w.stepInput(i == 0 ? first : std::vector<InputEvent>{});
+            w.update(kDt);
+        }
+    };
+    step(1);
+    const uint64_t h0 = hashOf(w);   // the round's start
+    for (const uint64_t id : {0x5c0b1a7e00000010ull, 0x5c0b1a7e00000020ull})
+        (void)combat.damage(w.findById(id), 1000.0f, entt::null, {});
+    step(2);
+    CHECK(combat.round().phase == RoundPhase::Won, "both enemies dead: won");
+    step(1, {actionEvent("restart", true)});
+    CHECK(combat.round().restarts == 1, "restart: the round restarted");
+    CHECK(hashOf(w) == h0, "the world after the restart step is the round's start: world.hash, rotations bit for bit");
+}
+
 // ---- step 4: presentation (no numbered test in the spec; fx_*) ------------------------------------
 // docs/specs/2026-10-27-combat-design.md, "Presentation (step 4)": the muzzle flash, impact marks,
 // the HUD's content. The GPU side (the hud pass) is in engine_tests, sounds and the capturing click
@@ -1350,6 +1384,7 @@ int main(int argc, char** argv) {
     RUN(t17_no_round_no_restart);
     RUN(t17_restart_replays_identically);
     RUN(t17_restart_after_win_replays_identically);
+    RUN(t17_restart_after_kills_keeps_restored_rotations);
     RUN(fx_muzzle_flash_on_for_flash_time);
     RUN(fx_impact_pool_caps_and_reuses_oldest);
     RUN(fx_marks_from_hits_never_saved_or_hashed);
