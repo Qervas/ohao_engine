@@ -1,23 +1,30 @@
 // feel_bench -- input-to-present latency and frame pacing in a real window (sub-project 9 spec,
 // "Performance budgets"). For each present mode: a visible window plays the play scene for a
 // scripted minute (walking back and forth, firing bursts, the enemies fighting back) while a mouse
-// movement is fed every 50 ms as a device's would be; the window's frame log gives each movement's
-// latency (poll to the present of the first frame showing it in full) and each frame's time and
-// steps. A hidden window may never present, so the window is shown.
+// movement is fed every 40-60 ms as a device's would be; the window's frame log gives each movement's
+// latency (poll to the present of the first frame showing it in full) and each frame's time, phases
+// and steps. A hidden window may never present, so the window is shown.
 //
 //   feel_bench [--check budgets.json] [--out build/feel_bench.json] [--seconds 60] [--warmup 2]
-//              [--modes immediate,mailbox,fifo] [--csv-dir build]
+//              [--modes immediate,mailbox,fifo] [--csv-dir build] [--frames-ahead N]
 //
-// Budgets (tests/bench/feel_budgets.json): look_latency_ms (median) and frame_p99_over_median, each
-// measured in the present mode it names and gated from the build step it names; the latency budget
-// is gated only on a display of at least minRefreshHz with present wait, else it is reported pending.
-// Exit 0: no gated budget missed; 1: one did, or a run measured nothing.
+// Per mode, feel_bench_<mode>.csv (every frame: time, steps, phases, the latency of each movement it
+// showed) and feel_bench_<mode>_events.csv (the round's deaths, restarts, wins and reloads), on one
+// clock. Budgets (tests/bench/feel_budgets.json): look_latency_ms (median) and frame_p99_over_median,
+// each measured in the present mode it names and gated from the build step it names; the latency
+// budget is gated only on a display of at least minRefreshHz with present wait, else it is reported
+// pending. Other processes' CPU is recorded over each measured minute (dwm.exe aside): beside more than
+// half a core, a gated budget is `noisy`. Exit 0: no gated budget missed; 1: one did on a quiet run,
+// or a run measured nothing; 2: noisy (tools/check.py reruns it).
 
 #include "common/harness.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/scene_types.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_log.hpp"
 #include "runtime/live_host.hpp"
+
+#include "bench_env.hpp"   // windows.h: after the engine's headers (its OPAQUE macro)
 
 #include <nlohmann/json.hpp>
 
@@ -54,8 +61,15 @@ struct ModeRun {
     bool presentWait{false};
     double seconds{0.0};
     std::vector<FrameStamps> frames;   // after the warm-up
+    // The round's turns (deaths, restarts, wins, reloads) by when their step ran: a spike in the
+    // frame CSV read beside what the game did then.
+    std::vector<std::pair<Clock::time_point, std::string>> events;
     std::optional<LatencyStats> latency;
     std::optional<PacingStats> pacing;
+    // Other processes' CPU over the measured minute, the compositor (dwm.exe, which presents this
+    // window) left out: a run beside busy processes is noisy (spec ruling 17).
+    double externalCorePct{0.0};
+    std::vector<bench::BusyProcess> busy;
 };
 
 InputEvent axis(const char* name, float value) {
@@ -74,7 +88,7 @@ InputEvent action(const char* name, bool down) {
 }
 
 // One present mode's scripted minute.
-ModeRun run(PresentMode mode, double seconds, double warmup) {
+ModeRun run(PresentMode mode, double seconds, double warmup, int framesAhead) {
     ModeRun r;
     r.want = mode;
     LiveConfig cfg;
@@ -86,6 +100,7 @@ ModeRun run(PresentMode mode, double seconds, double warmup) {
     cfg.timeMode = TimeMode::realtime;
     cfg.root = OHAO_SOURCE_DIR;
     cfg.frameLogCapacity = 1u << 20;
+    cfg.framesAhead = framesAhead;
     LiveHost host;
     if (!host.initialize(cfg, engineTypes())) return r;
     const std::string scene = std::string(OHAO_SOURCE_DIR) + "/assets/scenes/blockout_play.scene.json";
@@ -115,9 +130,15 @@ ModeRun run(PresentMode mode, double seconds, double warmup) {
     double nextMouse = 0.0;
     float forward = -2.0f;
     bool firing = false;
+    bench::LoadMonitor load;
+    bool loadStarted = false;
     GameHooks hooks;
     hooks.update = [&](LiveHost& h, float, float) {
         const double t = std::chrono::duration<double>(Clock::now() - start).count();
+        if (t >= warmup && !loadStarted) {
+            load.start();
+            loadStarted = true;
+        }
         if (t >= warmup + seconds) {
             h.quit();
             return;
@@ -139,7 +160,24 @@ ModeRun run(PresentMode mode, double seconds, double warmup) {
         if (fire != firing) events.push_back(action("fire", firing = fire));
         h.feedEvents(events);
     };
+    hooks.fixedUpdate = [&](LiveHost& h, float) {
+        for (const ecs::CombatEvent& e : ecs::combatEvents(h.world()))
+            if (e.kind != ecs::CombatEvent::Kind::Shot && e.kind != ecs::CombatEvent::Kind::Hit &&
+                e.kind != ecs::CombatEvent::Kind::Damage)
+                r.events.emplace_back(Clock::now(), ecs::combatEventKindName(e.kind));
+    };
     (void)host.run(hooks);
+    if (loadStarted) {
+        double total = 0.0;
+        for (bench::BusyProcess& p : load.stop(0.0, &total)) {
+            if (p.name == "dwm.exe") {
+                total -= p.corePct;
+                continue;
+            }
+            if (p.corePct >= 5.0) r.busy.push_back(std::move(p));
+        }
+        r.externalCorePct = std::max(total, 0.0);
+    }
 
     r.ran = true;
     r.got = host.renderer().presentMode();
@@ -164,19 +202,35 @@ double ms(Clock::duration d) { return std::chrono::duration<double, std::milli>(
 
 void writeCsv(const std::filesystem::path& path, const ModeRun& r) {
     std::ofstream out(path, std::ios::binary);
-    out << "t_ms,frame_ms,steps,discarded,latency_ms,present_wait\n";
+    // A frame's phases (for reading a spike: frame_ms is the time since the previous frame began, so
+    // the phase that took it is the previous row's): start to poll (the late input wait), poll to view
+    // (the steps and sync), view to submit (recording), submit to present.
+    out << "t_ms,frame_ms,steps,discarded,latency_ms,present_wait,poll_ms,view_ms,submit_ms,present_ms\n";
     if (r.frames.empty()) return;
     const Clock::time_point t0 = r.frames.front().start;
     for (const FrameStamps& f : r.frames) {
         const std::string t = std::to_string(ms(f.start - t0)), ft = std::to_string(f.frameMs);
+        const std::string phases = std::to_string(ms(f.poll - f.start)) + ',' + std::to_string(ms(f.view - f.poll)) + ',' +
+                                   std::to_string(ms(f.submit - f.view)) + ',' +
+                                   (f.present ? std::to_string(ms(*f.present - f.submit)) : std::string());
         if (f.looks.empty() || !f.present) {
-            out << t << ',' << ft << ',' << f.steps << ',' << f.discardedSteps << ",," << (f.presentWait ? 1 : 0) << '\n';
+            out << t << ',' << ft << ',' << f.steps << ',' << f.discardedSteps << ",," << (f.presentWait ? 1 : 0) << ','
+                << phases << '\n';
             continue;
         }
         for (const LookSample& l : f.looks)
             out << t << ',' << ft << ',' << f.steps << ',' << f.discardedSteps << ',' << ms(*f.present - l.poll) << ','
-                << (f.presentWait ? 1 : 0) << '\n';
+                << (f.presentWait ? 1 : 0) << ',' << phases << '\n';
     }
+}
+
+void writeEventsCsv(const std::filesystem::path& path, const ModeRun& r) {
+    std::ofstream out(path, std::ios::binary);
+    out << "t_ms,event\n";
+    if (r.frames.empty()) return;
+    const Clock::time_point t0 = r.frames.front().start;
+    for (const auto& [at, name] : r.events)
+        if (at >= t0) out << ms(at - t0) << ',' << name << '\n';
 }
 
 struct Verdict {
@@ -185,17 +239,29 @@ struct Verdict {
     int from{0};
 };
 
+// A frame over this is a stall (the presentation engine holding the window's images; spec "As built
+// (step 2)"): counted beside the pacing numbers.
+constexpr double kStallMs = 100.0;
+// Other processes using more than half a core in total make a run noisy (the other benches' rule).
+constexpr double kMaxExternalCorePct = 50.0;
+
+int stalls(const ModeRun& r) {
+    return static_cast<int>(std::count_if(r.frames.begin(), r.frames.end(), [](const FrameStamps& f) { return f.frameMs > kStallMs; }));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     std::string checkPath, outPath = "build/feel_bench.json", csvDir = "build";
     double seconds = 60.0, warmup = 2.0;
+    int framesAhead = -1;   // LiveConfig::framesAhead: the window's own choice
     std::vector<PresentMode> modes{PresentMode::Immediate, PresentMode::Mailbox, PresentMode::Fifo};
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--check" && i + 1 < argc) checkPath = argv[++i];
         else if (a == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (a == "--csv-dir" && i + 1 < argc) csvDir = argv[++i];
+        else if (a == "--frames-ahead" && i + 1 < argc) framesAhead = std::atoi(argv[++i]);
         else if (a == "--seconds" && i + 1 < argc) seconds = std::max(1.0, std::atof(argv[++i]));
         else if (a == "--warmup" && i + 1 < argc) warmup = std::max(0.0, std::atof(argv[++i]));
         else if (a == "--modes" && i + 1 < argc) {
@@ -213,7 +279,7 @@ int main(int argc, char** argv) {
             }
         } else {
             std::fprintf(stderr, "usage: feel_bench [--check budgets.json] [--out file] [--seconds N] [--warmup N] "
-                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR]\n");
+                                 "[--modes immediate,mailbox,fifo] [--csv-dir DIR] [--frames-ahead N]\n");
             return 1;
         }
     }
@@ -233,7 +299,7 @@ int main(int argc, char** argv) {
     std::printf("feel_bench: the play scene, %.0f s a present mode after %.0f s of warm-up\n", seconds, warmup);
     std::vector<ModeRun> runs;
     for (const PresentMode m : modes) {
-        runs.push_back(run(m, seconds, warmup));
+        runs.push_back(run(m, seconds, warmup, framesAhead));
         const ModeRun& r = runs.back();
         if (!r.ran) {
             std::printf("  %-9s did not run (no window or GPU)\n", std::string(presentModeName(m)).c_str());
@@ -242,6 +308,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         std::filesystem::create_directories(csvDir, ec);
         writeCsv(std::filesystem::path(csvDir) / ("feel_bench_" + std::string(presentModeName(m)) + ".csv"), r);
+        writeEventsCsv(std::filesystem::path(csvDir) / ("feel_bench_" + std::string(presentModeName(m)) + "_events.csv"), r);
         std::printf("  %-9s (surface gave %s, %d Hz, %s)\n", std::string(presentModeName(m)).c_str(),
                     std::string(presentModeName(r.got)).c_str(), r.refreshHz, r.presentWait ? "present wait" : "present call");
         if (r.latency)
@@ -257,9 +324,13 @@ int main(int argc, char** argv) {
                         static_cast<unsigned long long>(r.pacing->steps[0]), static_cast<unsigned long long>(r.pacing->steps[1]),
                         static_cast<unsigned long long>(r.pacing->steps[2]), static_cast<unsigned long long>(r.pacing->steps[3]),
                         static_cast<unsigned long long>(r.pacing->discardedSteps));
+        std::printf("    stalls        %d frames over %.0f ms; other processes %.1f%% of a core (dwm.exe aside)%s\n",
+                    stalls(r), kStallMs, r.externalCorePct, r.busy.empty() ? "" : ":");
+        for (const auto& p : r.busy) std::printf("        %-40s %6.1f%%\n", p.name.c_str(), p.corePct);
     }
 
     std::vector<std::string> failures;
+    bool noisy = false;
     const auto find = [&](const nlohmann::json& b) -> const ModeRun* {
         const auto want = presentModeFromName(b.value("present", std::string("immediate")));
         for (const ModeRun& r : runs)
@@ -285,6 +356,10 @@ int main(int argc, char** argv) {
         } else if (latency && (r->refreshHz < b.value("minRefreshHz", 0) || !r->presentWait)) {
             v.verdict = "pending";
             v.why = r->presentWait ? "the display runs at " + std::to_string(r->refreshHz) + " Hz" : "no present wait";
+        } else if (r->externalCorePct > kMaxExternalCorePct) {
+            v.verdict = "noisy";
+            v.why = "other processes used " + std::to_string(static_cast<int>(r->externalCorePct)) + "% of a core";
+            noisy = true;
         } else {
             v.verdict = v.value <= v.max ? "pass" : "fail";
             if (v.verdict == "fail") failures.push_back(name + ": " + std::to_string(v.value) + " over its budget of " + std::to_string(v.max));
@@ -319,6 +394,11 @@ int main(int argc, char** argv) {
                 m["pacing"] = {{"medianMs", r.pacing->medianMs}, {"p95Ms", r.pacing->p95Ms}, {"p99Ms", r.pacing->p99Ms},
                                {"p99OverMedian", r.pacing->medianMs > 0 ? r.pacing->p99Ms / r.pacing->medianMs : 0.0},
                                {"steps", r.pacing->steps}, {"discardedSteps", r.pacing->discardedSteps}};
+            m["stalls"] = stalls(r);
+            m["externalCorePct"] = r.externalCorePct;
+            nlohmann::json busy = nlohmann::json::array();
+            for (const auto& p : r.busy) busy.push_back({{"name", p.name}, {"corePct", p.corePct}});
+            m["busy"] = busy;
         }
         modesJson.push_back(m);
     }
@@ -326,7 +406,8 @@ int main(int argc, char** argv) {
     out["look_latency_ms"] = {{"value", vl.value}, {"max", vl.max}, {"verdict", vl.verdict}, {"why", vl.why}};
     out["frame_p99_over_median"] = {{"value", vp.value}, {"max", vp.max}, {"verdict", vp.verdict}, {"why", vp.why}};
     out["checked"] = !checkPath.empty();
-    out["passed"] = failures.empty();
+    out["passed"] = failures.empty() && !noisy;
+    out["noisy"] = noisy;
     out["failures"] = failures;
     if (const auto dir = std::filesystem::path(outPath).parent_path(); !dir.empty()) {
         std::error_code ec;
@@ -338,10 +419,14 @@ int main(int argc, char** argv) {
     for (const ModeRun& r : runs) measured = measured && r.ran && r.latency && r.pacing;
     if (!measured) failures.push_back("a present mode's run measured nothing (no window, no GPU, or no look input reached a frame)");
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
-    std::printf("%s (results in %s)\n", failures.empty() ? "PASS" : "FAIL", outPath.c_str());
+    // A noisy run (a gated budget measured beside busy processes) is neither a pass nor a regression:
+    // exit 2, which tools/check.py reruns. A failure measured on a quiet run still fails.
+    const bool noisyOnly = noisy && failures.empty();
+    if (noisyOnly) failures.push_back("noisy run: other processes were busy (see above)");
+    std::printf("%s (results in %s)\n", noisyOnly ? "NOISY" : failures.empty() ? "PASS" : "FAIL", outPath.c_str());
     std::string line = "{\"suite\":\"feel_bench\",\"passed\":" + std::to_string(failures.empty() ? 1 : 0) +
                        ",\"failed\":" + std::to_string(failures.empty() ? 0 : 1) + ",\"failures\":[";
     for (std::size_t i = 0; i < failures.size(); ++i) line += (i ? "," : "") + test::jsonString(failures[i]);
-    std::printf("%s]}\n", line.c_str());
-    return failures.empty() ? 0 : 1;
+    std::printf("%s]%s}\n", line.c_str(), noisyOnly ? ",\"noisy\":true" : "");
+    return noisyOnly ? 2 : failures.empty() ? 0 : 1;
 }
