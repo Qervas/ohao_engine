@@ -173,7 +173,8 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("exposure", &RenderCaptureParams::exposure).doc("Exposure in (0, 64]; absent: render.settings'")
             .unitless().min(0.0).max(64.0)
         .field("quality", &RenderCaptureParams::quality).doc("Deferred quality for this capture; absent: render.settings'")
-        .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times");
+        .field("timings", &RenderCaptureParams::timings).doc("Add the capture frame's per-pass GPU times")
+        .field("hud", &RenderCaptureParams::hud).doc("Draw the combat HUD over the frame, as a window shows it (deferred)");
     r.enumeration<GIResolution>("GIResolution").doc("RT GI's realtime trace resolution")
         .value("half", GIResolution::half, "Half the frame's size, upsampled (the budgeted frame)")
         .value("full", GIResolution::full, "The frame's size");

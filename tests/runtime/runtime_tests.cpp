@@ -10,7 +10,9 @@
 
 #include "ecs/asset_resolver.hpp"
 #include "ecs/physics_scene.hpp"
+#include "runtime/click_capture.hpp"
 #include "runtime/clock.hpp"
+#include "runtime/combat_sounds.hpp"
 #include "runtime/footsteps.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/image.hpp"
@@ -584,7 +586,89 @@ static void sp6_t13_footsteps_play_the_walk() {
     CHECK(logged >= 6 && steps.played() == logged, "every footstep the steps logged is played, none twice");
 }
 
+// ---- sub-project 7, step 4: combat sounds and the capturing click (runtime/combat_sounds.hpp,
+// runtime/click_capture.hpp) -------------------------------------------------------------------
+
+static void sp7_fx_sounds_by_event_and_surface() {
+    using K = ecs::CombatEvent::Kind;
+    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
+    const auto ev = [](K kind, uint64_t source, uint64_t target, float amount = 0.0f, std::string surface = {}) {
+        ecs::CombatEvent e;
+        e.kind = kind;
+        e.sourceId = source;
+        e.targetId = target;
+        e.amount = amount;
+        e.surface = std::move(surface);
+        return e;
+    };
+    using V = std::vector<std::string>;
+    CHECK(soundsFor(ev(K::Shot, player, 0), player) == V{"fire"}, "the player's round: fire");
+    CHECK(soundsFor(ev(K::Shot, enemy, 0), player) == V{"enemy_fire"}, "an enemy's round: enemy_fire");
+    CHECK(soundsFor(ev(K::Hit, player, 7, 4.0f, "metal"), player) == V{"impact_metal"}, "a hit: its surface's impact");
+    CHECK(soundsFor(ev(K::Hit, enemy, player, 4.0f, "default"), player) == V{"impact_default"}, "on anything");
+    CHECK(soundsFor(ev(K::Damage, enemy, player, 8.0f), player) == V{"hurt"}, "damage to the player: hurt");
+    CHECK(soundsFor(ev(K::Damage, player, enemy, 25.0f), player).empty(), "damage to anyone else: nothing");
+    CHECK(soundsFor(ev(K::Death, player, enemy), player) == V{"death"}, "a death");
+    CHECK(soundsFor(ev(K::Reload, player, 0, 0.0f), player) == (V{"empty", "reload"}), "the magazine ran dry");
+    CHECK(soundsFor(ev(K::Reload, player, 0, 12.0f), player) == V{"reload"}, "a reload by the key");
+    CHECK(soundsFor(ev(K::Reload, enemy, 0, 0.0f), player).empty(), "an enemy's reload: nothing");
+    for (const K quiet : {K::Reloaded, K::RoundStart, K::Restart, K::Win})
+        CHECK(soundsFor(ev(quiet, player, 0), player).empty(), "and nothing else");
+    // Every sound an event can name is shipped (tools/audio/make_weapons.py).
+    namespace fs = std::filesystem;
+    for (const char* name : {"fire", "enemy_fire", "impact_default", "impact_concrete", "impact_metal", "impact_wood",
+                             "hurt", "death", "reload", "empty"})
+        CHECK(fs::is_regular_file(fs::path(OHAO_SOURCE_DIR) / "assets" / "audio" / "weapons" / (std::string(name) + ".wav")),
+              std::string("assets/audio/weapons/") + name + ".wav exists");
+}
+
+static void sp7_fx_the_capturing_click_never_fires() {
+    const auto button = [](bool down, int code = 0) {
+        InputEvent e;
+        e.type = down ? InputEvent::Type::Down : InputEvent::Type::Up;
+        e.device = InputDevice::MouseButton;
+        e.code = code;
+        return e;
+    };
+    InputEvent key;
+    key.type = InputEvent::Type::Down;
+    key.device = InputDevice::Key;
+    key.code = 87;   // W
+    ClickToCapture click;
+    std::vector<InputEvent> frame{key, button(true)};
+    CHECK(click.filter(frame, false), "a press on a free cursor asks for the cursor");
+    CHECK(frame.size() == 1 && frame[0].device == InputDevice::Key, "the press is taken out; keys pass");
+    frame = {button(false)};
+    CHECK(!click.filter(frame, true) && frame.empty(), "and its release (the cursor captured since)");
+    frame = {button(true), button(false)};
+    CHECK(!click.filter(frame, true) && frame.size() == 2, "with the cursor captured, buttons pass (they fire)");
+    frame = {button(true, 1), button(false, 1)};
+    CHECK(click.filter(frame, false) && frame.empty(), "a press and release in one frame on a free cursor: both out");
+
+    // Through an InputMap bound like the play scene (fire and capture_mouse on the left button):
+    // the click that captures the cursor never presses fire.
+    InputMap map;
+    map.bindAction("fire", *keyBinding(Key::MouseLeft));
+    ClickToCapture c2;
+    bool captured = false;
+    int firePresses = 0;
+    for (int f = 0; f < 4; ++f) {
+        std::vector<InputEvent> events;
+        if (f == 0) events.push_back(button(true));
+        if (f == 1) events.push_back(button(false));
+        if (f == 2) events.push_back(button(true));
+        if (f == 3) events.push_back(button(false));
+        if (c2.filter(events, captured)) captured = true;
+        map.beginStep(events);
+        firePresses += map.pressed("fire") ? 1 : 0;
+    }
+    CHECK(captured && firePresses == 1, "the first click captures, the second fires: one press of fire");
+}
+
 int main() {
+    std::printf("[combat sounds, capturing click]\n");
+    RUN(sp7_fx_sounds_by_event_and_surface);
+    RUN(sp7_fx_the_capturing_click_never_fires);
     std::printf("[footsteps]\n");
     RUN(sp6_t13_footstep_sounds_round_robin_and_fallback);
     RUN(sp6_t13_footsteps_play_the_walk);

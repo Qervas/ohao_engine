@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 893390a91fa991da. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash c6dd4dc42b3fede5. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -51,6 +51,7 @@
         "Health": { "$ref": "#/$defs/Health" },
         "Weapon": { "$ref": "#/$defs/Weapon" },
         "WeaponState": { "$ref": "#/$defs/WeaponState" },
+        "Muzzle": { "$ref": "#/$defs/Muzzle" },
         "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" },
         "Enemy": { "$ref": "#/$defs/Enemy" },
         "EnemyState": { "$ref": "#/$defs/EnemyState" },
@@ -1166,6 +1167,28 @@
           "description": "The trigger at the last step (one round a press)",
           "default": false,
           "allOf": [{ "type": "boolean" }]
+        },
+        "flash": {
+          "description": "Muzzle flash left (the Muzzle's light is on while above 0)",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Muzzle": {
+      "description": "A weapon's muzzle flash, on a Light below the weapon's entity: the combat step turns the light to `intensity` for `time` after each round and to 0 otherwise (a light at 0 has no emitter mesh, so the flash is the light's mesh while it is on).",
+      "type": "object",
+      "properties": {
+        "intensity": {
+          "description": "The Light's intensity while the flash is on",
+          "default": 6,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+05 }]
+        },
+        "time": {
+          "description": "How long the flash stays on after a round",
+          "default": 0.05,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         }
       },
       "additionalProperties": false

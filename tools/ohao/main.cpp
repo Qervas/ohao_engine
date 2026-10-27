@@ -11,7 +11,7 @@
 //   ohao run      <scene> [--seed S] [--steps N] [--dt S] [--script ops.jsonl]
 //                 [--render out.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--frames N]
 //                  [--denoise X] [--size WxH] [--post bloom,taa,ssao] [--exposure E]
-//                  [--quality realtime|reference]]
+//                  [--quality realtime|reference] [--hud]]
 //                 [--save out.scene.json]
 //   ohao level    <level.glb>   level.info for a level file (its nodes, spawns, colliders, bodies), no GPU
 //   ohao doctor  [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
@@ -560,7 +560,7 @@ int cmdRun(const Args& a) {
         return usage(err);
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
     const bool render = has(a, "--render");
-    for (const char* o : {"--mode", "--spp", "--frames", "--denoise", "--size", "--post", "--exposure", "--quality"})
+    for (const char* o : {"--mode", "--spp", "--frames", "--denoise", "--size", "--post", "--exposure", "--quality", "--hud"})
         if (has(a, o) && !render) return usage(std::string(o) + " needs --render");
     std::string width = "1920", height = "1080";
     if (has(a, "--size")) {
@@ -654,6 +654,7 @@ int cmdRun(const Args& a) {
         if (has(a, "--post")) p.emplace_back("post", jsonStrings(splitList(opt(a, "--post"))));
         if (has(a, "--exposure")) p.emplace_back("exposure", opt(a, "--exposure"));
         if (has(a, "--quality")) p.emplace_back("quality", jsonString(opt(a, "--quality")));
+        if (has(a, "--hud")) p.emplace_back("hud", "true");
         if (!step("render.capture", c.session->call("render.capture", params(p)))) return worst;
     }
     if (has(a, "--save")) {
@@ -863,7 +864,7 @@ int run(int argc, char** argv) {
         return a.error.empty() ? cmdSummary(a) : usage(a.error);
     }
     if (cmd == "run") {
-        const Args a = parseArgs(argc, argv, 2, {},
+        const Args a = parseArgs(argc, argv, 2, {"--hud"},
                                  {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--frames",
                                   "--denoise", "--size", "--post", "--exposure", "--quality", "--save", "--root"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);

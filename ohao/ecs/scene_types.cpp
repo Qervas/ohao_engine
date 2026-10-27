@@ -328,7 +328,16 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("kickDeg", &WeaponState::kickDeg).doc("Vertical view kick not yet recovered").unit("deg").min(0.0)
         .field("shots", &WeaponState::shots).doc("Rounds fired: the index of the next round's random numbers")
             .unitless()
-        .field("triggerHeld", &WeaponState::triggerHeld).doc("The trigger at the last step (one round a press)");
+        .field("triggerHeld", &WeaponState::triggerHeld).doc("The trigger at the last step (one round a press)")
+        .field("flash", &WeaponState::flash).doc("Muzzle flash left (the Muzzle's light is on while above 0)")
+            .unit("s").min(0.0);
+    r.type<Muzzle>("Muzzle").component().host(makeComponentOps<Muzzle>())
+        .doc("A weapon's muzzle flash, on a Light below the weapon's entity: the combat step turns the light to "
+             "`intensity` for `time` after each round and to 0 otherwise (a light at 0 has no emitter mesh, so the flash "
+             "is the light's mesh while it is on).")
+        .field("intensity", &Muzzle::intensity).doc("The Light's intensity while the flash is on").unitless()
+            .min(0.0).max(100000.0)
+        .field("time", &Muzzle::time).doc("How long the flash stays on after a round").unit("s").min(0.0).max(1.0);
     r.type<WeaponTrigger>("WeaponTrigger").component().host(makeComponentOps<WeaponTrigger>())
         .doc("The trigger of a weapon that is not a player's: an AI, a turret or an agent pulls it.")
         .field("pull", &WeaponTrigger::pull).doc("Held")

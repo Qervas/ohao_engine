@@ -68,6 +68,7 @@ public:
     [[nodiscard]] uint64_t nextEventSeq() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
+    [[nodiscard]] float stepSeconds() const noexcept;   // the last step's dt (s); 1/60 before any step
     [[nodiscard]] RoundInfo round() const noexcept;
 
 private:

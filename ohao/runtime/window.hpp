@@ -41,6 +41,7 @@ public:
     // Captured: hidden and held by the window, its motion reported as MouseDelta events (look
     // input). Not captured: the cursor is free and its motion is not reported.
     void setCursorCaptured(bool captured);
+    [[nodiscard]] bool cursorCaptured() const noexcept { return m_cursorCaptured; }
     [[nodiscard]] bool focused() const;
     void setSize(uint32_t w, uint32_t h);
     [[nodiscard]] ohao::PresentTarget presentTarget(bool vsync) const;

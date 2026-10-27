@@ -428,6 +428,13 @@ void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out) 
     f("\"kickDeg\"", &WeaponState::kickDeg);
     if (!omit || v.shots != omit->shots) t.i64("\"shots\"", v.shots);
     if (!omit || v.triggerHeld != omit->triggerHeld) t.boolean("\"triggerHeld\"", v.triggerHeld);
+    f("\"flash\"", &WeaponState::flash);
+}
+
+void writeFields(const Muzzle& v, const Muzzle* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || !same(v.intensity, omit->intensity)) t.f32("\"intensity\"", v.intensity);
+    if (!omit || !same(v.time, omit->time)) t.f32("\"time\"", v.time);
 }
 
 void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out) {

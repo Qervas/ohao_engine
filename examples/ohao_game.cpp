@@ -10,9 +10,11 @@
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
 //   play mode (a scene with a PlayerController, e.g. assets/scenes/blockout_play.scene.json):
 //                 the mouse is captured while the window has focus and looks; WASD walk,
-//                 Shift sprints, Space jumps; Esc (release_mouse) frees the mouse, a click
-//                 (capture_mouse) takes it again; close the window to quit. Footsteps sound
-//                 by surface (assets/audio/footsteps; --mute silences them)
+//                 Shift sprints, Space jumps, the left button fires, R reloads, Enter restarts;
+//                 Esc (release_mouse) frees the mouse, a click takes it again (that click
+//                 never fires); close the window to quit. Footsteps and weapons sound
+//                 (assets/audio/footsteps, assets/audio/weapons; --mute silences them); a HUD
+//                 shows health, ammunition, the crosshair, hits, damage and the round's end
 //
 // --frames N runs N frames and exits non-zero if any frame did an unrequested GPU->CPU
 // readback, or if validation was on (OHAO_VALIDATION=1) and reported anything. --resize-at
@@ -115,6 +117,8 @@ int main(int argc, char** argv) {
     // Play mode: the world has a player, whose look is the mouse.
     const bool play = !host.world().registry().view<ecs::PlayerController>().empty();
     auto released = std::make_shared<bool>(false);   // play mode: Esc freed the mouse
+    // A click on the freed cursor takes it back and fires nothing (runtime/click_capture.hpp).
+    host.setClickToCapture(play);
     // Input is stepped once per fixed step, so it is read after each step.
     hooks.fixedUpdate = [play, released](LiveHost& h, float) {
         if (!play) {
@@ -122,9 +126,9 @@ int main(int argc, char** argv) {
             return;
         }
         if (h.input().pressed("release_mouse")) *released = true;
-        if (h.input().pressed("capture_mouse")) *released = false;
     };
     hooks.update = [play, released](LiveHost& h, float, float) {
+        if (play && h.takeCaptureClick()) *released = false;
         h.window().setCursorCaptured(play ? !*released && h.window().focused() : h.input().held("look"));
     };
 

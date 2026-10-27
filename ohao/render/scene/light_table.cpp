@@ -15,6 +15,9 @@ namespace ohao::render {
 std::optional<LightEmitter> lightEmitter(const LightDesc& d, const std::optional<glm::vec3>& viewer) {
     constexpr float kPi = glm::pi<float>();
     const float r = std::max(d.radius, 0.01f);   // the path tracer's emitter radius
+    // A light that gives no light has no mesh (a muzzle flash between rounds): drawn, it would be a
+    // black shape in the air.
+    if (!(d.intensity > 0.0f)) return std::nullopt;
     LightEmitter e;
     switch (d.kind) {
     case LightKind::Point:

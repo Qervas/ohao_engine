@@ -166,6 +166,7 @@ struct RenderCaptureParams {
     std::optional<float> exposure;                 // absent: render.settings exposure
     std::optional<Quality> quality;                // absent: render.settings quality
     bool timings{false};                           // the capture frame's pass list in the result
+    bool hud{false};                               // the combat HUD over the frame (a window draws it live)
 };
 
 // render.settings (sub-project 2b spec, "The agent-facing surface"): every quality knob of

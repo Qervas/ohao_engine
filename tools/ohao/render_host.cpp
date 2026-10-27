@@ -1,5 +1,6 @@
 #include "ohao/render_host.hpp"
 
+#include "ecs/impact_marks.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
 #include "gpu/vulkan/renderer.hpp"
@@ -71,6 +72,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
             if (auto* pp = deferred->getPostProcessing()) m_defaultExposure = pp->getExposure();
         ecs::installRenderExtract(*m_world, m_renderer->renderScene());
         ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
+        ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // as a window draws them
         if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size

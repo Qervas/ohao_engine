@@ -27,7 +27,9 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
+#include "runtime/click_capture.hpp"
 #include "runtime/clock.hpp"
+#include "runtime/combat_sounds.hpp"
 #include "runtime/footsteps.hpp"
 #include "runtime/window.hpp"
 
@@ -72,8 +74,9 @@ struct LiveConfig {
     // after a change until `spp` samples have accumulated, so a human watches it converge.
     RenderMode mode{RenderMode::Deferred};
     int spp{64};
-    // Players' footsteps and landings played through the default audio device (runtime/
-    // footsteps.hpp). ohao_game turns it on; a server's window stays silent.
+    // Players' footsteps and landings, and combat's sounds, played through the default audio
+    // device (runtime/footsteps.hpp, runtime/combat_sounds.hpp). ohao_game turns it on; a server's
+    // window stays silent.
     bool footsteps{false};
 };
 
@@ -116,6 +119,11 @@ public:
     // The world's input map, stepped once per simulation step.
     [[nodiscard]] InputMap& input() { return m_world->input(); }
     void quit() { m_quit = true; }
+    // A play window (runtime/click_capture.hpp): a mouse press on a free cursor only asks for the
+    // cursor, never reaching the world's input (the click that captures it fires no round).
+    void setClickToCapture(bool on) noexcept { m_clickToCapture = on; }
+    // True once after such a click: the game captures the cursor.
+    [[nodiscard]] bool takeCaptureClick() noexcept { return std::exchange(m_captureClicked, false); }
 
     // api::Host: render.capture, render.stats (the frames the window presented).
     [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
@@ -138,6 +146,10 @@ private:
     std::unique_ptr<ecs::World> m_world;       // destroyed before the renderer (it holds RenderScene slots)
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
     std::unique_ptr<Footsteps> m_footsteps;     // LiveConfig::footsteps
+    std::unique_ptr<CombatSounds> m_combatSounds;   // LiveConfig::footsteps too
+    ClickToCapture m_clickCapture;
+    bool m_clickToCapture{false};
+    bool m_captureClicked{false};
     Timeline m_time;
     FrameStats m_stats;
     std::vector<InputEvent> m_events;   // polled, not yet consumed by a step

@@ -2,6 +2,8 @@
 
 #include "core/log.hpp"
 #include "ecs/combat.hpp"
+#include "ecs/combat_hud.hpp"
+#include "ecs/impact_marks.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/render_extract.hpp"
@@ -70,6 +72,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
     ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
     ecs::installCombat(*m_world);                        // weapons fire after physics steps
+    ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);
@@ -77,6 +80,8 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     if (cfg.footsteps) {
         m_footsteps = std::make_unique<Footsteps>();
         if (!m_footsteps->initialize(cfg.root)) m_footsteps.reset();   // no audio device: silent
+        m_combatSounds = std::make_unique<CombatSounds>();
+        if (!m_combatSounds->initialize(cfg.root)) m_combatSounds.reset();
     }
     return true;
 }
@@ -90,6 +95,8 @@ void LiveHost::renderFrame() {
     // scene uploads itself); a still world keeps accumulating, one sample pass a frame.
     if (m_renderer->getRenderMode() != RenderMode::Deferred && changed) m_renderer->notifyCameraChanged();
     m_liveSamples = changed ? 1 : m_liveSamples + 1;
+    // The window always draws the combat HUD (empty without a player: no pass).
+    m_renderer->setHud(ecs::combatHud(*m_world, m_renderer->getWidth(), m_renderer->getHeight()));
     m_renderer->render();
     ++m_rendered;
     m_renderedChange = m_session->changeCount();
@@ -106,7 +113,13 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         if (static_cast<int64_t>(frame) == m_cfg.resizeAtFrame)
             m_window.setSize(m_cfg.resizeTo.width, m_cfg.resizeTo.height);
 
-        m_window.poll(m_events);   // appended: kept until a step consumes them
+        {
+            std::vector<InputEvent> polled;
+            m_window.poll(polled);
+            // A play window: the click on a free cursor only takes the cursor (it never fires).
+            if (m_clickToCapture && m_clickCapture.filter(polled, m_window.cursorCaptured())) m_captureClicked = true;
+            m_events.insert(m_events.end(), polled.begin(), polled.end());   // kept until a step consumes them
+        }
         if (m_window.consumeResized()) {
             m_renderer->setPresentExtent(m_window.framebufferExtent());
             m_needRender = true;
@@ -132,6 +145,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
             if (hooks.fixedUpdate) hooks.fixedUpdate(*this, fixedDt);
         }
         if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
+        if (m_combatSounds) m_combatSounds->update(*m_world);
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
         // Realtime frames draw what the steps move between their last two poses; lockstep and
         // paused ones the last step's exactly (so a lockstep window matches a headless capture).
@@ -314,6 +328,7 @@ uint64_t LiveHost::shutdown() {
     const uint64_t unrequested = unrequestedReadbacks();
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     m_footsteps.reset();
+    m_combatSounds.reset();
     m_session.reset();
     m_world.reset();   // releases its RenderScene slots while the RenderScene exists
     if (m_renderer) {

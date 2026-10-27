@@ -70,6 +70,7 @@ struct CombatSystem::Impl {
     uint64_t nextSeq{0};
     uint64_t steps{0};
     double lastMs{0.0};
+    float lastDt{1.0f / 60.0f};
     std::vector<std::pair<uint64_t, entt::entity>> order;   // the step's weapons by id
 
     explicit Impl(World& w) : world(w), reg(w.registry()) {}
@@ -253,11 +254,39 @@ struct CombatSystem::Impl {
         }
         s.cooldown -= dt;
         if (!fired && s.cooldown < 0.0f) s.cooldown = 0.0f;
+        updateFlash(e, s, fired, dt);
+    }
+
+    // The weapon's Muzzle: the first Light with one below it, depth first in child order.
+    [[nodiscard]] entt::entity muzzleOf(entt::entity e) const {
+        const auto* ch = reg.try_get<Children>(e);
+        if (!ch) return entt::null;
+        for (const entt::entity c : ch->entities) {
+            if (!reg.valid(c)) continue;
+            if (reg.all_of<Muzzle, Light>(c)) return c;
+            if (const entt::entity deeper = muzzleOf(c); deeper != entt::null) return deeper;
+        }
+        return entt::null;
+    }
+
+    // The muzzle flash: on for Muzzle.time after a round (the light at its intensity), else off.
+    void updateFlash(entt::entity e, WeaponState& s, bool fired, float dt) {
+        const entt::entity muzzle = muzzleOf(e);
+        if (fired && muzzle != entt::null) {
+            s.flash = reg.get<Muzzle>(muzzle).time;
+        } else if (s.flash > 0.0f) {
+            s.flash -= dt;
+            if (s.flash <= kTimeEps) s.flash = 0.0f;
+        }
+        if (muzzle == entt::null) return;
+        const float want = s.flash > 0.0f ? reg.get<Muzzle>(muzzle).intensity : 0.0f;
+        if (reg.get<Light>(muzzle).intensity != want) reg.patch<Light>(muzzle, [&](Light& l) { l.intensity = want; });
     }
 
     void step(float dt) {
         const auto t0 = std::chrono::steady_clock::now();
         ++steps;
+        if (dt > 0.0f) lastDt = dt;
         stepEvents.clear();
         PhysicsScene* physics = physicsScene(world);
         // The enemies decide first: their triggers fire in this step's weapons, their moves walk in
@@ -377,6 +406,7 @@ std::vector<CombatEvent> CombatSystem::eventsSince(uint64_t since, std::size_t m
 uint64_t CombatSystem::nextEventSeq() const noexcept { return m->nextSeq; }
 uint64_t CombatSystem::steps() const noexcept { return m->steps; }
 double CombatSystem::lastStepMs() const noexcept { return m->lastMs; }
+float CombatSystem::stepSeconds() const noexcept { return m->lastDt; }
 RoundInfo CombatSystem::round() const noexcept { return m->roundInfo; }
 
 CombatSystem& installCombat(World& world) {

@@ -317,6 +317,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<Weapon>(r, checked);
     ok &= complete<WeaponState>(r, checked);
     ok &= complete<WeaponTrigger>(r, checked);
+    ok &= complete<Muzzle>(r, checked);
     ok &= complete<MoveIntent>(r, checked);
     ok &= complete<Enemy>(r, checked);
     ok &= complete<EnemyState>(r, checked);
@@ -339,7 +340,7 @@ static void t01_authoring_and_runtime_split() {
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
-                              "WeaponTrigger", "MoveIntent", "Enemy", "EnemyState", "Round"}) {
+                              "WeaponTrigger", "Muzzle", "MoveIntent", "Enemy", "EnemyState", "Round"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -565,10 +566,14 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
                 ws.bloomDeg = unit();
                 ws.shots = static_cast<uint32_t>(rng());
                 ws.triggerHeld = rng() % 2 == 0;
+                ws.flash = 0.05f * unit();
                 w.registry().emplace<WeaponState>(e, ws);
             }
             if (rng() % 2 && !w.registry().all_of<WeaponTrigger>(e))
                 w.registry().emplace<WeaponTrigger>(e, WeaponTrigger{rng() % 2 == 0, rng() % 2 == 0});
+            // Presentation (sub-project 7 step 4).
+            if (rng() % 2 && !w.registry().all_of<Muzzle>(e))
+                w.registry().emplace<Muzzle>(e, Muzzle{20.0f * unit(), 0.1f * unit()});
             // Enemies (sub-project 7 step 2).
             if (rng() % 2 && !w.registry().all_of<MoveIntent>(e))
                 w.registry().emplace<MoveIntent>(e, MoveIntent{{unit() * 2.0f - 1.0f, unit()}, 90.0f * unit(),

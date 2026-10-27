@@ -3,7 +3,9 @@
 
 #include "ecs/asset_resolver.hpp"
 #include "ecs/combat.hpp"
+#include "ecs/combat_hud.hpp"
 #include "ecs/components.hpp"
+#include "ecs/impact_marks.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -12,6 +14,7 @@
 #include "ecs/world_hash.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
+#include "render/scene/light_table.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -21,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -940,6 +944,339 @@ static void t17_restart_after_win_replays_identically() {
     CHECK(hashOf(a.world) == h1, "and the same world.hash");
 }
 
+// ---- step 4: presentation (no numbered test in the spec; fx_*) ------------------------------------
+// docs/specs/2026-10-27-combat-design.md, "Presentation (step 4)": the muzzle flash, impact marks,
+// the HUD's content. The GPU side (the hud pass) is in engine_tests, sounds and the capturing click
+// in runtime_tests.
+
+namespace {
+
+// A muzzle light under the player's head (off), as the play scene has it.
+std::function<void(World&)> withMuzzle(std::function<void(World&)> more = {}) {
+    return [more](World& w) {
+        const entt::entity head = w.findById(0xb1a7e3);
+        const entt::entity m = w.createWithId(0xb1a7e4, "Muzzle");
+        w.setTransform(m, Transform{{0.18f, -0.12f, -0.6f}});
+        Light l;
+        l.intensity = 0.0f;
+        l.range = 6.0f;
+        l.radius = 0.03f;
+        l.castShadows = false;
+        w.registry().emplace<Light>(m, l);
+        w.registry().emplace<Muzzle>(m, Muzzle{6.0f, 0.05f});
+        w.setParent(m, head);
+        if (more) more(w);
+    };
+}
+
+// The texts a HUD list draws: glyphs on one line (same top), left to right, a space where a glyph
+// cell is skipped.
+std::vector<std::string> texts(const ohao::render::HudList& list) {
+    std::map<float, std::vector<const ohao::render::HudItem*>> lines;
+    for (const auto& it : list.items)
+        if (it.kind == static_cast<uint32_t>(ohao::render::HudKind::Glyph)) lines[it.rect.y].push_back(&it);
+    std::vector<std::string> out;
+    for (auto& [y, glyphs] : lines) {
+        std::sort(glyphs.begin(), glyphs.end(), [](auto* a, auto* b) { return a->rect.x < b->rect.x; });
+        std::string s;
+        for (std::size_t i = 0; i < glyphs.size(); ++i) {
+            const float w = glyphs[i]->rect.z - glyphs[i]->rect.x;
+            if (i > 0 && glyphs[i]->rect.x - glyphs[i - 1]->rect.x > w * 1.2f * 1.5f) s.push_back(' ');
+            const uint32_t g = glyphs[i]->glyph;
+            s.push_back(g < 10 ? static_cast<char>('0' + g) : g < 36 ? static_cast<char>('A' + g - 10) : '/');
+        }
+        out.push_back(s);
+    }
+    return out;
+}
+bool hasText(const ohao::render::HudList& list, std::string_view want) {
+    for (const auto& t : texts(list))
+        if (t.find(want) != std::string::npos) return true;
+    return false;
+}
+std::size_t countKind(const ohao::render::HudList& list, ohao::render::HudKind k) {
+    std::size_t n = 0;
+    for (const auto& it : list.items) n += it.kind == static_cast<uint32_t>(k) ? 1 : 0;
+    return n;
+}
+
+Weapon steadyRifle() {   // no spread, bloom or recoil: every round where the view looks
+    Weapon w;
+    w.spreadDeg = 0.0f;
+    w.bloomPerShotDeg = 0.0f;
+    w.recoilPitchDeg = w.recoilYawDeg = 0.0f;
+    return w;
+}
+
+} // namespace
+
+static void fx_muzzle_flash_on_for_flash_time() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, withMuzzle());
+    auto& reg = a.world.registry();
+    const entt::entity m = a.world.findById(0xb1a7e4);
+    CHECK(reg.get<Light>(m).intensity == 0.0f, "the muzzle light is off before a round");
+    std::vector<float> seen;
+    for (int i = 0; i < 6; ++i) {
+        (void)a.run(1, i == 0 ? std::vector<InputEvent>{actionEvent("fire", true)}
+                              : i == 1 ? std::vector<InputEvent>{actionEvent("fire", false)} : std::vector<InputEvent>{});
+        seen.push_back(reg.get<Light>(m).intensity);
+    }
+    std::printf("\n      intensity by step: %.1f %.1f %.1f %.1f %.1f %.1f", seen[0], seen[1], seen[2], seen[3], seen[4], seen[5]);
+    CHECK(seen[0] == 6.0f && seen[1] == 6.0f && seen[2] == 6.0f, "on at its intensity for 0.05 s: the round's step and two more");
+    CHECK(seen[3] == 0.0f && seen[4] == 0.0f && seen[5] == 0.0f, "then off");
+    CHECK(reg.get<WeaponState>(a.player).flash == 0.0f, "WeaponState.flash back to 0");
+    // A light at 0 has no emitter mesh; on, it has one: the flash.
+    ohao::render::LightDesc d;
+    d.kind = ohao::render::LightKind::Point;
+    d.radius = 0.03f;
+    d.intensity = 0.0f;
+    CHECK(!ohao::render::lightEmitter(d, std::nullopt).has_value(), "a light at 0 draws no emitter mesh");
+    d.intensity = 6.0f;
+    CHECK(ohao::render::lightEmitter(d, std::nullopt).has_value(), "on, it does");
+}
+
+static void fx_impact_pool_caps_and_reuses_oldest() {
+    World w;
+    ImpactMarks marks;
+    for (int i = 0; i < 70; ++i)
+        marks.add(w, entt::null, glm::vec3(static_cast<float>(i), 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    const auto pool = marks.marks();
+    CHECK(pool.size() == ImpactMarks::kCapacity && marks.made() == 70, "64 marks at most; 70 made");
+    CHECK(pool[0].serial == 65 && pool[5].serial == 70 && pool[6].serial == 7 && pool[63].serial == 64,
+          "the 65th..70th took the oldest slots (0..5); the rest are the 7th..64th");
+    const glm::mat4& m = pool[5].world;
+    CHECK(nearVec(glm::vec3(m[3]), {69.0f, 1.0f, ImpactMarks::kLift}, 1e-5f), "at the point, 2 mm off along the normal");
+    CHECK(nearVec(glm::normalize(glm::vec3(m[2])), {0.0f, 0.0f, 1.0f}, 1e-5f), "facing the normal (its +Z)");
+    CHECK(near(glm::length(glm::vec3(m[0])), ImpactMarks::kSize, 1e-5f), "8 cm across");
+    marks.clear();
+    CHECK(marks.marks().empty(), "clear empties the pool");
+}
+
+static void fx_marks_from_hits_never_saved_or_hashed() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
+    ImpactMarks marks;
+    marks.observe(a.world);   // starts at the log's end
+    const uint64_t h0 = hashOf(a.world);
+    const std::size_t entities = a.world.registry().view<EntityId>().size();
+    const auto ev = a.oneRound();
+    marks.observe(a.world);
+    marks.follow(a.world);
+    const auto hits = only(ev, Kind::Hit);
+    CHECK(hits.size() == 1 && marks.marks().size() == 1, "one round, one hit, one mark");
+    if (hits.size() == 1 && marks.marks().size() == 1) {
+        const glm::vec3 at(marks.marks()[0].world[3]);
+        CHECK(nearVec(at, hits[0].point + hits[0].normal * ImpactMarks::kLift, 1e-4f), "where the round hit the wall");
+    }
+    CHECK(a.world.registry().view<EntityId>().size() == entities, "no entity made");
+    // Same world with no marks observing: the same hash.
+    Arena b({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
+    (void)b.oneRound();
+    CHECK(hashOf(a.world) == hashOf(b.world) && hashOf(a.world) != h0, "the marks are not in world.hash");
+}
+
+static void fx_marks_on_an_enemy_land_on_its_body_and_follow_it() {
+    // EnemyA straight ahead (it spawns at (-2.5, -2) facing +Z), with the play scene's body and head boxes.
+    const auto bodies = [](World& w) {
+        enemies()(w);
+        const entt::entity e = w.findById(kEnemyA);
+        const entt::entity head = w.createWithId(0xe1e1, "EnemyA Head");
+        w.registry().emplace<MeshSource>(head, MeshSource{BoxPrim{{-0.14f, 1.46f, -0.14f}, {0.14f, 1.78f, 0.14f}, glm::vec3(0.8f)}});
+        w.setParent(head, e);
+        const entt::entity body = w.createWithId(0xe1e2, "EnemyA Body");
+        w.registry().emplace<MeshSource>(body, MeshSource{BoxPrim{{-0.25f, 0.0f, -0.17f}, {0.25f, 1.42f, 0.17f}, glm::vec3(0.6f)}});
+        w.setParent(body, e);
+    };
+    Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, steadyRifle(), bodies);
+    toughen(a);
+    ImpactMarks marks;
+    marks.observe(a.world);
+    const auto ev = a.oneRound();
+    marks.observe(a.world);
+    marks.follow(a.world);
+    const auto hits = only(ev, Kind::Hit);
+    const entt::entity enemy = byId(a, kEnemyA);
+    CHECK(hits.size() == 1 && hits[0].targetId == kEnemyA, "the round hit EnemyA's capsule");
+    CHECK(marks.marks().size() == 1 && marks.marks()[0].on == enemy, "a mark, attached to EnemyA");
+    if (marks.marks().size() != 1) return;
+    // In the enemy's frame (its boxes are its children's, at its origin): the eye's height (1.62 above
+    // the player's feet, the enemy standing on the 0.3 m step) is the body box's, so the mark is on the
+    // body's face toward the player (the enemy faces the player: its -Z), 2 mm off it, not on the capsule.
+    const auto inEnemy = [&] {
+        const glm::mat4 toEnemy = glm::inverse(a.world.registry().get<WorldTransform>(enemy).world);
+        return glm::vec3(toEnemy * marks.marks()[0].world[3]);
+    };
+    const glm::vec3 p = inEnemy();
+    std::printf("\n      the mark in the enemy's frame: (%.4f, %.4f, %.4f)", p.x, p.y, p.z);
+    CHECK(near(std::fabs(p.z), 0.17f + ImpactMarks::kLift, 1e-3f) && std::fabs(p.x) <= 0.25f && p.y >= 0.0f &&
+              p.y <= 1.42f,
+          "on a face of the body box, 2 mm off it (not on the capsule, 0.3 m round)");
+    const glm::vec3 facing = glm::normalize(glm::vec3(marks.marks()[0].world[2]));
+    const glm::vec3 toPlayer = a.info().pos - glm::vec3(a.world.registry().get<WorldTransform>(enemy).world[3]);
+    CHECK(glm::dot(facing, toPlayer) > 0.0f, "the face toward the player, the mark facing out of it");
+    // Killed: it falls over; the mark stays where it is on the body.
+    a.combat->damage(enemy, 1000.0f, a.player, {});
+    (void)a.run(5);
+    marks.follow(a.world);
+    CHECK(nearVec(inEnemy(), p, 1e-4f), "the mark follows the enemy as it lies down");
+}
+
+static void fx_no_marks_on_the_player() {
+    // An enemy's rounds hit the player: no mark hangs in front of the player's eyes.
+    Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, Weapon{}, enemies());
+    toughen(a);
+    ImpactMarks marks;
+    marks.observe(a.world);
+    const auto ev = a.run(120);
+    marks.observe(a.world);
+    std::size_t onPlayer = 0;
+    for (const CombatEvent& e : only(ev, Kind::Hit)) onPlayer += e.target == a.player ? 1 : 0;
+    std::printf("\n      %zu enemy rounds hit the player", onPlayer);
+    CHECK(onPlayer > 0, "the enemies hit the player");
+    for (const ImpactMark& m : marks.marks()) CHECK(m.on != a.player, "no mark on the player");
+}
+
+static void fx_marks_cleared_on_restart() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
+    (void)startRound(a);
+    ImpactMarks marks;
+    marks.observe(a.world);
+    (void)a.oneRound();
+    (void)a.run(10);   // past the 10 Hz cooldown
+    (void)a.oneRound();
+    marks.observe(a.world);
+    CHECK(marks.marks().size() == 2, "two rounds, two marks");
+    (void)a.run(1, {actionEvent("restart", true)});
+    marks.observe(a.world);
+    CHECK(marks.marks().empty(), "the restart clears them");
+}
+
+static void fx_hud_shows_health_ammo_and_a_crosshair() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, Weapon{});
+    CombatHud hud;
+    hud.observe(a.world);
+    HudState s = hud.state(a.world, 1920, 1080);
+    CHECK(s.player && s.armed && s.health == 100.0f && s.maxHealth == 100.0f, "the player's health");
+    CHECK(s.ammo == 30 && s.magazine == 30 && !s.reloading, "a full magazine");
+    CHECK(!s.hitMarker && s.hurt == 0.0f && s.phase == RoundPhase::Playing && !s.round, "nothing else");
+    const float fov = 75.0f;
+    const auto gapFor = [&](float cone) {
+        return 6.0f + 540.0f * std::tan(glm::radians(cone)) / std::tan(glm::radians(fov * 0.5f));
+    };
+    CHECK(near(s.coneDeg, 0.25f, 1e-5f) && near(s.crosshairGap, gapFor(0.25f), 0.01f),
+          "the crosshair opens with the cone at the camera's field of view (6 px + the cone's radius on screen)");
+    ohao::render::HudList list = CombatHud::layout(s, 1920, 1080);
+    CHECK(hasText(list, "100") && hasText(list, "30/30"), "health and ammo as text");
+    CHECK(countKind(list, ohao::render::HudKind::Rect) >= 6, "a health bar and four crosshair arms (and more)");
+    // Ten rounds: ammo 20, the cone bloomed.
+    (void)a.run(60, {actionEvent("fire", true)});
+    (void)a.run(1, {actionEvent("fire", false)});
+    hud.observe(a.world);
+    s = hud.state(a.world, 1920, 1080);
+    CHECK(s.ammo == 20 && hasText(CombatHud::layout(s, 1920, 1080), "20/30"), "the magazine goes down: 20/30");
+    // Empty it: RELOADING.
+    (void)a.run(120, {actionEvent("fire", true)});
+    hud.observe(a.world);
+    s = hud.state(a.world, 1920, 1080);
+    CHECK(s.reloading && hasText(CombatHud::layout(s, 1920, 1080), "RELOADING"), "the reload is shown");
+    // The bloom shows: fire a burst from rest and compare.
+    Arena b({-2.0f, 0.0f, 2.0f}, 0.0f, Weapon{});
+    CombatHud hb;
+    (void)b.run(13, {actionEvent("fire", true)});   // three rounds
+    hb.observe(b.world);
+    const HudState sb = hb.state(b.world, 1920, 1080);
+    std::printf("\n      cone %.3f deg -> gap %.2f px (rest %.2f)", sb.coneDeg, sb.crosshairGap, gapFor(0.25f));
+    CHECK(sb.coneDeg > 0.25f + 0.5f && near(sb.crosshairGap, gapFor(sb.coneDeg), 0.01f), "the crosshair opens with bloom");
+}
+
+static void fx_hud_hit_marker_and_damage_vignette_timing() {
+    // EnemyA straight ahead: a round that damages it shows the hit marker for 0.15 s (9 steps).
+    Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, steadyRifle(), enemies());
+    toughen(a);
+    CombatHud hud;
+    hud.observe(a.world);
+    (void)a.run(1, {actionEvent("fire", true)});
+    hud.observe(a.world);
+    CHECK(hud.state(a.world, 1280, 720).hitMarker, "the round's step: the hit marker shows");
+    int shown = 1;
+    (void)a.run(1, {actionEvent("fire", false)});
+    for (int i = 0; i < 20; ++i) {
+        hud.observe(a.world);
+        shown += hud.state(a.world, 1280, 720).hitMarker ? 1 : 0;
+        (void)a.run(1);
+    }
+    std::printf("\n      hit marker shown for %d steps", shown);
+    CHECK(shown == 9, "for 0.15 s: nine 60 Hz steps");
+    // Damage taken: the vignette for 0.3 s (18 steps), fading.
+    Arena b({-2.0f, 0.0f, 2.0f}, 0.0f, Weapon{});
+    CombatHud hb;
+    hb.observe(b.world);
+    b.combat->damage(b.player, 20.0f, entt::null, {});
+    (void)b.run(1);
+    hb.observe(b.world);
+    const float first = hb.state(b.world, 1280, 720).hurt;
+    int hurt = 0;
+    float last = first;
+    bool fading = true;
+    for (int i = 0; i < 30; ++i) {
+        const float v = hb.state(b.world, 1280, 720).hurt;
+        hurt += v > 0.0f ? 1 : 0;
+        fading = fading && v <= last;
+        last = v;
+        (void)b.run(1);
+        hb.observe(b.world);
+    }
+    std::printf("\n      vignette %.3f at first, shown for %d steps", first, hurt);
+    CHECK(first > 0.0f && first <= CombatHud::kHurtMaxAlpha && fading, "the vignette fades from the hit");
+    CHECK(hurt >= 17 && hurt <= 18, "for 0.3 s");
+    CHECK(countKind(CombatHud::layout(HudState{true, 80.0f, 100.0f, true, 30, 30, false, 0.25f, 10.0f, false, 0.4f},
+                                      1280, 720),
+                    ohao::render::HudKind::Vignette) == 1,
+          "the layout draws it as one vignette");
+}
+
+static void fx_hud_dead_and_cleared_screens() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, Weapon{}, enemies());
+    toughen(a);
+    (void)startRound(a);
+    CombatHud hud;
+    hud.observe(a.world);
+    HudState s = hud.state(a.world, 1920, 1080);
+    CHECK(s.round && s.phase == RoundPhase::Playing, "a running round");
+    a.combat->damage(byId(a, kEnemyA), 1000.0f, a.player, {});
+    a.combat->damage(byId(a, kEnemyB), 1000.0f, a.player, {});
+    (void)a.run(2);
+    hud.observe(a.world);
+    s = hud.state(a.world, 1920, 1080);
+    ohao::render::HudList list = CombatHud::layout(s, 1920, 1080);
+    CHECK(s.phase == RoundPhase::Won && hasText(list, "CLEARED") && hasText(list, "ENTER TO RESTART"), "won: CLEARED");
+    (void)a.run(1, {actionEvent("restart", true)});
+    a.combat->damage(a.player, 100000.0f, byId(a, kEnemyA), {});
+    (void)a.run(1, {actionEvent("restart", false)});
+    hud.observe(a.world);
+    s = hud.state(a.world, 1920, 1080);
+    list = CombatHud::layout(s, 1920, 1080);
+    CHECK(s.phase == RoundPhase::Dead && s.restartIn == 3 && hasText(list, "DEAD") && hasText(list, "RESTART 3"),
+          "dead: DEAD, RESTART 3");
+    (void)a.run(60);
+    hud.observe(a.world);
+    CHECK(hud.state(a.world, 1920, 1080).restartIn == 2, "a second later: 2");
+    CHECK(countKind(list, ohao::render::HudKind::Rect) >= 1, "a red wash over the screen");
+    (void)a.run(125);
+    hud.observe(a.world);
+    s = hud.state(a.world, 1920, 1080);
+    CHECK(s.phase == RoundPhase::Playing && s.health == s.maxHealth && !hasText(CombatHud::layout(s, 1920, 1080), "DEAD"),
+          "the restart: playing, full health, no screen");
+}
+
+static void fx_hud_without_a_player_is_empty() {
+    World w;
+    installCombat(w);
+    CombatHud hud;
+    hud.observe(w);
+    const HudState s = hud.state(w, 1280, 720);
+    CHECK(!s.player && CombatHud::layout(s, 1280, 720).empty(), "no player: nothing drawn");
+}
+
 // --dump-burst FILE: a 30-round burst at the north wall from (-2, 0, 2), as JSON (each round's step,
 // cone, eye, direction, hit point; the view's pitch and yaw each step), for the look shots' plot.
 static int dumpBurst(const char* path) {
@@ -1013,5 +1350,15 @@ int main(int argc, char** argv) {
     RUN(t17_no_round_no_restart);
     RUN(t17_restart_replays_identically);
     RUN(t17_restart_after_win_replays_identically);
+    RUN(fx_muzzle_flash_on_for_flash_time);
+    RUN(fx_impact_pool_caps_and_reuses_oldest);
+    RUN(fx_marks_from_hits_never_saved_or_hashed);
+    RUN(fx_marks_on_an_enemy_land_on_its_body_and_follow_it);
+    RUN(fx_no_marks_on_the_player);
+    RUN(fx_marks_cleared_on_restart);
+    RUN(fx_hud_shows_health_ammo_and_a_crosshair);
+    RUN(fx_hud_hit_marker_and_damage_vignette_timing);
+    RUN(fx_hud_dead_and_cleared_screens);
+    RUN(fx_hud_without_a_player_is_empty);
     return ohao::test::finish("combat_tests");
 }

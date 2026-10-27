@@ -355,6 +355,15 @@ struct WeaponState {
     float kickDeg{0.0f};        // vertical view kick not yet recovered
     uint32_t shots{0};          // rounds fired: the index of the next round's random numbers
     bool triggerHeld{false};    // the trigger at the last step (one round a press)
+    float flash{0.0f};          // s of muzzle flash left (the Muzzle's light is on while > 0)
+};
+
+// A weapon's muzzle flash: on a Light below the weapon's entity (its child, or deeper). The combat
+// step turns the light to `intensity` for `time` after each round and to 0 otherwise; a light at 0
+// has no emitter mesh, so the flash is the light's mesh while it is on.
+struct Muzzle {
+    float intensity{6.0f};   // the Light's intensity while the flash is on
+    float time{0.05f};       // s the flash stays on after a round
 };
 
 // The trigger of a weapon that is not a player's: an enemy's AI, a turret, a test pulls it.
