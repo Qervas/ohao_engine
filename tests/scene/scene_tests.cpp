@@ -320,6 +320,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<MoveIntent>(r, checked);
     ok &= complete<Enemy>(r, checked);
     ok &= complete<EnemyState>(r, checked);
+    ok &= complete<Round>(r, checked);
     CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -338,7 +339,7 @@ static void t01_authoring_and_runtime_split() {
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
-                              "WeaponTrigger", "MoveIntent", "Enemy", "EnemyState"}) {
+                              "WeaponTrigger", "MoveIntent", "Enemy", "EnemyState", "Round"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }

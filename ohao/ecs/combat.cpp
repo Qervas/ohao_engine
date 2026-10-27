@@ -3,6 +3,7 @@
 #include "core/log.hpp"
 #include "ecs/components.hpp"
 #include "ecs/enemy_ai.hpp"
+#include "ecs/round_hook.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/world.hpp"
 
@@ -270,7 +271,85 @@ struct CombatSystem::Impl {
             for (const auto& [id, e] : order)
                 if (reg.valid(e) && reg.all_of<Weapon>(e)) updateWeapon(e, dt, *physics);
         }
+        stepRound(dt);
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+
+    // ---- the round (step 3) ------------------------------------------------------------------
+    bool roundStarted{false};
+    std::shared_ptr<const void> roundStart;   // the world at the end of the round's first step
+    RoundInfo roundInfo;
+    float deadFor{0.0f};
+    bool warnedNoHook{false};
+
+    void pushRound(CombatEvent::Kind kind) {
+        CombatEvent ev;
+        ev.kind = kind;
+        push(ev);
+    }
+
+    // The world with a Round: starts it (a snapshot of the world after this step), watches the
+    // player's death and the enemies', and goes back to the start restartDelay after the death or
+    // when `restart` is pressed (at the end of this step: the world after it is the round's start).
+    void stepRound(float dt) {
+        const auto rounds = reg.view<const Round>();
+        if (rounds.empty()) return;
+        const Round round = reg.get<Round>(rounds.front());
+        const auto* hook = reg.ctx().find<RoundHook>();
+        if (!hook || !hook->save || !hook->restore) {
+            if (!warnedNoHook)
+                OHAO_LOG(Warn, ecs, "combat: the world has a Round but its host installed no RoundHook; no round runs");
+            warnedNoHook = true;
+            return;
+        }
+        if (!roundStarted) {
+            roundStarted = true;
+            roundInfo = RoundInfo{};
+            roundInfo.started = true;
+            deadFor = 0.0f;
+            pushRound(CombatEvent::Kind::RoundStart);
+            roundStart = hook->save();
+            return;
+        }
+        // The player: the first character moved by input, in id order.
+        bool playerDead = false;
+        uint64_t bestId = UINT64_MAX;
+        for (auto [e, pc] : reg.view<const PlayerController>().each()) {
+            const uint64_t id = world.idOf(e);
+            if (!pc.input || id >= bestId) continue;
+            bestId = id;
+            const auto* h = reg.try_get<Health>(e);
+            playerDead = h && !(h->current > 0.0f);
+        }
+        std::size_t enemies = 0, dead = 0;
+        for (auto [e, en] : reg.view<const Enemy>().each()) {
+            ++enemies;
+            const auto* h = reg.try_get<Health>(e);
+            dead += h && !(h->current > 0.0f) ? 1 : 0;
+        }
+        if (enemies > 0 && dead == enemies && roundInfo.phase != RoundPhase::Won && !playerDead) {
+            roundInfo.phase = RoundPhase::Won;
+            pushRound(CombatEvent::Kind::Win);
+        }
+        if (playerDead) {
+            roundInfo.phase = RoundPhase::Dead;
+            deadFor += dt;
+        } else {
+            deadFor = 0.0f;
+            if (roundInfo.phase == RoundPhase::Dead) roundInfo.phase = RoundPhase::Playing;
+        }
+        roundInfo.restartIn = playerDead ? std::max(0.0f, round.restartDelay - deadFor) : 0.0f;
+        const bool pressed = !round.restart.empty() && world.input().pressed(round.restart);
+        if (pressed || (playerDead && deadFor + kTimeEps >= round.restartDelay)) {
+            const auto t0 = std::chrono::steady_clock::now();
+            hook->restore(roundStart);
+            roundInfo.lastRestartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            ++roundInfo.restarts;
+            roundInfo.phase = RoundPhase::Playing;
+            roundInfo.restartIn = 0.0f;
+            deadFor = 0.0f;
+            pushRound(CombatEvent::Kind::Restart);
+        }
     }
 };
 
@@ -298,6 +377,7 @@ std::vector<CombatEvent> CombatSystem::eventsSince(uint64_t since, std::size_t m
 uint64_t CombatSystem::nextEventSeq() const noexcept { return m->nextSeq; }
 uint64_t CombatSystem::steps() const noexcept { return m->steps; }
 double CombatSystem::lastStepMs() const noexcept { return m->lastMs; }
+RoundInfo CombatSystem::round() const noexcept { return m->roundInfo; }
 
 CombatSystem& installCombat(World& world) {
     auto& reg = world.registry();

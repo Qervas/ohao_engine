@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash d04016663f613766. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 893390a91fa991da. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -53,7 +53,8 @@
         "WeaponState": { "$ref": "#/$defs/WeaponState" },
         "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" },
         "Enemy": { "$ref": "#/$defs/Enemy" },
-        "EnemyState": { "$ref": "#/$defs/EnemyState" }
+        "EnemyState": { "$ref": "#/$defs/EnemyState" },
+        "Round": { "$ref": "#/$defs/Round" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -1279,6 +1280,24 @@
           "description": "Its weapon's shots at the last step (counts a burst)",
           "default": 0,
           "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Round": {
+      "description": "The round's rules (one per world). The world's state at the end of its first combat step is the round's start; restartDelay after the player dies, or when `restart` is pressed, the world goes back to it. Every Enemy dead wins the round (it then waits for `restart`).",
+      "type": "object",
+      "properties": {
+        "restartDelay": {
+          "description": "From the player's death to the restart",
+          "default": 3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 600 }]
+        },
+        "restart": {
+          "description": "Action that restarts the round now",
+          "default": "restart",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
         }
       },
       "additionalProperties": false

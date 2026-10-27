@@ -21,7 +21,8 @@ namespace ohao::ecs {
 class World;
 
 struct CombatEvent {
-    enum class Kind : uint8_t { Shot, Hit, Damage, Death, Reload, Reloaded };
+    // RoundStart, Restart and Win (step 3) name no source or target.
+    enum class Kind : uint8_t { Shot, Hit, Damage, Death, Reload, Reloaded, RoundStart, Restart, Win };
     Kind kind{Kind::Shot};
     uint64_t step{0};                 // the combat step it happened in (1 = the first)
     uint64_t seq{0};                  // position in the log
@@ -33,6 +34,17 @@ struct CombatEvent {
     float amount{0.0f};               // Shot: the cone's half angle (deg); Hit: the distance (m); Damage: hp taken
     float health{0.0f};               // Damage, Death: the target's health after
     std::string surface;              // Hit: the body's Collider.surface ("default" if none)
+};
+
+enum class RoundPhase : uint8_t { Playing, Dead, Won };
+
+// The round as the last step left it (a world with a Round and a RoundHook).
+struct RoundInfo {
+    bool started{false};
+    RoundPhase phase{RoundPhase::Playing};
+    float restartIn{0.0f};     // s until the restart, while the player is dead
+    uint32_t restarts{0};
+    double lastRestartMs{0.0}; // what the last restart took (the snapshot's restore)
 };
 
 class CombatSystem {
@@ -56,6 +68,7 @@ public:
     [[nodiscard]] uint64_t nextEventSeq() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
+    [[nodiscard]] RoundInfo round() const noexcept;
 
 private:
     struct Impl;

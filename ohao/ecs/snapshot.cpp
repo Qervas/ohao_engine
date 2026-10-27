@@ -1,6 +1,7 @@
 #include "ecs/snapshot.hpp"
 
 #include "ecs/components.hpp"
+#include "ecs/round_hook.hpp"
 #include "ecs/scene_types.hpp"
 
 #include <algorithm>
@@ -31,6 +32,17 @@ std::size_t Snapshot::bytes() const noexcept {
     std::size_t n = ids.size() * 8 + order.size() * 8 + parent.size() * 4 + childBegin.size() * 4 + children.size() * 4;
     for (const SnapshotColumn& c : columns) n += c.rows.size() * 4 + c.valueBytes;
     return n;
+}
+
+void installRoundHook(World& world, const reflect::TypeRegistry& types) {
+    RoundHook hook;
+    hook.save = [&world, &types]() -> std::shared_ptr<const void> {
+        return std::make_shared<const Snapshot>(takeSnapshot(world, types));
+    };
+    hook.restore = [&world](const std::shared_ptr<const void>& s) {
+        if (s) restoreSnapshot(world, *static_cast<const Snapshot*>(s.get()));
+    };
+    world.registry().ctx().insert_or_assign(std::move(hook));
 }
 
 // Everything is read in EnTT packed order, which for a world built by World::create is

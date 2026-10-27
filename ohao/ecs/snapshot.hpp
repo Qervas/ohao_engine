@@ -71,6 +71,10 @@ void takeSnapshot(const World& world, const reflect::TypeRegistry& types, Snapsh
 // first, then the SnapshotHook's state.
 RestoreStats restoreSnapshot(World& world, const Snapshot& snapshot);
 
+// Puts the World's RoundHook (ecs/round_hook.hpp) in its context: a round's start is a snapshot of
+// the world taken with these types, a restart restores it. The world and types must outlive it.
+void installRoundHook(World& world, const reflect::TypeRegistry& types);
+
 // The parts of a capture, for code that reads the world in snapshot order without copying
 // its values (world.hash): the entity table (ids, creation order, hierarchy, id generator;
 // no columns, the frame untouched) with `rowOf` mapping an entity index to its row

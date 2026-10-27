@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "d04016663f613766",
+  "schemaHash": "893390a91fa991da",
   "units": [
     "m",
     "m/s",
@@ -3375,6 +3375,54 @@
           "angle": false,
           "hidden": false,
           "readOnly": false,
+          "aliases": []
+        }
+      ],
+      "skipped": []
+    },
+    {
+      "name": "Round",
+      "doc": "The round's rules (one per world). The world's state at the end of its first combat step is the round's start; restartDelay after the player dies, or when `restart` is pressed, the world goes back to it. Every Enemy dead wins the round (it then waits for `restart`).",
+      "role": "component",
+      "serialized": true,
+      "singleton": true,
+      "alwaysPresent": false,
+      "version": 1,
+      "readsVersions": [1],
+      "fields": [
+        {
+          "name": "restartDelay",
+          "type": "f32",
+          "default": 3,
+          "doc": "From the player's death to the restart",
+          "unit": "s",
+          "min": 0,
+          "max": 600,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "restart",
+          "type": "string",
+          "default": "restart",
+          "doc": "Action that restarts the round now",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "maxLength": 64,
           "aliases": []
         }
       ],

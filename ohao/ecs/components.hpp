@@ -393,6 +393,14 @@ struct EnemyState {
     uint32_t shotsSeen{0};         // its weapon's WeaponState.shots at the last step (counts a burst)
 };
 
+// The round's rules, one per world. A world with one keeps the round's start (a snapshot through
+// the host's RoundHook, at the end of its first combat step) and goes back to it restartDelay
+// after the player dies, or when `restart` is pressed; every Enemy dead wins the round.
+struct Round {
+    float restartDelay{3.0f};       // s from the player's death to the restart
+    std::string restart{"restart"}; // action that restarts the round now
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

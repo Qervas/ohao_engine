@@ -1191,7 +1191,11 @@ struct PhysicsScene::Impl {
             const MoveIntent* intent = pc.input ? nullptr : reg.try_get<MoveIntent>(e);
             glm::vec2 wish(0.0f);
             bool sprinting = false, jumpPressed = false;
-            if (pc.input) {
+            // A dead player (Health 0; combat, sub-project 7) neither walks, turns nor jumps: it
+            // stands (or falls) where it died until the round restarts.
+            const auto* health = reg.try_get<Health>(e);
+            const bool dead = health && !(health->current > 0.0f);
+            if (pc.input && !dead) {
                 // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
                 p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
                 p.pitchDeg -= (mouse.y + input.axis(pc.lookY)) * pc.lookDegPerUnit;

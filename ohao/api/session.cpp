@@ -1099,7 +1099,11 @@ Session::Impl::Impl(ecs::World& w, const reflect::TypeRegistry& t) : world(w), t
 }
 
 Session::Session(ecs::World& world, const reflect::TypeRegistry& types)
-    : m(std::make_unique<Impl>(world, types)) {}
+    : m(std::make_unique<Impl>(world, types)) {
+    // A Round in the world keeps its start as a snapshot with these types (the combat system's
+    // RoundHook; ECS system code has no reflection of its own).
+    ecs::installRoundHook(world, types);
+}
 Session::~Session() = default;
 
 ecs::World& Session::world() noexcept { return m->world; }

@@ -14,6 +14,7 @@
     "Name": 1,
     "Parent": 1,
     "PlayerController": 1,
+    "Round": 1,
     "Transform": 1,
     "Weapon": 1
   },
@@ -35,6 +36,7 @@
     {
       "id": "5c0b1a7e00000003",
       "Name": { "value": "Controls" },
+      "Round": {},
       "InputActions": {
         "actions": [
           { "action": "jump", "key": "Space" },
@@ -42,7 +44,8 @@
           { "action": "release_mouse", "key": "Escape" },
           { "action": "capture_mouse", "key": "MouseLeft" },
           { "action": "fire", "key": "MouseLeft" },
-          { "action": "reload", "key": "R" }
+          { "action": "reload", "key": "R" },
+          { "action": "restart", "key": "Enter" }
         ],
         "axes": [
           { "axis": "move_forward", "positive": "W", "negative": "S" },

@@ -370,6 +370,13 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .unitless()
         .field("shotsSeen", &EnemyState::shotsSeen).doc("Its weapon's shots at the last step (counts a burst)")
             .unitless();
+    r.type<Round>("Round").component().singleton().host(makeComponentOps<Round>())
+        .doc("The round's rules (one per world). The world's state at the end of its first combat step is the round's "
+             "start; restartDelay after the player dies, or when `restart` is pressed, the world goes back to it. "
+             "Every Enemy dead wins the round (it then waits for `restart`).")
+        .field("restartDelay", &Round::restartDelay).doc("From the player's death to the restart").unit("s").min(0.0)
+            .max(600.0)
+        .field("restart", &Round::restart).doc("Action that restarts the round now").maxLength(64);
 
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 

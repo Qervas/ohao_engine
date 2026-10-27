@@ -782,6 +782,137 @@ static void t16_play_scene_has_two_enemies() {
     CHECK(players == 1, "one player");
 }
 
+// ---- test 17: death, restart, win ----------------------------------------------------------------
+// docs/specs/2026-10-27-combat-design.md, "Death, restart, win": a world with a Round snapshots
+// itself at the end of its first combat step (through the host's RoundHook); the player dead for
+// restartDelay, or `restart` pressed, restores it at the end of that step; every Enemy dead wins.
+
+namespace {
+
+// Gives the arena a Round now: the next step is the round's first (its snapshot is the world
+// after that step). Returns that world's hash.
+uint64_t startRound(Arena& a, Round round = {}, std::size_t* starts = nullptr) {
+    installRoundHook(a.world, engineTypes());
+    const entt::entity r = a.world.createWithId(0x40a1d, "Round");
+    a.world.registry().emplace<Round>(r, round);
+    const auto ev = a.run(1);
+    if (starts) *starts = only(ev, Kind::RoundStart).size();
+    return hashOf(a.world);
+}
+
+} // namespace
+
+static void t17_round_start_event() {
+    Arena a;
+    std::size_t starts = 0;
+    (void)startRound(a, {}, &starts);
+    CHECK(starts == 1, "the round starts on the first step with a Round");
+    CHECK(a.combat->round().started && a.combat->round().restarts == 0, "round() says it started, no restarts");
+    CHECK(only(a.run(30), Kind::RoundStart).empty(), "and only once");
+}
+
+static void t17_restart_equals_round_start() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    const uint64_t h0 = startRound(a);
+    auto& reg = a.world.registry();
+    const glm::vec3 p0 = a.info().pos;
+    const entt::entity crate = a.named("CrateA");
+    const glm::vec3 crate0 = reg.get<Transform>(crate).position;
+    // A fight: the player fires and walks, a crate is knocked into the air, the enemies shoot.
+    (void)a.run(40, {actionEvent("fire", true), axisSet("move_right", 1.0f)});
+    Transform lifted = reg.get<Transform>(crate);
+    lifted.position.y += 1.0f;
+    a.world.setTransform(crate, lifted);
+    (void)a.run(10, {actionEvent("fire", false), axisSet("move_right", 0.0f)});
+    CHECK(hashOf(a.world) != h0, "the fight changed the world");
+    // The player dies; 3 s later the round restarts.
+    a.combat->damage(a.player, 10000.0f, byId(a, kEnemyA), a.info().pos);
+    std::vector<CombatEvent> ev;
+    int steps = 0;
+    while (only(ev, Kind::Restart).empty() && steps < 400) {
+        const auto e = a.run(1);
+        ev.insert(ev.end(), e.begin(), e.end());
+        ++steps;
+    }
+    std::printf("\n      restart %d steps after the death", steps);
+    CHECK(only(ev, Kind::Restart).size() == 1 && steps >= 179 && steps <= 181, "restartDelay (3 s, 180 steps) after the death");
+    CHECK(hashOf(a.world) == h0, "the world after the restart step is the round's start: world.hash");
+    CHECK(nearVec(a.info().pos, p0, 1e-6f), "the player back where it stood");
+    CHECK(near(reg.get<Health>(a.player).current, 100.0f) && reg.get<WeaponState>(a.player).ammo == 30,
+          "with full health and a full magazine");
+    CHECK(nearVec(reg.get<Transform>(crate).position, crate0, 1e-6f), "the crate back in its place");
+    CHECK(near(reg.get<Health>(byId(a, kEnemyA)).current, 100.0f) && modeOf(a, kEnemyA) != EnemyMode::Dead,
+          "the enemies back to their start");
+    CHECK(a.combat->round().restarts == 1, "round() counts the restart");
+}
+
+static void t17_restart_key() {
+    Arena a;
+    Round round;
+    const uint64_t h0 = startRound(a, round);
+    (void)a.run(20, {actionEvent("fire", true)});
+    const auto ev = a.run(1, {actionEvent("fire", false), actionEvent("restart", true)});
+    CHECK(only(ev, Kind::Restart).size() == 1, "restart pressed: the round restarts in that step");
+    CHECK(hashOf(a.world) == h0, "to the round's start");
+}
+
+static void t17_dead_player_cannot_move_or_fire() {
+    Arena a;
+    const glm::vec3 p0 = a.info().pos;
+    a.world.registry().patch<Health>(a.player, [](Health& h) { h.current = 0.0f; });
+    const auto ev = a.run(30, {axisSet("move_forward", 1.0f), axisSet("look_x", 5.0f), actionEvent("fire", true)});
+    CHECK(nearVec(a.info().pos, p0, 1e-4f), "a dead player does not walk");
+    CHECK(near(a.info().yawDeg, 0.0f, 1e-4f), "or turn");
+    CHECK(only(ev, Kind::Shot).empty(), "or fire");
+}
+
+static void t17_win_when_all_enemies_dead() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    (void)startRound(a);
+    a.combat->damage(byId(a, kEnemyA), 1000.0f, a.player, {});
+    auto ev = a.run(5);
+    CHECK(only(ev, Kind::Win).empty() && a.combat->round().phase == RoundPhase::Playing, "one enemy left: no win");
+    a.combat->damage(byId(a, kEnemyB), 1000.0f, a.player, {});
+    ev = a.run(240);
+    CHECK(only(ev, Kind::Win).size() == 1 && a.combat->round().phase == RoundPhase::Won, "both dead: won, once");
+    CHECK(only(ev, Kind::Restart).empty(), "a won round waits for `restart`");
+    ev = a.run(1, {actionEvent("restart", true)});
+    CHECK(only(ev, Kind::Restart).size() == 1 && modeOf(a, kEnemyA) != EnemyMode::Dead &&
+              a.world.registry().all_of<PlayerController>(byId(a, kEnemyB)),
+          "restart: both enemies back, characters and all");
+    CHECK(a.combat->round().phase == RoundPhase::Playing, "playing again");
+}
+
+static void t17_no_round_no_restart() {
+    Arena a;
+    a.combat->damage(a.player, 1000.0f, entt::null, {});
+    const auto ev = a.run(300, {actionEvent("restart", true)});
+    CHECK(only(ev, Kind::Restart).empty() && only(ev, Kind::RoundStart).empty(), "no Round: no round, no restart");
+    CHECK(near(a.world.registry().get<Health>(a.player).current, 0.0f), "the player stays dead");
+}
+
+static void t17_restart_replays_identically() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    (void)startRound(a);
+    const auto play = [&] {
+        std::vector<CombatEvent> all;
+        const auto add = [&](std::vector<CombatEvent> e) { all.insert(all.end(), e.begin(), e.end()); };
+        add(a.run(30, {actionEvent("fire", true), axisSet("look_x", 2.0f)}));
+        add(a.run(60, {axisSet("look_x", 0.0f), axisSet("move_forward", -1.0f)}));
+        add(a.run(30, {actionEvent("fire", false), axisSet("move_forward", 0.0f)}));
+        return all;
+    };
+    const auto first = play();
+    const uint64_t h1 = hashOf(a.world);
+    (void)a.run(1, {actionEvent("restart", true)});   // restarts on the press; held, it does nothing more
+    const auto again = play();
+    std::printf("\n      %zu events in the round's first 120 steps", first.size());
+    CHECK(!first.empty() && sameEvents(first, again, false), "after a restart the same play gives the same fight, bit for bit");
+    CHECK(hashOf(a.world) == h1, "and the same world.hash");
+}
+
 // --dump-burst FILE: a 30-round burst at the north wall from (-2, 0, 2), as JSON (each round's step,
 // cone, eye, direction, hit point; the view's pitch and yaw each step), for the look shots' plot.
 static int dumpBurst(const char* path) {
@@ -847,5 +978,12 @@ int main(int argc, char** argv) {
     RUN(t16_runs_are_identical);
     RUN(t16_snapshot_replays_a_fight);
     RUN(t16_play_scene_has_two_enemies);
+    RUN(t17_round_start_event);
+    RUN(t17_restart_equals_round_start);
+    RUN(t17_restart_key);
+    RUN(t17_dead_player_cannot_move_or_fire);
+    RUN(t17_win_when_all_enemies_dead);
+    RUN(t17_no_round_no_restart);
+    RUN(t17_restart_replays_identically);
     return ohao::test::finish("combat_tests");
 }

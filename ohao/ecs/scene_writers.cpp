@@ -383,6 +383,11 @@ void writeFields(const EnemyState& v, const EnemyState* omit, FieldSink& out) {
     if (!omit || v.shotsSeen != omit->shotsSeen) t.i64("\"shotsSeen\"", v.shotsSeen);
 }
 
+void writeFields(const Round& v, const Round* omit, FieldSink& out) {
+    if (!omit || !same(v.restartDelay, omit->restartDelay)) out.tree.f32("\"restartDelay\"", v.restartDelay);
+    if (!omit || v.restart != omit->restart) out.tree.string("\"restart\"", v.restart);
+}
+
 void writeFields(const Health& v, const Health* omit, FieldSink& out) {
     if (!omit || !same(v.max, omit->max)) out.tree.f32("\"max\"", v.max);
     if (!omit || !same(v.current, omit->current)) out.tree.f32("\"current\"", v.current);
