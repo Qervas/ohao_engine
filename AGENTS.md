@@ -296,9 +296,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   per present mode (`--modes`, `--seconds`, `--warmup`) while a mouse movement is fed every 40–60
   ms; budgets in `tests/bench/feel_budgets.json` (`look_latency_ms` median, gated only on a display
   of at least `minRefreshHz` with present wait, and `frame_p99_over_median`, each in the present
-  mode it names, both pending until Feel step 2), results in `build/feel_bench.json` and a CSV per
-  mode (`feel_bench_<mode>.csv`: every frame's time and steps, every movement's latency). No noise
-  detection yet: it shares the GPU and the display with whatever else runs.
+  mode it names, both gated since Feel step 2: latency 4.8 ms passes, p99/median 1.99 misses 1.5,
+  `docs/changes/2026-10-27-feel-step2.md`), results in `build/feel_bench.json` and per mode
+  `feel_bench_<mode>.csv` (every frame's time, steps and phases: start→poll is the late input wait,
+  poll→view the steps, view→submit, submit→present; every movement's latency; a slow frame's
+  interval is the previous row's phases) and `feel_bench_<mode>_events.csv` (the round's deaths,
+  restarts, wins and reloads, same clock); `--frames-ahead N` tries a `framesAhead`. Other
+  processes' CPU is recorded per mode (dwm.exe aside): over half a core, a gated budget is `noisy`,
+  exit 2, rerun by `tools/check.py`.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -582,7 +587,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     dynamic bodies) and their subtrees a runtime `RenderPose` between the last two step poses,
     which the render extract and the scene view's camera use; `Transform`, `WorldTransform`,
     `world.hash` and saved files stay the step's. A placement (spawn, teleport, edit) is never
-    interpolated across. A capture syncs before it resolves the view.
+    interpolated across. A capture syncs before it resolves the view. The input-driven player is
+    the exception in a realtime window: its turn is the newest step's plus the look lead (see
+    "Frame timing", the look lead), its position interpolated.
   - The window reports look input only from a captured cursor, as `MouseDelta`;
     `ohao_game` on a scene with a `PlayerController` captures the mouse while focused,
     `release_mouse` (Esc) frees it, and a click on the window takes it back
@@ -672,10 +679,28 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (`gpu/vulkan/present_waiter.hpp`) polls `vkWaitForPresentKHR` with a zero timeout about every
   0.25 ms, holding `Swapchain::hostMutex()`, which every host access to the swapchain (present,
   rebuild, destroy) takes, as Vulkan requires; a present unconfirmed after 250 ms, or without
-  present wait, keeps its call stamp (`source: present_call`, an underestimate). Today a look
-  movement counts as shown once the step after the one that applied it has run (the frame
-  interpolates from that step's pose). `ohao_game --present immediate|mailbox|fifo` and `ohao
-  serve --window --present` choose the present mode (`--vsync` is fifo).
+  present wait, keeps its call stamp (`source: present_call`, an underestimate). With a look-led
+  player a look movement counts as shown by the first frame after its poll; without one, once the
+  step after the one that applied it has run. `ohao_game --present immediate|mailbox|fifo` and
+  `ohao serve --window --present` choose the present mode (`--vsync` is fifo; the default stays
+  mailbox, which measured the same latency as immediate in a window).
+  - **The look lead** (step 2): a realtime window hands the World the look no step has consumed
+    yet (`World::setPendingLook`: the window's mouse movements since the last step and the
+    `input.inject` ones due at the next step, summed in the step's order), and the `interpolate`
+    sync system draws the input-driven, living player turned by it through `applyLook`, the step's
+    own arithmetic, so the next step lands exactly where the frame already was. **Gotcha: that
+    player's rotation is drawn from the newest step plus the lead, never interpolated** (only its
+    position is); anything else interpolates as before. Presentation only: `RenderPose`, never
+    `Transform`, `world.hash`, a file or a snapshot; no lead in lockstep (alpha 1, nothing pending),
+    for the dead, or for characters moved by their `MoveIntent`.
+  - **Late input sampling:** a realtime frame polls only once at most `LiveConfig::framesAhead`
+    submitted frames are unpresented (`presentToAwait`; it waits on present wait, else the frame's
+    fence, at most 20 ms). Automatic (-1): 1 while a player leads its look, unbounded otherwise.
+  - **Stalls:** every window on this laptop gets a few frames a minute of 330–500 ms (5–16 a
+    minute measured) in which the presentation engine holds the swapchain's images: the frame's
+    GPU work is normal and starts late, nothing of the engine's is queued in the gap, and a
+    30,000-frame headless loop never shows one. They are not the engine's to fix; `feel_bench`
+    counts them (`stalls`).
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

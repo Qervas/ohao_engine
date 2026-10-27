@@ -443,6 +443,70 @@ hitches of about half a second a minute (the frames that ran 3+ steps, the disca
 500–780 ms latency outliers); their cause is step 2's to find. fifo settles into two-refresh
 frames (8.3 ms) after about 20 s.
 
+## As built (step 2)
+
+- **`applyLook`** (`ecs/physics_scene.hpp`): the step's look arithmetic as a free function
+  (`yaw -= dx·lookDegPerUnit`, `pitch -= dy·lookDegPerUnit`, yaw by `std::remainder` into
+  ±180, pitch clamped to ±89), called by the step and by the lead; extracting it changed no
+  result (combat 48/48, api 65/65, both play-scene goldens exact).
+- **The lead:** `World::setPendingLook`/`pendingLook` (cleared by `simulate`). It runs inside the
+  `interpolate` sync system, right after the movers are interpolated, rather than as a separate
+  `look_lead` system (one pass over the players; the same order the plan asked for). For each
+  player with a `PlayerController` that takes input, a `Transform` and health above 0: the body's
+  `RenderPose` is its position (interpolated if it moved) with the yaw `applyLook(newest step,
+  pending)` gives, the head's the pitch, and the subtree is composed from those; `prevWorld` is
+  kept from the frame's first pose of the entity (motion vectors stay one frame's). It runs when
+  alpha < 1 or a look is pending: in lockstep and headless (alpha 1, nothing pending) nothing is
+  drawn differently. `PhysicsScene::leadsLook()` says whether a player led this sync.
+- **What is pending** (`LiveHost`): the window's `MouseDelta`s held since the last step plus the
+  `input.inject` mouse events due at the next step (`Session::injectedLookDue`), summed in the
+  order the step's input map sums them (device first), so the lead equals the next step bit for
+  bit. 0 when nothing steps.
+- **Latency with the lead:** a movement counts as shown by the first frame whose view was resolved
+  after its poll; its step (`consume`) may come later and is filled in then (`FrameLog::consumed`,
+  `LookSample::consumed`), so `pollToConsumeMs` stays the median wait for a step.
+- **Late input sampling:** before polling, a realtime frame waits until the frame
+  `presentToAwait(submitted, framesAhead)` is presented (`VulkanRenderer::waitForPresentOf`:
+  `PresentWaiter::waitResolved`, at most 20 ms, else the frame's fence). `LiveConfig::framesAhead`
+  -1 is automatic: 1 while a player leads its look, unbounded otherwise. 0 measured the same
+  latency (4.49 ms median) and worse pacing (p99/median 2.62), so 1 stays.
+- **feel_bench:** gated from step 2; per-frame phases and the round's events in the CSVs; a load
+  probe (other processes' CPU, dwm.exe aside; over half a core → `noisy`, exit 2; ruling 17);
+  `--frames-ahead`.
+
+**Results** (2026-10-27, `feel_bench --check`, the same machine; other processes 11–14% of a
+core: a quiet run). Before is the step 1 baseline above.
+
+| Present | Look latency median, before → after | p95 after | Stages after: poll→consume, poll→view, view→submit, submit→present | Frame p99/median, before → after | Stalls (> 100 ms) |
+|---|---|---|---|---|---|
+| immediate | 32.14 → **4.80 ms** | 24.87 | 9.41, 0.02, 0.15, 4.64 | 1.78 → 1.99 | 9 |
+| mailbox | 32.07 → **4.81 ms** | 22.05 | 9.66, 0.02, 0.16, 4.66 | 2.50 → 2.00 | 2 |
+| fifo | 53.24 → **7.62 ms** | 51.57 | 5.36, 0.03, 0.19, 7.39 | 2.45 → 4.49 | 9 |
+
+`look_latency_ms` (immediate, 240 Hz, present wait): **4.80, budget 15: pass.**
+`frame_p99_over_median` (immediate): **1.99, budget 1.5: fail.** What the spikes are:
+- **Stalls (330–500 ms, 5–16 a minute in every window).** The frame that waits on its slot's fence
+  waits for a frame whose GPU work took its usual 2–3 ms but started 410–500 ms after the one
+  before (GPU timestamps). Nothing of the engine's is queued in that gap: no device-memory
+  allocation (VMA callbacks), no other submission. The same happens with present wait off, in the
+  helmet scene, in `ohao_game` as in `feel_bench`, under either linked VMA copy, and presents
+  confirmed 30–110 ms late drain after it. A 30,000-frame headless loop has no gap over 50 ms.
+  The window's swapchain images are being held by the presentation engine (the compositor or the
+  laptop's display path); the frame's submission waits on its image's acquire semaphore. Not
+  fixed: there is no engine source to fix.
+- **The 1% slow frames (4–5 ms against a 2.5 ms median).** In 834 of the 891 frames over 1.5 ×
+  median the time went to the late input wait (median 4.6 ms against 0.5 ms in the others): a
+  window rendering at ~400 frames a second into a 240 Hz compositor gets its presents confirmed on
+  the compositor's ticks, so the wait for the previous present is either nearly nothing or most of
+  a tick. Steps add about 0.9 ms (the interval holding a step: median 3.24 ms against 2.30).
+  The run's stalls fall at no particular game event (one at a death, the rest at none; the
+  same rate with no input at all).
+- **fifo's 4.49** is its catch-up: two-step frames after a missed refresh (93 of them) at 21.9 ms.
+
+Proposed for ruling 7: **`ohao_game` keeps `mailbox` as its default.** In a window it measured
+the same latency as immediate (4.81 against 4.80 ms) without tearing; fifo costs 2.8 ms of
+latency and paces worst.
+
 ## Rulings for Frank
 
 Decided (by Frank adopting the roadmap, 2026-10-27):
@@ -485,3 +549,15 @@ Open (judgment calls made here, each conservative; any can be reversed):
     budgets are pending in step 1; step 2 adds a probe before they gate.
 18. **Step 1: injected look counts from its `input.inject` call,** so agents and check_live
     measure the same latency the device path does (both wait for the next step).
+19. **Step 2: the lead lives in the `interpolate` system** (after the movers) rather than a
+    separate `look_lead` system; the order is the plan's.
+20. **Step 2: `framesAhead` waits at most 20 ms** for a present, then polls anyway (a stall must
+    not stop input); automatic is 1 with a look-led player, else unbounded.
+21. **Step 2, open: `frame_p99_over_median` misses 1.5 (1.99 immediate).** Its causes are the
+    presentation engine's stalls and a windowed present clock, not engine work (As built
+    (step 2)). Options for Frank: (a) keep the budget and add a borderless fullscreen /
+    independent-flip window mode, where a present is not composited, then measure again;
+    (b) measure pacing as present-to-present intervals (what reaches the display) instead of loop
+    iterations; (c) cap a play window's frames at the display's rate. None is taken here.
+22. **Step 2: `feel_bench` leaves dwm.exe out of its load probe:** it is the process presenting
+    the bench's own window.

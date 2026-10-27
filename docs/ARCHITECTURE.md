@@ -126,7 +126,11 @@ World::sync()
   interpolate     World::renderAlpha < 1: what the last step moved    installed by installPhysics
                   (players, heads, dynamic bodies) and its subtree ->
                   RenderPose between its last two step poses; at 1
-                  none (Transform, the hash, saved files untouched)
+                  none (Transform, the hash, saved files untouched);
+                  then the look lead: the input-driven player and its
+                  subtree turned by World::pendingLook through
+                  applyLook (the newest step's turn plus the lead,
+                  never interpolated; nothing in lockstep)
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
                   (at RenderPose when there is one)
                   and the light list; setLights gives each point,      a renderer (addSyncAfter)
@@ -171,7 +175,10 @@ VulkanRenderer::render()
   with its frame number (VK_KHR_present_id) and confirmed by a waiter thread
   (vkWaitForPresentKHR, gpu/vulkan/present_waiter.hpp); a realtime window host stamps each
   frame (poll, view, submit, present) and the look movements it shows into its FrameLog
-  (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench
+  (runtime/frame_log.hpp): render.stats' latency and pacing, ohao_game --latency, feel_bench;
+  before polling it waits until at most LiveConfig::framesAhead frames are unpresented
+  (presentToAwait, VulkanRenderer::waitForPresentOf; 1 with a look-led player), and before
+  sync it sets World::setPendingLook to the look no step has consumed yet
 ```
 
 The deferred frame, pass by pass, under its registry names (`render/frame/pass_registry.hpp`,
