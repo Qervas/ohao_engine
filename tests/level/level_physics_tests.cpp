@@ -920,11 +920,13 @@ static void t12_play_scene_loads_with_head_camera() {
     auto& reg = w.registry();
     entt::entity player = entt::null, camera = entt::null;
     std::size_t active = 0;
-    for (const entt::entity e : reg.view<PlayerController>()) player = e;
+    std::size_t players = 0;   // moved by input; the scene's enemies (SP7) are characters moved by their AI
+    for (auto [e, pc] : reg.view<const PlayerController>().each())
+        if (pc.input) player = e, ++players;
     for (auto [e, cam] : reg.view<const Camera>().each())
         if (cam.active) camera = e, ++active;
     const auto* parent = camera != entt::null ? reg.try_get<Parent>(camera) : nullptr;
-    CHECK(player != entt::null && reg.view<PlayerController>().size() == 1, "one player");
+    CHECK(player != entt::null && players == 1, "one player");
     CHECK(active == 1 && parent && parent->entity == player, "one active Camera, the player's child (the level's stays off)");
     const auto view = resolveSceneView(w).camera;
     std::printf("\n      view at (%.4f, %.4f, %.4f) pitch %.3f yaw %.3f", view ? view->position.x : 0.0f,

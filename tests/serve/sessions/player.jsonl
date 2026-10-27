@@ -7,7 +7,7 @@
 {"jsonrpc":"2.0","id":7,"method":"player.info"}
 {"jsonrpc":"2.0","id":8,"method":"world.hash"}
 {"jsonrpc":"2.0","id":9,"method":"input.inject","params":{"events":[{"axis":"move_forward","value":null}]}}
-{"jsonrpc":"2.0","id":10,"method":"player.teleport","params":{"pos":[-2.2,0.3,-2],"yawDeg":90}}
+{"jsonrpc":"2.0","id":10,"method":"player.teleport","params":{"pos":[-2,0.3,-1.35],"yawDeg":90}}
 {"jsonrpc":"2.0","id":11,"method":"world.step","params":{"frames":5}}
 {"jsonrpc":"2.0","id":12,"method":"player.info"}
 {"jsonrpc":"2.0","id":13,"method":"physics.contacts"}

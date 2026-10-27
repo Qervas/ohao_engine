@@ -2258,19 +2258,20 @@ static void sp6_t14_player_teleport_moves_and_stops() {
               Reply(lw.s.call("input.inject", R"({"events":[{"axis":"move_forward","value":null}]})")).ok(),
           "walk 20 steps, then let go");
     const uint64_t before = lw.s.changeCount();
-    const Reply t(lw.s.call("player.teleport", R"({"pos":[-2.2,0.3,-2],"yawDeg":90})"));
+    // A spot on the Step clear of EnemyA (SP7), which stands at (-2.5, 0.3, -2).
+    const Reply t(lw.s.call("player.teleport", R"({"pos":[-2,0.3,-1.35],"yawDeg":90})"));
     std::printf("\n      %s", t.json("/result").c_str());
-    CHECK(t.ok() && t.json("/result/pos") == "[-2.2,0.3,-2]" && t.str("/result/yawDeg") == "90" &&
+    CHECK(t.ok() && t.json("/result/pos") == "[-2,0.3,-1.35]" && t.str("/result/yawDeg") == "90" &&
               t.json("/result/velocity") == "[0,0,0]",
           "onto the Step, facing -X, at rest; the reply is player.info's");
     CHECK(t.json("/result/ground") == "true" && t.str("/result/on") == "Step" && t.str("/result/surface") == "metal",
           "standing on the Step's metal at once");
     CHECK(lw.s.changeCount() > before, "it changes the world");
     const Reply q(lw.s.call("world.query", R"({"names":["Player"],"fields":["/Transform/position"]})"));
-    CHECK(q.json("/result/entities/0/Transform/position") == "[-2.2,0.3,-2]", "its Transform says so");
+    CHECK(q.json("/result/entities/0/Transform/position") == "[-2,0.3,-1.35]", "its Transform says so");
     CHECK(Reply(lw.s.call("world.step", R"({"frames":10})")).ok(), "10 steps");
     const Reply after(lw.s.call("player.info"));
-    CHECK(after.json("/result/pos") == "[-2.2,0.3,-2]" && after.json("/result/velocity") == "[0,0,0]",
+    CHECK(after.json("/result/pos") == "[-2,0.3,-1.35]" && after.json("/result/velocity") == "[0,0,0]",
           "it stays: the walk's speed did not carry through the teleport");
     const Reply keep(lw.s.call("player.teleport", R"({"pos":[-1,0,1]})"));
     CHECK(keep.ok() && keep.str("/result/yawDeg") == "90" && keep.str("/result/on") == "Floor", "without yawDeg it keeps its facing");

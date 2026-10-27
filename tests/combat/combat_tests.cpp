@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -75,7 +76,9 @@ struct Arena {
     entt::entity player{entt::null};
     entt::entity head{entt::null};
 
-    explicit Arena(glm::vec3 at = {-2.0f, 0.0f, 2.0f}, float yawDeg = 0.0f, Weapon weapon = {}) {
+    // `extra` runs before the first sync (what it adds spawns with the player).
+    explicit Arena(glm::vec3 at = {-2.0f, 0.0f, 2.0f}, float yawDeg = 0.0f, Weapon weapon = {},
+                   const std::function<void(World&)>& extra = {}) {
         world.seedIds(7);
         auto& reg = world.registry();
         ohao::level::installLevels(world, files, engineTypes());
@@ -90,6 +93,7 @@ struct Arena {
         head = world.createWithId(0xb1a7e3, "Head");
         reg.emplace<Camera>(head, Camera{75.0f, 0.05f, 100.0f, true});
         world.setParent(head, player);
+        if (extra) extra(world);
         world.sync();
         for (auto [e, cam, ln] : reg.view<Camera, const LevelNode>().each()) cam.active = false;
         world.setTransform(player, Transform{at, yawRotation(yawDeg)});
@@ -520,6 +524,264 @@ static void t15_play_scene_has_a_rifle() {
     CHECK(only(ev, Kind::Shot).size() == 2 && reg.get<WeaponState>(player).ammo == 28, "two rounds in 7 steps, 28 left");
 }
 
+// ---- test 16: enemies -------------------------------------------------------------------------
+// docs/specs/2026-10-27-combat-design.md, "Enemies": characters on the player's code (spawn
+// "enemy", input false) driven by the enemy AI at the start of each combat step.
+
+namespace {
+
+constexpr uint64_t kEnemyA = 0xe1, kEnemyB = 0xe2;
+// Behind both enemies (they face +Z from z -2): outside their cones, in the clear.
+const glm::vec3 kHidden{-0.8f, 0.0f, -2.6f};
+
+Weapon enemyWeapon() {
+    Weapon w;
+    w.damage = 8.0f;
+    w.fireRate = 4.0f;
+    w.magazine = 12;
+    w.reloadTime = 2.0f;
+    w.recoilPitchDeg = w.recoilYawDeg = 0.0f;
+    w.seed = 7;
+    return w;
+}
+
+// Two enemies, EnemyA and EnemyB, spawning at the blockout's enemy spawns.
+std::function<void(World&)> enemies(Enemy ai = {}) {
+    return [ai](World& w) {
+        for (const auto& [id, name] : {std::pair{kEnemyA, "EnemyA"}, std::pair{kEnemyB, "EnemyB"}}) {
+            const entt::entity e = w.createWithId(id, name);
+            PlayerController pc;
+            pc.spawn = "enemy";
+            pc.input = false;
+            pc.walkSpeed = 2.5f;
+            w.registry().emplace<PlayerController>(e, pc);
+            w.registry().emplace<Health>(e);
+            w.registry().emplace<Weapon>(e, enemyWeapon());
+            w.registry().emplace<Enemy>(e, ai);
+        }
+    };
+}
+
+entt::entity byId(const Arena& a, uint64_t id) { return a.world.findById(id); }
+EnemyMode modeOf(const Arena& a, uint64_t id) {
+    const auto* s = a.world.registry().try_get<EnemyState>(byId(a, id));
+    return s ? s->mode : EnemyMode::Idle;
+}
+glm::vec3 feetOf(const Arena& a, uint64_t id) { return a.world.registry().get<Transform>(byId(a, id)).position; }
+std::vector<CombatEvent> from(const std::vector<CombatEvent>& ev, Kind k, uint64_t source) {
+    std::vector<CombatEvent> out;
+    for (const CombatEvent& e : ev)
+        if (e.kind == k && e.sourceId == source) out.push_back(e);
+    return out;
+}
+void toughen(Arena& a) { a.world.registry().replace<Health>(a.player, Health{10000.0f, 10000.0f}); }
+
+} // namespace
+
+static void t16_enemies_spawn_at_enemy_spawns() {
+    Arena a(kHidden, 0.0f, {}, enemies());
+    for (const auto& [id, x, z] : {std::tuple{kEnemyA, -2.5f, -2.0f}, std::tuple{kEnemyB, 3.0f, -2.0f}}) {
+        const auto info = a.physics->playerInfo(byId(a, id));
+        std::printf("\n      %llx at (%.3f, %.3f, %.3f) yaw %.2f", static_cast<unsigned long long>(id),
+                    info ? info->pos.x : 0.0f, info ? info->pos.y : 0.0f, info ? info->pos.z : 0.0f,
+                    info ? info->yawDeg : 0.0f);
+        CHECK(info && near(info->pos.x, x, 0.01f) && near(info->pos.z, z, 0.01f),
+              "at its enemy spawn (B's is on the ramp: it settles a millimetre down it)");
+        CHECK(info && std::cos(glm::radians(info->yawDeg)) < -0.9999f, "facing the spawn's yaw (180: +Z)");
+    }
+    CHECK(a.physics->playerInfo(a.player) && near(a.info().pos.x, kHidden.x, 1e-3f), "the player is not moved by them");
+}
+
+static void t16_idle_without_sight() {
+    Arena a(kHidden, 0.0f, {}, enemies());
+    const glm::vec3 a0 = feetOf(a, kEnemyA), b0 = feetOf(a, kEnemyB);
+    const auto ev = a.run(120);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Idle && modeOf(a, kEnemyB) == EnemyMode::Idle,
+          "the player behind them: both stay idle");
+    CHECK(only(ev, Kind::Shot).empty(), "and fire nothing");
+    CHECK(nearVec(feetOf(a, kEnemyA), a0, 1e-3f) && nearVec(feetOf(a, kEnemyB), b0, 1e-3f), "or move");
+}
+
+static void t16_sees_and_chases() {
+    Enemy ai;
+    ai.attackRange = 2.0f;   // so it walks rather than fires
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies(ai));
+    toughen(a);
+    const float d0 = glm::length(glm::vec2(feetOf(a, kEnemyA).x - a.info().pos.x, feetOf(a, kEnemyA).z - a.info().pos.z));
+    (void)a.run(30);
+    const float d1 = glm::length(glm::vec2(feetOf(a, kEnemyA).x - a.info().pos.x, feetOf(a, kEnemyA).z - a.info().pos.z));
+    std::printf("\n      EnemyA %.3f m from the player, then %.3f", d0, d1);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Chase, "in sight, out of attack range: it chases");
+    CHECK(d0 - d1 > 0.8f, "and has walked most of a metre closer in half a second (2.5 m/s)");
+    (void)a.run(60);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Attack, "in range: it stops and attacks");
+}
+
+static void t16_attacks_in_range_after_reaction_time() {
+    Arena a(kHidden, 0.0f, {}, enemies());   // unseen while it settles,
+    toughen(a);
+    a.physics->teleportPlayer(a.player, {-2.0f, 0.0f, 2.0f}, 0.0f);   // then in front of them
+    const glm::vec3 a0 = feetOf(a, kEnemyA);
+    uint64_t attackAt = 0, firstShot = 0;
+    for (int i = 0; i < 90 && !firstShot; ++i) {
+        const auto ev = a.run(1);
+        if (!attackAt && modeOf(a, kEnemyA) == EnemyMode::Attack) attackAt = a.combat->steps();
+        if (const auto s = from(ev, Kind::Shot, kEnemyA); !s.empty()) firstShot = s[0].step;
+    }
+    std::printf("\n      attack at step %llu, first round at %llu", static_cast<unsigned long long>(attackAt),
+                static_cast<unsigned long long>(firstShot));
+    CHECK(attackAt != 0, "in sight and in range: it attacks");
+    CHECK(firstShot && firstShot - attackAt >= 20 && firstShot - attackAt <= 22,
+          "its first round after the reaction time (0.35 s: 21 steps)");
+    CHECK(glm::length(glm::vec2(feetOf(a, kEnemyA).x - a0.x, feetOf(a, kEnemyA).z - a0.z)) < 0.05f,
+          "standing where it stood");
+}
+
+static void t16_bursts_and_pauses() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    const auto shots = from(a.run(300), Kind::Shot, kEnemyA);
+    std::printf("\n      %zu rounds:", shots.size());
+    for (std::size_t i = 1; i < shots.size(); ++i)
+        std::printf(" %llu", static_cast<unsigned long long>(shots[i].step - shots[i - 1].step));
+    bool shape = shots.size() >= 9;
+    for (std::size_t i = 1; shape && i < 9; ++i) {
+        const uint64_t gap = shots[i].step - shots[i - 1].step;
+        shape &= i % 3 == 0 ? gap >= 48 && gap <= 50 : gap == 15;
+    }
+    CHECK(shape, "bursts of 3 at 4 Hz (15 steps apart), 0.8 s between bursts");
+}
+
+static void t16_loses_player_returns_to_idle() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    for (int i = 0; i < 10 && modeOf(a, kEnemyA) != EnemyMode::Attack; ++i) (void)a.run(1);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Attack, "it attacks");
+    (void)a.box(0x3a11, "Wall", {-2.25f, 1.5f, 0.0f}, {1.5f, 1.5f, 0.1f}, std::nullopt);   // between them
+    const auto ev = a.run(3);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Chase, "the line blocked: it chases where it last saw the player");
+    int steps = 0;
+    std::vector<CombatEvent> later;
+    while (modeOf(a, kEnemyA) != EnemyMode::Idle && steps < 400) {
+        const auto e = a.run(1);
+        later.insert(later.end(), e.begin(), e.end());
+        ++steps;
+    }
+    std::printf("\n      idle %d steps after the wall", steps + 3);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Idle && steps + 3 >= 180 && steps + 3 <= 200,
+          "and after 3 s without sight gives up: idle");
+    CHECK(from(later, Kind::Shot, kEnemyA).empty(), "firing nothing it cannot see");
+}
+
+static void t16_hit_wakes_idle_enemy() {
+    Arena a(kHidden, 0.0f, {}, enemies());
+    toughen(a);
+    (void)a.run(5);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Idle, "idle, the player behind it");
+    a.combat->damage(byId(a, kEnemyA), 10.0f, a.player, feetOf(a, kEnemyA));
+    (void)a.run(2);
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Attack, "hit: it turns on the player (in range, in the clear): attack");
+    CHECK(modeOf(a, kEnemyB) == EnemyMode::Idle, "the other one did not notice");
+}
+
+static void t16_dead_enemy_blocks_nothing() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    (void)a.run(5);
+    const entt::entity e = byId(a, kEnemyA);
+    const glm::vec3 chest = feetOf(a, kEnemyA) + glm::vec3(0.0f, 1.2f, 0.0f);
+    a.combat->damage(e, 1000.0f, a.player, chest);
+    const auto ev = a.run(60);
+    auto& reg = a.world.registry();
+    CHECK(modeOf(a, kEnemyA) == EnemyMode::Dead, "dead");
+    CHECK(!reg.all_of<PlayerController>(e) && !a.physics->playerInfo(e), "its character is gone");
+    const glm::vec3 up = reg.get<Transform>(e).rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+    CHECK(std::fabs(up.y) < 0.2f, "it lies on the floor");
+    const glm::vec3 eye = a.info().pos + glm::vec3(0.0f, 1.62f, 0.0f);
+    const auto r = a.physics->raycastFrom(eye, chest - eye, 50.0f, a.player);
+    CHECK(r && r->entity != e, "a ray through where it stood passes");
+    CHECK(from(ev, Kind::Shot, kEnemyA).empty(), "and it fires no more");
+}
+
+static void t16_enemy_fire_kills_player() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    a.world.registry().replace<Health>(a.player, Health{100.0f, 30.0f});
+    const auto ev = a.run(900);
+    const auto deaths = only(ev, Kind::Death);
+    const bool killed = !deaths.empty() && deaths[0].target == a.player &&
+                        (deaths[0].sourceId == kEnemyA || deaths[0].sourceId == kEnemyB);
+    std::printf("\n      %zu enemy rounds, %zu hits on the player", from(ev, Kind::Shot, kEnemyA).size() +
+                from(ev, Kind::Shot, kEnemyB).size(), only(ev, Kind::Damage).size());
+    CHECK(killed, "their rounds kill the player");
+    CHECK(near(a.world.registry().get<Health>(a.player).current, 0.0f), "Health 0");
+}
+
+namespace {
+
+std::vector<CombatEvent> fight(Arena& a) {
+    std::vector<CombatEvent> all;
+    const auto add = [&](std::vector<CombatEvent> ev) { all.insert(all.end(), ev.begin(), ev.end()); };
+    add(a.run(40, {actionEvent("fire", true), axisSet("look_x", 3.0f)}));
+    add(a.run(60, {axisSet("look_x", -2.0f), axisSet("move_right", 1.0f)}));
+    add(a.run(200, {axisSet("look_x", 0.0f), axisSet("move_right", 0.0f)}));
+    return all;
+}
+
+} // namespace
+
+static void t16_runs_are_identical() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies()), b({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    toughen(b);
+    const auto ea = fight(a), eb = fight(b);
+    std::printf("\n      %zu events, %zu damage", ea.size(), only(ea, Kind::Damage).size());
+    CHECK(!from(ea, Kind::Shot, kEnemyA).empty(), "the enemies fight back");
+    CHECK(sameEvents(ea, eb, true), "two runs: identical events, bit for bit");
+    CHECK(hashOf(a.world) == hashOf(b.world), "and world.hash");
+}
+
+static void t16_snapshot_replays_a_fight() {
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    toughen(a);
+    (void)a.run(60, {actionEvent("fire", true)});
+    const Snapshot mid = takeSnapshot(a.world, engineTypes());
+    const auto first = a.run(150);
+    const uint64_t h1 = hashOf(a.world);
+    restoreSnapshot(a.world, mid);
+    const auto again = a.run(150);
+    CHECK(!from(first, Kind::Shot, kEnemyB).empty() && sameEvents(first, again, false),
+          "a restore mid-fight replays the enemies' and the player's rounds bit for bit");
+    CHECK(hashOf(a.world) == h1, "to the same world.hash");
+}
+
+static void t16_play_scene_has_two_enemies() {
+    World w;
+    FileAssetResolver files(OHAO_SOURCE_DIR);
+    ohao::level::installLevels(w, files, engineTypes());
+    installPhysics(w, files);
+    installCombat(w);
+    const auto loaded = loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
+                                      engineTypes());
+    CHECK(loaded, "blockout_play.scene.json loads");
+    if (!loaded) return;
+    w.sync();
+    auto& reg = w.registry();
+    std::size_t enemiesFound = 0, atSpawn = 0, withBody = 0;
+    for (auto [e, en, pc] : reg.view<const Enemy, const PlayerController>().each()) {
+        ++enemiesFound;
+        const glm::vec3 p = reg.get<Transform>(e).position;
+        atSpawn += (near(p.x, -2.5f, 1e-3f) || near(p.x, 3.0f, 1e-3f)) && near(p.z, -2.0f, 1e-3f) && !pc.input &&
+                   pc.spawn == "enemy";
+        if (const auto* ch = reg.try_get<Children>(e))
+            for (const entt::entity c : ch->entities) withBody += reg.all_of<MeshSource>(c) ? 1 : 0;
+    }
+    CHECK(enemiesFound == 2 && atSpawn == 2, "two enemies, at the enemy spawns, moved by the AI");
+    CHECK(withBody >= 2, "each with a body to see");
+    std::size_t players = 0;
+    for (auto [e, pc] : reg.view<const PlayerController>().each()) players += pc.input ? 1 : 0;
+    CHECK(players == 1, "one player");
+}
+
 // --dump-burst FILE: a 30-round burst at the north wall from (-2, 0, 2), as JSON (each round's step,
 // cone, eye, direction, hit point; the view's pitch and yaw each step), for the look shots' plot.
 static int dumpBurst(const char* path) {
@@ -573,5 +835,17 @@ int main(int argc, char** argv) {
     RUN(t15_runs_are_identical);
     RUN(t15_snapshot_replays_a_burst);
     RUN(t15_play_scene_has_a_rifle);
+    RUN(t16_enemies_spawn_at_enemy_spawns);
+    RUN(t16_idle_without_sight);
+    RUN(t16_sees_and_chases);
+    RUN(t16_attacks_in_range_after_reaction_time);
+    RUN(t16_bursts_and_pauses);
+    RUN(t16_loses_player_returns_to_idle);
+    RUN(t16_hit_wakes_idle_enemy);
+    RUN(t16_dead_enemy_blocks_nothing);
+    RUN(t16_enemy_fire_kills_player);
+    RUN(t16_runs_are_identical);
+    RUN(t16_snapshot_replays_a_fight);
+    RUN(t16_play_scene_has_two_enemies);
     return ohao::test::finish("combat_tests");
 }

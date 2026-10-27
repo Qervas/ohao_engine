@@ -15,9 +15,15 @@ using reflect::LayoutTree;
 
 // Bit-exact equality, as the generic writer compares fields (-0 != +0).
 bool same(float a, float b) { return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b); }
+bool same(const glm::vec2& a, const glm::vec2& b) { return same(a.x, b.x) && same(a.y, b.y); }
 bool same(const glm::vec3& a, const glm::vec3& b) { return same(a.x, b.x) && same(a.y, b.y) && same(a.z, b.z); }
 bool same(const glm::quat& a, const glm::quat& b) {
     return same(a.x, b.x) && same(a.y, b.y) && same(a.z, b.z) && same(a.w, b.w);
+}
+
+void vec2(LayoutTree& t, std::string_view key, const glm::vec2& v) {
+    const float f[2] = {v.x, v.y};
+    t.floats(key, f, 2);
 }
 
 void vec3(LayoutTree& t, std::string_view key, const glm::vec3& v) {
@@ -327,6 +333,54 @@ void writeFields(const PlayerController& v, const PlayerController* omit, FieldS
     s("\"sprint\"", &PlayerController::sprint);
     s("\"lookX\"", &PlayerController::lookX);
     s("\"lookY\"", &PlayerController::lookY);
+    s("\"spawn\"", &PlayerController::spawn);
+    if (!omit || v.input != omit->input) t.boolean("\"input\"", v.input);
+}
+
+void writeFields(const MoveIntent& v, const MoveIntent* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || !same(v.move, omit->move)) vec2(t, "\"move\"", v.move);
+    if (!omit || !same(v.yawDeg, omit->yawDeg)) t.f32("\"yawDeg\"", v.yawDeg);
+    if (!omit || !same(v.pitchDeg, omit->pitchDeg)) t.f32("\"pitchDeg\"", v.pitchDeg);
+    if (!omit || v.jump != omit->jump) t.boolean("\"jump\"", v.jump);
+    if (!omit || v.sprint != omit->sprint) t.boolean("\"sprint\"", v.sprint);
+}
+
+void writeFields(const Enemy& v, const Enemy* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    const auto f = [&](std::string_view key, float Enemy::*m) {
+        if (!omit || !same(v.*m, omit->*m)) t.f32(key, v.*m);
+    };
+    f("\"sightRange\"", &Enemy::sightRange);
+    f("\"fovDeg\"", &Enemy::fovDeg);
+    f("\"attackRange\"", &Enemy::attackRange);
+    f("\"reactionTime\"", &Enemy::reactionTime);
+    f("\"aimErrorDeg\"", &Enemy::aimErrorDeg);
+    if (!omit || v.burst != omit->burst) t.i64("\"burst\"", v.burst);
+    f("\"burstPause\"", &Enemy::burstPause);
+    f("\"loseTime\"", &Enemy::loseTime);
+    f("\"turnRateDegPerSec\"", &Enemy::turnRateDegPerSec);
+}
+
+void writeFields(const EnemyState& v, const EnemyState* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.mode != omit->mode) {
+        static constexpr std::string_view kModes[] = {"\"Idle\"", "\"Chase\"", "\"Attack\"", "\"Dead\""};
+        const auto raw = static_cast<uint8_t>(v.mode);
+        if (raw < std::size(kModes)) {
+            t.token("\"mode\"", kModes[raw]);
+        } else {
+            t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum EnemyMode");
+            t.null("\"mode\"");
+        }
+    }
+    if (!omit || !same(v.lastSeen, omit->lastSeen)) vec3(t, "\"lastSeen\"", v.lastSeen);
+    if (!omit || !same(v.lostFor, omit->lostFor)) t.f32("\"lostFor\"", v.lostFor);
+    if (!omit || !same(v.reaction, omit->reaction)) t.f32("\"reaction\"", v.reaction);
+    if (!omit || v.burstLeft != omit->burstLeft) t.i64("\"burstLeft\"", v.burstLeft);
+    if (!omit || !same(v.pause, omit->pause)) t.f32("\"pause\"", v.pause);
+    if (!omit || !same(v.lastHealth, omit->lastHealth)) t.f32("\"lastHealth\"", v.lastHealth);
+    if (!omit || v.shotsSeen != omit->shotsSeen) t.i64("\"shotsSeen\"", v.shotsSeen);
 }
 
 void writeFields(const Health& v, const Health* omit, FieldSink& out) {

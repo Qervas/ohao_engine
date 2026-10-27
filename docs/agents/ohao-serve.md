@@ -109,7 +109,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_room.scene.json --seed 00000
 {"method":"physics.raycast","result":{"hit":false}}
 {"method":"physics.raycast","result":{"hit":true,"entity":"36125b5b252b59a1","name":"Ramp","point":[2.7,0.3,-1],"normal":[0,0.9806,0.1961],"dist":1.7}}
 {"method":"physics.raycast","error":{"code":"E_PARAMS","message":"the direction is zero (or not finite)","data":[{"code":"E_PARAMS","path":"/dir","message":"the direction is zero (or not finite)","expected":"a nonzero [x, y, z]"}]}}
-{"method":"world.hash","result":{"hash":"000dda90a7369a91","frame":0}}
+{"method":"world.hash","result":{"hash":"958ac943c6fad4a9","frame":0}}
 {"method":"level.reload","error":{"code":"E_NOT_FOUND","message":"entity 5c0b10c000000003 is not a level (it has no Level)","data":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b10c000000003 is not a level (it has no Level)","expected":"the id of an entity with a Level","got":"\"5c0b10c000000003\""}]}}
 ```
 
@@ -150,7 +150,7 @@ look axis of 100 turns 10° a step) and `world_step`; read where it went with `w
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/walk.jsonl
-{"method":"scene.load","result":{"entities":7}}
+{"method":"scene.load","result":{"entities":13}}
 {"method":"input.inject","result":{"queued":4,"firstStep":0,"lastStep":26}}
 {"method":"world.step","result":{"frame":40}}
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,0,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
@@ -174,18 +174,18 @@ restore, walk again, then teleport onto the Step and list what touches:
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 0000000000000001 --script docs/agents/examples/player.jsonl
-{"method":"scene.load","result":{"entities":7}}
+{"method":"scene.load","result":{"entities":13}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,2.2],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Floor","surface":"concrete","footsteps":0}}
-{"method":"world.snapshot","result":{"name":"spawn","entities":24,"bytes":5816}}
+{"method":"world.snapshot","result":{"name":"spawn","entities":30,"bytes":8056}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"5d47ba64b7332ff9","frame":30}}
-{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":7,"frame":0}}
+{"method":"world.hash","result":{"hash":"ea0910f827dc80c1","frame":30}}
+{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":19,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"5d47ba64b7332ff9","frame":30}}
-{"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2.2,0.3,-2],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
+{"method":"world.hash","result":{"hash":"ea0910f827dc80c1","frame":30}}
+{"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
 
@@ -202,7 +202,7 @@ second's rest:
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/fire.jsonl
-{"method":"scene.load","result":{"entities":7}}
+{"method":"scene.load","result":{"entities":13}}
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":15}}
 {"method":"world.step","result":{"frame":15}}
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","WeaponState":{"ammo":27,"cooldown":0.050000012,"bloomDeg":1.05,"kickDeg":1.05,"shots":3,"triggerHeld":true},"Health":{},"PlayerState":{"pitchDeg":1.05}}],"count":1}}
@@ -238,11 +238,11 @@ $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":60}}
 {"method":"world.step","result":{"frame":61,"watch":{"entities":[{"id":"0c6901342a294695","Transform":{"position":[0,-6.891139,27.53422]}}],"count":1}}}
 {"method":"input.record","result":{"path":"build/doc_tmp/fly.input.jsonl","steps":61,"events":2}}
-{"method":"world.hash","result":{"hash":"bd898f4b0704507b","frame":61}}
+{"method":"world.hash","result":{"hash":"791c60b2a5f6cc79","frame":61}}
 {"method":"world.diff","result":{"changed":[{"id":"0c6901342a294695","name":"MainCamera","fields":{"/Transform/position":[[0,-6.891139,30.534174],[0,-6.891139,27.53422]]}}],"created":[],"destroyed":[],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":2,"frame":0}}
 {"method":"input.replay","result":{"steps":61,"events":2,"checkpoints":2,"frame":61}}
-{"method":"world.hash","result":{"hash":"bd898f4b0704507b","frame":61}}
+{"method":"world.hash","result":{"hash":"791c60b2a5f6cc79","frame":61}}
 ```
 
 ## Look

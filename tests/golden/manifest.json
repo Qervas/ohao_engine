@@ -256,7 +256,7 @@
       "golden": "tests/golden/blockout_play_deferred.png",
       "max_abs_diff": 0,
       "max_diff_frac": 0.0,
-      "_note": "The play scene (added 2026-10-26, sub-project 6 step 3): the blockout seen through the player's head camera before any step, at the player spawn (1.5, 0, 2.2) 1.62 m up, facing -Z, fov 75, near 0.05 (the player spawns in the player_spawn sync system). Exact."
+      "_note": "The play scene (added 2026-10-26, sub-project 6 step 3): the blockout seen through the player's head camera before any step, at the player spawn (1.5, 0, 2.2) 1.62 m up, facing -Z, fov 75, near 0.05 (the player spawns in the player_spawn sync system). Exact. Re-baselined 2026-10-27 (sub-project 7 step 2): the scene's two enemies (red bodies, at the level's enemy spawns on the Step and the Ramp) are in view; the rest of the frame moves only by the RT GI, shadow and SSAO noise their geometry perturbs (looked at: heat map bright only on the enemies)."
     }
   ]
 }

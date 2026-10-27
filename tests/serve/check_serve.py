@@ -77,7 +77,7 @@ EXAMPLES = {
     "physics_events": {"since": 0, "max": 8},
     "physics_contacts": {"max": 8},
     "player_info": {"entity": "5c0b1a7e00000001"},
-    "player_teleport": {"pos": [-2.2, 0.3, -2], "yawDeg": 90},
+    "player_teleport": {"pos": [-2, 0.3, -1.35], "yawDeg": 90},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests

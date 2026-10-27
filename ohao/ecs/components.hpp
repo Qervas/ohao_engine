@@ -264,6 +264,20 @@ struct PlayerController {
     std::string sprint{"sprint"};
     std::string lookX{"look_x"};
     std::string lookY{"look_y"};
+    // Sub-project 7: where it spawns and what moves it. The k-th character with a tag (creation
+    // order) takes the k-th SpawnPoint with that tag; empty: it starts where it stands.
+    std::string spawn{"player"};
+    bool input{true};             // false: moved by its MoveIntent (an AI), not by the world's input
+};
+
+// The move a character without input (PlayerController.input false) makes each step: written by
+// an AI (the enemy AI) or an agent. Absent: it stands still, facing as it faces.
+struct MoveIntent {
+    glm::vec2 move{0.0f};     // x right, y forward, in its own frame; each within -1..1
+    float yawDeg{0.0f};       // the facing to take, about +Y from -Z
+    float pitchDeg{0.0f};     // the look up (positive) or down, within ±89
+    bool jump{false};
+    bool sprint{false};
 };
 
 // Runtime, render only: where the renderer draws an entity a simulation step moved, between its
@@ -347,6 +361,36 @@ struct WeaponState {
 struct WeaponTrigger {
     bool pull{false};     // held
     bool reload{false};   // reload now (cleared when acted on)
+};
+
+// An enemy: a character (PlayerController, input false) with Health and a Weapon that the enemy
+// AI drives, at the start of each combat step: idle until it sees the player (or is hit), then
+// chases the place it last saw it, and in range with a clear line attacks in bursts.
+struct Enemy {
+    float sightRange{30.0f};       // m
+    float fovDeg{140.0f};          // the cone it notices the player in while idle
+    float attackRange{14.0f};      // m
+    float reactionTime{0.35f};     // s from first sight to first round
+    float aimErrorDeg{2.5f};       // at most this off the player, each round (seeded)
+    uint32_t burst{3};             // rounds a burst
+    float burstPause{0.8f};        // s between bursts
+    float loseTime{3.0f};          // s it chases without seeing the player before giving up
+    float turnRateDegPerSec{360.0f};
+};
+
+enum class EnemyMode : uint8_t { Idle, Chase, Attack, Dead };
+
+// What an enemy is doing. The enemy AI writes it (and adds it to an Enemy without one); saved,
+// so files, world.hash and snapshots hold the AI exactly.
+struct EnemyState {
+    EnemyMode mode{EnemyMode::Idle};
+    glm::vec3 lastSeen{0.0f};      // where it last saw the player (its feet)
+    float lostFor{0.0f};           // s since it last saw the player
+    float reaction{0.0f};          // s left before it may fire
+    uint32_t burstLeft{0};         // rounds left in this burst
+    float pause{0.0f};             // s left of the pause between bursts
+    float lastHealth{-1.0f};       // its health at the last step (a fall wakes it); < 0: unknown
+    uint32_t shotsSeen{0};         // its weapon's WeaponState.shots at the last step (counts a burst)
 };
 
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------

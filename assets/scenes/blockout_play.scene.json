@@ -3,11 +3,14 @@
   "version": 1,
   "components": {
     "Camera": 1,
+    "Enemy": 1,
     "Environment": 1,
     "Health": 1,
     "InputActions": 1,
     "Level": 1,
     "Light": 1,
+    "MaterialOverride": 1,
+    "MeshSource": 1,
     "Name": 1,
     "Parent": 1,
     "PlayerController": 1,
@@ -71,6 +74,50 @@
       "id": "5c0b10c000000005",
       "Name": { "value": "Level" },
       "Level": { "asset": { "path": "assets/levels/blockout_room.glb" } }
+    },
+    {
+      "id": "5c0b1a7e00000010",
+      "Name": { "value": "EnemyA" },
+      "PlayerController": { "walkSpeed": 2.5, "spawn": "enemy", "input": false },
+      "Health": {},
+      "Weapon": { "damage": 8, "fireRate": 4, "magazine": 12, "reloadTime": 2, "recoilPitchDeg": 0, "recoilYawDeg": 0, "seed": 17 },
+      "Enemy": {}
+    },
+    {
+      "id": "5c0b1a7e00000011",
+      "Name": { "value": "EnemyA Body" },
+      "Parent": { "entity": "5c0b1a7e00000010" },
+      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.25, 0, -0.17], "hi": [0.25, 1.42, 0.17], "color": [0.62, 0.12, 0.1] } } },
+      "MaterialOverride": { "baseColor": [0.62, 0.12, 0.1], "roughness": 0.7 }
+    },
+    {
+      "id": "5c0b1a7e00000012",
+      "Name": { "value": "EnemyA Head" },
+      "Parent": { "entity": "5c0b1a7e00000010" },
+      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.14, 1.46, -0.14], "hi": [0.14, 1.78, 0.14], "color": [0.85, 0.7, 0.55] } } },
+      "MaterialOverride": { "baseColor": [0.85, 0.7, 0.55], "roughness": 0.6 }
+    },
+    {
+      "id": "5c0b1a7e00000020",
+      "Name": { "value": "EnemyB" },
+      "PlayerController": { "walkSpeed": 2.5, "spawn": "enemy", "input": false },
+      "Health": {},
+      "Weapon": { "damage": 8, "fireRate": 4, "magazine": 12, "reloadTime": 2, "recoilPitchDeg": 0, "recoilYawDeg": 0, "seed": 29 },
+      "Enemy": {}
+    },
+    {
+      "id": "5c0b1a7e00000021",
+      "Name": { "value": "EnemyB Body" },
+      "Parent": { "entity": "5c0b1a7e00000020" },
+      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.25, 0, -0.17], "hi": [0.25, 1.42, 0.17], "color": [0.62, 0.12, 0.1] } } },
+      "MaterialOverride": { "baseColor": [0.62, 0.12, 0.1], "roughness": 0.7 }
+    },
+    {
+      "id": "5c0b1a7e00000022",
+      "Name": { "value": "EnemyB Head" },
+      "Parent": { "entity": "5c0b1a7e00000020" },
+      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.14, 1.46, -0.14], "hi": [0.14, 1.78, 0.14], "color": [0.85, 0.7, 0.55] } } },
+      "MaterialOverride": { "baseColor": [0.85, 0.7, 0.55], "roughness": 0.6 }
     }
   ]
 }

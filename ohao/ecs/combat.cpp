@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "ecs/enemy_ai.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/world.hpp"
 
@@ -210,7 +211,7 @@ struct CombatSystem::Impl {
 
         // The trigger: a player's from the World's input, anyone else's from its WeaponTrigger.
         bool held = false, pressed = false, reload = false;
-        if (reg.all_of<PlayerController>(e)) {
+        if (const auto* pc = reg.try_get<PlayerController>(e); pc && pc->input) {
             const InputMap& in = world.input();
             held = in.held(w.fire);
             pressed = in.pressed(w.fire);
@@ -258,6 +259,9 @@ struct CombatSystem::Impl {
         ++steps;
         stepEvents.clear();
         PhysicsScene* physics = physicsScene(world);
+        // The enemies decide first: their triggers fire in this step's weapons, their moves walk in
+        // the next step's physics.
+        if (physics && dt > 0.0f) stepEnemies(world, *physics, dt);
         const auto weapons = reg.view<Weapon>();
         if (physics && !weapons.empty() && dt > 0.0f) {
             order.clear();

@@ -41,5 +41,8 @@ void writeFields(const Health& v, const Health* omit, FieldSink& out);
 void writeFields(const Weapon& v, const Weapon* omit, FieldSink& out);
 void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out);
 void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& out);
+void writeFields(const MoveIntent& v, const MoveIntent* omit, FieldSink& out);
+void writeFields(const Enemy& v, const Enemy* omit, FieldSink& out);
+void writeFields(const EnemyState& v, const EnemyState* omit, FieldSink& out);
 
 } // namespace ohao::ecs

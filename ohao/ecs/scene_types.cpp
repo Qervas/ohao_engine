@@ -225,7 +225,23 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("jump", &PlayerController::jump).doc("Action that jumps when pressed on the ground")
         .field("sprint", &PlayerController::sprint).doc("Action that, while held, walks at sprintSpeed")
         .field("lookX", &PlayerController::lookX).doc("Axis turning the player (yaw), added to the mouse's x")
-        .field("lookY", &PlayerController::lookY).doc("Axis tilting the view (pitch), added to the mouse's y");
+        .field("lookY", &PlayerController::lookY).doc("Axis tilting the view (pitch), added to the mouse's y")
+        .field("spawn", &PlayerController::spawn)
+            .doc("The SpawnPoint tag it spawns at: the k-th character with a tag (creation order) takes the k-th "
+                 "spawn point with it; empty: it starts where it stands")
+            .maxLength(32)
+        .field("input", &PlayerController::input)
+            .doc("Moved by the world's input (a player); false: by its MoveIntent (an AI or an agent)");
+    r.type<MoveIntent>("MoveIntent").component().host(makeComponentOps<MoveIntent>())
+        .doc("The move a character without input (PlayerController.input false) makes each step, written by the "
+             "enemy AI or an agent. Absent: it stands still, facing as it faces.")
+        .field("move", &MoveIntent::move).doc("x right, y forward, in its own frame; each within -1..1").unitless()
+            .min(-1.0).max(1.0)
+        .field("yawDeg", &MoveIntent::yawDeg).doc("The facing to take, about +Y from -Z").unit("deg").min(-360.0)
+            .max(360.0)
+        .field("pitchDeg", &MoveIntent::pitchDeg).doc("The look up (positive) or down").unit("deg").min(-89.0).max(89.0)
+        .field("jump", &MoveIntent::jump).doc("Jump (when on the ground)")
+        .field("sprint", &MoveIntent::sprint).doc("Walk at sprintSpeed");
 
     r.type<Level>("Level").component().host(makeComponentOps<Level>())
         .doc("A level file (glTF) placed in the world. The level system expands it into one child entity per node of "
@@ -317,6 +333,43 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .doc("The trigger of a weapon that is not a player's: an AI, a turret or an agent pulls it.")
         .field("pull", &WeaponTrigger::pull).doc("Held")
         .field("reload", &WeaponTrigger::reload).doc("Reload now; cleared when acted on");
+    r.type<Enemy>("Enemy").component().host(makeComponentOps<Enemy>())
+        .doc("An enemy: a character (PlayerController with input false) with Health and a Weapon, driven by the enemy "
+             "AI at the start of each combat step: idle until it sees the player or is hit, then it chases the place "
+             "it last saw the player, and in range with a clear line it attacks in bursts.")
+        .field("sightRange", &Enemy::sightRange).doc("How far it sees").unit("m").min(0.0).max(1000.0)
+        .field("fovDeg", &Enemy::fovDeg).doc("The cone it notices the player in while idle").unit("deg").min(0.0)
+            .max(360.0)
+        .field("attackRange", &Enemy::attackRange).doc("How near it comes before it stops and fires").unit("m")
+            .min(0.0).max(1000.0)
+        .field("reactionTime", &Enemy::reactionTime).doc("From first sight to first round").unit("s").min(0.0)
+            .max(60.0)
+        .field("aimErrorDeg", &Enemy::aimErrorDeg).doc("At most this off the player, each round (seeded)").unit("deg")
+            .min(0.0).max(45.0)
+        .field("burst", &Enemy::burst).doc("Rounds a burst").unitless().min(1.0).max(1000.0)
+        .field("burstPause", &Enemy::burstPause).doc("Between bursts").unit("s").min(0.0).max(60.0)
+        .field("loseTime", &Enemy::loseTime).doc("How long it chases without seeing the player").unit("s").min(0.0)
+            .max(600.0)
+        .field("turnRateDegPerSec", &Enemy::turnRateDegPerSec).doc("How fast it turns").unit("deg/s").min(0.0)
+            .max(100000.0);
+    r.enumeration<EnemyMode>("EnemyMode")
+        .doc("What an enemy is doing.")
+        .value("Idle", EnemyMode::Idle, "Standing; watching its cone")
+        .value("Chase", EnemyMode::Chase, "Walking to where it last saw the player")
+        .value("Attack", EnemyMode::Attack, "Stopped, turned to the player, firing bursts")
+        .value("Dead", EnemyMode::Dead, "Health 0: no character, lying down");
+    r.type<EnemyState>("EnemyState").component().host(makeComponentOps<EnemyState>())
+        .doc("What an enemy is doing. The enemy AI writes it, and adds it to an Enemy without one.")
+        .field("mode", &EnemyState::mode).doc("Idle, Chase, Attack or Dead")
+        .field("lastSeen", &EnemyState::lastSeen).doc("Where it last saw the player (its feet)").unit("m")
+        .field("lostFor", &EnemyState::lostFor).doc("Since it last saw the player").unit("s").min(0.0)
+        .field("reaction", &EnemyState::reaction).doc("Left before it may fire").unit("s").min(0.0)
+        .field("burstLeft", &EnemyState::burstLeft).doc("Rounds left in this burst").unitless()
+        .field("pause", &EnemyState::pause).doc("Left of the pause between bursts").unit("s").min(0.0)
+        .field("lastHealth", &EnemyState::lastHealth).doc("Its health at the last step (a fall wakes it); < 0: unknown")
+            .unitless()
+        .field("shotsSeen", &EnemyState::shotsSeen).doc("Its weapon's shots at the last step (counts a burst)")
+            .unitless();
 
     // ---- runtime state (catalogue only, never saved) -----------------------------------
 

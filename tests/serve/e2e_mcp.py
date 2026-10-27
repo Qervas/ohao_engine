@@ -190,7 +190,7 @@ def walk_the_level(c):
           "render_capture: the view has changed with the walk")
     hash1 = (c.tool("world_hash")[0] or {}).get("hash")
 
-    moved, _, err = c.tool("player_teleport", {"pos": [-2.2, 0.3, -2], "yawDeg": 90})
+    moved, _, err = c.tool("player_teleport", {"pos": [-2, 0.3, -1.35], "yawDeg": 90})   # clear of EnemyA
     check(not err and moved.get("on") == "Step" and moved.get("surface") == "metal", "player_teleport onto the Step: metal")
     contacts, _, err = c.tool("physics_contacts")
     check(not err and contacts is not None and "count" in contacts, "physics_contacts answers (%s pairs)" % contacts.get("count"))

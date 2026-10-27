@@ -59,7 +59,7 @@ the bounds of entity origins and a capped outline.
 
 ```console
 $ build/Release/ohao summary assets/scenes/cornell_box.scene.json --depth 1 --max-nodes 6
-{"result":{"entities":21,"roots":21,"components":{"Name":21,"Transform":21,"Light":12,"MeshSource":7,"MaterialOverride":7,"Camera":1,"Environment":1,"Children":21,"CreationOrder":21},"bounds":{"min":[-4,-3.2,-4],"max":[4,4,13]},"outline":[{"id":"77c2d2f9c6f089b6","name":"MainCamera"},{"id":"1a0edc87612c3fd5","name":"Environment"},{"id":"2dbe393e136129ec","name":"Back"},{"id":"dd80bf9bc5d8c7eb","name":"Left"},{"id":"bef33aced9e453c8","name":"Right"},{"id":"616133e14807f333","name":"Floor"}],"moreRoots":15}}
+{"result":{"entities":21,"roots":21,"components":{"Name":21,"Transform":21,"Light":12,"MeshSource":7,"MaterialOverride":7,"Camera":1,"Environment":1,"Children":21,"WorldTransform":21,"CreationOrder":21},"bounds":{"min":[-4,-3.2,-4],"max":[4,4,13]},"outline":[{"id":"77c2d2f9c6f089b6","name":"MainCamera"},{"id":"1a0edc87612c3fd5","name":"Environment"},{"id":"2dbe393e136129ec","name":"Back"},{"id":"dd80bf9bc5d8c7eb","name":"Left"},{"id":"bef33aced9e453c8","name":"Right"},{"id":"616133e14807f333","name":"Floor"}],"moreRoots":15}}
 ```
 
 Then ask for exactly what you need. Filters combine (all must match); `--fields`

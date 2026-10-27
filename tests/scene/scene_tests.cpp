@@ -317,6 +317,9 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<Weapon>(r, checked);
     ok &= complete<WeaponState>(r, checked);
     ok &= complete<WeaponTrigger>(r, checked);
+    ok &= complete<MoveIntent>(r, checked);
+    ok &= complete<Enemy>(r, checked);
+    ok &= complete<EnemyState>(r, checked);
     CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -335,7 +338,7 @@ static void t01_authoring_and_runtime_split() {
     for (const char* saved : {"Name", "Transform", "Parent", "Light", "MeshSource", "MaterialOverride", "Camera",
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
-                              "WeaponTrigger"}) {
+                              "WeaponTrigger", "MoveIntent", "Enemy", "EnemyState"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -565,6 +568,26 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
             }
             if (rng() % 2 && !w.registry().all_of<WeaponTrigger>(e))
                 w.registry().emplace<WeaponTrigger>(e, WeaponTrigger{rng() % 2 == 0, rng() % 2 == 0});
+            // Enemies (sub-project 7 step 2).
+            if (rng() % 2 && !w.registry().all_of<MoveIntent>(e))
+                w.registry().emplace<MoveIntent>(e, MoveIntent{{unit() * 2.0f - 1.0f, unit()}, 90.0f * unit(),
+                                                               10.0f * unit(), rng() % 2 == 0, rng() % 2 == 0});
+            if (rng() % 2 && !w.registry().all_of<Enemy>(e)) {
+                Enemy en;
+                en.sightRange = 50.0f * unit();
+                en.burst = 1 + static_cast<uint32_t>(rng() % 5);
+                en.aimErrorDeg = 5.0f * unit();
+                w.registry().emplace<Enemy>(e, en);
+            }
+            if (rng() % 2 && !w.registry().all_of<EnemyState>(e)) {
+                EnemyState st;
+                st.mode = static_cast<EnemyMode>(rng() % 4);
+                st.lastSeen = {unit(), 0.0f, -unit()};
+                st.lostFor = unit();
+                st.burstLeft = static_cast<uint32_t>(rng() % 4);
+                st.lastHealth = 100.0f * unit();
+                w.registry().emplace<EnemyState>(e, st);
+            }
         }
     }
 }

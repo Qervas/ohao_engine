@@ -928,16 +928,22 @@ struct PhysicsScene::Impl {
         m.moved = true;
     }
 
-    // The first SpawnPoint tagged "player" in creation order, or null.
-    [[nodiscard]] entt::entity playerSpawn() const {
-        entt::entity best = entt::null;
-        uint64_t bestSeq = UINT64_MAX;
-        for (auto [e, sp] : reg.view<const SpawnPoint>().each()) {
-            if (sp.tag != "player" || !reg.all_of<Transform>(e)) continue;
-            const uint64_t s = seqOf(e);
-            if (s < bestSeq) bestSeq = s, best = e;
-        }
-        return best;
+    // The spawn point of a character: the k-th character with its PlayerController.spawn tag (in
+    // creation order) takes the k-th SpawnPoint with that tag (in creation order); null if it has
+    // no tag or no point is left for it.
+    [[nodiscard]] entt::entity spawnFor(entt::entity e) const {
+        const std::string& tag = reg.get<PlayerController>(e).spawn;
+        if (tag.empty()) return entt::null;
+        std::vector<std::pair<uint64_t, entt::entity>> points, characters;
+        for (auto [p, sp] : reg.view<const SpawnPoint>().each())
+            if (sp.tag == tag && reg.all_of<Transform>(p)) points.emplace_back(seqOf(p), p);
+        for (auto [c, pc] : reg.view<const PlayerController>().each())
+            if (pc.spawn == tag) characters.emplace_back(seqOf(c), c);
+        std::sort(points.begin(), points.end());
+        std::sort(characters.begin(), characters.end());
+        for (std::size_t k = 0; k < characters.size(); ++k)
+            if (characters[k].second == e) return k < points.size() ? points[k].second : entt::entity{entt::null};
+        return entt::null;
     }
 
     // A character for a new PlayerController, at the player spawn (or where the entity is, with
@@ -955,7 +961,7 @@ struct PhysicsScene::Impl {
         const PlayerController& pc = reg.get<PlayerController>(e);
         glm::vec3 pos(0.0f);
         float yaw = 0.0f;
-        const entt::entity spawn = existed ? entt::null : playerSpawn();
+        const entt::entity spawn = existed ? entt::null : spawnFor(e);
         if (existed) {
             pos = reg.get<Transform>(e).position;
             yaw = oldYaw;
@@ -967,7 +973,9 @@ struct PhysicsScene::Impl {
             const Placement p = decompose(worldOf(e));
             pos = p.position;
             yaw = yawOf(p.rotation);
-            warn(e, "W_PLAYER_NO_SPAWN", "no SpawnPoint is tagged \"player\"; the player starts where it is");
+            if (!pc.spawn.empty())
+                warn(e, "W_PLAYER_NO_SPAWN",
+                     "no SpawnPoint tagged \"" + pc.spawn + "\" is left for it; the character starts where it is");
         }
         pb::CharacterCreationInfo ci;
         ci.position = pos;
@@ -1178,17 +1186,33 @@ struct PhysicsScene::Impl {
                     p.headRot = pitchQuat(p.pitchDeg);
                 }
 
-            // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
-            p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
+            // What moves it: the world's input (a player), else its MoveIntent (an AI or an agent;
+            // without one it stands, facing as it faces).
+            const MoveIntent* intent = pc.input ? nullptr : reg.try_get<MoveIntent>(e);
+            glm::vec2 wish(0.0f);
+            bool sprinting = false, jumpPressed = false;
+            if (pc.input) {
+                // Look: yaw about +Y (mouse right turns right), pitch kept within 89 degrees.
+                p.yawDeg -= (mouse.x + input.axis(pc.lookX)) * pc.lookDegPerUnit;
+                p.pitchDeg -= (mouse.y + input.axis(pc.lookY)) * pc.lookDegPerUnit;
+                wish = glm::vec2(input.axis(pc.moveRight), input.axis(pc.moveForward));
+                sprinting = input.held(pc.sprint);
+                jumpPressed = input.pressed(pc.jump);
+            } else if (intent) {
+                p.yawDeg = intent->yawDeg;
+                p.pitchDeg = intent->pitchDeg;
+                wish = glm::clamp(intent->move, glm::vec2(-1.0f), glm::vec2(1.0f));
+                sprinting = intent->sprint;
+                jumpPressed = intent->jump;
+            }
             p.yawDeg = std::remainder(p.yawDeg, 360.0f);
-            p.pitchDeg = std::clamp(p.pitchDeg - (mouse.y + input.axis(pc.lookY)) * pc.lookDegPerUnit, -89.0f, 89.0f);
+            p.pitchDeg = std::clamp(p.pitchDeg, -89.0f, 89.0f);
             const glm::quat rot = yawQuat(p.yawDeg);
             backend->setCharacterRotation(p.character, rot);
 
             // The wanted horizontal velocity, in the yaw frame.
-            glm::vec2 wish(input.axis(pc.moveRight), input.axis(pc.moveForward));
             if (glm::dot(wish, wish) > 1.0f) wish = glm::normalize(wish);
-            const float speed = input.held(pc.sprint) ? pc.sprintSpeed : pc.walkSpeed;
+            const float speed = sprinting ? pc.sprintSpeed : pc.walkSpeed;
             const glm::vec3 target = (rot * glm::vec3(0.0f, 0.0f, -1.0f) * wish.y + rot * glm::vec3(1.0f, 0.0f, 0.0f) * wish.x) * speed;
 
             // On the ground (and not rising from a jump): walk and maybe jump; else fall.
@@ -1201,7 +1225,7 @@ struct PhysicsScene::Impl {
             bool jumped = false;
             if (grounded) {
                 p.vy = 0.0f;
-                if (input.pressed(pc.jump)) {
+                if (jumpPressed) {
                     p.vy = pc.jumpSpeed;
                     jumped = true;
                 }
@@ -1228,7 +1252,7 @@ struct PhysicsScene::Impl {
                 }
                 const glm::vec3 moved = after.position - before.position;
                 p.stride += glm::length(glm::vec2(moved.x, moved.z));
-                const float stride = input.held(pc.sprint) ? kSprintStride : kWalkStride;
+                const float stride = sprinting ? kSprintStride : kWalkStride;
                 if (p.stride >= stride) {
                     p.stride -= stride;
                     out.push_back(playerEvent(PhysicsEvent::Kind::Footstep, e, after, glm::length(p.horizontal)));

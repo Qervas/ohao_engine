@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 9a90b74e98d2d96c. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash d04016663f613766. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -42,6 +42,7 @@
         "InputActions": { "$ref": "#/$defs/InputActions" },
         "FlyController": { "$ref": "#/$defs/FlyController" },
         "PlayerController": { "$ref": "#/$defs/PlayerController" },
+        "MoveIntent": { "$ref": "#/$defs/MoveIntent" },
         "Level": { "$ref": "#/$defs/Level" },
         "SpawnPoint": { "$ref": "#/$defs/SpawnPoint" },
         "Socket": { "$ref": "#/$defs/Socket" },
@@ -50,7 +51,9 @@
         "Health": { "$ref": "#/$defs/Health" },
         "Weapon": { "$ref": "#/$defs/Weapon" },
         "WeaponState": { "$ref": "#/$defs/WeaponState" },
-        "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" }
+        "WeaponTrigger": { "$ref": "#/$defs/WeaponTrigger" },
+        "Enemy": { "$ref": "#/$defs/Enemy" },
+        "EnemyState": { "$ref": "#/$defs/EnemyState" }
       },
       "additionalProperties": { "type": "object" }
     },
@@ -154,6 +157,10 @@
     "Motion": {
       "description": "How a rigid body moves.",
       "enum": ["Static", "Dynamic", "Kinematic"]
+    },
+    "EnemyMode": {
+      "description": "What an enemy is doing.",
+      "enum": ["Idle", "Chase", "Attack", "Dead"]
     },
     "Name": {
       "description": "Display name for people and agents. Not unique; entities are identified by id.",
@@ -843,6 +850,56 @@
           "description": "Axis tilting the view (pitch), added to the mouse's y",
           "default": "look_y",
           "allOf": [{ "type": "string" }]
+        },
+        "spawn": {
+          "description": "The SpawnPoint tag it spawns at: the k-th character with a tag (creation order) takes the k-th spawn point with it; empty: it starts where it stands",
+          "default": "player",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 32
+        },
+        "input": {
+          "description": "Moved by the world's input (a player); false: by its MoveIntent (an AI or an agent)",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MoveIntent": {
+      "description": "The move a character without input (PlayerController.input false) makes each step, written by the enemy AI or an agent. Absent: it stands still, facing as it faces.",
+      "type": "object",
+      "properties": {
+        "move": {
+          "description": "x right, y forward, in its own frame; each within -1..1",
+          "default": [0, 0],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": -1, "maximum": 1 },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        },
+        "yawDeg": {
+          "description": "The facing to take, about +Y from -Z",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": -360, "maximum": 360 }]
+        },
+        "pitchDeg": {
+          "description": "The look up (positive) or down",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": -89, "maximum": 89 }]
+        },
+        "jump": {
+          "description": "Jump (when on the ground)",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
+        },
+        "sprint": {
+          "description": "Walk at sprintSpeed",
+          "default": false,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false
@@ -1121,6 +1178,107 @@
           "description": "Reload now; cleared when acted on",
           "default": false,
           "allOf": [{ "type": "boolean" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Enemy": {
+      "description": "An enemy: a character (PlayerController with input false) with Health and a Weapon, driven by the enemy AI at the start of each combat step: idle until it sees the player or is hit, then it chases the place it last saw the player, and in range with a clear line it attacks in bursts.",
+      "type": "object",
+      "properties": {
+        "sightRange": {
+          "description": "How far it sees",
+          "default": 30,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
+        },
+        "fovDeg": {
+          "description": "The cone it notices the player in while idle",
+          "default": 140,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 360 }]
+        },
+        "attackRange": {
+          "description": "How near it comes before it stops and fires",
+          "default": 14,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
+        },
+        "reactionTime": {
+          "description": "From first sight to first round",
+          "default": 0.35,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 60 }]
+        },
+        "aimErrorDeg": {
+          "description": "At most this off the player, each round (seeded)",
+          "default": 2.5,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 45 }]
+        },
+        "burst": {
+          "description": "Rounds a burst",
+          "default": 3,
+          "allOf": [{ "type": "integer", "minimum": 1, "maximum": 1000 }]
+        },
+        "burstPause": {
+          "description": "Between bursts",
+          "default": 0.8,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 60 }]
+        },
+        "loseTime": {
+          "description": "How long it chases without seeing the player",
+          "default": 3,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 600 }]
+        },
+        "turnRateDegPerSec": {
+          "description": "How fast it turns",
+          "default": 360,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1e+05 }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnemyState": {
+      "description": "What an enemy is doing. The enemy AI writes it, and adds it to an Enemy without one.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Idle, Chase, Attack or Dead",
+          "default": "Idle",
+          "allOf": [{ "$ref": "#/$defs/EnemyMode" }]
+        },
+        "lastSeen": {
+          "description": "Where it last saw the player (its feet)",
+          "default": [0, 0, 0],
+          "allOf": [
+            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+          ]
+        },
+        "lostFor": {
+          "description": "Since it last saw the player",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "reaction": {
+          "description": "Left before it may fire",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "burstLeft": {
+          "description": "Rounds left in this burst",
+          "default": 0,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "pause": {
+          "description": "Left of the pause between bursts",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "lastHealth": {
+          "description": "Its health at the last step (a fall wakes it); < 0: unknown",
+          "default": -1,
+          "allOf": [{ "type": "number" }]
+        },
+        "shotsSeen": {
+          "description": "Its weapon's shots at the last step (counts a burst)",
+          "default": 0,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
         }
       },
       "additionalProperties": false

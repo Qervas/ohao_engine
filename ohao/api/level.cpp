@@ -423,19 +423,23 @@ entt::entity findPlayer(Session::Impl& s, const ecs::PhysicsScene& physics, cons
         }
         return e;
     }
-    if (players.empty()) {
+    // Without an id: the character moved by input (an enemy, moved by its AI, is not the player).
+    std::vector<entt::entity> driven;
+    for (const entt::entity e : players)
+        if (const auto* pc = s.world.registry().try_get<ecs::PlayerController>(e); pc && pc->input) driven.push_back(e);
+    if (driven.empty()) {
         ctx.error("E_STATE", params, "the world has no player",
                   "a scene with a PlayerController, as assets/scenes/blockout_play.scene.json");
         return entt::null;
     }
-    if (players.size() > 1) {
+    if (driven.size() > 1) {
         std::string ids;
-        for (const entt::entity e : players) ids += (ids.empty() ? "" : ", ") + hex16(s.world.idOf(e));
-        ctx.error("E_COMMAND", params, std::to_string(players.size()) + " players in the world; name one with entity",
+        for (const entt::entity e : driven) ids += (ids.empty() ? "" : ", ") + hex16(s.world.idOf(e));
+        ctx.error("E_COMMAND", params, std::to_string(driven.size()) + " players in the world; name one with entity",
                   "{\"entity\": one of " + ids + "}");
         return entt::null;
     }
-    return players.front();
+    return driven.front();
 }
 
 void writePlayerInfo(Session::Impl& s, entt::entity e, const ecs::PlayerInfo& info, JsonWriter& out) {

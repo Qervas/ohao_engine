@@ -294,11 +294,15 @@ bool sceneLoad(Session::Impl& s, const JsonDocument&, const JsonNode& params, De
     }
     if (p.seed) s.world.seedIds(*p.seed);
     // A host with the level system expands the scene's levels now, so the next query sees
-    // their nodes, and one with physics puts its players at their spawns, so a snapshot taken
-    // now holds the spawned world (a restore to it replays from the spawn); nothing else of
-    // sync runs (that is the next step's or render's).
+    // their nodes, and one with physics puts its characters at their spawns and builds the
+    // bodies, so a snapshot taken now holds the whole simulation a step starts from (a restore
+    // to it replays exactly: a character standing on a slope stood one float off when the
+    // bodies were built only after the snapshot). Nothing else of sync runs (instantiate and the
+    // render extract are the next render's).
     s.world.runSync("level");
     s.world.runSync("player_spawn");
+    s.world.runSync("transform");
+    s.world.runSync("physics");
     s.scenePath = p.path.value_or("");
     s.sceneSeed = p.seed;
     const ecs::LoadReport& rep = r.value();

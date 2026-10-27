@@ -95,10 +95,10 @@ then the same input" a bit-for-bit replay. That is what `input.replay` checkpoin
 ## What an agent drives
 
 `player.info`, `player.teleport` and `physics.contacts` sit beside `physics.events` and
-`physics.raycast`. `scene.load` spawns players, so the snapshot an agent takes after a load is
-the spawn:
+`physics.raycast`. `scene.load` spawns the characters and builds the bodies, so the snapshot an
+agent takes after a load is the whole simulation at the spawn:
 
-{{cite ohao/api/session.cpp "one with physics puts its players at their spawns, so a snapshot taken"}}
+{{cite ohao/api/session.cpp "puts its characters at their spawns and builds the"}}
 
 A teleport goes through the scene, not through `Transform`, so the reply already says where the
 player stands and on what:
