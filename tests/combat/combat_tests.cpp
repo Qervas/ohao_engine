@@ -1304,6 +1304,29 @@ static void fx_hud_dead_and_cleared_screens() {
           "the restart: playing, full health, no screen");
 }
 
+// The won screen (sub-project 9, "SP7 leftovers"): no crosshair or hit marker over ENTER TO RESTART.
+static void t21_won_screen_no_crosshair() {
+    const auto centreRects = [](const ohao::render::HudList& list) {
+        std::size_t n = 0;
+        for (const auto& it : list.items)
+            if (it.kind == static_cast<uint32_t>(ohao::render::HudKind::Rect)) {
+                const glm::vec2 c((it.rect.x + it.rect.z) * 0.5f, (it.rect.y + it.rect.w) * 0.5f);
+                n += glm::length(c - glm::vec2(960.0f, 540.0f)) < 120.0f ? 1 : 0;
+            }
+        return n;
+    };
+    HudState s{true, 100.0f, 100.0f, true, 30, 30, false, 0.25f, 10.0f, true, 0.0f};
+    s.round = true;
+    const std::size_t playing = centreRects(CombatHud::layout(s, 1920, 1080));
+    CHECK(playing == 8, "playing: four crosshair arms and four hit-marker corners at the centre");
+    s.phase = RoundPhase::Won;
+    const ohao::render::HudList won = CombatHud::layout(s, 1920, 1080);
+    std::printf("\n      centre rectangles: playing %zu, won %zu", playing, centreRects(won));
+    CHECK(centreRects(won) == 0, "won: none (no crosshair, no hit marker)");
+    CHECK(hasText(won, "CLEARED") && hasText(won, "ENTER TO RESTART") && hasText(won, "30/30"),
+          "the won screen and the rest of the HUD stay");
+}
+
 static void fx_hud_without_a_player_is_empty() {
     World w;
     installCombat(w);
@@ -1571,6 +1594,7 @@ int main(int argc, char** argv) {
     RUN(fx_hud_shows_health_ammo_and_a_crosshair);
     RUN(fx_hud_hit_marker_and_damage_vignette_timing);
     RUN(fx_hud_dead_and_cleared_screens);
+    RUN(t21_won_screen_no_crosshair);
     RUN(fx_hud_without_a_player_is_empty);
     // test 21: the first-person gun
     RUN(t21_view_model_rest_pose);

@@ -122,8 +122,9 @@ render::HudList CombatHud::layout(const HudState& s, uint32_t width, uint32_t he
     const bool dead = s.phase == RoundPhase::Dead || !(s.health > 0.0f);
     if (dead) hudRect(list, {0.0f, 0.0f, w, h}, {0.35f, 0.0f, 0.0f, 0.45f});
 
-    // The crosshair: four arms around the cone; the hit marker: four corners outside it.
-    if (!dead && s.armed) {
+    // The crosshair: four arms around the cone; the hit marker: four corners outside it. Neither
+    // while dead or once the round is won (they would sit over its screen).
+    if (!dead && s.armed && s.phase != RoundPhase::Won) {
         const float g = std::round(s.crosshairGap), len = std::round(10.0f * k), t = std::max(2.0f, std::round(2.0f * k));
         const float t0 = std::floor(t * 0.5f), t1 = t - t0;
         hudRect(list, {cx + g, cy - t0, cx + g + len, cy + t1}, white);
