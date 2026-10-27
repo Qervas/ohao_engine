@@ -64,3 +64,17 @@ endif()
 add_dependencies(render_bench shaders)
 ohao_add_test(render_bench LABEL bench GPU SERIAL TIMEOUT 900
     COMMAND render_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/render_budgets.json)
+
+# Input-to-present latency and frame pacing (sub-project 9): a visible window plays the play scene
+# for a scripted minute per present mode. Exit 1 = a gated budget missed or nothing measured.
+add_executable(feel_bench feel_bench.cpp)
+target_compile_features(feel_bench PRIVATE cxx_std_20)
+target_link_libraries(feel_bench PRIVATE ohao_host ohao_test_harness)
+target_compile_definitions(feel_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_link_options(feel_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(feel_bench shaders)
+ohao_add_test(feel_bench LABEL bench GPU SERIAL TIMEOUT 900
+    COMMAND feel_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/feel_budgets.json
+            --out ${CMAKE_BINARY_DIR}/feel_bench.json --csv-dir ${CMAKE_BINARY_DIR})

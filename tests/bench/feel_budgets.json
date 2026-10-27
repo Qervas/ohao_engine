@@ -1,0 +1,8 @@
+{
+  "comment": "Spec docs/specs/2026-10-27-feel-design.md, 'Performance budgets'. Measured by feel_bench in the present mode each names; gated from the build step that delivers it (currentStep). look_latency_ms is gated only on a display of at least minRefreshHz with present wait, else reported pending. Changing a budget needs Frank's OK.",
+  "currentStep": 1,
+  "budgets": {
+    "look_latency_ms": { "max": 15, "gatedFrom": 2, "present": "immediate", "minRefreshHz": 144 },
+    "frame_p99_over_median": { "max": 1.5, "gatedFrom": 2, "present": "immediate" }
+  }
+}
