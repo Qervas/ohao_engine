@@ -38,6 +38,7 @@ struct VfxFrameStats {
     uint32_t meshes{0};         // blended draws
     uint32_t objects{0};        // objects the transparent pass drew, in its order
     uint32_t dropped{0};        // particles past the set's cap (caps.particles), not drawn
+    uint32_t tracers{0};        // tracers drawn (six vertices each, host-built)
 };
 
 class VfxRenderer {
@@ -94,7 +95,7 @@ public:
     [[nodiscard]] const VfxFrameStats& stats() const noexcept { return m_stats; }
     // Tests: the particle slots as the last expand wrote them (blocking: the device idles).
     [[nodiscard]] std::vector<gpu::shared::VfxParticleGpu> readParticles();
-    // Tests: the transparent objects of the last prepare, in draw order (batch: 0, mesh: 1; its id).
+    // Tests: the transparent objects of the last prepare, in draw order (batch: 0, mesh: 1, tracer: 2; its id).
     struct Object { uint32_t kind; uint64_t id; float distance; uint32_t index; };
     [[nodiscard]] const std::vector<Object>& objects() const noexcept { return m_objects; }
 
@@ -107,15 +108,16 @@ private:
         bool sorted;
     };
     struct Slot {
-        rtc::HostBuffer emitters, batches;
-        VkDeviceSize emitterBytes{0}, batchBytes{0};
+        rtc::HostBuffer emitters, batches, tracerVerts;
+        VkDeviceSize emitterBytes{0}, batchBytes{0}, tracerBytes{0};
         VkDescriptorSet expandSet{VK_NULL_HANDLE}, sortSet{VK_NULL_HANDLE}, drawSet{VK_NULL_HANDLE}, forwardSet{VK_NULL_HANDLE};
     };
 
     [[nodiscard]] bool createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetLayout gbufferScene);
     [[nodiscard]] bool createPipelines();
     [[nodiscard]] bool createRenderPass();
-    [[nodiscard]] bool ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes);
+    [[nodiscard]] bool ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes,
+                                        VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     void writeExpandSet(uint32_t slot, const Lighting& lighting);
     void writeForwardSet(uint32_t slot, const Lighting& lighting);
     void destroySizeResources();
@@ -136,8 +138,8 @@ private:
         m_forwardLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_pool{VK_NULL_HANDLE};
     VkPipelineLayout m_expandPipelineLayout{VK_NULL_HANDLE}, m_sortPipelineLayout{VK_NULL_HANDLE},
-        m_drawPipelineLayout{VK_NULL_HANDLE}, m_meshPipelineLayout{VK_NULL_HANDLE};
-    VkPipeline m_expandPipeline{VK_NULL_HANDLE}, m_sortPipeline{VK_NULL_HANDLE};
+        m_drawPipelineLayout{VK_NULL_HANDLE}, m_meshPipelineLayout{VK_NULL_HANDLE}, m_tracerPipelineLayout{VK_NULL_HANDLE};
+    VkPipeline m_expandPipeline{VK_NULL_HANDLE}, m_sortPipeline{VK_NULL_HANDLE}, m_tracerPipeline{VK_NULL_HANDLE};
     std::array<VkPipeline, 3> m_particlePipelines{};   // by kVfxBlend*
     std::array<VkPipeline, 2> m_meshPipelines{};       // [0] one-sided (back faces culled), [1] double-sided
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
@@ -150,6 +152,7 @@ private:
     std::vector<Batch> m_batches;
     std::vector<Object> m_objects;
     std::vector<uint32_t> m_meshDraws;      // the blended draws (draw-table indices), by object index
+    std::vector<gpu::shared::TracerVertexGpu> m_tracerVerts;   // six a tracer, by object index (kind 2)
     View m_view;
     VfxFrameStats m_stats;
 };

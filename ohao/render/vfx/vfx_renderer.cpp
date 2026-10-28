@@ -1,5 +1,7 @@
 #include "render/vfx/vfx_renderer.hpp"
 
+#include "vfx/tracer_math.hpp"
+
 #include "render/scene/render_scene.hpp"
 #include "scene/asset/model.hpp"
 #include "vfx/particle_math.hpp"
@@ -160,11 +162,12 @@ void VfxRenderer::cleanup() {
         if (p) vkDestroyPipeline(m_device, p, nullptr);
     m_particlePipelines.fill(VK_NULL_HANDLE);
     m_meshPipelines.fill(VK_NULL_HANDLE);
-    for (VkPipeline* p : {&m_expandPipeline, &m_sortPipeline}) {
+    for (VkPipeline* p : {&m_expandPipeline, &m_sortPipeline, &m_tracerPipeline}) {
         if (*p) vkDestroyPipeline(m_device, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
-    for (VkPipelineLayout* l : {&m_expandPipelineLayout, &m_sortPipelineLayout, &m_drawPipelineLayout, &m_meshPipelineLayout}) {
+    for (VkPipelineLayout* l :
+         {&m_expandPipelineLayout, &m_sortPipelineLayout, &m_drawPipelineLayout, &m_meshPipelineLayout, &m_tracerPipelineLayout}) {
         if (*l) vkDestroyPipelineLayout(m_device, *l, nullptr);
         *l = VK_NULL_HANDLE;
     }
@@ -179,6 +182,7 @@ void VfxRenderer::cleanup() {
     for (auto& s : m_slots) {
         rtc::destroyHostBuffer(m_device, s.emitters);
         rtc::destroyHostBuffer(m_device, s.batches);
+        rtc::destroyHostBuffer(m_device, s.tracerVerts);
         s = Slot{};
     }
     rtc::destroyHostBuffer(m_device, m_particles);
@@ -349,7 +353,9 @@ bool VfxRenderer::createPipelines() {
     const VkShaderModule particleFrag = rtc::loadShaderModule(m_device, "vfx_particle.slang.fragmentMain.spv");
     const VkShaderModule meshVert = rtc::loadShaderModule(m_device, "core_gbuffer.vert.spv");
     const VkShaderModule meshFrag = rtc::loadShaderModule(m_device, "vfx_transparent_mesh.slang.spv");
-    bool ok = particleVert && particleFrag && meshVert && meshFrag;
+    const VkShaderModule tracerVert = rtc::loadShaderModule(m_device, "vfx_tracer.slang.vertexMain.spv");
+    const VkShaderModule tracerFrag = rtc::loadShaderModule(m_device, "vfx_tracer.slang.fragmentMain.spv");
+    bool ok = particleVert && particleFrag && meshVert && meshFrag && tracerVert && tracerFrag;
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     for (auto& s : stages) s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -439,7 +445,39 @@ bool VfxRenderer::createPipelines() {
             ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_meshPipelines[k]) == VK_SUCCESS;
         }
     }
-    for (VkShaderModule m : {particleVert, particleFrag, meshVert, meshFrag})
+    // Tracers: six host-built vertices a tracer (position, across and along, colour), additive light,
+    // the particles' depth test, both faces (a quad faces the camera).
+    if (ok) {
+        const VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(shared::TracerPush)};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &push;
+        ok = vkCreatePipelineLayout(m_device, &pl, nullptr, &m_tracerPipelineLayout) == VK_SUCCESS;
+    }
+    if (ok) {
+        const VkVertexInputBindingDescription binding{0, sizeof(shared::TracerVertexGpu), VK_VERTEX_INPUT_RATE_VERTEX};
+        std::array<VkVertexInputAttributeDescription, 3> attributes{};
+        for (uint32_t k = 0; k < attributes.size(); ++k)
+            attributes[k] = {k, 0, VK_FORMAT_R32G32B32A32_SFLOAT, static_cast<uint32_t>(k * sizeof(glm::vec4))};
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vi.vertexBindingDescriptionCount = 1;
+        vi.pVertexBindingDescriptions = &binding;
+        vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
+        vi.pVertexAttributeDescriptions = attributes.data();
+        stages[0].module = tracerVert;
+        stages[0].pName = "vertexMain";
+        stages[1].module = tracerFrag;
+        stages[1].pName = "fragmentMain";
+        pi.pVertexInputState = &vi;
+        pi.layout = m_tracerPipelineLayout;
+        blends[0] = blendState(shared::kVfxBlendAdditive);
+        blends[1] = maskState();
+        rs.cullMode = VK_CULL_MODE_NONE;
+        ok = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &m_tracerPipeline) == VK_SUCCESS;
+    }
+    for (VkShaderModule m : {particleVert, particleFrag, meshVert, meshFrag, tracerVert, tracerFrag})
         if (m) vkDestroyShaderModule(m_device, m, nullptr);
     return ok;
 }
@@ -466,11 +504,11 @@ bool VfxRenderer::resize(uint32_t width, uint32_t height, VkImageView hdr, VkIma
     return vkCreateFramebuffer(m_device, &fi, nullptr, &m_framebuffer) == VK_SUCCESS;
 }
 
-bool VfxRenderer::ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes) {
+bool VfxRenderer::ensureHostBuffer(rtc::HostBuffer& buf, VkDeviceSize& cap, VkDeviceSize bytes, VkBufferUsageFlags usage) {
     if (buf.buffer != VK_NULL_HANDLE && cap >= bytes) return true;
     rtc::destroyHostBuffer(m_device, buf);
     cap = std::max<VkDeviceSize>(bytes, 4096);
-    return rtc::createHostBuffer(m_device, m_physical, cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buf);
+    return rtc::createHostBuffer(m_device, m_physical, cap, usage, buf);
 }
 
 void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const View& view) {
@@ -480,6 +518,7 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
     m_meshDraws.clear();
     m_emitterTable.clear();
     m_emitterBase.clear();
+    m_tracerVerts.clear();
     m_stats = {};
     if (m_renderPass == VK_NULL_HANDLE || m_framebuffer == VK_NULL_HANDLE || slot >= m_slots.size()) return;
 
@@ -559,6 +598,24 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
         m_stats.batches = static_cast<uint32_t>(m_batches.size());
     }
 
+    // The tracers: a stretched camera-facing quad from the tail to the head, the head at speed * age
+    // along the round (clamped at its end), the tail `length` behind it. Six vertices each; a tracer
+    // not yet fired (head at its tail) is skipped. Objects of kind 2, index = the tracer's quad.
+    m_tracerVerts.clear();
+    for (const render::VfxFrameTracer& t : frame.tracers) {
+        const vfx::TracerQuad q = vfx::tracerQuad(t.from, t.to, t.speed, t.length, t.width, t.age, view.cameraPos);
+        if (!q.visible) continue;
+        for (const vfx::TracerQuad::Corner& c : q.corners) {
+            shared::TracerVertexGpu v{};
+            v.pos = {c.pos.x, c.pos.y, c.pos.z, 0.0f};
+            v.uv = {c.across, c.along, 0.0f, 0.0f};
+            v.color = {t.color.x, t.color.y, t.color.z, 1.0f};
+            m_tracerVerts.push_back(v);
+        }
+        m_objects.push_back({2u, t.id, glm::distance(q.centre, view.cameraPos), static_cast<uint32_t>(m_tracerVerts.size() / 6 - 1)});
+        ++m_stats.tracers;
+    }
+
     // The blended draws, each at its world bounds' centre.
     const auto draws = scene.draws();
     for (const uint32_t i : scene.transparentDraws()) {
@@ -601,6 +658,19 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
             g.info = {b.emitter, b.seed, b.first, b.count};
             g.timing = {b.age, 0.0f, 0.0f, 0.0f};
             out[i] = g;
+        }
+    }
+    // The tracers' vertices, in this slot's buffer; without one, no tracer is drawn.
+    if (!m_tracerVerts.empty()) {
+        const VkDeviceSize bytes = m_tracerVerts.size() * sizeof(shared::TracerVertexGpu);
+        if (ensureHostBuffer(s.tracerVerts, s.tracerBytes, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
+            std::memcpy(s.tracerVerts.mapped, m_tracerVerts.data(), static_cast<size_t>(bytes));
+        } else {
+            m_tracerVerts.clear();
+            m_stats.tracers = 0;
+            m_objects.erase(std::remove_if(m_objects.begin(), m_objects.end(), [](const Object& o) { return o.kind == 2; }),
+                            m_objects.end());
+            m_stats.objects = static_cast<uint32_t>(m_objects.size());
         }
     }
 }
@@ -829,7 +899,7 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
     fp.env = {lighting.envIntensity, 0.0f, 0.0f, 0.0f};
 
     const auto draws = scene.draws();
-    enum class Bound { None, Particles, Meshes } bound = Bound::None;
+    enum class Bound { None, Particles, Meshes, Tracers } bound = Bound::None;
     VkPipeline pipeline = VK_NULL_HANDLE;
     for (const Object& o : m_objects) {
         if (o.kind == 0) {
@@ -870,6 +940,20 @@ void VfxRenderer::drawTransparent(VkCommandBuffer cmd, uint32_t slot, const rend
             }
             // firstInstance is the draw's index: core/gbuffer.vert reads its record.
             vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, d.vertexOffset, i);
+        } else if (o.kind == 2) {
+            if (bound != Bound::Tracers) {
+                const VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &s.tracerVerts.buffer, &offset);
+                bound = Bound::Tracers;
+            }
+            if (m_tracerPipeline != pipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tracerPipeline);
+                pipeline = m_tracerPipeline;
+            }
+            shared::TracerPush tp{};
+            copyMatrix(tp.viewProj, viewProj);
+            vkCmdPushConstants(cmd, m_tracerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(tp), &tp);
+            vkCmdDraw(cmd, 6, 1, 6u * o.index, 0);
         }
     }
     vkCmdEndRenderPass(cmd);
