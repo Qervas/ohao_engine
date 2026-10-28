@@ -2,6 +2,7 @@
 #include "miniaudio.h"
 
 #include "audio_system.hpp"
+#include "audio/reverb_node.hpp"
 #include "core/log.hpp"
 
 #include <algorithm>
@@ -277,18 +278,58 @@ ma_node_vtable g_busVtable = {busProcess, nullptr, 1, 2, 0};
 
 } // namespace
 
+// ---- the reverb on the return bus -----------------------------------------------------------
+//
+// One input (the return's sound group), one output (the return's bus node): the Freeverb of
+// reverb_node.hpp, wet only. A preset change crosses threads through atomics and a version
+// counter, picked up at the next processed block.
+
+struct AudioReverbNode {
+    ma_node_base base;   // first: miniaudio treats the node as its base
+    std::unique_ptr<Reverb> reverb;
+    std::atomic<uint32_t> version{0};
+    std::atomic<float> room{0.5f}, damp{0.5f}, wet{0.0f};
+    std::atomic<uint32_t> crossfade{0};
+    uint32_t seen{0};   // audio thread
+
+    void process(const float* in, float* out, uint32_t frames) {
+        if (const uint32_t v = version.load(std::memory_order_acquire); v != seen) {
+            seen = v;
+            ReverbPreset p;
+            p.room = room.load(std::memory_order_relaxed);
+            p.damp = damp.load(std::memory_order_relaxed);
+            p.wet = wet.load(std::memory_order_relaxed);
+            reverb->setPreset(p, crossfade.load(std::memory_order_relaxed));
+        }
+        reverb->process(in, out, frames);
+    }
+};
+
+namespace {
+
+void reverbProcess(ma_node* node, const float** in, ma_uint32* frameCountIn, float** out, ma_uint32* frameCountOut) {
+    (void)frameCountIn;
+    reinterpret_cast<AudioReverbNode*>(node)->process(in[0], out[0], *frameCountOut);
+}
+
+ma_node_vtable g_reverbVtable = {reverbProcess, nullptr, 1, 1, 0};
+
+} // namespace
+
 struct AudioSystem::Bus {
     ma_sound_group group{};
     AudioBusNode node;
+    std::unique_ptr<AudioReverbNode> reverb;   // the first return bus's, between its group and its node
     int parent{-1};
     bool isReturn{false};
     bool muted{false}, soloed{false};
-    bool groupInit{false}, nodeInit{false}, sendAttached{false};
+    bool groupInit{false}, nodeInit{false}, sendAttached{false}, reverbInit{false};
 };
 
 void AudioSystem::BusDeleter::operator()(Bus* bus) const {
     if (!bus) return;
     if (bus->groupInit) ma_sound_group_uninit(&bus->group);
+    if (bus->reverbInit) ma_node_uninit(&bus->reverb->base, nullptr);
     if (bus->nodeInit) ma_node_uninit(&bus->node.base, nullptr);
     delete bus;
 }
@@ -378,7 +419,30 @@ void AudioSystem::buildBuses() {
             continue;
         }
         bus->groupInit = true;
-        ma_node_attach_output_bus(&bus->group, 0, &bus->node.base, 0);
+        // The first return bus carries the reverb: group -> reverb -> the bus's node (stereo only).
+        const bool firstReturn = d.isReturn && ch == 2 &&
+                                 std::none_of(m_buses.begin(), m_buses.end(), [](const auto& b) { return b && b->reverbInit; });
+        if (firstReturn) {
+            bus->reverb = std::make_unique<AudioReverbNode>();
+            bus->reverb->reverb = std::make_unique<Reverb>(rate);
+            ma_node_config rc = ma_node_config_init();
+            rc.vtable = &g_reverbVtable;
+            const ma_uint32 stereo[1] = {2};
+            rc.pInputChannels = stereo;
+            rc.pOutputChannels = stereo;
+            if (ma_node_init(graph, &rc, nullptr, &bus->reverb->base) == MA_SUCCESS) {
+                bus->reverbInit = true;
+            } else {
+                bus->reverb.reset();
+                OHAO_LOG(Error, audio, "bus '{}': its reverb could not start; the return passes through", d.name);
+            }
+        }
+        if (bus->reverbInit) {
+            ma_node_attach_output_bus(&bus->group, 0, &bus->reverb->base, 0);
+            ma_node_attach_output_bus(&bus->reverb->base, 0, &bus->node.base, 0);
+        } else {
+            ma_node_attach_output_bus(&bus->group, 0, &bus->node.base, 0);
+        }
         Bus* parent = bus->parent >= 0 && static_cast<std::size_t>(bus->parent) < m_buses.size()
                           ? m_buses[static_cast<std::size_t>(bus->parent)].get() : nullptr;
         if (parent) ma_node_attach_output_bus(&bus->node.base, 0, &parent->group, 0);
@@ -454,19 +518,38 @@ bool AudioSystem::loadBank(const AudioBank& bank, const std::filesystem::path& r
             m_decoded[s].push_back(std::move(d));
         }
     }
+    // The reverb starts at the zone outside every zone.
+    if (const ReverbDesc* p = m_bank.preset(m_bank.defaultZone)) setReverb(*p, 0);
     m_bankLoadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return true;
+}
+
+void AudioSystem::setReverb(const ReverbPreset& preset, uint32_t crossfadeFrames) {
+    for (const auto& b : m_buses) {
+        if (!b || !b->reverbInit) continue;
+        AudioReverbNode& r = *b->reverb;
+        r.room.store(preset.room, std::memory_order_relaxed);
+        r.damp.store(preset.damp, std::memory_order_relaxed);
+        r.wet.store(preset.wet, std::memory_order_relaxed);
+        r.crossfade.store(crossfadeFrames, std::memory_order_relaxed);
+        r.version.fetch_add(1, std::memory_order_release);
+        return;
+    }
+}
+
+bool AudioSystem::hasReverb() const noexcept {
+    return std::any_of(m_buses.begin(), m_buses.end(), [](const auto& b) { return b && b->reverbInit; });
 }
 
 uint32_t AudioSystem::variantCount(uint16_t sound) const {
     return sound < m_decoded.size() ? static_cast<uint32_t>(m_decoded[sound].size()) : 0;
 }
 
-void AudioSystem::routeOccluded(SoundInstance& instance, Bus* bus) {
+void AudioSystem::routeOccluded(SoundInstance& instance, Bus* bus, double hz) {
     ma_node* into = bus && bus->groupInit ? static_cast<ma_node*>(&bus->group) : ma_engine_get_endpoint(m_engine.get());
     auto lowPass = MaLpfNodePtr(new AudioLowPass());
     const ma_lpf_node_config config = ma_lpf_node_config_init(
-        ma_engine_get_channels(m_engine.get()), ma_engine_get_sample_rate(m_engine.get()), kOccludedLowPassHz, 2);
+        ma_engine_get_channels(m_engine.get()), ma_engine_get_sample_rate(m_engine.get()), hz, 2);
     if (ma_lpf_node_init(ma_engine_get_node_graph(m_engine.get()), &config, nullptr, &lowPass->node) == MA_SUCCESS) {
         ma_node_attach_output_bus(&lowPass->node, 0, into, 0);
         ma_node_attach_output_bus(instance.sound.get(), 0, &lowPass->node, 0);
@@ -500,7 +583,9 @@ SoundHandle AudioSystem::play(uint16_t sound, uint32_t variant, const VoicePlace
     const uint64_t now = engineFrame();
     source->delay = startFrame > now ? startFrame - now : 0;
     instance.source = std::move(source);
-    const bool occluded = placement.spatial && placement.shape.occluded;
+    // Graded occlusion (the schedule's) when it names a low-pass, else Feel's single grade.
+    const bool graded = placement.occlusionLowPassHz > 0.0;
+    const bool occluded = placement.spatial && (graded || placement.shape.occluded);
     auto snd = MaSoundPtr(new ma_sound());
     // No pitch: the data is at the engine's rate, and the pitch resampler (always on otherwise)
     // delays a voice by 4 frames.
@@ -519,12 +604,17 @@ SoundHandle AudioSystem::play(uint16_t sound, uint32_t variant, const VoicePlace
         ma_sound_set_rolloff(s, placement.shape.rolloff);
         ma_sound_set_attenuation_model(s, ma_attenuation_model_inverse);
     }
-    if (occluded) routeOccluded(instance, bus);
+    if (occluded) {
+        instance.occlusionHz = graded ? placement.occlusionLowPassHz : kOccludedLowPassHz;
+        instance.occlusionDb = graded ? placement.occlusionDb : kOccludedGainDb;
+        routeOccluded(instance, bus, instance.occlusionHz);
+    }
     instance.bank = true;
     instance.baseVolume = std::max(0.0f, placement.volume * desc.volume);
     instance.spatial = placement.spatial;
     instance.position = placement.position;
     instance.shape = placement.shape;
+    instance.shape.occluded = occluded;
     return start(std::move(instance));
 }
 
@@ -798,7 +888,7 @@ std::optional<VoiceInfo> AudioSystem::voice(SoundHandle handle) const {
     v.shape = s.shape;
     v.baseVolume = s.baseVolume;
     v.volume = ma_sound_get_volume(s.sound.get());
-    v.lowPassHz = s.lowPass ? kOccludedLowPassHz : 0.0;
+    v.lowPassHz = s.lowPass ? (s.occlusionHz > 0.0 ? s.occlusionHz : kOccludedLowPassHz) : 0.0;
     return v;
 }
 
@@ -939,7 +1029,8 @@ void AudioSystem::update() {
 
 void AudioSystem::updateSoundVolume(SoundInstance& instance) {
     if (!instance.sound) return;
-    const float occlusion = instance.shape.occluded ? std::pow(10.0f, kOccludedGainDb / 20.0f) : 1.0f;
+    const float db = instance.occlusionDb != 0.0f ? instance.occlusionDb : (instance.shape.occluded ? kOccludedGainDb : 0.0f);
+    const float occlusion = db != 0.0f ? std::pow(10.0f, db / 20.0f) : 1.0f;
     ma_sound_set_volume(instance.sound.get(), instance.baseVolume * occlusion);
 }
 

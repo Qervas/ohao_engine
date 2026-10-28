@@ -96,6 +96,12 @@ const ShapeDesc* AudioBank::shape(std::string_view name) const {
     return nullptr;
 }
 
+const ReverbDesc* AudioBank::preset(std::string_view name) const {
+    for (const ReverbDesc& r : reverb)
+        if (r.name == name) return &r;
+    return nullptr;
+}
+
 int AudioBank::parentOf(int b) const {
     if (b < 0 || b >= static_cast<int>(buses.size())) return -1;
     return bus(buses[static_cast<std::size_t>(b)].parent);

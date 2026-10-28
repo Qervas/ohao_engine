@@ -124,12 +124,16 @@ struct VoiceInfo {
 };
 
 // Where and how loud a bank sound plays: at the listener (not spatial), or at a position on a
-// distance shape, occluded or not.
+// distance shape, occluded or not. Graded occlusion (the schedule's, sub-project 11 step 2):
+// occlusionLowPassHz above 0 plays the voice that much quieter through that low-pass; else
+// shape.occluded is Feel's single grade (kOccludedGainDb, kOccludedLowPassHz).
 struct VoicePlacement {
     bool spatial{false};
     glm::vec3 position{0.0f};
     SoundShape shape;
     float volume{1.0f};   // times the bank sound's own volume
+    float occlusionDb{0.0f};
+    double occlusionLowPassHz{0.0};
 };
 
 class AudioSystem {
@@ -177,8 +181,13 @@ public:
     // ancestor or its descendant. Both change over 2 ms (96 frames at 48 kHz).
     void setMute(uint8_t bus, bool muted);
     void setSolo(uint8_t bus, bool soloed);
-    // How much of a bus goes to the bank's return bus (the reverb, step 2), 0..1.
+    // How much of a bus goes to the bank's return bus (the reverb), 0..1.
     void setBusSend(uint8_t bus, float level);
+    // The reverb on the bank's first return bus (reverb_node.hpp): crossfaded to `preset` over
+    // `crossfadeFrames` (0: at once). loadBank sets the bank's defaultZone preset. Nothing without a
+    // return bus.
+    void setReverb(const ReverbPreset& preset, uint32_t crossfadeFrames);
+    [[nodiscard]] bool hasReverb() const noexcept;
 
     [[nodiscard]] uint64_t engineFrame() const;   // the engine clock, in frames
     [[nodiscard]] uint32_t sampleRate() const;
@@ -259,6 +268,8 @@ private:
         bool stopping = false;  // fading out by stop(): freed once it has stopped
         glm::vec3 position{0.0f};
         SoundShape shape;
+        float occlusionDb{0.0f};     // a graded occlusion's cut (bank voices); 0: shape.occluded's, if any
+        double occlusionHz{0.0};     // its low-pass; 0: none, or shape.occluded's
     };
     struct Bus;
     struct BusDeleter {
@@ -275,8 +286,8 @@ private:
     void pushGates();           // mute and solo into every bus's gate
     [[nodiscard]] Bus* busFor(SoundCategory category) const;
     [[nodiscard]] Bus* busAt(uint8_t bus) const;
-    // Routes an occluded sound (initialized without a group) into `bus` through a low-pass.
-    void routeOccluded(SoundInstance& instance, Bus* bus);
+    // Routes an occluded sound (initialized without a group) into `bus` through a low-pass at `hz`.
+    void routeOccluded(SoundInstance& instance, Bus* bus, double hz = kOccludedLowPassHz);
     [[nodiscard]] SoundHandle nextHandle();
     // The voice cap for a new SFX sound this loud at the listener: false when it is dropped;
     // otherwise room is made (the quietest playing sound stopped if at the cap). Under m_mutex.

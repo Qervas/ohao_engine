@@ -68,12 +68,17 @@ struct SnapshotDesc {
     uint32_t outSteps{0};
 };
 
-struct ReverbDesc {
-    std::string name;
+// A reverb's character (the Freeverb node's room size, damping and wet level, 0..1) and the
+// ambience bed that loops while it is the listener's zone.
+struct ReverbPreset {
     float room{0.5f};
     float damp{0.5f};
     float wet{0.2f};
     std::string bed;   // a looping ambience sound's name; empty: none
+};
+
+struct ReverbDesc : ReverbPreset {
+    std::string name;
 };
 
 struct AudioBank {
@@ -90,6 +95,7 @@ struct AudioBank {
     [[nodiscard]] int bus(std::string_view name) const;
     [[nodiscard]] int sound(std::string_view name) const;
     [[nodiscard]] const ShapeDesc* shape(std::string_view name) const;
+    [[nodiscard]] const ReverbDesc* preset(std::string_view name) const;
     [[nodiscard]] int parentOf(int bus) const;   // -1 for the root
 };
 

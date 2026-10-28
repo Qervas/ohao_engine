@@ -14,6 +14,7 @@
 
 #include "audio/audio_bank.hpp"
 #include "audio/audio_system.hpp"
+#include "audio/reverb_node.hpp"
 
 #include "common/harness.hpp"   // the JSON summary line (ohao::test::finish)
 
@@ -409,7 +410,9 @@ constexpr const char* kBank = R"({
     "tone100": {"files": "tone100", "bus": "ui", "priority": 50, "shape": "ear", "holdMs": 2000},
     "noise":   {"files": "noise", "bus": "weapons", "priority": 200, "shape": "near", "holdMs": 2000},
     "var":     {"files": "var_{n}", "bus": "foley", "priority": 100, "shape": "ear", "holdMs": 100}
-  }
+  },
+  "reverb": {"outdoor": {"room": 0.3, "damp": 0.6, "wet": 0.05}, "room": {"room": 0.7, "damp": 0.4, "wet": 0.25}},
+  "defaultZone": "room"
 })";
 
 AudioBank testBank() {
@@ -799,6 +802,104 @@ bool t26_local_first() {
 }
 
 // =============================================================================
+// Test 27, the mixer half (sub-project 11 step 2): the reverb return
+// =============================================================================
+
+namespace t27 {
+
+// The RT60 of an impulse response: Schroeder's backward-integrated energy decay, its slope fitted
+// (least squares, in dB against seconds) between -5 and -25 dB, extrapolated to 60 dB (T20).
+double rt60(const std::vector<float>& ir, uint32_t rate) {
+    std::vector<double> edc(ir.size());
+    double sum = 0.0;
+    for (std::size_t i = ir.size(); i-- > 0;) {
+        sum += double(ir[i]) * ir[i];
+        edc[i] = sum;
+    }
+    if (sum <= 0.0) return 0.0;
+    double sx = 0, sy = 0, sxx = 0, sxy = 0;
+    int n = 0;
+    for (std::size_t i = 0; i < edc.size(); ++i) {
+        const double level = 10.0 * std::log10(std::max(edc[i] / edc[0], 1e-30));
+        if (level > -5.0) continue;
+        if (level < -25.0) break;
+        const double t = double(i) / rate;
+        sx += t, sy += level, sxx += t * t, sxy += t * level, ++n;
+    }
+    if (n < 2) return 0.0;
+    const double slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);   // dB per second
+    return slope < 0.0 ? -60.0 / slope : 0.0;
+}
+
+// The slice's bank (assets/audio/slice.audio.json), parsed.
+AudioBank sliceBank() {
+    std::ifstream f(std::filesystem::path(OHAO_SOURCE_DIR) / "assets/audio/slice.audio.json", std::ios::binary);
+    const std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto r = parseAudioBank(json);
+    return r ? std::move(r).value() : AudioBank{};
+}
+
+} // namespace t27
+
+// An impulse through each of the slice's presets decays at its design RT60 (the comb feedback's,
+// Reverb::designRt60) within 20%; the open air's is the shortest.
+bool t27_reverb_preset_tail() {
+    TEST_BEGIN("t27_reverb_preset_tail");
+    const AudioBank bank = t27::sliceBank();
+    constexpr uint32_t rate = 48000, frames = 4 * rate;
+    double outdoor = 0.0, room = 0.0;
+    for (const char* name : {"outdoor", "room", "corridor"}) {
+        const ReverbDesc* p = bank.preset(name);
+        if (!p) {
+            TEST_FAIL(std::string("the slice bank has no preset ") + name);
+            return false;
+        }
+        Reverb r(rate);
+        r.setPreset(*p, 0);
+        std::vector<float> in(std::size_t(frames) * 2, 0.0f), out(in.size(), 0.0f);
+        in[0] = in[1] = 1.0f;
+        for (uint32_t at = 0; at < frames; at += 480) r.process(in.data() + at * 2, out.data() + at * 2, 480);
+        std::vector<float> left(frames);
+        for (uint32_t i = 0; i < frames; ++i) left[i] = out[std::size_t(i) * 2];
+        const double measured = t27::rt60(left, rate), design = Reverb::designRt60(p->room, rate);
+        std::cout << "\n      " << name << ": RT60 " << measured << " s (design " << design << " s)";
+        if (std::abs(measured - design) > 0.2 * design) {
+            TEST_FAIL(std::string(name) + "'s RT60 is not within 20% of its design value");
+            return false;
+        }
+        if (std::string_view(name) == "outdoor") outdoor = measured;
+        if (std::string_view(name) == "room") room = measured;
+    }
+    std::cout << ' ';
+    EXPECT_TRUE(outdoor > 0.0 && outdoor < room);
+    TEST_PASS();
+    return true;
+}
+
+// A bus without a send leaves no tail; a bus's send scales its tail (twice the send, +6 dB).
+bool t27_reverb_send_per_bus() {
+    TEST_BEGIN("t27_reverb_send_per_bus");
+    const auto tail = [](float send) {
+        AudioSystem a;
+        if (!t26::mixer(a)) return -1.0;
+        const auto& bank = a.bank();
+        a.setBusSend(static_cast<uint8_t>(bank.bus("weapons")), send);
+        if (!isValidSoundHandle(a.play(static_cast<uint16_t>(bank.sound("click")), 0, t26::atEar()))) return -1.0;
+        const auto x = t26::renderLeft(a, 38400);
+        return t26::rms(x, 4800);   // after 100 ms: the click is over, what is left is the tail
+    };
+    AudioSystem probe;
+    EXPECT_TRUE(t26::mixer(probe) && probe.hasReverb());
+    const double dry = tail(0.0f), quarter = tail(0.25f), half = tail(0.5f);
+    std::cout << "\n      tail rms: send 0 " << dry << ", 0.25 " << quarter << ", 0.5 " << half << ' ';
+    EXPECT_TRUE(dry >= 0.0 && dry < 1e-6);
+    EXPECT_TRUE(quarter > 1e-4);
+    EXPECT_NEAR(t26::db(half / quarter), 6.02, 0.1);
+    TEST_PASS();
+    return true;
+}
+
+// =============================================================================
 // TEST RUNNER
 // =============================================================================
 
@@ -843,6 +944,10 @@ void runAllTests() {
     t26_render_repeatable();
     t26_occluded_through_bus();
     t26_local_first();
+
+    std::cout << "\n\033[1m--- Test 27: the reverb return ---\033[0m" << std::endl;
+    t27_reverb_preset_tail();
+    t27_reverb_send_per_bus();
     std::error_code ec;
     std::filesystem::remove_all(t26::soundRoot(), ec);
 
