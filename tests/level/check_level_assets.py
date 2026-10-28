@@ -81,6 +81,8 @@ def l1_every_checked_in_level_has_valid_hints():
 # assert against these numbers (docs/plans/2026-10-26-level-pipeline.md, Task 1).
 BLOCKOUT = {
     "Floor": ([0, -0.1, 0], {"col": "box", "surf": "concrete"}),
+    # The outdoor ground: 80 x 80 m, its top 5 cm below the Floor's (audio spec ruling 21).
+    "Ground": ([0, -0.15, 0], {"col": "box", "surf": "concrete"}),
     "WallNorth": ([0, 1.5, -3.1], {"col": "box"}),
     "WallEast": ([4.1, 1.5, 0], {"col": "box"}),
     "WallWest": ([-4.1, 1.5, 0], {"col": "box"}),
@@ -109,7 +111,7 @@ def l1_blockout_hints_are_the_contract():
         got = n.get("translation", [0, 0, 0])
         assert all(abs(a - b) < 1e-5 for a, b in zip(got, t)), f"{name}: translation {got}, expected {t}"
         assert n.get("extras") == extras, f"{name}: extras {n.get('extras')}, expected {extras}"
-    assert len(doc["meshes"]) == 13, f"{len(doc['meshes'])} meshes"
+    assert len(doc["meshes"]) == 14, f"{len(doc['meshes'])} meshes"
     assert "camera" in nodes["LevelCamera"], "LevelCamera has no camera"
     assert not doc.get("extensionsUsed"), f"extensions {doc.get('extensionsUsed')}"
 

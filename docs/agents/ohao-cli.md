@@ -202,7 +202,7 @@ facing about +Y, 0 looking down −Z.
 ```console
 $ build/Release/ohao level assets/levels/blockout_room.glb > build/doc_tmp/level.json
 $ python -c "import json; r = json.load(open('build/doc_tmp/level.json'))['result']; print(r['nodes'], r['meshes'], r['colliders'], r['bodies']); print([(s['tag'], s['pos'], s['yawDeg']) for s in r['spawns']])"
-17 13 {'box': 12, 'mesh': 1} {'static': 11, 'dynamic': 2}
+18 14 {'box': 13, 'mesh': 1} {'static': 12, 'dynamic': 2}
 [('enemy', [-2.5, 0.3, -2], 180), ('enemy', [3, 0.5, -2], 180), ('player', [1.5, 0, 2.2], 0)]
 $ build/Release/ohao level assets/levels/no_such_level.glb   # exit 2
 {"error":{"code":"E_ASSET_NOT_FOUND","message":"no file 'assets/levels/no_such_level.glb' in the project","data":[{"code":"E_ASSET_NOT_FOUND","path":"","message":"no file 'assets/levels/no_such_level.glb' in the project"}]}}

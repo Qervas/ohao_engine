@@ -446,8 +446,8 @@ def main():
     spawns = (info or {}).get("spawns", [])
     player = next((sp for sp in spawns if sp.get("tag") == "player"), None)
     info_bytes = len(json.dumps(info, separators=(",", ":")).encode("utf-8")) if info else 0
-    check(not err and info.get("nodes") == 17 and len(spawns) == 3 and player is not None and info_bytes <= 1024,
-          "level_info: 17 nodes, 3 spawns, a player spawn, %d bytes (at most 1,024)" % info_bytes)
+    check(not err and info.get("nodes") == 18 and len(spawns) == 3 and player is not None and info_bytes <= 1024,
+          "level_info: 18 nodes, 3 spawns, a player spawn, %d bytes (at most 1,024)" % info_bytes)
     if player:
         x, y, z = player["pos"]
         hit, _, err = c.tool("physics_raycast", {"from": [x, y + 0.5, z], "dir": [0, -1, 0], "max": 2})
@@ -457,8 +457,8 @@ def main():
               "physics_raycast down at the player spawn hits the Floor at %s (%d bytes, at most 200)"
               % ((hit or {}).get("point"), hit_bytes))
     bodies, _, err = c.tool("physics_info")
-    check(not err and bodies.get("bodies", {}).get("static") == 11 and bodies.get("bodies", {}).get("dynamic") == 2,
-          "physics_info: 11 static bodies and 2 dynamic")
+    check(not err and bodies.get("bodies", {}).get("static") == 12 and bodies.get("bodies", {}).get("dynamic") == 2,
+          "physics_info: 12 static bodies (the outdoor Ground among them) and 2 dynamic")
 
     # Physics in the step (sub-project 6, step 1): lift the crates apart (CrateA 1 m, CrateB 2 m: CrateB
     # stands on CrateA), step, read the landing as an event.

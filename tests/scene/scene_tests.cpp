@@ -2385,19 +2385,19 @@ static void sp5_t02_default_scene_is_used() {
     CHECK(r && r.value().nodes.size() == 1 && r.value().nodes[0].name == "InChosen", "`scene` picks the scene; others are ignored");
 }
 
-// assets/levels/blockout_room.glb (step 1's contract): 17 root nodes, 13 meshes, 12 boxes of 12
-// triangles and the ramp's wedge of 8, the hints as extras.
+// assets/levels/blockout_room.glb (step 1's contract, plus the outdoor Ground): 18 root nodes,
+// 14 meshes, 13 boxes of 12 triangles and the ramp's wedge of 8, the hints as extras.
 static void sp5_t02_blockout_structure() {
     const auto r = readStructure(kBlockout);
     CHECK(r, "the blockout reads");
     const level::GltfStructure& s = r.value();
-    CHECK(s.nodes.size() == 17 && s.meshes.size() == 13, "17 nodes, 13 meshes");
+    CHECK(s.nodes.size() == 18 && s.meshes.size() == 14, "18 nodes, 14 meshes");
     uint64_t triangles = 0;
     for (const auto& m : s.meshes) {
         triangles += m.triangles;
         CHECK(m.primitives == 1 && m.triangles == (m.name == "Ramp" ? 8u : 12u), "one primitive per mesh: a box or the wedge");
     }
-    CHECK(triangles == 152, "152 triangles, as the merged model's 456 indices");
+    CHECK(triangles == 164, "164 triangles, as the merged model's 492 indices");
     const auto node = [&](const char* name) {
         for (const auto& n : s.nodes)
             if (n.name == name) return &n;
@@ -2442,7 +2442,7 @@ static uint64_t modelHashWithoutNormals(const Model& m) {
     return h;
 }
 
-// Every blockout mesh loaded alone: its triangles are its accessors' (152 in all), it is not
+// Every blockout mesh loaded alone: its triangles are its accessors' (164 in all), it is not
 // moved by its node (the pillar is centred on the origin), it carries only its own material;
 // by name and by #index the same mesh.
 static void sp5_t03_load_mesh_matches_accessors() {
@@ -2473,7 +2473,7 @@ static void sp5_t03_load_mesh_matches_accessors() {
     CHECK(nearVec(lo, {-0.3f, -1.5f, -0.3f}, 1e-5f) && nearVec(hi, {0.3f, 1.5f, 0.3f}, 1e-5f),
           "untransformed: the 0.6 x 3 x 0.6 m pillar centred on its own origin, not at its node's (0, 1.5, -0.5)");
     const auto missing = ModelLoader::loadMesh(kBlockout.string(), "Chandelier");
-    const auto outOfRange = ModelLoader::loadMesh(kBlockout.string(), "#13");
+    const auto outOfRange = ModelLoader::loadMesh(kBlockout.string(), "#14");
     CHECK(!missing && missing.error().find("Chandelier") != std::string::npos && !outOfRange,
           "a mesh the file does not have is an error naming it");
     const auto notGltf = ModelLoader::loadMesh((fs::path(OHAO_SOURCE_DIR) / "assets" / "scenes" / "cornell_box.scene.json").string(), "#0");
@@ -2481,11 +2481,12 @@ static void sp5_t03_load_mesh_matches_accessors() {
 }
 
 // The whole-file path (an empty `mesh`) is unchanged by per-mesh loading: the hashes are from
-// the task's base commit (e47bccb), normals aside.
+// the task's base commit (e47bccb), normals aside; the blockout's since its outdoor Ground (a
+// mesh more, ruling 21 of the audio spec).
 static void sp5_t03_whole_file_unchanged() {
     struct Case { const char* path; uint64_t hash; };
     const Case cases[] = {
-        {"assets/levels/blockout_room.glb", 0xff69ea18844ea165ULL},
+        {"assets/levels/blockout_room.glb", 0x0100e1a542cede15ULL},
         {"assets/test_models/DamagedHelmet.glb", 0x57901f2647bd9f79ULL},
         {"tests/assets/node_transforms.gltf", 0x07bff31e8fe20a25ULL},
     };

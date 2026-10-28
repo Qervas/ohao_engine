@@ -166,13 +166,14 @@ int main(int argc, char** argv) {
     const auto busy = monitor.stop(5.0, &external);
     const double cal1 = bench::calibrationMs();
 
-    // A benchmark of broken code fails: the blockout's 17 nodes, 11 static bodies, 2 crates.
-    const bool wrong = last.nodes != 17 || last.info.bodies.statics != 11 || last.info.bodies.dynamics != 2;
+    // A benchmark of broken code fails: the blockout's 18 nodes, 12 static bodies (the outdoor
+    // Ground's among them), 2 crates.
+    const bool wrong = last.nodes != 18 || last.info.bodies.statics != 12 || last.info.bodies.dynamics != 2;
     std::vector<std::string> failures;
     if (wrong)
         failures.push_back("the blockout did not load as expected: " + std::to_string(last.nodes) + " nodes, " +
                            std::to_string(last.info.bodies.statics) + " static and " +
-                           std::to_string(last.info.bodies.dynamics) + " dynamic bodies (want 17, 11, 2)");
+                           std::to_string(last.info.bodies.dynamics) + " dynamic bodies (want 18, 12, 2)");
 
     const Stats s = stats(samples);
     std::printf("level_bench (%d rounds after 5 warm-ups)\n", rounds);

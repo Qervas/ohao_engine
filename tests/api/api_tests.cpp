@@ -1990,11 +1990,11 @@ static void sp5_t08_level_info_counts_and_spawns() {
     std::printf("\n      %s", r.text.c_str());
     CHECK(r.ok() && r.str("/result/entity") == kBlockoutLevel && r.str("/result/path") == "assets/levels/blockout_room.glb",
           "the only level, by id and file");
-    CHECK(r.str("/result/nodes") == "17" && r.str("/result/meshes") == "13" && r.str("/result/uniqueMeshes") == "13" &&
-              r.str("/result/triangles") == "152" && r.str("/result/lights") == "0" && r.str("/result/cameras") == "1",
-          "17 nodes, 13 meshes (13 unique, 152 triangles), no light, one camera");
-    CHECK(r.json("/result/colliders") == R"({"box":12,"mesh":1})" && r.json("/result/bodies") == R"({"static":11,"dynamic":2})",
-          "12 box colliders and the ramp's mesh; 11 static bodies and the 2 crates");
+    CHECK(r.str("/result/nodes") == "18" && r.str("/result/meshes") == "14" && r.str("/result/uniqueMeshes") == "14" &&
+              r.str("/result/triangles") == "164" && r.str("/result/lights") == "0" && r.str("/result/cameras") == "1",
+          "18 nodes, 14 meshes (14 unique, 164 triangles), no light, one camera");
+    CHECK(r.json("/result/colliders") == R"({"box":13,"mesh":1})" && r.json("/result/bodies") == R"({"static":12,"dynamic":2})",
+          "13 box colliders (the outdoor Ground's too) and the ramp's mesh; 12 static bodies and the 2 crates");
     CHECK(r.at("/result/spawns") && r.at("/result/spawns")->count == 3, "three spawns");
     // Node order is the file's (Blender writes its objects by name): the enemies, then the player.
     CHECK(r.str("/result/spawns/0/tag") == "enemy" && r.json("/result/spawns/0/pos") == "[-2.5,0.3,-2]" &&
@@ -2081,9 +2081,9 @@ static void sp5_t08_physics_info_counts() {
     CHECK(lw.load().ok(), "the blockout scene loads");
     const Reply r(lw.s.call("physics.info"));
     std::printf("\n      %s", r.text.c_str());
-    CHECK(r.ok() && r.json("/result/bodies") == R"({"static":11,"dynamic":2})" &&
-              r.json("/result/shapes") == R"({"box":12,"mesh":1})" && r.str("/result/steps") == "0",
-          "the blockout: 11 static bodies and 2 dynamic; 12 boxes and a mesh; nothing stepped yet");
+    CHECK(r.ok() && r.json("/result/bodies") == R"({"static":12,"dynamic":2})" &&
+              r.json("/result/shapes") == R"({"box":13,"mesh":1})" && r.str("/result/steps") == "0",
+          "the blockout: 12 static bodies and 2 dynamic; 13 boxes and a mesh; nothing stepped yet");
     CHECK(r.at("/result/buildMs") && !r.at("/result/warnings"), "its build time; no warnings");
 }
 
@@ -2848,7 +2848,7 @@ static void sp5_t08_level_reload_keeps_world_hash() {
     CHECK(lw.load().ok(), "the blockout scene loads");
     const std::string before = Reply(lw.s.call("world.hash")).str("/result/hash");
     const Reply r(lw.s.call("level.reload"));
-    CHECK(r.ok() && r.str("/result/nodes") == "17" && r.json("/result/bodies") == R"({"static":11,"dynamic":2})",
+    CHECK(r.ok() && r.str("/result/nodes") == "18" && r.json("/result/bodies") == R"({"static":12,"dynamic":2})",
           "level.reload answers as level.info, after re-reading the file");
     CHECK(Reply(lw.s.call("world.hash")).str("/result/hash") == before, "an unchanged file keeps world.hash");
     const Reply hit(lw.s.call("physics.raycast", R"({"from":[1.5,0.5,2.2],"dir":[0,-1,0],"max":2})"));

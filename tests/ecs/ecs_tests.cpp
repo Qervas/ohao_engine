@@ -591,7 +591,7 @@ static void sp5_t04_one_entity_per_node() {
     const auto bn = b.nodes(blv);
     std::size_t meshes = 0;
     for (const auto e : bn) meshes += b.world.registry().all_of<MeshSource>(e) ? 1 : 0;
-    CHECK(bn.size() == 17 && meshes == 13, "the blockout: 17 nodes, 13 of them drawn meshes");
+    CHECK(bn.size() == 18 && meshes == 14, "the blockout: 18 nodes, 14 of them drawn meshes");
     CHECK(!b.world.registry().all_of<InstantiateError>(blv), "the blockout loads without errors");
 }
 

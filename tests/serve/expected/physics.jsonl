@@ -5,9 +5,9 @@
 {"jsonrpc":"2.0","id":5,"result":{"events":[{"seq":1,"step":28,"kind":"contact_begin","a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,-0.028,-1.4],"normal":[0,-1,0],"speed":4.57},{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
 {"jsonrpc":"2.0","id":6,"result":{"events":[{"seq":2,"step":39,"kind":"contact_begin","a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.595,-1.9],"normal":[0,-1,0],"speed":6.19}],"next":2}}
 {"jsonrpc":"2.0","id":7,"result":{"events":[],"next":2}}
-{"jsonrpc":"2.0","id":8,"result":{"bodies":{"static":11,"dynamic":2},"shapes":{"box":12,"mesh":1},"steps":60,"awake":2,"contacts":2,"buildMs":0}}
+{"jsonrpc":"2.0","id":8,"result":{"bodies":{"static":12,"dynamic":2},"shapes":{"box":13,"mesh":1},"steps":60,"awake":2,"contacts":2,"buildMs":0}}
 {"jsonrpc":"2.0","id":9,"result":{"entities":[{"id":"5cfbb21776b390b8","Transform":{"position":[1.2999303,0.29498821,-1.6999675]}},{"id":"506f14503a54ecba","Transform":{"position":[1.2998403,0.78997314,-1.700009]}}],"count":2}}
-{"jsonrpc":"2.0","id":10,"result":{"hash":"14b139640554be42","frame":60}}
+{"jsonrpc":"2.0","id":10,"result":{"hash":"0d5295a1656d0a6f","frame":60}}
 {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"PhysicsEventsParams.max is outside its limits","data":[{"code":"E_RANGE","path":"/max","message":"PhysicsEventsParams.max is outside its limits","expected":"in [1, 64]","got":"0"}]}}
 {"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"PhysicsEventsParams.since is outside its limits","data":[{"code":"E_RANGE","path":"/since","message":"PhysicsEventsParams.since is outside its limits","expected":">= 0","got":"-1"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":22,"frame":60,"schemaHash":"0480e4b562132cde","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":60,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":23,"frame":60,"schemaHash":"0480e4b562132cde","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":60,"fixedDt":0.016666668}}}
