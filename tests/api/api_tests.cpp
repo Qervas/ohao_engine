@@ -9,6 +9,7 @@
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/animation.hpp"
+#include "ecs/audio_schedule.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
@@ -178,7 +179,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 36, "thirty-six methods");
+    CHECK(api::methods().size() == 38, "thirty-eight methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -2627,6 +2628,208 @@ static void sp7_t18_combat_params_refused() {
     }
 }
 
+// ---- audio.info, audio.mix (sub-project 11, test 29) ------------------------------------------------
+// docs/specs/2026-10-28-audio-design.md, "The agent-facing surface". The play scene's bank is
+// assets/audio/slice.audio.json (ten buses, snapshots default, dead, won).
+
+struct AudioWorld : LevelWorld {
+    AudioWorld() {   // as the CLI context and the window host install them
+        ecs::installCombat(w);
+        ecs::installAnimation(w, files);
+        ecs::installAudio(w, files);
+    }
+    // Faces EnemyA (at (-2.5, 0.3, -2) from the spawn (1.5, 0, 2.2): yaw 43.6) and holds fire 20 steps
+    // out of every 40, for `steps` steps.
+    void fight(int steps) {
+        (void)s.call("player.teleport", R"({"pos":[1.5,0,2.2],"yawDeg":43.6})");
+        for (int i = 0; i < steps; i += 20) {
+            const bool down = (i / 20) % 2 == 0;
+            (void)s.call("input.inject", std::string(R"({"events":[{"action":"fire","down":)") + (down ? "true" : "false") + "}]}");
+            (void)s.call("world.step", R"({"frames":20})");
+        }
+    }
+};
+
+// A window host's audio half: what it reports, and the overrides audio.mix hands it.
+struct FakeAudioHost : api::Host {
+    api::AudioMixOverrides mix;
+    int mixes{0};
+    [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
+    [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest&) override { return {}; }
+    [[nodiscard]] std::optional<api::RenderStats> renderStats(int) override {
+        api::RenderStats st;
+        st.frames = 1;
+        st.audio = api::RenderStats::Audio{0.0712, 7, 2};
+        return st;
+    }
+    [[nodiscard]] std::optional<api::AudioDeviceState> audioDevice() override {
+        api::AudioDeviceState d;
+        d.sampleRate = 48000;
+        d.horizonMs = 1000.0 / 60.0;
+        d.voices = 3;
+        d.late = 2;
+        d.mixMs = 0.0712;
+        return d;
+    }
+    void setAudioMix(const api::AudioMixOverrides& m) override {
+        mix = m;
+        ++mixes;
+    }
+};
+
+static std::string busEntry(const Reply& r, const std::string& name) {
+    for (uint32_t i = 0; r.at("/result/buses") && i < r.at("/result/buses")->count; ++i)
+        if (r.str("/result/buses/" + std::to_string(i) + "/name") == name) return r.json("/result/buses/" + std::to_string(i));
+    return {};
+}
+
+static void t29_audio_info() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("audio.info")).code() == "E_STATE" && Reply(s.call("audio.mix", R"({"clear":true})")).code() == "E_STATE",
+              "a world without the voice schedule: E_STATE for both");
+    }
+    AudioWorld aw;
+    CHECK(aw.load(kPlayScene).ok(), "the play scene loads");
+    CHECK(Reply(aw.s.call("world.step", R"({"frames":1})")).ok(), "one step: the schedule reads the scene's bank");
+    const Reply first(aw.s.call("audio.info"));
+    std::printf("\n      %.700s", first.json("/result").c_str());
+    CHECK(first.ok() && first.str("/result/device") == "none" && !first.at("/result/sampleRate") && !first.at("/result/late"),
+          "headless: device none, no device half");
+    CHECK(first.str("/result/horizonMs") == "16.67", "the horizon: one step");
+    CHECK(first.json("/result/snapshot") == R"({"name":"default","blend":0})" && first.str("/result/zone") == "room",
+          "the default snapshot; the listener in the room's zone");
+    CHECK(first.json("/result/listener/pos").size() > 2, "the listener at the step");
+    CHECK(first.at("/result/buses") && first.at("/result/buses")->count == 10 && first.str("/result/buses/0/name") == "master" &&
+              busEntry(first, "weapons") == R"({"name":"weapons","cap":12})",
+          "the bank's ten buses in its order, with their caps (a level of 0 dB left out)");
+    CHECK(first.json("/result/voices") == R"({"playing":0,"dropped":0,"stolen":0})" && first.at("/result/rays"),
+          "no voice held yet (a bed is the zone's, not a voice); nothing dropped or stolen");
+    CHECK(first.str("/result/commands/0/seq") == "1" && first.str("/result/commands/0/op") == "zone" &&
+              first.str("/result/commands/0/zone") == "room" && first.str("/result/commands/0/bed") == "bed_room",
+          "the first command: the room's zone and its bed");
+
+    aw.fight(120);
+    const Reply mid(aw.s.call("audio.info", R"({"since":0,"max":64})"));
+    bool fire = false, enemy = false;
+    for (uint32_t i = 0; mid.at("/result/commands") && i < mid.at("/result/commands")->count; ++i) {
+        const std::string at = "/result/commands/" + std::to_string(i);
+        fire |= mid.str(at + "/op") == "play" && mid.str(at + "/sound") == "fire" && !mid.at(at + "/pos");
+        enemy |= mid.str(at + "/op") == "play" && mid.str(at + "/sound") == "enemy_fire" && mid.at(at + "/pos");
+    }
+    CHECK(fire && enemy, "the player's rounds at the ear, the enemies' at their place");
+    CHECK(std::stoull(mid.str("/result/rays/cast")) > 0, "the enemies' rounds cast occlusion rays");
+    const std::string next = mid.str("/result/next");
+    const Reply none(aw.s.call("audio.info", "{\"since\":" + next + "}"));
+    CHECK(none.ok() && none.at("/result/commands")->count == 0 && none.str("/result/next") == next, "nothing after next; next stays");
+    const Reply one(aw.s.call("audio.info", R"({"since":1,"max":1})"));
+    CHECK(one.at("/result/commands")->count == 1 && one.str("/result/commands/0/seq") == "2" && one.str("/result/next") == "2",
+          "since 1, max 1: command 2, next 2");
+    const Reply zero(aw.s.call("audio.info", R"({"max":0})"));
+    CHECK(zero.ok() && zero.at("/result/commands")->count == 0, "max 0: no commands");
+
+    // The budget: mid-fight, 16 commands, at most 2 KB (serve_bench audio_info_bytes).
+    const Reply sixteen(aw.s.call("audio.info", "{\"since\":" + std::to_string(std::max(0, std::stoi(next) - 16)) + "}"));
+    std::printf("\n      max 16 mid-fight: %zu bytes", sixteen.json("/result").size());
+    CHECK(sixteen.at("/result/commands")->count == 16 && sixteen.json("/result").size() <= 2048, "16 commands in at most 2 KB");
+
+    for (const char* bad : {R"({"max":65})", R"({"since":-1})"})
+        CHECK(Reply(aw.s.call("audio.info", bad)).code() == "E_RANGE", "max over 64, since below 0: E_RANGE");
+    CHECK(Reply(aw.s.call("audio.info", R"({"bus":"weapons"})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
+
+    FakeAudioHost host;
+    aw.s.setHost(&host);
+    const Reply win(aw.s.call("audio.info", R"({"max":0})"));
+    std::printf("\n      window: device %s, rate %s, late %s, mixMs %s, voices %s", win.str("/result/device").c_str(),
+                win.str("/result/sampleRate").c_str(), win.str("/result/late").c_str(), win.str("/result/mixMs").c_str(),
+                win.json("/result/voices").c_str());
+    CHECK(win.str("/result/device") == "default" && win.str("/result/sampleRate") == "48000" && win.str("/result/late") == "2" &&
+              win.str("/result/mixMs") == "0.071" && win.str("/result/voices/device") == "3",
+          "a window adds the device's half: rate, late commands, the mix's cost, its voices");
+    const Reply stats(aw.s.call("render.stats"));
+    CHECK(stats.json("/result/audio") == R"({"mixMs":0.071,"voices":7,"late":2})", "render.stats carries the host's audio");
+    aw.s.setHost(nullptr);
+}
+
+static void t29_audio_mix() {
+    AudioWorld aw;
+    CHECK(aw.load(kPlayScene).ok() && Reply(aw.s.call("world.step", R"({"frames":1})")).ok(), "the play scene, one step");
+    FakeAudioHost host;
+    aw.s.setHost(&host);
+    const std::string hash0 = hashOf(aw.s);
+    const uint64_t changes0 = aw.s.changeCount();
+    CHECK(Reply(aw.s.call("world.snapshot", R"({"name":"before"})")).ok(), "a snapshot");
+
+    const Reply mute(aw.s.call("audio.mix", R"({"bus":"weapons","mute":true})"));
+    std::printf("\n      %.400s", mute.json("/result").c_str());
+    CHECK(mute.ok() && busEntry(mute, "weapons") == R"({"name":"weapons","cap":12,"mix":{"mute":true}})" &&
+              !mute.at("/result/commands"),
+          "weapons muted; the reply is audio.info's without commands");
+    CHECK(Reply(aw.s.call("audio.mix", R"({"bus":"music","db":-12.5})")).ok() &&
+              Reply(aw.s.call("audio.mix", R"({"bus":"foley","solo":true})")).ok() &&
+              Reply(aw.s.call("audio.mix", R"({"snapshot":"dead"})")).ok(),
+          "music at -12.5 dB, foley soloed, the dead snapshot forced");
+    const Reply info(aw.s.call("audio.info", R"({"max":0})"));
+    CHECK(busEntry(info, "music") == R"({"name":"music","cap":2,"mix":{"db":-12.5}})" &&
+              busEntry(info, "foley").find(R"("mix":{"solo":true})") != std::string::npos &&
+              info.json("/result/snapshot") == R"({"name":"default","blend":0,"forced":"dead"})",
+          "audio.info reports every override beside the game's mix (the schedule's snapshot stays default)");
+    CHECK(host.mixes == 4 && host.mix.buses.size() == 3 && host.mix.snapshot == "dead" && host.mix.buses[0].name == "weapons" &&
+              host.mix.buses[0].mute && host.mix.buses[1].db && *host.mix.buses[1].db == -12.5f && host.mix.buses[2].solo,
+          "the host got all of them, each time");
+
+    CHECK(hashOf(aw.s) == hash0 && aw.s.changeCount() == changes0, "world.hash unchanged; no change counted");
+    CHECK(Reply(aw.s.call("world.restore", R"({"name":"before"})")).ok(), "a restore");
+    const Reply restored(aw.s.call("audio.info", R"({"max":0})"));
+    CHECK(busEntry(restored, "weapons").find(R"("mix":{"mute":true})") != std::string::npos &&
+              restored.str("/result/snapshot/forced") == "dead",
+          "the overrides are the session's: a restore keeps them (no snapshot holds them)");
+
+    CHECK(Reply(aw.s.call("audio.mix", R"({"bus":"weapons","mute":false})")).ok() &&
+              busEntry(Reply(aw.s.call("audio.info", R"({"max":0})")), "weapons") == R"({"name":"weapons","cap":12})",
+          "unmuted with nothing else set: the bus has no override left");
+    CHECK(Reply(aw.s.call("audio.mix", R"({"snapshot":""})")).ok() &&
+              !Reply(aw.s.call("audio.info", R"({"max":0})")).at("/result/snapshot/forced"),
+          "snapshot \"\": the schedule's again");
+
+    const Reply noBus(aw.s.call("audio.mix", R"({"db":-6})"));
+    CHECK(noBus.code() == "E_COMMAND", "db without a bus: E_COMMAND");
+    CHECK(Reply(aw.s.call("audio.mix", R"({"bus":"weapons"})")).code() == "E_COMMAND", "a bus alone: E_COMMAND");
+    const Reply unknown(aw.s.call("audio.mix", R"({"bus":"lasers","mute":true})"));
+    CHECK(unknown.code() == "E_NOT_FOUND" && unknown.str("/error/data/0/path") == "/bus", "a bus the bank lacks: E_NOT_FOUND at /bus");
+    const Reply snap(aw.s.call("audio.mix", R"({"snapshot":"underwater"})"));
+    CHECK(snap.code() == "E_NOT_FOUND" && snap.str("/error/data/0/path") == "/snapshot", "a snapshot the bank lacks: E_NOT_FOUND");
+    const Reply loud(aw.s.call("audio.mix", R"({"bus":"music","db":20})"));
+    CHECK(loud.code() == "E_RANGE" && loud.str("/error/data/0/path") == "/db", "db over +12: E_RANGE at /db");
+    CHECK(host.mixes == 6, "a refused call hands the host nothing");
+
+    const Reply cleared(aw.s.call("audio.mix", R"({"clear":true})"));
+    CHECK(cleared.ok() && cleared.json("/result").find("\"mix\"") == std::string::npos && host.mix.buses.empty() &&
+              host.mix.snapshot.empty(),
+          "clear: no override left, here or in the host");
+    aw.s.setHost(nullptr);
+
+    // The schedule never sees an override: the same fight with and without them writes the same commands.
+    AudioWorld plain, mixed;
+    CHECK(plain.load(kPlayScene).ok() && mixed.load(kPlayScene).ok(), "two play scenes");
+    CHECK(Reply(mixed.s.call("world.step", R"({"frames":1})")).ok() && Reply(plain.s.call("world.step", R"({"frames":1})")).ok() &&
+              Reply(mixed.s.call("audio.mix", R"({"bus":"weapons","mute":true})")).ok() &&
+              Reply(mixed.s.call("audio.mix", R"({"snapshot":"won"})")).ok(),
+          "one of them muted and forced to won");
+    plain.fight(120);
+    mixed.fight(120);
+    const Reply a(plain.s.call("audio.info", R"({"max":64})")), b(mixed.s.call("audio.info", R"({"max":64})"));
+    const std::string ca = a.json("/result/commands"), cb = b.json("/result/commands");
+    if (ca != cb) {
+        std::size_t at = 0;
+        while (at < ca.size() && at < cb.size() && ca[at] == cb[at]) ++at;
+        const std::size_t from = at > 160 ? at - 160 : 0;
+        std::printf("\n      differ at %zu:\n      %s\n      %s", at, ca.substr(from, 320).c_str(), cb.substr(from, 320).c_str());
+    }
+    CHECK(ca == cb, "the same commands");
+}
+
 static void sp5_t08_level_reload_keeps_world_hash() {
     LevelWorld lw;
     CHECK(lw.load().ok(), "the blockout scene loads");
@@ -2726,6 +2929,8 @@ int main() {
     RUN(sp7_t18_combat_events_cursor);
     RUN(sp7_t18_combat_damage_kills);
     RUN(sp7_t18_combat_params_refused);
+    RUN(t29_audio_info);
+    RUN(t29_audio_mix);
     RUN(bench_apply_and_query_10k);
 
     std::printf("Results: %d/%d passed\n", g_pass, g_pass + g_fail);

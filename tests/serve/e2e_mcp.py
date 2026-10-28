@@ -15,7 +15,7 @@ the acceptance session of the spec's test 19:
   player.info -> look -> snapshot -> walk, turn and jump on injected input -> player.info,
   footsteps -> look -> player.teleport -> physics.contacts -> restore -> the same walk ->
   (sub-project 7) load the play scene again -> combat.info -> shoot EnemyA down ->
-  combat.events -> look with the HUD -> combat.damage kills the player -> the restart ->
+  combat.events -> audio.info, audio.mix (mute, solo, clear) -> look with the HUD -> combat.damage kills the player -> the restart ->
   clear the room -> won
 
 and requires: the flight moves the camera as injected, the replay reaches the same world
@@ -236,6 +236,29 @@ def shoot_down(c, eid, tries=20):
     return None
 
 
+def listen_to_the_fight(c):
+    """Sub-project 11, step 4: mid-fight, an agent reads the voice schedule (audio_info), mutes a bus, solos
+    one and clears the overrides (audio_mix); world_hash never moves."""
+    # A cursor past the log comes back as its end: where the log is now.
+    end = (c.tool("audio_info", {"since": 1000000000, "max": 0})[0] or {}).get("next", 0)
+    info, _, err = c.tool("audio_info", {"since": max(0, end - 64), "max": 64})
+    plays = [x.get("sound") for x in (info or {}).get("commands", []) if x.get("op") == "play"]
+    check(not err and info.get("device") in ("default", "none") and info.get("zone") == "room" and
+          "fire" in plays and "enemy_fire" in plays and len(info.get("buses", [])) == 10,
+          "audio_info mid-fight: the player's and the enemies' rounds, the room's zone, ten buses (device %s; %s)" %
+          ((info or {}).get("device"), sorted(set(plays))))
+    before = (c.tool("world_hash")[0] or {}).get("hash")
+    muted, _, err = c.tool("audio_mix", {"bus": "weapons", "mute": True})
+    weapons = next((b for b in (muted or {}).get("buses", []) if b.get("name") == "weapons"), {})
+    check(not err and weapons.get("mix") == {"mute": True} and "commands" not in muted, "audio_mix mutes the weapons bus")
+    soloed, _, err = c.tool("audio_mix", {"bus": "foley", "solo": True})
+    foley = next((b for b in (soloed or {}).get("buses", []) if b.get("name") == "foley"), {})
+    check(not err and foley.get("mix") == {"solo": True}, "audio_mix solos the foley bus")
+    cleared, _, err = c.tool("audio_mix", {"clear": True})
+    check(not err and all("mix" not in b for b in (cleared or {}).get("buses", [])), "audio_mix clear: no override left")
+    check((c.tool("world_hash")[0] or {}).get("hash") == before, "world_hash unchanged by the overrides")
+
+
 def fight_the_round(c):
     """An agent plays the play scene's round (sub-project 7, step 5): shoots EnemyA down, is killed,
     waits out the restart, clears the room and wins, reading combat_info and combat_events and
@@ -253,6 +276,7 @@ def fight_the_round(c):
     kinds = [e.get("kind") for e in (events or {}).get("events", [])]
     check(bursts is not None and not err and "shot" in kinds and "hit" in kinds and "death" in kinds,
           "EnemyA shot down in %s bursts: combat_events has its shots, hits and death" % bursts)
+    listen_to_the_fight(c)
     # Sub-project 10: its body plays the death clip (its Transform stays upright) and lands.
     c.tool("world_step", {"frames": 50})
     anim, _, err = c.tool("animation_info", {"entity": ENEMY_A, "since": 0, "max": 64})
@@ -298,7 +322,7 @@ def main():
     print("e2e_mcp (sub-project 4, test 19)")
     env = dict(os.environ)
     env["OHAO_VALIDATION"] = "1"
-    c = McpClient([OHAO, "serve", "--window", "960x540", "--hidden", "--out", OUT], env)
+    c = McpClient([OHAO, "serve", "--window", "960x540", "--hidden", "--sound", "--out", OUT], env)
 
     init = c.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
                                     "clientInfo": {"name": "e2e_mcp", "version": "1"}})
@@ -308,11 +332,12 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 36 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+    check(len(names) == 38 and "render_capture" in names and "render_stats" in names and "render_settings" in names
           and "input_replay" in names and "level_info" in names and "physics_raycast" in names
           and "physics_events" in names and "physics_contacts" in names and "player_info" in names
           and "player_teleport" in names and "combat_info" in names and "combat_events" in names
-          and "combat_damage" in names and "animation_info" in names, "tools/list: 36 tools")
+          and "combat_damage" in names and "animation_info" in names and "audio_info" in names
+          and "audio_mix" in names, "tools/list: 38 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})

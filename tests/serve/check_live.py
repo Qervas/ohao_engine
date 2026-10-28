@@ -530,6 +530,38 @@ def test_render_stats_latency():
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")
 
 
+def test_render_stats_audio():
+    print("sp11 test 29: render.stats audio and audio.info's device half (a realtime window with --sound)")
+    scene = "assets/scenes/blockout_play.scene.json"
+    s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--realtime", "--sound", "--out", out_dir("audio"),
+                "--seed", SEED, scene], "audio", env=validation_env())
+    s.call("player.teleport", {"pos": [1.5, 0, 2.2], "yawDeg": 43.6})   # toward EnemyA
+    s.call("input.inject", {"events": [{"action": "fire", "down": True}, {"step": 30, "action": "fire", "down": False}]})
+    time.sleep(1.5)   # the burst, its impacts and the enemies' replies play
+    stats = result(s.call("render.stats", {"frames": 60})) or {}
+    audio = stats.get("audio") or {}
+    check(set(audio.keys()) == {"mixMs", "voices", "late"} and 0 < audio.get("mixMs", 0) < 10,
+          "render.stats carries the mix's cost: %s" % audio)
+    info = result(s.call("audio.info", {"max": 0})) or {}
+    check(info.get("device") == "default" and info.get("sampleRate", 0) >= 44100 and "mixMs" in info and "late" in info and
+          "device" in (info.get("voices") or {}),
+          "audio.info adds the device's half: rate %s, late %s, mixMs %s" %
+          (info.get("sampleRate"), info.get("late"), info.get("mixMs")))
+    muted = result(s.call("audio.mix", {"bus": "weapons", "mute": True})) or {}
+    check(any(b.get("name") == "weapons" and b.get("mix") == {"mute": True} for b in muted.get("buses", [])),
+          "audio.mix mutes the window's weapons bus")
+    s.call("audio.mix", {"clear": True})
+    code = s.close()
+    check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown with the device playing")
+    quiet = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--out", out_dir("audio_off"), "--seed", SEED, scene],
+                   "audio_off", env=validation_env())
+    quiet.call("render.capture", {"inline": True})
+    off = result(quiet.call("render.stats")) or {}
+    check(off.get("frames", 0) > 0 and "audio" not in off and (result(quiet.call("audio.info")) or {}).get("device") == "none",
+          "a window without --sound: no audio in render.stats, device none")
+    check(quiet.close() == 0, "exit 0")
+
+
 def test_view_turns_next_frame():
     print("sp9 test 19: the look lead (a realtime window shows a movement on the next frame)")
     scene = "assets/scenes/blockout_play.scene.json"
@@ -756,6 +788,7 @@ def main():
     test_walk()
     test_fight()
     test_render_stats_latency()
+    test_render_stats_audio()
     test_view_turns_next_frame()
     test_lead_dropped_in_lockstep()
     if os.name == "nt":

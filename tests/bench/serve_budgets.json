@@ -16,7 +16,8 @@
     "world_diff_1pct_rpc_ms": 2.0,
     "log_below_threshold_ns": 5,
     "log_ring_80_ns": 300,
-    "tools_list_bytes": 24576
+    "tools_list_bytes": 24576,
+    "audio_info_bytes": 2048
   },
   "noise": {
     "maxCalibrationSlowdown": 1.25,
