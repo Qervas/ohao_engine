@@ -100,6 +100,10 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(check_level_assets LABEL quick TIMEOUT 600 SCRIPT tests/level/check_level_assets.py)
     # `ohao serve` as a process (tests 8-10, 15): its goldens write build/serve_tmp/<session>.
     ohao_add_python_test(check_serve LABEL quick TIMEOUT 600 LOCKS serve_tmp SCRIPT tests/serve/check_serve.py)
+    # The test grenade about a fixed listener (audio ruling 23), rendered without a device and measured:
+    # left/right balance per side, far below near, front centred.
+    ohao_add_python_test(grenade_spatial LABEL quick TIMEOUT 300 SCRIPT tools/audio/grenade_spatial.py
+        ARGS --out ${CMAKE_BINARY_DIR}/grenade_spatial)
 
     # GPU harnesses and the presentation gate
     ohao_add_python_test(check_cli LABEL gpu GPU LOCKS cli_tmp SCRIPT tests/cli/check_cli.py)
