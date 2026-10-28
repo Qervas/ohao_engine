@@ -729,6 +729,8 @@ bool t26_steal_fade() {
     std::cout << "\n      largest sample step " << step << ' ';
     EXPECT_TRUE(step < 0.02f);
     EXPECT_TRUE(std::abs(x[200]) < 1e-6f && std::abs(x.back()) < 1e-6f);
+    a.update();   // the faded voice is freed
+    EXPECT_EQ(a.activeSoundCount(), 0u);
     TEST_PASS();
     return true;
 }
