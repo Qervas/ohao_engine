@@ -760,6 +760,53 @@ from the design above, and why:
   `schedule16_step_ms` 0.0005–0.0027 ms (p95 0.013–0.019, 8 rays capped), `submit_frame_ms` 0.0009 ms
   (p95 0.0035), `bank_load_ms` 8.5–11.4 ms; the proposals stand (OPEN 11).
 
+## As built (step 4)
+
+Agents, budgets and the close (plan Task 4, `docs/changes/2026-10-28-audio-step4.md`). What differs
+from "The agent-facing surface", and why:
+
+- **`audio.info` is compact.** A bus is `{name, db?, cap?, voices?, mix?}`: `db` (the game's level
+  from the snapshot and its duck) only when not 0, `voices` the schedule's held voices only when not
+  0, `mix` the session's override. There is no `gain`, `muted` or `solo` of the game's own (the game
+  never mutes; overrides are under `mix`). Voices are `{playing, dropped, stolen}`, no `virtual`
+  (the schedule has none). A `play` command leaves out variant 0, a gain equal to the bank's volume,
+  no occlusion and outcome `played`; `bus`, `prio` and `send` are the bank's and left out. The design's
+  shape measured 2,118 bytes mid-fight at `max` 16, over the 2 KB budget; this one 1,903 headless
+  (`t29`) and 1,844 in `serve_bench` (`audio_info_bytes`).
+- **The device's half** (a window with `--sound`): `sampleRate`, the device's `horizonMs`, `late`,
+  `mixMs`, `voices.device`, and per bus `out` (the level the device drives it to, when not the
+  game's) and `playing` (its voices sounding). `snapshot.forced` names a forced snapshot.
+- **`audio.mix` checks everything before changing anything:** `db`, `mute` or `solo` without a
+  `bus`, or a `bus` alone, is `E_COMMAND`; an unknown bus or snapshot `E_NOT_FOUND` at its pointer;
+  `clear` applies first. `snapshot: ""` gives the schedule's back. The session hands the whole set
+  to `Host::setAudioMix`; the player re-applies it on a bank load. It is the session's: a
+  `world.restore` keeps it.
+- **`render.stats.audio.mixMs`** is the median over the newest 512 device periods of the engine's
+  read in the device callback (a callback of ours around `ma_engine_read_pcm_frames`), scaled to
+  10 ms of audio; `voices` the device's sounding voices, `late` the commands played late.
+- **`ohao serve --window --sound`** opens a device (a serve window was mute before; `ohao_game`
+  always had sound unless `--mute`).
+- **OPEN 16, `tools/list`:** 24,137 bytes before (36 tools); 25,463 with the two methods; 24,452
+  after trimming nine methods' descriptions (`render.capture`, `render.settings`, `render.stats`,
+  `input.inject`, `input.record`, `input.replay`, `world.diff`, `player.info`, `world.summary`).
+  The cap stays 24,576 (24 KB); not raised.
+- **The catalogue's two methods** move `schemaHash` (9806972b70f2e94c → 0480e4b562132cde) in every
+  serve and CLI expectation; nothing else in them changed.
+- **The gate is blocked, not by audio.** `check.py --all` on 2026-10-28: 39 of 55 tests pass. Every
+  audio budget passes on a quiet run (`mix_10ms_ms` 0.0625, `reverb_10ms_ms` 0.009,
+  `schedule_step_ms` 0.0006, `schedule16_step_ms` 0.0005, `submit_frame_ms` 0.001, `bank_load_ms`
+  9.28; calibration ×1.03); `serve_bench` passes (`tools_list_bytes` 24,452, `audio_info_bytes`
+  1,844); `check_live` 75/75 with validation on and a window with sound; `check_validation` clean;
+  27 of 30 goldens exact; `look_latency_ms` 8.19 (≤ 15). What fails is Frank's outdoor ground pad
+  (6a14fa25: an 80 × 80 m `Ground` node, second in `blockout_room.glb`, its top coplanar with the
+  Floor): the blockout's counts (18 nodes, 12 static bodies), a ray down at the spawn hitting
+  `Ground`, CrateA's double landing on `Ground` and `Floor`, node ids shifted, the three blockout
+  goldens, `level_bench`'s load check, and the doc commands that run those suites. The pad is
+  not this step's to change and the expectations are not this step's to re-baseline: that needs
+  Frank's ruling (below). `scene_bench`, `physics_bench` and `render_bench` were noisy (calibration
+  ×2–2.5 with other processes busy) and stayed noisy on their reruns: no verdict.
+  `frame_p99_over_median` 2.31 against 1.5 is SP9's open pacing gate (ruling 21), reported only.
+
 ## Rulings for Frank
 
 PROVISIONAL (recommended by the post-SP7 roadmap; Frank deferred them to this row; the spec is
@@ -835,3 +882,12 @@ OPEN (judgment calls; recommendations given):
 20. **The stack question for later rows:** if a later row wants HRTF or baked acoustics, Steam
     Audio (Apache-2.0) behind `AudioSystem` is the candidate. FMOD and Wwise stay out of the MIT
     repo. Recommended: write it into row 11's successor when a need appears, not now.
+21. **The outdoor ground pad (6a14fa25) and the expectations it moved** (found at step 4's gate;
+    not audio's). The pad's top is coplanar with the room's Floor, so a crate lands on both (two
+    `contact_begin`s), a ray down inside the room hits `Ground`, an edited Floor surface is
+    not what the footsteps report (`t13_surface_from_ground_body`), the blockout has 18 nodes and 12 static bodies, every level node id
+    after it moved, and the room's render changed (`cli_blockout_room_deferred` max_abs 4,
+    `cli_blockout_play_*` max_abs 21). Recommended: keep the pad out from under the room (or its
+    top a few centimetres below the Floor) so the room's contacts, rays and surfaces are the
+    Floor's again, then re-baseline the counts, ids and the three goldens after looking at them.
+    Until Frank rules, step 4's gate cannot be green.
