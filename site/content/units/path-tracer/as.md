@@ -39,7 +39,7 @@ the same stride one call earlier — the sort of line that survives review and d
 to a refactor. The caller is the mesh registry, which builds each BLAS at
 registration time with the arena's first-vertex bias:
 
-{{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset);      // arena indices are mesh-local"}}
+{{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset,       // arena indices are mesh-local"}}
 
 The payoff is in the hit shaders. `gl_InstanceCustomIndexEXT` is the instance's slot
 in the instance table. The closest-hit shader resolves it in three hops — slot to
@@ -106,24 +106,22 @@ the size so the two readers cannot drift:
 
 The build reads the leading `vec3` of each vertex and steps over the other 88.
 
-The class ships the alternative. `createBLASFromPositions` takes a
-tightly-packed position buffer at stride 12, documented for per-frame animated
-rebuilds:
+Animated geometry goes through the same layout. A skinned instance gets a mesh of its
+own (a copy of its vertex range in the arena) whose BLAS is built updatable, and the
+skin pass rewrites that copy's positions in place; the `rt.blas.refit` pass then refits
+the BLAS against the same interleaved vertices:
 
-{{cite ohao/render/rt/rt_acceleration_structure.hpp "// For per-frame animated mesh BLAS — uses PREFER_FAST_BUILD."}}
+{{cite ohao/render/rt/rt_acceleration_structure.hpp "// updatable: ALLOW_UPDATE | PREFER_FAST_BUILD (a skinned instance's, refit every frame its"}}
 
-It has no callers anywhere in the tree, and no inlined equivalent either —
 `vkCmdBuildAccelerationStructuresKHR` is recorded only inside
-`rt_acceleration_structure.cpp`. The packed variant is dormant; the arenas hold
-static meshes only.
+`rt_acceleration_structure.cpp`.
 
-Nor is there compaction. The BLAS builder that actually runs asks for
-`PREFER_FAST_TRACE`, and so do both TLAS paths:
+There is no compaction. A static mesh's BLAS asks for `PREFER_FAST_TRACE`, and both
+TLAS paths ask for it too, beside `ALLOW_UPDATE`:
 
 {{cite ohao/render/rt/rt_acceleration_structure.cpp "PREFER_FAST_TRACE_BIT_KHR;"}}
 
-The dormant packed variant is the file's one `PREFER_FAST_BUILD`, exactly as its
-header above advertises. `ALLOW_COMPACTION` appears in no build in the engine, and
+The skinned BLASes are the only `PREFER_FAST_BUILD` ones. `ALLOW_COMPACTION` appears in no build in the engine, and
 there is no AS query pool to read a compacted size back through — every
 `vkCreateQueryPool` in the tree makes a timestamp pool (the per-frame-slot pass timer,
 `render_bench`'s calibration kernel). No compacted-size

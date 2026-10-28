@@ -52,12 +52,19 @@ instance:
 
 {{cite ohao/render/scene/render_scene.cpp "// A reference of 0 makes the instance inactive (no BLAS: failed build)."}}
 
-BLASes are built for fast trace and cannot be updated, so a BLAS never references its
-inputs after the build and survives the arenas being replaced by larger ones.
+A registered mesh's BLAS is built for fast trace and cannot be updated, so it never
+references its inputs after the build and survives the arenas being replaced by larger ones.
 
 {{cite ohao/render/scene/mesh_registry.cpp "// A built BLAS (FAST_TRACE, no ALLOW_UPDATE) does not reference its inputs, so"}}
 
-{{cite ohao/render/rt/rt_acceleration_structure.cpp "buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;"}}
+{{cite ohao/render/rt/rt_acceleration_structure.cpp ": VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;"}}
+
+The one exception is a skinned instance's own mesh: its BLAS is built updatable
+(`ALLOW_UPDATE | PREFER_FAST_BUILD`) and refit in the `rt.blas.refit` pass whenever its
+pose changes, from the arenas' current addresses, and rebuilt every
+`kBlasRefitsPerRebuild` refits so a refit tree's quality does not drift:
+
+{{cite ohao/render/rt/rt_acceleration_structure.cpp "buildInfo.flags = updatable ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |"}}
 
 The structures belong to the `RenderScene`. It owns its own `RTAccelerationStructure`
 and decides itself whether ray tracing is available; the renderer asks it.

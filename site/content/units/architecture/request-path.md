@@ -71,11 +71,12 @@ Instantiate, when installed, goes immediately before `transform`, so a mesh it b
 gets its world matrix in the same sync. `TransformSystem` recomputes `WorldTransform`
 for every dirty entity and its descendants, parents first, and tags the movers
 `RenderDirty`. The render extract is installed straight after it, or later when
-presentation systems are already there: after the first-person gun's `view_model`
-if combat installed it, else after render interpolation if the physics scene put
-one there, else after `transform`. It consumes those tags:
+presentation systems are already there: after animation's `pose` if animation
+installed it, else after the first-person gun's `view_model` if combat installed it,
+else after render interpolation if the physics scene put one there, else after
+`transform`. It consumes those tags:
 
-{{cite ohao/ecs/render_extract.cpp "const char* anchor = has("view_model") ? "view_model" : has("interpolate") ? "interpolate" : "transform";"}}
+{{cite ohao/ecs/render_extract.cpp "const char* anchor = has("pose")"}}
 {{cite ohao/ecs/render_extract.cpp "world.addSyncAfter(anchor, "render_extract", [state](World&) { state->run(); });"}}
 
 It releases the slots of vanished renderables, creates an instance for every

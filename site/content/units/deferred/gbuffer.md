@@ -197,7 +197,12 @@ into a screen-space UV delta:
 The previous position is the vertex pushed through the instance's *previous* world
 matrix and the previous frame's view-projection, both read on the GPU:
 
-{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));"}}
+{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(prevLocal, 1.0));"}}
+
+`prevLocal` is the vertex itself, except on a skinned draw (`kDrawSkinned`), whose own mesh
+keeps last frame's deformed position in `boneWeights.xyz`, so a moving limb has motion too:
+
+{{cite shaders/core/gbuffer.vert "const vec3 prevLocal = (d.info.y & kDrawSkinned) != 0u ? inBoneWeights.xyz : inPosition;"}}
 
 So the buffer carries object motion as well as camera motion. `prevWorld` is
 maintained by the ECS transform system: when an entity's transform changes, its old

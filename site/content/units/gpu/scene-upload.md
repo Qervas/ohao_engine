@@ -78,7 +78,7 @@ G-buffer and the cascaded shadow pass both draw such lists; the shadow pass adds
 The BLAS build gets the same offset as its `firstVertex`, with the buffer base and a
 byte offset for the mesh's slice:
 
-{{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset);      // arena indices are mesh-local"}}
+{{cite ohao/render/scene/mesh_registry.cpp "mesh.vertexOffset,       // arena indices are mesh-local"}}
 
 and the closest-hit shader adds it by hand when it fetches a triangle's corners:
 

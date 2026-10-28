@@ -149,7 +149,10 @@ negate here; this one must not.
 The "previous" position pairs last frame's view-projection with the instance's
 **previous** world matrix, read from the instance table in the vertex shader:
 
-{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));"}}
+{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(prevLocal, 1.0));"}}
+
+(`prevLocal` is the vertex's position, or on a skinned draw last frame's deformed one, which
+the skin pass leaves in `boneWeights.xyz`)
 
 so a moving object is reprojected from where it was, and TAA's history follows it
 rather than smearing it. What it does not capture is the other half of the pair: the

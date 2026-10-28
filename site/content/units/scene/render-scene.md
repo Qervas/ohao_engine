@@ -67,7 +67,7 @@ Slots come from a free list that always returns the lowest released slot, and th
 Every rebuild bumps `drawsVersion()`, and `recordUpdates` uploads the whole list, when its version differs from the uploaded one, as the draw table: one 64-byte `gpu::shared::DrawRecord` per draw (index range, vertex offset, instance slot; material slot, the one-sided, emitter and view-model flags, first meshlet and meshlet count; the mesh's local box), in a device-local buffer that grows by doubling and retires the old one:
 
 {{cite ohao/render/scene/render_scene.cpp "(d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u) |"}}
-{{cite ohao/render/scene/render_scene.cpp "(d.viewModel ? gpu::shared::kDrawViewModel : 0u),"}}
+{{cite ohao/render/scene/render_scene.cpp "(d.viewModel ? gpu::shared::kDrawViewModel : 0u) | (d.skinned ? gpu::shared::kDrawSkinned : 0u),"}}
 
 An emitter draw is a light's mesh, and a view-model draw a first-person gun's (a mesh under a `ViewModel`, drawn shrunk toward the eye). The cascade lists leave both out: a light's sphere would otherwise cast the sun's shadow, and the gun would cast one from a pose that is not where it stands in the world.
 

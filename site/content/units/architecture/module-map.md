@@ -65,10 +65,10 @@ reader and writer, with no engine dependency at all (glm, and fast_float private
 The next three archives sit above the rest and add no edge back down. `ohao_ecs` is
 the game world — an EnTT registry, the ordered systems (spin, transform, instantiate,
 physics, the render extract), the scene codec and snapshots. It links core, the
-renderer, scene, reflect and physics, and it is the only engine archive that sees
-EnTT:
+renderer, scene, reflect, physics and `ohao_anim` (skeletons, clips and the animation
+graph, on core and glm alone), and it is the only engine archive that sees EnTT:
 
-{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect ohao_physics glm EnTT::EnTT"}}
+{{cite ohao/ecs/CMakeLists.txt "target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect ohao_physics ohao_anim glm EnTT::EnTT"}}
 
 Every `<entt/entt.hpp>` include in the engine sits under `ohao/ecs/` (and above it, in
 `api/` and the tools); the renderer's side of the seam is `render::RenderScene`, a

@@ -49,7 +49,7 @@ The exception is an entity a simulation step already recomputed this frame. The 
 
 The G-buffer vertex shader projects the vertex through both, so an object's own displacement between frames lands in the velocity buffer:
 
-{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));"}}
+{{cite shaders/core/gbuffer.vert "fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(prevLocal, 1.0));"}}
 
 The settle pass exists because the GPU copy of an instance is only rewritten when something marks it `RenderDirty`. Without it, an object that moves once and stops would keep its last `prevWorld ≠ world` pair on the GPU indefinitely, and the velocity buffer would report the final step's motion on every later frame. With it, a single move costs exactly two instance uploads: the move frame, carrying the displacement, and the next frame, carrying `prevWorld = world` and zero velocity.
 
