@@ -9,6 +9,8 @@ without it (a skip is neither a pass nor a failure, and is listed in the summary
   the blockout's nodes and hints are the contract later steps assert against; a Blender
   rebuild of the blockout (tools/level/blockout_room.py) is byte-identical to the checked-in
   file; the blockout scene references it. Needs `jsonschema`.
+  a3_* the player's arms and rifle (sub-project 10 step 3): a Blender rebuild
+  (tools/anim/make_fps_arms.py) is byte-identical to assets/characters/fps_arms/fps_arms.glb.
 """
 import glob
 import json
@@ -24,6 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 LEVEL = os.path.join(ROOT, "assets", "levels", "blockout_room.glb")
 SCENE = os.path.join(ROOT, "assets", "scenes", "blockout_room.scene.json")
 SCHEMA = os.path.join(ROOT, "tests", "level", "extras_schema.json")
+ARMS = os.path.join(ROOT, "assets", "characters", "fps_arms", "fps_arms.glb")
 
 passed, failed, skipped, failures = 0, 0, [], []
 
@@ -118,23 +121,33 @@ def blender():
     return None
 
 
-def l1_blockout_rebuilds_byte_identical():
+def rebuild_byte_identical(script, checked_in_path):
+    """Runs a Blender generator into build/level_check and compares its bytes with the checked-in file."""
     exe = blender()
     if not exe:
         raise Skip("Blender not found (OHAO_BLENDER, the scoop shim or PATH)")
     out_dir = os.path.join(ROOT, "build", "level_check")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, f"blockout_room_{os.getpid()}.glb")
-    script = os.path.join(ROOT, "tools", "level", "blockout_room.py")
-    r = subprocess.run([exe, "-b", "--factory-startup", "--python", script, "--", out],
+    name = os.path.splitext(os.path.basename(checked_in_path))[0]
+    out = os.path.join(out_dir, f"{name}_{os.getpid()}.glb")
+    r = subprocess.run([exe, "-b", "--factory-startup", "--python", os.path.join(ROOT, script), "--", out],
                        capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and os.path.exists(out), f"Blender exit {r.returncode}: {r.stderr[-400:]}"
     ver = next((line for line in r.stdout.splitlines() if line.startswith("Blender ")), "Blender ?")
-    rebuilt, checked_in = open(out, "rb").read(), open(LEVEL, "rb").read()
+    rebuilt, checked_in = open(out, "rb").read(), open(checked_in_path, "rb").read()
     os.remove(out)
     if not ver.startswith("Blender 5.2.2"):
         raise Skip(f"{ver.strip()}: the checked-in file was made by Blender 5.2.2")
     assert rebuilt == checked_in, f"rebuild differs ({len(rebuilt)} vs {len(checked_in)} bytes): regenerate and look"
+
+
+def l1_blockout_rebuilds_byte_identical():
+    rebuild_byte_identical(os.path.join("tools", "level", "blockout_room.py"), LEVEL)
+
+
+def a3_fps_arms_rebuild_byte_identical():
+    # Sub-project 10 step 3: the player's arms and rifle, made by our Blender script.
+    rebuild_byte_identical(os.path.join("tools", "anim", "make_fps_arms.py"), ARMS)
 
 
 def l1_blockout_scene_references_the_level():
@@ -149,7 +162,8 @@ def l1_blockout_scene_references_the_level():
 
 def main():
     for fn in (l1_every_checked_in_level_has_valid_hints, l1_blockout_hints_are_the_contract,
-               l1_blockout_rebuilds_byte_identical, l1_blockout_scene_references_the_level):
+               l1_blockout_rebuilds_byte_identical, l1_blockout_scene_references_the_level,
+               a3_fps_arms_rebuild_byte_identical):
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed, {len(skipped)} skipped")
     print(json.dumps({"suite": "check_level_assets", "passed": passed, "failed": failed,

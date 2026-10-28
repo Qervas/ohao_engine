@@ -31,3 +31,5 @@ tests/level/fixtures/** text eol=lf
 tests/level/extras_schema.json text eol=lf
 # The animation test rig (sub-project 10): tools/anim/make_test_rig.py's output, byte for byte.
 tests/anim/fixtures/** -text
+# Characters (sub-project 10): generated files, byte for byte (the arms' Blender rebuild compares).
+assets/characters/** -text

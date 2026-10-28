@@ -137,7 +137,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `test_golden_diff.py` | the golden harness's diff report on synthetic images: statistics, regions, heatmap, crop, `--json` |
 | `check_doctor.py` | `ohao doctor` on fake shader trees (missing, stale, includes, Slang entry points and imports) and on the real tree; `--gpu` adds the device checks |
 | `check_layout.py` | `shaders/shared/layout.json`'s generated files current, std430 offsets asserted, bad layouts refused, the generated GLSL and Slang compiling |
-| `check_level_assets.py` | the checked-in levels (`assets/levels/`): every node's `extras` against the hint schema (`tests/level/extras_schema.json`), the blockout's nodes and hints (the contract the level pipeline's later tests assert), its Blender rebuild byte for byte (`skip` without Blender 5.2.2) |
+| `check_level_assets.py` | the checked-in levels (`assets/levels/`): every node's `extras` against the hint schema (`tests/level/extras_schema.json`), the blockout's nodes and hints (the contract the level pipeline's later tests assert), its Blender rebuild byte for byte (`skip` without Blender 5.2.2); the player's arms and rifle (`assets/characters/fps_arms/`, `tools/anim/make_fps_arms.py`) rebuilt the same way |
 | `check_serve.py` | `ohao serve` as a process: protocol goldens (`tests/serve/sessions` → `expected`, `--update`; `loadMs` and `buildMs` compare as 0), every tool schema through `jsonschema`, `tools/list` at most 24 KB, stdout clean under stray prints, the sandbox and caps, `ohao serve --pipe` as a process |
 
 GPU suites and harnesses (each creates a Vulkan device):
