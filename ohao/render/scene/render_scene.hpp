@@ -68,6 +68,18 @@ public:
     // (lightEmitter(): a sphere or its rectangle, kInstanceEmitter) that the camera sees as the
     // light's own radiance; it shadows nothing and lights nothing (the light does).
     void setLights(std::span<const LightDesc> lights);
+    // Lights of this frame that are not in the scene: an effect's flash (sub-project 12, the vfx_draw
+    // sync system). They join the raster table after setLights' lights, every frame they are given
+    // (an empty list clears them); they have no emitter mesh and no shadow (EmissiveProxy kind).
+    void setTransientLights(std::span<const LightDesc> lights);
+    // Spheres the frame draws that are not in the registry (sub-project 12: a test grenade in flight): a
+    // black sphere of the emitter mesh, an ordinary instance (it casts shadows, it emits nothing). Every
+    // frame they are given; an empty list removes them.
+    struct PresentedSphere {
+        glm::vec3 centre{0.0f};
+        float radius{0.05f};
+    };
+    void setPresentedSpheres(std::span<const PresentedSphere> spheres);
     // Whether the last setLights had a directional light: it stands for the sun, so the
     // environment lights without its own (render/rt/env_sun.hpp, VulkanRenderer::render).
     [[nodiscard]] bool hasDirectionalLight() const;

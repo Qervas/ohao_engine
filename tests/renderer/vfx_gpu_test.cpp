@@ -22,13 +22,17 @@
 #include "api/session.hpp"
 #include "common/harness.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/vfx.hpp"
+#include "ecs/vfx_draw.hpp"
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
+#include "level/level_system.hpp"
 #include "ohao/render_host.hpp"
 #include "render/deferred/deferred_renderer.hpp"
+#include "render/frame/pass_registry.hpp"
 #include "render/scene/render_scene.hpp"
 #include "runtime/image.hpp"
 #include "stb_image.h"
@@ -39,8 +43,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -67,7 +73,11 @@ void check(bool ok, const std::string& what) {
     std::printf("\n    FAIL: %s", what.c_str());
 }
 
+// --only NAME runs one test (a development aid: the suite's summary still counts the others as not run).
+std::string g_only;
+
 void run(const char* name, void (*fn)()) {
+    if (!g_only.empty() && g_only != name) return;
     g_current = name;
     std::printf("  %s", name);
     fn();
@@ -101,7 +111,10 @@ const char* kSet = R"({
     "hard_puff": {"emitters": [{"count": 1, "life": [30, 30], "speed": [0, 0], "size": [2.0, 2.0],
               "color": [[0.6, 0.6, 0.6], [0.6, 0.6, 0.6]], "alpha": [1, 1], "blend": "additive"}]},
     "sparks": {"emitters": [{"count": 24, "life": [30, 30], "speed": [0.2, 0.6], "spread": 60, "size": [0.05, 0.05],
-              "color": [[1, 0.8, 0.4], [1, 0.8, 0.4]], "alpha": [1, 1], "blend": "additive", "drag": 4}]}
+              "color": [[1, 0.8, 0.4], [1, 0.8, 0.4]], "alpha": [1, 1], "blend": "additive", "drag": 4}]},
+    "cloud": {"emitters": [{"count": 1, "life": [9, 9], "speed": [0, 0], "size": [0.1, 0.1],
+              "color": [[1, 1, 1], [1, 1, 1]], "alpha": [0, 0], "blend": "alpha"}],
+              "proxy": {"spheres": 1, "radius": [2.0, 2.0], "density": 5.0, "rise": 0, "life": 9}}
   }
 })";
 
@@ -174,6 +187,9 @@ struct Frame {
     std::vector<VfxRenderer::Object> objects;
     std::vector<gpu::shared::VfxParticleGpu> particles;
     std::string vfxInfo;   // vfx.info after the steps
+    std::vector<vfx::SmokeSphere> smoke;   // the smoke proxies the frame's RT traces read (after the steps)
+    std::vector<std::string> passes;       // the last captured frame's passes, in order
+    bool rtGI{false};                      // RT GI is wanted and available in that renderer
 };
 
 struct Options {
@@ -192,6 +208,9 @@ Frame capture(const std::string& scenePath, const Options& o, const std::string&
     host::RenderHost host(assets, api::HostKind::Headless);
     ecs::World world;
     ecs::installVfx(world, assets);
+    // The CLI context's installs (ohao/tools/ohao/main.cpp): a Level expands into its blockout, and its bodies build.
+    level::installLevels(world, assets, engineTypes());
+    ecs::installPhysics(world, assets);
     api::Session session(world, engineTypes());
     session.setAssetResolver(&assets);
     host.bind(world);
@@ -208,6 +227,8 @@ Frame capture(const std::string& scenePath, const Options& o, const std::string&
         if (stepped.rfind("{\"result\"", 0) != 0) std::printf("\n      world.step: %s", stepped.substr(0, 300).c_str());
     }
     out.vfxInfo = session.call("vfx.info", "{}");
+    if (const ecs::VfxSystem* sys = ecs::vfxSystem(world))
+        out.smoke = ecs::vfxFrameOf(world, std::make_shared<const vfx::VfxSet>(sys->set()), {}, {}).smoke;
     api::RenderRequest r;
     r.mode = "deferred";
     r.frames = 1;
@@ -232,11 +253,15 @@ Frame capture(const std::string& scenePath, const Options& o, const std::string&
         std::printf("  capture: %s\n", res.errors.front().message.c_str());
         return out;
     }
-    if (auto* d = host.renderer()->getDeferredRenderer())
+    if (auto* d = host.renderer()->getDeferredRenderer()) {
+        out.rtGI = d->rtGIEnabled() && d->rtGIAvailable();
         if (auto* v = d->vfxRenderer()) {
             out.objects = v->objects();
             out.particles = v->readParticles();
         }
+    }
+    for (const auto& f : host.renderer()->frameTimings(1))
+        for (uint32_t i = 0; i < f.count; ++i) out.passes.emplace_back(render::kPasses[f.pass[i]].name);
     int w = 0, h = 0, n = 0;
     if (unsigned char* px = stbi_load(png.c_str(), &w, &h, &n, 4)) {
         if (w == int(kWidth) && h == int(kHeight)) out.rgba.assign(px, px + std::size_t{kWidth} * kHeight * 4);
@@ -718,9 +743,252 @@ void t33_decal_wraps() {
     check(nB == 0, "a face 61 degrees off is refused (the 60-degree threshold)");
 }
 
+// ---- t34_doorway_dims_gi ----------------------------------------------------------------------
+// smoke_doorway.scene.json: the blockout room with a smoke_cloud in its south doorway (engine axes: the
+// doorway is at z = 3.1, the room's floor at y = 0). The Sun is taken out, so the floor is lit by RT GI
+// alone; the view is from inside the room, looking out at the doorway and the floor 1-2 m inside it.
+
+const View kDoorwayView{{1.5f, 1.6f, -0.8f}, 180.0f, -35.0f};
+
+// A view's camera: yaw about Y, then pitch about X (camera()).
+glm::quat viewRotation(const View& v) {
+    return glm::angleAxis(glm::radians(v.yawDeg), glm::vec3(0.0f, 1.0f, 0.0f)) *
+           glm::angleAxis(glm::radians(v.pitchDeg), glm::vec3(1.0f, 0.0f, 0.0f));
+}
+
+// Where a pixel's ray meets the floor (y = 0) from a View; false when it does not reach it.
+bool floorPoint(const View& v, uint32_t x, uint32_t y, glm::vec3& out) {
+    const float t = std::tan(glm::radians(kFov) * 0.5f), aspect = float(kWidth) / float(kHeight);
+    const glm::vec3 dir = glm::normalize(viewRotation(v) *
+                                         glm::vec3((2.0f * (float(x) + 0.5f) / kWidth - 1.0f) * t * aspect,
+                                                   (1.0f - 2.0f * (float(y) + 0.5f) / kHeight) * t, -1.0f));
+    if (dir.y >= -1e-6f) return false;
+    out = v.position + dir * (-v.position.y / dir.y);
+    return true;
+}
+
+// The mean of the frame's red, green and blue over the pixels that see the floor patch
+// (x 1..2 m, z 1..2 m), as a 0..255 level.
+double patchMean(const Frame& f, const View& v) {
+    double sum = 0.0;
+    std::size_t n = 0;
+    for (uint32_t y = 0; y < kHeight; ++y)
+        for (uint32_t x = 0; x < kWidth; ++x) {
+            glm::vec3 p;
+            if (!floorPoint(v, x, y, p) || p.x < 1.0f || p.x > 2.0f || p.z < 1.0f || p.z > 2.0f) continue;
+            const glm::ivec3 c = pixel(f, x, y);
+            sum += (c.r + c.g + c.b) / 3.0;
+            ++n;
+        }
+    return n ? sum / double(n) : 0.0;
+}
+
+// The doorway frame: the Sun out, RT GI on, the smoke in GI as given, `steps` steps, `frames` accumulated.
+Options doorwayFrame(bool smokeInGi, int steps, int frames) {
+    Options o;
+    o.steps = steps;
+    o.frames = frames;
+    o.afterLoad = [](ecs::World& w) {
+        std::vector<entt::entity> suns;
+        for (auto [e, l] : w.registry().view<const ecs::Light>().each()) suns.push_back(e);
+        for (entt::entity e : suns) w.registry().remove<ecs::Light>(e);
+        for (auto [e, c] : w.registry().view<const ecs::Camera>().each())
+            w.registry().patch<ecs::Transform>(e, [](ecs::Transform& t) {
+                t.position = kDoorwayView.position;
+                t.rotation = viewRotation(kDoorwayView);
+            });
+    };
+    o.settings = [smokeInGi](VulkanRenderer& r) {
+        if (auto* d = r.getDeferredRenderer()) {
+            d->setRTGIEnabled(true);
+            d->setSmokeInGi(smokeInGi);
+        }
+    };
+    return o;
+}
+
+void writeJson(const std::string& rel, const std::string& text) {
+    std::filesystem::create_directories(std::filesystem::path(OHAO_SOURCE_DIR) / "build" / "vfx");
+    std::ofstream(std::string(OHAO_SOURCE_DIR) + "/" + rel, std::ios::binary | std::ios::trunc) << text;
+}
+
+void t34_doorway_dims_gi() {
+    const std::string scene = "assets/scenes/smoke_doorway.scene.json";
+    const Frame on = capture(scene, doorwayFrame(true, 60, 30), "smoke_doorway_on");
+    const Frame off = capture(scene, doorwayFrame(false, 60, 30), "smoke_doorway_off");
+    const Frame cleared = capture(scene, doorwayFrame(true, 600, 30), "smoke_doorway_cleared");   // 10 s: the cloud's life (9 s) is past
+    if (!sameSize(on, off) || !sameSize(on, cleared)) {
+        check(false, "the three doorway frames captured");
+        return;
+    }
+    const double mOn = patchMean(on, kDoorwayView), mOff = patchMean(off, kDoorwayView), mClear = patchMean(cleared, kDoorwayView);
+    const double dimming = 1.0 - mOn / mOff, clearError = std::fabs(mClear - mOff) / mOff;
+    std::printf("\n      floor patch: %.2f with the cloud, %.2f without (%.1f%% darker); %.2f cleared (%.2f%% off the cloudless value)",
+                mOn, mOff, 100.0 * dimming, mClear, 100.0 * clearError);
+    std::printf("\n      smoke spheres in the frame at 60 steps: %zu", on.smoke.size());
+    char json[512];
+    std::snprintf(json, sizeof(json),
+                  "{\"patchMeanCloud\": %.4f, \"patchMeanCloudless\": %.4f, \"patchMeanCleared\": %.4f, \"dimming\": %.4f, "
+                  "\"clearedError\": %.6f, \"spheresAt60Steps\": %zu}\n",
+                  mOn, mOff, mClear, dimming, clearError, on.smoke.size());
+    writeJson("build/vfx/t34.json", json);
+    check(!on.smoke.empty(), "the cloud publishes its spheres to the traces");
+    check(dimming >= 0.20, "the cloud dims the floor's RT GI by at least 20%");
+    check(clearError <= 0.01, "the floor is back within 1% of its cloudless value once the cloud clears");
+}
+
+// ---- t34_shadow_through_smoke -----------------------------------------------------------------
+// The smoke proxies' transmittance on the CPU: a sun ray through a sphere the closed form gives, the
+// product of exp(-density * chord) it crosses. The GPU's trace is checked by the frame (the floor under
+// the cloud is darker than the floor beside it, shadow only: RT GI and the constant ambient are off).
+
+void t34_shadow_through_smoke() {
+    // One cloud over the floor's origin, the sun from 60 degrees up, the camera straight down. The
+    // floor point the cloud shadows is where the sun ray through the cloud's centre lands; the frame's
+    // pixels there, against the same frame without the cloud, are the shadow's transmittance (RT GI and
+    // the constant ambient off, so the floor is lit by the sun alone). The optical depth is the closed
+    // form's: the spheres the frame publishes, each crossed chord times its density.
+    ecs::World w;
+    w.seedIds(34);
+    sun(w, 3.0f, 0.0f);
+    floorPlane(w);
+    const glm::vec3 cloudAt(0.0f, 2.0f, 0.0f);
+    const entt::entity c = w.create("Cloud", ecs::Transform{cloudAt});
+    w.registry().emplace<ecs::VfxEmitter>(c, ecs::VfxEmitter{"cloud", 0.0f, 7u, true});   // the test set's: radius 2, density 5
+    const View top{{0.0f, 6.0f, 0.0f}, 0.0f, -89.0f};
+    camera(w, top);
+    const std::string scene = save(w, "shadow_through_smoke");
+    Options o;
+    o.steps = 60;
+    o.frames = 30;
+    o.settings = [](VulkanRenderer& r) {
+        r.setAmbientIntensity(0.0f);
+        if (auto* d = r.getDeferredRenderer()) d->setRTGIEnabled(false);
+    };
+    const Frame with = capture(scene, o, "shadow_through_smoke");
+    if (with.smoke.empty()) {
+        check(false, "the cloud publishes its spheres");
+        return;
+    }
+    // The sun's direction: the light's -Z (sun() turns it so), and the ray from the floor back to it.
+    const glm::quat sunRot = glm::angleAxis(glm::radians(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)) *
+                             glm::angleAxis(glm::radians(-60.0f), glm::normalize(glm::vec3(1.0f, 0.0f, 0.3f)));
+    const glm::vec3 toSun = -glm::normalize(sunRot * glm::vec3(0.0f, 0.0f, -1.0f));
+    // The floor point the cloud's centre shadows, and the optical depth of the sun ray from it.
+    const glm::vec3 c0 = with.smoke.front().centre;   // the one sphere the cloud has (offset from its origin)
+    const glm::vec3 floorAt = c0 - toSun * (c0.y / toSun.y);
+    double tau = 0.0;
+    for (const vfx::SmokeSphere& s : with.smoke) {
+        const glm::vec3 oc = floorAt - s.centre;
+        const float b = glm::dot(oc, toSun), disc = b * b - (glm::dot(oc, oc) - s.radius * s.radius);
+        if (disc <= 0.0f) continue;
+        const float sq = std::sqrt(disc);
+        tau += s.density * std::max(0.0f, -b + sq - std::max(-b - sq, 0.0f));
+    }
+    const double expected = std::exp(-tau);
+    // The pixel of that floor point through the top view (the same projection as the frame's).
+    const float t = std::tan(glm::radians(kFov) * 0.5f), aspect = float(kWidth) / float(kHeight);
+    const glm::vec3 pc = glm::conjugate(viewRotation(top)) * (floorAt - top.position);
+    const float px = (0.5f + 0.5f * pc.x / (-pc.z * t * aspect)) * kWidth;
+    const float py = (0.5f - 0.5f * pc.y / (-pc.z * t)) * kHeight;
+    double lit = 0.0, dark = 0.0;
+    std::size_t n = 0;
+    Options off = o;
+    off.afterLoad = [](ecs::World& ww) {
+        std::vector<entt::entity> clouds;
+        for (auto [e, em] : ww.registry().view<const ecs::VfxEmitter>().each()) clouds.push_back(e);
+        for (entt::entity e : clouds) ww.registry().remove<ecs::VfxEmitter>(e);
+    };
+    const Frame without = capture(scene, off, "shadow_through_smoke_off");
+    if (!sameSize(with, without)) {
+        check(false, "both frames captured");
+        return;
+    }
+    n = 0;
+    for (int y = int(py) - 3; y <= int(py) + 3; ++y)
+        for (int x = int(px) - 3; x <= int(px) + 3; ++x) {
+            if (x < 0 || y < 0 || x >= int(kWidth) || y >= int(kHeight)) continue;
+            const glm::ivec3 a = pixel(with, x, y), b = pixel(without, x, y);
+            lit += (a.r + a.g + a.b) / 3.0;
+            dark += (b.r + b.g + b.b) / 3.0;
+            ++n;
+        }
+    const double ratio = n && dark > 0.0 ? lit / dark : 1.0;
+    std::printf("\n      optical depth %.3f: closed-form transmittance %.4f; the floor's pixels with the cloud at %.1f%% of "
+                "those without (display values, tonemapped: not the linear ratio)",
+                tau, expected, 100.0 * ratio);
+    check(tau > 0.0, "the sun ray crosses the cloud's spheres (closed form)");
+    check(ratio < 0.99, "the cloud shadows the floor under it");
+}
+
+// The doorway's floor with RT GI on against off (the smoke in GI as it is): the GI reaches the patch at all,
+// so t34_doorway_dims_gi measures the bounce light and not the ambient or the environment's direct term.
+void t34_gi_reaches_floor() {
+    const std::string scene = "assets/scenes/smoke_doorway.scene.json";
+    Options noGi = doorwayFrame(true, 60, 30);
+    noGi.settings = [](VulkanRenderer& r) {
+        if (auto* d = r.getDeferredRenderer()) d->setRTGIEnabled(false);
+    };
+    const Frame on = capture(scene, doorwayFrame(true, 60, 30), "gi_reaches_floor_on");
+    const Frame off = capture(scene, noGi, "gi_reaches_floor_off");
+    if (!sameSize(on, off)) {
+        check(false, "both frames captured");
+        return;
+    }
+    const double mOn = patchMean(on, kDoorwayView), mOff = patchMean(off, kDoorwayView);
+    std::printf("\n      floor patch: %.2f with RT GI, %.2f without", mOn, mOff);
+    std::printf("\n      rtGI wanted+available: %d / %d; passes with rt.gi: %d / %d (%zu passes)", on.rtGI, off.rtGI,
+                int(std::count(on.passes.begin(), on.passes.end(), "rt.gi")), int(std::count(off.passes.begin(), off.passes.end(), "rt.gi")),
+                on.passes.size());
+    check(std::fabs(mOn - mOff) > 0.01 * mOff, "RT GI changes the floor the cloud is measured on");
+}
+
+// ---- t34_gi_reads_smoke -----------------------------------------------------------------------
+// RT GI only (no sun, the environment lights the floor through the sky), a dense cloud over the floor's
+// middle: the frame's mean with smoke in GI on against off. The cloud is invisible (its particles'
+// alpha is 0), so the difference is the traces' alone.
+void t34_gi_reads_smoke() {
+    ecs::World w;
+    w.seedIds(34);
+    const entt::entity env = w.create("Environment", ecs::Transform{});
+    w.registry().emplace<ecs::Environment>(env, ecs::Environment{ecs::AssetRef{"assets/test_models/env_outdoor.hdr", {}}, 1.0f});
+    floorPlane(w);
+    emitter(w, "Cloud", "cloud", glm::vec3(0.0f, 1.2f, 0.0f), 7u);
+    camera(w, View{{0.0f, 6.0f, 0.0f}, 0.0f, -89.0f});
+    const std::string scene = save(w, "probe_gi_cloud");
+    double means[2] = {0.0, 0.0};
+    std::size_t spheres = 0;
+    for (int on = 0; on < 2; ++on) {
+        Options o;
+        o.steps = 60;
+        o.frames = 30;
+        o.settings = [on](VulkanRenderer& r) {
+            if (auto* d = r.getDeferredRenderer()) {
+                d->setRTGIEnabled(true);
+                d->setSmokeInGi(on == 1);
+            }
+        };
+        const Frame f = capture(scene, o, "");
+        spheres = f.smoke.size();
+        double sum = 0.0;
+        for (uint32_t y = 0; y < kHeight; ++y)
+            for (uint32_t x = 0; x < kWidth; ++x) {
+                const glm::ivec3 c = pixel(f, x, y);
+                sum += (c.r + c.g + c.b) / 3.0;
+            }
+        means[on] = sum / double(kWidth * kHeight);
+    }
+    const double dimming = 1.0 - means[1] / means[0];
+    std::printf("\n      frame mean %.3f with smoke in GI, %.3f without (%.2f%% darker; spheres %zu)", means[1], means[0],
+                100.0 * dimming, spheres);
+    check(spheres > 0, "the cloud publishes its sphere to the traces");
+    check(dimming > 0.01, "smoke in GI darkens the frame's RT GI by more than 1%");
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--keep") == 0) g_keep = true;
+        else if (std::strcmp(argv[i], "--only") == 0 && i + 1 < argc) g_only = argv[++i];
     run("t32_sort_order", t32_sort_order);
     run("t32_lit_particles", t32_lit_particles);
     run("t32_soft", t32_soft);
@@ -730,6 +998,10 @@ int main(int argc, char** argv) {
     run("t32_forward_parity", t32_forward_parity);
     run("t33_decal_footprint", t33_decal_footprint);
     run("t33_decal_wraps", t33_decal_wraps);
+    run("t34_gi_reaches_floor", t34_gi_reaches_floor);
+    run("t34_doorway_dims_gi", t34_doorway_dims_gi);
+    run("t34_shadow_through_smoke", t34_shadow_through_smoke);
+    run("t34_gi_reads_smoke", t34_gi_reads_smoke);
     std::remove((std::string(OHAO_SOURCE_DIR) + "/" + setPath()).c_str());
     return ohao::test::finish("vfx_gpu_test", g_passed, g_failed, g_failures);
 }

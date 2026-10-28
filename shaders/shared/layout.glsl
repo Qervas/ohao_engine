@@ -65,6 +65,12 @@ const uint kVfxBlendAlpha = 1u;
 const uint kVfxBlendPremultiplied = 2u;
 // VfxEmitterGpu.look.z: no texture (a soft round dot)
 const uint kVfxNoTexture = 4294967295u;
+// smoke proxy spheres the upload holds (caps.proxies is at most this; the set's default is 32)
+const uint kSmokeSpheresMax = 256u;
+// bytes a SmokeSphereGpu takes in the proxy buffer (rt/smoke_proxy.slang reads it as bytes)
+const uint kSmokeSphereStride = 32u;
+// byte offset of the first SmokeSphereGpu in the proxy buffer; the SmokeProxyHeaderGpu is before it
+const uint kSmokeSpheresOffset = 16u;
 // skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
 const uint kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
@@ -397,6 +403,17 @@ struct ForwardPush {
 struct EnvPrefilterPush {
     uvec4 size;   // x, y the output level's size; z samples a texel; w the source chain's mip count
     vec4 params;   // x the level's GGX roughness (prefilter); y, z the source chain's base size; w unused
+};
+
+// the first 16 bytes of the smoke proxy buffer (set 1, binding 7 of rt/shadow_trace and rt/gi_trace): the spheres after it, SmokeSphereGpu each at kSmokeSpheresOffset
+struct SmokeProxyHeaderGpu {
+    uvec4 counts;   // x the spheres written; y 1 when the RT traces attenuate through them (render.settings vfx.smokeInGi), 0 when they ignore smoke; z, w unused
+};
+
+// one smoke proxy sphere this frame (vfx::SmokeSphere at the record's age): a closed-form density sphere the shadow and GI rays attenuate through
+struct SmokeSphereGpu {
+    vec4 centre;   // xyz the world centre; w the radius (m)
+    vec4 density;   // x the density (1/m: transmittance exp(-density * chord)); y, z, w unused
 };
 
 #endif

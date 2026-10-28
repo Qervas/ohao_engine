@@ -69,6 +69,12 @@ inline constexpr uint32_t kVfxBlendAlpha = 1u;
 inline constexpr uint32_t kVfxBlendPremultiplied = 2u;
 // VfxEmitterGpu.look.z: no texture (a soft round dot)
 inline constexpr uint32_t kVfxNoTexture = 4294967295u;
+// smoke proxy spheres the upload holds (caps.proxies is at most this; the set's default is 32)
+inline constexpr uint32_t kSmokeSpheresMax = 256u;
+// bytes a SmokeSphereGpu takes in the proxy buffer (rt/smoke_proxy.slang reads it as bytes)
+inline constexpr uint32_t kSmokeSphereStride = 32u;
+// byte offset of the first SmokeSphereGpu in the proxy buffer; the SmokeProxyHeaderGpu is before it
+inline constexpr uint32_t kSmokeSpheresOffset = 16u;
 // skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
 inline constexpr uint32_t kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
@@ -547,5 +553,21 @@ struct alignas(16) EnvPrefilterPush {
 static_assert(offsetof(EnvPrefilterPush, size) == 0);
 static_assert(offsetof(EnvPrefilterPush, params) == 16);
 static_assert(sizeof(EnvPrefilterPush) == 32);
+
+// the first 16 bytes of the smoke proxy buffer (set 1, binding 7 of rt/shadow_trace and rt/gi_trace): the spheres after it, SmokeSphereGpu each at kSmokeSpheresOffset
+struct alignas(16) SmokeProxyHeaderGpu {
+    alignas(16) std::array<uint32_t, 4> counts{};
+};
+static_assert(offsetof(SmokeProxyHeaderGpu, counts) == 0);
+static_assert(sizeof(SmokeProxyHeaderGpu) == 16);
+
+// one smoke proxy sphere this frame (vfx::SmokeSphere at the record's age): a closed-form density sphere the shadow and GI rays attenuate through
+struct alignas(16) SmokeSphereGpu {
+    alignas(16) std::array<float, 4> centre{};
+    alignas(16) std::array<float, 4> density{};
+};
+static_assert(offsetof(SmokeSphereGpu, centre) == 0);
+static_assert(offsetof(SmokeSphereGpu, density) == 16);
+static_assert(sizeof(SmokeSphereGpu) == 32);
 
 } // namespace ohao::gpu::shared

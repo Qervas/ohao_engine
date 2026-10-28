@@ -320,7 +320,7 @@ struct CombatSystem::Impl {
 
     // ---- the test grenade (audio spec ruling 23; combat.hpp, combat::kGrenade*) ------------------
     struct Grenade {
-        glm::vec3 pos{0.0f}, vel{0.0f};
+        glm::vec3 prev{0.0f}, pos{0.0f}, vel{0.0f};   // prev: where the last step left it (drawn between steps)
         float fuse{0.0f};   // s left
         bool resting{false};
         entt::entity thrower{entt::null};
@@ -345,6 +345,7 @@ struct CombatSystem::Impl {
                 const glm::vec3 look = yawQuat(info->yawDeg) * pitchQuat(info->pitchDeg) * glm::vec3(0.0f, 0.0f, -1.0f);
                 Grenade g;
                 g.pos = eye + look * combat::kGrenadeAhead;
+                g.prev = g.pos;
                 g.vel = look * combat::kGrenadeSpeed + glm::vec3(0.0f, combat::kGrenadeLift, 0.0f);
                 g.fuse = combat::kGrenadeFuse;
                 g.thrower = player;
@@ -352,6 +353,7 @@ struct CombatSystem::Impl {
                 grenadeCooldown = combat::kGrenadeCooldown;
             }
         for (Grenade& g : grenades) {
+            g.prev = g.pos;
             if (!g.resting) {
                 const glm::vec3 next = g.pos + g.vel * dt + glm::vec3(0.0f, 0.5f * combat::kGrenadeGravity * dt * dt, 0.0f);
                 const glm::vec3 move = next - g.pos;
@@ -485,6 +487,12 @@ uint64_t CombatSystem::steps() const noexcept { return m->steps; }
 double CombatSystem::lastStepMs() const noexcept { return m->lastMs; }
 float CombatSystem::stepSeconds() const noexcept { return m->lastDt; }
 RoundInfo CombatSystem::round() const noexcept { return m->roundInfo; }
+std::vector<CombatGrenade> CombatSystem::grenadesInFlight() const {
+    std::vector<CombatGrenade> out;
+    out.reserve(m->grenades.size());
+    for (const auto& g : m->grenades) out.push_back({g.prev, g.pos});
+    return out;
+}
 
 CombatSystem& installCombat(World& world) {
     auto& reg = world.registry();

@@ -36,6 +36,14 @@ struct RenderScene::Impl {
     MaterialTable materials;
     InstanceTable instances;
     LightTable lights;
+    std::vector<LightDesc> sceneLights;       // setLights' list
+    std::vector<LightDesc> transientLights;   // setTransientLights': the effects' flashes this frame
+    // The table's list: the scene's lights, then the transient ones.
+    void setLightTable() {
+        std::vector<LightDesc> all = sceneLights;
+        all.insert(all.end(), transientLights.begin(), transientLights.end());
+        lights.set(all);
+    }
 
     // One host-visible staging buffer per frame slot: the slot's fence guarantees
     // the GPU finished reading it before recordUpdates rewrites it.
@@ -77,6 +85,7 @@ struct RenderScene::Impl {
     // order; their meshes and material are registered by the first light that needs them.
     bool emittersEnabled{true};
     std::vector<uint32_t> emitterSlots;
+    std::vector<uint32_t> presentedSlots;   // setPresentedSpheres: the emitter sphere mesh, not an emitter
     MeshHandle emitterSphere{}, emitterQuad{};
     MaterialHandle emitterMaterial{};
     bool emitterAssetsReady{false};
@@ -515,6 +524,7 @@ void RenderScene::shutdown() {
     m->allocator.shutdown();
     m->draws.clear();
     m->emitterSlots.clear();
+    m->presentedSlots.clear();
     m->emitterAssetsReady = false;
     m->initialized = false;
 }
@@ -704,7 +714,41 @@ void RenderScene::destroyInstance(uint32_t slot) {
 
 void RenderScene::setLights(std::span<const LightDesc> lights) {
     if (!m->initialized) return;
-    m->lights.set(lights);
+    m->sceneLights.assign(lights.begin(), lights.end());
+    m->setLightTable();
+    m->syncEmitters();
+}
+
+void RenderScene::setPresentedSpheres(std::span<const PresentedSphere> spheres) {
+    if (!m->initialized || (spheres.empty() && m->presentedSlots.empty())) return;
+    if (!spheres.empty() && !m->ensureEmitterAssets()) return;
+    const MaterialHandle mats[1] = {m->emitterMaterial};
+    for (std::size_t i = 0; i < spheres.size(); ++i) {
+        InstanceDesc d{};
+        d.mesh = m->emitterSphere;
+        d.materials = mats;
+        d.world = glm::scale(glm::translate(glm::mat4(1.0f), spheres[i].centre), glm::vec3(spheres[i].radius));
+        d.prevWorld = d.world;   // the frame draws it where the step left it: no motion of its own
+        if (i < m->presentedSlots.size()) {
+            m->instances.update(m->presentedSlots[i], d, m->materials.count());
+            m->stageTlasInstance(m->presentedSlots[i], false);
+        } else {
+            const uint32_t slot = m->instances.create(d, m->materials.count());
+            m->stageTlasInstance(slot, true);
+            m->presentedSlots.push_back(slot);
+        }
+    }
+    while (m->presentedSlots.size() > spheres.size()) {
+        m->instances.destroy(m->presentedSlots.back());
+        m->stageTlasInstance(m->presentedSlots.back(), true);
+        m->presentedSlots.pop_back();
+    }
+}
+
+void RenderScene::setTransientLights(std::span<const LightDesc> lights) {
+    if (!m->initialized || (m->transientLights.empty() && lights.empty())) return;
+    m->transientLights.assign(lights.begin(), lights.end());
+    m->setLightTable();
     m->syncEmitters();
 }
 

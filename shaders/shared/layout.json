@@ -71,6 +71,12 @@
      "doc": "VfxEmitterGpu.look.x: premultiplied alpha"},
     {"name": "kVfxNoTexture", "type": "uint", "value": 4294967295,
      "doc": "VfxEmitterGpu.look.z: no texture (a soft round dot)"},
+    {"name": "kSmokeSpheresMax", "type": "uint", "value": 256,
+     "doc": "smoke proxy spheres the upload holds (caps.proxies is at most this; the set's default is 32)"},
+    {"name": "kSmokeSphereStride", "type": "uint", "value": 32,
+     "doc": "bytes a SmokeSphereGpu takes in the proxy buffer (rt/smoke_proxy.slang reads it as bytes)"},
+    {"name": "kSmokeSpheresOffset", "type": "uint", "value": 16,
+     "doc": "byte offset of the first SmokeSphereGpu in the proxy buffer; the SmokeProxyHeaderGpu is before it"},
     {"name": "kSkinGroupSize", "type": "uint", "value": 64,
      "doc": "skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup"},
     {"name": "kInstanceViewModel", "type": "uint", "value": 4,
@@ -373,6 +379,15 @@
      "fields": [
        {"name": "size", "type": "uint4", "doc": "x, y the output level's size; z samples a texel; w the source chain's mip count"},
        {"name": "params", "type": "float4", "doc": "x the level's GGX roughness (prefilter); y, z the source chain's base size; w unused"}
+     ]},
+    {"name": "SmokeProxyHeaderGpu", "doc": "the first 16 bytes of the smoke proxy buffer (set 1, binding 7 of rt/shadow_trace and rt/gi_trace): the spheres after it, SmokeSphereGpu each at kSmokeSpheresOffset",
+     "fields": [
+       {"name": "counts", "type": "uint4", "doc": "x the spheres written; y 1 when the RT traces attenuate through them (render.settings vfx.smokeInGi), 0 when they ignore smoke; z, w unused"}
+     ]},
+    {"name": "SmokeSphereGpu", "doc": "one smoke proxy sphere this frame (vfx::SmokeSphere at the record's age): a closed-form density sphere the shadow and GI rays attenuate through",
+     "fields": [
+       {"name": "centre", "type": "float4", "doc": "xyz the world centre; w the radius (m)"},
+       {"name": "density", "type": "float4", "doc": "x the density (1/m: transmittance exp(-density * chord)); y, z, w unused"}
      ]}
   ]
 }

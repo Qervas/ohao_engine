@@ -143,7 +143,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // The RT traces alpha-test candidates (sub-project 12): RenderScene's tables (set 1) and the
     // bindless textures (set 2). Without them neither technique initializes.
-    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device);
+    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device, physicalDevice);
     const VkDescriptorSetLayout alphaTables = m_alphaTablesReady ? m_alphaTables.layout() : VK_NULL_HANDLE;
     const VkDescriptorSetLayout textures = m_textureManager ? m_textureManager->getDescriptorSetLayout() : VK_NULL_HANDLE;
 
@@ -308,7 +308,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // buffer. Null without RT or before anything was built.
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
     // The RT traces' alpha tables for this slot (its fence was waited on), and the textures.
-    const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene);
+    const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene, m_smokeInGi);
     const VkDescriptorSet alphaTablesSet = alphaSets ? m_alphaTables.set(frameIndex) : VK_NULL_HANDLE;
     const VkDescriptorSet texturesSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
     // RT shadows replace CSM whenever they trace this frame; CSM is the fallback.

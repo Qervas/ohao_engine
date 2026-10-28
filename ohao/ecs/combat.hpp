@@ -48,6 +48,11 @@ struct RoundInfo {
     double lastRestartMs{0.0}; // what the last restart took (the snapshot's restore)
 };
 
+// A test grenade in flight: where the last step left it and where this step did.
+struct CombatGrenade {
+    glm::vec3 prev{0.0f}, pos{0.0f};
+};
+
 class CombatSystem {
 public:
     explicit CombatSystem(World& world);
@@ -71,6 +76,9 @@ public:
     [[nodiscard]] double lastStepMs() const noexcept;   // the last step's time in this system
     [[nodiscard]] float stepSeconds() const noexcept;   // the last step's dt (s); 1/60 before any step
     [[nodiscard]] RoundInfo round() const noexcept;
+    // The test grenades in flight (runtime: never saved), in throw order: where the last step left each
+    // and where this one did (the presentation draws between the two, sub-project 12).
+    [[nodiscard]] std::vector<CombatGrenade> grenadesInFlight() const;
 
 private:
     struct Impl;
@@ -101,6 +109,7 @@ inline constexpr float kGrenadeGravity = -9.81f;   // m/s^2
 inline constexpr float kGrenadeFuse = 2.5f;        // s from the throw
 inline constexpr float kGrenadeCooldown = 1.0f;    // s between throws
 inline constexpr float kGrenadeAhead = 0.4f;       // m in front of the eye it leaves from
+inline constexpr float kGrenadeRadius = 0.05f;     // m: its drawn sphere (sub-project 12, presentation only)
 } // namespace combat
 
 namespace combat {

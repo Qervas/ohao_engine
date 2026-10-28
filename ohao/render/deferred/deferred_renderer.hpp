@@ -180,6 +180,11 @@ public:
     [[nodiscard]] VfxRenderer* vfxRenderer() noexcept { return m_vfx.get(); }
     // Whether the decals pass draws (on by default; the GPU tests compare a frame with and without).
     void setDecalsDrawn(bool on) noexcept { m_decalsDrawn = on; }
+    [[nodiscard]] bool decalsDrawn() const noexcept { return m_decalsDrawn; }
+    // Whether RT shadows and RT GI attenuate through the smoke proxies (render.settings vfx.smokeInGi;
+    // on by default, a presentation switch: the traces read it through the alpha tables).
+    void setSmokeInGi(bool on) noexcept { m_smokeInGi = on; }
+    [[nodiscard]] bool smokeInGi() const noexcept { return m_smokeInGi; }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
     // Get final output for display/readback
@@ -286,6 +291,7 @@ private:
     std::unique_ptr<VfxRenderer> m_vfx;
     std::unique_ptr<DecalPass> m_decals;   // the decals pass, after gbuffer.late (sub-project 12, step 3)
     bool m_decalsDrawn{true};
+    bool m_smokeInGi{true};                // setSmokeInGi: the traces' smoke proxies
     VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
     VkImageView m_envIrradiance{VK_NULL_HANDLE};
     float m_deltaTime{0.016f};

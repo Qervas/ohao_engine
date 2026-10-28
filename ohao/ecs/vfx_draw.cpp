@@ -1,6 +1,7 @@
 #include "ecs/vfx_draw.hpp"
 
 #include "ecs/asset_resolver.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/vfx.hpp"
 #include "ecs/world.hpp"
@@ -23,6 +24,25 @@ glm::mat4 drawnWorld(const entt::registry& reg, entt::entity e) {
     if (const auto* wt = reg.try_get<WorldTransform>(e)) return wt->world;
     if (const auto* t = reg.try_get<Transform>(e)) return t->matrix();
     return glm::mat4(1.0f);
+}
+
+// A flash as a light of the raster table: an EmissiveProxy (a light with no mesh, which is what a
+// flash is), whose range the table takes as its radius times 10 (light_table.cpp). Shadowless.
+std::vector<render::LightDesc> flashLights(const render::VfxFrame& frame) {
+    std::vector<render::LightDesc> out;
+    out.reserve(frame.lights.size());
+    for (const render::VfxFrameLight& l : frame.lights) {
+        render::LightDesc d{};
+        d.kind = render::LightKind::EmissiveProxy;
+        d.position = l.position;
+        d.color = l.color;
+        d.intensity = l.intensity;
+        d.radius = l.range / 10.0f;
+        d.castShadows = false;
+        d.order = l.id;
+        out.push_back(d);
+    }
+    return out;
 }
 
 } // namespace
@@ -54,6 +74,22 @@ render::VfxFrame vfxFrameOf(const World& world, std::shared_ptr<const vfx::VfxSe
             e.pose = r.pose;
             e.id = r.seq;
             frame.effects.push_back(e);
+            if (const auto& proxy = frame.set->effects[r.effect].proxy)
+                vfx::smokeSpheres(*proxy, r.seed, r.pose, age, frame.smoke);
+            break;
+        }
+        case VfxRecord::Kind::Light: {
+            // A flash: its light fades to nothing over its time; the record is gone at its end.
+            if (r.effect >= frame.set->effects.size() || !frame.set->effects[r.effect].light) break;
+            const vfx::FlashLight& l = *frame.set->effects[r.effect].light;
+            if (age < 0.0f || age >= l.time) break;
+            render::VfxFrameLight f;
+            f.position = glm::vec3(r.pose[3]);
+            f.color = l.color;
+            f.intensity = l.intensity * (1.0f - age / l.time);
+            f.range = l.range;
+            f.id = r.seq;
+            frame.lights.push_back(f);
             break;
         }
         case VfxRecord::Kind::Decal: {
@@ -92,6 +128,9 @@ render::VfxFrame vfxFrameOf(const World& world, std::shared_ptr<const vfx::VfxSe
             break;
         }
     }
+    // The set's proxy cap: the newest records' spheres stay, a cloud past it loses its oldest first.
+    const std::size_t cap = std::min<std::size_t>(frame.set->caps.proxies, gpu::shared::kSmokeSpheresMax);
+    if (frame.smoke.size() > cap) frame.smoke.erase(frame.smoke.begin(), frame.smoke.end() - static_cast<std::ptrdiff_t>(cap));
     return frame;
 }
 
@@ -133,13 +172,22 @@ struct VfxDraw {
     }
 
     void run(World& world) {
+        // The test grenades in flight, between the last two steps (a runtime presentation: never saved).
+        std::vector<render::RenderScene::PresentedSphere> grenades;
+        if (const CombatSystem* combat = combatSystem(world))
+            for (const CombatGrenade& g : combat->grenadesInFlight())
+                grenades.push_back({g.prev + (g.pos - g.prev) * world.renderAlpha(), combat::kGrenadeRadius});
+        scene.setPresentedSpheres(grenades);
         const VfxSystem* system = vfxSystem(world);
         if (!system) {
             if (!scene.vfx().effects.empty() || scene.vfx().set) scene.setVfx({});
+            scene.setTransientLights({});
             return;
         }
         refresh(*system);
         scene.setVfx(vfxFrameOf(world, set, textures, normals));
+        const std::vector<render::LightDesc> flashes = flashLights(scene.vfx());
+        scene.setTransientLights(flashes);
     }
 };
 

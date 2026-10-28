@@ -58,6 +58,12 @@
       "minLength": 1,
       "maxLength": 32,
       "description": "A reverb zone: the node's volume gets ReverbZone{preset}, a preset of the world's .audio.json (room, outdoor, ...); a trigger box unless col says otherwise"
+    },
+    "vfx": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "A placed effect: the node gets a VfxEmitter that spawns this effect of the world's .vfx.json once, where it stands (smoke_cloud, ...)"
     }
   }
 }

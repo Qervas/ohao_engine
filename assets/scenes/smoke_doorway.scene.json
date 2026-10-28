@@ -1,0 +1,55 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "components": {
+    "Camera": 1,
+    "Environment": 1,
+    "Level": 1,
+    "Light": 1,
+    "Name": 1,
+    "Transform": 1,
+    "VfxEmitter": 1,
+    "VfxSet": 1
+  },
+  "entities": [
+    {
+      "id": "5c0b10c000000001",
+      "Name": { "value": "MainCamera" },
+      "Transform": {
+        "position": [3.3, 2.3, 2.6],
+        "rotation": [-0.131591, 0.3224, 0.04531, 0.936317]
+      },
+      "Camera": { "fovDeg": 70 }
+    },
+    {
+      "id": "5c0b10c000000002",
+      "Name": { "value": "Environment" },
+      "Environment": { "hdri": { "path": "assets/test_models/env_outdoor.hdr" } }
+    },
+    {
+      "id": "5c0b10c000000003",
+      "Name": { "value": "Sun" },
+      "Transform": {
+        "position": [0, 20, 0],
+        "rotation": [-0.440377, -0.266729, -0.13885, 0.845957]
+      },
+      "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 }
+    },
+    {
+      "id": "5c0b10c000000005",
+      "Name": { "value": "Level" },
+      "Level": { "asset": { "path": "assets/levels/blockout_room.glb" } }
+    },
+    {
+      "id": "5c0b10c000000006",
+      "Name": { "value": "Effects" },
+      "VfxSet": { "asset": { "path": "assets/vfx/slice.vfx.json" } }
+    },
+    {
+      "id": "5c0b10c000000007",
+      "Name": { "value": "DoorwaySmoke" },
+      "Transform": { "position": [1.5, 1.1, 3.1] },
+      "VfxEmitter": { "effect": "smoke_cloud", "rate": 0, "seed": 1, "active": true }
+    }
+  ]
+}

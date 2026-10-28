@@ -19,6 +19,7 @@
 // a reset. Light l of the buffer is visibility channel l: the lighting pass's params.w.
 import shared.layout;
 import rt.alpha_test;
+import rt.smoke_proxy;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rg32ui")]] RWTexture2D<uint2> meta;
@@ -159,7 +160,11 @@ float traceOne(uint pixelKey, uint l, uint s, float3 p, float3 origin, float3 n)
             alphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
             q.CommitNonOpaqueTriangleHit();
     }
-    return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
+    if (q.CommittedStatus() != COMMITTED_NOTHING) return 0.0;
+    // Smoke: the sample is lit with the probability the cloud lets light through (its transmittance),
+    // so the filter's average is that transmittance; with no smoke it is always lit.
+    const float T = smokeTransmittance(origin, dir, tMax);
+    return rand01(pixelKey, l, s, 2u) < T ? 1.0 : 0.0;
 }
 
 [shader("compute")]
