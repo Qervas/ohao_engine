@@ -245,8 +245,8 @@ static void t07_crates_come_to_rest_when_stepped() {
           "without sliding off");
     for (const auto& [h, p] : statics) CHECK(backend.getPosition(h) == p, "no static body moved");
     const PhysicsInfo info = f.physics->info();
-    CHECK(info.bodies.statics == 11 && info.bodies.dynamics == 2 && info.shapes.mesh == 1,
-          "the blockout: 11 static bodies (one a mesh, the ramp) and the 2 crates");
+    CHECK(info.bodies.statics == 12 && info.bodies.dynamics == 2 && info.shapes.mesh == 1,
+          "the blockout: 12 static bodies (one a mesh, the ramp; one the outdoor Ground) and the 2 crates");
 }
 
 static void t07_render_only_level_builds_no_bodies() {
@@ -260,7 +260,7 @@ static void t07_render_only_level_builds_no_bodies() {
     CHECK(w.registry().view<Collider>().empty() && physics.info().bodies.statics == 0, "Level.collision false: no colliders");
     w.registry().patch<Level>(lv, [](Level& l) { l.collision = true; });
     w.sync();
-    CHECK(physics.info().bodies.statics == 11 && physics.info().bodies.dynamics == 2, "turned on: the bodies are built");
+    CHECK(physics.info().bodies.statics == 12 && physics.info().bodies.dynamics == 2, "turned on: the bodies are built");
     w.destroy(lv);
     w.sync();
     const PhysicsInfo after = physics.info();
@@ -657,6 +657,34 @@ static void t11_the_north_wall_stops_the_player() {
     std::printf("\n      stopped at (%.4f, %.4f, %.4f)", p.x, p.y, p.z);
     CHECK(p.z > -2.75f && p.z < -2.6f, "against WallNorth (its face z -3.0, the capsule's radius 0.3)");
     CHECK(near(p.x, -1.0f, 0.02f), "without sliding sideways");
+}
+
+// The outdoor Ground (audio spec ruling 21): out of the south doorway the player steps down 5 cm
+// onto it and stands there (before it, walking out fell forever); inside the room a ray down
+// meets the Floor, never the Ground under it.
+static void t11_walks_out_the_doorway_onto_the_ground() {
+    PlayerFixture f;
+    const entt::entity ground = f.named("Ground");
+    const entt::entity floor = f.named("Floor");
+    CHECK(ground != entt::null && floor != entt::null, "the blockout has its Floor and the outdoor Ground");
+    // Beside the player at the spawn (1.5, 0, 2.2), whose capsule a ray would meet first.
+    for (const glm::vec3 at : {glm::vec3{0.5f, 1.0f, 2.5f}, glm::vec3{-2.0f, 1.0f, 0.0f}, glm::vec3{3.8f, 1.0f, 2.8f}}) {
+        const auto hit = f.ray(at, {0.0f, -1.0f, 0.0f}, 2.0f);
+        CHECK(hit && hit->entity == floor && near(hit->point.y, 0.0f, 1e-4f), "inside the room a ray down hits the Floor at 0");
+    }
+    f.place({1.5f, 0.0f, 2.2f}, 180.0f);   // the spawn, turned toward the doorway (+Z)
+    f.step({axisSet("move_forward", 1.0f)});
+    f.steps(150);                           // 2.5 s at 4 m/s: through the doorway and 7 m out
+    f.step({axisSet("move_forward", 0.0f)});
+    f.steps(30);
+    const glm::vec3 p = f.pos();
+    const auto info = f.physics->playerInfo(f.player);
+    std::printf("\n      out of the doorway at (%.4f, %.4f, %.4f), on %s", p.x, p.y, p.z,
+                info && info->ground == ground ? "Ground" : info && info->ground == floor ? "Floor" : "nothing");
+    CHECK(p.z > 6.0f && near(p.x, 1.5f, 0.05f), "through the doorway and out past the room");
+    CHECK(info && info->onGround && info->ground == ground && near(p.y, -0.05f, 0.01f),
+          "standing on the Ground, 5 cm below the Floor");
+    CHECK(info && near(info->velocity.y, 0.0f, 1e-3f), "at rest, not falling");
 }
 
 static void t11_climbs_the_step_and_the_platform() {
@@ -1669,6 +1697,7 @@ int main(int argc, char** argv) {
     RUN(t11_spawns_at_the_player_spawn_facing_its_yaw);
     RUN(t11_walks_four_metres_in_sixty_steps);
     RUN(t11_the_north_wall_stops_the_player);
+    RUN(t11_walks_out_the_doorway_onto_the_ground);
     RUN(t11_climbs_the_step_and_the_platform);
     RUN(t11_climbs_the_ramp);
     RUN(t11_pushes_a_crate);

@@ -91,9 +91,11 @@ def build():
 
     # The room: 8 x 6 m inside, walls 3 m high and 0.2 m thick, open to the sky.
     box('Floor', (-4.2, -3.2, -0.2), (4.2, 3.2, 0.0), concrete, col='box', surf='concrete')
-    # Outdoor apron: the room floor is only 8 x 6 m; past the doorway there was no
-    # collider, so walking out fell forever (velocity blew up). Same top height as Floor.
-    box('Ground', (-40.0, -40.0, -0.2), (40.0, 40.0, 0.0), concrete, col='box', surf='concrete')
+    # Outdoor ground: the room floor is only 8 x 6 m, and past the doorway there was no
+    # collider, so walking out fell forever. Its top is 5 cm below the Floor's: level with
+    # it, a crate in the room landed on both and a ray down hit the pad; 5 cm stays clear
+    # of Jolt's 2 cm speculative contacts, so inside the room only the Floor is touched.
+    box('Ground', (-40.0, -40.0, -0.25), (40.0, 40.0, -0.05), concrete, col='box', surf='concrete')
     box('WallNorth', (-4.2, 3.0, 0.0), (4.2, 3.2, 3.0), plaster, col='box')
     box('WallEast', (4.0, -3.0, 0.0), (4.2, 3.0, 3.0), plaster, col='box')
     box('WallWest', (-4.2, -3.0, 0.0), (-4.0, 3.0, 3.0), plaster, col='box')
