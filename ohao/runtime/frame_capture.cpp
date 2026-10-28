@@ -8,6 +8,7 @@
 #include "gpu/vulkan/renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "render/scene/render_scene.hpp"
 #include "runtime/image.hpp"
 #include "runtime/scene_view_apply.hpp"
 
@@ -360,6 +361,8 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
             overflow->frame <= frames.back().frame)
             st->lightsOverflow = overflow->lights;
     }
+    if (const auto& k = renderer.renderScene().stats().skinning; k.instances > 0)
+        st->skinning = api::RenderStats::Skinning{k.instances, k.skinned, k.vertices, k.blasRefits, k.blasRebuilds};
     return st;
 }
 

@@ -97,7 +97,7 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "geometry path, occlusion culling, the CSM fallback, exposure. Members of set left out keep their value. "
          "Host state, never saved in scene files; captures take them as defaults. The defaults are the budgeted "
          "frame. E_STATE on a host that renders nothing (the CLI)."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, latency?, pacing?}",
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, skinning?, latency?, pacing?}",
          "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
          "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). A "
          "realtime window adds latency (look input to present) and pacing (frame time, steps). E_STATE "
@@ -142,6 +142,11 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"combat.damage", p.find<CombatDamageParams>(), "{entity, name, health, max, dead, taken}",
          "Takes amount from the entity's Health (or its nearest ancestor's), as a hit would: damage and death "
          "events; a dead enemy lies down at the next step."},
+        {"animation.info", p.find<AnimationInfoParams>(),
+         "{steps, animators: [{entity, name, graph, layers: [{state, clip?, t?, from?, blend?}]}], more?, events: "
+         "[{seq, step, entity, layer, clip, name}], next, dropped?}",
+         "Each Animator's layers (state, clip time in s, the fade) and the clip events after since. Force a state "
+         "with component.set on Animator."},
     };
 }
 
@@ -836,6 +841,16 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
     }
     if (st->shadowLightsDropped) { out.key("shadowLightsDropped"); out.uint64(*st->shadowLightsDropped); }
     if (st->lightsOverflow) { out.key("lightsOverflow"); out.uint64(*st->lightsOverflow); }
+    if (const auto& k = st->skinning) {
+        out.key("skinning");
+        out.beginObject();
+        out.key("instances"); out.uint64(k->instances);
+        out.key("skinned"); out.uint64(k->skinned);
+        out.key("vertices"); out.uint64(k->vertices);
+        out.key("blasRefits"); out.uint64(k->blasRefits);
+        out.key("blasRebuilds"); out.uint64(k->blasRebuilds);
+        out.endObject();
+    }
     if (const auto& l = st->latency) {
         out.key("latency");
         out.beginObject();
@@ -925,6 +940,7 @@ constexpr MethodEntry kDispatch[] = {
     {"player.teleport", methodPlayerTeleport, true},
     {"combat.info", methodCombatInfo}, {"combat.events", methodCombatEvents},
     {"combat.damage", methodCombatDamage, true},
+    {"animation.info", methodAnimationInfo},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

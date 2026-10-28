@@ -258,6 +258,11 @@ struct CombatEventsParams {
     int64_t since{0};   // the seq of the last event already read (the previous reply's next)
     int32_t max{32};    // 1..64
 };
+struct AnimationInfoParams {
+    std::optional<uint64_t> entity;   // one animator; absent: every animator (the first 16)
+    int64_t since{0};                 // events after this seq (the previous reply's next)
+    int32_t max{16};                  // events in one reply, 0..64
+};
 struct CombatDamageParams {
     std::optional<uint64_t> entity;   // required: the entity hit (its Health, or its nearest ancestor's)
     float amount{0.0f};               // required

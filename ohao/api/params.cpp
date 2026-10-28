@@ -252,6 +252,11 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("since", &CombatEventsParams::since)
             .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
         .field("max", &CombatEventsParams::max).doc("Events in one reply").unitless().min(1).max(64);
+    r.type<AnimationInfoParams>("AnimationInfoParams").doc("animation.info params")
+        .field("entity", &AnimationInfoParams::entity).doc("One animator, 16 hex digits; absent: every animator")
+        .field("since", &AnimationInfoParams::since)
+            .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
+        .field("max", &AnimationInfoParams::max).doc("Events in one reply (0: none)").unitless().min(0).max(64);
     r.type<CombatDamageParams>("CombatDamageParams").doc("combat.damage params")
         .field("entity", &CombatDamageParams::entity).doc("Who takes it, 16 hex digits (its Health or an ancestor's)")
             .required()

@@ -142,6 +142,13 @@ struct RenderStats {
     // Clustered lighting: lights the newest frame covered left out of full froxels (a froxel
     // keeps its first 256); absent when none was.
     std::optional<uint32_t> lightsOverflow;
+    // Sub-project 10: the skinned instances (absent when there are none): the newest frame's skinned
+    // instances and vertices (those whose pose changed), and the BLAS refits and rebuilds so far.
+    struct Skinning {
+        uint32_t instances{0}, skinned{0};
+        uint64_t vertices{0}, blasRefits{0}, blasRebuilds{0};
+    };
+    std::optional<Skinning> skinning;
     // Sub-project 9, a window host in realtime only (absent headless and in lockstep): a look
     // movement's latency, poll to the present of the first frame showing it in full, over the
     // newest `frames` frames that carried look; and the frames' pacing.

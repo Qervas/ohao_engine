@@ -8,6 +8,7 @@
 #include "api/session.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
@@ -177,7 +178,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 35, "thirty-five methods");
+    CHECK(api::methods().size() == 36, "thirty-six methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -2433,6 +2434,59 @@ static void sp7_t18_combat_info() {
     CHECK(Reply(cw.s.call("combat.info", R"({"all":true})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
 }
 
+// ---- animation.info (sub-project 10, test 23) ---------------------------------------------------
+
+struct AnimWorld {
+    FileAssetResolver files{OHAO_SOURCE_DIR};
+    World w;
+    api::Session s{w, engineTypes()};
+    explicit AnimWorld(bool animation = true) {
+        if (animation) ecs::installAnimation(w, files);
+        s.setAssetResolver(&files);
+    }
+    Reply load(const char* scene) {
+        const std::string path = (fs::path(OHAO_SOURCE_DIR) / scene).generic_string();
+        return Reply(s.call("scene.load", "{\"path\":\"" + path + "\"}"));
+    }
+};
+
+static void t23_animation_info() {
+    AnimWorld none(false);
+    CHECK(Reply(none.s.call("animation.info")).code() == "E_STATE", "a world without animation: E_STATE");
+    AnimWorld aw;
+    CHECK(aw.load("assets/scenes/anim_rig.scene.json").ok(), "the rig scene loads");
+    const Reply r(aw.s.call("animation.info"));
+    std::printf("\n      %s (%zu bytes)", r.json("/result").c_str(), r.json("/result").size());
+    CHECK(r.ok() && r.str("/result/animators/0/entity") == "a17a000000000004" && r.str("/result/animators/0/name") == "Rig" &&
+              r.str("/result/animators/0/graph") == "tests/anim/fixtures/rig.animgraph.json",
+          "the rig's animator: entity, name, graph");
+    CHECK(r.json("/result/animators/0/layers/0") == R"({"state":"wave","clip":"wave","t":0.5})",
+          "layer 0: wave at 30 steps, 0.5 s into the clip");
+    CHECK(r.json("/result/animators/0/layers/1") == R"({"state":"still","clip":"step","t":0})", "layer 1: still");
+    CHECK(r.json("/result/events") == "[]" && r.str("/result/next") == "0", "no step yet: no events");
+    CHECK(r.json("/result").size() < 1024, "under 1 KB");
+    // Steps: wave's tick at 0.25 s of each 2 s loop; the rig starts at 30 steps (0.5 s), so the next
+    // is at 2.25 s, 135 steps: the animation system's step 105, its log seq 0.
+    CHECK(Reply(aw.s.call("world.step", R"({"frames":106})")).ok(), "106 steps");
+    const Reply e(aw.s.call("animation.info", R"({"since":0})"));
+    std::printf("\n      %s", e.json("/result/events").c_str());
+    CHECK(e.json("/result/events/0") == R"({"seq":1,"step":105,"entity":"a17a000000000004","layer":0,"clip":"wave","name":"tick"})" &&
+              e.str("/result/next") == "1",
+          "the tick at step 105, numbered from 1; next 1");
+    CHECK(Reply(aw.s.call("animation.info", R"({"since":1})")).json("/result/events") == "[]", "read on from next: nothing new");
+    // A forced state: component.set on Animator, as any edit.
+    CHECK(Reply(aw.s.call("world.apply",
+                          R"({"commands":[{"op":"component.set","id":"a17a000000000004","type":"Animator","value":)"
+                          R"({"graph":{"path":"tests/anim/fixtures/rig.animgraph.json"},"layers":[{"state":"held","steps":4},)"
+                          R"({"state":"still","steps":0}]}}]})"))
+              .ok(),
+          "component.set forces a state");
+    const Reply f(aw.s.call("animation.info", R"({"entity":"a17a000000000004","max":0})"));
+    CHECK(f.json("/result/animators/0/layers/0") == R"({"state":"held","clip":"raise","t":1})", "held: raise at 1 s");
+    CHECK(Reply(aw.s.call("animation.info", R"({"entity":"a17a000000000001"})")).code() == "E_NOT_FOUND",
+          "an entity without an Animator: E_NOT_FOUND");
+}
+
 static void sp7_t18_combat_events_cursor() {
     CombatWorld cw;
     CHECK(cw.load(kPlayScene).ok(), "the play scene loads");
@@ -2668,6 +2722,7 @@ int main() {
     RUN(sp6_t14_restore_mid_fall_replays_to_the_same_hash);
     RUN(sp6_t14_restore_and_replay_a_walk_through_the_api);
     RUN(sp7_t18_combat_info);
+    RUN(t23_animation_info);
     RUN(sp7_t18_combat_events_cursor);
     RUN(sp7_t18_combat_damage_kills);
     RUN(sp7_t18_combat_params_refused);

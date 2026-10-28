@@ -81,6 +81,7 @@ EXAMPLES = {
     "combat_info": {},
     "combat_events": {"since": 0, "max": 8},
     "combat_damage": {"entity": "5c0b1a7e00000010", "amount": 25, "source": "5c0b1a7e00000001"},
+    "animation_info": {"since": 0, "max": 8},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests

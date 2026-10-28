@@ -344,6 +344,12 @@ void t24_refit_and_rebuild() {
     check(refits + rebuilds >= frames, "t24: every frame with a new pose updated the BLAS");
     check(rebuilds >= 1, "t24: a rebuild after kBlasRefitsPerRebuild refits");
     check(refits >= render::kBlasRefitsPerRebuild, "t24: the frames between rebuilds refit");
+    // render.stats reports it: the instance, the newest frame's skinning, the BLAS counts.
+    const auto stats = rig.host.renderStats(1);
+    const bool reported = stats && stats->skinning && stats->skinning->instances == 1 && stats->skinning->skinned == 1 &&
+                          stats->skinning->vertices == 96 && stats->skinning->blasRefits == end.blasRefits &&
+                          stats->skinning->blasRebuilds == end.blasRebuilds;
+    check(reported, "t24: render.stats skinning: 1 instance, 96 vertices skinned, the refits and rebuilds");
 }
 
 void t24_unchanged_pose_skips() {

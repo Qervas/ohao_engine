@@ -132,6 +132,9 @@ bool methodCombatEvents(Session::Impl& s, const JsonDocument& doc, const JsonNod
                         JsonWriter& out);
 bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                         JsonWriter& out);
+// Animation (sub-project 10, step 1; animation.cpp).
+bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                         JsonWriter& out);
 
 // One simulation step (input.cpp): the host's device events, then the events injected for
 // this step, into the world's input map (and the recording); the simulate systems with dt;
