@@ -6,7 +6,7 @@
 {"jsonrpc":"2.0","id":6,"result":{"applied":1,"results":[null],"inverse":[{"op":"component.set","id":"a17a000000000004","type":"Animator","value":{"graph":{"path":"tests/anim/fixtures/rig.animgraph.json"},"layers":[{"state":"wave","steps":136,"from":"","fromSteps":0,"fade":0,"faded":0},{"state":"still","steps":106,"from":"","fromSteps":0,"fade":0,"faded":0}]}}]}}
 {"jsonrpc":"2.0","id":7,"result":{"frame":107}}
 {"jsonrpc":"2.0","id":8,"result":{"steps":107,"animators":[{"entity":"a17a000000000004","name":"Rig","graph":"tests/anim/fixtures/rig.animgraph.json","layers":[{"state":"wave","clip":"wave","t":0},{"state":"still","clip":"step","t":0}]}],"events":[],"next":1}}
-{"jsonrpc":"2.0","id":9,"result":{"hash":"75394abf5e42d980","frame":107}}
+{"jsonrpc":"2.0","id":9,"result":{"hash":"bace3c4a52ee2851","frame":107}}
 {"jsonrpc":"2.0","id":10,"error":{"code":1,"message":"entity a17a000000000001 has no Animator","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity a17a000000000001 has no Animator","expected":"the id of an entity with an Animator","got":"\"a17a000000000001\""}]}}}
 {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"AnimationInfoParams.max is outside its limits","data":[{"code":"E_RANGE","path":"/max","message":"AnimationInfoParams.max is outside its limits","expected":"in [0, 64]","got":"65"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":107,"schemaHash":"613adb2c6a96d4fb","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":107,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":107,"schemaHash":"828291b3fb38a981","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":107,"fixedDt":0.016666668}}}

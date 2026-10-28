@@ -3,6 +3,7 @@
   "version": 1,
   "components": {
     "Animator": 1,
+    "AudioMix": 1,
     "Camera": 1,
     "Enemy": 1,
     "Environment": 1,
@@ -67,6 +68,7 @@
       "id": "5c0b1a7e00000003",
       "Name": { "value": "Controls" },
       "Round": {},
+      "AudioMix": { "asset": { "path": "assets/audio/slice.audio.json" } },
       "InputActions": {
         "actions": [
           { "action": "jump", "key": "Space" },

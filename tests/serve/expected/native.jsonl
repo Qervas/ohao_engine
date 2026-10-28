@@ -1,11 +1,11 @@
 {"jsonrpc":"2.0","id":"p","result":{}}
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"613adb2c6a96d4fb","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"schemaHash":"828291b3fb38a981","version":"0.1.0","host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":2,"result":{"entities":4}}
-{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"613adb2c6a96d4fb","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":3,"result":{"entities":4,"frame":0,"schemaHash":"828291b3fb38a981","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":0,"fixedDt":0.016666668}}}
 {"jsonrpc":"2.0","id":4,"result":{"entities":4,"roots":2,"components":{"Name":4,"Transform":4,"Parent":2,"Light":2,"Children":4,"WorldTransform":4,"CreationOrder":4},"bounds":{"min":[0,0,-4],"max":[15,50,0]},"outline":[{"id":"1000000000000001","name":"Room","children":[{"id":"1000000000000002","name":"Lamp","more":1}]},{"id":"1000000000000003","name":"Sun"}]}}
 {"jsonrpc":"2.0","id":5,"result":{"entities":[{"id":"1000000000000002","Light":{"type":"Spot","color":[1,0.85,0.6],"intensity":12.5,"range":15,"radius":0.05,"innerConeDeg":20,"outerConeDeg":35}}],"count":1}}
 {"jsonrpc":"2.0","id":6,"result":{"name":"base","entities":4,"bytes":564}}
-{"jsonrpc":"2.0","id":20,"result":{"hash":"41584d4a97d34c09","frame":0}}
+{"jsonrpc":"2.0","id":20,"result":{"hash":"ef1d8a0bd6581fa5","frame":0}}
 {"jsonrpc":"2.0","id":7,"result":{"applied":2,"results":[null,"4f3c532b3a1decba"],"inverse":[{"op":"entity.destroy","id":"4f3c532b3a1decba"},{"op":"field.set","id":"1000000000000002","path":"/Light/intensity","value":12.5}]}}
 {"jsonrpc":"2.0","id":8,"result":{"frame":3}}
 {"jsonrpc":"2.0","id":21,"result":{"changed":[{"id":"1000000000000002","name":"Lamp","fields":{"/Light/intensity":[12.5,3.5]}}],"created":["4f3c532b3a1decba"],"destroyed":[],"count":1}}
@@ -18,10 +18,10 @@
 {"jsonrpc":"2.0","id":29,"result":{"actions":{"fire":{"held":true,"pressed":false,"released":false}},"axes":{"move_forward":0.5}}}
 {"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"'Spcae' is not a Key","data":[{"code":"E_ENUM","path":"/events/0/key","message":"'Spcae' is not a Key","expected":"one of: None, Space, Apostrophe, Comma, Minus, Period, Slash, Digit0, Digit1, Digit2, Digit3, Digit4, +72 more","got":"\"Spcae\"","suggestion":"Space"}]}}
 {"jsonrpc":"2.0","id":9,"result":{"created":0,"destroyed":1,"changed":1,"frame":0}}
-{"jsonrpc":"2.0","id":26,"result":{"hash":"41584d4a97d34c09","frame":0}}
+{"jsonrpc":"2.0","id":26,"result":{"hash":"ef1d8a0bd6581fa5","frame":0}}
 {"jsonrpc":"2.0","id":10,"result":{"entities":4}}
 {"jsonrpc":"2.0","id":11,"result":{"path":"build/serve_tmp/native/rooms.scene.json","bytes":1056}}
 {"jsonrpc":"2.0","id":30,"result":{"quality":"realtime","rtShadows":{"enabled":true,"maxLights":4},"rtGI":{"enabled":true,"resolution":"half","rays":2},"ssao":false,"ssr":true,"sss":true,"geometry":"auto","occlusionCulling":true,"csm":{"cascades":4,"size":2048},"exposure":0.6}}
 {"jsonrpc":"2.0","id":31,"result":{"quality":"realtime","rtShadows":{"enabled":true,"maxLights":4},"rtGI":{"enabled":true,"resolution":"half","rays":4},"ssao":false,"ssr":false,"sss":true,"geometry":"auto","occlusionCulling":true,"csm":{"cascades":4,"size":2048},"exposure":0.6}}
 {"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"CsmSettings.size is outside its limits","data":[{"code":"E_RANGE","path":"/set/csm/size","message":"CsmSettings.size is outside its limits","expected":"in [512, 4096]","got":"100"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"613adb2c6a96d4fb","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":2,"fixedDt":0.05}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":4,"frame":2,"schemaHash":"828291b3fb38a981","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":2,"fixedDt":0.05}}}
