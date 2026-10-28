@@ -176,15 +176,15 @@ restore, walk again, then teleport onto the Step and list what touches:
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 0000000000000001 --script docs/agents/examples/player.jsonl
 {"method":"scene.load","result":{"entities":19}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,2.2],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Floor","surface":"concrete","footsteps":0}}
-{"method":"world.snapshot","result":{"name":"spawn","entities":36,"bytes":9452}}
+{"method":"world.snapshot","result":{"name":"spawn","entities":36,"bytes":9500}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"aa3bd1dbcb114470","frame":30}}
-{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":19,"frame":0}}
+{"method":"world.hash","result":{"hash":"d97acccd7f194248","frame":30}}
+{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":21,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"aa3bd1dbcb114470","frame":30}}
+{"method":"world.hash","result":{"hash":"d97acccd7f194248","frame":30}}
 {"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
@@ -226,8 +226,12 @@ drive it, beside `input.inject` (fire with `fire` down and up, `reload`, `restar
   damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`;
   read on with the reply's `next`, as `physics_events`.
 - `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
-  entity's `Health` or its nearest ancestor's (an enemy's body box is fine); a dead enemy lies
-  down at the next step. 0 to 10,000; `E_NOT_FOUND` for what has no `Health`.
+  entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead
+  enemy plays its death clip from the next step, its `Transform` upright where it stood. 0 to
+  10,000; `E_NOT_FOUND` for what has no `Health`.
+- `animation_info {entity?, since?, max?}`: each enemy's animation layers (body: `move`,
+  `combat`, `death`, `dead`; additive `aim`, `fire`, `reload`, `hit`) and the animation events
+  (`mag_out`, `mag_in`, `bolt`, `body_fall`) after a cursor.
 
 Kill both enemies by hand and read what the round says:
 
@@ -239,7 +243,7 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"taken":40}}
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"taken":100}}
 {"method":"world.step","result":{"frame":2}}
-{"method":"combat.info","result":{"steps":2,"round":{"started":true,"phase":"won","restarts":0},"combatants":[{"entity":"5c0b1a7e00000001","name":"Player","player":true,"health":100,"max":100,"dead":false,"pos":[1.5,0,2.2],"weapon":{"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0}},{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"pos":[-2.5,0.6,-2],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}},{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"pos":[3,0.806,-1.999],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}}]}}
+{"method":"combat.info","result":{"steps":2,"round":{"started":true,"phase":"won","restarts":0},"combatants":[{"entity":"5c0b1a7e00000001","name":"Player","player":true,"health":100,"max":100,"dead":false,"pos":[1.5,0,2.2],"weapon":{"ammo":30,"magazine":30,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0}},{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"pos":[-2.5,0.3,-2],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}},{"entity":"5c0b1a7e00000020","name":"EnemyB","health":0,"max":100,"dead":true,"pos":[3,0.506,-1.999],"weapon":{"ammo":12,"magazine":12,"reloading":0,"bloomDeg":0,"kickDeg":0,"shots":0},"enemy":{"state":"dead"}}]}}
 {"method":"combat.events","result":{"events":[{"seq":1,"step":1,"kind":"round_start"},{"seq":2,"step":1,"kind":"damage","source":"5c0b1a7e00000001","sn":"Player","target":"5c0b1a7e00000010","tn":"EnemyA","amount":60,"health":40},{"seq":3,"step":1,"kind":"damage","target":"5c0b1a7e00000010","tn":"EnemyA","amount":40,"health":0},{"seq":4,"step":1,"kind":"death","target":"5c0b1a7e00000010","tn":"EnemyA"},{"seq":5,"step":1,"kind":"damage","target":"5c0b1a7e00000020","tn":"EnemyB","amount":100,"health":0},{"seq":6,"step":1,"kind":"death","target":"5c0b1a7e00000020","tn":"EnemyB"},{"seq":7,"step":2,"kind":"win"}],"next":7}}
 ```
 

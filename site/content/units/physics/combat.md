@@ -45,7 +45,8 @@ cone (`t15_spread_cone_distribution` draws 10,000 rounds and checks it within 3 
 An enemy is a character on the player's code: a `PlayerController` with `input: false`, moved
 by a saved `MoveIntent` the enemy AI writes at the start of the combat step, and firing through
 a saved `WeaponTrigger`. Everything the AI decides is in components, so files, `world.hash` and
-snapshots hold a fight exactly. A dead enemy lies down and loses its controller:
+snapshots hold a fight exactly. A dead enemy loses its controller; its `Transform` stays upright
+and its animation's death clip is the fall (sub-project 10):
 
 {{cite ohao/ecs/enemy_ai.cpp "reg.remove<PlayerController>(e);"}}
 
@@ -90,7 +91,7 @@ step's poses:
 
 A headless host makes its renderer at its first capture. When marks were taken by the renderer,
 it read the whole log then and attached each mark by its target's pose *then*: an enemy that had
-died and tipped over carried its marks elsewhere, and a window and a headless capture of the same
+moved since carried its marks elsewhere, and a window and a headless capture of the same
 fight differed. Taken at the step, they are the same picture.
 
 ## An agent's fight
@@ -119,8 +120,8 @@ fight, and an agent plays it through three tools and input.
 
 - Combat events go to a log of 1,024 that survives restarts; `combat.events` numbers them from 1
   and reads after `since`, as `physics.events`.
-- Damage outside a step (`combat.damage`) takes effect at once; a dead enemy lies down at the next
-  step.
+- Damage outside a step (`combat.damage`) takes effect at once; a dead enemy plays its death clip
+  from the next step.
 - The round's start is the world at the end of its first step: damage dealt before that step is
   in the start, and a player dead there stays dead after each restart.
 - Impact marks, the HUD and sounds are never saved or hashed.
