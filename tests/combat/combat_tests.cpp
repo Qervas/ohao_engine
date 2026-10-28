@@ -10,6 +10,7 @@
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/scene_view.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/view_model.hpp"
 #include "ecs/world.hpp"
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -1654,6 +1656,150 @@ static void t23_enemy_reload_events() {
     CHECK(at(out) == 36 && at(in) == 78 && at(bolt) == 105, "mag_out 0.6 s, mag_in 1.3 s, bolt 1.75 s into it");
 }
 
+// ---- sub-project 10, step 3: the player's arms and ADS (tests 23 and 25) -------------------------
+// docs/specs/2026-10-28-animation-design.md, "The frame": the arms are the ViewModel's skinned child,
+// driven by `arms` (ecs/arms_anim.cpp) through assets/anim/arms.animgraph.json; ADS (OPEN ruling 11,
+// provisional) steps WeaponState.aim over Weapon.adsTime, tightens the cone and narrows the drawn view.
+
+namespace {
+
+constexpr const char* kArmsGlb = "assets/characters/fps_arms/fps_arms.glb";
+constexpr const char* kArmsGraph = "assets/anim/arms.animgraph.json";
+constexpr uint64_t kArmsId = 0xb1a7e6;
+
+// The arena's player with the play scene's view model: a ViewModel root at the eye, the skinned arms
+// below it (their root is the eye), the muzzle light on the gun joint.
+struct ArmsArena : Arena {
+    entt::entity root{entt::null};
+    entt::entity arms{entt::null};
+    explicit ArmsArena(Weapon weapon = {}) : Arena({-2.0f, 0.0f, 2.0f}, 0.0f, weapon) {
+        auto& reg = world.registry();
+        root = world.createWithId(0xb1a7e4, "ViewModel");
+        world.setTransform(root, Transform{});
+        world.setParent(root, head);
+        reg.emplace<ViewModel>(root);
+        arms = world.createWithId(kArmsId, "Arms");
+        world.setTransform(arms, Transform{});
+        world.setParent(arms, root);
+        reg.emplace<MeshSource>(arms, MeshSource{ModelAsset{AssetRef{kArmsGlb, {}}, "Arms"}});
+        reg.emplace<SkinnedMesh>(arms, SkinnedMesh{AssetRef{kArmsGlb, {}}, "ArmsRig"});
+        reg.emplace<Animator>(arms, Animator{AssetRef{kArmsGraph, {}}, {}});
+        frame(0.0f);
+    }
+    void frame(float dt) {
+        world.setPresentationDt(dt);
+        world.sync();
+    }
+    std::vector<CombatEvent> stepOnly(std::vector<InputEvent> events = {}) {
+        world.stepInput(events);
+        world.simulate(kDt);
+        const auto ev = combatEvents(world);
+        return {ev.begin(), ev.end()};
+    }
+};
+
+// The steps from a reload's start to the weapon's `reloaded` and to the arms' `mag_in`, at `reloadTime`.
+void reloadTiming(float reloadTime, int& reloadedAt, int& magInAt, int& magOutAt) {
+    Weapon w;
+    w.reloadTime = reloadTime;
+    ArmsArena a(w);
+    (void)a.oneRound();   // a part-empty magazine
+    reloadedAt = magInAt = magOutAt = -1;
+    int start = -1;
+    std::size_t ins = animEventsOf(a.world, kArmsId, "mag_in").size(), outs = animEventsOf(a.world, kArmsId, "mag_out").size();
+    for (int i = 0; i < 400 && (reloadedAt < 0 || magInAt < 0); ++i) {
+        const auto ev = a.run(1, i == 0 ? std::vector{actionEvent("reload", true)}
+                                        : i == 1 ? std::vector{actionEvent("reload", false)} : std::vector<InputEvent>{});
+        if (start < 0 && !only(ev, Kind::Reload).empty()) start = i;
+        if (start >= 0 && reloadedAt < 0 && !only(ev, Kind::Reloaded).empty()) reloadedAt = i - start;
+        if (const auto n = animEventsOf(a.world, kArmsId, "mag_in").size(); n > ins && magInAt < 0) magInAt = i - start;
+        if (const auto n = animEventsOf(a.world, kArmsId, "mag_out").size(); n > outs && magOutAt < 0) magOutAt = i - start;
+    }
+}
+
+} // namespace
+
+static void t23_reload_mag_in_on_reloaded() {
+    for (const float rt : {1.5f, 2.0f}) {
+        int reloaded = -1, magIn = -1, magOut = -1;
+        reloadTiming(rt, reloaded, magIn, magOut);
+        std::printf("\n      reloadTime %.1f s: mag_out %d steps after the reload, mag_in %d, reloaded %d", rt, magOut, magIn,
+                    reloaded);
+        CHECK(reloaded > 0 && magIn > 0 && std::abs(reloaded - magIn) <= 1,
+              "the arms' mag_in within one step of the weapon's reloaded");
+        CHECK(magOut > 0 && magOut < magIn, "mag_out before it");
+    }
+}
+
+static void t23_ads_aim_steps_over_ads_time() {
+    Arena a;
+    const Weapon w;
+    CHECK(w.adsTime == 0.2f && w.aim == "aim", "Weapon.adsTime 0.2 s, the `aim` action");
+    (void)a.run(1, {actionEvent("aim", true)});
+    std::printf("\n      after one step held: aim %.6f", a.state().aim);
+    CHECK(near(a.state().aim, kDt / 0.2f, 1e-6f), "one step held: dt / adsTime");
+    (void)a.run(10);
+    CHECK(a.state().aim < 1.0f, "11 steps: not there yet");
+    (void)a.run(1);
+    CHECK(a.state().aim == 1.0f, "12 steps (0.2 s): exactly 1");
+    (void)a.run(5);
+    CHECK(a.state().aim == 1.0f, "held: stays at 1");
+    const auto saved = saveScene(a.world, engineTypes());
+    CHECK(saved && saved.value().find("\"aim\"") != std::string::npos, "saved (WeaponState.aim)");
+    (void)a.run(12, {actionEvent("aim", false)});
+    CHECK(a.state().aim == 0.0f, "released: back to 0 over the same 0.2 s");
+    a.combat->damage(a.player, 1000.0f, entt::null, {});
+    (void)a.run(12, {actionEvent("aim", true)});
+    CHECK(a.state().aim == 0.0f, "the dead do not aim");
+}
+
+static void t23_ads_halves_spread() {
+    Weapon w = steadyRifle();
+    w.spreadDeg = 2.0f;
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, w);
+    auto cone = [&](std::vector<InputEvent> with) {
+        with.push_back(actionEvent("fire", true));
+        const auto ev = a.run(1, with);
+        const float aim = a.state().aim;
+        (void)a.run(1, {actionEvent("fire", false)});
+        const auto shots = only(ev, Kind::Shot);
+        return std::pair{shots.empty() ? -1.0f : shots[0].amount, aim};
+    };
+    const auto [hip, hipAim] = cone({});
+    (void)a.run(5, {actionEvent("aim", true)});
+    const auto [mid, midAim] = cone({});
+    (void)a.run(12);
+    const auto [ads, adsAim] = cone({});
+    std::printf("\n      cone %.4f at aim %.3f, %.4f at %.3f, %.4f at %.3f", hip, hipAim, mid, midAim, ads, adsAim);
+    CHECK(hipAim == 0.0f && hip == 2.0f, "from the hip: the whole cone");
+    CHECK(adsAim == 1.0f && ads == 1.0f, "aimed (aim 1): half the cone");
+    CHECK(midAim > 0.0f && midAim < 1.0f && near(mid, 2.0f * (1.0f - 0.5f * midAim), 1e-5f),
+          "between: linear in aim, the step's aim before its round");
+}
+
+static void t23_ads_fov_live_only() {
+    ArmsArena a;
+    for (int i = 0; i < 13; ++i) (void)a.stepOnly(i == 0 ? std::vector{actionEvent("aim", true)} : std::vector<InputEvent>{});
+    CHECK(a.state().aim == 1.0f, "aimed");
+    a.frame(0.0f);
+    const auto lockstep = resolveSceneView(a.world).camera;
+    CHECK(lockstep && lockstep->fovDeg == 75.0f, "a lockstep frame (every capture): the scene's 75 degrees");
+    for (int i = 0; i < 30; ++i) a.frame(kDt);
+    const auto live = resolveSceneView(a.world).camera;
+    std::printf("\n      live after 0.5 s aimed: %.3f degrees", live ? live->fovDeg : 0.0f);
+    CHECK(live && near(live->fovDeg, 55.0f, 0.05f), "a live frame aimed: narrowed to 55 degrees at render rate");
+    const glm::mat4 head = a.world.registry().get<WorldTransform>(a.head).world;
+    const ViewModel vm;
+    const auto* rp = a.world.registry().try_get<RenderPose>(a.root);
+    CHECK(rp && live && nearMat(rp->world, head * viewModelRemap(glm::mat4(1.0f), live->fovDeg, vm.fovDeg, vm.depthScale), 1e-5f),
+          "the arms remapped through the drawn field of view");
+    a.frame(0.0f);
+    CHECK(resolveSceneView(a.world).camera->fovDeg == 75.0f, "and a lockstep frame after it: 75 again");
+    for (int i = 0; i < 13; ++i) (void)a.stepOnly(i == 0 ? std::vector{actionEvent("aim", false)} : std::vector<InputEvent>{});
+    for (int i = 0; i < 30; ++i) a.frame(kDt);
+    CHECK(near(resolveSceneView(a.world).camera->fovDeg, 75.0f, 0.05f), "released: back to 75 live");
+}
+
 namespace {
 
 // The play scene as hosts load it (levels, physics, combat, the round hook, animation).
@@ -1720,6 +1866,29 @@ static void t25_play_scene_skinned() {
         CHECK(rifles == 1 && muzzles == 1, "its rifle in its right hand (JointAttach), the muzzle light on it, drawn there");
         CHECK(boxes == 0, "its body and head boxes draw nothing (hit volumes: the capsule, ruling 18)");
     }
+    // Step 3: the player's arms and rifle, skinned below the view model's root, the muzzle on the gun joint.
+    entt::entity root = entt::null, arms = entt::null, muzzle = entt::null;
+    for (auto [e, vm] : reg.view<const ViewModel>().each()) root = e;
+    for (auto [c, p] : reg.view<const Parent>().each())
+        if (root != entt::null && p.entity == root && reg.all_of<SkinnedMesh, Animator>(c)) arms = c;
+    for (auto [c, p] : reg.view<const Parent>().each())
+        if (arms != entt::null && p.entity == arms && reg.all_of<JointAttach, Muzzle>(c)) muzzle = c;
+    const auto* armsPose = arms != entt::null ? reg.try_get<AnimPose>(arms) : nullptr;
+    std::printf("\n      arms: %zu joints, %zu bones in the palette", armsPose ? armsPose->model.size() : 0u,
+                armsPose ? armsPose->palette.size() : 0u);
+    CHECK(root != entt::null && arms != entt::null && armsPose && armsPose->model.size() == 5 && armsPose->palette.size() >= 4 &&
+              reg.all_of<RenderPose>(arms),
+          "the player's arms: skinned below the ViewModel's root, posed and drawn from the first frame");
+    CHECK(muzzle != entt::null && reg.get<JointAttach>(muzzle).joint == "gun" && reg.all_of<RenderPose>(muzzle),
+          "the muzzle light on the rifle's gun joint, drawn there");
+    bool box = false;
+    for (auto [c, p] : reg.view<const Parent>().each())
+        box |= root != entt::null && (c == root || p.entity == root) && reg.all_of<MeshSource>(c) &&
+               std::holds_alternative<BoxPrim>(reg.get<MeshSource>(c).source);
+    CHECK(!box, "the box gun is gone");
+    const ViewModel* vm = root != entt::null ? reg.try_get<ViewModel>(root) : nullptr;
+    CHECK(vm && vm->kickBack == 0.015f && vm->kickPitchDeg == 1.25f,
+          "the procedural kick at half amplitude over the arms' fire clip (provisional ruling 8)");
 }
 
 static void t25_fight_states() {
@@ -1880,6 +2049,10 @@ int main(int argc, char** argv) {
     RUN(t21_view_model_never_in_world);
     RUN(t23_enemy_states_from_ai);
     RUN(t23_enemy_reload_events);
+    RUN(t23_reload_mag_in_on_reloaded);
+    RUN(t23_ads_aim_steps_over_ads_time);
+    RUN(t23_ads_halves_spread);
+    RUN(t23_ads_fov_live_only);
     RUN(t25_play_scene_skinned);
     RUN(t25_fight_states);
     return ohao::test::finish("combat_tests");

@@ -29,15 +29,20 @@ import bmesh
 from mathutils import Matrix, Quaternion, Vector
 
 FPS = 60
-GRIP = Vector((0.15, 0.32, -0.20))          # the right hand's grip on the rifle, at the hip
-MUZZLE = GRIP + Vector((0.0, 0.52, 0.018))  # the barrel's tip
+# The hold is placed for the ViewModel's remap (sub-project 9): the rig is drawn as if through a 60 degree
+# lens and pulled toward the eye to 0.41 of its depth, so the grip sits about 20 degrees below and right
+# of the eye line (lower and it leaves the screen), nothing that shows is nearer than 0.25 m (the remap
+# would put it inside the near plane's clip), and the muzzle stays near 0.3 m once remapped (the capsule's
+# radius: the closest a wall comes to the eye).
+GRIP = Vector((0.13, 0.36, -0.13))          # the right hand's grip on the rifle, at the hip
+MUZZLE = GRIP + Vector((0.0, 0.40, 0.018))  # the barrel's tip
 MAG = GRIP + Vector((0.0, 0.085, -0.03))    # the magazine's pivot (its top, in the receiver)
 SHOULDER_R = Vector((0.30, -0.25, -0.45))
-ELBOW_R = Vector((0.24, -0.02, -0.40))
+ELBOW_R = Vector((0.26, 0.05, -0.36))
 WRIST_R = GRIP + Vector((0.025, -0.07, -0.07))
 SHOULDER_L = Vector((-0.24, -0.20, -0.45))
-ELBOW_L = Vector((-0.12, 0.12, -0.36))
-WRIST_L = GRIP + Vector((-0.035, 0.17, -0.075))
+ELBOW_L = Vector((-0.10, 0.22, -0.30))
+WRIST_L = GRIP + Vector((-0.035, 0.17, -0.06))
 
 
 def reset():
@@ -94,7 +99,7 @@ def part(name, mat_index, bone, build, parts):
 def build_mesh(arm_obj):
     mats = [
         material("Sleeve", (0.13, 0.15, 0.10), 0.9),
-        material("Glove", (0.035, 0.035, 0.035), 0.7),
+        material("Glove", (0.10, 0.085, 0.065), 0.7),
         material("Gunmetal", (0.09, 0.09, 0.10), 0.45, 0.6),
         material("Polymer", (0.11, 0.10, 0.09), 0.6),
     ]
@@ -102,9 +107,9 @@ def build_mesh(arm_obj):
     parts = []
     # The rifle (gun) and its magazine (mag).
     part("receiver", 2, "gun", lambda bm: add_box(bm, g + Vector((-0.022, -0.05, -0.03)), g + Vector((0.022, 0.22, 0.035))), parts)
-    part("handguard", 3, "gun", lambda bm: add_box(bm, g + Vector((-0.026, 0.12, -0.012)), g + Vector((0.026, 0.33, 0.03))), parts)
-    part("barrel", 2, "gun", lambda bm: add_tube(bm, g + Vector((0.0, 0.30, 0.018)), MUZZLE, 0.011, 0.010), parts)
-    part("stock", 3, "gun", lambda bm: add_box(bm, g + Vector((-0.018, -0.24, -0.055)), g + Vector((0.018, -0.05, 0.022))), parts)
+    part("handguard", 3, "gun", lambda bm: add_box(bm, g + Vector((-0.026, 0.12, -0.012)), g + Vector((0.026, 0.30, 0.03))), parts)
+    part("barrel", 2, "gun", lambda bm: add_tube(bm, g + Vector((0.0, 0.28, 0.018)), MUZZLE, 0.011, 0.010), parts)
+    part("stock", 3, "gun", lambda bm: add_box(bm, g + Vector((-0.018, -0.10, -0.055)), g + Vector((0.018, -0.05, 0.022))), parts)
     part("grip", 3, "gun", lambda bm: add_box(bm, g + Vector((-0.014, -0.025, -0.10)), g + Vector((0.014, 0.02, -0.03))), parts)
     part("sight", 2, "gun", lambda bm: add_box(bm, g + Vector((-0.007, 0.0, 0.035)), g + Vector((0.007, 0.05, 0.06))), parts)
     part("magazine", 2, "mag", lambda bm: add_box(bm, MAG + Vector((-0.015, -0.025, -0.11)), MAG + Vector((0.015, 0.025, 0.0))), parts)
@@ -234,7 +239,7 @@ def build_clips(a):
     clip(a, "rest", still((0, 60)))
     clip(a, "idle", {"gun": [(0, O, []), (60, (0, 0, -0.004), [(X, 0.6)]), (120, O, [])]})
     clip(a, "fire", {"gun": [(0, O, []), (2, (0, -0.035, 0.004), [(X, 3.0)]), (9, O, [])]})
-    hip_to_sights = (-0.15, -0.06, 0.145)
+    hip_to_sights = (-GRIP.x, 0.0, -(GRIP.z + 0.065))   # the sight's top 5 mm under the eye line
     clip(a, "ads_in", {"gun": [(0, O, []), (12, hip_to_sights, [])]})
     clip(a, "ads_hold", {"gun": [(0, hip_to_sights, []), (60, hip_to_sights, [])]})
     clip(a, "sprint", {"gun": [(0, (0.02, -0.02, -0.08), [(Z, 35), (Y, 20), (X, -12)]),

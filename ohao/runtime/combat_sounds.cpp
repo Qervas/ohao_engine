@@ -49,6 +49,18 @@ SoundPlan planAnimSound(std::string_view name, const ecs::AnimEvent& e, glm::vec
     return plan;
 }
 
+uint64_t animSoundOwner(const ecs::World& world, uint64_t entityId, uint64_t playerId) {
+    if (playerId == 0) return entityId;
+    const auto& reg = world.registry();
+    entt::entity at = world.findById(entityId);
+    for (int depth = 0; depth < 64 && at != entt::null && reg.valid(at); ++depth) {
+        if (world.idOf(at) == playerId) return playerId;
+        const auto* p = reg.try_get<ecs::Parent>(at);
+        at = p ? p->entity : entt::null;
+    }
+    return entityId;
+}
+
 bool CombatSounds::initialize(const std::filesystem::path& root, AudioSystem& audio) {
     const std::filesystem::path folder = root / "assets" / "audio" / "weapons";
     std::error_code ec;
@@ -108,7 +120,9 @@ void CombatSounds::update(ecs::World& world) {
                 if (const auto* rp = reg.try_get<ecs::RenderPose>(who)) at = glm::vec3(rp->world[3]);
                 else if (const auto* wt = reg.try_get<ecs::WorldTransform>(who)) at = glm::vec3(wt->world[3]);
                 at.y += name == "body_fall" ? 0.2f : 1.1f;   // the floor, or the hands at the chest
-                play(world, it->second, planAnimSound(name, e, at, listener), listener);
+                ecs::AnimEvent heard = e;   // the player's arms' events are the player's own
+                heard.entity = animSoundOwner(world, e.entity, listener.playerId);
+                play(world, it->second, planAnimSound(name, heard, at, listener), listener);
             }
         }
     }

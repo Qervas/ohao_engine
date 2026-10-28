@@ -414,6 +414,8 @@ void writeFields(const Weapon& v, const Weapon* omit, FieldSink& out) {
     if (!omit || v.seed != omit->seed) t.i64("\"seed\"", v.seed);
     if (!omit || v.fire != omit->fire) t.string("\"fire\"", v.fire);
     if (!omit || v.reload != omit->reload) t.string("\"reload\"", v.reload);
+    f("\"adsTime\"", &Weapon::adsTime);
+    if (!omit || v.aim != omit->aim) t.string("\"aim\"", v.aim);
 }
 
 void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out) {
@@ -429,6 +431,7 @@ void writeFields(const WeaponState& v, const WeaponState* omit, FieldSink& out) 
     if (!omit || v.shots != omit->shots) t.i64("\"shots\"", v.shots);
     if (!omit || v.triggerHeld != omit->triggerHeld) t.boolean("\"triggerHeld\"", v.triggerHeld);
     f("\"flash\"", &WeaponState::flash);
+    f("\"aim\"", &WeaponState::aim);
 }
 
 void writeFields(const Muzzle& v, const Muzzle* omit, FieldSink& out) {

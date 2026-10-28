@@ -317,7 +317,10 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .unit("deg/s").min(0.0).max(10000.0)
         .field("seed", &Weapon::seed).doc("Seed of the spread's and recoil's random numbers").unitless()
         .field("fire", &Weapon::fire).doc("Action that fires (a player's)").maxLength(64)
-        .field("reload", &Weapon::reload).doc("Action that reloads (a player's)").maxLength(64);
+        .field("reload", &Weapon::reload).doc("Action that reloads (a player's)").maxLength(64)
+        .field("adsTime", &Weapon::adsTime).doc("Time from the hip to the sights (and back); aimed, the cone halves")
+            .unit("s").min(0.0).max(10.0)
+        .field("aim", &Weapon::aim).doc("Action that aims down the sights while held (a player's)").maxLength(64);
     r.type<WeaponState>("WeaponState").component().host(makeComponentOps<WeaponState>())
         .doc("What a weapon has and is doing. Written by the combat step, which adds it (a full magazine) to a Weapon "
              "without one.")
@@ -330,7 +333,9 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
             .unitless()
         .field("triggerHeld", &WeaponState::triggerHeld).doc("The trigger at the last step (one round a press)")
         .field("flash", &WeaponState::flash).doc("Muzzle flash left (the Muzzle's light is on while above 0)")
-            .unit("s").min(0.0);
+            .unit("s").min(0.0)
+        .field("aim", &WeaponState::aim).doc("0 from the hip, 1 down the sights; the cone narrows linearly to half")
+            .unitless().min(0.0).max(1.0);
     r.type<Muzzle>("Muzzle").component().host(makeComponentOps<Muzzle>())
         .doc("A weapon's muzzle flash, on a Light below the weapon's entity: the combat step turns the light to "
              "`intensity` for `time` after each round and to 0 otherwise (a light at 0 has no emitter mesh, so the flash "

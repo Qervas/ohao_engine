@@ -962,6 +962,26 @@ static void sp10_t23_handling_sounds() {
               "every handling sound is shipped (tools/audio/make_weapons.py)");
 }
 
+// Step 3: the player's arms are below the player (head, view model, arms): their handling sounds are
+// the player's own, at the ear without a ray, not an enemy's.
+static void sp10_t23_arms_sounds_are_the_players() {
+    ecs::World w;
+    const entt::entity player = w.createWithId(0xb1a7e2, "Player");
+    const entt::entity head = w.createWithId(0xb1a7e3, "Head");
+    w.setParent(head, player);
+    const entt::entity root = w.createWithId(0xb1a7e4, "Gun");
+    w.setParent(root, head);
+    const entt::entity arms = w.createWithId(0xb1a7e6, "Arms");
+    w.setParent(arms, root);
+    const entt::entity enemy = w.createWithId(0xe1, "Enemy");
+    (void)arms;
+    (void)enemy;
+    CHECK(animSoundOwner(w, 0xb1a7e6, 0xb1a7e2) == 0xb1a7e2, "the arms' events are the player's");
+    CHECK(animSoundOwner(w, 0xb1a7e2, 0xb1a7e2) == 0xb1a7e2, "the player's own");
+    CHECK(animSoundOwner(w, 0xe1, 0xb1a7e2) == 0xe1, "an enemy's are its own");
+    CHECK(animSoundOwner(w, 0xb1a7e6, 0) == 0xb1a7e6, "no player: everyone's their own");
+}
+
 // ---- sub-project 7, step 4: combat sounds and the capturing click (runtime/combat_sounds.hpp,
 // runtime/click_capture.hpp) -------------------------------------------------------------------
 
@@ -1054,6 +1074,7 @@ int main() {
     RUN(sp9_t21_distance_curves);
     RUN(sp9_t21_occlusion_ray);
     RUN(sp10_t23_handling_sounds);
+    RUN(sp10_t23_arms_sounds_are_the_players);
     std::printf("[render stats]\n");
     RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");

@@ -1,0 +1,43 @@
+{
+  "skeleton": {"file": "assets/characters/fps_arms/fps_arms.glb", "skin": "ArmsRig"},
+  "driver": "arms",
+  "clips": {
+    "rest": {"file": "assets/characters/fps_arms/fps_arms.glb", "animation": "rest", "loop": true},
+    "idle": {"file": "assets/characters/fps_arms/fps_arms.glb", "animation": "idle", "loop": true},
+    "ads": {"file": "assets/characters/fps_arms/fps_arms.glb", "animation": "ads_hold", "loop": true},
+    "sprint": {"file": "assets/characters/fps_arms/fps_arms.glb", "animation": "sprint", "loop": true},
+    "fire": {"file": "assets/characters/fps_arms/fps_arms.glb", "animation": "fire", "loop": false},
+    "reload": {
+      "file": "assets/characters/fps_arms/fps_arms.glb", "animation": "reload", "loop": false,
+      "rateFrom": {"param": "reloadTime", "at": "mag_in"},
+      "events": [{"t": 0.6, "name": "mag_out"}, {"t": 1.5, "name": "mag_in"}]
+    }
+  },
+  "params": {"moving": "bool", "sprinting": "bool", "aim": "float", "alive": "bool", "reloadTime": "float"},
+  "layers": [
+    {
+      "name": "body", "blend": "replace", "initial": "ready",
+      "states": {
+        "ready": {"blend1d": {"param": "aim", "points": [{"clip": "idle", "at": 0}, {"clip": "ads", "at": 1}]}},
+        "sprint": {"clip": "sprint"},
+        "reload": {"clip": "reload"}
+      },
+      "transitions": [
+        {"from": "ready", "to": "reload", "when": {"event": "reload"}, "fade": 4},
+        {"from": "sprint", "to": "reload", "when": {"event": "reload"}, "fade": 4},
+        {"from": "ready", "to": "sprint", "when": {"param": "sprinting", "op": "==", "value": 1}, "fade": 10},
+        {"from": "sprint", "to": "ready", "when": {"param": "sprinting", "op": "==", "value": 0}, "fade": 8},
+        {"from": "reload", "to": "ready", "when": {"clipEnd": true}, "fade": 8}
+      ]
+    },
+    {
+      "name": "fire", "blend": "additive", "initial": "still",
+      "states": {"still": {"clip": "rest"}, "kick": {"clip": "fire"}},
+      "transitions": [
+        {"from": "still", "to": "kick", "when": {"event": "shot"}},
+        {"from": "kick", "to": "kick", "when": {"event": "shot"}},
+        {"from": "kick", "to": "still", "when": {"clipEnd": true}}
+      ]
+    }
+  ]
+}

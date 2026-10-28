@@ -290,6 +290,14 @@ struct RenderPose {
     glm::mat4 prevWorld{1.0f};   // what the last frame drew (motion vectors)
 };
 
+// Runtime, render only (sub-project 10 step 3): the field of view a live frame draws a Camera with,
+// in place of Camera.fovDeg: aiming down the sights narrows it (the `view_model` sync system writes it
+// on the view's camera in realtime frames only, and removes it otherwise, so lockstep frames and every
+// capture keep Camera.fovDeg). Never saved or hashed.
+struct DrawnFov {
+    float deg{45.0f};
+};
+
 // Runtime: the player as the physics system left it after the last step.
 struct PlayerState {
     glm::vec3 velocity{0.0f};     // m/s, world
@@ -343,6 +351,10 @@ struct Weapon {
     uint32_t seed{1};                      // the spread's and recoil's random numbers
     std::string fire{"fire"};
     std::string reload{"reload"};
+    // Aiming down the sights (sub-project 10, provisional ruling 11): a player holding `aim` steps
+    // WeaponState.aim to 1 over adsTime (and back); the cone narrows linearly with it, to half at 1.
+    float adsTime{0.2f};                   // s from the hip to the sights
+    std::string aim{"aim"};
 };
 
 // What the weapon has and is doing. The combat step writes it (and emplaces it, a full magazine,
@@ -356,6 +368,7 @@ struct WeaponState {
     uint32_t shots{0};          // rounds fired: the index of the next round's random numbers
     bool triggerHeld{false};    // the trigger at the last step (one round a press)
     float flash{0.0f};          // s of muzzle flash left (the Muzzle's light is on while > 0)
+    float aim{0.0f};            // 0 from the hip .. 1 down the sights (Weapon.adsTime from one to the other)
 };
 
 // A weapon's muzzle flash: on a Light below the weapon's entity (its child, or deeper). The combat

@@ -42,6 +42,9 @@ struct SoundPlan {
 // curve; the player's own at the ear; an enemy's (anyone else's) gets an occlusion ray.
 [[nodiscard]] SoundPlan planAnimSound(std::string_view name, const ecs::AnimEvent& event, glm::vec3 at,
                                       const Listener& listener);
+// Whose an animated entity's handling sounds are: the player's (playerId) when it is the player or below
+// it (the player's arms, sub-project 10 step 3), else its own id.
+[[nodiscard]] uint64_t animSoundOwner(const ecs::World& world, uint64_t entityId, uint64_t playerId);
 
 class CombatSounds {
 public:

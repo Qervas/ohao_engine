@@ -67,7 +67,8 @@ SceneView resolveSceneView(const World& world) {
             const auto* drawn = reg.try_get<RenderPose>(e);
             const glm::mat4 w = drawn ? drawn->world : worldMatrix(reg, e);
             const glm::vec2 py = pitchYawDegrees(-glm::vec3(w[2]));
-            view.camera = CameraView{glm::vec3(w[3]), py.x, py.y, cam.fovDeg, cam.nearPlane, cam.farPlane};
+            const auto* fov = reg.try_get<DrawnFov>(e);   // a live frame's (aiming), else the camera's own
+            view.camera = CameraView{glm::vec3(w[3]), py.x, py.y, fov ? fov->deg : cam.fovDeg, cam.nearPlane, cam.farPlane};
         }
     }
     if (const entt::entity e = firstWith<Environment>(reg); e != entt::null) {

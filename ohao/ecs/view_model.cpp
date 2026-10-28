@@ -28,10 +28,14 @@ glm::mat4 viewModelRemap(const glm::mat4& view, float sceneFovDeg, float fovDeg,
 
 namespace {
 
+// Aimed down the sights, a live frame draws the view through this (provisional ruling 11).
+constexpr float kAdsFovDeg = 55.0f;
+
 struct Gun {
     ViewModelMotion motion;
     bool hasView{false};
     float lastYawDeg{0.0f}, lastPitchDeg{0.0f};
+    float drawnAim{0.0f};   // WeaponState.aim followed at render rate
 };
 
 // The holder in the registry's context: each gun's motion, the combat log's cursor, and what this
@@ -108,6 +112,7 @@ public:
         }
 
         m_seen.clear();
+        m_narrowed.clear();
         for (auto [e, vm, t] : reg.view<const ViewModel, const Transform>().each()) {
             entt::entity owner = entt::null;
             const entt::entity camera = cameraAbove(reg, e, owner);
@@ -156,6 +161,26 @@ public:
             gun.lastYawDeg = yaw;
             gun.lastPitchDeg = pitch;
 
+            // ADS: the drawn aim follows the step's WeaponState.aim at the weapon's own rate (1 / adsTime a
+            // second), so a frame between steps is never ahead of the simulation and never overshoots; the
+            // view narrows from the camera's field of view toward kAdsFovDeg with it, in live frames only.
+            const float sceneFov = reg.get<Camera>(camera).fovDeg;
+            const auto* ws = reg.try_get<WeaponState>(owner);
+            const auto* weapon = reg.try_get<Weapon>(owner);
+            const float aim = ws ? ws->aim : 0.0f;
+            if (!live || restarted) {
+                gun.drawnAim = aim;
+            } else {
+                const float by = weapon && weapon->adsTime > 0.0f ? dt / weapon->adsTime : 1.0f;
+                gun.drawnAim = std::clamp(aim, gun.drawnAim - by, gun.drawnAim + by);
+            }
+            float fov = sceneFov;
+            if (live && gun.drawnAim > 0.0f) fov = sceneFov + (std::min(sceneFov, kAdsFovDeg) - sceneFov) * gun.drawnAim;
+            if (fov != sceneFov) {
+                reg.emplace_or_replace<DrawnFov>(camera, DrawnFov{fov});
+                m_narrowed.push_back(camera);
+            }
+
             // The motion in view space, about the gun's own origin; then the remap.
             const glm::mat4 local = t.matrix();   // the gun's pose in its parent's (the view's) space
             const glm::vec3 pivot(local[3]);
@@ -166,10 +191,10 @@ public:
             motion = glm::rotate(motion, glm::radians(m.swayYawDeg), glm::vec3(0, 1, 0));
             motion = glm::rotate(motion, glm::radians(m.swayPitchDeg + m.kickPitchDeg), glm::vec3(1, 0, 0));
             motion = glm::translate(motion, -pivot);
-            const float sceneFov = reg.get<Camera>(camera).fovDeg;
-            const glm::mat4 toDrawn = view * viewModelRemap(motion, sceneFov, vm.fovDeg, vm.depthScale);
+            const glm::mat4 toDrawn = view * viewModelRemap(motion, fov, vm.fovDeg, vm.depthScale);
 
-            // The gun and its subtree, each from its pose in the view's space.
+            // The gun and its subtree, each from its pose in the view's space (a JointAttach child is
+            // drawn at its joint by the pose system, after this).
             const auto* gp = reg.try_get<Parent>(e);
             const bool directChild = gp && gp->entity == camera;
             m_stack.clear();
@@ -180,10 +205,16 @@ public:
                 setDrawn(reg, x, toDrawn * inView);
                 if (const auto* ch = reg.try_get<Children>(x))
                     for (const entt::entity c : ch->entities)
-                        if (const auto* ct = reg.try_get<Transform>(c); ct && reg.valid(c))
+                        if (const auto* ct = reg.valid(c) ? reg.try_get<Transform>(c) : nullptr; ct && !reg.all_of<JointAttach>(c))
                             m_stack.emplace_back(c, inView * ct->matrix());
             }
         }
+
+        // A camera no gun narrowed this frame draws at its own field of view.
+        m_wide.clear();
+        for (const entt::entity c : reg.view<DrawnFov>())
+            if (std::find(m_narrowed.begin(), m_narrowed.end(), c) == m_narrowed.end()) m_wide.push_back(c);
+        for (const entt::entity c : m_wide) reg.remove<DrawnFov>(c);
 
         // What it drew last frame and no longer draws (a ViewModel removed) goes back to the step's pose,
         // unless something else drew it this frame.
@@ -224,6 +255,7 @@ private:
     std::shared_ptr<ViewModelState> m_state;
     std::vector<entt::entity> m_shots;
     std::vector<entt::entity> m_seen;
+    std::vector<entt::entity> m_narrowed, m_wide;   // cameras with a DrawnFov this frame, and the rest
     std::vector<std::pair<entt::entity, glm::mat4>> m_stack;
 };
 

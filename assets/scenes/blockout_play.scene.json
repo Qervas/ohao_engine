@@ -41,17 +41,25 @@
     {
       "id": "5c0b1a7e00000004",
       "Name": { "value": "Gun" },
-      "Transform": { "position": [0.22, -0.21, -0.26] },
+      "Transform": {},
       "Parent": { "entity": "5c0b1a7e00000002" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.016, -0.026, -0.24], "hi": [0.016, 0.018, 0], "color": [0.09, 0.09, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.09, 0.09, 0.1], "roughness": 0.45, "metallic": 0.6 },
-      "ViewModel": {}
+      "ViewModel": { "kickBack": 0.015, "kickPitchDeg": 1.25 }
+    },
+    {
+      "id": "5c0b1a7e00000006",
+      "Name": { "value": "Arms" },
+      "Transform": {},
+      "Parent": { "entity": "5c0b1a7e00000004" },
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/characters/fps_arms/fps_arms.glb" }, "mesh": "Arms" } } },
+      "SkinnedMesh": { "file": { "path": "assets/characters/fps_arms/fps_arms.glb" }, "skin": "ArmsRig" },
+      "Animator": { "graph": { "path": "assets/anim/arms.animgraph.json" } }
     },
     {
       "id": "5c0b1a7e00000005",
       "Name": { "value": "Muzzle" },
-      "Transform": { "position": [0, 0.01, -0.26] },
-      "Parent": { "entity": "5c0b1a7e00000004" },
+      "Transform": { "position": [0, 0.4, 0.018] },
+      "Parent": { "entity": "5c0b1a7e00000006" },
+      "JointAttach": { "joint": "gun" },
       "Light": { "color": [1, 0.72, 0.38], "intensity": 0, "range": 6, "radius": 0.03, "castShadows": false },
       "Muzzle": {}
     },
@@ -65,6 +73,7 @@
           { "action": "sprint", "key": "LeftShift" },
           { "action": "release_mouse", "key": "Escape" },
           { "action": "fire", "key": "MouseLeft" },
+          { "action": "aim", "key": "MouseRight" },
           { "action": "reload", "key": "R" },
           { "action": "restart", "key": "Enter" }
         ],

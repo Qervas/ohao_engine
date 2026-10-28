@@ -173,7 +173,8 @@ struct CombatSystem::Impl {
         glm::vec3 eye, aim;
         bool player = false;
         eyeAndAim(e, physics, eye, aim, player);
-        const float cone = w.spreadDeg + s.bloomDeg;
+        // Aimed, the cone narrows linearly with WeaponState.aim, to half at 1 (provisional ruling 11).
+        const float cone = (w.spreadDeg + s.bloomDeg) * (1.0f - 0.5f * s.aim);
         const uint32_t shot = s.shots;
         const glm::vec3 dir = combat::spreadDirection(aim, cone, w.seed, shot);
         CombatEvent ev;
@@ -214,12 +215,13 @@ struct CombatSystem::Impl {
         const bool living = alive(e);
 
         // The trigger: a player's from the World's input, anyone else's from its WeaponTrigger.
-        bool held = false, pressed = false, reload = false;
+        bool held = false, pressed = false, reload = false, aiming = false;
         if (const auto* pc = reg.try_get<PlayerController>(e); pc && pc->input) {
             const InputMap& in = world.input();
             held = in.held(w.fire);
             pressed = in.pressed(w.fire);
             reload = in.pressed(w.reload);
+            aiming = in.held(w.aim);
         } else if (auto* t = reg.try_get<WeaponTrigger>(e)) {
             held = t->pull;
             pressed = t->pull && !s.triggerHeld;
@@ -227,7 +229,17 @@ struct CombatSystem::Impl {
             if (t->reload) t->reload = false;
         }
         s.triggerHeld = held;
-        if (!living) held = pressed = reload = false;
+        if (!living) held = pressed = reload = aiming = false;
+
+        // Down the sights (provisional ruling 11): toward 1 while `aim` is held and the weapon is not
+        // reloading (the arms leave the sights for it), back to 0 otherwise, at 1 / adsTime a second,
+        // before this step's round (whose cone it narrows).
+        aiming = aiming && !(s.reloading > 0.0f);
+        if (const float to = aiming ? 1.0f : 0.0f; s.aim != to) {
+            const float by = w.adsTime > kTimeEps ? dt / w.adsTime : 1.0f;
+            s.aim = aiming ? std::min(1.0f, s.aim + by) : std::max(0.0f, s.aim - by);
+            if (std::fabs(s.aim - to) <= kTimeEps) s.aim = to;
+        }
 
         if (s.reloading > 0.0f) {
             s.reloading -= dt;

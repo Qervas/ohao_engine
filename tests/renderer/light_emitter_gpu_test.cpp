@@ -26,6 +26,7 @@
 // Exit code 0 = pass; the last line is a JSON summary. --keep leaves the PNGs in build/.
 #include "api/session.hpp"
 #include "common/harness.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -35,6 +36,7 @@
 #include "ohao/render_host.hpp"
 #include "render/scene/render_scene.hpp"
 #include "runtime/image.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "stb_image.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -180,7 +182,10 @@ Image capture(const std::string& scenePath, Mode mode, bool emitters, bool viewM
     host::RenderHost host(assets, api::HostKind::Headless);
     Image out;
     ecs::World world;
-    if (viewModel) ecs::installViewModel(world);
+    if (viewModel) {
+        ecs::installViewModel(world);
+        ecs::installAnimation(world, assets);   // the skinned arms (sub-project 10 step 3) are posed
+    }
     api::Session session(world, engineTypes());
     session.setAssetResolver(&assets);
     host.bind(world);
@@ -630,6 +635,70 @@ void view_model_changes_only_its_pixels() {
           "gun: the same box as a world mesh shadows the room (the comparison sees a shadow)");
 }
 
+// Sub-project 10 step 3: the player's skinned arms and rifle as the ViewModel's child (as the play
+// scene has them) change nothing but their own pixels: within 24 px of their projected vertices, and
+// below them to the image's edge where they come from behind the eye.
+void view_model_arms_change_only_their_pixels() {
+    std::printf("arms: the skinned arms below a ViewModel shadow nothing\n");
+    const char* glb = "assets/characters/fps_arms/fps_arms.glb";
+    const View view = kLightsInView;
+    const std::string none = gunScene(view, "arms_none", Gun::None);
+    const std::string arms = roomScene(view, "arms_vm", false, [&](ecs::World& w, entt::entity camera) {
+        using namespace ecs;
+        Light lamp;
+        lamp.intensity = 6.0f;
+        lamp.range = 30.0f;
+        lamp.radius = 0.02f;
+        w.registry().emplace<Light>(w.create("Lamp behind", Transform{view.position + glm::vec3(0.25f, 0.35f, 0.5f)}), lamp);
+        const auto root = w.create("Gun", Transform{});
+        w.setParent(root, camera);
+        ViewModel vm;
+        vm.fovDeg = kFov;
+        vm.depthScale = kGunDepth;
+        w.registry().emplace<ViewModel>(root, vm);
+        const auto a = w.create("Arms", Transform{});
+        w.setParent(a, root);
+        w.registry().emplace<MeshSource>(a, MeshSource{ModelAsset{AssetRef{glb, {}}, "Arms"}});
+        w.registry().emplace<SkinnedMesh>(a, SkinnedMesh{AssetRef{glb, {}}, "ArmsRig"});
+        w.registry().emplace<Animator>(a, Animator{AssetRef{"assets/anim/arms.animgraph.json", {}}, {}});
+    });
+    const Image off = capture(none, Mode::Deferred, true, true), on = capture(arms, Mode::Deferred, true, true);
+    for (const auto& s : {none, arms}) std::remove((std::string(OHAO_SOURCE_DIR) + "/" + s).c_str());
+    if (off.rgba.empty() || on.rgba.empty()) {
+        check(false, "arms: the captures rendered");
+        return;
+    }
+    keep(on, "arms_vm");
+    // The arms before any step are at their bind pose: the mesh's own vertices, remapped below the eye.
+    const auto model = ModelLoader::loadMesh((std::string(OHAO_SOURCE_DIR) + "/" + glb), "Arms");
+    if (!model || !model.value()) {
+        check(false, "arms: the mesh loads");
+        return;
+    }
+    const glm::mat4 remap = ecs::viewModelRemap(glm::mat4(1.0f), kFov, kFov, kGunDepth);
+    const glm::mat4 drawn = cameraWorld(view) * remap;
+    Footprint fp{0, 0, 0, 1e9f, 1e9f, -1e9f, -1e9f, true};
+    bool behind = false;
+    for (const Vertex& v : model.value()->vertices) {
+        if ((remap * glm::vec4(v.position, 1.0f)).z > -0.1f) {   // at or behind the near plane: not drawn here
+            behind = true;
+            continue;
+        }
+        const glm::vec3 p = project(view, glm::vec3(drawn * glm::vec4(v.position, 1.0f)));
+        fp.x0 = std::min(fp.x0, p.x - 24.0f);
+        fp.y0 = std::min(fp.y0, p.y - 24.0f);
+        fp.x1 = std::max(fp.x1, p.x + 24.0f);
+        fp.y1 = std::max(fp.y1, p.y + 24.0f);
+    }
+    if (behind) fp.y1 = float(kHeight);   // what crosses the near plane reaches the bottom edge
+    const Diff outside = diffOutside(on, off, {fp});
+    const Diff all = diffOutside(on, off, {});
+    std::printf("  footprint x %.0f..%.0f y %.0f..%.0f; arms: %zu px changed, %zu outside (max %d)\n", fp.x0, fp.x1, fp.y0,
+                fp.y1, all.changed, outside.changed, outside.maxAbs);
+    check(all.changed > 200, "arms: drawn (their pixels changed)");
+    check(withinBvhFloor(outside), "arms: nothing past 24 px of their footprint changed (no shadow, no GI)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -641,5 +710,6 @@ int main(int argc, char** argv) {
     moved_light_emitters_carry_their_motion();
     moving_light_emitter_is_taa_stable();
     view_model_changes_only_its_pixels();
+    view_model_arms_change_only_their_pixels();
     return test::finish("light_emitter_gpu_test", g_passed, g_failed, g_failures);
 }
