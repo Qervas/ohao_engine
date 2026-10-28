@@ -291,11 +291,11 @@ def main():
     c.notify("notifications/initialized")
     tools = c.request("tools/list")
     names = [t["name"] for t in (tools or {}).get("result", {}).get("tools", [])]
-    check(len(names) == 35 and "render_capture" in names and "render_stats" in names and "render_settings" in names
+    check(len(names) == 36 and "render_capture" in names and "render_stats" in names and "render_settings" in names
           and "input_replay" in names and "level_info" in names and "physics_raycast" in names
           and "physics_events" in names and "physics_contacts" in names and "player_info" in names
           and "player_teleport" in names and "combat_info" in names and "combat_events" in names
-          and "combat_damage" in names, "tools/list: 35 tools")
+          and "combat_damage" in names and "animation_info" in names, "tools/list: 36 tools")
 
     info, _, err = c.tool("engine_info")
     gpu = (info or {}).get("gpu", {})

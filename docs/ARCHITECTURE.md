@@ -502,7 +502,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-29 passes registered; budget names matching none: []
+32 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 

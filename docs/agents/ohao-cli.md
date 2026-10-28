@@ -291,7 +291,7 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 
 ```console
 $ python -c "import json, os, subprocess; p = subprocess.Popen([os.path.abspath('build/Release/ohao.exe'), 'serve', '--out', 'build/doc_tmp/serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE); p.stdin.write(b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n'); p.stdin.flush(); r = json.loads(p.stdout.readline()); p.stdin.close(); print(p.wait(), len(r['result']['tools']), 'tools')"
-0 35 tools
+0 36 tools
 ```
 
 ## Methods
