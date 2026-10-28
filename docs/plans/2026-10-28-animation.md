@@ -117,42 +117,42 @@
   - `void RenderScene::setSkinPalette(MeshHandle skinned, std::span<const glm::mat4> current, std::span<const glm::mat4> previous)`;
   - `RenderSceneStats::Skinning {instances, vertices, blasRefits, blasRebuilds}`.
 
-- [ ] **Step 1: The test rig.**
+- [x] **Step 1: The test rig.**
   - `tools/anim/make_test_rig.py` (pure Python, MIT) writes `tests/anim/fixtures/rig.glb`: a 4-joint jointed column of boxes with known weights, clips `wave` (loop), `raise` (one shot, swings the top joint 2 m outside the bind box), `step` (`STEP`) and `spline` (`CUBICSPLINE`).
   - It also writes `rig.animgraph.json` (a full-body layer, an additive upper layer, events `tick` at 0.25 s of `wave`).
   - Run it twice; expected: byte-identical output. Commit `test(anim): the generated test rig`.
-- [ ] **Step 2: Failing tests.**
+- [x] **Step 2: Failing tests.**
   - `anim_tests` (test 22, and test 23's state machine parts) against the rig.
   - `skinning_gpu_test` (test 24); `cull_parity_gpu_test` test 8; the skinned case in `deferred_determinism_gpu_test`.
   - Register the suites. Build; expected: FAIL to compile (no `ohao/anim`, no components).
-- [ ] **Step 3: The reader and the assets.**
+- [x] **Step 3: The reader and the assets.**
   - Accessors and buffer views decoded (GLB chunk, external `.bin`, normalised integer types).
   - Skins and animations read. `W_LEVEL_UNSUPPORTED` drops them from its list; morph channels stay refused.
   - `ohao/anim`'s skeleton, clip, graph, pose and cache.
   - The model loader's skinned path through `loadMesh`, with the joint remap.
   - Run `anim_tests`; expected: test 22 PASS.
-- [ ] **Step 4: The step and the pose.**
+- [x] **Step 4: The step and the pose.**
   - The components (registration, writers, docs, units, limits).
   - `installAnimation`: the `animation` simulate system with the event log, and the `pose` sync system with palettes and `JointAttach` poses.
   - The graph validation errors with paths.
   - Run `anim_tests`, `scene_tests`, `combat_tests`; expected: test 23's rig cases PASS, every existing case unchanged.
-- [ ] **Step 5: GPU skinning.**
+- [x] **Step 5: GPU skinning.**
   - The skinned-instance mesh in `MeshRegistry` and `RenderScene` (range, meshlet copy, previous-position stream, palette buffers per frame slot, retire on release).
   - `skin.slang` (`skin`, `bounds`); the passes in frame order, before culling and `recordTlas`.
   - The updatable BLAS and `refitBLAS` (rebuild threshold per OPEN ruling 12); `createBLASFromPositions` deleted.
   - `gbuffer.vert` and `meshlets.slang` previous positions; skinned cones off.
   - `python tools/gen_layout.py`. Run `skinning_gpu_test`, `cull_parity_gpu_test`, `deferred_determinism_gpu_test`, `engine_tests`, `check_validation.py` (with the rig, deferred and path traced); expected: PASS, zero validation messages.
   - Every existing golden exact: nothing skinned is in them.
-- [ ] **Step 6: Agents and benches.**
+- [x] **Step 6: Agents and benches.**
   - `animation.info` (params, handler, doc, dispatch; `tests/serve/sessions/animation.jsonl`; `tools/list` ≤ 24 KB, else OPEN ruling 13).
   - `render.stats` `skinning`.
   - `render_bench anim16_1080p` (16 rig instances in the blockout running `wave` at different phases) and the CPU benches (`anim16_step_ms`, `pose16_sync_ms`, `animStep` 1).
   - Measure, then propose the budget numbers in the change record for Frank (OPEN ruling 16); gate them at their proposed values.
-- [ ] **Step 7: Goldens and expectations.**
+- [x] **Step 7: Goldens and expectations.**
   - `assets/scenes/anim_rig.scene.json`: the rig mid-`wave`, a floor and a light, so its shadow falls in view.
   - New goldens `cli_anim_rig_deferred`, `cli_anim_rig_reference`, `cli_anim_rig_pt`; look at each before adding it.
   - The new saved types move the serve and CLI `world.hash` expectations: diff them (only hashes and the type list), then `--update`.
-- [ ] **Step 8: Close.**
+- [x] **Step 8: Close.**
   - `check.py --all`.
   - Change record `docs/changes/YYYY-MM-DD-animation-step1.md`.
   - Look shots: `step1_rig_strip.png` (the `wave` cycle; the raised arm with its RT shadow, its GI on the floor, and the path tracer) and `step1_motion_vectors.png` (the velocity buffer of a swinging limb).

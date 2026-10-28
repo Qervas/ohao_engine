@@ -616,3 +616,59 @@ OPEN (judgment calls; recommendations given):
     Recommended: 11 syncs feet to sound with a mixer to schedule them.
 18. **Hitboxes:** rounds keep hitting the capsule and body boxes, which no longer draw.
     Recommended: per-bone hitboxes come with 13's ragdoll bodies.
+
+## As built (step 1)
+
+Task 1 of the plan (2026-10-28): skeletons, clips, graphs, the step and the pose, GPU skinning on
+the generated rig. Change record: `docs/changes/2026-10-28-animation-step1.md`. Where the build
+differs from the text above, this section holds.
+
+- **The reader.** `ohao/anim/gltf_anim` reads skins and animations itself (GLB chunk or base64
+  data URI; normalised integer accessors; an external `.bin` and sparse accessors refused as
+  `E_ASSET_UNSUPPORTED`). `readGltfStructure` (levels) is unchanged and still refuses skins and
+  animations in a level: a level is static, and the node reorder it does for levels loses the glTF
+  indices a skin needs.
+- **The model loader** keeps a skinned file's vertices as written: it reads, then post-processes
+  without `JoinIdenticalVertices` when any mesh has bones. Assimp's join compares position, normal
+  and UVs, not joints or weights, and merged the rig's box-seam vertices (72 of 96 left), each then
+  carrying both weight sets. Every existing golden is unchanged (no checked-in model has bones).
+- **The palette is in the mesh's bone order** (Assimp's, `Model::boneNames`), mapped to the
+  skeleton's joints by name: vertex data is never rewritten.
+- **The pose is sampled at `(steps − 1 + alpha)` steps** (alpha 1: the newest step's pose); the fade
+  weight is `(faded − 1 + alpha) / fade`. The "Frame" section's `steps + alpha` is off by one step.
+- **`AnimLayerState.fade` and `faded` are `uint32_t`**, not `uint16_t`: the reflection codec has
+  no 16-bit field kind. Values stay within 0..600 (the graph's limit).
+- **`installAnimation(world, assets)`** is called by the hosts after `installCombat` (the CLI
+  context, `LiveHost`, and the tools and tests that build their own sessions), not by
+  `installCombat`: it needs the asset resolver for graphs and models.
+- **The previous position lives in the skinned copy's `boneWeights.xyz`**, flagged by the draw flag
+  `kDrawSkinned`, not in a separate stream with an offset in `InstanceGpu`: `InstanceGpu` (160 bytes)
+  has no free field, and nothing reads a copy's joints (the skin pass reads them from the base
+  mesh). No new binding, buffer or layout change; 12 bytes a vertex saved.
+- **The previous palette is the previous sync's**, as `WorldTransform::prevWorld` is. A capture
+  syncs once for the view and once a frame, and `world.step` syncs, so both start without motion;
+  a window frame (steps, one sync, the frame) has it. Motion vectors of a skinned limb are tested on
+  that path.
+- **Bounds (OPEN ruling 15, partly not as recommended):** each meshlet copy's sphere is exact, from
+  its deformed vertices on the GPU (`skin.bounds`, one thread a meshlet, fixed order, cone off). The
+  draws' culling box is conservative, from each bone's bind-pose box through its palette matrix on
+  the CPU (the pose system), not a GPU reduction: the draw table is uploaded from the CPU, and a
+  conservative box keeps culling parity exact (test 8). Cost if wrong: a skinned draw culled a
+  little later than it could be.
+- **The passes run before `scene.upload`** (whose TLAS build reads the refit BLASes), in the pass
+  registry as `skin`, `skin.bounds`, `rt.blas.refit`. They are recorded only for instances whose
+  palettes changed; a still pose costs nothing. The TLAS refits whenever a BLAS was refit.
+- **Refit and rebuild (OPEN ruling 12):** refit every changed frame, rebuild every
+  `kBlasRefitsPerRebuild` = 120 refits; the clip-change rebuild is not built (the renderer does not
+  know clips). anim16 measured the refit at 0.136 ms for 16 instances (budget 0.60).
+- **`tools/list` (OPEN ruling 13):** 24,137 bytes of 24,576 with `animation_info` (36 tools): no
+  trimming and no new cap for step 1; 439 bytes are left for Tasks 2–3.
+- **`animation.info`** reports each layer's state, the clip timing it and its time (`t`), the fade
+  (`from`, `blend`), and the clip events after `since`, numbered from 1 as `combat.events`.
+- **Not built in step 1 (later tasks):** test 23's `t23_restart_resets` (needs `Round`, Task 2), the
+  death clip (ruling 7) and ADS (ruling 11), the enemy and arm rigs, `JointAttach` on a real weapon
+  (the component and its pose are built and unused), `ohao schema`'s `.animgraph.json` export,
+  `animation_info` in `serve_bench`. `Fox.glb` and `BrainStem.glb` stay (ruling 10, Task 2).
+- **Budgets (OPEN ruling 16)** gate at the proposals: anim16 skin + bounds 0.25 ms, refit 0.60 ms;
+  `anim16_step_ms` 0.05 ms, `pose16_sync_ms` 0.10 ms (`animStep` 1). The play-scene budgets wait for
+  Task 2's enemies.
