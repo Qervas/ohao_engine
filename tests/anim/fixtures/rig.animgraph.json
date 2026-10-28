@@ -1,0 +1,160 @@
+{
+  "skeleton": {
+    "file": "tests/anim/fixtures/rig.glb",
+    "skin": "RigSkin"
+  },
+  "clips": {
+    "wave": {
+      "file": "tests/anim/fixtures/rig.glb",
+      "animation": "wave",
+      "loop": true,
+      "events": [
+        {
+          "t": 0.25,
+          "name": "tick"
+        }
+      ]
+    },
+    "raise": {
+      "file": "tests/anim/fixtures/rig.glb",
+      "animation": "raise",
+      "loop": false
+    },
+    "step": {
+      "file": "tests/anim/fixtures/rig.glb",
+      "animation": "step",
+      "loop": true
+    },
+    "spline": {
+      "file": "tests/anim/fixtures/rig.glb",
+      "animation": "spline",
+      "loop": true
+    }
+  },
+  "params": {
+    "speed": "float",
+    "raised": "bool"
+  },
+  "layers": [
+    {
+      "name": "body",
+      "blend": "replace",
+      "weight": 1.0,
+      "initial": "wave",
+      "states": {
+        "wave": {
+          "clip": "wave"
+        },
+        "raise": {
+          "clip": "raise"
+        },
+        "held": {
+          "clip": "raise",
+          "rate": 0.0,
+          "startAt": 1.0
+        },
+        "moves": {
+          "blend1d": {
+            "param": "speed",
+            "points": [
+              {
+                "clip": "wave",
+                "at": 0.0
+              },
+              {
+                "clip": "step",
+                "at": 1.0
+              }
+            ]
+          }
+        }
+      },
+      "transitions": [
+        {
+          "from": "wave",
+          "to": "raise",
+          "when": {
+            "param": "raised",
+            "op": "==",
+            "value": 1
+          },
+          "fade": 6
+        },
+        {
+          "from": "raise",
+          "to": "held",
+          "when": {
+            "clipEnd": true
+          },
+          "fade": 0
+        },
+        {
+          "from": "held",
+          "to": "wave",
+          "when": {
+            "param": "raised",
+            "op": "==",
+            "value": 0
+          },
+          "fade": 12
+        },
+        {
+          "from": "wave",
+          "to": "moves",
+          "when": {
+            "param": "speed",
+            "op": ">",
+            "value": 0.5
+          },
+          "fade": 6
+        },
+        {
+          "from": "moves",
+          "to": "wave",
+          "when": {
+            "param": "speed",
+            "op": "<=",
+            "value": 0.5
+          },
+          "fade": 6
+        }
+      ]
+    },
+    {
+      "name": "top",
+      "blend": "additive",
+      "weight": 1.0,
+      "mask": [
+        "upper"
+      ],
+      "initial": "still",
+      "states": {
+        "still": {
+          "clip": "step",
+          "rate": 0.0
+        },
+        "nod": {
+          "clip": "step"
+        }
+      },
+      "transitions": [
+        {
+          "from": "still",
+          "to": "nod",
+          "when": {
+            "event": "nod"
+          },
+          "fade": 0
+        },
+        {
+          "from": "nod",
+          "to": "still",
+          "when": {
+            "clipEnd": true
+          },
+          "fade": 0
+        }
+      ]
+    }
+  ]
+}

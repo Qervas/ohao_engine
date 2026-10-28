@@ -29,3 +29,5 @@ assets/levels/** -text
 tests/level/fixtures/** text eol=lf
 # The level hint schema (step 3): `ohao schema level-extras`' output, compared byte for byte.
 tests/level/extras_schema.json text eol=lf
+# The animation test rig (sub-project 10): tools/anim/make_test_rig.py's output, byte for byte.
+tests/anim/fixtures/** -text
