@@ -784,6 +784,9 @@ double patchMean(const Frame& f, const View& v) {
 }
 
 // The doorway frame: the Sun out, RT GI on, the smoke in GI as given, `steps` steps, `frames` accumulated.
+// The aperture (x 0.9..2.1, y 0..2.2 m at z 3.1) is filled in the harness, not the scene: the authored
+// smoke_cloud (one record, spheres of radius 0.6..2.4 m offset up to 0.6 R) covers only part of it, and
+// ruling 28 keeps the 20% bar and the effect as they are. Four more clouds sit at the aperture's corners.
 Options doorwayFrame(bool smokeInGi, int steps, int frames) {
     Options o;
     o.steps = steps;
@@ -797,6 +800,12 @@ Options doorwayFrame(bool smokeInGi, int steps, int frames) {
                 t.position = kDoorwayView.position;
                 t.rotation = viewRotation(kDoorwayView);
             });
+        // Fixed ids: a smoke record's seed is its emitter's id, so a random id would move the cloud every run.
+        const glm::vec3 corners[4] = {{0.9f, 0.6f, 3.1f}, {2.1f, 0.6f, 3.1f}, {0.9f, 1.6f, 3.1f}, {2.1f, 1.6f, 3.1f}};
+        for (uint32_t i = 0; i < 4; ++i) {
+            const entt::entity e = w.createWithId(0x5c0b10c0000000a0ull + i, "DoorwayFill", ecs::Transform{corners[i]});
+            w.registry().emplace<ecs::VfxEmitter>(e, ecs::VfxEmitter{"smoke_cloud", 0.0f, 2u + i, true});
+        }
     };
     o.settings = [smokeInGi](VulkanRenderer& r) {
         if (auto* d = r.getDeferredRenderer()) {
