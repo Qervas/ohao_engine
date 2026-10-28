@@ -250,11 +250,11 @@
 
 **Files:** docs, the monograph, the roadmap; no engine change unless the gate finds a defect (then fixed with its test, its own commit).
 
-- [ ] **Step 1: The gate.**
+- [x] **Step 1: The gate.**
   - `python tools/check.py --all`.
   - Every SP10 budget gated: a quiet rerun of any noisy bench, and the measured medians and p95 recorded.
   - Validation clean in raster and RT on the rig and the play scene.
-- [ ] **Step 2: Docs.**
+- [x] **Step 2: Docs.**
   - AGENTS.md: the suites, `anim_tests`, `skinning_gpu_test`, the animation notes and gotchas ("a pose is presentation; animator state is saved integers"; "a skinned instance is its own mesh").
   - ARCHITECTURE.md: the flow, and a recipe "add an animated character".
   - The CLI and serve guides: `animation.info`, `render.stats` `skinning`, forcing a state.
@@ -264,7 +264,7 @@
   - Frank plays `build/Release/ohao_game.exe assets/scenes/blockout_play.scene.json --latency`.
   - The spec's "Hand-test acceptance" table gets his notes; each item is closed by a fix with its test, or a ruling.
   - Until he has played, this step stays open and the row is "built, waiting for Frank".
-- [ ] **Step 4: Close.**
+- [x] **Step 4: Close.**
   - The spec's "As built (step 4)" and the rulings Frank made.
   - The roadmap's row 10 status.
   - Change record `...-animation-step4.md`.
