@@ -411,12 +411,14 @@ that id.
 | `WeaponState` | What a weapon has: `ammo`, `cooldown`, `reloading`, `bloomDeg`, `kickDeg`, `shots`, `triggerHeld`. The combat step writes it, and adds it (a full magazine) to a `Weapon` without one. |
 | `WeaponTrigger` | A non-player's trigger: `pull` (held), `reload` (cleared when acted on). |
 | `AudioMix` | The world's sound bank and mix, one per world: `asset`, an `.audio.json` (buses with voice caps, sounds, distance shapes, ducks, snapshots, reverb presets). Without one, the default bank (master over `sfx`, `music`, `ambient`). The play scene names `assets/audio/slice.audio.json`. |
+| `ReverbZone` | A volume whose reverb the listener hears while inside it: `preset` (a name in the bank's `reverb`, ≤ 32 characters), `priority` (the highest of overlapping zones wins, then the lower id), `size` (half extents in m about the entity, in its frame; zero: fitted to the entity's mesh). Outside every zone the bank's `defaultZone`. A zone is not a physics body: it adds no contacts or trigger events. A level node's `verb` hint makes one, on a trigger box unless the node names its own `col`. An unknown preset is `W_AUDIO_PRESET` and counts as the default. The play scene's `RoomZone` covers the room's inside (`room`). |
 
 Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, `PhysicsBody`, …) are
 derived, appear in the catalogue for reference, and are refused in files and commands.
 
 `ohao schema level-extras [-o file]` writes the level hint keys (`col`, `body`, `mass`,
-`fric`, `rest`, `vis`, `spawn`, `socket`) as a JSON Schema for one node's `extras`.
+`fric`, `rest`, `trig`, `surf`, `vis`, `spawn`, `socket`, `verb`) as a JSON Schema for one node's
+`extras`.
 `ohao schema audio-bank [-o file]` writes the `.audio.json` format (an `AudioMix`'s file) as a
 JSON Schema (default `audio_bank.schema.json`).
 

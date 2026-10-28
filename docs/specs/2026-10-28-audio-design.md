@@ -669,6 +669,50 @@ design above, and why:
   first 2 ms of the other buses through (about −30 dB in `step1_buses.wav`'s soloed segments).
 - **`mix_10ms_ms`** measures 32 voices without the reverb, which step 2 adds to the same mix.
 
+## As built (step 2)
+
+Reverb zones and occlusion (plan Task 2, `docs/changes/2026-10-28-audio-step2.md`). What differs
+from the design above, and why:
+
+- **A zone is a volume, not a trigger body.** `ReverbZone { preset, priority, size }`: `size` is
+  half extents about the entity, in its frame; 0 fits the zone to the entity's mesh (its
+  `CollisionMesh`, else its `MeshSource` model, cached). The design put a zone beside a trigger
+  `Collider`; in the play scene that sensor would have shown in `physics.contacts`, `physics.info`
+  and the trigger events the serve sessions print, so a scene zone carries its own size and
+  physics never sees it. A level node's `verb` hint still gets a trigger box (unless it names its
+  own `col`), decided in `parseHints` before the scene's `col` default; containment reads the box
+  either way, never the sensor.
+- **`listenerZone` returns `std::string`** (empty: outside every zone), and its listener is
+  `AudioListener { position, body }`: the input-driven player's head (the root's pose times the
+  head's local position, the camera child with the lowest id), else the first active camera. A
+  listener exactly on a face is inside.
+- **The reverb is on the bank's first return bus**, stereo: group → `AudioReverbNode` (Freeverb,
+  `ohao/audio/reverb_node.*`) → the bus node → master. `loadBank` starts it at the bank's
+  `defaultZone` preset; `AudioSystem::setReverb(preset, frames)` crossfades. The new preset goes
+  into the quieter of two cores, cleared first; a crossfade costs two cores.
+- **Measured RT60s fall 14–18% below the design value** (`Reverb::designRt60`, the combs' feedback
+  at DC over their mean delay): outdoor 0.730 s (design 0.887), room 1.658 s (1.966), corridor
+  2.338 s (2.731). The damping shortens the high end, and the T20 fit sees it. All within the test's
+  20%.
+- **`ohao_audio_bank` is its own library** (the parser and the bank types, simdjson, no
+  miniaudio), so `ohao_ecs` reads a world's bank without linking the mixer.
+- **The schedule installs with zone and occlusion commands only.** `installAudio(world, assets)`
+  adds `audio_schedule`, the step's last simulate system. Each step it writes a `zone` command
+  (preset, bed, 30-step blend) when the listener's zone changes, then re-casts held voices. Voices
+  enter through `AudioSchedule::trackVoice(source, holdMs, occlude)`, the hook step 3's play
+  commands use. Nothing plays from the schedule yet, the snapshot hook holds no schedule state, and
+  the presets' `bed` stays empty: all three are step 3's.
+- **Rays are counted per cast**, 16 a step. A voice past the cap counts as unoccluded and a re-cast
+  past it keeps its last answer; both are counted in `stats().raysCapped`. A wall is passed by
+  ignoring the hit entity and casting again from the same origin, characters passed the same way,
+  4 hops at most.
+- **Teardown cuts every link first.** miniaudio 0.11.21's `ma_node_uninit` detaches only the first
+  node feeding each input (`ma_node_detach_full` reads `pNext` after the detach cleared it). The
+  return, destroyed first, left the other senders linked to its freed group: `audio_bench` faulted
+  in teardown about one run in ten. `destroyBuses` detaches every output before any node goes.
+- **A sound's `send` is parsed but not yet applied per voice**: a bus sends at one level. Step 3's
+  player sets it per voice.
+
 ## Rulings for Frank
 
 PROVISIONAL (recommended by the post-SP7 roadmap; Frank deferred them to this row; the spec is
