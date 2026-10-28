@@ -21,6 +21,7 @@
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
 #include "common/harness.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/render_extract.hpp"
 #include "ecs/scene_types.hpp"
@@ -288,6 +289,7 @@ std::vector<uint8_t> sceneCapture(const char* path, const char* capture, GpuCull
         ecs::World world;
         api::Session session(world, engineTypes());
         session.setAssetResolver(&assets);
+        ecs::installAnimation(world, assets);   // the skinned rig's pose (test 8); nothing else animates
         host.bind(world);
         session.setHost(&host);
         const std::string loaded = session.call("scene.load", std::string(R"({"replace":true,"path":")") + path + "\"}");
@@ -467,6 +469,70 @@ void t07_mesh_shaders_and_fallback_render_the_scene_files_identically() {
     }
 }
 
+// ---- test 8 (sub-project 10, t24_cull_parity_skinned) -------------------------------------------
+
+// The rig with its arm raised (raise held at 1 s: the column above 0.5 m swings 1.5 m to -X), seen
+// from where its bind box (x within 0.125 of 0) is off screen and only the raised arm is in view.
+// `bind`: the same scene in the bind pose (nothing in view but the floor).
+std::string skinnedOffscreenScene(bool bind) {
+    const std::string rig = R"({
+  "format": "ohao.scene",
+  "version": 1,
+  "components": { "Animator": 1, "Camera": 1, "Light": 1, "MaterialOverride": 1, "MeshSource": 1, "Name": 1, "SkinnedMesh": 1, "Transform": 1 },
+  "entities": [
+    { "id": "a17b000000000001", "Name": { "value": "MainCamera" },
+      "Transform": { "position": [-2.2, 0.62, 1.8] }, "Camera": { "fovDeg": 30 } },
+    { "id": "a17b000000000002", "Name": { "value": "Floor" },
+      "MeshSource": { "source": { "BoxPrim": { "lo": [-6, -0.1, -6], "hi": [6, 0, 4], "color": [0.6, 0.6, 0.6] } } },
+      "MaterialOverride": { "baseColor": [0.6, 0.6, 0.6], "roughness": 0.9 } },
+    { "id": "a17b000000000003", "Name": { "value": "Sun" },
+      "Transform": { "rotation": [-0.40822, 0.23457, 0.10938, 0.87543] },
+      "Light": { "type": "Directional", "color": [1, 0.95, 0.85], "intensity": 3 } },
+    { "id": "a17b000000000004", "Name": { "value": "Rig" },
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "tests/anim/fixtures/rig.glb" }, "mesh": "Column" } } },
+      "SkinnedMesh": { "file": { "path": "tests/anim/fixtures/rig.glb" }, "skin": "RigSkin" },
+      "Animator": { "graph": { "path": "tests/anim/fixtures/rig.animgraph.json" },
+        "layers": [ { "state": ")" + std::string(bind ? "wave" : "held") + R"(", "steps": )" + (bind ? "0" : "1") +
+                            R"( }, { "state": "still", "steps": 0 } ] } }
+  ]
+})";
+    const std::string path = std::string(OHAO_BINARY_DIR) + "/cull_parity_rig_" + (bind ? "bind_" : "raised_") +
+                             std::to_string(static_cast<unsigned long>(_getpid())) + ".scene.json";
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (f) {
+        std::fwrite(rig.data(), 1, rig.size(), f);
+        std::fclose(f);
+    }
+    return path;
+}
+
+void t08_skinned_arm_outside_its_bind_box_is_drawn() {
+    std::printf("t08: a skinned rig whose bind box is off screen and whose raised arm is in view\n");
+    const std::string raised = skinnedOffscreenScene(false), bind = skinnedOffscreenScene(true);
+    const std::string base = std::string(OHAO_BINARY_DIR) + "/cull_parity_rig_" +
+                             std::to_string(static_cast<unsigned long>(_getpid()));
+    SceneLists l1, l2, l3, l4, l5;
+    const auto on = sceneCapture(raised.c_str(), "plain", {true, true}, base + "_on.png", l1);
+    const auto off = sceneCapture(raised.c_str(), "plain", {false, false}, base + "_off.png", l2);
+    const auto mesh = sceneCapture(raised.c_str(), "plain", kMeshShaders, base + "_mesh.png", l3);
+    const auto fallback = sceneCapture(raised.c_str(), "plain", kFallback, base + "_fallback.png", l4);
+    const auto bound = sceneCapture(bind.c_str(), "plain", {true, true}, base + "_bind.png", l5);
+    if (on.empty() || off.empty() || mesh.empty() || fallback.empty() || bound.empty()) {
+        check(false, "t08: the rig captures rendered");
+        return;
+    }
+    std::printf("  raised: culling on vs off %s, mesh shaders %s, fallback %s; against the bind pose %s\n",
+                on == off ? "identical" : "DIFFER", mesh == on ? "identical" : "DIFFER",
+                fallback == on ? "identical" : "DIFFER", on == bound ? "IDENTICAL (arm not drawn)" : "differs (arm drawn)");
+    check(on == off, "t08: the raised rig: culling on = off");
+    check(mesh == on, "t08: the raised rig on the meshlet path (mesh shaders) = the instance path");
+    check(fallback == on, "t08: the raised rig on the meshlet fallback = the instance path");
+    check(on != bound, "t08: the raised arm is drawn though the bind box is off screen");
+    for (const char* s : {"_on.png", "_off.png", "_mesh.png", "_fallback.png", "_bind.png"}) std::remove((base + s).c_str());
+    std::remove(raised.c_str());
+    std::remove(bind.c_str());
+}
+
 } // namespace
 
 int main() {
@@ -479,5 +545,6 @@ int main() {
     t07_cone_culling_drops_back_facing_meshlets();
     t07_fallback_twin_runs_build_identical_meshlet_lists();
     t07_mesh_shaders_and_fallback_render_the_scene_files_identically();
+    t08_skinned_arm_outside_its_bind_box_is_drawn();
     return test::finish("cull_parity_gpu_test", g_passed, g_failed, g_failures);
 }

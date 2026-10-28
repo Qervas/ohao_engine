@@ -56,8 +56,10 @@ void main() {
     // Current frame clip position
     fragCurrentPos = cam.viewProj * worldPos;
 
-    // Previous frame clip position for velocity calculation
-    fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(inPosition, 1.0));
+    // Previous frame clip position for velocity calculation. A skinned instance's own mesh keeps
+    // last frame's deformed position in boneWeights.xyz (skin/skin.slang).
+    const vec3 prevLocal = (d.info.y & kDrawSkinned) != 0u ? inBoneWeights.xyz : inPosition;
+    fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(prevLocal, 1.0));
 
     fragInstance = slot;
     fragMaterialSlot = d.info.x;

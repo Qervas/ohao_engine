@@ -3,6 +3,8 @@
 #include "render/scene/light_table.hpp"
 #include "render/scene/material_table.hpp"
 #include "render/scene/mesh_registry.hpp"
+#include "render/scene/skin_pass.hpp"
+#include "render/frame/gpu_pass_timer.hpp"
 #include "gpu/shared_layout.hpp"
 
 #include <glm/gtc/constants.hpp>
@@ -11,6 +13,7 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <set>
 
 #include "core/log.hpp"
@@ -76,6 +79,23 @@ struct RenderScene::Impl {
     bool emitterAssetsReady{false};
     std::optional<glm::vec3> viewer;   // setViewerPosition: spot emitters shine toward it
     bool spotEmitters{false};          // a spot light has an emitter: they follow the viewer
+
+    // Skinned instances' meshes (registerSkinnedInstance), by mesh index. A pose is skinned when
+    // its palettes differ from what the mesh shows (`shown`: the last palettes skinned); a pose
+    // whose previous palette equals its current one has no motion, and once skinned twice in a
+    // row like that the mesh is left as it is (no skin, bounds or refit).
+    struct Skinned {
+        MeshHandle mesh;
+        std::vector<glm::mat4> current, previous;
+        bool pending{false};
+        uint32_t refits{0};   // since the BLAS's last build
+    };
+    std::map<uint32_t, Skinned> skinned;
+    SkinPass skinPass;
+    bool skinPassTried{false};
+    bool skinnedBlasChanged{false};   // a BLAS was refit or rebuilt this frame: the TLAS refits
+    std::vector<SkinPass::Job> skinJobs;
+    std::vector<uint32_t> skinJobMeshes;
 
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
@@ -233,7 +253,8 @@ struct RenderScene::Impl {
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
                                      mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1],
-                                     (g.flags & kInstanceEmitter) != 0, (g.flags & kInstanceViewModel) != 0});
+                                     (g.flags & kInstanceEmitter) != 0, (g.flags & kInstanceViewModel) != 0,
+                                     mesh->skinned});
             }
         }
         drawsDirty = false;
@@ -266,7 +287,7 @@ struct RenderScene::Impl {
             r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
             r.info = {d.materialSlot,
                       (d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u) |
-                          (d.viewModel ? gpu::shared::kDrawViewModel : 0u),
+                          (d.viewModel ? gpu::shared::kDrawViewModel : 0u) | (d.skinned ? gpu::shared::kDrawSkinned : 0u),
                       d.firstMeshlet, d.meshletCount};
             r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};
             r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};
@@ -428,6 +449,9 @@ void RenderScene::shutdown() {
     vkDeviceWaitIdle(m->info.device);
     for (auto& r : m->retireQueue) m->destroyRetired(r);
     m->retireQueue.clear();
+    m->skinPass.shutdown();
+    m->skinPassTried = false;
+    m->skinned.clear();
     m->allocator.destroyBuffer(m->tlasInstances);
     m->tlasInstances = GpuBuffer{};
     m->allocator.destroyBuffer(m->drawTable);
@@ -474,6 +498,127 @@ void RenderScene::releaseMesh(MeshHandle h) {
     const BlasHandle blas = m->meshes.release(h);
     if (blas != INVALID_BLAS)
         m->retireQueue.push_back(Impl::Retired{m->frameCounter + MAX_FRAMES_IN_FLIGHT, GpuBuffer{}, {}, blas});
+    m->skinned.erase(h.index);
+    m->stats.skinning.instances = static_cast<uint32_t>(m->skinned.size());
+}
+
+std::vector<Vertex> RenderScene::readMeshVertices(MeshHandle h) {
+    if (!m->initialized) return {};
+    return m->meshes.readVertices(h);
+}
+
+MeshHandle RenderScene::registerSkinnedInstance(MeshHandle base) {
+    if (!m->initialized) return {};
+    if (!m->skinPassTried) {
+        m->skinPassTried = true;
+        if (!m->skinPass.initialize(m->info.device, m->info.physical)) m->skinPass.shutdown();
+    }
+    std::vector<GpuBuffer> retired;
+    uint32_t grown = 0;
+    const MeshHandle h = m->meshes.registerSkinnedCopy(base, retired, grown);
+    m->stats.arenaGrowths += grown;
+    m->retire(retired);
+    if (!h.valid()) {
+        OHAO_LOG(Error, render, "RenderScene: registerSkinnedInstance: no mesh for base {}", base.index);
+        return {};
+    }
+    m->skinned[h.index] = Impl::Skinned{h, {}, {}, false, 0};
+    m->stats.skinning.instances = static_cast<uint32_t>(m->skinned.size());
+    return h;
+}
+
+void RenderScene::setSkinPalette(MeshHandle mesh, std::span<const glm::mat4> current,
+                                 std::span<const glm::mat4> previous, const glm::vec3& boundsMin,
+                                 const glm::vec3& boundsMax) {
+    if (!m->initialized) return;
+    const auto it = m->skinned.find(mesh.index);
+    if (it == m->skinned.end() || !m->meshes.info(mesh) || current.size() != previous.size()) return;
+    Impl::Skinned& s = it->second;
+    const auto same = [](const std::vector<glm::mat4>& a, std::span<const glm::mat4> b) {
+        return a.size() == b.size() && (b.empty() || std::memcmp(a.data(), b.data(), b.size_bytes()) == 0);
+    };
+    if (!same(s.current, current) || !same(s.previous, previous)) {
+        s.current.assign(current.begin(), current.end());
+        s.previous.assign(previous.begin(), previous.end());
+        s.pending = true;
+    }
+    if (m->meshes.setBounds(mesh, boundsMin, boundsMax)) m->drawsDirty = true;
+}
+
+void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPassTimer* timer) {
+    auto& st = m->stats.skinning;
+    st.skinned = 0;
+    st.vertices = 0;
+    if (!m->initialized || cmd == VK_NULL_HANDLE || frameSlot >= MAX_FRAMES_IN_FLIGHT || !m->skinPass.ready()) return;
+    m->skinJobs.clear();
+    m->skinJobMeshes.clear();
+    for (auto& [index, s] : m->skinned) {
+        if (!s.pending || s.current.empty()) continue;
+        const MeshInfo* mesh = m->meshes.info(s.mesh);
+        if (!mesh) continue;
+        SkinPass::Job j;
+        j.baseVertex = mesh->baseVertexOffset;
+        j.vertex = mesh->vertexOffset;
+        j.vertexCount = mesh->vertexCount;
+        j.firstMeshlet = mesh->firstMeshlet;
+        j.meshletCount = mesh->meshletCount;
+        j.current = s.current;
+        j.previous = s.previous;
+        m->skinJobs.push_back(j);
+        m->skinJobMeshes.push_back(index);
+    }
+    if (m->skinJobs.empty() ||
+        !m->skinPass.prepare(frameSlot, m->skinJobs, m->meshes.vertexArena(), m->meshes.meshletArena(),
+                             m->meshes.meshletVertexArena()))
+        return;
+
+    if (timer) timer->begin(cmd, "skin");
+    m->skinPass.recordSkin(cmd, frameSlot, m->skinJobs);
+    if (timer) timer->end(cmd);
+    if (timer) timer->begin(cmd, "skin.bounds");
+    m->skinPass.recordBounds(cmd, frameSlot, m->skinJobs);
+    if (timer) timer->end(cmd);
+
+    if (m->rt()) {
+        if (timer) timer->begin(cmd, "rt.blas.refit");
+        bool any = false;
+        for (const uint32_t index : m->skinJobMeshes) {
+            Impl::Skinned& s = m->skinned[index];
+            const MeshInfo* mesh = m->meshes.info(s.mesh);
+            if (!mesh || mesh->blas == INVALID_BLAS) continue;
+            // A refit keeps the build's tree and moves its boxes: after many, the boxes of a
+            // pose far from the built one overlap and traversal slows (OPEN ruling 12).
+            const bool rebuild = s.refits >= kBlasRefitsPerRebuild;
+            if (!m->rtAccel->recordBlasUpdate(cmd, mesh->blas, m->meshes.vertexArena(), m->meshes.indexArena(), rebuild))
+                continue;
+            any = true;
+            if (rebuild) {
+                s.refits = 0;
+                ++st.blasRebuilds;
+            } else {
+                ++s.refits;
+                ++st.blasRefits;
+            }
+        }
+        if (any) {
+            // The BLASes to the TLAS build (recordUpdates) and the ray-query and trace readers.
+            VkMemoryBarrier after{};
+            after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            after.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            after.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                 VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &after, 0, nullptr, 0,
+                                 nullptr);
+            m->skinnedBlasChanged = true;
+        }
+        if (timer) timer->end(cmd);
+    }
+    for (const uint32_t index : m->skinJobMeshes) {
+        Impl::Skinned& s = m->skinned[index];
+        s.pending = false;
+        ++st.skinned;
+        if (const MeshInfo* mesh = m->meshes.info(s.mesh)) st.vertices += mesh->vertexCount;
+    }
 }
 
 MaterialHandle RenderScene::registerMaterial(const MaterialDesc& desc) {
@@ -550,7 +695,10 @@ void RenderScene::recordUpdates(VkCommandBuffer cmd, uint32_t frameSlot) {
     m->stats.instanceBytesUploaded = 0;
     m->stats.lightBytesUploaded = 0;
 
-    const bool tlasChanged = !m->tlasDirty.empty();
+    // A refit or rebuilt BLAS (recordSkinning, before this) moves its instances' bounds: the TLAS
+    // refits even when no instance changed.
+    const bool tlasChanged = !m->tlasDirty.empty() || m->skinnedBlasChanged;
+    m->skinnedBlasChanged = false;
     bool tlasUploaded = !tlasChanged;
     if (m->instances.consumeDrawsDirty() || m->drawsDirty) m->rebuildDraws();
     const bool drawUpload = m->drawTableStale();

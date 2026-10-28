@@ -167,7 +167,17 @@ struct MeshInfo {
     BlasHandle blas{INVALID_BLAS};
     std::string debugName;
     bool released{false};   // RenderScene::releaseMesh
+    // A skinned instance's own mesh (RenderScene::registerSkinnedInstance): its vertices are the
+    // base mesh's deformed by the skin pass, its indices and triangle slots the base's, its
+    // meshlets copies of the base's (spheres rewritten by skin.bounds), its BLAS updatable.
+    bool skinned{false};
+    uint32_t baseVertexOffset{0};   // the base mesh's first vertex (the bind pose the pass reads)
+    uint32_t firstMeshlet{0}, meshletCount{0};   // its own meshlet copies, all submeshes
 };
+
+// A skinned mesh's BLAS is refit while its pose changes and rebuilt after this many refits (the
+// spec's recommendation, OPEN ruling 12: about 2 s at 60 Hz).
+inline constexpr uint32_t kBlasRefitsPerRebuild = 120;
 
 struct RenderSceneStats {
     std::size_t instanceBytesUploaded{0};   // last recordUpdates
@@ -176,6 +186,15 @@ struct RenderSceneStats {
     uint32_t arenaGrowths{0};               // cumulative, mesh arenas (load time)
     uint32_t instanceTableGrowths{0};       // cumulative, device instance/material-ref buffers (mid-frame)
     enum class TlasOp { None, Build, Refit } lastTlasOp{TlasOp::None};
+    // The skinned instances, last recordSkinning: those whose pose changed were skinned (vertices
+    // their vertex count), their BLASes refit or rebuilt; the counts are cumulative.
+    struct Skinning {
+        uint32_t instances{0};     // skinned instances registered
+        uint32_t skinned{0};       // skinned last recordSkinning (pose changed)
+        uint64_t vertices{0};      // vertices skinned last recordSkinning
+        uint64_t blasRefits{0};    // cumulative
+        uint64_t blasRebuilds{0};  // cumulative
+    } skinning;
 };
 
 namespace detail {

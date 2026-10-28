@@ -43,6 +43,10 @@
      "doc": "DrawRecord.info.y bit: a light's emitter mesh, in no CSM cascade (it never shadows)"},
     {"name": "kDrawViewModel", "type": "uint", "value": 4,
      "doc": "DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)"},
+    {"name": "kDrawSkinned", "type": "uint", "value": 8,
+     "doc": "DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights"},
+    {"name": "kSkinGroupSize", "type": "uint", "value": 64,
+     "doc": "skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup"},
     {"name": "kInstanceViewModel", "type": "uint", "value": 4,
      "doc": "InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)"},
     {"name": "kInstanceEmitter", "type": "uint", "value": 2,
@@ -211,7 +215,7 @@
     {"name": "DrawRecord", "doc": "one draw of RenderScene's draw table (an instance's submesh), read by GPU culling and by the G-buffer and CSM vertex shaders through firstInstance",
      "fields": [
        {"name": "draw", "type": "uint4", "doc": "x first index, y index count, z vertex offset (an int's bits), w the instance-table slot"},
-       {"name": "info", "type": "uint4", "doc": "x the material slot, y flags (kDrawOneSided), z the submesh's first meshlet, w its meshlet count"},
+       {"name": "info", "type": "uint4", "doc": "x the material slot, y flags (kDrawOneSided, kDrawEmitter, kDrawViewModel, kDrawSkinned), z the submesh's first meshlet, w its meshlet count"},
        {"name": "aabbMin", "type": "float4", "doc": "xyz the mesh's local bounding box, minimum; w the draw's first meshlet entry (a uint's bits: the meshlets of the draws before it)"},
        {"name": "aabbMax", "type": "float4", "doc": "xyz the mesh's local bounding box, maximum"}
      ]},
@@ -246,6 +250,12 @@
        {"name": "proj", "type": "float4", "doc": "the projection the G-buffer was rasterized with (jitter included): x proj[0][0], y proj[1][1], z proj[2][0], w proj[2][1]"},
        {"name": "screen", "type": "float4", "doc": "x, y the frame's size in pixels; z the slice scale (kClusterSlices / log(far / kClusterNear)); w the slice bias (-log(kClusterNear) * scale): slice = floor(log(distance) * z + w)"},
        {"name": "config", "type": "uint4", "doc": "x the light count"}
+     ]},
+    {"name": "SkinPush", "doc": "skin and skin.bounds (skin/skin.slang) push constants, one skinned instance a dispatch",
+     "fields": [
+       {"name": "mesh", "type": "uint4", "doc": "x the base (bind-pose) mesh's first vertex in the arena, y the instance's own mesh's first vertex, z the vertex count"},
+       {"name": "palette", "type": "uint4", "doc": "x this frame's palette's first matrix in the slot's palette buffer, y last frame's, z the bone count"},
+       {"name": "meshlets", "type": "uint4", "doc": "skin.bounds: x the instance's first meshlet (its own copies), y its meshlet count"}
      ]},
     {"name": "PreviewPush", "doc": "capture.preview (capture/preview.slang) push constants",
      "fields": [

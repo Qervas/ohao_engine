@@ -41,6 +41,10 @@ inline constexpr uint32_t kDrawOneSided = 1u;
 inline constexpr uint32_t kDrawEmitter = 2u;
 // DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
 inline constexpr uint32_t kDrawViewModel = 4u;
+// DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
+inline constexpr uint32_t kDrawSkinned = 8u;
+// skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
+inline constexpr uint32_t kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
 inline constexpr uint32_t kInstanceViewModel = 4u;
 // InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
@@ -339,6 +343,17 @@ static_assert(offsetof(ClusterPush, proj) == 64);
 static_assert(offsetof(ClusterPush, screen) == 80);
 static_assert(offsetof(ClusterPush, config) == 96);
 static_assert(sizeof(ClusterPush) == 112);
+
+// skin and skin.bounds (skin/skin.slang) push constants, one skinned instance a dispatch
+struct alignas(16) SkinPush {
+    alignas(16) std::array<uint32_t, 4> mesh{};
+    alignas(16) std::array<uint32_t, 4> palette{};
+    alignas(16) std::array<uint32_t, 4> meshlets{};
+};
+static_assert(offsetof(SkinPush, mesh) == 0);
+static_assert(offsetof(SkinPush, palette) == 16);
+static_assert(offsetof(SkinPush, meshlets) == 32);
+static_assert(sizeof(SkinPush) == 48);
 
 // capture.preview (capture/preview.slang) push constants
 struct alignas(16) PreviewPush {

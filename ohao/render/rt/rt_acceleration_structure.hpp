@@ -35,6 +35,13 @@ struct BlasEntry {
     VkDeviceAddress deviceAddress = 0;
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
+    // An updatable BLAS (a skinned instance's): its geometry, for refits and rebuilds.
+    bool updatable = false;
+    VkDeviceSize vertexStride = 0;
+    uint32_t maxVertex = 0;
+    uint32_t primitiveOffset = 0;   // index byte offset
+    uint32_t firstVertex = 0;
+    VkDeviceSize scratchSize = 0;   // max(build, update) scratch
 };
 
 // TLAS storage replaced by buildTLASFromDevice. Earlier frames may still trace or
@@ -91,22 +98,24 @@ public:
     // vertexOffset/indexOffset are BYTE offsets into the combined buffer.
     // firstVertex is added to every index: 0 for buffers holding global indices,
     // the mesh's first vertex for arenas holding mesh-local indices.
+    // updatable: ALLOW_UPDATE | PREFER_FAST_BUILD (a skinned instance's, refit every frame its
+    // pose changes: recordBlasUpdate); else PREFER_FAST_TRACE.
     BlasHandle createBLAS(VkBuffer vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride,
                           VkBuffer indexBuffer, uint32_t indexCount,
                           VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                          VkCommandBuffer cmd, uint32_t firstVertex = 0);
+                          VkCommandBuffer cmd, uint32_t firstVertex = 0, bool updatable = false);
 
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);
 
-    // Create a new BLAS from tightly-packed vec3 positions (stride=12).
-    // For per-frame animated mesh BLAS — uses PREFER_FAST_BUILD.
-    // If cmd is provided, records the build on that command buffer (caller submits).
-    // If cmd is VK_NULL_HANDLE, uses single-time commands (submit + wait internally).
-    BlasHandle createBLASFromPositions(VkBuffer positionBuffer, uint32_t vertexCount,
-                                       VkBuffer indexBuffer, uint32_t indexCount,
-                                       VkDeviceSize indexByteOffset,
-                                       VkCommandBuffer cmd = VK_NULL_HANDLE);
+    // Records an updatable BLAS's refit (MODE_UPDATE, in place) or, `rebuild`, a full build in
+    // place, from its geometry in `vertexBuffer` / `indexBuffer` (the arenas as they are now: they
+    // may have grown since). Uses a refit scratch buffer of this object's, ordered by a barrier
+    // before each build (one queue); a scratch that must grow is retired (takeRetired). The
+    // caller makes the vertex writes visible to the build before, and the BLAS visible to its
+    // readers (the TLAS build, ray queries) after. False when nothing was recorded.
+    bool recordBlasUpdate(VkCommandBuffer cmd, BlasHandle handle, VkBuffer vertexBuffer, VkBuffer indexBuffer,
+                          bool rebuild);
 
     // === TLAS management ===
 
@@ -201,6 +210,10 @@ private:
     VkDeviceMemory m_tlasScratchMemory = VK_NULL_HANDLE;
     VkDeviceSize m_tlasScratchSize = 0;
     std::vector<RetiredTlas> m_retired;
+    // recordBlasUpdate's scratch (inside frames: retired, not destroyed, when it grows).
+    VkBuffer m_refitScratchBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_refitScratchMemory = VK_NULL_HANDLE;
+    VkDeviceSize m_refitScratchSize = 0;
 
     // Instance buffer (GPU-side VkAccelerationStructureInstanceKHR array)
     VkBuffer m_instanceBuffer = VK_NULL_HANDLE;

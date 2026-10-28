@@ -180,6 +180,8 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
+    // Skinned poses first: the TLAS build in recordUpdates reads the refit BLASes.
+    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
     m_passTimer.begin(cmd, "scene.upload");
     // A spot light's mesh shines toward this frame's camera as the light does (its cone).
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());
@@ -351,6 +353,7 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
     m_passTimer.beginFrame(cmd, m_currentFrame, m_framesStarted);
+    m_renderScene->recordSkinning(cmd, m_currentFrame, &m_passTimer);
     m_passTimer.begin(cmd, "scene.upload");
     // A spot light's mesh shines toward this frame's camera as the light does (its cone).
     if (m_camera) m_renderScene->setViewerPosition(m_camera->getPosition());

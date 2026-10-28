@@ -26,6 +26,7 @@
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
@@ -83,6 +84,11 @@ constexpr Config kConfigs[] = {
     // RT goldens render it. Compared within the BVH floor (see rtWithinFloor), not exactly.
     {"cornell_rt_offline", "assets/scenes/cornell_box.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
     {"cornell_rt_realtime", "assets/scenes/cornell_box.scene.json", "rt_realtime", R"("spp":16,"denoise":"none")"},
+    // Test 24 (sub-project 10, t24_deferred_determinism_skinned): a skinned instance (the rig
+    // mid-wave): the skin pass, its bounds and the refit BLAS (RT shadows, RT GI, the tracer).
+    {"anim_rig_plain", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":[])"},
+    {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},
+    {"anim_rig_rt_offline", "assets/scenes/anim_rig.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
 };
 
 bool isRT(const Config& c) { return std::strcmp(c.mode, "deferred") != 0; }
@@ -157,6 +163,7 @@ Image renderFresh(const reflect::TypeRegistry& types, ecs::AssetResolver& assets
     ecs::World world;
     api::Session s(world, types);
     s.setAssetResolver(&assets);
+    ecs::installAnimation(world, assets);   // the skinned rig's pose, as the CLI context installs it
     h.bind(world);
     s.setHost(&h);
     const std::string loaded = s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}");

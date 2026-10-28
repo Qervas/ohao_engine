@@ -35,6 +35,10 @@ static const uint kDrawOneSided = 1u;
 static const uint kDrawEmitter = 2u;
 // DrawRecord.info.y bit: a first-person gun's mesh (ViewModel), drawn shrunk toward the eye: in no CSM cascade (it never shadows the world)
 static const uint kDrawViewModel = 4u;
+// DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
+static const uint kDrawSkinned = 8u;
+// skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
+static const uint kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
 static const uint kInstanceViewModel = 4u;
 // InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
@@ -227,7 +231,7 @@ struct MeshletGpu
 struct DrawRecord
 {
     uint4 draw;   // x first index, y index count, z vertex offset (an int's bits), w the instance-table slot
-    uint4 info;   // x the material slot, y flags (kDrawOneSided), z the submesh's first meshlet, w its meshlet count
+    uint4 info;   // x the material slot, y flags (kDrawOneSided, kDrawEmitter, kDrawViewModel, kDrawSkinned), z the submesh's first meshlet, w its meshlet count
     float4 aabbMin;   // xyz the mesh's local bounding box, minimum; w the draw's first meshlet entry (a uint's bits: the meshlets of the draws before it)
     float4 aabbMax;   // xyz the mesh's local bounding box, maximum
 };
@@ -272,6 +276,14 @@ struct ClusterPush
     float4 proj;   // the projection the G-buffer was rasterized with (jitter included): x proj[0][0], y proj[1][1], z proj[2][0], w proj[2][1]
     float4 screen;   // x, y the frame's size in pixels; z the slice scale (kClusterSlices / log(far / kClusterNear)); w the slice bias (-log(kClusterNear) * scale): slice = floor(log(distance) * z + w)
     uint4 config;   // x the light count
+};
+
+// skin and skin.bounds (skin/skin.slang) push constants, one skinned instance a dispatch
+struct SkinPush
+{
+    uint4 mesh;   // x the base (bind-pose) mesh's first vertex in the arena, y the instance's own mesh's first vertex, z the vertex count
+    uint4 palette;   // x this frame's palette's first matrix in the slot's palette buffer, y last frame's, z the bone count
+    uint4 meshlets;   // skin.bounds: x the instance's first meshlet (its own copies), y its meshlet count
 };
 
 // capture.preview (capture/preview.slang) push constants

@@ -140,6 +140,18 @@ if(MSVC)
 endif()
 add_dependencies(light_emitter_gpu_test shaders)
 
+# GPU skinning (sub-project 10, test 24): the deformed range against a CPU skin, two poses of one
+# mesh, the motion vectors' previous positions, RT and the path tracer seeing the pose, refits.
+add_executable(skinning_gpu_test skinning_gpu_test.cpp)
+target_compile_features(skinning_gpu_test PRIVATE cxx_std_20)
+target_compile_definitions(skinning_gpu_test PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    OHAO_BINARY_DIR="${CMAKE_BINARY_DIR}")
+target_link_libraries(skinning_gpu_test PRIVATE ohao_host ohao_test_harness)
+if(MSVC)
+    target_link_options(skinning_gpu_test PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+endif()
+add_dependencies(skinning_gpu_test shaders)
+
 # The small GoogleTest suites (CPU). ohao_gtest_main prints the harness's JSON line.
 add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp
@@ -164,6 +176,6 @@ endforeach()
 # The GPU suites above: one device each, never two at once.
 ohao_add_test(renderer_test LABEL gpu GPU COMMAND renderer_test)
 foreach(t instantiate_gpu_test scene_view_gpu_test restore_render_gpu_test deferred_determinism_gpu_test
-          cull_parity_gpu_test light_cluster_gpu_test light_emitter_gpu_test)
+          cull_parity_gpu_test light_cluster_gpu_test light_emitter_gpu_test skinning_gpu_test)
     ohao_add_test(${t} LABEL gpu GPU COMMAND ${t})
 endforeach()

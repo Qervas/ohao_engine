@@ -219,7 +219,7 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
                                                 VkDeviceSize vertexStride,
                                                 VkBuffer indexBuffer, uint32_t indexCount,
                                                 VkDeviceSize vertexByteOffset, VkDeviceSize indexByteOffset,
-                                                VkCommandBuffer cmd, uint32_t firstVertex) {
+                                                VkCommandBuffer cmd, uint32_t firstVertex, bool updatable) {
     if (!m_supported) return INVALID_BLAS;
 
     // Geometry: point to BASE of combined buffers (not sub-range).
@@ -246,7 +246,9 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.flags = updatable ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                                      VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
+                                : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
 
@@ -259,6 +261,12 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
     BlasEntry entry{};
     entry.vertexCount = vertexCount;
     entry.indexCount = indexCount;
+    entry.updatable = updatable;
+    entry.vertexStride = vertexStride;
+    entry.maxVertex = triangles.maxVertex;
+    entry.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
+    entry.firstVertex = firstVertex;
+    entry.scratchSize = std::max(sizeInfo.buildScratchSize, sizeInfo.updateScratchSize);
 
     if (!createBuffer(sizeInfo.accelerationStructureSize,
                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
@@ -332,20 +340,33 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     entry.deviceAddress = 0;
 }
 
-BlasHandle RTAccelerationStructure::createBLASFromPositions(
-        VkBuffer positionBuffer, uint32_t vertexCount,
-        VkBuffer indexBuffer, uint32_t indexCount,
-        VkDeviceSize indexByteOffset, VkCommandBuffer cmd) {
-    if (!m_supported) return INVALID_BLAS;
+bool RTAccelerationStructure::recordBlasUpdate(VkCommandBuffer cmd, BlasHandle handle, VkBuffer vertexBuffer,
+                                               VkBuffer indexBuffer, bool rebuild) {
+    if (!m_supported || cmd == VK_NULL_HANDLE || handle >= m_blasEntries.size()) return false;
+    const BlasEntry& entry = m_blasEntries[handle];
+    if (!entry.updatable || entry.handle == VK_NULL_HANDLE) return false;
 
-    uint32_t primitiveCount = indexCount / 3;
+    if (m_refitScratchSize < entry.scratchSize) {
+        if (m_refitScratchBuffer != VK_NULL_HANDLE)   // frames in flight may still use it
+            m_retired.push_back(RetiredTlas{VK_NULL_HANDLE, m_refitScratchBuffer, m_refitScratchMemory});
+        m_refitScratchBuffer = VK_NULL_HANDLE;
+        m_refitScratchMemory = VK_NULL_HANDLE;
+        const VkDeviceSize size = (std::max(entry.scratchSize, m_refitScratchSize * 2) + 255) & ~VkDeviceSize{255};
+        if (!createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_refitScratchBuffer, m_refitScratchMemory)) {
+            m_refitScratchSize = 0;
+            OHAO_LOG(Error, render, "RT: BLAS refit scratch allocation failed ({} bytes)", size);
+            return false;
+        }
+        m_refitScratchSize = size;
+    }
 
     VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
     triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = getBufferDeviceAddress(positionBuffer);
-    triangles.vertexStride = 12;
-    triangles.maxVertex = vertexCount - 1;
+    triangles.vertexData.deviceAddress = getBufferDeviceAddress(vertexBuffer);
+    triangles.vertexStride = entry.vertexStride;
+    triangles.maxVertex = entry.maxVertex;
     triangles.indexType = VK_INDEX_TYPE_UINT32;
     triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);
 
@@ -358,63 +379,31 @@ BlasHandle RTAccelerationStructure::createBLASFromPositions(
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
-
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
-    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-    vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                             &buildInfo, &primitiveCount, &sizeInfo);
-
-    BlasEntry entry{};
-    entry.vertexCount = vertexCount;
-    entry.indexCount = indexCount;
-
-    if (!createBuffer(sizeInfo.accelerationStructureSize,
-                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                      entry.buffer, entry.memory)) {
-        return INVALID_BLAS;
-    }
-
-    VkAccelerationStructureCreateInfoKHR createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-    createInfo.buffer = entry.buffer;
-    createInfo.size = sizeInfo.accelerationStructureSize;
-    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-
-    if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &entry.handle) != VK_SUCCESS) {
-        destroyBuffer(entry.buffer, entry.memory);
-        return INVALID_BLAS;
-    }
-
-    VkAccelerationStructureDeviceAddressInfoKHR addressInfo{};
-    addressInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    addressInfo.accelerationStructure = entry.handle;
-    entry.deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(m_device, &addressInfo);
-
-    ensureScratchBuffer(sizeInfo.buildScratchSize);
-
-    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.mode = rebuild ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    buildInfo.srcAccelerationStructure = rebuild ? VK_NULL_HANDLE : entry.handle;
     buildInfo.dstAccelerationStructure = entry.handle;
-    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_refitScratchBuffer);
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
-    rangeInfo.primitiveCount = primitiveCount;
-    rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
-
+    rangeInfo.primitiveCount = entry.indexCount / 3;
+    rangeInfo.primitiveOffset = entry.primitiveOffset;
+    rangeInfo.firstVertex = entry.firstVertex;
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
 
-    bool ownCmd = (cmd == VK_NULL_HANDLE);
-    if (ownCmd) cmd = beginSingleTimeCommands();
+    // The scratch and the structure: the previous build (this frame's or an earlier one) and the
+    // previous frames' traces finish with them first.
+    VkMemoryBarrier before{};
+    before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    before.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    before.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | m_asConsumerStages,
+                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &before, 0, nullptr, 0, nullptr);
     vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
-    if (ownCmd) endSingleTimeCommands(cmd);
-
-    BlasHandle handle = static_cast<BlasHandle>(m_blasEntries.size());
-    m_blasEntries.push_back(entry);
-    return handle;
+    return true;
 }
 
 // === TLAS ===
@@ -732,6 +721,8 @@ void RTAccelerationStructure::destroy() {
     // Destroy scratch
     destroyBuffer(m_scratchBuffer, m_scratchMemory);
     m_scratchSize = 0;
+    destroyBuffer(m_refitScratchBuffer, m_refitScratchMemory);
+    m_refitScratchSize = 0;
 
     m_instances.clear();
     m_supported = false;

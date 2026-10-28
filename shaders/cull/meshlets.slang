@@ -102,7 +102,10 @@ GVertex shadeVertex(uint vtx, DrawRecord d, InstanceXform x)
     v.texCoord = float2(vertices[b + 9u], vertices[b + 10u]);
     v.texCoord1 = float2(vertices[b + 11u], vertices[b + 12u]);
     v.currentPos = mul(camera.viewProj, worldPos);
-    v.prevPos = mul(camera.prevViewProj, mul(x.prevWorld, float4(p, 1.0)));
+    // A skinned instance's own mesh keeps last frame's position in boneWeights.xyz (gbuffer.vert's rule).
+    const float3 prevLocal = (d.info.y & kDrawSkinned) != 0u
+                                 ? float3(vertices[b + 21u], vertices[b + 22u], vertices[b + 23u]) : p;
+    v.prevPos = mul(camera.prevViewProj, mul(x.prevWorld, float4(prevLocal, 1.0)));
     v.instance = d.draw.w;
     v.materialSlot = d.info.x;
     v.position = v.currentPos;

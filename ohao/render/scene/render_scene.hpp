@@ -6,10 +6,11 @@
 #include <vulkan/vulkan.h>
 #include <array>
 #include <memory>
+#include <span>
 
 namespace ohao::render {
 
-class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable;
+class MeshRegistry; class MaterialTable; class InstanceTable; class LightTable; class GpuPassTimer;
 
 // The persistent GPU render world: mesh arenas (one BLAS per mesh), a material
 // table, an instance table and a light table. Host edits mark entries dirty; the
@@ -42,6 +43,22 @@ public:
     // the frames in flight retire. Instances must stop using it first (the ECS extract
     // releases them when MeshRenderer changes). Arena space is not reused yet.
     void releaseMesh(MeshHandle h);
+    // A skinned instance's own mesh (sub-project 10): `base`'s vertices copied into a new range
+    // of the arena (its bind pose until a palette is set), its indices and triangle slots
+    // shared, its meshlets copied, an updatable BLAS. An instance using it is skinned by
+    // recordSkinning. Released with releaseMesh like any mesh. Blocking (load time).
+    MeshHandle registerSkinnedInstance(MeshHandle base);
+    // The skinned mesh's palette this frame and last frame's (in the mesh's bone order), and a
+    // local box around its posed vertices (the draws' culling box). A palette equal to what the
+    // mesh already shows skips the skin, bounds and refit work.
+    void setSkinPalette(MeshHandle skinned, std::span<const glm::mat4> current, std::span<const glm::mat4> previous,
+                        const glm::vec3& boundsMin, const glm::vec3& boundsMax);
+    // Before recordUpdates (its TLAS build reads the refit BLASes): the skin, skin.bounds and
+    // rt.blas.refit passes for the skinned meshes whose pose changed, each timed by `timer`
+    // when given. Nothing is recorded when none changed.
+    void recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPassTimer* timer);
+    // A mesh's vertices as the arena holds them now (blocking: the queue idles). Tests and tools.
+    [[nodiscard]] std::vector<Vertex> readMeshVertices(MeshHandle h);
     MaterialHandle registerMaterial(const MaterialDesc& desc);
     uint32_t createInstance(const InstanceDesc& desc);        // returns slot
     void updateInstance(uint32_t slot, const InstanceDesc& desc);
@@ -97,7 +114,7 @@ public:
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;
 
-    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; bool emitter; bool viewModel; };
+    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; bool emitter; bool viewModel; bool skinned{false}; };
     // Visible instance x submesh draws, in slot order; rebuilt only when instances change.
     [[nodiscard]] std::span<const Draw> draws() const;
     // The same list on the GPU (gpu::shared::DrawRecord each), uploaded by recordUpdates:

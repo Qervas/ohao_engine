@@ -203,7 +203,28 @@ void AnimationSystem::poseEntity(World& world, entt::entity e, bool placed) {
     }
     if (pose.boneToJoint.empty()) {
         auto loaded = m_assets.loadModel(model->asset, model->mesh);
-        if (loaded && loaded.value()) pose.boneToJoint = anim::boneToJointMap(g->skeleton, loaded.value()->boneNames);
+        if (loaded && loaded.value()) {
+            const Model& mesh = *loaded.value();
+            pose.boneToJoint = anim::boneToJointMap(g->skeleton, mesh.boneNames);
+            const glm::vec3 none(3.4e38f), noneMax(-3.4e38f);
+            pose.boneBoxes.assign(pose.boneToJoint.size() + 1, {none, noneMax});
+            for (const Vertex& v : mesh.vertices) {
+                bool held = false;
+                for (int k = 0; k < 4; ++k) {
+                    const int b = v.boneIndices[k];
+                    if (v.boneWeights[k] <= 0.0f || b < 0 || b >= static_cast<int>(pose.boneToJoint.size())) continue;
+                    auto& [lo, hi] = pose.boneBoxes[static_cast<std::size_t>(b)];
+                    lo = glm::min(lo, v.position);
+                    hi = glm::max(hi, v.position);
+                    held = true;
+                }
+                if (!held) {
+                    auto& [lo, hi] = pose.boneBoxes.back();
+                    lo = glm::min(lo, v.position);
+                    hi = glm::max(hi, v.position);
+                }
+            }
+        }
     }
     if (placed || pose.frame == 0 || pose.palette.size() != pose.boneToJoint.size()) {
         anim::skinPalette(g->skeleton, pose.model, pose.boneToJoint, pose.palette);
@@ -212,6 +233,22 @@ void AnimationSystem::poseEntity(World& world, entt::entity e, bool placed) {
         pose.prevPalette.swap(pose.palette);
         anim::skinPalette(g->skeleton, pose.model, pose.boneToJoint, pose.palette);
     }
+    // The posed local box: each bone's box through its matrix (its eight corners), and the
+    // vertices no bone holds where they are.
+    glm::vec3 lo(3.4e38f), hi(-3.4e38f);
+    for (std::size_t b = 0; b < pose.boneBoxes.size(); ++b) {
+        const auto& [bmin, bmax] = pose.boneBoxes[b];
+        if (bmin.x > bmax.x) continue;
+        const glm::mat4 m = b < pose.palette.size() ? pose.palette[b] : glm::mat4(1.0f);
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? bmax.x : bmin.x, (c & 2) ? bmax.y : bmin.y, (c & 4) ? bmax.z : bmin.z);
+            const glm::vec3 p = glm::vec3(m * glm::vec4(corner, 1.0f));
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+    }
+    pose.boundsMin = lo.x <= hi.x ? lo : glm::vec3(0.0f);
+    pose.boundsMax = lo.x <= hi.x ? hi : glm::vec3(0.0f);
     ++pose.frame;
 }
 

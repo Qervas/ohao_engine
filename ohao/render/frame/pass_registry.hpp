@@ -18,6 +18,9 @@ struct PassInfo {
 };
 
 inline constexpr PassInfo kPasses[] = {
+    {"skin", PassKind::Compute, "skinned instances whose pose changed: each vertex through its palette into the instance's own mesh, last frame's position beside it (skin/skin.slang)"},
+    {"skin.bounds", PassKind::Compute, "the skinned instances' meshlet spheres around their deformed vertices"},
+    {"rt.blas.refit", PassKind::RayTracing, "the skinned instances' BLASes refit to their pose (rebuilt every kBlasRefitsPerRebuild refits)"},
     {"scene.upload", PassKind::Transfer, "RenderScene table uploads, BLAS builds, the TLAS build or refit"},
     {"csm", PassKind::Raster, "cascaded shadow maps (render.settings csm, default 4 of 2048x2048): only when RT shadows do not run"},
     {"cull.instances", PassKind::Compute, "GPU culling, early phase: the draws visible last frame and in the frustum, as indirect lists (prefix-sum compaction)"},

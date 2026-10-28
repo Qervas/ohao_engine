@@ -53,6 +53,20 @@ SCENES = [
     ("damaged_helmet rt_offline",
      ["build/Release/model_viewer.exe", "assets/test_models/DamagedHelmet.glb", "{out}", "4",
       "rt_offline", "--denoise=none"]),
+    # A skinned instance (sub-project 10): the skin, bounds and BLAS refit passes, then every
+    # consumer of the deformed mesh (G-buffer, RT shadows and GI, the path tracer, NRD).
+    ("anim_rig deferred",
+     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+      "--mode", "deferred", "--frames", "4", "--size", "640x360"]),
+    ("anim_rig rt_offline",
+     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("anim_rig rt_realtime",
+     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("anim_rig rt_realtime nrd",
+     ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
 ]
 
 LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)

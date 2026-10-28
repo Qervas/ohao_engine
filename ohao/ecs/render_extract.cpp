@@ -1,4 +1,5 @@
 #include "ecs/render_extract.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/components.hpp"
 #include "render/scene/render_scene.hpp"
 #include "core/log.hpp"
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <unordered_set>
 #include <utility>
@@ -73,6 +75,7 @@ public:
         for (uint32_t slot = 0; slot < m_owner.size(); ++slot)
             if (m_owner[slot] != entt::null) m_rs.destroyInstance(slot);
         for (const auto& [e, slot] : m_releaseQueue) m_rs.destroyInstance(slot);
+        for (const auto& [e, s] : m_skinned) m_rs.releaseMesh(s.mesh);
         if (m_lightsSet) m_rs.setLights({});
     }
 
@@ -80,6 +83,7 @@ public:
         // 1. Releases queued by the destroy signals.
         for (const auto& [e, slot] : m_releaseQueue) {
             m_rs.destroyInstance(slot);
+            releaseSkinned(e);
             if (!m_reg.valid(e)) continue;
             // MeshRenderer was removed (entity alive): drop the stale RenderSlot. Its
             // destroy signal finds the slot already unowned and does nothing.
@@ -124,6 +128,16 @@ public:
 
         // 4.
         m_reg.clear<RenderDirty>();
+        for (const entt::entity e : m_unskinned) releaseSkinned(e);
+        m_unskinned.clear();
+
+        // Skinned meshes: this frame's palettes (the pose system's), every frame; the scene
+        // skins only those whose pose changed.
+        for (const auto& [e, s] : m_skinned) {
+            const auto* pose = m_reg.valid(e) ? m_reg.try_get<AnimPose>(e) : nullptr;
+            if (!pose || pose->palette.empty() || pose->palette.size() != pose->prevPalette.size()) continue;
+            m_rs.setSkinPalette(s.mesh, pose->palette, pose->prevPalette, pose->boundsMin, pose->boundsMax);
+        }
 
         // 5. Lights.
         if (lightsTouched) m_lightsDirty = true;
@@ -134,9 +148,36 @@ public:
     }
 
 private:
-    render::InstanceDesc describe(entt::entity e, const MeshRenderer& mr, const WorldTransform& wt) const {
+    // A skinned entity's own mesh (RenderScene::registerSkinnedInstance), made the first time it
+    // is drawn and again when its base mesh changes; none for an entity without SkinnedMesh.
+    render::MeshHandle meshFor(entt::entity e, const MeshRenderer& mr) {
+        const auto it = m_skinned.find(e);
+        if (!m_reg.all_of<SkinnedMesh>(e)) {
+            if (it != m_skinned.end()) m_unskinned.push_back(e);   // released after the instance moves off it
+            return mr.mesh;
+        }
+        if (it != m_skinned.end() && it->second.base.index == mr.mesh.index && m_rs.meshInfo(it->second.mesh))
+            return it->second.mesh;
+        if (it != m_skinned.end()) m_rs.releaseMesh(it->second.mesh);
+        const render::MeshHandle own = m_rs.registerSkinnedInstance(mr.mesh);
+        if (!m_rs.meshInfo(own)) {
+            warnOnce(mr.mesh, "registerSkinnedInstance failed; drawn unskinned");
+            m_skinned.erase(e);
+            return mr.mesh;
+        }
+        m_skinned[e] = Skinned{mr.mesh, own};
+        return own;
+    }
+    void releaseSkinned(entt::entity e) {
+        const auto it = m_skinned.find(e);
+        if (it == m_skinned.end()) return;
+        m_rs.releaseMesh(it->second.mesh);
+        m_skinned.erase(it);
+    }
+
+    render::InstanceDesc describe(entt::entity e, const MeshRenderer& mr, const WorldTransform& wt) {
         render::InstanceDesc d{};
-        d.mesh = mr.mesh;
+        d.mesh = meshFor(e, mr);
         d.materials = mr.materials;
         // Drawn between two simulation steps (render interpolation) or at the step's pose.
         if (const auto* rp = m_reg.try_get<RenderPose>(e)) {
@@ -247,6 +288,11 @@ private:
     bool m_lightsDirty{false};
     bool m_lightsSet{false};
     std::unordered_set<uint64_t> m_warned;   // mesh handles already reported
+    struct Skinned {
+        render::MeshHandle base, mesh;
+    };
+    std::map<entt::entity, Skinned> m_skinned;   // skinned entities' own meshes
+    std::vector<entt::entity> m_unskinned;       // lost SkinnedMesh this run
 };
 
 } // namespace

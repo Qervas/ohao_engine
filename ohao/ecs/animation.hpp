@@ -47,6 +47,11 @@ struct AnimPose {
     std::vector<glm::mat4> palette;         // skinning palette in the mesh's bone order, this frame
     std::vector<glm::mat4> prevPalette;     // the previous drawn frame's (= palette after a placement)
     std::vector<int> boneToJoint;           // the mesh's bones to the skeleton's joints
+    // Per bone, the bind-pose box of the vertices it holds (any weight); the last entry, the
+    // vertices no bone holds. The posed box is the union of each through its palette matrix:
+    // a skinned vertex is a weighted mean of its bones' images, so it lies inside.
+    std::vector<std::pair<glm::vec3, glm::vec3>> boneBoxes;
+    glm::vec3 boundsMin{0.0f}, boundsMax{0.0f};   // this frame's posed local box (the draws' culling box)
     uint64_t frame{0};                      // pose syncs run so far for this entity
 };
 
