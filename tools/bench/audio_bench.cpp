@@ -8,9 +8,11 @@
 // a device, 32 voices playing (positioned, occluded where the bank says so, topped up between
 // periods as one-shots end), every bus under `world` with its low-pass engaged and a send to the
 // return bus, then N periods (300) of 480 frames (10 ms at 48 kHz) rendered after 20 warm-ups;
-// median and p95 of the time to render one period. bank_load_ms (gated from step 3): parsing
-// nothing, decoding every variant of every sound into a fresh mixer, median of 5. The reverb
-// (step 2, which also joins this mix) and the voice schedule (step 3) add their own budgets.
+// median and p95 of the time to render one period; since step 2 the mix includes the reverb on the
+// return (the bank's defaultZone preset). reverb_10ms_ms (gated from step 2): the Freeverb alone,
+// stereo, on noise, one preset (room); reverb_xfade_10ms_ms (reported): the same mid-crossfade, two
+// cores running. bank_load_ms (gated from step 3): parsing nothing, decoding every variant of every
+// sound into a fresh mixer, median of 5. The voice schedule (step 3) adds its own budgets.
 //
 // --listen DIR writes step1_buses.wav (48 kHz stereo float): one burst of the fight's sounds, first
 // with every bus open, then with each leaf bus soloed in turn, and step1_buses.csv (the left
@@ -20,6 +22,7 @@
 // reference or beside other processes using more than half a core is `noisy`: exit 2.
 #include "audio/audio_bank.hpp"
 #include "audio/audio_system.hpp"
+#include "audio/reverb_node.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
 
@@ -265,6 +268,39 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // reverb_10ms_ms (step 2): the Freeverb alone on noise, stereo, the slice's room preset; then every
+    // period mid-crossfade to outdoor (two cores running), reported beside it.
+    bool reverbOk = true;
+    const auto timeReverb = [&](bool crossfading) {
+        std::vector<double> t;
+        const ReverbDesc* room = bank.preset("room");
+        const ReverbDesc* outdoor = bank.preset("outdoor");
+        if (!room || !outdoor) {
+            reverbOk = false;
+            return t;
+        }
+        Reverb r(48000);
+        r.setPreset(*room, 0);
+        if (crossfading) r.setPreset(*outdoor, 0x7fffffffu);   // a fade that outlasts the run
+        std::vector<float> in(std::size_t(kPeriod) * 2), wet(in.size());
+        uint32_t s = 12345u;
+        for (int i = 0; i < 20 + periods; ++i) {
+            for (float& v : in) {
+                s = s * 1664525u + 1013904223u;
+                v = 0.3f * (float(s >> 8) / 8388608.0f - 1.0f);
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            r.process(in.data(), wet.data(), kPeriod);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            for (float v : wet) reverbOk = reverbOk && std::isfinite(v);
+            if (i >= 20) t.push_back(ms);
+        }
+        if (crossfading && !r.crossfading()) reverbOk = false;
+        return t;
+    };
+    const std::vector<double> verbSamples = timeReverb(false), fadeSamples = timeReverb(true);
+    if (!reverbOk) failures.push_back("the reverb was not what was measured (no room/outdoor preset, a non-finite sample, or no crossfade)");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
@@ -272,7 +308,7 @@ int main(int argc, char** argv) {
 
     // A benchmark of broken code fails: 32 voices every period, audible, finite output.
     const double rms = samples.empty() ? 0.0 : std::sqrt(sumSquares / (double(samples.size()) * kPeriod * 2));
-    const bool wrong = !started || fewest < kVoices || !finite || rms < 1e-3 || worldBuses == 0;
+    const bool wrong = !started || fewest < kVoices || !finite || rms < 1e-3 || worldBuses == 0 || !reverbOk;
     if (started && wrong)
         failures.push_back("the mix is not what was measured: fewest voices " + std::to_string(fewest) + ", rms " +
                            std::to_string(rms) + (finite ? "" : ", non-finite samples") + ", world buses " +
@@ -307,8 +343,24 @@ int main(int argc, char** argv) {
         }
         std::printf("    budget %.0f ms, gated from step %d: %s\n", max, from, loadVerdict.c_str());
     }
+    const Stats verb = stats(verbSamples), fade = stats(fadeSamples);
+    std::printf("  reverb_10ms_ms     median %8.4f   p95 %8.4f   (one preset)\n", verb.median, verb.p95);
+    std::string verbVerdict = "reported";
+    if (budgets.contains("reverb_10ms_ms")) {
+        const double max = budgets["reverb_10ms_ms"].value("max", 0.0);
+        const int from = budgets["reverb_10ms_ms"].value("gatedFrom", 0);
+        verbVerdict = currentStep < from ? "pending" : verb.median <= max ? "pass" : "fail";
+        if (verbVerdict == "fail") {
+            char text[160];
+            std::snprintf(text, sizeof text, "reverb_10ms_ms: median %.4f ms over its budget of %.4f ms", verb.median, max);
+            failures.push_back(text);
+        }
+        std::printf("    budget %.3f ms, gated from step %d: %s\n", max, from, verbVerdict.c_str());
+    }
+    std::printf("  reverb_xfade_10ms_ms median %6.4f   p95 %8.4f   (mid-crossfade: two cores; reported)\n", fade.median,
+                fade.p95);
     for (const auto& [name, b] : budgets.items())
-        if (name != "mix_10ms_ms" && name != "bank_load_ms")
+        if (name != "mix_10ms_ms" && name != "bank_load_ms" && name != "reverb_10ms_ms")
             std::printf("  %-18s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -325,6 +377,8 @@ int main(int argc, char** argv) {
                           {"verdict", verdict}, {"voices", kVoices}, {"fewestVoices", fewest},
                           {"worldBuses", worldBuses}, {"rms", rms}};
     out["bank_load_ms"] = {{"median", load.median}, {"samples", loads}, {"sounds", bank.sounds.size()}, {"verdict", loadVerdict}};
+    out["reverb_10ms_ms"] = {{"median", verb.median}, {"p95", verb.p95}, {"min", verb.min}, {"verdict", verbVerdict}};
+    out["reverb_xfade_10ms_ms"] = {{"median", fade.median}, {"p95", fade.p95}, {"min", fade.min}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
