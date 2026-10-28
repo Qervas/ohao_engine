@@ -24,7 +24,6 @@
     "impact_metal":     {"files": "weapons/impact_metal", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_wood":      {"files": "weapons/impact_wood", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_default":   {"files": "weapons/impact_default", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
-    "hurt":             {"files": "weapons/hurt", "bus": "voice", "priority": 240, "shape": "ear", "holdMs": 300, "volume": 0.85},
     "death":            {"files": "weapons/death", "bus": "voice", "priority": 240, "shape": "near", "holdMs": 800, "volume": 0.85},
     "reload":           {"files": "weapons/reload", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 900, "volume": 0.85, "send": 0.1},
     "empty":            {"files": "weapons/empty", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 120, "volume": 0.85},
@@ -41,8 +40,7 @@
   },
   "ducks": [
     {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
-    {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15},
-    {"on": "hurt", "bus": "world", "db": -4, "attackSteps": 1, "releaseSteps": 18}
+    {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15}
   ],
   "snapshots": {
     "default": {},

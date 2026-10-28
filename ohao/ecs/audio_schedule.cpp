@@ -244,9 +244,6 @@ std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerI
     switch (e.kind) {
         case K::Shot: return {byPlayer ? "fire" : "enemy_fire"};
         case K::Hit: return {"impact_" + (e.surface.empty() ? std::string("default") : e.surface)};
-        case K::Damage:
-            if (playerId != 0 && e.targetId == playerId) return {"hurt"};
-            return {};
         case K::Death: return {"death"};
         case K::Reload:
             if (!byPlayer) return {};
@@ -257,7 +254,7 @@ std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerI
 }
 
 bool combatSoundAtEar(std::string_view name) noexcept {
-    return name == "fire" || name == "hurt" || name == "reload" || name == "empty";
+    return name == "fire" || name == "reload" || name == "empty";
 }
 
 std::vector<std::string> animSoundNames(const AnimEvent& e) {

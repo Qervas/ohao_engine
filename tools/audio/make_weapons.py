@@ -7,7 +7,6 @@ partials with fixed seeds, so the files are ours (MIT, as the repo) and rebuild 
     fire             the player's rifle: a sharp crack over a low thump and a short noise tail
     enemy_fire       an enemy's: the same family, darker and a little softer
     impact_<surface> a round striking default, concrete, metal or wood
-    hurt             the player hit: a dull body thump
     death            a heavier thump with a falling tone
     reload           magazine out, magazine in, a bolt pull
     empty            the dry click of an empty magazine
@@ -93,15 +92,6 @@ def impact(surface, seed):
         hit = lowpass(noise, 1800.0) * envelope(t, 0.0, 0.001, 0.02)
         x = hit * 1.6 + np.sin(2 * np.pi * 150.0 * t) * envelope(t, 0.0, 0.001, 0.03) * 0.6
     return finish(x, length, 0.8)
-
-
-def hurt():
-    rng = np.random.default_rng(71)
-    length = 0.3
-    t = timeline(length)
-    thump = np.sin(2 * np.pi * (95.0 - 30.0 * t) * t) * envelope(t, 0.0, 0.003, 0.07)
-    smack = lowpass(rng.standard_normal(t.size), 900.0) * envelope(t, 0.0, 0.002, 0.03)
-    return finish(thump * 1.2 + smack * 1.5, length, 0.85)
 
 
 def death():
@@ -199,7 +189,6 @@ def main():
         "impact_concrete": impact("concrete", 23),
         "impact_metal": impact("metal", 29),
         "impact_wood": impact("wood", 31),
-        "hurt": hurt(),
         "death": death(),
         "reload": reload(),
         "empty": empty(),

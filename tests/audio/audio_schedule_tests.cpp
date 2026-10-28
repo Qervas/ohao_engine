@@ -463,7 +463,8 @@ void t28_rules_moved() {
     CHECK(combatSoundNames(ev(K::Shot, enemy, 0), player) == V{"enemy_fire"}, "an enemy's round: enemy_fire");
     CHECK(combatSoundNames(ev(K::Hit, player, 7, 4.0f, "metal"), player) == V{"impact_metal"}, "a hit: its surface's impact");
     CHECK(combatSoundNames(ev(K::Hit, enemy, player, 4.0f, "default"), player) == V{"impact_default"}, "on anything");
-    CHECK(combatSoundNames(ev(K::Damage, enemy, player, 8.0f), player) == V{"hurt"}, "damage to the player: hurt");
+    // Damage makes no sound: the player's hurt cue masked the enemy's shot (Frank, ruling 22).
+    CHECK(combatSoundNames(ev(K::Damage, enemy, player, 8.0f), player).empty(), "damage to the player: nothing");
     CHECK(combatSoundNames(ev(K::Damage, player, enemy, 25.0f), player).empty(), "damage to anyone else: nothing");
     CHECK(combatSoundNames(ev(K::Death, player, enemy), player) == V{"death"}, "a death");
     CHECK(combatSoundNames(ev(K::Reload, player, 0, 0.0f), player) == (V{"empty", "reload"}), "the magazine ran dry");
@@ -471,7 +472,7 @@ void t28_rules_moved() {
     CHECK(combatSoundNames(ev(K::Reload, enemy, 0, 0.0f), player).empty(), "an enemy's reload: nothing");
     for (const K quiet : {K::Reloaded, K::RoundStart, K::Restart, K::Win})
         CHECK(combatSoundNames(ev(quiet, player, 0), player).empty(), "and nothing else");
-    for (const char* own : {"fire", "hurt", "reload", "empty"}) CHECK(combatSoundAtEar(own), "the player's own at the ear");
+    for (const char* own : {"fire", "reload", "empty"}) CHECK(combatSoundAtEar(own), "the player's own at the ear");
     CHECK(!combatSoundAtEar("enemy_fire") && !combatSoundAtEar("impact_metal") && !combatSoundAtEar("death"), "the rest at their point");
 
     // Handling and footsteps from animation events (sp10_t23_handling_sounds).
@@ -749,8 +750,8 @@ void t28_hold_declared() {
     CHECK(!x.empty() && x == y, "the same commands with the sound's file swapped for a longer one");
 }
 
-// A `fire` ducks its buses while it holds (attack 1 step, release 15), a hurt the world; the deepest
-// duck on a bus wins.
+// A `fire` ducks its buses while it holds (attack 1 step, release 15), a `sting` the world; the
+// deepest duck on a bus wins.
 void t28_duck_rules() {
     const char* json = R"({
       "buses": {"master": {}, "world": {"parent": "master"}, "weapons": {"parent": "world"},
@@ -758,13 +759,13 @@ void t28_duck_rules() {
       "sounds": {
         "fire":   {"files": "t/fire", "bus": "weapons", "priority": 250, "shape": "ear", "holdMs": 450},
         "reload": {"files": "t/reload", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 900},
-        "hurt":   {"files": "t/hurt", "bus": "voice", "priority": 240, "shape": "ear", "holdMs": 300}
+        "sting":  {"files": "t/sting", "bus": "voice", "priority": 240, "shape": "ear", "holdMs": 300}
       },
       "ducks": [
         {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
         {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15},
         {"on": "reload", "bus": "foley", "db": -5, "attackSteps": 2, "releaseSteps": 10},
-        {"on": "hurt", "bus": "world", "db": -4, "attackSteps": 1, "releaseSteps": 18}
+        {"on": "sting", "bus": "world", "db": -4, "attackSteps": 1, "releaseSteps": 18}
       ]
     })";
     const ohao::AudioBank bank = bankFrom(json);
@@ -794,9 +795,9 @@ void t28_duck_rules() {
     CHECK(byStep.count(28) && byStep[28].size() == 1 && byStep[28]["ambience"] == std::make_pair(0.0f, 15u),
           "fire's hold ends at step 28: ambience back over 15 steps, foley held by the reload");
     CHECK(byStep.count(60) && byStep[60]["foley"] == std::make_pair(0.0f, 10u), "the reload's hold ends at step 60: foley back over 10");
-    (void)r.audio->play({"hurt", 0, {}});
+    (void)r.audio->play({"sting", 0, {}});
     now = busCmds(r.audio->stepCommands());
-    CHECK(now.size() == 1 && now["world"] == std::make_pair(-4.0f, 1u), "hurt: world -4 dB");
+    CHECK(now.size() == 1 && now["world"] == std::make_pair(-4.0f, 1u), "sting: world -4 dB");
 }
 
 // dead on the player's death, the default on the restart (dead's out-blend), won on the win, each with

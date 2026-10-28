@@ -901,3 +901,11 @@ OPEN (judgment calls; recommendations given):
     moves. As built: the top at −0.05 m (see "As built (step 4)"); with it level with the Floor a
     crate had landed on both, a ray down inside the room had hit `Ground`, and an edited Floor
     surface had not been what the footsteps reported.
+22. **Player hurt SFX removed for mix clarity** (Frank, 2026-10-28 hand test). RULED. An enemy's
+    round is hitscan, so when it hit, the player's `hurt` (at the ear, 0.85) and its `world` duck
+    (−4 dB, held 300 ms, released over 18 steps) landed in the same step as the `enemy_fire` they
+    answered: in the step 4 listen render all 22 enemy shots coincided with a `hurt`. The schedule
+    no longer names a sound for damage (`combatSoundNames`); the bank's `hurt` sound and its duck
+    rule are gone, and `assets/audio/weapons/hurt.wav` with its generator. The impacts of the
+    player's rounds, the enemies' `death` and `body_fall` stay; the HUD's red vignette still marks
+    a hit. Ruling 8's hurt duck is void with it.

@@ -134,12 +134,12 @@ void writeWav(const std::filesystem::path& path, const std::vector<float>& stere
     f.write(reinterpret_cast<const char*>(stereo.data()), bytes);
 }
 
-// One burst of the fight (the player's shots, an enemy's, impacts, a footstep, a reload, a hurt),
+// One burst of the fight (the player's shots, an enemy's, impacts, footsteps, a reload, a fall),
 // rendered once with every bus open and then with each leaf bus soloed; returns false on failure.
 bool listen(const AudioBank& bank, const std::filesystem::path& dir, std::string& error) {
     struct Hit { const char* sound; float at; };
     const Hit burst[] = {{"fire", 0.0f}, {"impact_concrete", 0.02f}, {"fire", 0.1f}, {"impact_metal", 0.12f},
-                         {"enemy_fire", 0.3f}, {"footstep_concrete", 0.45f}, {"hurt", 0.55f},
+                         {"enemy_fire", 0.3f}, {"footstep_concrete", 0.45f},
                          {"footstep_concrete", 0.9f}, {"reload", 1.0f}, {"body_fall", 1.4f}};
     std::vector<std::string> segments{"all"};   // then every bus the burst plays on, in bank order
     for (const BusDesc& b : bank.buses)
