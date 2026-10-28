@@ -927,6 +927,41 @@ particle system is deleted. What differs from the design above, and why:
 - **Budgets**: `decals` (play_vfx_1080p) is pending at 0.05 ms, measured 0.004 ms on the scene's few decals;
   gated when Task 4's scripted moment (64 decals in view) is measured.
 
+## As built (step 4)
+
+`docs/changes/2026-10-28-vfx-step4.md` has the numbers. What changed from the text above, and what is open:
+
+- **Smoke in RT** (`ohao/vfx/smoke_math.hpp`, `shaders/rt/smoke_proxy.slang`): the proxy spheres are a byte
+  buffer in set 1 binding 7 of the alpha tables, read by `shadow_trace` (a lit sample with probability `T`)
+  and `gi_trace` (radiance × `T` plus 0.12 in-scatter × `1 − T`). With no spheres `T` is exactly 1.
+  `render.settings vfx.smokeInGi` switches both. The spec's `exp(−density · chord)` is the transmittance per
+  sphere; `t34_shadow_through_smoke` checks the shadow's ratio, not the closed form to ±2%.
+- **The doorway room has a roof.** The spec's text is "the room lit only by bounce". The blockout is open to
+  the sky, so the floor patch was lit mostly from above and the cloud moved it 0.1%. `smoke_doorway.scene.json`
+  adds a roof slab as its own entity (the blockout and its goldens do not move).
+- **The doorway bar is not met.** `t34_doorway_dims_gi` measures 12.1% dimming at 1 s (the spec's 20% is the
+  bar, not lowered). The curve is in the change record: 0% at 1 step, 12.5% peak at 20–30 steps, 3.4% by 5 s.
+  The cause is the spec's own content: the `smoke_cloud` effect's three spheres (density 0.9) cover part of the
+  1.2 m doorway. **OPEN ruling 28:** make the cloud fill the aperture (more spheres or a larger emitter in the
+  doorway; a change to the effect or to the scene), or re-state the 20% as the peak of the curve. Not decided here.
+- **`tools/list` cap is 28 KB** (OPEN ruling 20's alternative): 25,037 bytes for 39 tools. `rpc_tests`,
+  `check_serve` and `serve_budgets` use it.
+- **`vfx.info` gate is 2 KB, not 1 KB**: measured 805 bytes at `max` 16 in the play scene mid-fight;
+  `serve_bench vfx_info_bytes` gates at 2,048, the audio gate's size, for headroom as records grow.
+- **Agent surface**: `render.stats vfx`, `render.settings vfx` (five switches, on by default, never in the World),
+  `vfx.info`'s frame half (`particles`, null headless). `t35_vfx_frame_and_settings` checks the groups and that
+  `world.hash` does not move.
+- **Grenade**: `explode` writes the boom, its smoke and the scorch decal; `grenade_boom`'s light is a transient
+  light through the clustered lights; a grenade in flight is drawn as a presented sphere (never in the
+  registry). `vfx.info` after the boom holds an effect, a light and a decal (`e2e_mcp`'s grenade leg).
+- **Level hint** `vfx` makes a `VfxEmitter` (`extras_schema.json`; `check_level_assets` `t35_vfx_hint_schema`).
+- **Validation**: `check_validation` runs the doorway's smoke through raster and both RT modes, 17 of 17 clean.
+- **Not built, open for Task 4's close:** `t34_proxy_cost` (the spec's ≤ +0.06 ms for 32 spheres) and the
+  `render_bench` smoke row with `smokeInGi` off; the 64-decal, doorway-boom and enemy-fire moment of
+  `play_vfx_1080p` (so `decals` stays pending at 0.05 ms); the `play_vfx_1080p` total and frame rows; the boom's
+  look shots inside and outside the room; the monograph's `vfx` units.
+- **Hand test V1–V8 is open for Frank.** Nothing here is a hand-test pass.
+
 ## Rulings for Frank
 
 PROVISIONAL 1–9 and OPEN 10–27 await Frank, each with its recommendation.
@@ -1066,3 +1101,9 @@ OPEN (judgment calls; recommendations given):
     `shaders/particles/*` and `runtime/combat_fx.*` once Task 2 draws every effect from records
     (forward only). `render_bench play_fx_1080p` becomes `play_vfx_1080p`, and the 0.1 ms
     `particles` budget becomes the `transparent` budget above.
+28. **The doorway's 20% bar (test 34).** Found in step 4: with the doorway room roofed (the spec's "lit only by
+    bounce"), the 1 s cloud dims the floor patch 12.1%, peaking at 12.5% at 0.3–0.5 s, against the 20% bar.
+    Options: (a) the cloud fills the doorway (more spheres or a larger emitter in the scene; a change to the
+    shared `smoke_cloud` effect moves every smoke scene); (b) the bar as a peak over the cloud's first second,
+    stated as such; (c) the 20% kept and the test left failing until (a). Recommended: (a) in the scene only,
+    with `smoke_cloud` untouched; the bar is not lowered either way.
