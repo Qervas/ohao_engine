@@ -5,7 +5,7 @@ partials with fixed seeds, so the files are ours (MIT, as the repo) and rebuild 
     python tools/audio/make_weapons.py [out_dir]
 
     fire             the player's rifle: a sharp crack over a low thump and a short noise tail
-    enemy_fire       an enemy's: the same family, darker and a little softer
+    enemy_fire       an enemy's, heard from afar: darker, a slap off the walls, a 1.2 s roll
     impact_<surface> a round striking default, concrete, metal or wood
     death            a heavier thump with a falling tone
     reload           magazine out, magazine in, a bolt pull
@@ -68,6 +68,21 @@ def shot(seed, dark):
     thump = np.sin(2 * np.pi * (70.0 if dark else 90.0) * t) * envelope(t, 0.0, 0.002, 0.05)
     tail = lowpass(rng.standard_normal(t.size), 600.0) * envelope(t, 0.02, 0.01, 0.16) * 0.5
     return finish(crack * (1.0 if dark else 1.6) + body * 1.4 + thump * 1.2 + tail, length, 0.75 if dark else 0.9)
+
+
+def distant_shot(seed):
+    """An enemy's round heard from metres away: the dark crack and body of `shot`, then a slap off
+    the walls and a long low roll (1.2 s; Frank's hand test found the 0.45 s one too short)."""
+    rng = np.random.default_rng(seed)
+    length = 1.2
+    t = timeline(length)
+    crack = bandpass(rng.standard_normal(t.size), 1260.0, 5400.0) * envelope(t, 0.0, 0.0008, 0.014)
+    body = lowpass(rng.standard_normal(t.size), 1200.0) * envelope(t, 0.0, 0.002, 0.08)
+    thump = np.sin(2 * np.pi * 70.0 * t) * envelope(t, 0.0, 0.002, 0.07)
+    slap = bandpass(rng.standard_normal(t.size), 400.0, 3000.0) * envelope(t, 0.045, 0.004, 0.05) * 0.45
+    roll = lowpass(rng.standard_normal(t.size), 320.0) * envelope(t, 0.03, 0.05, 0.32) * 1.1
+    air = lowpass(rng.standard_normal(t.size), 900.0) * envelope(t, 0.02, 0.02, 0.18) * 0.35
+    return finish(crack + body * 1.4 + thump * 1.2 + slap + roll + air, length, 0.8)
 
 
 def impact(surface, seed):
@@ -184,7 +199,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     sounds = {
         "fire": shot(11, False),
-        "enemy_fire": shot(13, True),
+        "enemy_fire": distant_shot(13),
         "impact_default": impact("default", 21),
         "impact_concrete": impact("concrete", 23),
         "impact_metal": impact("metal", 29),
