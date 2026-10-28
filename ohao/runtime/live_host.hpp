@@ -27,11 +27,10 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/world.hpp"
 #include "gpu/vulkan/renderer.hpp"
+#include "runtime/audio_player.hpp"
 #include "runtime/click_capture.hpp"
 #include "runtime/clock.hpp"
 #include "runtime/combat_fx.hpp"
-#include "runtime/combat_sounds.hpp"
-#include "runtime/footsteps.hpp"
 #include "runtime/frame_log.hpp"
 #include "runtime/window.hpp"
 
@@ -79,10 +78,10 @@ struct LiveConfig {
     // after a change until `spp` samples have accumulated, so a human watches it converge.
     RenderMode mode{RenderMode::Deferred};
     int spp{64};
-    // Players' footsteps and landings, and combat's sounds, played through the default audio
-    // device (runtime/footsteps.hpp, runtime/combat_sounds.hpp). ohao_game turns it on; a server's
-    // window stays silent.
-    bool footsteps{false};
+    // The world's voice schedule played through the default audio device (runtime/audio_player.hpp:
+    // footsteps, combat, handling, the mix). ohao_game turns it on (--mute off: the schedule is still
+    // built, no device is made); a server's window stays silent.
+    bool sound{false};
     // Sparks, dust and muzzle bursts from the combat log as GPU particles (runtime/combat_fx.hpp):
     // emitted only while the timeline runs; a lockstep capture draws none. ohao_game turns it on
     // (--no-fx off); a server's window stays without.
@@ -174,9 +173,8 @@ private:
     std::unique_ptr<ecs::FileAssetResolver> m_assets;
     std::unique_ptr<ecs::World> m_world;       // destroyed before the renderer (it holds RenderScene slots)
     std::unique_ptr<api::Session> m_session;   // destroyed before the world
-    std::unique_ptr<AudioSystem> m_audio;       // LiveConfig::footsteps: the players' shared device
-    std::unique_ptr<Footsteps> m_footsteps;     // LiveConfig::footsteps
-    std::unique_ptr<CombatSounds> m_combatSounds;   // LiveConfig::footsteps too
+    std::unique_ptr<AudioSystem> m_audio;       // LiveConfig::sound: the device
+    std::unique_ptr<AudioPlayer> m_player;      // LiveConfig::sound: the schedule onto it
     std::unique_ptr<CombatFx> m_combatFx;           // LiveConfig::effects
     ClickToCapture m_clickCapture;
     bool m_clickToCapture{false};

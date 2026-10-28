@@ -642,21 +642,51 @@ def check_fight(f, where):
           "%s: the room cleared (EnemyA in %s bursts, EnemyB in %s): won, a win event" % (where, f["killA2"], f["killB"]))
 
 
+def audio_trace(call):
+    """Every audio schedule command the host logged (OHAO_AUDIO_TRACE=1: one `audio` line per command,
+    every field but seq), oldest first."""
+    out, since = [], 0
+    while True:
+        page = call("log.read", {"since": since, "level": "info", "channel": "audio", "limit": 1000}) or {}
+        lines = page.get("lines", [])
+        out += [l["msg"][len("schedule: "):] for l in lines if l.get("msg", "").startswith("schedule: ")]
+        if not lines or page.get("next", since) == since:
+            return out, page.get("dropped", 0)
+        since = page["next"]
+
+
+def traced_env(validation=False):
+    env = validation_env() if validation else dict(os.environ)
+    env["OHAO_AUDIO_TRACE"] = "1"
+    return env
+
+
 def test_fight():
     print("sp7 test 18: a fight in a hidden window, and the same fight headless")
     out = out_dir("fight")
     scene = "assets/scenes/blockout_play.scene.json"
     s = Server([OHAO, "serve", "--window", "960x540", "--hidden", "--out", out, "--seed", SEED, scene], "fight",
-               env=validation_env())
+               env=traced_env(validation=True))
     f = fight(lambda m, p: result(s.call(m, p)))
     check_fight(f, "window")
     shot = result(s.call("render.capture", {"path": out + "/fight_window.png", "post": [], "hud": True})) or {}
     check(shot.get("deterministic") is True, "a lockstep capture of the won round with its HUD")
-    h = Server([OHAO, "serve", "--out", out, "--seed", SEED, scene], "fight_headless")
+    h = Server([OHAO, "serve", "--out", out, "--seed", SEED, scene], "fight_headless", env=traced_env())
     g = fight(lambda m, p: result(h.call(m, p)))
     check(f["hash"] is not None and f["hash"] == g["hash"] and f["final"] == g["final"] and f["kinds"] == g["kinds"] and
           f["animA"] == g["animA"],
           "the same fight headless: the same world.hash (%s), combat.info, events and animation.info" % f["hash"])
+    # sub-project 11 test 28 (t28_window_equals_headless): the same voice schedule in both hosts.
+    wa, wdropped = audio_trace(lambda m, p: result(s.call(m, p)))
+    ha, hdropped = audio_trace(lambda m, p: result(h.call(m, p)))
+    plays = sum(1 for l in wa if l.startswith("play"))
+    with open(os.path.join(TMP, "fight_schedule_window.txt"), "w", encoding="utf-8") as fw:
+        fw.write("\n".join(wa) + "\n")
+    with open(os.path.join(TMP, "fight_schedule_headless.txt"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(ha) + "\n")
+    check(plays > 20 and not wdropped and not hdropped and wa == ha,
+          "t28_window_equals_headless: the same audio schedule in the window and headless (%d commands, %d plays)" %
+          (len(wa), plays))
     shot2 = result(h.call("render.capture", {"path": out + "/fight_headless.png", "post": [], "hud": True,
                                               "width": shot.get("width", 960), "height": shot.get("height", 540)})) or {}
     same = bool(shot2.get("path") and shot.get("path")) and pixels(out + "/fight_window.png") == pixels(out + "/fight_headless.png")

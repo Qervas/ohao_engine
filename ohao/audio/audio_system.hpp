@@ -121,6 +121,7 @@ struct VoiceInfo {
     float baseVolume{1.0f};   // as asked
     float volume{1.0f};       // set on the sound: base x occlusion (category and master are its bus's)
     double lowPassHz{0.0};    // 0: none
+    uint64_t startFrame{0};   // a bank voice's first frame on the engine clock (asked for, or when it began)
 };
 
 // Where and how loud a bank sound plays: at the listener (not spatial), or at a position on a
@@ -134,6 +135,8 @@ struct VoicePlacement {
     float volume{1.0f};   // times the bank sound's own volume
     float occlusionDb{0.0f};
     double occlusionLowPassHz{0.0};
+    bool loop{false};             // plays its data over and over (an ambience bed) until stopped
+    uint32_t fadeInFrames{0};     // rises linearly from silence over these frames (a bed's crossfade)
 };
 
 class AudioSystem {
@@ -173,6 +176,11 @@ public:
     // Stops a sound with a linear fade over `fadeFrames` (0: at once). A bank sound's source fades
     // and ends itself, from the next frame it reads.
     void stop(SoundHandle handle, uint32_t fadeFrames);
+    // A bank voice's occlusion changed (the schedule's re-cast): its level ramps linearly to the new
+    // cut over `rampFrames`, its low-pass moves to `lowPassHz` (0: open) at once.
+    void setVoiceOcclusion(SoundHandle handle, float db, double lowPassHz, uint32_t rampFrames);
+    // Files opened since the system started (bank loads and the category API): a bank voice opens none.
+    [[nodiscard]] uint64_t filesOpened() const noexcept { return m_filesOpened; }
 
     // A bus's level: its gain in dB (linear in dB over `rampFrames`) and its low-pass (0: none;
     // ramped in log frequency over the same frames). From the next processed frame.
@@ -270,6 +278,8 @@ private:
         SoundShape shape;
         float occlusionDb{0.0f};     // a graded occlusion's cut (bank voices); 0: shape.occluded's, if any
         double occlusionHz{0.0};     // its low-pass; 0: none, or shape.occluded's
+        uint64_t startFrame{0};      // a bank voice's
+        int bus{-1};                 // a bank voice's bus
     };
     struct Bus;
     struct BusDeleter {
@@ -318,6 +328,7 @@ private:
     std::vector<std::vector<std::unique_ptr<Decoded, DecodedDeleter>>> m_decoded;
     double m_bankLoadMs{0.0};
     bool m_withoutDevice{false};
+    uint64_t m_filesOpened{0};
 };
 
 } // namespace ohao

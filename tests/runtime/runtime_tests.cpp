@@ -8,16 +8,23 @@
 #include <string>
 #include <vector>
 
+#include "audio/audio_bank.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
+#include "ecs/audio_schedule.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/scene_io.hpp"
+#include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
+#include "level/level_system.hpp"
+#include "reflect/registry.hpp"
 #include "runtime/click_capture.hpp"
+#include "runtime/audio_player.hpp"
 #include "runtime/clock.hpp"
 #include "runtime/combat_fx.hpp"
-#include "runtime/combat_sounds.hpp"
-#include "runtime/footsteps.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/frame_log.hpp"
-#include "runtime/game_audio.hpp"
 #include "runtime/image.hpp"
 #include "core/input.hpp"
 #include "gpu/vulkan/swapchain.hpp"
@@ -649,73 +656,6 @@ static void sp2b_t14_stats_are_medians_per_pass_in_registry_order() {
     CHECK(close, "each pass's median over the frames that ran it (bloom: two frames)");
 }
 
-// ---- sub-project 6, step 4: which footstep sound plays (runtime/footsteps.hpp) -----------------
-
-static void sp6_t13_footstep_sounds_round_robin_and_fallback() {
-    namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() /
-                          ("ohao_footsteps_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const fs::path local = root / "local", shipped = root / "shipped";
-    fs::create_directories(local);
-    fs::create_directories(shipped);
-    const auto touch = [](const fs::path& p) { std::ofstream(p) << "RIFF"; };
-    for (const char* f : {"default_1.wav", "default_2.wav", "metal_1.wav", "metal_2.wav", "metal_10.wav", "wood_x.wav",
-                          "metal_3.ogg", "readme.txt"})
-        touch(shipped / f);
-    touch(local / "wood_1.wav");
-
-    FootstepSounds s({local, shipped});
-    const auto name = [&](std::string_view surface) { return fs::path(s.next(surface)).filename().string(); };
-    CHECK(name("metal") == "metal_1.wav" && name("metal") == "metal_2.wav" && name("metal") == "metal_10.wav" &&
-              name("metal") == "metal_1.wav",
-          "a surface's sounds in number order, round robin");
-    CHECK(name("wood") == "wood_1.wav" && fs::path(s.next("wood")).parent_path() == local,
-          "the local folder's sounds (wood_x.wav is not numbered and is ignored)");
-    CHECK(name("concrete") == "default_1.wav" && name("concrete") == "default_2.wav" && name("concrete") == "default_1.wav",
-          "a surface without sounds plays default's");
-    CHECK(s.sounds() == 6, "six sounds found: .ogg, unnumbered and other files are not");
-
-    touch(local / "metal_1.wav");
-    FootstepSounds over({local, shipped});
-    CHECK(fs::path(over.next("metal")).parent_path() == local && fs::path(over.next("metal")).parent_path() == local,
-          "a surface the local folder has is played from there only (it overrides the shipped set)");
-
-    FootstepSounds none({root / "missing"});
-    CHECK(none.next("metal").empty() && none.sounds() == 0, "no folder: nothing to play");
-    std::error_code ec;
-    fs::remove_all(root, ec);
-}
-
-// The window host's player: a walk's footsteps, read from the physics log and played (at volume 0).
-static void sp6_t13_footsteps_play_the_walk() {
-    AudioSystem audio;
-    CHECK(audio.initialize(true), "a mixer without a device");
-    Footsteps steps;
-    CHECK(steps.initialize(OHAO_SOURCE_DIR, audio), "footsteps on it");
-    ecs::World w;
-    ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
-    ecs::installPhysics(w, files);
-    const entt::entity ground = w.create("Ground", ecs::Transform{{0.0f, -0.5f, 0.0f}});
-    ecs::Collider floor{ecs::ColliderShape::Box, {30.0f, 0.5f, 30.0f}};
-    floor.surface = "metal";
-    w.registry().emplace<ecs::Collider>(ground, floor);
-    w.registry().emplace<ecs::PlayerController>(w.create("Player"));
-    InputEvent walk;
-    walk.type = InputEvent::Type::AxisSet;
-    walk.name = "move_forward";
-    walk.value = 1.0f;
-    std::size_t logged = 0;
-    for (int i = 0; i < 90; ++i) {
-        w.stepInput(i == 0 ? std::vector<InputEvent>{walk} : std::vector<InputEvent>{});
-        w.update(1.0f / 60.0f);
-        for (const auto& e : ecs::physicsEvents(w)) logged += e.kind == ecs::PhysicsEvent::Kind::Footstep;
-        if (i % 3 == 2) steps.update(w);   // a frame every three steps: the log keeps what came between
-    }
-    steps.update(w);
-    std::printf("\n      %zu footsteps logged, %llu played", logged, static_cast<unsigned long long>(steps.played()));
-    CHECK(logged >= 6 && steps.played() == logged, "every footstep the steps logged is played, none twice");
-}
-
 // ---- sub-project 9, step 3: particles from combat (runtime/combat_fx.hpp) -------------------------
 
 static void sp9_t21_particles_from_events() {
@@ -806,217 +746,137 @@ static void sp9_t21_particles_from_events() {
     CHECK(sparks, "and the round's sparks on the wall");
 }
 
-// ---- sub-project 9, step 3: audio quick wins (audio/audio_system.hpp, runtime/game_audio.hpp) -----
+// ---- sub-project 11, step 3: the audio player (runtime/audio_player.hpp) ---------------------------
 
-// 30 sounds started under a cap of 24: the 24 loudest at the listener play, the 6 quietest are lost.
-static void sp9_t21_voice_cap() {
-    AudioSystem audio;
-    CHECK(audio.initialize(true), "a mixer without a device");
-    audio.setVoiceLimit(kVoiceLimit);
-    audio.setListenerPosition(glm::vec3(0.0f), {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f});
-    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/fire.wav";
-    // Sounds at 1..30 m alternately near and far: a quieter one starting over the cap is dropped, a
-    // louder one replaces the quietest playing.
-    std::vector<std::pair<float, SoundHandle>> started;
-    for (int i = 0; i < 30; ++i) {
-        const float d = static_cast<float>(i % 2 == 0 ? 1 + i / 2 : 30 - i / 2);
-        const SoundHandle h = audio.playSoundAt(wav, {0.0f, 0.0f, -d}, SoundCategory::SFX, false, 1.0f, shapeFor(SoundKind::Gunfire));
-        started.emplace_back(d, h);
-    }
-    std::size_t playing = 0;
-    float loudestLost = 0.0f, quietestKept = 1.0f;
-    for (const auto& [d, h] : started) {
-        const auto v = audio.voice(h);
-        const float gain = AudioSystem::distanceGain(d, shapeFor(SoundKind::Gunfire));
-        if (v && v->playing) {
-            ++playing;
-            quietestKept = std::min(quietestKept, gain);
-        } else {
-            loudestLost = std::max(loudestLost, gain);
-        }
-    }
-    std::printf("\n      %zu playing, %llu dropped", playing, static_cast<unsigned long long>(audio.voicesDropped()));
-    CHECK(playing == 24 && audio.sfxVoices() == 24, "24 play");
-    CHECK(audio.voicesDropped() == 6, "voicesDropped 6");
-    CHECK(loudestLost < quietestKept, "the ones lost are the quietest at the listener");
-    // A sound not positioned (the player's own, at full volume) always gets a voice.
-    CHECK(isValidSoundHandle(audio.playSound(wav)) && audio.sfxVoices() == 24 && audio.voicesDropped() == 7,
-          "a louder sound takes the quietest's voice");
+namespace t29 {
+
+AudioBank bankFrom(const std::string& json) {
+    auto r = parseAudioBank(json);
+    return r ? std::move(r).value() : AudioBank{};
 }
 
-static void sp9_t21_distance_curves() {
-    const SoundShape gun = shapeFor(SoundKind::Gunfire), near = shapeFor(SoundKind::Near);
-    CHECK(gun.minDistance == 1.0f && gun.maxDistance == 60.0f && gun.rolloff == 1.0f && !gun.occluded,
-          "gunfire: inverse, 1 m to 60 m, rolloff 1");
-    CHECK(near.minDistance == 0.5f && near.maxDistance == 20.0f && near.rolloff == 1.5f, "near: 0.5 m to 20 m, rolloff 1.5");
-    CHECK(AudioSystem::distanceGain(0.5f, gun) == 1.0f && std::abs(AudioSystem::distanceGain(10.0f, gun) - 0.1f) < 1e-6f &&
-              AudioSystem::distanceGain(100.0f, gun) == AudioSystem::distanceGain(60.0f, gun),
-          "full within the minimum, 1/d beyond it, held past the maximum");
-    CHECK(std::abs(AudioSystem::distanceGain(10.0f, near) - 0.5f / (0.5f + 1.5f * 9.5f)) < 1e-6f, "near falls faster");
-
-    // Each player sets its kind's shape on the sound it starts.
-    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
-    Listener l;
-    l.position = {0.0f, 1.62f, 0.0f};
-    l.playerId = player;
-    ecs::CombatEvent shot;
-    shot.kind = ecs::CombatEvent::Kind::Shot;
-    shot.sourceId = enemy;
-    shot.point = {0.0f, 1.6f, -12.0f};
-    const SoundPlan enemyRound = planCombatSound("enemy_fire", shot, l);
-    CHECK(enemyRound.shape.maxDistance == 60.0f && enemyRound.at == shot.point && enemyRound.enemy,
-          "an enemy's round: gunfire, at its eye, an enemy's sound");
-    shot.sourceId = player;
-    const SoundPlan ownRound = planCombatSound("fire", shot, l);
-    CHECK(ownRound.shape.maxDistance == 60.0f && ownRound.at == l.position && !ownRound.enemy,
-          "the player's own: gunfire at the ear, no ray");
-    ecs::CombatEvent hit;
-    hit.kind = ecs::CombatEvent::Kind::Hit;
-    hit.sourceId = enemy;
-    hit.point = {1.0f, 1.0f, -3.0f};
-    const SoundPlan impact = planCombatSound("impact_metal", hit, l);
-    CHECK(impact.shape.maxDistance == 20.0f && impact.shape.rolloff == 1.5f && !impact.enemy, "an impact: near, no ray");
-
-    AudioSystem audio;
-    CHECK(audio.initialize(true), "a mixer without a device");
-    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/fire.wav";
-    const auto v = audio.voice(audio.playSoundAt(wav, shot.point, SoundCategory::SFX, false, 0.7f, gun));
-    CHECK(v && v->spatial && v->shape.maxDistance == 60.0f && v->shape.rolloff == 1.0f && v->lowPassHz == 0.0,
-          "the shape reaches the sound; no low-pass in the open");
+AudioBank slice() {
+    std::ifstream f(std::filesystem::path(OHAO_SOURCE_DIR) / "assets/audio/slice.audio.json", std::ios::binary);
+    return bankFrom(std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
 }
 
-// A wall between the listener and an enemy's round: occluded, 8 dB down through a 1.2 kHz low-pass.
-static void sp9_t21_occlusion_ray() {
+ecs::AudioCommand playAt(uint64_t step, uint32_t voice, uint16_t sound) {
+    ecs::AudioCommand c;
+    c.op = ecs::AudioCommand::Op::Play;
+    c.step = step;
+    c.voice = voice;
+    c.sound = sound;
+    c.gain = 0.85f;
+    return c;
+}
+
+uint64_t startOf(const AudioSystem& audio, const AudioPlayer& p, uint32_t voice) {
+    const auto h = p.handleOf(voice);
+    const auto v = h ? audio.voice(*h) : std::nullopt;
+    return v ? v->startFrame : ~0ull;
+}
+
+} // namespace t29
+
+// The clock: two steps in one frame start their sounds one step apart; a command whose time has passed
+// starts at once and counts as late; a pause (or lockstep) plays at once plus the horizon and takes the
+// anchor again.
+static void t29_player_clock() {
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
+    AudioPlayer p;
+    p.initialize(OHAO_SOURCE_DIR, audio);
+    const AudioBank bank = t29::slice();
+    p.useBank(bank);
+    const auto fire = static_cast<uint16_t>(bank.sound("fire"));
+    CHECK(p.horizonFrames() == 800 && p.stepFrames() == 800, "one step: 800 frames at 48 kHz");
+    std::vector<float> scratch(48000 * 2);
+    (void)audio.render(scratch, 1000);
+    const uint64_t e0 = audio.engineFrame();
+    const std::vector<ecs::AudioCommand> frame1{t29::playAt(10, 1, fire), t29::playAt(11, 2, fire)};
+    p.submit(frame1, 11, true);
+    const uint64_t s1 = t29::startOf(audio, p, 1), s2 = t29::startOf(audio, p, 2);
+    std::printf("\n      engine %llu: steps 10 and 11 start at %llu and %llu", static_cast<unsigned long long>(e0),
+                static_cast<unsigned long long>(s1), static_cast<unsigned long long>(s2));
+    CHECK(s1 == e0 && s2 == e0 + 800 && p.late() == 0, "steps 10 and 11 of one frame: a step apart, the newest a step ahead");
+    // A stall: eight steps' worth of audio played before the next frame, which brings steps 12 to 19.
+    (void)audio.render(scratch, 6400);
+    const std::vector<ecs::AudioCommand> frame2{t29::playAt(12, 3, fire), t29::playAt(19, 4, fire)};
+    p.submit(frame2, 19, true);
+    const uint64_t e1 = audio.engineFrame();
+    CHECK(t29::startOf(audio, p, 3) == e1 && p.late() == 1, "step 12's time has passed: at once, counted late");
+    CHECK(t29::startOf(audio, p, 4) == e0 + 800 + 8 * 800 && p.anchors() == 1, "step 19 on the same clock, no new anchor");
+    // A pause (or lockstep): at once plus the horizon; then real time again from a new anchor.
+    (void)audio.render(scratch, 20000);
+    const std::vector<ecs::AudioCommand> paused{t29::playAt(25, 5, fire)};
+    p.submit(paused, 25, false);
+    const uint64_t e2 = audio.engineFrame();
+    CHECK(t29::startOf(audio, p, 5) == e2 + 800, "not real time: at once plus the horizon");
+    const std::vector<ecs::AudioCommand> resumed{t29::playAt(26, 6, fire)};
+    p.submit(resumed, 26, true);
+    CHECK(t29::startOf(audio, p, 6) == e2 + 800 && p.late() == 1 && p.anchors() == 2, "running again: a new anchor, nothing late");
+    // A restore puts the schedule's step back: the anchor is taken again, nothing counted late.
+    const std::vector<ecs::AudioCommand> back{t29::playAt(3, 7, fire)};
+    p.submit(back, 3, true);
+    CHECK(t29::startOf(audio, p, 7) == e2 + 800 && p.late() == 1 && p.anchors() == 3, "a step back: a new anchor");
+}
+
+// No file is opened by a play once the bank has loaded; a bank sound without a file is skipped with one
+// warning per name.
+static void t29_preloaded() {
+    AudioSystem audio;
+    CHECK(audio.initialize(true), "a mixer without a device");
+    AudioPlayer p;
+    p.initialize(OHAO_SOURCE_DIR, audio);
     ecs::World w;
     ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
-    ecs::installPhysics(w, files);
-    const entt::entity ground = w.create("Ground", ecs::Transform{{0.0f, -0.5f, 0.0f}});
-    w.registry().emplace<ecs::Collider>(ground, ecs::Collider{ecs::ColliderShape::Box, {30.0f, 0.5f, 30.0f}});
-    const entt::entity p = w.create("Player");
-    w.registry().emplace<ecs::PlayerController>(p);
-    const entt::entity head = w.create("Head", ecs::Transform{{0.0f, 1.62f, 0.0f}});
-    w.setParent(head, p);
-    w.registry().emplace<ecs::Camera>(head, ecs::Camera{75.0f, 0.05f, 100.0f, true});
-    ecs::PlayerController enemyPc;
-    enemyPc.input = false;
-    const entt::entity enemy = w.create("Enemy", ecs::Transform{{0.0f, 0.0f, -10.0f}});
-    w.registry().emplace<ecs::PlayerController>(enemy, enemyPc);
-    w.update(1.0f / 60.0f);
-    const auto listener = listenerOf(w);
-    CHECK(listener && listener->body == p, "the listener: the camera, the input player's head");
-    if (!listener) return;
-    const glm::vec3 enemyEye = glm::vec3(w.registry().get<ecs::WorldTransform>(enemy).world[3]) + glm::vec3(0.0f, 1.6f, 0.0f);
-    CHECK(!soundOccluded(w, *listener, enemyEye), "in the open: heard (the source's own capsule passed through)");
-    const entt::entity wall = w.create("Wall", ecs::Transform{{0.0f, 1.5f, -5.0f}});
-    w.registry().emplace<ecs::Collider>(wall, ecs::Collider{ecs::ColliderShape::Box, {4.0f, 2.0f, 0.1f}});
-    w.update(1.0f / 60.0f);
-    CHECK(soundOccluded(w, *listener, enemyEye), "a wall between: occluded");
+    reflect::TypeRegistry types;
+    ecs::registerSceneTypes(types);
+    level::installLevels(w, files, types);
+    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    (void)ecs::installCombat(w);
+    ecs::installRoundHook(w, types);
+    (void)ecs::installAnimation(w, files);
+    (void)ecs::installAudio(w, files);
+    CHECK(static_cast<bool>(ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", types)),
+          "the play scene loads");
+    w.update(1.0f / 60.0f);   // the schedule reads the world's bank in its first step
+    p.update(w, false);       // and the player decodes it here
+    const uint64_t opened = audio.filesOpened();
+    entt::entity player = entt::null;
+    for (auto [e, pc] : w.registry().view<const ecs::PlayerController>().each())
+        if (pc.input) player = e;
+    const glm::vec3 me = physics.playerInfo(player)->pos;
+    physics.teleportPlayer(player, me, 180.0f);   // toward the enemies
+    std::vector<float> scratch(800 * 2);
+    for (int i = 0; i < 240; ++i) {
+        InputEvent fire;
+        fire.type = i % 40 == 13 ? InputEvent::Type::ActionUp : InputEvent::Type::ActionDown;
+        fire.name = "fire";
+        w.stepInput(i % 40 == 0 || i % 40 == 13 ? std::vector<InputEvent>{fire} : std::vector<InputEvent>{});
+        w.update(1.0f / 60.0f);
+        p.update(w, false);
+        (void)audio.render(scratch, 800);
+    }
+    std::printf("\n      %llu voices started; %llu files opened at the bank's load, %llu after",
+                static_cast<unsigned long long>(p.played()), static_cast<unsigned long long>(opened),
+                static_cast<unsigned long long>(audio.filesOpened() - opened));
+    CHECK(opened > 0 && p.played() > 10 && audio.filesOpened() == opened, "a fight's voices, no file opened after the load");
 
-    AudioSystem audio;
-    CHECK(audio.initialize(true), "a mixer without a device");
-    const std::string wav = std::string(OHAO_SOURCE_DIR) + "/assets/audio/weapons/enemy_fire.wav";
-    SoundShape blocked = shapeFor(SoundKind::Gunfire);
-    blocked.occluded = true;
-    const auto v = audio.voice(audio.playSoundAt(wav, enemyEye, SoundCategory::SFX, false, 0.7f, blocked));
-    std::printf("\n      occluded volume %.4f (asked 0.7), low-pass %.0f Hz", v ? v->volume : -1.0f, v ? v->lowPassHz : -1.0);
-    CHECK(v && std::abs(v->volume - 0.7f * std::pow(10.0f, -8.0f / 20.0f)) < 1e-5f && v->lowPassHz == 1200.0,
-          "-8 dB and the 1.2 kHz low-pass");
-
-    // The combat player casts a ray for each enemy round it starts and none for the player's own.
-    ecs::CombatEvent own;
-    own.kind = ecs::CombatEvent::Kind::Shot;
-    own.sourceId = listener->playerId;
-    CHECK(!planCombatSound("fire", own, *listener).enemy, "the player's own round: no ray");
-    ecs::CombatEvent theirs = own;
-    theirs.sourceId = w.idOf(enemy);
-    CHECK(planCombatSound("enemy_fire", theirs, *listener).enemy, "an enemy's round: one ray");
+    // A sound with no file in any folder: the schedule names it, the player skips it, warned once.
+    const AudioBank ghost = t29::bankFrom(R"({"buses": {"master": {}}, "sounds": {
+        "ghost": {"files": "nowhere/ghost", "bus": "master", "shape": "ear"},
+        "fire": {"files": "weapons/fire", "bus": "master", "shape": "ear"}}})");
+    p.useBank(ghost);
+    const std::vector<ecs::AudioCommand> two{t29::playAt(1, 100, static_cast<uint16_t>(ghost.sound("ghost"))),
+                                             t29::playAt(2, 101, static_cast<uint16_t>(ghost.sound("ghost"))),
+                                             t29::playAt(2, 102, static_cast<uint16_t>(ghost.sound("fire")))};
+    const uint64_t before = p.played();
+    p.submit(two, 2, false);
+    CHECK(p.missing() == 1 && p.played() == before + 1 && !p.handleOf(100) && p.handleOf(102), "skipped, one warning; the next plays");
 }
 
-// ---- sub-project 10, step 2: handling sounds from animation events (runtime/combat_sounds.hpp) ----
-
-static void sp10_t23_handling_sounds() {
-    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
-    const auto ev = [](uint64_t entity, std::string name) {
-        ecs::AnimEvent e;
-        e.entity = entity;
-        e.clip = "reload";
-        e.name = std::move(name);
-        return e;
-    };
-    using V = std::vector<std::string>;
-    for (const char* n : {"mag_out", "mag_in", "bolt", "body_fall"})
-        CHECK(soundsForAnim(ev(enemy, n), player) == V{n}, "a handling event plays its own sound");
-    CHECK(soundsForAnim(ev(enemy, "tick"), player).empty(), "and nothing else");
-    Listener l;
-    l.position = {0.0f, 1.62f, 0.0f};
-    l.playerId = player;
-    const glm::vec3 at{2.0f, 1.0f, -6.0f};
-    const SoundPlan theirs = planAnimSound("mag_out", ev(enemy, "mag_out"), at, l);
-    CHECK(theirs.at == at && theirs.shape.maxDistance == 20.0f && theirs.shape.rolloff == 1.5f && theirs.enemy,
-          "an enemy's: at it, on the near curve, with an occlusion ray");
-    const SoundPlan own = planAnimSound("mag_in", ev(player, "mag_in"), at, l);
-    CHECK(own.at == l.position && !own.enemy, "the player's own: at the ear, no ray");
-    namespace fs = std::filesystem;
-    for (const char* n : {"mag_out", "mag_in", "bolt", "body_fall"})
-        CHECK(fs::exists(fs::path(OHAO_SOURCE_DIR) / "assets/audio/weapons" / (std::string(n) + ".wav")),
-              "every handling sound is shipped (tools/audio/make_weapons.py)");
-}
-
-// Step 3: the player's arms are below the player (head, view model, arms): their handling sounds are
-// the player's own, at the ear without a ray, not an enemy's.
-static void sp10_t23_arms_sounds_are_the_players() {
-    ecs::World w;
-    const entt::entity player = w.createWithId(0xb1a7e2, "Player");
-    const entt::entity head = w.createWithId(0xb1a7e3, "Head");
-    w.setParent(head, player);
-    const entt::entity root = w.createWithId(0xb1a7e4, "Gun");
-    w.setParent(root, head);
-    const entt::entity arms = w.createWithId(0xb1a7e6, "Arms");
-    w.setParent(arms, root);
-    const entt::entity enemy = w.createWithId(0xe1, "Enemy");
-    (void)arms;
-    (void)enemy;
-    CHECK(animSoundOwner(w, 0xb1a7e6, 0xb1a7e2) == 0xb1a7e2, "the arms' events are the player's");
-    CHECK(animSoundOwner(w, 0xb1a7e2, 0xb1a7e2) == 0xb1a7e2, "the player's own");
-    CHECK(animSoundOwner(w, 0xe1, 0xb1a7e2) == 0xe1, "an enemy's are its own");
-    CHECK(animSoundOwner(w, 0xb1a7e6, 0) == 0xb1a7e6, "no player: everyone's their own");
-}
-
-// ---- sub-project 7, step 4: combat sounds and the capturing click (runtime/combat_sounds.hpp,
-// runtime/click_capture.hpp) -------------------------------------------------------------------
-
-static void sp7_fx_sounds_by_event_and_surface() {
-    using K = ecs::CombatEvent::Kind;
-    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
-    const auto ev = [](K kind, uint64_t source, uint64_t target, float amount = 0.0f, std::string surface = {}) {
-        ecs::CombatEvent e;
-        e.kind = kind;
-        e.sourceId = source;
-        e.targetId = target;
-        e.amount = amount;
-        e.surface = std::move(surface);
-        return e;
-    };
-    using V = std::vector<std::string>;
-    CHECK(soundsFor(ev(K::Shot, player, 0), player) == V{"fire"}, "the player's round: fire");
-    CHECK(soundsFor(ev(K::Shot, enemy, 0), player) == V{"enemy_fire"}, "an enemy's round: enemy_fire");
-    CHECK(soundsFor(ev(K::Hit, player, 7, 4.0f, "metal"), player) == V{"impact_metal"}, "a hit: its surface's impact");
-    CHECK(soundsFor(ev(K::Hit, enemy, player, 4.0f, "default"), player) == V{"impact_default"}, "on anything");
-    CHECK(soundsFor(ev(K::Damage, enemy, player, 8.0f), player) == V{"hurt"}, "damage to the player: hurt");
-    CHECK(soundsFor(ev(K::Damage, player, enemy, 25.0f), player).empty(), "damage to anyone else: nothing");
-    CHECK(soundsFor(ev(K::Death, player, enemy), player) == V{"death"}, "a death");
-    CHECK(soundsFor(ev(K::Reload, player, 0, 0.0f), player) == (V{"empty", "reload"}), "the magazine ran dry");
-    CHECK(soundsFor(ev(K::Reload, player, 0, 12.0f), player) == V{"reload"}, "a reload by the key");
-    CHECK(soundsFor(ev(K::Reload, enemy, 0, 0.0f), player).empty(), "an enemy's reload: nothing");
-    for (const K quiet : {K::Reloaded, K::RoundStart, K::Restart, K::Win})
-        CHECK(soundsFor(ev(quiet, player, 0), player).empty(), "and nothing else");
-    // Every sound an event can name is shipped (tools/audio/make_weapons.py).
-    namespace fs = std::filesystem;
-    for (const char* name : {"fire", "enemy_fire", "impact_default", "impact_concrete", "impact_metal", "impact_wood",
-                             "hurt", "death", "reload", "empty"})
-        CHECK(fs::is_regular_file(fs::path(OHAO_SOURCE_DIR) / "assets" / "audio" / "weapons" / (std::string(name) + ".wav")),
-              std::string("assets/audio/weapons/") + name + ".wav exists");
-}
+// ---- sub-project 7, step 4: the capturing click (runtime/click_capture.hpp) -------------------------------------------------------------------
 
 static void sp7_fx_the_capturing_click_never_fires() {
     const auto button = [](bool down, int code = 0) {
@@ -1063,18 +923,12 @@ static void sp7_fx_the_capturing_click_never_fires() {
 
 int main() {
     std::printf("[combat sounds, capturing click]\n");
-    RUN(sp7_fx_sounds_by_event_and_surface);
     RUN(sp9_t21_particles_from_events);
     RUN(sp7_fx_the_capturing_click_never_fires);
+    RUN(t29_player_clock);
+    RUN(t29_preloaded);
     std::printf("[footsteps]\n");
-    RUN(sp6_t13_footstep_sounds_round_robin_and_fallback);
-    RUN(sp6_t13_footsteps_play_the_walk);
     std::printf("[audio: voices, curves, occlusion]\n");
-    RUN(sp9_t21_voice_cap);
-    RUN(sp9_t21_distance_curves);
-    RUN(sp9_t21_occlusion_ray);
-    RUN(sp10_t23_handling_sounds);
-    RUN(sp10_t23_arms_sounds_are_the_players);
     std::printf("[render stats]\n");
     RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");

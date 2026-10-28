@@ -292,7 +292,8 @@ struct Context {
         ecs::installPhysics(*world, *assets);                    // and their colliders into bodies
         ecs::installCombat(*world);                              // weapons fire after physics steps
         ecs::installAnimation(*world, *assets);                  // animators step after combat
-        ecs::installAudio(*world, *assets);                      // the audio schedule: the step's last
+        // The audio schedule: the step's last (OHAO_AUDIO_TRACE=1 logs its commands).
+        ecs::installAudio(*world, *assets).setTrace(runtime::audioTraceRequested());
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);

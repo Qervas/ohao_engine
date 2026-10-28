@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     cfg.frameLimit = argInt(argc, argv, "--frames", 0);
     cfg.resizeAtFrame = argInt(argc, argv, "--resize-at", -1);
     cfg.timeMode = TimeMode::realtime;
-    cfg.footsteps = !argFlag(argc, argv, "--mute");   // a player's footsteps, through the default audio device
+    cfg.sound = !argFlag(argc, argv, "--mute");   // the world's sounds through the default audio device
     cfg.effects = !argFlag(argc, argv, "--no-fx");    // sparks, dust and muzzle bursts from combat
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") != 0) continue;

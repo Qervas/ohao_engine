@@ -41,14 +41,33 @@ struct AudioVoiceSource {
     ma_uint32 sampleRate{0};
     ma_uint64 cursor{0};   // data frames read
     ma_uint64 delay{0};    // silent frames left before the data
+    bool loop{false};      // back to the data's start at its end (an ambience bed)
+    uint32_t fadeInLen{0}, fadeInDone{0};   // a rise from silence over the first data frames
     std::atomic<uint32_t> fadeRequest{0};   // main thread -> audio thread: fade over this many frames
     uint32_t fadeLen{0}, fadeLeft{0};
     bool fading{false};
+    // A level ramped linearly to a target (an occlusion re-cast): main thread -> audio thread.
+    std::atomic<float> gainTarget{1.0f};
+    std::atomic<uint32_t> gainRamp{0}, gainVersion{0};
+    uint32_t gainSeen{0}, gainLeft{0};
+    float gain{1.0f}, gainStep{0.0f}, gainEnd{1.0f};
 
     ma_result read(float* out, ma_uint64 count, ma_uint64* read) {
         if (const uint32_t f = fadeRequest.exchange(0, std::memory_order_acquire); f != 0 && !fading) {
             fading = true;
             fadeLen = fadeLeft = f;
+        }
+        if (const uint32_t v = gainVersion.load(std::memory_order_acquire); v != gainSeen) {
+            gainSeen = v;
+            gainEnd = gainTarget.load(std::memory_order_relaxed);
+            const uint32_t ramp = gainRamp.load(std::memory_order_relaxed);
+            if (ramp == 0) {
+                gain = gainEnd;
+                gainLeft = 0;
+            } else {
+                gainStep = (gainEnd - gain) / static_cast<float>(ramp);
+                gainLeft = ramp;
+            }
         }
         ma_uint64 done = 0;
         while (done < count) {
@@ -65,18 +84,24 @@ struct AudioVoiceSource {
                 done += n;
                 continue;
             }
-            if (cursor >= frames) break;
+            if (cursor >= frames) {
+                if (!loop || frames == 0) break;
+                cursor = 0;
+            }
             ma_uint64 n = std::min(frames - cursor, count - done);
             if (fading) n = std::min<ma_uint64>(n, fadeLeft);
             const float* in = pcm + cursor * channels;
-            if (!fading) {
+            if (!fading && gainLeft == 0 && gain == 1.0f && fadeInDone >= fadeInLen) {
                 std::copy(in, in + n * channels, o);
             } else {
                 for (ma_uint64 i = 0; i < n; ++i) {
-                    const float g = static_cast<float>(fadeLeft - i - 1) / static_cast<float>(fadeLen);
+                    float g = fading ? static_cast<float>(fadeLeft - i - 1) / static_cast<float>(fadeLen) : 1.0f;
+                    if (gainLeft > 0) gain = --gainLeft ? gain + gainStep : gainEnd;
+                    g *= gain;
+                    if (fadeInDone < fadeInLen) g *= static_cast<float>(++fadeInDone) / static_cast<float>(fadeInLen);
                     for (ma_uint32 c = 0; c < channels; ++c) o[i * channels + c] = in[i * channels + c] * g;
                 }
-                fadeLeft -= static_cast<uint32_t>(n);
+                if (fading) fadeLeft -= static_cast<uint32_t>(n);
             }
             cursor += n;
             done += n;
@@ -513,6 +538,7 @@ bool AudioSystem::loadBank(const AudioBank& bank, const std::filesystem::path& r
             ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, 0, rate);
             std::unique_ptr<Decoded, DecodedDeleter> d(new Decoded());
             const std::string path = file.string();
+            ++m_filesOpened;
             if (ma_decode_file(path.c_str(), &dc, &d->frames, &d->pcm) != MA_SUCCESS || !d->pcm) {
                 OHAO_LOG(Warn, audio, "sound '{}': cannot decode {}", desc.name, path);
                 continue;
@@ -521,6 +547,7 @@ bool AudioSystem::loadBank(const AudioBank& bank, const std::filesystem::path& r
             if (d->channels == 0) {   // the decoder kept the file's: ask it
                 ma_decoder probe;
                 ma_decoder_config pc = ma_decoder_config_init(ma_format_f32, 0, rate);
+                ++m_filesOpened;
                 if (ma_decoder_init_file(path.c_str(), &pc, &probe) == MA_SUCCESS) {
                     d->channels = probe.outputChannels;
                     ma_decoder_uninit(&probe);
@@ -594,6 +621,10 @@ SoundHandle AudioSystem::play(uint16_t sound, uint32_t variant, const VoicePlace
     source->sampleRate = ma_engine_get_sample_rate(m_engine.get());
     const uint64_t now = engineFrame();
     source->delay = startFrame > now ? startFrame - now : 0;
+    source->loop = placement.loop;
+    source->fadeInLen = placement.fadeInFrames;
+    instance.startFrame = std::max(startFrame, now);
+    instance.bus = busIndex;
     instance.source = std::move(source);
     // Graded occlusion (the schedule's) when it names a low-pass, else Feel's single grade.
     const bool graded = placement.occlusionLowPassHz > 0.0;
@@ -759,6 +790,7 @@ SoundHandle AudioSystem::playSound(std::string_view path, SoundCategory category
     const std::string pathStr(path);
     auto sound = MaSoundPtr(new ma_sound());
     Bus* bus = busFor(category);
+    ++m_filesOpened;
     const ma_result result = ma_sound_init_from_file(
         m_engine.get(), pathStr.c_str(), 0, bus && bus->groupInit ? &bus->group : nullptr, nullptr, sound.get());
     if (result != MA_SUCCESS) {
@@ -797,6 +829,7 @@ SoundHandle AudioSystem::playSoundAt(std::string_view path, const glm::vec3& pos
     Bus* bus = busFor(category);
     // Behind a wall the sound feeds a low-pass node, which feeds the bus (the cut is in the volume).
     ma_sound_group* group = !shape.occluded && bus && bus->groupInit ? &bus->group : nullptr;
+    ++m_filesOpened;
     const ma_result result = ma_sound_init_from_file(
         m_engine.get(), pathStr.c_str(), 0, group, nullptr, sound.get());
     if (result != MA_SUCCESS) {
@@ -901,7 +934,32 @@ std::optional<VoiceInfo> AudioSystem::voice(SoundHandle handle) const {
     v.baseVolume = s.baseVolume;
     v.volume = ma_sound_get_volume(s.sound.get());
     v.lowPassHz = s.lowPass ? (s.occlusionHz > 0.0 ? s.occlusionHz : kOccludedLowPassHz) : 0.0;
+    v.startFrame = s.startFrame;
     return v;
+}
+
+void AudioSystem::setVoiceOcclusion(SoundHandle handle, float db, double lowPassHz, uint32_t rampFrames) {
+    std::lock_guard lock(m_mutex);
+    const auto it = m_sounds.find(handle);
+    if (it == m_sounds.end() || !it->second.sound || !it->second.source || !it->second.spatial) return;
+    SoundInstance& s = it->second;
+    // The level: the source's gain ramps to the new cut relative to the one the voice started with
+    // (that one is in the sound's volume).
+    const float started = s.occlusionDb != 0.0f ? s.occlusionDb : (s.shape.occluded ? kOccludedGainDb : 0.0f);
+    s.source->gainTarget.store(std::pow(10.0f, (db - started) / 20.0f), std::memory_order_relaxed);
+    s.source->gainRamp.store(rampFrames, std::memory_order_relaxed);
+    s.source->gainVersion.fetch_add(1, std::memory_order_release);
+    // The low-pass moves at once: an existing one is retuned (wide open for none); a voice that had
+    // none is routed through one now.
+    const double hz = lowPassHz > 0.0 ? lowPassHz : 0.45 * ma_engine_get_sample_rate(m_engine.get());
+    if (s.lowPass) {
+        const ma_lpf_config config = ma_lpf_config_init(ma_format_f32, ma_engine_get_channels(m_engine.get()),
+                                                        ma_engine_get_sample_rate(m_engine.get()), hz, 2);
+        (void)ma_lpf_node_reinit(&config, &s.lowPass->node);
+    } else if (lowPassHz > 0.0) {
+        routeOccluded(s, s.bus >= 0 ? busAt(static_cast<uint8_t>(s.bus)) : nullptr, lowPassHz);
+    }
+    s.occlusionHz = lowPassHz;
 }
 
 void AudioSystem::stopSound(SoundHandle handle) {

@@ -1,0 +1,100 @@
+#pragma once
+// The audio player (sub-project 11 step 3; docs/specs/2026-10-28-audio-design.md, "The frame: the
+// player"): a window host's bridge from the voice schedule (ecs/audio_schedule.hpp, decided in the
+// step) to the device. Once a frame, after the frame's steps, it reads the schedule since its cursor
+// and drives AudioSystem. Headless hosts have none: the schedule is what tests and agents read.
+//
+// The clock: the player anchors a schedule step s0 to an engine frame f0 and plays step s's commands at
+// f0 + (s - s0) x rate / 60 + one step (the horizon, OPEN ruling 7), so two steps run in one frame
+// sound a step apart. A command whose time has passed starts at once and counts as late. The anchor is
+// taken again when the timeline is not running in real time (paused or lockstep: each command at once
+// plus the horizon), when the schedule's step goes back (a restore, a round restart), and when the
+// anchor drifts more than a step from the device clock.
+//
+// The commands: play (the bank's preloaded sound, on its bus, at its position on its shape, through its
+// occlusion's low-pass; a dropped one plays nothing), stop (a steal's 2 ms fade), bus (a duck: the
+// bus's level is the snapshot's plus the deepest duck's), snapshot (every bus's level and low-pass,
+// ramped over the blend), zone (the reverb's preset crossfaded, the preset's bed looped on its bus and
+// crossfaded over the same blend), occlusion (a voice's level ramped, its low-pass moved), stop_world
+// (every voice on the world's buses faded over 3 steps). A bank sound without a file in any folder is
+// skipped with one warning per name. Nothing here opens a file after the bank loads.
+#include "audio/audio_system.hpp"
+#include "ecs/audio_schedule.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <map>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace ohao::ecs {
+class World;
+}
+
+namespace ohao::runtime {
+
+// OHAO_AUDIO_TRACE=1: hosts turn on the schedule's trace (every command on the `audio` log channel),
+// so check_live compares a window's schedule with a headless host's through log.read.
+[[nodiscard]] bool audioTraceRequested();
+
+class AudioPlayer {
+public:
+    // Plays through `audio` (the host's; it must outlive this). A bank's sounds are decoded from files
+    // under `root` when it is loaded (useBank; update loads the schedule's whenever it changes).
+    void initialize(const std::filesystem::path& root, AudioSystem& audio);
+    [[nodiscard]] bool ready() const noexcept { return m_audio != nullptr && m_audio->isInitialized(); }
+
+    // Once a frame, after the frame's steps: the schedule's bank (when it changed), the listener from
+    // the frame's camera, then the schedule's commands since the cursor. `realtime`: the timeline runs
+    // in real time (false: paused or lockstep). The first call starts at the log's end.
+    void update(ecs::World& world, bool realtime);
+
+    // The bank to play (decoded into the device now; every playing sound stops).
+    void useBank(const AudioBank& bank);
+    // Plays commands written up to the schedule's step `scheduleStep` (update's core; tests drive it).
+    void submit(std::span<const ecs::AudioCommand> commands, uint64_t scheduleStep, bool realtime);
+
+    [[nodiscard]] uint64_t late() const noexcept { return m_late; }        // commands started after their time
+    [[nodiscard]] uint64_t played() const noexcept { return m_played; }    // voices started
+    [[nodiscard]] std::size_t missing() const noexcept { return m_missing.size(); }   // sounds without a file, warned once
+    [[nodiscard]] uint64_t anchors() const noexcept { return m_anchors; }  // times the clock was anchored
+    [[nodiscard]] std::optional<SoundHandle> handleOf(uint32_t voice) const;
+    [[nodiscard]] uint32_t horizonFrames() const noexcept;
+    [[nodiscard]] uint32_t stepFrames() const noexcept;
+
+private:
+    void anchor(uint64_t step);
+    [[nodiscard]] uint64_t startFrameOf(uint64_t step);
+    void play(const ecs::AudioCommand& c);
+    void applyBuses(uint32_t rampFrames);
+    void zone(const ecs::AudioCommand& c);
+
+    AudioSystem* m_audio{nullptr};
+    std::filesystem::path m_root;
+    AudioBank m_bank;
+    bool m_hasBank{false};
+    uint64_t m_bankVersion{~0ull};
+
+    uint64_t m_cursor{0};
+    bool m_started{false};
+    bool m_anchored{false};
+    uint64_t m_s0{0}, m_f0{0};
+    uint64_t m_lastStep{0};
+
+    std::map<uint32_t, SoundHandle> m_voices;       // schedule voice -> device handle
+    std::map<uint32_t, uint8_t> m_voiceBus;         // schedule voice -> its bus
+    std::vector<float> m_snapshotDb, m_duckDb;      // per bus: the snapshot's level and the duck's
+    std::vector<double> m_snapshotHz;               // per bus: the snapshot's low-pass (0: none)
+    std::string m_snapshotName, m_zoneName;         // what the device is in now
+    SoundHandle m_bed{INVALID_SOUND_HANDLE};
+    std::string m_bedName;
+
+    uint64_t m_late{0}, m_played{0}, m_anchors{0};
+    std::set<std::string> m_missing;
+};
+
+} // namespace ohao::runtime

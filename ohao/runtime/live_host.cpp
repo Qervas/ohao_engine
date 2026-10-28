@@ -78,21 +78,20 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
     ecs::installCombat(*m_world);                        // weapons fire after physics steps
     ecs::installAnimation(*m_world, *m_assets);          // animators step after combat; pose before the extract
-    ecs::installAudio(*m_world, *m_assets);              // the audio schedule: the step's last
+    // The audio schedule: the step's last. OHAO_AUDIO_TRACE=1 logs its commands (check_live compares
+    // a window's with a headless host's).
+    ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
     ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);
     m_session->setHost(this);
-    if (cfg.footsteps) {
-        // One device and one voice cap for every sound the window plays (game_audio.hpp).
+    if (cfg.sound) {
+        // One device for the schedule's voices (the schedule decides what plays; no cap here).
         m_audio = std::make_unique<AudioSystem>();
         if (m_audio->initialize()) {
-            m_audio->setVoiceLimit(kVoiceLimit);
-            m_footsteps = std::make_unique<Footsteps>();
-            if (!m_footsteps->initialize(cfg.root, *m_audio)) m_footsteps.reset();
-            m_combatSounds = std::make_unique<CombatSounds>();
-            if (!m_combatSounds->initialize(cfg.root, *m_audio)) m_combatSounds.reset();
+            m_player = std::make_unique<AudioPlayer>();
+            m_player->initialize(cfg.root, *m_audio);
         } else {
             OHAO_LOG(Warn, audio, "live host: no audio device; the window is silent");
             m_audio.reset();
@@ -202,9 +201,7 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
                     trackLook(q, true);
         }
         m_world->setPendingLook(pending);
-        if (m_footsteps) m_footsteps->update(*m_world);   // what this frame's steps logged
-        if (m_combatSounds) m_combatSounds->update(*m_world);
-        if (m_audio) m_audio->update();   // finished sounds free their voices
+        if (m_player) m_player->update(*m_world, m_time.running());   // what this frame's steps scheduled
         if (m_combatFx)   // sparks and muzzle bursts: realtime only, at the poses this frame draws
             if (auto* deferred = m_renderer->getDeferredRenderer()) m_combatFx->update(*m_world, *deferred, m_time.running());
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
@@ -491,8 +488,7 @@ uint64_t LiveHost::shutdown() {
     const bool validated = m_renderer && m_renderer->validationEnabled();
     const uint64_t unrequested = unrequestedReadbacks();
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
-    m_footsteps.reset();
-    m_combatSounds.reset();
+    m_player.reset();
     m_audio.reset();
     m_combatFx.reset();
     m_session.reset();
