@@ -150,7 +150,7 @@ look axis of 100 turns 10° a step) and `world_step`; read where it went with `w
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/walk.jsonl
-{"method":"scene.load","result":{"entities":19}}
+{"method":"scene.load","result":{"entities":20}}
 {"method":"input.inject","result":{"queued":4,"firstStep":0,"lastStep":26}}
 {"method":"world.step","result":{"frame":40}}
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","Transform":{"position":[1.5,0,2.7333333]},"PlayerState":{"velocity":[-0,0,0],"onGround":true,"yawDeg":-180,"character":0}}],"count":1}}
@@ -174,17 +174,17 @@ restore, walk again, then teleport onto the Step and list what touches:
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 0000000000000001 --script docs/agents/examples/player.jsonl
-{"method":"scene.load","result":{"entities":19}}
+{"method":"scene.load","result":{"entities":20}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,2.2],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Floor","surface":"concrete","footsteps":0}}
-{"method":"world.snapshot","result":{"name":"spawn","entities":36,"bytes":9500}}
+{"method":"world.snapshot","result":{"name":"spawn","entities":37,"bytes":9924}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"d97acccd7f194248","frame":30}}
-{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":21,"frame":0}}
+{"method":"world.hash","result":{"hash":"ebb30f5ca0824884","frame":30}}
+{"method":"world.restore","result":{"created":0,"destroyed":0,"changed":22,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"d97acccd7f194248","frame":30}}
+{"method":"world.hash","result":{"hash":"ebb30f5ca0824884","frame":30}}
 {"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
@@ -196,13 +196,15 @@ The player holds a rifle (`Weapon`, `Health`): the action `fire` (the left mouse
 window) fires 10 rounds a second while held, `reload` (R) reloads a part-empty magazine of 30,
 and an empty one reloads itself (1.5 s). Each round is a ray from the eye within a cone that
 blooms with sustained fire, kicks the view up 0.35°, and damages what it hits if that has
-`Health`; the kick comes back down once the trigger rests. `WeaponState` says what the rifle
-has (`ammo`, `cooldown`, `reloading`, `bloomDeg`, `kickDeg`, `shots`). Three rounds, then a
-second's rest:
+`Health`; the kick comes back down once the trigger rests. Holding `aim` (the right mouse button)
+raises the sights over `Weapon.adsTime` (0.2 s): `WeaponState.aim` steps from 0 to 1, the cone
+narrows linearly to half, and a window draws the view at 55° instead of 75° (captures keep 75°).
+`WeaponState` says what the rifle has (`ammo`, `cooldown`, `reloading`, `bloomDeg`, `kickDeg`,
+`shots`, `aim`). Three rounds, then a second's rest:
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/fire.jsonl
-{"method":"scene.load","result":{"entities":19}}
+{"method":"scene.load","result":{"entities":20}}
 {"method":"input.inject","result":{"queued":2,"firstStep":0,"lastStep":15}}
 {"method":"world.step","result":{"frame":15}}
 {"method":"world.query","result":{"entities":[{"id":"5c0b1a7e00000001","WeaponState":{"ammo":27,"cooldown":0.050000012,"bloomDeg":1.05,"kickDeg":1.05,"shots":3,"triggerHeld":true,"flash":0.016666664},"Health":{},"PlayerState":{"pitchDeg":1.05}}],"count":1}}
@@ -237,7 +239,7 @@ Kill both enemies by hand and read what the round says:
 
 ```console
 $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/fight.jsonl
-{"method":"scene.load","result":{"entities":19}}
+{"method":"scene.load","result":{"entities":20}}
 {"method":"world.step","result":{"frame":1}}
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000010","name":"EnemyA","health":40,"max":100,"dead":false,"taken":60}}
 {"method":"combat.damage","result":{"entity":"5c0b1a7e00000010","name":"EnemyA","health":0,"max":100,"dead":true,"taken":40}}
