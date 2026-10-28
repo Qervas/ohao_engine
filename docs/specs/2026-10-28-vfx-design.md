@@ -834,6 +834,56 @@ the design above, and why:
   through `vfx.info` come with the GPU harnesses' VFX legs in step 4; `t31_replay` covers two runs, a
   restore mid-fight and a round restart.
 
+## As built (step 2)
+
+Sorted forward transparency and lit, soft particles (plan Task 2,
+`docs/changes/2026-10-28-vfx-step2.md`). Effects draw from the step's records in every host; the old
+particle system is deleted. What differs from the design above, and why:
+
+- **Alpha in the RT traces is a per-candidate test, BLASes stay opaque.** An instance with any
+  non-opaque material is `FORCE_NO_OPAQUE` in the TLAS (a flags change counts as a structural TLAS
+  change), and an all-BLEND instance also gets mask `kTlasMaskTransparent` (8; `kRayMaskCamera` is
+  15). Inline ray queries test each candidate in `rt/alpha_test.slang` (RenderScene's tables as set 1,
+  `rtc::AlphaTables`; the bindless textures as set 2), the path tracer in `pt_anyhit` (blend:
+  stochastic opacity hashed from the launch pixel, primitive, instance and ray). The path tracer
+  forces opacity on every ray while no instance has an alpha material (the light header's word 3).
+- **The G-buffer's MASK draws are drawn after the late lists, outside the cull lists,** with
+  `core/gbuffer_mask.frag` (the body shared with `core/gbuffer.frag` through
+  `includes/scene/gbuffer_body.glsl`); CSM draws them as opaque. They are not Hi-Z occluders.
+- **Objects are ordered on the host, particles inside an alpha batch on the GPU.** Per-object blend
+  states need host-recorded draws, so the transparent pass sorts its objects (an emitter batch at the
+  mean of its first eight living particles, a blended mesh at its world bounds' centre) by distance,
+  then kind, then id. `vfx.sort` keys are `(distance bits, slot)`: integers, ties by slot. A batch over
+  `kVfxSortMax` (1,024) or additive is drawn in slot order.
+- **No compaction:** particle slots are fixed in record order, a dead particle is drawn at size 0. One
+  set of particle slots serves every frame in flight (expand waits for the previous frame's draws).
+- **`VfxExpandPush` is 128 bytes** (the guaranteed push constant size): the view matrix became its
+  third row (`viewZ`) and the environment's intensity shares `camera.w` with the constant ambient.
+- **Particles off screen sum every light** (a froxel holds only its slice's lights).
+- **Bindless arrays in Slang are declared at the table's size** (`Sampler2D t[4096]`): Slang
+  decorates an unsized resource array with an `ArrayStride` spirv-val rejects (VUID 10684).
+- **The forward pass needs ray queries and the bindless textures** (the sun's ray, the flipbooks):
+  without them nothing transparent draws, logged once.
+- **Muzzle effects stay at the logical muzzle in every host** (step 1's `kMuzzleAhead`), not the drawn
+  muzzle in live windows: a window's lockstep capture must equal a headless one with effects drawn
+  (`t32_window_equals_headless`). Moving them to the drawn muzzle in realtime frames is open.
+- **`--fx` and `--no-fx` are removed** with `LiveConfig::effects`: effects are the world's
+  presentation, drawn everywhere; no `render.settings vfx.particles` switch was added.
+- **Content:** `assets/vfx/alpha_card.gltf` (`tools/vfx/make_alpha_card.py`, byte for byte), the MASK
+  leaf card; `assets/vfx/transparency.vfx.json`; `assets/scenes/transparency.scene.json`.
+- **`t32_khronos_alpha` is carried by the pack's own alpha surfaces:** AlphaBlendModeTest is not in
+  `assets/khronos/` and was not downloaded; FlightHelmet's BLEND lenses and Sponza's MASK foliage
+  moved their goldens once, looked at.
+- **`t32_mask_rays` cuts by opacity, not texture holes:** a MASK card under its cutoff lets the RT
+  shadow and the path tracer through, one over it shadows; the texture path is exercised by the
+  transparency golden's leaf card and Sponza. RT GI through the holes is not measured separately.
+- **The G-buffer's normal target is `R16G16B16A16_SFLOAT`** (attachment 1), recorded for step 3's
+  decals (OPEN ruling 16).
+- **`render_bench play_vfx_1080p`** is the play scene with a grenade thrown and the rifle held, stepped
+  151 steps to the boom and once before every frame; Task 4 completes the script (enemies firing,
+  decals). `physics_bench vfx_sync_ms` times `vfxFrameOf` (records to the frame's effects), the sync
+  system's work; the renderer's host-side `prepare` is in render_bench's CPU column.
+
 ## Rulings for Frank
 
 PROVISIONAL 1–9 and OPEN 10–27 await Frank, each with its recommendation.
