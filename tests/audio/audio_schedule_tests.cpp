@@ -987,6 +987,129 @@ void t28_hash_unchanged() {
     CHECK(a == b, "the same world.hash");
 }
 
+// =============================================================================
+// Test 30: the test grenade (ruling 23, Frank's hand test of 2026-10-28)
+// =============================================================================
+
+// The player outside, north of the room (its walls between them and the enemies), throws once facing
+// north (-z) and turns to `turnYaw` before it goes off. What the grenade left: the explode plays,
+// the Explode events, the throw's step and pose, and the listener when it went off.
+struct GrenadeRun {
+    std::vector<AudioCommand> plays;   // explode plays only
+    std::vector<CombatEvent> explodes;
+    uint64_t throwStep{0};
+    glm::vec3 throwFeet{0.0f};
+    float eyeHeight{0.0f}, throwPitch{0.0f};
+    std::optional<AudioListener> ears;
+    float yawAtExplode{0.0f};
+    std::optional<float> groundY;      // the ground under the explosion
+};
+
+GrenadeRun throwGrenade(float turnYaw) {
+    constexpr int kThrowAt = 5, kTurnAt = 20, kSteps = 200;
+    Fight f;
+    GrenadeRun out;
+    if (!f.loaded) return out;
+    const ohao::AudioBank bank = sliceBank();
+    const int explode = bank.sound("explode");
+    f.physics->teleportPlayer(f.player, {0.0f, -0.05f, -10.0f}, 0.0f);   // yaw 0: facing -z
+    out.eyeHeight = f.w.registry().get<PlayerController>(f.player).eyeHeight;
+    for (int i = 0; i < kSteps; ++i) {
+        std::vector<InputEvent> in;
+        if (i == kThrowAt) in.push_back(actionEvent("grenade", true));
+        if (i == kThrowAt + 1) in.push_back(actionEvent("grenade", false));
+        if (i == kTurnAt) {
+            const auto me = f.physics->playerInfo(f.player);
+            f.physics->teleportPlayer(f.player, me->pos, turnYaw);
+        }
+        f.w.stepInput(in);
+        f.w.update(kDt);
+        if (i == kThrowAt) {
+            const auto me = f.physics->playerInfo(f.player);
+            out.throwStep = uint64_t(i) + 1;   // the schedule counts steps from 1
+            out.throwFeet = me->pos;
+            out.throwPitch = me->pitchDeg;
+        }
+        for (const AudioCommand& c : audioCommands(f.w)) {
+            if (c.op == AudioCommand::Op::Play && c.sound == explode) {
+                out.plays.push_back(c);
+                out.ears = listenerAtStep(f.w);
+                out.yawAtExplode = f.physics->playerInfo(f.player)->yawDeg;
+            }
+        }
+        for (const CombatEvent& e : combatEvents(f.w))
+            if (e.kind == CombatEvent::Kind::Explode) out.explodes.push_back(e);
+    }
+    if (!out.explodes.empty()) {
+        const glm::vec3 at = out.explodes[0].point;
+        if (const auto hit = f.physics->raycast({at.x, 5.0f, at.z}, {0.0f, -1.0f, 0.0f}, 20.0f)) out.groundY = hit->point.y;
+    }
+    return out;
+}
+
+// Rendered from `ears` facing `yawDeg`: 10 log10 of the right channel's energy over the left's.
+double renderBalance(const ohao::AudioBank& bank, const AudioCommand& play, glm::vec3 ears, float yawDeg) {
+    ohao::AudioSystem a;
+    if (!a.initialize(true) || !a.loadBank(bank, OHAO_SOURCE_DIR)) return 0.0;
+    const float yaw = glm::radians(yawDeg);
+    a.setListenerPosition(ears, {-std::sin(yaw), 0.0f, -std::cos(yaw)}, {0.0f, 1.0f, 0.0f});
+    const ohao::ShapeDesc* blast = bank.shape("blast");
+    ohao::VoicePlacement p;
+    p.spatial = play.spatial;
+    p.position = play.pos;
+    if (blast) p.shape = ohao::SoundShape{blast->minDistance, blast->maxDistance, blast->rolloff, false};
+    p.occlusionDb = play.occl.db;
+    p.occlusionLowPassHz = play.occl.lowPassHz;
+    if (!ohao::isValidSoundHandle(a.play(play.sound, 0, p))) return 0.0;
+    std::vector<float> st(std::size_t(24000) * 2);
+    a.render(st, 24000);
+    double l = 0.0, r = 0.0;
+    for (std::size_t i = 0; i < 24000; ++i) l += double(st[i * 2]) * st[i * 2], r += double(st[i * 2 + 1]) * st[i * 2 + 1];
+    return (l > 0.0 && r > 0.0) ? 10.0 * std::log10(r / l) : 0.0;
+}
+
+// G throws one grenade: exactly one Explode and one explode voice, 2.5 s (150 steps) after the throw,
+// where the throw's arc meets the ground, unoccluded and spatial; the same place and step whichever
+// way the player turned, and the voice pans to the right ear facing west and to the left facing east.
+void t30_grenade_explode_pans() {
+    const GrenadeRun west = throwGrenade(90.0f), east = throwGrenade(270.0f);
+    CHECK(west.plays.size() == 1 && east.plays.size() == 1, "one explode voice per throw");
+    CHECK(west.explodes.size() == 1 && east.explodes.size() == 1, "one Explode event per throw");
+    if (west.plays.size() != 1 || west.explodes.size() != 1 || east.plays.size() != 1) return;
+    const AudioCommand& play = west.plays[0];
+    const glm::vec3 at = west.explodes[0].point;
+    std::printf("\n      thrown at step %llu from (%.3f, %.3f, %.3f); explode at step %llu at (%.3f, %.3f, %.3f), %u walls",
+                static_cast<unsigned long long>(west.throwStep), west.throwFeet.x, west.throwFeet.y, west.throwFeet.z,
+                static_cast<unsigned long long>(play.step), at.x, at.y, at.z, play.occl.walls);
+    CHECK(play.step == west.throwStep + 149, "the throw's step and 149 more: the fuse's 2.5 s");
+    CHECK(play.spatial && glm::length(play.pos - at) < 1e-5f, "a positional voice at the Explode's point");
+    CHECK(play.occl.walls == 0 && play.source == 0, "in the open: unoccluded (a world source, not the player's own)");
+    CHECK(east.plays[0].step == play.step && glm::length(east.plays[0].pos - play.pos) < 1e-6f,
+          "the same step and place whichever way the player turned");
+
+    // Where the arc meets the ground, worked out here: from the eye 0.4 m along the look (north, level),
+    // 9 m/s along it and 3 m/s up under -9.81 m/s^2, to the ground; it rests 5 cm above where it touched.
+    CHECK(near(west.throwPitch, 0.0f, 1e-4f), "thrown level");
+    const glm::vec3 eye = west.throwFeet + glm::vec3(0.0f, west.eyeHeight, 0.0f);
+    const glm::vec3 from = eye + glm::vec3(0.0f, 0.0f, -0.4f);
+    CHECK(west.groundY.has_value(), "ground under the landing");
+    if (!west.groundY) return;
+    const float t = (3.0f + std::sqrt(9.0f + 2.0f * 9.81f * (from.y - *west.groundY))) / 9.81f;
+    const glm::vec3 expected{from.x, *west.groundY + 0.05f, from.z - 9.0f * t};
+    std::printf("\n      expected (%.3f, %.3f, %.3f) after %.3f s of flight", expected.x, expected.y, expected.z, t);
+    CHECK(glm::length(at - expected) < 0.01f, "on the arc, at the ground, within 1 cm");
+
+    const ohao::AudioBank bank = sliceBank();
+    const double facingWest = renderBalance(bank, play, west.ears ? west.ears->position : glm::vec3(0.0f), west.yawAtExplode);
+    const double facingEast = renderBalance(bank, east.plays[0], east.ears ? east.ears->position : glm::vec3(0.0f), east.yawAtExplode);
+    std::printf("\n      yaw %.0f: right over left %+.2f dB; yaw %.0f: %+.2f dB", west.yawAtExplode, facingWest,
+                east.yawAtExplode, facingEast);
+    CHECK(west.ears && east.ears, "a listener at both explosions");
+    CHECK(near(std::fabs(west.yawAtExplode - east.yawAtExplode), 180.0f, 0.01f), "the two listeners 180 degrees apart");
+    CHECK(facingWest >= 3.0, "facing west, the grenade to the north is on the right");
+    CHECK(facingEast <= -3.0, "facing east, on the left");
+}
+
 // ---- --listen DIR: step 2's listening renders ------------------------------------------------------
 //
 // step2_zones.wav: the play scene's player fires a burst in the room, then stands outside the doorway
@@ -1208,6 +1331,7 @@ int main(int argc, char** argv) {
     RUN(t28_replay);
     RUN(t28_enemy_footsteps_on_feet);
     RUN(t28_hash_unchanged);
+    RUN(t30_grenade_explode_pans);
     if (argc == 3 && std::string_view(argv[1]) == "--listen") {
         g_listenDir = argv[2];
         RUN(step2_listen);
