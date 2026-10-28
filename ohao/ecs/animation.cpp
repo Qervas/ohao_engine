@@ -2,6 +2,7 @@
 
 #include "core/log.hpp"
 #include "ecs/components.hpp"
+#include "ecs/enemy_anim.hpp"
 #include "scene/asset/model.hpp"
 
 #include <algorithm>
@@ -267,10 +268,27 @@ void AnimationSystem::pose(World& world) {
 }
 
 // JointAttach children: drawn at their parent's joint (its drawn pose × the joint × their own
-// Transform). The previous drawn pose is what this system drew last frame, or (new) the pose.
+// Transform), and their subtrees with them (the rifle's muzzle light). The previous drawn pose is
+// what this system drew last frame, or (new) the pose.
 void AnimationSystem::attach(World& world) {
     auto& reg = world.registry();
     m_seen.clear();
+    const auto draw = [&](const auto& self, entt::entity c, const glm::mat4& world, int depth) -> void {
+        m_seen.push_back(c);
+        const auto last = m_drawn.find(c);
+        const glm::mat4 prev = last != m_drawn.end() ? last->second : world;
+        const auto* rp = reg.try_get<RenderPose>(c);
+        if (!rp || rp->world != world || rp->prevWorld != prev) {
+            reg.emplace_or_replace<RenderPose>(c, RenderPose{world, prev});
+            reg.emplace_or_replace<RenderDirty>(c);
+        }
+        m_drawn[c] = world;
+        if (depth >= 4) return;
+        if (const auto* kids = reg.try_get<Children>(c))
+            for (const entt::entity k : kids->entities)
+                if (reg.valid(k) && !reg.all_of<JointAttach>(k))
+                    if (const auto* t = reg.try_get<Transform>(k)) self(self, k, world * t->matrix(), depth + 1);
+    };
     for (const entt::entity c : reg.view<JointAttach, Parent, Transform, WorldTransform>()) {
         const entt::entity parent = reg.get<Parent>(c).entity;
         if (parent == entt::null || !reg.valid(parent)) continue;
@@ -281,16 +299,7 @@ void AnimationSystem::attach(World& world) {
         if (joint < 0 || joint >= static_cast<int>(pose->model.size())) continue;
         const auto* prp = reg.try_get<RenderPose>(parent);
         const glm::mat4 parentWorld = prp ? prp->world : pw->world;
-        const glm::mat4 world = parentWorld * pose->model[static_cast<std::size_t>(joint)] * reg.get<Transform>(c).matrix();
-        m_seen.push_back(c);
-        const auto last = m_drawn.find(c);
-        const glm::mat4 prev = last != m_drawn.end() ? last->second : world;
-        const auto* rp = reg.try_get<RenderPose>(c);
-        if (!rp || rp->world != world || rp->prevWorld != prev) {
-            reg.emplace_or_replace<RenderPose>(c, RenderPose{world, prev});
-            reg.emplace_or_replace<RenderDirty>(c);
-        }
-        m_drawn[c] = world;
+        draw(draw, c, parentWorld * pose->model[static_cast<std::size_t>(joint)] * reg.get<Transform>(c).matrix(), 0);
     }
     // Drawn last frame and no longer attached: back to the step's pose (unless another system drew it).
     for (auto it = m_drawn.begin(); it != m_drawn.end();) {
@@ -313,6 +322,7 @@ AnimationSystem& installAnimation(World& world, AssetResolver& assets) {
     if (const auto* installed = reg.ctx().find<AnimationInstalled>()) return *installed->system;
     auto system = std::make_shared<AnimationSystem>(assets);
     reg.ctx().emplace<AnimationInstalled>(AnimationInstalled{system.get()});
+    registerEnemyDriver(*system);
     // Animator writes from outside the step are placements (the step writes through get<>()).
     struct Placed {
         AnimationSystem* s;

@@ -11,6 +11,10 @@ partials with fixed seeds, so the files are ours (MIT, as the repo) and rebuild 
     death            a heavier thump with a falling tone
     reload           magazine out, magazine in, a bolt pull
     empty            the dry click of an empty magazine
+    mag_out          handling (animation events): the magazine released and pulled out
+    mag_in           a magazine slid in and seated
+    bolt             the bolt pulled back and let go
+    body_fall        a body hitting the floor
 
 Mono, 16-bit, 44.1 kHz.
 """
@@ -135,6 +139,48 @@ def empty():
     return finish(click(rng, t, 0.005, 1.1, 1.0), length, 0.7)
 
 
+# Handling sounds (sub-project 10 step 2), each played on its animation event (the enemy graph's
+# reload and death clips, assets/anim/enemy.animgraph.json).
+
+def mag_out():
+    rng = np.random.default_rng(103)
+    length = 0.3
+    t = timeline(length)
+    latch = click(rng, t, 0.01, 0.8, 1.0) + click(rng, t, 0.035, 1.0, 0.45)
+    slide = bandpass(rng.standard_normal(t.size), 1200.0, 5000.0) * envelope(t, 0.05, 0.04, 0.05) * 0.3
+    return finish(latch + slide, length, 0.75)
+
+
+def mag_in():
+    rng = np.random.default_rng(107)
+    length = 0.3
+    t = timeline(length)
+    slide = bandpass(rng.standard_normal(t.size), 1000.0, 4500.0) * envelope(t, 0.0, 0.04, 0.03) * 0.25
+    seat = click(rng, t, 0.07, 0.7, 1.2) + click(rng, t, 0.095, 1.1, 0.6)
+    return finish(slide + seat, length, 0.8)
+
+
+def bolt():
+    rng = np.random.default_rng(109)
+    length = 0.3
+    t = timeline(length)
+    back = click(rng, t, 0.01, 1.2, 0.9)
+    rattle = bandpass(rng.standard_normal(t.size), 2000.0, 7000.0) * envelope(t, 0.02, 0.01, 0.03) * 0.3
+    home = click(rng, t, 0.11, 0.9, 1.1) + click(rng, t, 0.13, 1.3, 0.5)
+    return finish(back + rattle + home, length, 0.8)
+
+
+def body_fall():
+    rng = np.random.default_rng(113)
+    length = 0.6
+    t = timeline(length)
+    thud = np.sin(2 * np.pi * (58.0 - 12.0 * t) * t) * envelope(t, 0.0, 0.004, 0.09)
+    cloth = lowpass(rng.standard_normal(t.size), 700.0) * envelope(t, 0.0, 0.003, 0.05) * 1.3
+    gear = bandpass(rng.standard_normal(t.size), 1500.0, 6000.0) * envelope(t, 0.015, 0.002, 0.04) * 0.35
+    settle = lowpass(rng.standard_normal(t.size), 400.0) * envelope(t, 0.16, 0.01, 0.07) * 0.6
+    return finish(thud * 1.3 + cloth + gear + settle, length, 0.85)
+
+
 def write(path, samples):
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
@@ -157,6 +203,10 @@ def main():
         "death": death(),
         "reload": reload(),
         "empty": empty(),
+        "mag_out": mag_out(),
+        "mag_in": mag_in(),
+        "bolt": bolt(),
+        "body_fall": body_fall(),
     }
     for name, samples in sounds.items():
         write(os.path.join(out, f"{name}.wav"), samples)

@@ -1,6 +1,7 @@
 // Combat (sub-project 7): test 15, the weapon, health and damage, CPU only.
 // docs/specs/2026-10-27-combat-design.md, "The combat step", "Components", "Events".
 
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/combat_hud.hpp"
@@ -79,6 +80,7 @@ struct Arena {
     FileAssetResolver files{OHAO_SOURCE_DIR};
     PhysicsScene* physics{nullptr};
     CombatSystem* combat{nullptr};
+    AnimationSystem* anim{nullptr};
     entt::entity player{entt::null};
     entt::entity head{entt::null};
 
@@ -90,6 +92,7 @@ struct Arena {
         ohao::level::installLevels(world, files, engineTypes());
         physics = &installPhysics(world, files);
         combat = &installCombat(world);
+        anim = &installAnimation(world, files);
         const entt::entity level = world.createWithId(0x1e7e1, "Level");
         reg.emplace<Level>(level, Level{AssetRef{kBlockout, {}}});
         player = world.createWithId(0xb1a7e2, "Player");
@@ -582,6 +585,50 @@ std::vector<CombatEvent> from(const std::vector<CombatEvent>& ev, Kind k, uint64
 }
 void toughen(Arena& a) { a.world.registry().replace<Health>(a.player, Health{10000.0f, 10000.0f}); }
 
+// Sub-project 10: the same enemies with the enemy graph's Animator (no mesh: the step needs none).
+constexpr const char* kEnemyGraph = "assets/anim/enemy.animgraph.json";
+constexpr std::size_t kBody = 0, kFire = 2, kReload = 3, kHit = 4;   // the graph's layers (1: aim)
+
+std::function<void(World&)> animatedEnemies(Enemy ai = {}, Weapon weapon = enemyWeapon()) {
+    return [ai, weapon](World& w) {
+        enemies(ai)(w);
+        for (const uint64_t id : {kEnemyA, kEnemyB}) {
+            const entt::entity e = w.findById(id);
+            w.registry().replace<Weapon>(e, weapon);
+            w.registry().emplace<Animator>(e, Animator{AssetRef{kEnemyGraph, {}}, {}});
+        }
+    };
+}
+const AnimLayerState* layerOf(const World& w, entt::entity e, std::size_t layer) {
+    const auto* an = w.registry().try_get<Animator>(e);
+    return an && layer < an->layers.size() ? &an->layers[layer] : nullptr;
+}
+std::string stateOf(const World& w, entt::entity e, std::size_t layer) {
+    const auto* l = layerOf(w, e, layer);
+    return l ? l->state : std::string("<none>");
+}
+uint32_t stepsIn(const World& w, entt::entity e, std::size_t layer) {
+    const auto* l = layerOf(w, e, layer);
+    return l ? l->steps : 0u;
+}
+float paramOf(const World& w, entt::entity e, std::string_view name) {
+    if (const auto* p = w.registry().try_get<AnimParams>(e))
+        for (const auto& [n, v] : p->values)
+            if (n == name) return v;
+    return -999.0f;
+}
+std::vector<AnimEvent> animEventsOf(const World& w, uint64_t id, std::string_view name = {}) {
+    std::vector<AnimEvent> out;
+    uint64_t dropped = 0;
+    if (const AnimationSystem* s = animationSystem(w))
+        for (const AnimEvent& e : s->eventsSince(0, AnimationSystem::kLogCapacity, dropped))
+            if (e.entity == id && (name.empty() || e.name == name)) out.push_back(e);
+    return out;
+}
+bool upright(const World& w, entt::entity e) {
+    return (w.registry().get<Transform>(e).rotation * glm::vec3(0.0f, 1.0f, 0.0f)).y > 0.9999f;
+}
+
 } // namespace
 
 static void t16_enemies_spawn_at_enemy_spawns() {
@@ -691,7 +738,7 @@ static void t16_hit_wakes_idle_enemy() {
 }
 
 static void t16_dead_enemy_blocks_nothing() {
-    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, enemies());
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, animatedEnemies());
     toughen(a);
     (void)a.run(5);
     const entt::entity e = byId(a, kEnemyA);
@@ -701,8 +748,9 @@ static void t16_dead_enemy_blocks_nothing() {
     auto& reg = a.world.registry();
     CHECK(modeOf(a, kEnemyA) == EnemyMode::Dead, "dead");
     CHECK(!reg.all_of<PlayerController>(e) && !a.physics->playerInfo(e), "its character is gone");
-    const glm::vec3 up = reg.get<Transform>(e).rotation * glm::vec3(0.0f, 1.0f, 0.0f);
-    CHECK(std::fabs(up.y) < 0.2f, "it lies on the floor");
+    // Sub-project 10, OPEN ruling 7 (provisional): the death clip falls; the saved Transform stays upright.
+    CHECK(stateOf(a.world, e, kBody) == "dead", "its death clip played to its end (the held `dead` state)");
+    CHECK(upright(a.world, e), "its Transform upright where it stood");
     const glm::vec3 eye = a.info().pos + glm::vec3(0.0f, 1.62f, 0.0f);
     const auto r = a.physics->raycastFrom(eye, chest - eye, 50.0f, a.player);
     CHECK(r && r->entity != e, "a ray through where it stood passes");
@@ -1149,11 +1197,12 @@ static void fx_marks_on_an_enemy_land_on_its_body_and_follow_it() {
     const glm::vec3 facing = glm::normalize(glm::vec3(marks.marks()[0].world[2]));
     const glm::vec3 toPlayer = a.info().pos - glm::vec3(a.world.registry().get<WorldTransform>(enemy).world[3]);
     CHECK(glm::dot(facing, toPlayer) > 0.0f, "the face toward the player, the mark facing out of it");
-    // Killed: it falls over; the mark stays where it is on the body.
+    // Killed (its Transform stays upright: the death clip falls, sub-project 10 ruling 7): the mark
+    // stays where it is on the body.
     a.combat->damage(enemy, 1000.0f, a.player, {});
     (void)a.run(5);
     marks.follow(a.world);
-    CHECK(nearVec(inEnemy(), p, 1e-4f), "the mark follows the enemy as it lies down");
+    CHECK(nearVec(inEnemy(), p, 1e-4f), "the mark stays with the enemy after its death");
 }
 
 static void fx_no_marks_on_the_player() {
@@ -1513,6 +1562,231 @@ static void t21_view_model_never_in_world() {
     CHECK(hashOf(a.world) == h0, "a snapshot carries none of it");
 }
 
+// ---- sub-project 10, step 2: the enemy's animation (tests 23 and 25) -----------------------------
+// docs/specs/2026-10-28-animation-design.md, "The step": the enemy driver (ecs/enemy_anim.cpp) writes
+// the graph's parameters from saved state and the step's combat events; the enemy graph
+// (assets/anim/enemy.animgraph.json) turns them into states within that step.
+
+static void t23_enemy_states_from_ai() {
+    {   // idle, then attack: the combat state from the step its mode turns, a kick per round, the aim
+        Arena a(kHidden, 0.0f, {}, animatedEnemies());
+        toughen(a);
+        (void)a.run(5);
+        const entt::entity e = byId(a, kEnemyA);
+        CHECK(stateOf(a.world, e, kBody) == "move" && near(paramOf(a.world, e, "speed"), 0.0f, 0.05f) &&
+                  near(paramOf(a.world, e, "alive"), 1.0f) && near(paramOf(a.world, e, "mode"), 0.0f),
+              "idle: the move blend at speed 0, alive, mode 0");
+        a.physics->teleportPlayer(a.player, {-2.0f, 0.0f, 2.0f}, 0.0f);
+        int attackStep = -1, shotStep = -1;
+        bool combatAtOnce = false, kickAtOnce = false, aimFollows = true;
+        for (int i = 0; i < 120 && shotStep < 0; ++i) {
+            const auto ev = a.run(1);
+            if (attackStep < 0 && modeOf(a, kEnemyA) == EnemyMode::Attack) {
+                attackStep = i;
+                combatAtOnce = stateOf(a.world, e, kBody) == "combat";
+            }
+            if (modeOf(a, kEnemyA) == EnemyMode::Attack) {
+                const float pitch = std::clamp(a.world.registry().get<MoveIntent>(e).pitchDeg, -60.0f, 60.0f);
+                aimFollows &= near(paramOf(a.world, e, "aimPitch"), pitch, 1e-4f);
+            }
+            if (!from(ev, Kind::Shot, kEnemyA).empty()) {
+                shotStep = i;
+                kickAtOnce = stateOf(a.world, e, kFire) == "kick" && stepsIn(a.world, e, kFire) == 1;
+            }
+        }
+        std::printf("\n      attack at step %d, first round at %d", attackStep, shotStep);
+        CHECK(attackStep >= 0 && combatAtOnce, "attack: the combat state in the same step");
+        CHECK(aimFollows, "aimPitch is the AI's pitch, within +-60");
+        CHECK(shotStep >= 0 && kickAtOnce, "a round: the fire layer's kick from that step");
+    }
+    {   // chase: the move blend at its walking speed
+        Enemy ai;
+        ai.attackRange = 2.0f;
+        Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, animatedEnemies(ai));
+        toughen(a);
+        (void)a.run(30);
+        const entt::entity e = byId(a, kEnemyA);
+        std::printf("\n      chasing at %.3f m/s", paramOf(a.world, e, "speed"));
+        CHECK(modeOf(a, kEnemyA) == EnemyMode::Chase && stateOf(a.world, e, kBody) == "move" &&
+                  paramOf(a.world, e, "speed") > 2.0f,
+              "chase: the move blend, toward the run (2.5 m/s)");
+    }
+    {   // a round that damages it: a flinch from that step; death: the death clip, then held
+        Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, steadyRifle(), animatedEnemies());
+        toughen(a);
+        const entt::entity e = byId(a, kEnemyA);
+        const auto ev = a.run(1, {actionEvent("fire", true)});
+        (void)a.run(1, {actionEvent("fire", false)});
+        bool damaged = false;
+        for (const CombatEvent& c : only(ev, Kind::Damage)) damaged |= c.targetId == kEnemyA;
+        CHECK(damaged, "the player's round damaged EnemyA");
+        // One step later the flinch is at its second step.
+        CHECK(stateOf(a.world, e, kHit) == "flinch" && stepsIn(a.world, e, kHit) == 2, "damage: the hit layer's flinch");
+        a.combat->damage(e, 1000.0f, a.player, {});
+        (void)a.run(1);
+        CHECK(stateOf(a.world, e, kBody) == "death" && near(paramOf(a.world, e, "alive"), 0.0f),
+              "death: the body's death clip from the next step");
+        (void)a.run(50);
+        CHECK(stateOf(a.world, e, kBody) == "dead" && upright(a.world, e) && modeOf(a, kEnemyA) == EnemyMode::Dead,
+              "its clip ended (held), the Transform upright");
+        const auto falls = animEventsOf(a.world, kEnemyA, "body_fall");
+        CHECK(falls.size() == 1, "body_fall once");
+    }
+}
+
+static void t23_enemy_reload_events() {
+    Weapon three = enemyWeapon();
+    three.magazine = 3;   // a burst empties it
+    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, {}, animatedEnemies({}, three));
+    toughen(a);
+    const entt::entity e = byId(a, kEnemyA);
+    uint64_t reloadAt = 0;
+    for (int i = 0; i < 300 && !reloadAt; ++i) {
+        (void)a.run(1);
+        if (stateOf(a.world, e, kReload) == "reload" && stepsIn(a.world, e, kReload) == 1) reloadAt = a.anim->steps();
+    }
+    CHECK(reloadAt != 0, "an empty magazine: the reload layer's reload");
+    (void)a.run(130);
+    const auto out = animEventsOf(a.world, kEnemyA, "mag_out"), in = animEventsOf(a.world, kEnemyA, "mag_in"),
+               bolt = animEventsOf(a.world, kEnemyA, "bolt");
+    const auto at = [&](const std::vector<AnimEvent>& v) { return v.empty() ? -1 : static_cast<int>(v[0].step - reloadAt) + 1; };
+    std::printf("\n      mag_out at step %d of the clip, mag_in %d, bolt %d", at(out), at(in), at(bolt));
+    CHECK(at(out) == 36 && at(in) == 78 && at(bolt) == 105, "mag_out 0.6 s, mag_in 1.3 s, bolt 1.75 s into it");
+}
+
+namespace {
+
+// The play scene as hosts load it (levels, physics, combat, the round hook, animation).
+struct PlayScene {
+    World w;
+    FileAssetResolver files{OHAO_SOURCE_DIR};
+    CombatSystem* combat{nullptr};
+    PhysicsScene* physics{nullptr};
+    bool loaded{false};
+    PlayScene() {
+        w.seedIds(7);
+        ohao::level::installLevels(w, files, engineTypes());
+        physics = &installPhysics(w, files);
+        combat = &installCombat(w);
+        installRoundHook(w, engineTypes());
+        installAnimation(w, files);
+        loaded = static_cast<bool>(loadSceneFile(
+            w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes()));
+        if (loaded)
+            for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
+    }
+    std::vector<CombatEvent> step(int n, std::vector<InputEvent> first = {}) {
+        std::vector<CombatEvent> all;
+        for (int i = 0; i < n; ++i) {
+            w.stepInput(i == 0 ? first : std::vector<InputEvent>{});
+            w.update(kDt);
+            const auto ev = combatEvents(w);
+            all.insert(all.end(), ev.begin(), ev.end());
+        }
+        return all;
+    }
+};
+
+constexpr uint64_t kPlayEnemyA = 0x5c0b1a7e00000010ull, kPlayEnemyB = 0x5c0b1a7e00000020ull;
+
+} // namespace
+
+static void t25_play_scene_skinned() {
+    PlayScene s;
+    CHECK(s.loaded, "blockout_play.scene.json loads");
+    if (!s.loaded) return;
+    s.w.sync();   // the first frame, before any step
+    auto& reg = s.w.registry();
+    for (const uint64_t id : {kPlayEnemyA, kPlayEnemyB}) {
+        const entt::entity e = s.w.findById(id);
+        const auto* pose = reg.try_get<AnimPose>(e);
+        const bool parts = reg.all_of<SkinnedMesh, Animator, Enemy>(e);
+        std::printf("\n      %llx: %zu bones in its palette, posed box top %.3f m", static_cast<unsigned long long>(id),
+                    pose ? pose->palette.size() : 0u, pose ? pose->boundsMax.y : 0.0f);
+        // The palette holds the bones that weight vertices (Assimp's bone list): the IK targets have none.
+        CHECK(parts && pose && pose->palette.size() >= 30 && pose->model.size() == 43 && pose->boundsMax.y > 1.5f &&
+                  pose->boundsMax.y < 2.3f,
+              "an enemy: skinned, animated, posed from the first frame (43 joints, about 1.8 m)");
+        std::size_t rifles = 0, muzzles = 0, boxes = 0;
+        for (auto [c, p] : reg.view<const Parent>().each()) {
+            if (p.entity != e) continue;
+            boxes += reg.all_of<MeshSource>(c) && !reg.all_of<JointAttach>(c);
+            if (!reg.all_of<JointAttach>(c)) continue;
+            const auto* rp = reg.try_get<RenderPose>(c);
+            rifles += rp && reg.get<JointAttach>(c).joint == "Index1.R" && rp->world[3].y > 0.5f && rp->world[3].y < 1.8f;
+            for (auto [m, mp] : reg.view<const Parent>().each())
+                muzzles += mp.entity == c && reg.all_of<Muzzle>(m) && reg.all_of<RenderPose>(m);
+        }
+        CHECK(rifles == 1 && muzzles == 1, "its rifle in its right hand (JointAttach), the muzzle light on it, drawn there");
+        CHECK(boxes == 0, "its body and head boxes draw nothing (hit volumes: the capsule, ruling 18)");
+    }
+}
+
+static void t25_fight_states() {
+    PlayScene s;
+    CHECK(s.loaded, "blockout_play.scene.json loads");
+    if (!s.loaded) return;
+    auto& reg = s.w.registry();
+    entt::entity player = entt::null;
+    for (auto [e, pc] : reg.view<const PlayerController>().each())
+        if (pc.input) player = e;
+    reg.replace<Health>(player, Health{10000.0f, 10000.0f});
+    (void)s.step(1);
+    const uint64_t h0 = hashOf(s.w);   // the round's start
+    const entt::entity a = s.w.findById(kPlayEnemyA), b = s.w.findById(kPlayEnemyB);
+    const bool animated = reg.all_of<Animator>(a) && reg.all_of<Animator>(b);
+    CHECK(animated, "both enemies animated");
+    if (!animated) return;
+    const Animator animA = reg.get<Animator>(a), animB = reg.get<Animator>(b);
+    // Face EnemyA where the player stands, fire bursts of three until it is dead.
+    const glm::vec3 me = s.physics->playerInfo(player)->pos, it = reg.get<Transform>(a).position;
+    s.physics->teleportPlayer(player, me, glm::degrees(std::atan2(-(it.x - me.x), -(it.z - me.z))));
+    int damageSteps = 0, flinched = 0, deathStep = -1, i = 0;
+    bool combatBefore = false;
+    while (reg.get<Health>(a).current > 0.0f && i < 600) {
+        const bool down = i % 40 == 0, up = i % 40 == 13;
+        const auto ev = s.step(1, down ? std::vector{actionEvent("fire", true)}
+                                       : up ? std::vector{actionEvent("fire", false)} : std::vector<InputEvent>{});
+        combatBefore |= stateOf(s.w, a, kBody) == "combat";
+        bool hurt = false, died = false;
+        for (const CombatEvent& c : ev) {
+            hurt |= c.kind == Kind::Damage && c.targetId == kPlayEnemyA;
+            died |= c.kind == Kind::Death && c.targetId == kPlayEnemyA;
+        }
+        if (hurt && !died) {
+            ++damageSteps;
+            flinched += stateOf(s.w, a, kHit) == "flinch" && stepsIn(s.w, a, kHit) == 1;
+        }
+        if (died) deathStep = i;
+        ++i;
+    }
+    std::printf("\n      EnemyA died at step %d after %d damaging steps (%d flinched)", deathStep, damageSteps, flinched);
+    CHECK(deathStep >= 0, "EnemyA shot down");
+    CHECK(combatBefore, "it fought back in its combat state first");
+    CHECK(damageSteps > 0 && flinched == damageSteps, "every round that hurt it: a flinch in that step");
+    CHECK(stateOf(s.w, a, kBody) == "death", "its death: the death clip in the step it died");
+    (void)s.step(50);
+    CHECK(stateOf(s.w, a, kBody) == "dead" && upright(s.w, a), "held at its end, the Transform upright");
+    CHECK(animEventsOf(s.w, kPlayEnemyA, "body_fall").size() == 1, "body_fall once");
+    CHECK(layerOf(s.w, b, kBody) != nullptr, "EnemyB's animator stepped too");
+    (void)s.combat->damage(b, 1000.0f, entt::null, {});
+    (void)s.step(2);
+    CHECK(s.combat->round().phase == RoundPhase::Won, "both dead: won");
+    (void)s.step(1, {actionEvent("restart", true)});
+    const auto same = [](const Animator& x, const Animator& y) {
+        if (x.layers.size() != y.layers.size()) return false;
+        for (std::size_t l = 0; l < x.layers.size(); ++l)
+            if (x.layers[l].state != y.layers[l].state || x.layers[l].steps != y.layers[l].steps ||
+                x.layers[l].from != y.layers[l].from || x.layers[l].fromSteps != y.layers[l].fromSteps ||
+                x.layers[l].fade != y.layers[l].fade || x.layers[l].faded != y.layers[l].faded)
+                return false;
+        return true;
+    };
+    CHECK(same(reg.get<Animator>(a), animA) && same(reg.get<Animator>(b), animB),
+          "the restart (t23_restart_resets): both Animators as at the round's start");
+    CHECK(hashOf(s.w) == h0, "and world.hash the round start's");
+}
+
 static int dumpBurst(const char* path) {
     Arena a;
     std::FILE* f = std::fopen(path, "wb");
@@ -1604,5 +1878,9 @@ int main(int argc, char** argv) {
     RUN(t21_kick_per_round_returns);
     RUN(t21_view_model_resets_on_restart);
     RUN(t21_view_model_never_in_world);
+    RUN(t23_enemy_states_from_ai);
+    RUN(t23_enemy_reload_events);
+    RUN(t25_play_scene_skinned);
+    RUN(t25_fight_states);
     return ohao::test::finish("combat_tests");
 }

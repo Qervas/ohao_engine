@@ -2,11 +2,13 @@
   "format": "ohao.scene",
   "version": 1,
   "components": {
+    "Animator": 1,
     "Camera": 1,
     "Enemy": 1,
     "Environment": 1,
     "Health": 1,
     "InputActions": 1,
+    "JointAttach": 1,
     "Level": 1,
     "Light": 1,
     "MaterialOverride": 1,
@@ -16,6 +18,7 @@
     "Parent": 1,
     "PlayerController": 1,
     "Round": 1,
+    "SkinnedMesh": 1,
     "Transform": 1,
     "ViewModel": 1,
     "Weapon": 1
@@ -102,34 +105,33 @@
       "PlayerController": { "walkSpeed": 2.5, "spawn": "enemy", "input": false },
       "Health": {},
       "Weapon": { "damage": 8, "fireRate": 4, "magazine": 12, "reloadTime": 2, "recoilPitchDeg": 0, "recoilYawDeg": 0, "seed": 17 },
-      "Enemy": {}
+      "Enemy": {},
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/characters/toon_enemy/enemy.glb" }, "mesh": "Enemy" } } },
+      "SkinnedMesh": { "file": { "path": "assets/characters/toon_enemy/enemy.glb" }, "skin": "EnemySkin" },
+      "Animator": { "graph": { "path": "assets/anim/enemy.animgraph.json" } }
     },
     {
       "id": "5c0b1a7e00000011",
       "Name": { "value": "EnemyA Body" },
-      "Parent": { "entity": "5c0b1a7e00000010" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.25, 0, -0.17], "hi": [0.25, 1.42, 0.17], "color": [0.62, 0.12, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.62, 0.12, 0.1], "roughness": 0.7 }
+      "Parent": { "entity": "5c0b1a7e00000010" }
     },
     {
       "id": "5c0b1a7e00000012",
       "Name": { "value": "EnemyA Head" },
-      "Parent": { "entity": "5c0b1a7e00000010" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.14, 1.46, -0.14], "hi": [0.14, 1.78, 0.14], "color": [0.85, 0.7, 0.55] } } },
-      "MaterialOverride": { "baseColor": [0.85, 0.7, 0.55], "roughness": 0.6 }
+      "Parent": { "entity": "5c0b1a7e00000010" }
     },
     {
       "id": "5c0b1a7e00000013",
       "Name": { "value": "EnemyA Gun" },
       "Parent": { "entity": "5c0b1a7e00000010" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [0.2, 1.2, -0.62], "hi": [0.26, 1.28, -0.17], "color": [0.09, 0.09, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.09, 0.09, 0.1], "roughness": 0.45, "metallic": 0.6 }
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/characters/toon_enemy/rifle.glb" } } } },
+      "JointAttach": { "joint": "Index1.R" }
     },
     {
       "id": "5c0b1a7e00000014",
       "Name": { "value": "EnemyA Muzzle" },
-      "Transform": { "position": [0.23, 1.24, -0.66] },
-      "Parent": { "entity": "5c0b1a7e00000010" },
+      "Transform": { "position": [0.173, 0.945, -0.039] },
+      "Parent": { "entity": "5c0b1a7e00000013" },
       "Light": { "color": [1, 0.72, 0.38], "intensity": 0, "range": 6, "radius": 0.03, "castShadows": false },
       "Muzzle": {}
     },
@@ -139,34 +141,33 @@
       "PlayerController": { "walkSpeed": 2.5, "spawn": "enemy", "input": false },
       "Health": {},
       "Weapon": { "damage": 8, "fireRate": 4, "magazine": 12, "reloadTime": 2, "recoilPitchDeg": 0, "recoilYawDeg": 0, "seed": 29 },
-      "Enemy": {}
+      "Enemy": {},
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/characters/toon_enemy/enemy.glb" }, "mesh": "Enemy" } } },
+      "SkinnedMesh": { "file": { "path": "assets/characters/toon_enemy/enemy.glb" }, "skin": "EnemySkin" },
+      "Animator": { "graph": { "path": "assets/anim/enemy.animgraph.json" } }
     },
     {
       "id": "5c0b1a7e00000021",
       "Name": { "value": "EnemyB Body" },
-      "Parent": { "entity": "5c0b1a7e00000020" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.25, 0, -0.17], "hi": [0.25, 1.42, 0.17], "color": [0.62, 0.12, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.62, 0.12, 0.1], "roughness": 0.7 }
+      "Parent": { "entity": "5c0b1a7e00000020" }
     },
     {
       "id": "5c0b1a7e00000022",
       "Name": { "value": "EnemyB Head" },
-      "Parent": { "entity": "5c0b1a7e00000020" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [-0.14, 1.46, -0.14], "hi": [0.14, 1.78, 0.14], "color": [0.85, 0.7, 0.55] } } },
-      "MaterialOverride": { "baseColor": [0.85, 0.7, 0.55], "roughness": 0.6 }
+      "Parent": { "entity": "5c0b1a7e00000020" }
     },
     {
       "id": "5c0b1a7e00000023",
       "Name": { "value": "EnemyB Gun" },
       "Parent": { "entity": "5c0b1a7e00000020" },
-      "MeshSource": { "source": { "BoxPrim": { "lo": [0.2, 1.2, -0.62], "hi": [0.26, 1.28, -0.17], "color": [0.09, 0.09, 0.1] } } },
-      "MaterialOverride": { "baseColor": [0.09, 0.09, 0.1], "roughness": 0.45, "metallic": 0.6 }
+      "MeshSource": { "source": { "ModelAsset": { "asset": { "path": "assets/characters/toon_enemy/rifle.glb" } } } },
+      "JointAttach": { "joint": "Index1.R" }
     },
     {
       "id": "5c0b1a7e00000024",
       "Name": { "value": "EnemyB Muzzle" },
-      "Transform": { "position": [0.23, 1.24, -0.66] },
-      "Parent": { "entity": "5c0b1a7e00000020" },
+      "Transform": { "position": [0.173, 0.945, -0.039] },
+      "Parent": { "entity": "5c0b1a7e00000023" },
       "Light": { "color": [1, 0.72, 0.38], "intensity": 0, "range": 6, "radius": 0.03, "castShadows": false },
       "Muzzle": {}
     }

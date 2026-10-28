@@ -5,6 +5,7 @@
 // tools/audio/make_weapons.py. Which sounds an event plays is soundsFor, how planCombatSound;
 // headless hosts play none.
 #include "audio/audio_system.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/world.hpp"
 #include "runtime/game_audio.hpp"
@@ -34,13 +35,21 @@ struct SoundPlan {
 };
 [[nodiscard]] SoundPlan planCombatSound(std::string_view name, const ecs::CombatEvent& event, const Listener& listener);
 
+// Handling sounds (sub-project 10): an animation event `mag_out`, `mag_in`, `bolt` or `body_fall`
+// plays the sound of its name; nothing else plays.
+[[nodiscard]] std::vector<std::string> soundsForAnim(const ecs::AnimEvent& event, uint64_t playerId);
+// At `at` (where the animated entity is drawn: its chest, or its feet for a fall) on the near
+// curve; the player's own at the ear; an enemy's (anyone else's) gets an occlusion ray.
+[[nodiscard]] SoundPlan planAnimSound(std::string_view name, const ecs::AnimEvent& event, glm::vec3 at,
+                                      const Listener& listener);
+
 class CombatSounds {
 public:
     // The sounds in `root`/assets/audio/weapons, played through `audio` (the host's, shared with the
     // footsteps; it must outlive this). False when `audio` has no device; update then does nothing.
     bool initialize(const std::filesystem::path& root, AudioSystem& audio);
-    // Plays what the combat log holds since the last call (the first call starts at its end).
-    // Call once per frame, after the frame's steps.
+    // Plays what the combat and animation logs hold since the last call (the first call starts at
+    // their ends). Call once per frame, after the frame's steps.
     void update(ecs::World& world);
     [[nodiscard]] uint64_t played() const noexcept { return m_played; }
     [[nodiscard]] uint64_t occlusionRays() const noexcept { return m_rays; }
@@ -50,8 +59,12 @@ public:
 private:
     AudioSystem* m_audio{nullptr};
     std::map<std::string, std::string, std::less<>> m_files;   // name -> path
+    void play(ecs::World& world, const std::string& name, SoundPlan plan, const Listener& listener);
+
     uint64_t m_cursor{0};
     bool m_started{false};
+    uint64_t m_animCursor{0};
+    bool m_animStarted{false};
     uint64_t m_played{0};
     uint64_t m_rays{0};
     uint64_t m_occluded{0};

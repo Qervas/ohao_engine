@@ -932,6 +932,36 @@ static void sp9_t21_occlusion_ray() {
     CHECK(planCombatSound("enemy_fire", theirs, *listener).enemy, "an enemy's round: one ray");
 }
 
+// ---- sub-project 10, step 2: handling sounds from animation events (runtime/combat_sounds.hpp) ----
+
+static void sp10_t23_handling_sounds() {
+    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
+    const auto ev = [](uint64_t entity, std::string name) {
+        ecs::AnimEvent e;
+        e.entity = entity;
+        e.clip = "reload";
+        e.name = std::move(name);
+        return e;
+    };
+    using V = std::vector<std::string>;
+    for (const char* n : {"mag_out", "mag_in", "bolt", "body_fall"})
+        CHECK(soundsForAnim(ev(enemy, n), player) == V{n}, "a handling event plays its own sound");
+    CHECK(soundsForAnim(ev(enemy, "tick"), player).empty(), "and nothing else");
+    Listener l;
+    l.position = {0.0f, 1.62f, 0.0f};
+    l.playerId = player;
+    const glm::vec3 at{2.0f, 1.0f, -6.0f};
+    const SoundPlan theirs = planAnimSound("mag_out", ev(enemy, "mag_out"), at, l);
+    CHECK(theirs.at == at && theirs.shape.maxDistance == 20.0f && theirs.shape.rolloff == 1.5f && theirs.enemy,
+          "an enemy's: at it, on the near curve, with an occlusion ray");
+    const SoundPlan own = planAnimSound("mag_in", ev(player, "mag_in"), at, l);
+    CHECK(own.at == l.position && !own.enemy, "the player's own: at the ear, no ray");
+    namespace fs = std::filesystem;
+    for (const char* n : {"mag_out", "mag_in", "bolt", "body_fall"})
+        CHECK(fs::exists(fs::path(OHAO_SOURCE_DIR) / "assets/audio/weapons" / (std::string(n) + ".wav")),
+              "every handling sound is shipped (tools/audio/make_weapons.py)");
+}
+
 // ---- sub-project 7, step 4: combat sounds and the capturing click (runtime/combat_sounds.hpp,
 // runtime/click_capture.hpp) -------------------------------------------------------------------
 
@@ -1023,6 +1053,7 @@ int main() {
     RUN(sp9_t21_voice_cap);
     RUN(sp9_t21_distance_curves);
     RUN(sp9_t21_occlusion_ray);
+    RUN(sp10_t23_handling_sounds);
     std::printf("[render stats]\n");
     RUN(sp2b_t14_stats_are_medians_per_pass_in_registry_order);
     std::printf("[capture images]\n");

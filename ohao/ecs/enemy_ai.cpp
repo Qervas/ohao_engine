@@ -56,20 +56,14 @@ Target findTarget(const World& world, const entt::registry& reg, const PhysicsSc
     return best;
 }
 
-// Lies a dead enemy down where it stood: its character goes (it blocks nothing and rays pass),
-// its body tips over backwards onto the floor.
-void lieDown(entt::registry& reg, entt::entity e, EnemyState& s) {
+// A dead enemy stops where it stood: its character goes (it blocks nothing and rays pass). Its
+// Transform stays upright; the animation's death clip is the fall (sub-project 10, OPEN ruling 7,
+// provisional: it replaced a rigid 90-degree tip).
+void die(entt::registry& reg, entt::entity e, EnemyState& s) {
     s.mode = EnemyMode::Dead;
-    float radius = 0.3f, yaw = 0.0f;
-    if (const auto* pc = reg.try_get<PlayerController>(e)) radius = pc->radius;
-    if (const auto* mi = reg.try_get<MoveIntent>(e)) yaw = mi->yawDeg;
     if (auto* mi = reg.try_get<MoveIntent>(e)) mi->move = glm::vec2(0.0f);
     if (auto* t = reg.try_get<WeaponTrigger>(e)) t->pull = false;
     reg.remove<PlayerController>(e);
-    reg.patch<Transform>(e, [&](Transform& t) {
-        t.rotation = yawQuat(yaw) * glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-        t.position.y += radius;
-    });
 }
 
 } // namespace
@@ -97,7 +91,7 @@ void stepEnemies(World& world, PhysicsScene& physics, float dt) {
         EnemyState& s = reg.get<EnemyState>(e);
         if (s.mode == EnemyMode::Dead) continue;
         if (health && !(health->current > 0.0f)) {
-            lieDown(reg, e, s);
+            die(reg, e, s);
             continue;
         }
         const auto me = reg.all_of<PlayerController>(e) ? physics.playerInfo(e) : std::nullopt;

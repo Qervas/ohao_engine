@@ -34,6 +34,21 @@ SoundPlan planCombatSound(std::string_view name, const ecs::CombatEvent& e, cons
     return plan;
 }
 
+std::vector<std::string> soundsForAnim(const ecs::AnimEvent& e, uint64_t /*playerId*/) {
+    if (e.name == "mag_out" || e.name == "mag_in" || e.name == "bolt" || e.name == "body_fall") return {e.name};
+    return {};
+}
+
+SoundPlan planAnimSound(std::string_view name, const ecs::AnimEvent& e, glm::vec3 at, const Listener& listener) {
+    SoundPlan plan;
+    const bool own = listener.playerId != 0 && e.entity == listener.playerId;
+    plan.at = own ? listener.position : at;
+    plan.volume = name == "body_fall" ? 0.8f : 0.6f;
+    plan.shape = shapeFor(SoundKind::Near);
+    plan.enemy = !own && e.entity != 0;
+    return plan;
+}
+
 bool CombatSounds::initialize(const std::filesystem::path& root, AudioSystem& audio) {
     const std::filesystem::path folder = root / "assets" / "audio" / "weapons";
     std::error_code ec;
@@ -69,17 +84,44 @@ void CombatSounds::update(ecs::World& world) {
                 auto it = m_files.find(name);
                 if (it == m_files.end() && name.rfind("impact_", 0) == 0) it = m_files.find("impact_default");
                 if (it == m_files.end()) continue;
-                SoundPlan plan = planCombatSound(name, e, listener);
-                if (plan.enemy) {   // one ray per enemy round started
-                    ++m_rays;
-                    plan.shape.occluded = soundOccluded(world, listener, plan.at);
-                    m_occluded += plan.shape.occluded;
-                }
-                if (isValidSoundHandle(m_audio->playSoundAt(it->second, plan.at, SoundCategory::SFX, false, plan.volume, plan.shape)))
-                    ++m_played;
+                play(world, it->second, planCombatSound(name, e, listener), listener);
             }
         }
     }
+
+    // Handling sounds from the animation log, where the animated entity is drawn.
+    const ecs::AnimationSystem* anim = ecs::animationSystem(world);
+    if (!anim) return;
+    if (!std::exchange(m_animStarted, true)) m_animCursor = anim->nextEventSeq();
+    const auto& reg = world.registry();
+    for (;;) {
+        uint64_t dropped = 0;
+        const auto events = anim->eventsSince(m_animCursor, 64, dropped);
+        if (events.empty()) break;
+        for (const ecs::AnimEvent& e : events) {
+            m_animCursor = e.seq + 1;
+            for (const std::string& name : soundsForAnim(e, listener.playerId)) {
+                const auto it = m_files.find(name);
+                const entt::entity who = world.findById(e.entity);
+                if (it == m_files.end() || who == entt::null) continue;
+                glm::vec3 at(0.0f);
+                if (const auto* rp = reg.try_get<ecs::RenderPose>(who)) at = glm::vec3(rp->world[3]);
+                else if (const auto* wt = reg.try_get<ecs::WorldTransform>(who)) at = glm::vec3(wt->world[3]);
+                at.y += name == "body_fall" ? 0.2f : 1.1f;   // the floor, or the hands at the chest
+                play(world, it->second, planAnimSound(name, e, at, listener), listener);
+            }
+        }
+    }
+}
+
+void CombatSounds::play(ecs::World& world, const std::string& path, SoundPlan plan, const Listener& listener) {
+    if (plan.enemy) {   // one ray per enemy sound started
+        ++m_rays;
+        plan.shape.occluded = soundOccluded(world, listener, plan.at);
+        m_occluded += plan.shape.occluded;
+    }
+    if (isValidSoundHandle(m_audio->playSoundAt(path, plan.at, SoundCategory::SFX, false, plan.volume, plan.shape)))
+        ++m_played;
 }
 
 } // namespace ohao::runtime

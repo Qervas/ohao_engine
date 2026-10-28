@@ -1,0 +1,115 @@
+{
+  "skeleton": { "file": "assets/characters/toon_enemy/enemy.glb", "skin": "EnemySkin" },
+  "driver": "enemy",
+  "clips": {
+    "idle": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "idle", "loop": true },
+    "walk": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk", "loop": true },
+    "run": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run", "loop": true },
+    "aim_idle": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "aim_idle", "loop": true },
+    "walk_aim": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk_aim", "loop": true },
+    "run_aim": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run_aim", "loop": true },
+    "death": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "death", "loop": false,
+      "events": [ { "t": 0.55, "name": "body_fall" } ]
+    },
+    "rest": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "rest", "loop": true },
+    "aim_up": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "aim_up", "loop": true },
+    "aim_down": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "aim_down", "loop": true },
+    "fire": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "fire", "loop": false },
+    "hit": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "hit", "loop": false },
+    "reload": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "reload", "loop": false,
+      "events": [ { "t": 0.6, "name": "mag_out" }, { "t": 1.3, "name": "mag_in" }, { "t": 1.75, "name": "bolt" } ]
+    }
+  },
+  "params": { "speed": "float", "aimPitch": "float", "mode": "float", "alive": "bool" },
+  "layers": [
+    {
+      "name": "body",
+      "blend": "replace",
+      "weight": 1.0,
+      "initial": "move",
+      "states": {
+        "move": {
+          "blend1d": { "param": "speed", "points": [ { "clip": "idle", "at": 0.0 }, { "clip": "walk", "at": 1.25 }, { "clip": "run", "at": 2.5 } ] }
+        },
+        "combat": {
+          "blend1d": { "param": "speed", "points": [ { "clip": "aim_idle", "at": 0.0 }, { "clip": "walk_aim", "at": 1.25 }, { "clip": "run_aim", "at": 2.5 } ] }
+        },
+        "death": { "clip": "death" },
+        "dead": { "clip": "death", "rate": 0.0, "startAt": 0.75 }
+      },
+      "transitions": [
+        { "from": "move", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "combat", "to": "death", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "move", "to": "combat", "when": { "param": "mode", "op": "==", "value": 2 }, "fade": 8 },
+        { "from": "combat", "to": "move", "when": { "param": "mode", "op": "<", "value": 2 }, "fade": 12 },
+        { "from": "death", "to": "dead", "when": { "clipEnd": true }, "fade": 0 },
+        { "from": "dead", "to": "move", "when": { "param": "alive", "op": "==", "value": 1 }, "fade": 0 }
+      ]
+    },
+    {
+      "name": "aim",
+      "blend": "additive",
+      "weight": 1.0,
+      "mask": [ "Abdomen" ],
+      "initial": "pitch",
+      "states": {
+        "pitch": {
+          "blend1d": { "param": "aimPitch", "points": [ { "clip": "aim_down", "at": -60.0 }, { "clip": "rest", "at": 0.0 }, { "clip": "aim_up", "at": 60.0 } ] }
+        }
+      },
+      "transitions": []
+    },
+    {
+      "name": "fire",
+      "blend": "additive",
+      "weight": 1.0,
+      "mask": [ "Abdomen" ],
+      "initial": "still",
+      "states": {
+        "still": { "clip": "rest" },
+        "kick": { "clip": "fire" }
+      },
+      "transitions": [
+        { "from": "still", "to": "kick", "when": { "event": "shot" }, "fade": 0 },
+        { "from": "kick", "to": "kick", "when": { "event": "shot" }, "fade": 2 },
+        { "from": "kick", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "kick", "to": "still", "when": { "clipEnd": true }, "fade": 0 }
+      ]
+    },
+    {
+      "name": "reload",
+      "blend": "additive",
+      "weight": 1.0,
+      "mask": [ "Abdomen" ],
+      "initial": "still",
+      "states": {
+        "still": { "clip": "rest" },
+        "reload": { "clip": "reload" }
+      },
+      "transitions": [
+        { "from": "still", "to": "reload", "when": { "event": "reload" }, "fade": 4 },
+        { "from": "reload", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "reload", "to": "still", "when": { "clipEnd": true }, "fade": 4 }
+      ]
+    },
+    {
+      "name": "hit",
+      "blend": "additive",
+      "weight": 1.0,
+      "mask": [ "Abdomen" ],
+      "initial": "still",
+      "states": {
+        "still": { "clip": "rest" },
+        "flinch": { "clip": "hit" }
+      },
+      "transitions": [
+        { "from": "still", "to": "flinch", "when": { "event": "hit" }, "fade": 0 },
+        { "from": "flinch", "to": "flinch", "when": { "event": "hit" }, "fade": 2 },
+        { "from": "flinch", "to": "still", "when": { "param": "alive", "op": "==", "value": 0 }, "fade": 4 },
+        { "from": "flinch", "to": "still", "when": { "clipEnd": true }, "fade": 0 }
+      ]
+    }
+  ]
+}
