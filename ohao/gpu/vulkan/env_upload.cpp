@@ -1,5 +1,6 @@
 #include "renderer_impl.hpp"
 #include "render/rt/env_cdf.hpp"
+#include "render/rt/env_sun.hpp"
 #include "render/scene/render_scene.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "stb_image.h"
@@ -7,6 +8,7 @@
 #include "core/log.hpp"
 
 #include <cstring>
+#include <span>
 
 namespace ohao {
 
@@ -43,13 +45,32 @@ void VulkanRenderer::uploadEnvironmentMap() {
     if (m_device == VK_NULL_HANDLE) return;
     if (m_envSampler == VK_NULL_HANDLE) m_envSampler = createEnvSampler(m_device);
 
-    // Load once per path: reloading on every scene upload leaked multi-GB HDR images.
-    if (!m_envMapPath.empty() && m_envMapPath != m_envMapLoadedPath && m_textureManager) {
+    // Load once per path (reloading on every scene upload leaked multi-GB HDR images), and again
+    // when the scene gains or loses the directional light that stands for the map's sun.
+    if (!m_envMapPath.empty() && (m_envMapPath != m_envMapLoadedPath || m_envMapSunless != m_envMapLoadedSunless) &&
+        m_textureManager) {
         int ew = 0, eh = 0, ec = 0;
         float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
         if (!hdrPixels) {
             OHAO_LOG(Error, gpu, "RT: env map: failed to load {}", m_envMapPath);
         } else {
+            // A directional light stands for the sun: every consumer below (RT GI's rays, the
+            // deferred IBL, the path tracer's misses and its importance sampling) lights with the
+            // sky alone, so the sun is counted once and GI's cosine rays never meet it.
+            if (m_envMapSunless) {
+                const render::EnvSun sun = render::separateEnvSun(
+                    std::span<float>(hdrPixels, static_cast<size_t>(ew) * static_cast<size_t>(eh) * 4u), ew, eh);
+                if (sun.found)
+                    OHAO_LOG(Info, gpu,
+                             "env map: a directional light stands for the sun; {} lights without its sun "
+                             "({} texels, {:.2e} sr, {:.1f}% of its power, peak {:.0f} over a median sky of {:.3f}, "
+                             "toward ({:.3f}, {:.3f}, {:.3f}))",
+                             m_envMapPath, sun.texels, sun.solidAngle, sun.powerShare * 100.0f, sun.peak, sun.median,
+                             sun.direction.x, sun.direction.y, sun.direction.z);
+                else
+                    OHAO_LOG(Info, gpu, "env map: {} has no sun to take out (peak {:.1f}, median sky {:.3f})",
+                             m_envMapPath, sun.peak, sun.median);
+            }
             // Replacing an earlier env map: frames in flight may still sample it.
             if (m_envMapImage != VK_NULL_HANDLE) {
                 vkQueueWaitIdle(m_graphicsQueue);
@@ -230,6 +251,7 @@ void VulkanRenderer::uploadEnvironmentMap() {
                 m_envMapHeight = static_cast<uint32_t>(eh);
                 m_envMapIntegral = envCDF.integral();
                 m_envMapLoadedPath = m_envMapPath;
+                m_envMapLoadedSunless = m_envMapSunless;
                 OHAO_LOG(Info, gpu, "RT: Environment map loaded: {}x{} (bindless idx={})", ew, eh,
                          m_envMapTexIdx);
             }

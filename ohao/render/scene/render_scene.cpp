@@ -673,6 +673,13 @@ void RenderScene::setLights(std::span<const LightDesc> lights) {
     m->syncEmitters();
 }
 
+bool RenderScene::hasDirectionalLight() const {
+    if (!m->initialized) return false;
+    const auto descs = m->lights.descs();
+    return std::any_of(descs.begin(), descs.end(),
+                       [](const LightDesc& l) { return l.kind == LightKind::Directional; });
+}
+
 void RenderScene::setLightEmitters(bool enabled) {
     if (!m->initialized || enabled == m->emittersEnabled) return;
     m->emittersEnabled = enabled;

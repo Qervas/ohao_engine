@@ -67,6 +67,9 @@ public:
     // (lightEmitter(): a sphere or its rectangle, kInstanceEmitter) that the camera sees as the
     // light's own radiance; it shadows nothing and lights nothing (the light does).
     void setLights(std::span<const LightDesc> lights);
+    // Whether the last setLights had a directional light: it stands for the sun, so the
+    // environment lights without its own (render/rt/env_sun.hpp, VulkanRenderer::render).
+    [[nodiscard]] bool hasDirectionalLight() const;
     // Lights without their emitter meshes (true by default): the light still lights.
     void setLightEmitters(bool enabled);
     // Where the camera is this frame: a spot light's mesh shines toward it by its cone

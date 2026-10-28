@@ -105,6 +105,9 @@ function(ohao_register_harness_tests)
     ohao_add_python_test(check_cli LABEL gpu GPU LOCKS cli_tmp SCRIPT tests/cli/check_cli.py)
     ohao_add_python_test(check_validation LABEL gpu GPU SCRIPT tests/validation/check_validation.py
         ARGS --json build/check_validation.json)
+    # RT GI under an outdoor sky: the HDRI's sun, which a directional light stands for, never
+    # reaches GI's rays as fireflies (docs/changes/2026-10-28-rt-gi-fireflies.md).
+    ohao_add_python_test(check_fireflies LABEL gpu GPU SCRIPT tests/renderer/check_fireflies.py)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)

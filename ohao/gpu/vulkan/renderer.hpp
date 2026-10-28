@@ -468,6 +468,10 @@ private:
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
     std::string m_envMapAttemptedPath;  // path render() last handed to uploadEnvironmentMap
     bool m_envMapChecked{false};        // render() ran uploadEnvironmentMap at least once
+    // The environment lights without its sun while the scene has a directional light, which
+    // stands for it (render/rt/env_sun.hpp): what render() asked for, and what is uploaded.
+    bool m_envMapSunless{false};
+    bool m_envMapLoadedSunless{false};
     VkImage m_envMapImage{VK_NULL_HANDLE};
     VkDeviceMemory m_envMapMemory{VK_NULL_HANDLE};
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // owned by the bindless table once registered
