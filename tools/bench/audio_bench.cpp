@@ -2,7 +2,7 @@
 // "Performance budgets").
 //
 //   audio_bench [--check budgets.json] [--out build/audio_bench.json] [--periods N]
-//               [--reference build/serve_bench_reference.json] [--listen DIR]
+//               [--reference build/serve_bench_reference.json] [--listen DIR] [--grenade-spatial DIR]
 //
 // Step 1 measures mix_10ms_ms: the slice's bank (assets/audio/slice.audio.json) on a mixer without
 // a device, 32 voices playing (positioned, occluded where the bank says so, topped up between
@@ -26,6 +26,11 @@
 // output's level and every bus's driven level per step); and prints how many variants each footstep
 // sound loaded (the local folder first).
 //
+// --grenade-spatial DIR does only this: the test grenade (G, audio ruling 23) going off left and right
+// of a fixed listener at 4 and 20 m and 4 m in front, through the schedule and the window's player,
+// rendered to grenade_spatial.wav with grenade_spatial_schedule.json (each boom's window, place and
+// listener). tools/audio/grenade_spatial.py runs it and measures every window's left/right balance.
+//
 // The machine is recorded as the other benches record it (bench_env.hpp). A run >25% slower than the
 // reference or beside other processes using more than half a core is `noisy`: exit 2.
 #include "audio/audio_bank.hpp"
@@ -41,6 +46,7 @@
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/scene_view.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
@@ -374,10 +380,138 @@ ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     return out;
 }
 
+// ---- --grenade-spatial DIR: the test grenade placed about a fixed listener (audio ruling 23) ---------
+
+// One boom: where it was meant to go off (azimuth: degrees right of the listener's facing; distance).
+struct Boom {
+    const char* label;
+    float azimuthDeg, distance;
+};
+
+// The play scene's player stands outdoors north of the room at kListen, facing north (-z), the
+// ambience bus muted (its bed would fill every window alike). For each boom it is teleported to where a
+// level throw north lands at the boom's place, presses G, is put back at kListen facing north 70 steps
+// later (the grenade lands about 57 steps after the throw), and the grenade goes off 149 steps after
+// the throw step; the next throw waits 200 steps after the boom, so a 3 s window per boom holds one
+// tail. Everything goes through the schedule and a window's AudioPlayer on a mixer without a device, a
+// step's 800 frames rendered after each step. Writes grenade_spatial.wav (48 kHz stereo float) and
+// grenade_spatial_schedule.json (every boom's window, place and listener; every command).
+bool grenadeSpatial(const std::filesystem::path& dir, std::string& error) {
+    constexpr glm::vec3 kListen{0.0f, -0.05f, -20.0f};   // the outdoor ground's top is at -0.05
+    constexpr int kSettle = 10, kBackAt = 70, kFuseSteps = 149, kGap = 200, kWindowSteps = 180;
+    const Boom booms[] = {{"LEFT-near", -90.0f, 4.0f}, {"LEFT-far", -90.0f, 20.0f}, {"RIGHT-near", 90.0f, 4.0f},
+                          {"RIGHT-far", 90.0f, 20.0f}, {"FRONT-near", 0.0f, 4.0f}};
+
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    ecs::World w;
+    w.seedIds(7);
+    level::installLevels(w, files, engineTypes());
+    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    (void)ecs::installCombat(w);
+    ecs::installRoundHook(w, engineTypes());
+    (void)ecs::installAnimation(w, files);
+    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) {
+        error = "grenade-spatial: the play scene did not load";
+        return false;
+    }
+    for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
+    entt::entity player = entt::null;
+    for (auto [e, pc] : w.registry().view<const ecs::PlayerController>().each())
+        if (pc.input) player = e;
+    if (player == entt::null) {
+        error = "grenade-spatial: no input-driven player";
+        return false;
+    }
+    // A level throw from standing lands this far ahead of the thrower's feet (combat::kGrenade*).
+    const float eye = w.registry().get<ecs::PlayerController>(player).eyeHeight, g = -ecs::combat::kGrenadeGravity;
+    const float lift = ecs::combat::kGrenadeLift;
+    const float flight = (lift + std::sqrt(lift * lift + 2.0f * g * eye)) / g;
+    const float reach = ecs::combat::kGrenadeAhead + ecs::combat::kGrenadeSpeed * flight;
+
+    AudioSystem device;
+    if (!device.initialize(true)) {
+        error = "grenade-spatial: the mixer did not start";
+        return false;
+    }
+    runtime::AudioPlayer out;
+    out.initialize(OHAO_SOURCE_DIR, device);
+    runtime::MixOverrides mix;
+    mix.buses.push_back({"ambience", std::nullopt, true, false});
+    out.setOverrides(mix);
+
+    std::vector<float> wav, period(std::size_t(800) * 2);
+    nlohmann::json commands = nlohmann::json::array(), windows = nlohmann::json::array();
+    int step = 0;
+    const auto run = [&](int n, const std::vector<InputEvent>& first = {}) {
+        for (int i = 0; i < n; ++i, ++step) {
+            w.stepInput(i == 0 ? first : std::vector<InputEvent>{});
+            w.update(kDt);
+            out.update(w, true);
+            (void)device.render(period, 800);
+            wav.insert(wav.end(), period.begin(), period.end());
+            for (const ecs::AudioCommand& c : ecs::audioCommands(w)) {
+                // The schedule reads the scene's bank at its first step: names, not indices, from here.
+                const bool play = c.op == ecs::AudioCommand::Op::Play && c.sound < audio.bank().sounds.size();
+                const std::string sound = play ? audio.bank().sounds[c.sound].name : std::string();
+                nlohmann::json j{{"runStep", step + 1}, {"op", int(c.op)}, {"command", ecs::describeAudioCommand(c, audio.bank())}};
+                if (play) j["sound"] = sound;
+                commands.push_back(std::move(j));
+                if (sound == "explode" && !windows.empty() && !windows.back().contains("pos")) {
+                    nlohmann::json& b = windows.back();
+                    b["runStep"] = step + 1;
+                    b["pos"] = {c.pos.x, c.pos.y, c.pos.z};
+                    b["walls"] = c.occl.walls;
+                    b["startFrame"] = std::size_t(step) * 800;   // the start of the step that wrote it
+                    b["frames"] = std::size_t(kWindowSteps) * 800;
+                    if (const auto view = ecs::resolveSceneView(w).camera) {
+                        const float p = glm::radians(view->pitchDeg), y = glm::radians(view->yawDeg);
+                        const glm::vec3 f(std::cos(y) * std::cos(p), std::sin(p), std::sin(y) * std::cos(p));
+                        const glm::vec3 right = glm::normalize(glm::cross(f, glm::vec3(0, 1, 0)));
+                        const glm::vec3 to = c.pos - view->position;
+                        b["ears"] = {view->position.x, view->position.y, view->position.z};
+                        b["forward"] = {f.x, f.y, f.z};
+                        b["distance"] = glm::length(to);
+                        b["azimuthDeg"] = glm::degrees(std::atan2(glm::dot(to, right), glm::dot(to, f)));
+                    }
+                }
+            }
+        }
+    };
+    physics.teleportPlayer(player, kListen, 0.0f);
+    run(kSettle);
+    for (const Boom& b : booms) {
+        const float a = glm::radians(b.azimuthDeg);   // facing -z, right is +x
+        const glm::vec3 at = kListen + glm::vec3(b.distance * std::sin(a), 0.0f, -b.distance * std::cos(a));
+        windows.push_back({{"label", b.label}, {"plannedAzimuthDeg", b.azimuthDeg}, {"plannedDistance", b.distance},
+                           {"planned", {at.x, at.y, at.z}}});
+        physics.teleportPlayer(player, at + glm::vec3(0.0f, 0.0f, reach), 0.0f);
+        run(1, {actionEvent("grenade", true)});
+        run(1, {actionEvent("grenade", false)});
+        run(kBackAt - 2);
+        physics.teleportPlayer(player, kListen, 0.0f);
+        run(kFuseSteps - kBackAt + 1 + kGap);
+        if (!windows.back().contains("pos")) {
+            error = std::string("grenade-spatial: no explode play for ") + b.label;
+            return false;
+        }
+    }
+    static_assert(kWindowSteps <= kGap, "the last window ends before the run does");
+    writeWav(dir / "grenade_spatial.wav", wav, 48000);
+    std::ofstream(dir / "grenade_spatial_schedule.json", std::ios::binary)
+        << nlohmann::json{{"rate", 48000}, {"channels", 2}, {"framesPerStep", 800}, {"steps", step},
+                          {"listen", {kListen.x, kListen.y, kListen.z}}, {"facing", "north (-z)"},
+                          {"muted", {"ambience"}}, {"throwReach", reach}, {"booms", windows}, {"commands", commands}}
+               .dump(1);
+    std::printf("  grenade-spatial: %s (%d steps, %zu booms, %llu voices played)\n", (dir / "grenade_spatial.wav").string().c_str(),
+                step, windows.size(), static_cast<unsigned long long>(out.played()));
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string checkPath, outPath = "build/audio_bench.json", refPath = "build/serve_bench_reference.json", listenDir;
+    std::string checkPath, outPath = "build/audio_bench.json", refPath = "build/serve_bench_reference.json", listenDir, spatialDir;
     int periods = 300;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -386,11 +520,24 @@ int main(int argc, char** argv) {
         else if (a == "--reference" && i + 1 < argc) refPath = argv[++i];
         else if (a == "--periods" && i + 1 < argc) periods = std::max(1, std::atoi(argv[++i]));
         else if (a == "--listen" && i + 1 < argc) listenDir = argv[++i];
+        else if (a == "--grenade-spatial" && i + 1 < argc) spatialDir = argv[++i];
         else {
             std::fprintf(stderr, "usage: audio_bench [--check budgets.json] [--out file] [--periods N] "
-                                 "[--reference file] [--listen DIR]\n");
+                                 "[--reference file] [--listen DIR] [--grenade-spatial DIR]\n");
             return 2;
         }
+    }
+    // The grenade placed about the listener, rendered and nothing else (tools/audio/grenade_spatial.py
+    // runs this and measures it).
+    if (!spatialDir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(spatialDir, ec);
+        std::string error;
+        if (!grenadeSpatial(spatialDir, error)) {
+            std::fprintf(stderr, "audio_bench: %s\n", error.c_str());
+            return 1;
+        }
+        return 0;
     }
 
     nlohmann::json budgets;
