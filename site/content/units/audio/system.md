@@ -6,59 +6,91 @@ standard: v2
 figures: [audio-system-bus-topology]
 ---
 
-## The buses that are not buses
+## A bus is a group and a node
 
-`SoundCategory` reads like a mixer strip — SFX, Music, Ambient, each with its own
-volume, each stoppable and pausable as a group. miniaudio ships a first-class
-object for exactly that shape: `ma_sound_group`, a node you splice between voices
-and the engine endpoint. OHAO does not use it. Both play paths pass a null group
-pointer, which attaches every voice straight to the engine's endpoint:
+The mixer is a tree of buses read from a bank (`audio_bank.hpp`: the slice's is
+`assets/audio/slice.audio.json`, master over world over weapons, impacts, foley
+and ambience, beside voice, ui, music and a reverb return). Every bus is two
+miniaudio nodes. Its voices play into an `ma_sound_group`; the group plays into
+the bus's own node; the node plays into its parent's group, and the root's into
+the endpoint:
 
-{{cite ohao/audio/audio_system.cpp "m_engine.get(), pathStr.c_str(), flags, nullptr, nullptr, sound.get());"}}
+{{cite ohao/audio/audio_system.cpp "ma_node_attach_output_bus(&bus->group, 0, &bus->node.base, 0);"}}
+{{cite ohao/audio/audio_system.cpp "if (parent) ma_node_attach_output_bus(&bus->node.base, 0, &parent->group, 0);"}}
 
-A category is therefore two ordinary C++ things: an enum tag stored on the owning
-`SoundInstance`, and a scalar folded into that one voice's gain. Nothing in the
-audio graph corresponds to "music". Changing a category volume is a linear walk
-over every live sound, re-multiplying the ones whose tag matches:
+{{figure audio-system-bus-topology "The shipped graph, part of the slice's bank: voices into their bus's group, each group into the bus's node, each node into its parent's group; a node's second output sends to the return bus. Conceptual — buildBuses makes it; not a captured node-graph dump."}}
 
-{{cite ohao/audio/audio_system.cpp "if (instance.category == category) {"}}
+The group carries the old category API. A world without a bank gets the default
+one, master over `sfx` (24 voices), `music` and `ambient`, so `SoundCategory` is
+now a name for a bus and a category volume is that bus's group volume, set once
+instead of re-multiplied into every live voice:
 
-{{figure audio-system-bus-topology "Shipped signal graph (left) against the ma_sound_group topology the facade does not use (right). Conceptual — the left panel is derived from the null pGroup argument in both play paths, not a captured node-graph dump."}}
+{{cite ohao/audio/audio_system.cpp "ma_sound_group_set_volume(&b->group, m_categoryVolumes[static_cast<std::size_t>(idx)]);"}}
+
+The node is ours (`AudioBusNode`), because what a bus does to its signal has to
+be the same frame for frame on every machine. It applies a gain linear in dB,
+ramped over the frames the caller names; a second-order Butterworth low-pass
+ramped in log frequency, its coefficients refreshed every 16 frames; and a
+mute/solo gate that opens or closes over 2 ms. Its parameters cross from the
+caller's thread through atomics and a version counter, read once per processed
+block. Per frame it is one multiply by the product of the two ramps:
+
+{{cite ohao/audio/audio_system.cpp "const float g = gain * gateCur;"}}
 
 :::why
-`ma_sound_group` would make `setCategoryVolume` O(1) instead of O(active sounds),
-and — the part that matters more — would give the mix a real insertion point,
-because miniaudio can splice effect nodes into a node graph but not into a float.
-The flat design buys a facade with no hidden state: `stopCategory` is a
-`std::erase_if` over a map, not a graph edit, and the entire mixer is four floats
-you can print — one master and a three-element category array. The price is that
-ducking music under dialogue, or putting a limiter on the SFX bus, is not a
-feature you add later — it is a topology change.
+miniaudio has a low-pass node and group volumes already, but neither ramps in
+dB, and a duck or a snapshot is a ramp in dB: −6 dB over one step, back over
+fifteen, which `t26_duck_envelope` holds to 0.2 dB at every step boundary. A node
+of our own is also the place the reverb send (its second output, attached only
+while the send is above 0) and, later, a limiter go. Solo follows the tree: a
+soloed bus keeps its ancestors and descendants open and gates everything else.
 :::
 
-## Four factors, a voice cap, and no limiter
+## Bank voices start on the frame
 
-Each voice's gain is a bare four-way product, computed in C++ and pushed down
-with a single `ma_sound_set_volume`:
+A bank voice reads decoded PCM through its own data source (`AudioVoiceSource`),
+not through miniaudio's start time or stop fade, because miniaudio 0.11.21 gets
+both wrong: `ma_node_read_pcm_frames` offsets a start inside a block by (block
+end − start) instead of (start − block begin), and `stop_with_fade` cut a voice
+at once here. The source reads `startFrame − engineFrame()` frames of silence
+first, and a stop's fade is the source's own linear ramp to its end:
 
-$$v = v_b\,o\,v_c\,v_m, \qquad o = \begin{cases} 10^{-8/20} \approx 0.40 & \text{occluded} \\ 1 & \text{otherwise} \end{cases}$$
+{{cite ohao/audio/audio_system.cpp "source->delay = startFrame > now ? startFrame - now : 0;"}}
 
-{{cite ohao/audio/audio_system.cpp "const float finalVolume = instance.baseVolume * occlusion *"}}
+Voices and groups are made without pitch: the bank's data is decoded at the
+engine's rate, and the pitch resampler, on by default, delayed every voice by a
+frame per node it crossed (`t26_start_time_sample_accurate` saw a click land 4
+frames late through three groups):
 
-$v_b$ is the per-sound base volume passed to `playSound`, $o$ the occlusion cut
-(`kOccludedGainDb`, −8 dB, for a sound its `SoundShape` marks as behind a wall),
-$v_c$ the category scalar, $v_m$ the master. `updateSoundVolume` clamps nothing
-itself; the clamp sits at the entry points, where `clampVolume` applies
-$\mathrm{cl}(x) = \min(\max(x,0),1)$ to whatever the caller supplies — in both
+{{cite ohao/audio/audio_system.cpp "const ma_uint32 flags = MA_SOUND_FLAG_NO_PITCH | (placement.spatial ? 0 : MA_SOUND_FLAG_NO_SPATIALIZATION);"}}
+
+Without a device (`initialize(true)`), `render` pulls frames from the engine
+directly, so a test or `audio_bench` hears exactly what a sequence of plays and
+bus changes produces, the same bytes twice.
+
+## Two factors per voice, a voice cap, and no limiter
+
+A voice's own gain is now two factors, pushed down with `ma_sound_set_volume`;
+category and master are its buses' group volumes:
+
+$$v = v_b\,o, \qquad o = \begin{cases} 10^{-8/20} \approx 0.40 & \text{occluded} \\ 1 & \text{otherwise} \end{cases}$$
+
+{{cite ohao/audio/audio_system.cpp "ma_sound_set_volume(instance.sound.get(), instance.baseVolume * occlusion);"}}
+
+$v_b$ is the base volume passed to a play (times the bank's `volume` for a bank
+sound), $o$ the occlusion cut (`kOccludedGainDb`, −8 dB, for a sound its
+`SoundShape` marks as behind a wall). The clamp sits at the entry points, where
+`clampVolume` applies $\mathrm{cl}(x) = \min(\max(x,0),1)$ — in the category
 play paths, in `setSoundVolume`, in `setCategoryVolume` and in
-`setMasterVolume`. Every factor is therefore already in $[0,1]$ before the
-multiply, and so is the product: a voice can be attenuated, never amplified.
-That ceiling is per voice, not per mix — the endpoint sums N voices with nothing
-after it, so a dozen simultaneous unity-gain effects clip the output while every
-individual gain is legally "at most 1".
+`setMasterVolume` — so a voice can be attenuated, never amplified. A bus's dB
+gain is not clamped: a bank may raise a bus. Either way the ceiling is per voice
+and per bus, not per mix — the endpoint sums every bus with nothing after it, so
+a dozen simultaneous unity-gain effects clip the output.
 
 What bounds N is a voice cap, not a limiter. `setVoiceLimit` (0, the default,
-is none; the window host sets 24) caps the SFX sounds playing at once. A new one
+is none; the window host sets 24) caps the category API's SFX sounds playing at
+once (bank voices are outside it: the bank's per-bus caps belong to the voice
+schedule, sub-project 11's step 3). A new one
 over the cap takes the place of the quietest at the listener, or is dropped when
 it would be the quietest itself, and either way one sound is counted in
 `voicesDropped`:
@@ -97,8 +129,9 @@ default is `MA_FLT_MAX`); the rest are defaults written down. The shape makes
 them a choice per sound: the window host gives gunfire 1 to 60 m and footsteps,
 landings and impacts 0.5 to 20 m at rolloff 1.5 (`runtime/game_audio.cpp`). A
 shape marked `occluded` also routes the sound through a low-pass node at
-`kOccludedLowPassHz` (1,200 Hz) on its way to the endpoint, beside the −8 dB cut
-in the gain above — the one place a node now sits between a voice and the mix.
+`kOccludedLowPassHz` (1,200 Hz) on its way to its bus's group, beside the −8 dB
+cut in the gain above, so muting the bus still silences it
+(`t26_occluded_through_bus`).
 
 miniaudio's inverse model (OpenAL's `AL_INVERSE_DISTANCE_CLAMPED`) computes a
 scalar gain from the listener-to-source distance $d$:
@@ -181,12 +214,12 @@ by the inline `isInitialized()`. Single-threaded teardown is the only regime in
 which this is safe, and nothing in the class enforces it.
 
 :::key
-There is no audio graph here beyond a flat fan-in to one endpoint, with a
-low-pass node in front of an occluded voice. Every "bus" behaviour — category
-volume, category stop, master volume — is C++ iterating a map and calling
-`ma_sound_set_volume` per voice; the voice cap bounds how many there are. The mutex covers that map while
-it is being walked; it does not cover the writes to the mixer scalars, the handle
-counter, or `shutdown()`.
+The graph is a tree of buses, each a group (its volume is the category's) and
+a node of ours (gain in dB, low-pass, mute/solo, a send), with a low-pass node
+in front of an occluded voice. Category stop and pause are still C++ walking a
+map. The mutex covers that map while it is being walked; it does not cover the
+writes to the mixer scalars, the handle counter, or `shutdown()`. Bus parameters
+cross threads through the node's atomics instead.
 :::
 
 ## One translation unit pays for miniaudio
@@ -248,8 +281,10 @@ case when `initialize()` fails, so machines with no audio device still pass:
 
 {{cite tests/audio/audio_system_tests.cpp "bool testPlayInvalidPath() {"}}
 
-That suite still never creates a voice. The ones that do are in `runtime_tests`:
-`initialize(true)` builds a mixer without a device, and `sp9_t21_voice_cap`
+Its test 26 (`t26_*`) creates voices on a mixer without a device and listens to
+what comes out: a bus's gain on its subtree only, mute and solo by Goertzel
+power, start times to the frame, a duck and a snapshot's ramps in dB, a stop's
+fade, and two renders bit for bit. In `runtime_tests`, `sp9_t21_voice_cap`
 starts 30 positioned sounds under the 24-voice cap and checks that the 24 loudest
 at the listener play and that the 6 lost are counted, while
 `sp9_t21_distance_curves` checks the shapes against `distanceGain`.

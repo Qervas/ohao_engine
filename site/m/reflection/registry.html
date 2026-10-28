@@ -110,7 +110,7 @@
 <li>Cross-entity rules (unique ids, parents, cycles, singletons) stay with the engine&#x27;s validator.</li>
 </ul>
 <p>There is a sharp edge between the two exports. `ohao schema` writes the catalogue with the API method table:</p>
-<div class="citation-chip"><code class="citation-code">const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L358" target="_blank" rel="noopener">tools/ohao/main.cpp:358</a></div>
+<div class="citation-chip"><code class="citation-code">const auto catalogue = reflect::exportCatalogue(engineTypes(), {api::methods(), reflect::JsonLayout::Pretty});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L361" target="_blank" rel="noopener">tools/ohao/main.cpp:361</a></div>
 <p>The scene schema, however, embeds a hash computed with no methods:</p>
 <div class="citation-chip"><code class="citation-code">h.hex64(schemaHash(r));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/reflect/schema.cpp#L462" target="_blank" rel="noopener">ohao/reflect/schema.cpp:462</a></div>
 <p>So one `ohao schema` run writes two files that name different hashes: the catalogue&#x27;s covers the method table, the scene schema&#x27;s does not (a scene file does not depend on the API). A cache keyed on one cannot be checked against the other.</p>

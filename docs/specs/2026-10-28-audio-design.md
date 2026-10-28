@@ -632,6 +632,43 @@ Each step ends with the engine running, every gate green, a change record
 - A sound name with no file in any folder: the schedule writes it, the player skips it with one
   warning per name, never a crash (`t29_preloaded` missing case).
 
+## As built (step 1)
+
+The mixer graph (plan Task 1, `docs/changes/2026-10-28-audio-step1.md`). What differs from the
+design above, and why:
+
+- **A bus is a group and a node of ours.** Each bus is an `ma_sound_group` (its volume is the old
+  category volume) feeding an `AudioBusNode`: a gain linear in dB, ramped; a Butterworth low-pass
+  ramped in log frequency (coefficients every 16 frames; 0 Hz = bypassed); a 2 ms mute/solo gate;
+  a second output that sends to the return bus, attached only while the send is above 0. The plan
+  named `ma_lpf_node` per bus and a splitter per world bus; neither ramps in dB, and one node does
+  all four. Parameters cross threads through atomics and a version counter.
+- **Start times and stop fades are the voice's own.** miniaudio 0.11.21 places an
+  `ma_sound` start time inside a processed block at (block end − start) instead of (start − block
+  begin) (`ma_node_read_pcm_frames`), and `ma_sound_stop_with_fade_in_pcm_frames` cut a voice at
+  once. A bank voice reads its decoded PCM through `AudioVoiceSource`, which plays
+  `startFrame − engineFrame()` frames of silence first and fades a stop itself. Without a device
+  this is exact to the frame; with one, `startFrame` is relative to the engine clock read on the
+  calling thread (step 3's schedule adds its horizon on top).
+- **No pitch anywhere on the bank's path.** Voices and bus groups are made with
+  `MA_SOUND_FLAG_NO_PITCH`: the bank is decoded at the engine's rate, and the pitch resampler (on by
+  default) delayed a voice by a frame per node it crossed. Nothing in the engine sets pitch.
+- **Decoding** is `ma_decode_file` into f32 at the engine's rate, every variant at `loadBank`, not
+  `MA_SOUND_FLAG_DECODE` per voice: a voice copies nothing, it reads the shared buffer.
+- **Interfaces as built:** `parseAudioBank(json)` returns `Result<AudioBank, std::vector<BankError>>`
+  (path and message per error); `loadBank(bank, root)` searches the bank's own `folders` under
+  `root`; `play` returns a `SoundHandle`; `render` returns the frames rendered. Bank voices are
+  outside the category API's 24-voice cap: the bank's caps are the schedule's (step 3).
+- **The slice's bank** (`assets/audio/slice.audio.json`) names footsteps per surface
+  (`footstep_concrete` … `footstep_default`, files `footsteps/<surface>_{n}`) instead of the
+  `footstep_*` pattern above: a schedule command names one sound. The reverb presets carry no
+  `bed` until step 2 generates the ambience beds. Volumes are Feel's (fire, reload, empty, hurt,
+  death 0.85; enemy fire 0.7; impacts 0.55; handling 0.6; body fall 0.8; footsteps by speed, at the
+  call). The game still plays through the category API, so nothing it sounds like changed.
+- **Mute and solo ramp even before a sound plays:** a solo set the frame a burst starts lets the
+  first 2 ms of the other buses through (about −30 dB in `step1_buses.wav`'s soloed segments).
+- **`mix_10ms_ms`** measures 32 voices without the reverb, which step 2 adds to the same mix.
+
 ## Rulings for Frank
 
 PROVISIONAL (recommended by the post-SP7 roadmap; Frank deferred them to this row; the spec is

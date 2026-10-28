@@ -82,7 +82,7 @@
 <p>The last thing in the frame is the flush:</p>
 <div class="citation-chip"><code class="citation-code">if (pump &amp;&amp; pump-&gt;flush) pump-&gt;flush();   // replies after the frame they caused</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/runtime/live_host.cpp#L256" target="_blank" rel="noopener">ohao/runtime/live_host.cpp:256</a></div>
 <p>`serveWindow` creates the server with `holdReplies`, so the replies to requests run during this frame&#x27;s poll wait until the frame has been presented:</p>
-<div class="citation-chip"><code class="citation-code">options.holdReplies = true;   // sent after the frame the requests caused is presented</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L736" target="_blank" rel="noopener">tools/ohao/main.cpp:736</a></div>
+<div class="citation-chip"><code class="citation-code">options.holdReplies = true;   // sent after the frame the requests caused is presented</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tools/ohao/main.cpp#L739" target="_blank" rel="noopener">tools/ohao/main.cpp:739</a></div>
 <p>When the agent reads the reply to `world_apply`, the window already shows the edit. An agent that captures the screen by some other means, or a human watching, never sees an acknowledged change that is not yet on screen. Progress and log notifications are not held.</p>
 </div>
 <div class="section-rule"><h2 id="captures-inside-the-poll">Captures inside the poll</h2></div>

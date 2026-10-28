@@ -410,12 +410,19 @@ that id.
 | `Weapon` | A hitscan weapon: `damage` 25 a round, `fireRate` 10 Hz, `automatic`, `magazine` 30 (reserve unlimited), `reloadTime` 1.5 s, `range` 100 m, spread (`spreadDeg` 0.25 plus bloom: `bloomPerShotDeg`, `bloomMaxDeg`, `bloomRecoveryDegPerSec`), recoil (`recoilPitchDeg` 0.35, `recoilYawDeg` 0.15, `recoilRecoveryDegPerSec` 6), `seed`, actions `fire`/`reload`. A player fires from its eye by input; anything else from its origin along −Z by `WeaponTrigger`. |
 | `WeaponState` | What a weapon has: `ammo`, `cooldown`, `reloading`, `bloomDeg`, `kickDeg`, `shots`, `triggerHeld`. The combat step writes it, and adds it (a full magazine) to a `Weapon` without one. |
 | `WeaponTrigger` | A non-player's trigger: `pull` (held), `reload` (cleared when acted on). |
+| `AudioMix` | The world's sound bank and mix, one per world: `asset`, an `.audio.json` (buses with voice caps, sounds, distance shapes, ducks, snapshots, reverb presets). Without one, the default bank (master over `sfx`, `music`, `ambient`). The play scene names `assets/audio/slice.audio.json`. |
 
 Runtime components (`WorldTransform`, `MeshRenderer`, `RenderSlot`, `LevelNode`, `PhysicsBody`, …) are
 derived, appear in the catalogue for reference, and are refused in files and commands.
 
 `ohao schema level-extras [-o file]` writes the level hint keys (`col`, `body`, `mass`,
 `fric`, `rest`, `vis`, `spawn`, `socket`) as a JSON Schema for one node's `extras`.
+`ohao schema audio-bank [-o file]` writes the `.audio.json` format (an `AudioMix`'s file) as a
+JSON Schema (default `audio_bank.schema.json`).
+
+```console
+$ build/Release/ohao.exe schema audio-bank -o build/doc_tmp/audio_bank.schema.json > /dev/null
+```
 
 ## Error codes
 
