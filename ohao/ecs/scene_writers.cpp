@@ -459,4 +459,43 @@ void writeFields(const WeaponTrigger& v, const WeaponTrigger* omit, FieldSink& o
     if (!omit || v.reload != omit->reload) out.tree.boolean("\"reload\"", v.reload);
 }
 
+void writeFields(const SkinnedMesh& v, const SkinnedMesh* omit, FieldSink& out) {
+    if (!omit || v.file != omit->file) assetRef(out.tree, "\"file\"", v.file);
+    if (!omit || v.skin != omit->skin) out.tree.string("\"skin\"", v.skin);
+}
+
+void writeFields(const Animator& v, const Animator* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.graph != omit->graph) assetRef(t, "\"graph\"", v.graph);
+    const auto sameLayers = [&]() {
+        if (v.layers.size() != omit->layers.size()) return false;
+        for (std::size_t i = 0; i < v.layers.size(); ++i) {
+            const AnimLayerState& a = v.layers[i];
+            const AnimLayerState& b = omit->layers[i];
+            if (a.state != b.state || a.steps != b.steps || a.from != b.from || a.fromSteps != b.fromSteps ||
+                a.fade != b.fade || a.faded != b.faded)
+                return false;
+        }
+        return true;
+    };
+    if (!omit || !sameLayers()) {
+        t.beginArray("\"layers\"");
+        for (const AnimLayerState& l : v.layers) {   // array elements in full
+            t.beginObject();
+            t.string("\"state\"", l.state);
+            t.i64("\"steps\"", l.steps);
+            t.string("\"from\"", l.from);
+            t.i64("\"fromSteps\"", l.fromSteps);
+            t.i64("\"fade\"", l.fade);
+            t.i64("\"faded\"", l.faded);
+            t.endObject();
+        }
+        t.endArray();
+    }
+}
+
+void writeFields(const JointAttach& v, const JointAttach* omit, FieldSink& out) {
+    if (!omit || v.joint != omit->joint) out.tree.string("\"joint\"", v.joint);
+}
+
 } // namespace ohao::ecs

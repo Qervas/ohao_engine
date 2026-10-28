@@ -1,6 +1,7 @@
 #include "runtime/live_host.hpp"
 
 #include "core/log.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/combat_hud.hpp"
 #include "ecs/impact_marks.hpp"
@@ -75,6 +76,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     level::installLevels(*m_world, *m_assets, types);   // before instantiate: Level components expand into entities
     ecs::installPhysics(*m_world, *m_assets);            // after transform: colliders become bodies
     ecs::installCombat(*m_world);                        // weapons fire after physics steps
+    ecs::installAnimation(*m_world, *m_assets);          // animators step after combat; pose before the extract
     ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());

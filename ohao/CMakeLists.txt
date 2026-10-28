@@ -1,6 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(reflect)
 add_subdirectory(level)
+add_subdirectory(anim)
 add_subdirectory(scene)
 add_subdirectory(gpu)
 add_subdirectory(render)

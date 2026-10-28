@@ -341,7 +341,17 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     // split off, so neither runs here (non-triangle faces are skipped when emitting anyway).
     if (range) flags &= ~(aiProcess_FindDegenerates | aiProcess_SortByPType);
 
-    const aiScene* scene = importer.ReadFile(pathStr, flags);
+    // Read first, post-process second: a file with skinned meshes keeps its vertices as written.
+    // JoinIdenticalVertices compares position, normal and UVs, not joints or weights, so it merged
+    // two vertices that differ only in their weights (sub-project 10's rig, at each box seam) and
+    // the merged vertex took both sets.
+    const aiScene* scene = importer.ReadFile(pathStr, 0);
+    if (scene) {
+        bool bones = false;
+        for (unsigned m = 0; m < scene->mNumMeshes && !bones; ++m) bones = scene->mMeshes[m]->HasBones();
+        if (bones) flags &= ~aiProcess_JoinIdenticalVertices;
+        scene = importer.ApplyPostProcessing(flags);
+    }
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         OHAO_LOG(Error, asset, "ModelLoader: Assimp error: {}", importer.GetErrorString());
         return nullptr;
@@ -559,10 +569,11 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
         walk(scene->mRootNode, glm::mat4(1.0f));
     }
 
-    // Skeletal animation removed — skeleton and animation channels are no
-    // longer built. Bone weights remain in the Vertex struct as inert data.
-    (void)nextJointIdx;
+    // The bone order the vertices index (sub-project 10): skeletons and clips are read from the
+    // glTF by ohao/anim; the skinning palette is built in this order by joint name.
     (void)inverseBindMatrices;
+    model->boneNames.resize(static_cast<std::size_t>(nextJointIdx));
+    for (const auto& [name, idx] : boneNameToIdx) model->boneNames[static_cast<std::size_t>(idx)] = name;
 
     OHAO_LOG(Info, asset, "ModelLoader: loaded: {} ({} verts, {} indices, {} materials, {} textures)",
              pathStr, model->vertices.size(), model->indices.size(), numMats,

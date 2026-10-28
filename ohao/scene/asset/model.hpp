@@ -75,6 +75,11 @@ public:
     // materialPerTriangle[triangleIdx] = GLTF material index
     std::vector<uint32_t> materialPerTriangle;
 
+    // The joints Vertex::boneIndices index, by name, in that index order (Assimp numbers bones
+    // file-wide in the order it meets them, not in a skin's joint order: an animation skeleton
+    // maps them by name, anim::boneToJointMap). Empty for a model without bones.
+    std::vector<std::string> boneNames;
+
     // Per-material base color: vec4(r, g, b, roughness)
     std::vector<glm::vec4> materialColors;
     // Per-material metallic factor (0 = dielectric, 1 = metal)

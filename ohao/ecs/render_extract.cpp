@@ -261,9 +261,13 @@ void installRenderExtract(World& world, render::RenderScene& scene) {
     auto state = std::make_shared<ExtractState>(reg, scene);
     // After the transform system, and after render interpolation when physics installed it first.
     const auto names = world.syncNames();
-    // After the first-person gun's drawn poses too (view_model, after interpolate).
+    // After the first-person gun's drawn poses too (view_model, after interpolate), and the
+    // animation pose (pose, after both).
     const auto has = [&](const char* n) { return std::find(names.begin(), names.end(), n) != names.end(); };
-    const char* anchor = has("view_model") ? "view_model" : has("interpolate") ? "interpolate" : "transform";
+    const char* anchor = has("pose")         ? "pose"
+                         : has("view_model")  ? "view_model"
+                         : has("interpolate") ? "interpolate"
+                                              : "transform";
     world.addSyncAfter(anchor, "render_extract", [state](World&) { state->run(); });
 }
 
