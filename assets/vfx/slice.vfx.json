@@ -1,47 +1,61 @@
 {
+  "textures": {
+    "smoke":   {"file": "assets/vfx/smoke_8x8.png", "cols": 8, "rows": 8},
+    "flash":   {"file": "assets/vfx/flash_4x1.png", "cols": 4, "rows": 1},
+    "spark":   {"file": "assets/vfx/spark.png"},
+    "bullet":  {"file": "assets/vfx/decal_bullet.png", "normal": "assets/vfx/decal_bullet_n.png"},
+    "scorch":  {"file": "assets/vfx/decal_scorch.png"}
+  },
   "effects": {
     "muzzle": {"emitters": [
       {"count": 16, "life": [0.05, 0.15], "speed": [8, 15], "spread": 17.19, "size": [0.05, 0.01],
-       "color": [[1, 0.8, 0.3], [1, 0.4, 0.1]], "alpha": [1, 0], "drag": 5, "blend": "additive"}]},
+       "color": [[1, 0.8, 0.3], [1, 0.4, 0.1]], "alpha": [1, 0], "drag": 5, "blend": "additive",
+       "texture": "flash", "frames": "random"}]},
     "impact_concrete": {"emitters": [
       {"count": 24, "life": [0.2, 0.6], "speed": [2, 8], "spread": 68.75, "size": [0.03, 0.005],
-       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive"},
+       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive",
+       "texture": "spark"},
       {"count": 10, "life": [0.4, 1.2], "speed": [0.4, 1.6], "spread": 40.11, "size": [0.05, 0.25], "offset": 0.02,
        "color": [[0.62, 0.6, 0.56], [0.5, 0.48, 0.45]], "alpha": [0.55, 0], "gravity": 0.5, "drag": 3,
-       "blend": "alpha", "lit": true, "soft": 0.05}]},
+       "blend": "alpha", "lit": true, "soft": 0.05, "texture": "smoke", "frames": "life"}]},
     "impact_metal": {"emitters": [
       {"count": 24, "life": [0.2, 0.6], "speed": [2, 8], "spread": 68.75, "size": [0.03, 0.005],
-       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive"},
+       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive",
+       "texture": "spark"},
       {"count": 14, "life": [0.2, 0.6], "speed": [4, 11], "spread": 68.75, "size": [0.03, 0.005],
-       "color": [[1, 0.95, 0.75], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive"}]},
+       "color": [[1, 0.95, 0.75], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive",
+       "texture": "spark"}]},
     "impact_wood": {"emitters": [
       {"count": 24, "life": [0.2, 0.6], "speed": [2, 8], "spread": 68.75, "size": [0.03, 0.005],
-       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive"},
+       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive",
+       "texture": "spark"},
       {"count": 10, "life": [0.4, 1.2], "speed": [0.4, 1.6], "spread": 40.11, "size": [0.03, 0.08], "offset": 0.02,
        "color": [[0.45, 0.32, 0.2], [0.35, 0.25, 0.15]], "alpha": [0.6, 0], "gravity": 3, "drag": 3,
-       "blend": "alpha", "lit": true, "soft": 0.05}]},
+       "blend": "alpha", "lit": true, "soft": 0.05, "texture": "smoke", "frames": "life"}]},
     "impact_default": {"emitters": [
       {"count": 24, "life": [0.2, 0.6], "speed": [2, 8], "spread": 68.75, "size": [0.03, 0.005],
-       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive"},
+       "color": [[1, 0.9, 0.5], [1, 0.5, 0.1]], "alpha": [1, 0], "gravity": 9.81, "drag": 0.5, "blend": "additive",
+       "texture": "spark"},
       {"count": 10, "life": [0.4, 1.2], "speed": [0.4, 1.6], "spread": 40.11, "size": [0.05, 0.25], "offset": 0.02,
        "color": [[0.7, 0.7, 0.7], [0.6, 0.6, 0.6]], "alpha": [0.45, 0], "gravity": 0.5, "drag": 3,
-       "blend": "alpha", "lit": true, "soft": 0.05}]},
+       "blend": "alpha", "lit": true, "soft": 0.05, "texture": "smoke", "frames": "life"}]},
     "grenade_boom": {"emitters": [
       {"count": 128, "life": [0.5, 2.0], "speed": [3, 12], "spread": 180, "size": [0.2, 0.5],
-       "color": [[1, 0.6, 0.1], [0.3, 0.1, 0.05]], "alpha": [1, 0], "gravity": 2, "drag": 1, "blend": "additive"}],
+       "color": [[1, 0.6, 0.1], [0.3, 0.1, 0.05]], "alpha": [1, 0], "gravity": 2, "drag": 1, "blend": "additive",
+       "texture": "spark"}],
       "light": {"color": [1, 0.7, 0.4], "intensity": 40, "range": 8, "time": 0.12}},
     "smoke_cloud": {"emitters": [
       {"count": 8, "life": [1, 4], "speed": [0.5, 2], "spread": 22.92, "size": [0.1, 0.5],
        "color": [[0.5, 0.5, 0.5], [0.3, 0.3, 0.3]], "alpha": [0.6, 0], "gravity": -0.5, "drag": 2,
-       "blend": "alpha", "lit": true, "soft": 0.2}],
+       "blend": "alpha", "lit": true, "soft": 0.2, "texture": "smoke", "frames": "life"}],
       "proxy": {"spheres": 3, "radius": [0.6, 2.4], "density": 0.9, "rise": 0.25, "life": 9}}
   },
   "decals": {
-    "bullet_concrete": {"size": 0.10, "depth": 0.06, "albedo": "#2b2926", "roughness": 0.95, "normal": 0.8},
-    "bullet_metal":    {"size": 0.07, "depth": 0.04, "albedo": "#3a3a3c", "roughness": 0.40, "normal": 0.6},
-    "bullet_wood":     {"size": 0.09, "depth": 0.05, "albedo": "#2a1d12", "roughness": 0.90, "normal": 0.8},
-    "bullet_default":  {"size": 0.08, "depth": 0.05, "albedo": "#262626", "roughness": 0.95, "normal": 0.7},
-    "scorch":          {"size": 1.6, "depth": 0.6, "albedo": "#151311", "roughness": 0.98}
+    "bullet_concrete": {"texture": "bullet", "size": 0.10, "depth": 0.06, "albedo": "#2b2926", "roughness": 0.95, "normal": 0.8},
+    "bullet_metal":    {"texture": "bullet", "size": 0.07, "depth": 0.04, "albedo": "#3a3a3c", "roughness": 0.40, "normal": 0.6},
+    "bullet_wood":     {"texture": "bullet", "size": 0.09, "depth": 0.05, "albedo": "#2a1d12", "roughness": 0.90, "normal": 0.8},
+    "bullet_default":  {"texture": "bullet", "size": 0.08, "depth": 0.05, "albedo": "#262626", "roughness": 0.95, "normal": 0.7},
+    "scorch":          {"texture": "scorch", "size": 1.6, "depth": 0.6, "albedo": "#151311", "roughness": 0.98, "normal": 0.0}
   },
   "tracers": {
     "rifle": {"speed": 420, "length": 1.8, "width": 0.012, "color": "#ffd090", "intensity": 10,

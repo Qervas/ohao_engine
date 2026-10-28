@@ -86,7 +86,7 @@ struct EffectDesc {
 
 struct TextureDesc {
     std::string name;
-    std::string file;                // project-relative under the set's folder (assets/)
+    std::string file;                // project-relative, as every asset path: "assets/vfx/smoke_8x8.png"
     std::string normal;              // a decal's normal map; empty: none
     uint32_t cols{1}, rows{1};       // a flipbook's frames
 };
