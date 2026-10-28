@@ -63,6 +63,10 @@ public:
     [[nodiscard]] std::size_t missing() const noexcept { return m_missing.size(); }   // sounds without a file, warned once
     [[nodiscard]] uint64_t anchors() const noexcept { return m_anchors; }  // times the clock was anchored
     [[nodiscard]] std::optional<SoundHandle> handleOf(uint32_t voice) const;
+    // The level a bus is driven to (dB: its snapshot's plus its deepest duck's; 0 for an unknown bus).
+    [[nodiscard]] float busLevelDb(std::size_t bus) const noexcept {
+        return bus < m_snapshotDb.size() ? m_snapshotDb[bus] + m_duckDb[bus] : 0.0f;
+    }
     [[nodiscard]] uint32_t horizonFrames() const noexcept;
     [[nodiscard]] uint32_t stepFrames() const noexcept;
 

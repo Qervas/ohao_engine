@@ -19,7 +19,12 @@
 //
 // --listen DIR writes step1_buses.wav (48 kHz stereo float): one burst of the fight's sounds, first
 // with every bus open, then with each leaf bus soloed in turn, and step1_buses.csv (the left
-// channel's RMS per 10 ms, by segment) for a level plot.
+// channel's RMS per 10 ms, by segment) for a level plot. Since step 3 it also plays the done demo's
+// fight (900 steps, the player mortal) through the window's AudioPlayer on a mixer without a device:
+// step3_fight.wav, step3_fight_schedule.json (every command with the run's step and the schedule's,
+// which a round restart takes back to the round start's) and step3_fight_buses.csv (the
+// output's level and every bus's driven level per step); and prints how many variants each footstep
+// sound loaded (the local folder first).
 //
 // The machine is recorded as the other benches record it (bench_env.hpp). A run >25% slower than the
 // reference or beside other processes using more than half a core is `noisy`: exit 2.
@@ -226,10 +231,18 @@ struct ScheduleRun {
     bool ok{false};
 };
 
+// What --listen keeps of the fight: the device's output, every command by step, every bus's level.
+struct FightRecord {
+    std::vector<float> wav;
+    nlohmann::json commands = nlohmann::json::array();
+    std::string busCsv;
+};
+
 // schedule_step_ms and submit_frame_ms: the play scene's scripted fight (the player unkillable, facing
 // EnemyA), the schedule's step timed each step, and a window's player on a mixer without a device timed
-// once a frame (a frame a step, 800 frames rendered between them).
-ScheduleRun playSceneFight(int steps) {
+// once a frame (a frame a step, 800 frames rendered between them). With `rec` (--listen) the player
+// keeps its health, so the round can kill it, and the output, the schedule and the bus levels are kept.
+ScheduleRun playSceneFight(int steps, FightRecord* rec = nullptr) {
     ScheduleRun out;
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
     ecs::World w;
@@ -247,7 +260,7 @@ ScheduleRun playSceneFight(int steps) {
         if (pc.input) player = e;
     const entt::entity enemy = w.findById(0x5c0b1a7e00000010ull);
     if (player == entt::null || enemy == entt::null) return out;
-    w.registry().replace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
+    if (!rec) w.registry().replace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
     const glm::vec3 me = physics.playerInfo(player)->pos, it = w.registry().get<ecs::Transform>(enemy).position;
     physics.teleportPlayer(player, me, glm::degrees(std::atan2(-(it.x - me.x), -(it.z - me.z))));
     AudioSystem device;
@@ -263,6 +276,27 @@ ScheduleRun playSceneFight(int steps) {
         player2.update(w, true);
         out.submitMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
         (void)device.render(period, 800);
+        if (!rec) continue;
+        rec->wav.insert(rec->wav.end(), period.begin(), period.end());
+        for (const ecs::AudioCommand& c : ecs::audioCommands(w))
+            rec->commands.push_back({{"runStep", i + 1}, {"step", audio.steps()}, {"command", ecs::describeAudioCommand(c, audio.bank())}});
+        const AudioBank& bank = audio.bank();
+        if (rec->busCsv.empty()) {
+            rec->busCsv = "step,seconds,out_rms_db";
+            for (const auto& b : bank.buses) rec->busCsv += "," + b.name;
+            rec->busCsv += "\n";
+        }
+        double sum = 0.0;
+        for (float v : period) sum += double(v) * v;
+        char row[64];
+        std::snprintf(row, sizeof row, "%d,%.4f,%.2f", i + 1, double(i + 1) / 60.0,
+                      10.0 * std::log10(std::max(sum / double(period.size()), 1e-12)));
+        rec->busCsv += row;
+        for (std::size_t b = 0; b < bank.buses.size(); ++b) {
+            std::snprintf(row, sizeof row, ",%.2f", player2.busLevelDb(b));
+            rec->busCsv += row;
+        }
+        rec->busCsv += "\n";
     }
     const auto st = audio.stats();
     out.plays = st.played + st.stole;
@@ -273,8 +307,8 @@ ScheduleRun playSceneFight(int steps) {
 }
 
 // schedule16_step_ms: 16 enemies about the player in the blockout running in and firing, on the slice's
-// bank: their rounds, the misses' impacts and their footsteps take rays, past the 16 a step when their
-// bursts coincide (16 rounds and the impacts of those that miss).
+// bank: their rounds and footsteps take rays (the bank occludes those), past the 16 a step when their
+// bursts coincide.
 ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
     ScheduleRun out;
     ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
@@ -389,6 +423,25 @@ int main(int argc, char** argv) {
         std::error_code ec;
         std::filesystem::create_directories(listenDir, ec);
         if (!listen(bank, listenDir, error)) failures.push_back(error);
+        // Step 3: the done demo's fight through the player, without a device.
+        FightRecord rec;
+        const ScheduleRun run = playSceneFight(900, &rec);
+        if (!run.ok) failures.push_back("the listen fight played nothing");
+        const std::filesystem::path dir(listenDir);
+        writeWav(dir / "step3_fight.wav", rec.wav, 48000);
+        std::ofstream(dir / "step3_fight_schedule.json", std::ios::binary) << nlohmann::json{{"steps", 900}, {"commands", rec.commands}}.dump(1);
+        std::ofstream(dir / "step3_fight_buses.csv", std::ios::binary) << rec.busCsv;
+        std::printf("  listen: %s (%zu commands, %llu plays)\n", (dir / "step3_fight.wav").string().c_str(), rec.commands.size(),
+                    static_cast<unsigned long long>(run.plays));
+        // Local first: the folder each footstep sound's variants come from, and how many the mixer loaded.
+        AudioSystem probe;
+        if (probe.initialize(true) && probe.loadBank(bank, OHAO_SOURCE_DIR))
+            for (const char* s : {"footstep_concrete", "footstep_metal", "footstep_wood", "footstep_default"})
+                if (const int i = bank.sound(s); i >= 0) {
+                    const auto files = resolveSoundFiles(bank, bank.sounds[std::size_t(i)], OHAO_SOURCE_DIR);
+                    std::printf("  listen: %s loads %u variants from %s\n", s, probe.variantCount(static_cast<uint16_t>(i)),
+                                files.empty() ? "nowhere" : files.front().parent_path().string().c_str());
+                }
     }
 
     const double cal0 = bench::calibrationMs();
