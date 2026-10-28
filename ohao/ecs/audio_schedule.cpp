@@ -13,6 +13,7 @@
 #include "scene/asset/model.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <deque>
@@ -352,6 +353,7 @@ struct AudioSchedule::Impl {
 
     std::optional<AudioListener> ears;   // the step's listener (refreshed by each step and each play)
     uint32_t raysThisStep{0};
+    double lastStepMs{0.0};
     AudioScheduleStats stats;
 
     std::deque<AudioCommand> log;
@@ -863,7 +865,13 @@ struct AudioSchedule::Impl {
 AudioSchedule::AudioSchedule(World& world, AssetResolver& assets) : m(std::make_unique<Impl>(world, assets)) {}
 AudioSchedule::~AudioSchedule() = default;
 
-void AudioSchedule::step() { m->step(); }
+void AudioSchedule::step() {
+    const auto t0 = std::chrono::steady_clock::now();
+    m->step();
+    m->lastStepMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+double AudioSchedule::lastStepMs() const noexcept { return m->lastStepMs; }
 
 std::optional<AudioCommand> AudioSchedule::play(const SoundRequest& request) {
     m->refreshBank();

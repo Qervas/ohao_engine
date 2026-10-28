@@ -1,10 +1,12 @@
 {
   "comment": "Spec docs/specs/2026-10-28-audio-design.md, 'Performance budgets' (proposals for Frank, OPEN ruling 11). Targets gated from the step that delivers them (currentStep). Changing a budget needs Frank's OK.",
-  "currentStep": 2,
+  "currentStep": 3,
   "budgets": {
     "mix_10ms_ms": { "max": 0.5, "gatedFrom": 1 },
     "reverb_10ms_ms": { "max": 0.15, "gatedFrom": 2 },
     "schedule_step_ms": { "max": 0.02, "gatedFrom": 3 },
+    "schedule16_step_ms": { "max": 0.1, "gatedFrom": 3 },
+    "submit_frame_ms": { "max": 0.05, "gatedFrom": 3 },
     "bank_load_ms": { "max": 150, "gatedFrom": 3 }
   },
   "noise": { "maxCalibrationSlowdown": 1.25, "maxExternalCorePct": 50 }

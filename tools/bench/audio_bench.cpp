@@ -12,7 +12,10 @@
 // return (the bank's defaultZone preset). reverb_10ms_ms (gated from step 2): the Freeverb alone,
 // stereo, on noise, one preset (room); reverb_xfade_10ms_ms (reported): the same mid-crossfade, two
 // cores running. bank_load_ms (gated from step 3): parsing nothing, decoding every variant of every
-// sound into a fresh mixer, median of 5. The voice schedule (step 3) adds its own budgets.
+// sound into a fresh mixer, median of 5. Step 3's (gated from 3): schedule_step_ms, the audio_schedule
+// system's step over the play scene's scripted fight (600 steps, 3 rounds); schedule16_step_ms, the
+// same with 16 enemies running and firing in the blockout (the ray cap reached); submit_frame_ms, a
+// window's player reading and submitting a frame's commands, over the same fight, a frame a step.
 //
 // --listen DIR writes step1_buses.wav (48 kHz stereo float): one burst of the fight's sounds, first
 // with every bus open, then with each leaf bus soloed in turn, and step1_buses.csv (the left
@@ -25,6 +28,19 @@
 #include "audio/reverb_node.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
+#include "ecs/animation.hpp"
+#include "ecs/asset_resolver.hpp"
+#include "ecs/audio_schedule.hpp"
+#include "ecs/combat.hpp"
+#include "ecs/components.hpp"
+#include "ecs/physics_scene.hpp"
+#include "ecs/scene_io.hpp"
+#include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
+#include "ecs/world.hpp"
+#include "level/level_system.hpp"
+#include "reflect/registry.hpp"
+#include "runtime/audio_player.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -168,6 +184,162 @@ bool listen(const AudioBank& bank, const std::filesystem::path& dir, std::string
     return true;
 }
 
+// ---- the schedule and the player (step 3) ----------------------------------------------------------
+
+constexpr float kDt = 1.0f / 60.0f;
+
+const reflect::TypeRegistry& engineTypes() {
+    static reflect::TypeRegistry r;
+    static const bool once = (ecs::registerSceneTypes(r), true);
+    (void)once;
+    return r;
+}
+
+InputEvent actionEvent(const char* name, bool down) {
+    InputEvent e;
+    e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
+    e.name = name;
+    return e;
+}
+
+// The done demo's fight, as audio_schedule_tests scripts it: bursts every 40 steps (held 13), a walk
+// forward from 100 to 160, a reload at 300.
+std::vector<InputEvent> fightScript(int i) {
+    std::vector<InputEvent> in;
+    if (i % 40 == 0) in.push_back(actionEvent("fire", true));
+    if (i % 40 == 13) in.push_back(actionEvent("fire", false));
+    if (i == 100 || i == 160) {
+        InputEvent walk;
+        walk.type = InputEvent::Type::AxisSet;
+        walk.name = "move_forward";
+        walk.value = i == 100 ? 1.0f : 0.0f;
+        in.push_back(walk);
+    }
+    if (i == 300) in.push_back(actionEvent("reload", true));
+    if (i == 302) in.push_back(actionEvent("reload", false));
+    return in;
+}
+
+struct ScheduleRun {
+    std::vector<double> stepMs, submitMs;
+    uint64_t plays{0}, rays{0}, capped{0}, shots{0}, mostShots{0}, mostRays{0};
+    bool ok{false};
+};
+
+// schedule_step_ms and submit_frame_ms: the play scene's scripted fight (the player unkillable, facing
+// EnemyA), the schedule's step timed each step, and a window's player on a mixer without a device timed
+// once a frame (a frame a step, 800 frames rendered between them).
+ScheduleRun playSceneFight(int steps) {
+    ScheduleRun out;
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    ecs::World w;
+    w.seedIds(7);
+    level::installLevels(w, files, engineTypes());
+    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    (void)ecs::installCombat(w);
+    ecs::installRoundHook(w, engineTypes());
+    (void)ecs::installAnimation(w, files);
+    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes())) return out;
+    for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
+    entt::entity player = entt::null;
+    for (auto [e, pc] : w.registry().view<const ecs::PlayerController>().each())
+        if (pc.input) player = e;
+    const entt::entity enemy = w.findById(0x5c0b1a7e00000010ull);
+    if (player == entt::null || enemy == entt::null) return out;
+    w.registry().replace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
+    const glm::vec3 me = physics.playerInfo(player)->pos, it = w.registry().get<ecs::Transform>(enemy).position;
+    physics.teleportPlayer(player, me, glm::degrees(std::atan2(-(it.x - me.x), -(it.z - me.z))));
+    AudioSystem device;
+    if (!device.initialize(true)) return out;
+    runtime::AudioPlayer player2;
+    player2.initialize(OHAO_SOURCE_DIR, device);
+    std::vector<float> period(std::size_t(800) * 2);
+    for (int i = 0; i < steps; ++i) {
+        w.stepInput(fightScript(i));
+        w.update(kDt);
+        out.stepMs.push_back(audio.lastStepMs());
+        const auto t0 = std::chrono::steady_clock::now();
+        player2.update(w, true);
+        out.submitMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        (void)device.render(period, 800);
+    }
+    const auto st = audio.stats();
+    out.plays = st.played + st.stole;
+    out.rays = st.raysCast;
+    out.capped = st.raysCapped;
+    out.ok = player2.played() > 0;
+    return out;
+}
+
+// schedule16_step_ms: 16 enemies about the player in the blockout running in and firing, on the slice's
+// bank: their rounds, the misses' impacts and their footsteps take rays, past the 16 a step when their
+// bursts coincide (16 rounds and the impacts of those that miss).
+ScheduleRun sixteenEnemies(const AudioBank& bank, int steps) {
+    ScheduleRun out;
+    ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+    ecs::World w;
+    w.seedIds(7);
+    level::installLevels(w, files, engineTypes());
+    ecs::PhysicsScene& physics = ecs::installPhysics(w, files);
+    (void)ecs::installCombat(w);
+    ecs::AudioSchedule& audio = ecs::installAudio(w, files);
+    audio.setBank(bank);
+    auto& reg = w.registry();
+    const entt::entity lv = w.createWithId(0x1e7e1, "Level");
+    reg.emplace<ecs::Level>(lv, ecs::Level{ecs::AssetRef{"assets/levels/blockout_room.glb", {}}});
+    const entt::entity player = w.createWithId(0xb1a7e2, "Player");
+    reg.emplace<ecs::PlayerController>(player);
+    reg.emplace<ecs::Health>(player, ecs::Health{1.0e6f, 1.0e6f});
+    for (int i = 0; i < 16; ++i) {
+        const entt::entity e = w.createWithId(0x100 + static_cast<uint64_t>(i), "Enemy");
+        ecs::PlayerController pc;
+        pc.input = false;
+        pc.walkSpeed = 2.5f;
+        reg.emplace<ecs::PlayerController>(e, pc);
+        reg.emplace<ecs::Health>(e, ecs::Health{1.0e6f, 1.0e6f});
+        ecs::Weapon gun;
+        gun.damage = 8.0f;
+        gun.fireRate = 4.0f;
+        gun.magazine = 12;
+        gun.recoilPitchDeg = gun.recoilYawDeg = 0.0f;
+        reg.emplace<ecs::Weapon>(e, gun);
+        // An ellipse about the player on the room's clear south half (0.88 m apart, nothing between
+        // any of them and the player), each facing it and 0.6 m out of its attack range: all see it at
+        // once, run the same 0.6 m in and fire on the same steps.
+        const float a = 6.2831853f * float(i) / 16.0f;
+        const glm::vec3 at(-0.5f + 3.0f * std::sin(a), 0.0f, 1.4f + 1.3f * std::cos(a));
+        ecs::Enemy ai;   // the AI's range is from its eye to the player's chest (0.65 of its height)
+        const float rise = pc.eyeHeight - 0.65f * ecs::PlayerController{}.height;
+        ai.attackRange = glm::length(glm::vec2(glm::length(glm::vec2(at.x + 0.5f, at.z - 1.4f)) - 0.6f, rise));
+        reg.emplace<ecs::Enemy>(e, ai);
+        const float yaw = std::atan2(-(-0.5f - at.x), -(1.4f - at.z));
+        ecs::Transform t{at};
+        t.rotation = glm::angleAxis(yaw, glm::vec3(0, 1, 0));
+        w.setTransform(e, t);
+    }
+    w.sync();
+    physics.teleportPlayer(player, {-0.5f, 0.0f, 1.4f}, 0.0f);
+    uint64_t rays = 0;
+    for (int i = 0; i < steps; ++i) {
+        w.update(kDt);
+        if (i >= 20) out.stepMs.push_back(audio.lastStepMs());
+        uint64_t shots = 0;
+        for (const ecs::CombatEvent& e : ecs::combatEvents(w))
+            if (e.kind == ecs::CombatEvent::Kind::Shot) ++shots;
+        out.shots += shots;
+        out.mostShots = std::max(out.mostShots, shots);
+        out.mostRays = std::max(out.mostRays, audio.stats().raysCast - rays);
+        rays = audio.stats().raysCast;
+    }
+    const auto st = audio.stats();
+    out.plays = st.played + st.stole + st.dropped;
+    out.rays = st.raysCast;
+    out.capped = st.raysCapped;
+    out.ok = out.plays > 0;
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -301,6 +473,23 @@ int main(int argc, char** argv) {
     const std::vector<double> verbSamples = timeReverb(false), fadeSamples = timeReverb(true);
     if (!reverbOk) failures.push_back("the reverb was not what was measured (no room/outdoor preset, a non-finite sample, or no crossfade)");
 
+    // Step 3: the schedule in the play scene's fight and with 16 enemies, the player's submission.
+    log::setLevel(log::Level::Error);   // the loads' info lines
+    std::vector<double> scheduleMs, submitMs, schedule16Ms;
+    ScheduleRun fight, sixteen;
+    for (int r = 0; r < 3; ++r) {
+        fight = playSceneFight(600);
+        scheduleMs.insert(scheduleMs.end(), fight.stepMs.begin(), fight.stepMs.end());
+        submitMs.insert(submitMs.end(), fight.submitMs.begin(), fight.submitMs.end());
+        sixteen = sixteenEnemies(bank, 220);
+        schedule16Ms.insert(schedule16Ms.end(), sixteen.stepMs.begin(), sixteen.stepMs.end());
+    }
+    log::setLevel(log::Level::Warn);
+    const bool scheduleOk = fight.ok && fight.plays > 50 && sixteen.ok && sixteen.capped > 0;
+    if (!scheduleOk)
+        failures.push_back("the schedule was not what was measured: fight " + std::to_string(fight.plays) + " plays, 16 enemies " +
+                           std::to_string(sixteen.plays) + " plays and " + std::to_string(sixteen.capped) + " capped rays");
+
     log::setLevel(log::Level::Info);
     double external = 0.0;
     const auto busy = monitor.stop(5.0, &external);
@@ -308,8 +497,9 @@ int main(int argc, char** argv) {
 
     // A benchmark of broken code fails: 32 voices every period, audible, finite output.
     const double rms = samples.empty() ? 0.0 : std::sqrt(sumSquares / (double(samples.size()) * kPeriod * 2));
-    const bool wrong = !started || fewest < kVoices || !finite || rms < 1e-3 || worldBuses == 0 || !reverbOk;
-    if (started && wrong)
+    const bool mixWrong = !started || fewest < kVoices || !finite || rms < 1e-3 || worldBuses == 0;
+    const bool wrong = mixWrong || !reverbOk || !scheduleOk;
+    if (started && mixWrong)
         failures.push_back("the mix is not what was measured: fewest voices " + std::to_string(fewest) + ", rms " +
                            std::to_string(rms) + (finite ? "" : ", non-finite samples") + ", world buses " +
                            std::to_string(worldBuses));
@@ -359,8 +549,35 @@ int main(int argc, char** argv) {
     }
     std::printf("  reverb_xfade_10ms_ms median %6.4f   p95 %8.4f   (mid-crossfade: two cores; reported)\n", fade.median,
                 fade.p95);
+    // A budget's verdict for a median: pending before its step, else pass or fail (a failure named).
+    const auto judge = [&](const char* name, double median) {
+        if (!budgets.contains(name)) return std::string("reported");
+        const double max = budgets[name].value("max", 0.0);
+        const int from = budgets[name].value("gatedFrom", 0);
+        const std::string v = currentStep < from ? "pending" : median <= max ? "pass" : "fail";
+        if (v == "fail") {
+            char text[160];
+            std::snprintf(text, sizeof text, "%s: median %.4f ms over its budget of %.4f ms", name, median, max);
+            failures.push_back(text);
+        }
+        std::printf("    budget %.3f ms, gated from step %d: %s\n", max, from, v.c_str());
+        return v;
+    };
+    const Stats sched = stats(scheduleMs), sched16 = stats(schedule16Ms), submit = stats(submitMs);
+    std::printf("  schedule_step_ms   median %8.4f   p95 %8.4f   (the play scene's fight, %zu steps, %llu plays)\n", sched.median,
+                sched.p95, scheduleMs.size(), static_cast<unsigned long long>(fight.plays));
+    const std::string schedVerdict = judge("schedule_step_ms", sched.median);
+    std::printf("  schedule16_step_ms median %8.4f   p95 %8.4f   (16 enemies, %zu steps; %llu rounds, at most %llu a step; "
+                "%llu rays cast, at most %llu a step; %llu capped)\n",
+                sched16.median, sched16.p95, schedule16Ms.size(), static_cast<unsigned long long>(sixteen.shots),
+                static_cast<unsigned long long>(sixteen.mostShots), static_cast<unsigned long long>(sixteen.rays),
+                static_cast<unsigned long long>(sixteen.mostRays), static_cast<unsigned long long>(sixteen.capped));
+    const std::string sched16Verdict = judge("schedule16_step_ms", sched16.median);
+    std::printf("  submit_frame_ms    median %8.4f   p95 %8.4f   (the player's frame, the same fight)\n", submit.median, submit.p95);
+    const std::string submitVerdict = judge("submit_frame_ms", submit.median);
     for (const auto& [name, b] : budgets.items())
-        if (name != "mix_10ms_ms" && name != "bank_load_ms" && name != "reverb_10ms_ms")
+        if (name != "mix_10ms_ms" && name != "bank_load_ms" && name != "reverb_10ms_ms" && name != "schedule_step_ms" &&
+            name != "schedule16_step_ms" && name != "submit_frame_ms")
             std::printf("  %-18s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -379,6 +596,12 @@ int main(int argc, char** argv) {
     out["bank_load_ms"] = {{"median", load.median}, {"samples", loads}, {"sounds", bank.sounds.size()}, {"verdict", loadVerdict}};
     out["reverb_10ms_ms"] = {{"median", verb.median}, {"p95", verb.p95}, {"min", verb.min}, {"verdict", verbVerdict}};
     out["reverb_xfade_10ms_ms"] = {{"median", fade.median}, {"p95", fade.p95}, {"min", fade.min}};
+    out["schedule_step_ms"] = {{"median", sched.median}, {"p95", sched.p95}, {"min", sched.min}, {"steps", scheduleMs.size()},
+                               {"plays", fight.plays}, {"verdict", schedVerdict}};
+    out["schedule16_step_ms"] = {{"median", sched16.median}, {"p95", sched16.p95}, {"min", sched16.min}, {"steps", schedule16Ms.size()},
+                                 {"plays", sixteen.plays}, {"rays", sixteen.rays}, {"capped", sixteen.capped}, {"verdict", sched16Verdict}};
+    out["submit_frame_ms"] = {{"median", submit.median}, {"p95", submit.p95}, {"min", submit.min}, {"frames", submitMs.size()},
+                              {"verdict", submitVerdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},

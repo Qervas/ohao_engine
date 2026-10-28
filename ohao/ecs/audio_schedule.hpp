@@ -215,6 +215,7 @@ public:
     [[nodiscard]] const std::string& zone() const noexcept;       // the listener's zone's preset now
     [[nodiscard]] const std::string& snapshot() const noexcept;   // the snapshot now
     [[nodiscard]] AudioScheduleStats stats() const noexcept;
+    [[nodiscard]] double lastStepMs() const noexcept;             // the last step's time in this system
     [[nodiscard]] std::vector<ScheduledVoice> voices() const;     // in id order
     [[nodiscard]] const std::vector<AudioWarning>& warnings() const noexcept;
     // The preset of the zone holding `p` ("" in none), fitted zones included.
