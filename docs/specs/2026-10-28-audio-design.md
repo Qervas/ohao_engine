@@ -792,22 +792,36 @@ from "The agent-facing surface", and why:
   The cap stays 24,576 (24 KB); not raised.
 - **The catalogue's two methods** move `schemaHash` (9806972b70f2e94c → 0480e4b562132cde) in every
   serve and CLI expectation; nothing else in them changed.
-- **The gate is blocked, not by audio.** `check.py --all` on 2026-10-28: 39 of 55 tests pass. Every
-  audio budget passes on a quiet run (`mix_10ms_ms` 0.0625, `reverb_10ms_ms` 0.009,
-  `schedule_step_ms` 0.0006, `schedule16_step_ms` 0.0005, `submit_frame_ms` 0.001, `bank_load_ms`
-  9.28; calibration ×1.03); `serve_bench` passes (`tools_list_bytes` 24,452, `audio_info_bytes`
-  1,844); `check_live` 75/75 with validation on and a window with sound; `check_validation` clean;
-  27 of 30 goldens exact; `look_latency_ms` 8.19 (≤ 15). What fails is Frank's outdoor ground pad
-  (6a14fa25: an 80 × 80 m `Ground` node, second in `blockout_room.glb`, its top coplanar with the
-  Floor): the blockout's counts (18 nodes, 12 static bodies), a ray down at the spawn hitting
-  `Ground`, CrateA's double landing on `Ground` and `Floor`, node ids shifted, the three blockout
-  goldens, `level_bench`'s load check, and the doc commands that run those suites. The pad is
-  not this step's to change and the expectations are not this step's to re-baseline: that needs
-  Frank's ruling (below). `scene_bench`, `physics_bench` and `render_bench` were noisy (calibration
-  ×2–2.5 with other processes busy) and stayed noisy on their reruns: no verdict.
-  `frame_p99_over_median` 2.31 against 1.5 is SP9's open pacing gate (ruling 21), reported only.
+- **The outdoor ground (ruling 21, taken).** Frank's 80 × 80 m `Ground` pad (6a14fa25) had its top
+  level with the Floor; its top is now 5 cm below it (`tools/level/blockout_room.py`: a box from
+  −0.25 to −0.05 m, rebuilt byte for byte with Blender 5.2.2). At −0.02 m a crate resting 5 mm
+  into the Floor would still have been inside Jolt's 2 cm speculative contact distance of it.
+  Inside the room only the Floor is touched again (the crates' contacts, rays down, footstep
+  surfaces as before the pad); out of the south doorway the player steps down onto Ground and
+  stands (`t11_walks_out_the_doorway_onto_the_ground`). What one more node and one more static box
+  move was re-baselined: counts (18 nodes, 14 meshes, 164 triangles, 13 boxes, 12 static
+  bodies), the ids of the nodes after `Ground` in the exporter's name order, `world.hash` and
+  snapshot sizes (every entity is hashed), and the three blockout goldens (RT GI rays leaving
+  through the doorway now meet the ground: faces turned to it take a little less bounce light,
+  max_abs 4 in the room, 20 on the gun). No simulation result moved.
+- **The gate** (`check.py --all`, 2026-10-28, after the pad fix): 51 of 55. Every test, golden
+  and doc check passes, `audio_bench` and `serve_bench` included (`tools_list_bytes` 24,452,
+  `audio_info_bytes` 1,844); `check_live` 75/75 with validation on, the sound window included;
+  `check_validation` clean; 30 of 30 goldens exact. The four that did not pass are benches on a
+  machine never quiet that day (Frank's Grok Bot and its webview at 1.1–1.8 cores; `wait_quiet`
+  gave up after 15 minutes): `scene_bench`, `physics_bench` and `render_bench` noisy on the run
+  and its reruns (CPU calibration ×2.0–3.0, GPU ×1.2–1.3), no verdict; `feel_bench`
+  `look_latency_ms` 31.5 ms in the gate's run, with every frame GPU-bound at 15.3 ms (GPU
+  calibration ×1.29 after the benches before it), then 8.93 ms (≤ 15) on its rerun, flagged noisy.
+  Audio's numbers on a noisy rerun (calibration ×2.03) still sit under every budget:
+  `mix_10ms_ms` 0.119, `reverb_10ms_ms` 0.017, `schedule_step_ms` 0.0014, `schedule16_step_ms`
+  0.0011, `submit_frame_ms` 0.002, `bank_load_ms` 17.1 (step 3's quiet run: 0.0625, 0.009,
+  0.0006, 0.0005, 0.001, 9.28). `frame_p99_over_median` 2.41 against 1.5 on the rerun is SP9's
+  open pacing gate (SP9 ruling 21), reported only. The three noisy benches want a quiet rerun.
 
 ## Rulings for Frank
+
+PROVISIONAL 1–6 and OPEN 7–20 still await Frank, each with its recommendation below; 21 is taken.
 
 PROVISIONAL (recommended by the post-SP7 roadmap; Frank deferred them to this row; the spec is
 designed to them):
@@ -882,12 +896,8 @@ OPEN (judgment calls; recommendations given):
 20. **The stack question for later rows:** if a later row wants HRTF or baked acoustics, Steam
     Audio (Apache-2.0) behind `AudioSystem` is the candidate. FMOD and Wwise stay out of the MIT
     repo. Recommended: write it into row 11's successor when a need appears, not now.
-21. **The outdoor ground pad (6a14fa25) and the expectations it moved** (found at step 4's gate;
-    not audio's). The pad's top is coplanar with the room's Floor, so a crate lands on both (two
-    `contact_begin`s), a ray down inside the room hits `Ground`, an edited Floor surface is
-    not what the footsteps report (`t13_surface_from_ground_body`), the blockout has 18 nodes and 12 static bodies, every level node id
-    after it moved, and the room's render changed (`cli_blockout_room_deferred` max_abs 4,
-    `cli_blockout_play_*` max_abs 21). Recommended: keep the pad out from under the room (or its
-    top a few centimetres below the Floor) so the room's contacts, rays and surfaces are the
-    Floor's again, then re-baseline the counts, ids and the three goldens after looking at them.
-    Until Frank rules, step 4's gate cannot be green.
+21. **The outdoor ground pad (6a14fa25) and the expectations it moved.** TAKEN by Frank
+    (2026-10-28): its top a few centimetres below the Floor, then re-baseline what it legitimately
+    moves. As built: the top at −0.05 m (see "As built (step 4)"); with it level with the Floor a
+    crate had landed on both, a ray down inside the room had hit `Ground`, and an edited Floor
+    surface had not been what the footsteps reported.
