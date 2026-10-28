@@ -3,7 +3,7 @@
 // hint schema"): what a glTF node's extras, its name and the default scene's extras say about
 // the entity the node becomes.
 //
-//   - Keys: col, body, mass, fric, rest, trig, surf, vis, spawn, socket. The default scene's extras
+//   - Keys: col, body, mass, fric, rest, trig, surf, vis, spawn, socket, verb. The default scene's extras
 //     may set col and body for every node that does not.
 //   - Component passthrough: a capitalised key naming a saved component, with an object
 //     value, is that component, read as a scene file reads it (same diagnostics).
@@ -39,6 +39,7 @@ struct LevelHints {
     bool visible = true;                     // vis 0: collision only, no MeshSource
     std::string spawn, socket;               // empty: none
     std::string surface;                     // surf: the collider's surface (footsteps); empty: none
+    std::string verb;                        // verb: ReverbZone{verb} on the node (a trigger box unless col says otherwise)
     // Passed-through components, in key order: the type and its value as compact JSON.
     std::vector<std::pair<const reflect::TypeInfo*, std::string>> components;
 };

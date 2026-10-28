@@ -487,6 +487,17 @@ struct AudioMix {
     AssetRef asset;   // an .audio.json, project-relative
 };
 
+// A volume whose reverb preset (a name in the world's .audio.json) the listener hears while inside
+// it (sub-project 11; ecs/audio_schedule.hpp): a box of half extents `size` about the entity, in
+// its frame. size 0 fits the box to the entity's mesh (a level's `verb` node). Of the zones holding
+// the listener the highest priority wins, then the lowest id; outside them all, the bank's
+// defaultZone. A volume, not a body: the physics scene never sees it.
+struct ReverbZone {
+    std::string preset;
+    int32_t priority{0};
+    glm::vec3 size{0.0f};
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

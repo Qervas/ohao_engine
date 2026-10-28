@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash beb22c566b1e50d8. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 6cc87a625dfae435. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -58,6 +58,7 @@
         "EnemyState": { "$ref": "#/$defs/EnemyState" },
         "Round": { "$ref": "#/$defs/Round" },
         "AudioMix": { "$ref": "#/$defs/AudioMix" },
+        "ReverbZone": { "$ref": "#/$defs/ReverbZone" },
         "SkinnedMesh": { "$ref": "#/$defs/SkinnedMesh" },
         "Animator": { "$ref": "#/$defs/Animator" },
         "JointAttach": { "$ref": "#/$defs/JointAttach" }
@@ -912,7 +913,7 @@
       "additionalProperties": false
     },
     "Level": {
-      "description": "A level file (glTF) placed in the world. The level system expands it into one child entity per node of the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, vis, spawn, socket) and components by name.",
+      "description": "A level file (glTF) placed in the world. The level system expands it into one child entity per node of the file's default scene (LevelNode), with ids hashed from this entity's id and the node's index; those entities are the file's and are never saved. Node extras give hints (col, body, mass, fric, rest, trig, surf, vis, spawn, socket, verb) and components by name.",
       "type": "object",
       "properties": {
         "asset": {
@@ -1411,6 +1412,36 @@
           "description": "Project-relative path of the .audio.json file, '/' separators",
           "default": { "path": "" },
           "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReverbZone": {
+      "description": "A volume whose reverb preset the listener hears while inside it: a box about the entity, in its frame. Of the zones holding the listener the highest priority wins, then the lowest id; outside them all, the bank's defaultZone. A volume, not a body: nothing collides with it.",
+      "type": "object",
+      "properties": {
+        "preset": {
+          "description": "A reverb preset of the world's .audio.json (room, outdoor, ...)",
+          "default": "",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 32
+        },
+        "priority": {
+          "description": "Higher wins where zones overlap",
+          "default": 0,
+          "allOf": [{ "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }]
+        },
+        "size": {
+          "description": "The box's half extents; zero fits it to the entity's mesh",
+          "default": [0, 0, 0],
+          "allOf": [
+            {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          ]
         }
       },
       "additionalProperties": false

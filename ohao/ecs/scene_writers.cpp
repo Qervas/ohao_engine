@@ -392,6 +392,13 @@ void writeFields(const AudioMix& v, const AudioMix* omit, FieldSink& out) {
     if (!omit || v.asset != omit->asset) assetRef(out.tree, "\"asset\"", v.asset);
 }
 
+void writeFields(const ReverbZone& v, const ReverbZone* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.preset != omit->preset) t.string("\"preset\"", v.preset);
+    if (!omit || v.priority != omit->priority) t.i64("\"priority\"", v.priority);
+    if (!omit || !same(v.size, omit->size)) vec3(t, "\"size\"", v.size);
+}
+
 void writeFields(const Health& v, const Health* omit, FieldSink& out) {
     if (!omit || !same(v.max, omit->max)) out.tree.f32("\"max\"", v.max);
     if (!omit || !same(v.current, omit->current)) out.tree.f32("\"current\"", v.current);

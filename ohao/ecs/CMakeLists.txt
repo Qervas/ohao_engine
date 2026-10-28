@@ -8,3 +8,5 @@ target_compile_features(ohao_ecs PUBLIC cxx_std_20)
 target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_reflect ohao_physics ohao_anim glm EnTT::EnTT
     ohao_unordered_dense)
 target_link_libraries(ohao_ecs PRIVATE ohao_simdjson)
+# The audio schedule reads the world's .audio.json (the bank, plain data: no miniaudio).
+target_link_libraries(ohao_ecs PRIVATE ohao_audio_bank)

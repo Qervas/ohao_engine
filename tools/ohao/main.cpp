@@ -49,6 +49,7 @@
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
 #include "ecs/animation.hpp"
+#include "ecs/audio_schedule.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
@@ -291,6 +292,7 @@ struct Context {
         ecs::installPhysics(*world, *assets);                    // and their colliders into bodies
         ecs::installCombat(*world);                              // weapons fire after physics steps
         ecs::installAnimation(*world, *assets);                  // animators step after combat
+        ecs::installAudio(*world, *assets);                      // the audio schedule: the step's last
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);

@@ -328,6 +328,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<Animator>(r, checked);
     ok &= complete<JointAttach>(r, checked);
     ok &= complete<AudioMix>(r, checked);
+    ok &= complete<ReverbZone>(r, checked);
     CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -347,7 +348,7 @@ static void t01_authoring_and_runtime_split() {
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
                               "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round",
-                              "SkinnedMesh", "Animator", "JointAttach", "AudioMix"}) {
+                              "SkinnedMesh", "Animator", "JointAttach", "AudioMix", "ReverbZone"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -616,6 +617,12 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
         if (rng() % 2)
             w.registry().emplace<AudioMix>(es[rng() % es.size()],
                                            AudioMix{AssetRef{"assets/audio/a_" + std::to_string(seed) + ".audio.json", {}}});
+        // Reverb zones (sub-project 11 step 2), after it for the same reason.
+        for (const entt::entity e : es)
+            if (rng() % 8 == 0)
+                w.registry().emplace<ReverbZone>(
+                    e, ReverbZone{"preset_" + std::to_string(rng() % 4), static_cast<int32_t>(rng() % 21) - 10,
+                                  {8.0f * unit(), 3.0f * unit(), 8.0f * unit()}});
     }
 }
 

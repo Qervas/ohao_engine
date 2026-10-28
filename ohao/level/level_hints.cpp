@@ -24,13 +24,14 @@ using reflect::JsonType;
 
 namespace {
 
-constexpr std::array<std::string_view, 10> kHintKeys = {"col",  "body", "mass",  "fric",   "rest",
-                                                         "trig", "surf", "vis", "spawn", "socket"};
+constexpr std::array<std::string_view, 11> kHintKeys = {"col",  "body", "mass",  "fric",   "rest",  "trig",
+                                                         "surf", "vis",  "spawn", "socket", "verb"};
 constexpr std::array<std::string_view, 6> kShapes = {"box", "sphere", "capsule", "convex", "mesh", "none"};   // ColliderShape order
 constexpr std::array<std::string_view, 3> kMotions = {"static", "dynamic", "kinematic"};                       // Motion order
 constexpr std::size_t kMaxSpawn = 32;    // SpawnPoint.tag's limit
 constexpr std::size_t kMaxSocket = 64;   // Socket.name's limit
 constexpr std::size_t kMaxSurface = 32;  // Collider.surface's limit
+constexpr std::size_t kMaxPreset = 32;   // ReverbZone.preset's limit
 
 std::size_t codePoints(std::string_view s) noexcept {
     std::size_t n = 0;
@@ -199,6 +200,8 @@ LevelHints parseHints(const GltfStructure& s, int node, const reflect::TypeRegis
                     readText(*d, m, kMaxSocket, h.socket, sink);
                 } else if (key == "surf") {
                     readText(*d, m, kMaxSurface, h.surface, sink);
+                } else if (key == "verb") {
+                    readText(*d, m, kMaxPreset, h.verb, sink);
                 } else if (!key.empty() && key[0] >= 'A' && key[0] <= 'Z') {
                     readComponent(*d, m, types, h, sink);
                 } else {
@@ -218,6 +221,13 @@ LevelHints parseHints(const GltfStructure& s, int node, const reflect::TypeRegis
         const std::string name = n.name.substr(7);
         if (codePoints(name) <= kMaxSocket) h.socket = name;
         else sink.add("E_LEVEL_EXTRAS", "socket", "the name after SOCKET_ is over " + std::to_string(kMaxSocket) + " characters");
+    }
+
+    // A reverb zone's node is a trigger box unless it names its own collider (sub-project 11): the
+    // scene-wide col below never makes a zone solid.
+    if (!h.verb.empty() && !h.col) {
+        h.col = ecs::ColliderShape::Box;
+        h.trigger = true;
     }
 
     // 3. The default scene's col and body, for a node that sets neither; judged with node 0.
@@ -296,7 +306,9 @@ std::string extrasJsonSchema() {
     for (const auto& [key, limit, what] :
          {std::tuple{"spawn", kMaxSpawn, "SpawnPoint tag (player, enemy, ...)"},
           std::tuple{"socket", kMaxSocket, "Socket name (an attach point)"},
-          std::tuple{"surf", kMaxSurface, "The collider's surface, for footsteps (concrete, metal, wood, ...)"}}) {
+          std::tuple{"surf", kMaxSurface, "The collider's surface, for footsteps (concrete, metal, wood, ...)"},
+          std::tuple{"verb", kMaxPreset, "A reverb zone: the node's volume gets ReverbZone{preset}, a preset of the world's "
+                                         ".audio.json (room, outdoor, ...); a trigger box unless col says otherwise"}}) {
         w.key(key);
         w.beginObject();
         w.key("type"); w.string("string");

@@ -52,6 +52,12 @@
       "minLength": 1,
       "maxLength": 32,
       "description": "The collider's surface, for footsteps (concrete, metal, wood, ...)"
+    },
+    "verb": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "A reverb zone: the node's volume gets ReverbZone{preset}, a preset of the world's .audio.json (room, outdoor, ...); a trigger box unless col says otherwise"
     }
   }
 }
