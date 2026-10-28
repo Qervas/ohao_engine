@@ -155,6 +155,8 @@ public:
     [[nodiscard]] std::optional<api::RenderSettings> renderSettings() override;
     void setRenderSettings(const api::RenderSettings& settings) override;
     [[nodiscard]] std::optional<GpuInfo> gpuInfo() override;
+    [[nodiscard]] std::optional<api::AudioDeviceState> audioDevice() override;
+    void setAudioMix(const api::AudioMixOverrides& mix) override;
 
 private:
     void renderFrame();   // world.sync, the world's view, render + present

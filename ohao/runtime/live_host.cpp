@@ -318,6 +318,13 @@ void LiveHost::drawLatencyReadout(render::HudList& hud) const {
 std::optional<api::RenderStats> LiveHost::renderStats(int frames) {
     if (!m_renderer) return std::nullopt;
     std::optional<api::RenderStats> st = runtime::renderStats(*m_renderer, frames);
+    if (st && m_player && m_player->ready()) {   // a window with sound
+        api::RenderStats::Audio a;
+        a.mixMs = m_audio->mixMs().value_or(0.0);
+        a.voices = static_cast<uint32_t>(m_audio->activeSoundCount());
+        a.late = m_player->late();
+        st->audio = a;
+    }
     if (!st || !m_time.running()) return st;   // latency and pacing are a realtime window's
     collectPresents();
     if (const auto l = m_frameLog.latency(frames)) {
@@ -361,6 +368,30 @@ void LiveHost::setRenderSettings(const api::RenderSettings& settings) {
 std::optional<api::Host::GpuInfo> LiveHost::gpuInfo() {
     if (!m_renderer) return std::nullopt;
     return runtime::gpuInfo(*m_renderer);
+}
+
+std::optional<api::AudioDeviceState> LiveHost::audioDevice() {
+    if (!m_player || !m_player->ready()) return std::nullopt;
+    api::AudioDeviceState d;
+    d.sampleRate = m_audio->sampleRate();
+    d.horizonMs = d.sampleRate ? 1000.0 * m_player->horizonFrames() / d.sampleRate : 0.0;
+    for (const DeviceBus& b : m_player->deviceBuses()) {
+        d.busVoices.push_back(b.voices);
+        d.busDb.push_back(b.db);
+    }
+    d.voices = static_cast<uint32_t>(m_audio->activeSoundCount());
+    d.played = m_player->played();
+    d.late = m_player->late();
+    d.mixMs = m_audio->mixMs();
+    return d;
+}
+
+void LiveHost::setAudioMix(const api::AudioMixOverrides& mix) {
+    if (!m_player) return;
+    MixOverrides o;
+    for (const auto& b : mix.buses) o.buses.push_back({b.name, b.db, b.mute, b.solo});
+    o.snapshot = mix.snapshot;
+    m_player->setOverrides(std::move(o));
 }
 
 api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {

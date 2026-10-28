@@ -14,10 +14,49 @@
 
 namespace ohao {
 
+namespace {
+
+// The mix's cost (render.stats audio, sub-project 11 step 4): each period's mixing time scaled to 10 ms
+// of audio, the newest 512 kept. The device thread writes it, any thread reads it.
+struct MixMeter {
+    static constexpr uint32_t kSize = 512;
+    std::array<std::atomic<float>, kSize> ms{};
+    std::atomic<uint32_t> count{0};
+
+    void push(float v) noexcept {
+        const uint32_t n = count.load(std::memory_order_relaxed);
+        ms[n % kSize].store(v, std::memory_order_relaxed);
+        count.store(n + 1, std::memory_order_release);
+    }
+};
+
+// miniaudio's engine with the meter beside it: the device callback finds both through the engine.
+struct EngineBox {
+    ma_engine engine{};   // first: an engine pointer is the box's
+    MixMeter meter;
+};
+
+EngineBox* boxOf(ma_engine* engine) noexcept { return reinterpret_cast<EngineBox*>(engine); }
+
+double sinceMs(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// The engine's own device callback (ma_engine_data_callback_internal: read the engine), timed.
+void meteredDataCallback(ma_device* device, void* out, const void* in, ma_uint32 frames) {
+    (void)in;
+    EngineBox* box = boxOf(static_cast<ma_engine*>(device->pUserData));
+    const auto t0 = std::chrono::steady_clock::now();
+    ma_engine_read_pcm_frames(&box->engine, out, frames, nullptr);
+    if (frames) box->meter.push(static_cast<float>(sinceMs(t0) * ma_engine_get_sample_rate(&box->engine) / 100.0 / frames));
+}
+
+} // namespace
+
 void MaEngineDeleter::operator()(ma_engine* engine) const {
     if (!engine) return;
     ma_engine_uninit(engine);
-    delete engine;
+    delete boxOf(engine);
 }
 
 void MaSoundDeleter::operator()(ma_sound* sound) const {
@@ -380,7 +419,7 @@ AudioSystem::~AudioSystem() {
 bool AudioSystem::initialize(bool withoutDevice) {
     if (m_initialized) return true;
 
-    auto engine = MaEnginePtr(new ma_engine());
+    auto engine = MaEnginePtr(&(new EngineBox())->engine);
 
     ma_engine_config config = ma_engine_config_init();
     config.listenerCount = 1;
@@ -388,6 +427,8 @@ bool AudioSystem::initialize(bool withoutDevice) {
         config.noDevice = MA_TRUE;
         config.channels = 2;
         config.sampleRate = 48000;
+    } else {
+        config.dataCallback = meteredDataCallback;   // the engine's own read, timed (mixMs)
     }
 
     const ma_result result = ma_engine_init(&config, engine.get());
@@ -763,8 +804,21 @@ uint32_t AudioSystem::render(std::span<float> out, uint32_t frames) {
     if (!m_initialized || !m_withoutDevice) return 0;
     frames = std::min<uint32_t>(frames, static_cast<uint32_t>(out.size() / std::max<uint32_t>(1, channels())));
     ma_uint64 read = 0;
+    const auto t0 = std::chrono::steady_clock::now();
     ma_engine_read_pcm_frames(m_engine.get(), out.data(), frames, &read);
+    if (read) boxOf(m_engine.get())->meter.push(static_cast<float>(sinceMs(t0) * sampleRate() / 100.0 / double(read)));
     return static_cast<uint32_t>(read);
+}
+
+std::optional<double> AudioSystem::mixMs() const {
+    if (!m_initialized) return std::nullopt;
+    const MixMeter& meter = boxOf(m_engine.get())->meter;
+    const uint32_t n = std::min(meter.count.load(std::memory_order_acquire), MixMeter::kSize);
+    if (n == 0) return std::nullopt;
+    std::vector<float> v(n);
+    for (uint32_t i = 0; i < n; ++i) v[i] = meter.ms[i].load(std::memory_order_relaxed);
+    std::nth_element(v.begin(), v.begin() + n / 2, v.end());
+    return v[n / 2];
 }
 
 void AudioSystem::setListenerPosition(const glm::vec3& pos, const glm::vec3& forward, const glm::vec3& up) {

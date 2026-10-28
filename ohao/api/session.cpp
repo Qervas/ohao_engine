@@ -39,8 +39,8 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host, time}",
          "Cheap orientation: sizes, identity and the time state."},
         {"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
-         "Counts per component, world-space bounds of entity origins, and a capped hierarchy outline. A node whose "
-         "children are not all listed carries more (the count left out); moreRoots counts unlisted roots."},
+         "Counts per component, bounds of entity origins and a capped hierarchy outline (more: children left out; "
+         "moreRoots: roots left out)."},
         {"world.query", p.find<WorldQueryParams>(), "{count, entities, missing?, next?}",
          "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
          "\"/Type/field\"; without fields each entity is its file form."},
@@ -61,23 +61,19 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "creation sequence. Equal hashes, equal worlds; runtime state is not hashed."},
         {"world.diff", p.find<WorldDiffParams>(),
          "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
-         "What changed since a snapshot: per entity, \"/Type/field\" (or \"/Type\" for a component added or "
-         "removed) with old and new values in file form; created and destroyed ids. count: changed entities; more: "
-         "entries left out by limit."},
+         "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\": a component added or removed) with old "
+         "and new values; created and destroyed ids; more: entries past limit."},
         {"input.inject", p.find<InputInjectParams>(), "{queued, firstStep, lastStep}",
-         "Queues input events stamped by simulation step, relative to the next step (0). Actions and axes act as "
-         "one more device (an axis value holds until changed; null releases it), keys go through the bindings, "
-         "mouse entries are deltas. Same-step events apply in order, after the step's device events."},
+         "Queues input events by simulation step (0: the next). Actions and axes act as one more device (an axis "
+         "holds until changed; null releases it); keys go through the bindings; mouse entries are deltas."},
         {"input.state", p.find<InputStateParams>(), "{actions: {name: {held, pressed, released}}, axes: {name: value}}",
          "The input map as the last step saw it."},
         {"input.record", p.find<InputRecordParams>(), "{path, steps, events}",
-         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording under the output directory: every event "
-         "that reached the input map with its step, a {step, hash} checkpoint every 60 steps, the final hash. "
-         "Starting releases everything held, as a replay does."},
+         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording in the output directory: each input event "
+         "with its step, a {step, hash} every 60 steps, the final hash. Starting releases all held input."},
         {"input.replay", p.find<InputReplayParams>(), "{steps, events, checkpoints, frame}",
-         "Replays a recording in lockstep from the current world, which must hash as the recording's start (load "
-         "the scene with its seed, or restore a snapshot, first). E_REPLAY names the first diverging step. "
-         "Cancellable between steps."},
+         "Replays a recording in lockstep from the current world, which must hash as its start (load with its "
+         "seed, or restore). E_REPLAY names the first diverging step. Cancellable."},
         {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
          "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
          "component, the id generator and the frame."},
@@ -86,22 +82,16 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"render.capture", p.find<RenderCaptureParams>(),
          "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
          "deterministic, validation?} (+ the inline image)",
-         "Renders the world through its Camera and Environment: frames from a reset, the last kept, to a PNG "
-         "(path) and/or an inline preview (inline: JPEG, long side maxSize; region zooms). A window host captures "
-         "at its own size, presenting each frame; in realtime it returns its next presented frame in its live mode "
-         "(deterministic false). post turns on deferred effects; quality, post and exposure left out come from "
-         "render.settings. gpuMs: the last frame's GPU time; timings adds its passes. Cancellable between frames, "
-         "with progress."},
+         "Renders the world through its Camera (frames from a reset, the last kept) to a PNG (path) and/or an "
+         "inline preview (long side maxSize; region zooms). A window captures at its own size; in realtime, its "
+         "next presented frame (deterministic false). quality, post and exposure left out: render.settings'. "
+         "Cancellable, with progress."},
         {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
-         "Reads, or with set changes, the host's renderer settings: quality, RT shadows and GI, SSAO/SSR/SSS, the "
-         "geometry path, occlusion culling, the CSM fallback, exposure. Members of set left out keep their value. "
-         "Host state, never saved in scene files; captures take them as defaults. The defaults are the budgeted "
-         "frame. E_STATE on a host that renders nothing (the CLI)."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, skinning?, latency?, pacing?}",
-         "The GPU time of the frames the host rendered: medians over the newest frames finished frames, per pass "
-         "in frame order (render/frame/pass_registry.hpp names; a pass a frame did not run is left out). A "
-         "realtime window adds latency (look input to present) and pacing (frame time, steps). E_STATE "
-         "before the host has rendered a frame."},
+         "Reads, or with set changes, the host's renderer settings; members left out keep their value. Host state, "
+         "never saved; captures default to them. E_STATE on a host that renders nothing."},
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, skinning?, latency?, pacing?, audio?}",
+         "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
+         "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
          "Engine log records after since (pass the last read's next), filtered by level and channel."},
         {"level.info", p.find<LevelInfoParams>(),
@@ -126,8 +116,8 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "they began in."},
         {"player.info", p.find<PlayerInfoParams>(),
          "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
-         "The player: its feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
-         "input.inject (move_forward, move_right, jump, sprint, mouse) and world.step. E_STATE without a player."},
+         "The player: feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
+         "input.inject and world.step."},
         {"player.teleport", p.find<PlayerTeleportParams>(), "as player.info",
          "Puts the player's feet at pos, at rest, facing yawDeg (else as it faced); its ground is found there at once."},
         {"combat.info", p.find<CombatInfoParams>(),
@@ -147,6 +137,14 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "[{seq, step, entity, layer, clip, name}], next, dropped?}",
          "Each Animator's layers (state, clip time in s, the fade) and the clip events after since. Force a state "
          "with component.set on Animator."},
+        {"audio.info", p.find<AudioInfoParams>(),
+         "{device, sampleRate?, horizonMs, snapshot: {name, blend}, zone, listener?, buses: [{name, db, cap?, voices?, "
+         "mix?}], voices: {playing, dropped, stolen, device?}, rays: {cast, capped}, late?, mixMs?, commands: [{seq, "
+         "step, op, ...}], next, dropped?}",
+         "The voice schedule's commands after since and the bus mix; a window adds the device's half."},
+        {"audio.mix", p.find<AudioMixParams>(), "as audio.info, without commands",
+         "Listening overrides in the device only (never the world, schedule or snapshots): a bus's db, mute, solo; "
+         "a forced snapshot; clear."},
     };
 }
 
@@ -887,6 +885,14 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         out.key("discardedSteps"); out.uint64(pc->discardedSteps);
         out.endObject();
     }
+    if (const auto& a = st->audio) {
+        out.key("audio");
+        out.beginObject();
+        out.key("mixMs"); out.float32(ms(a->mixMs));
+        out.key("voices"); out.uint64(a->voices);
+        out.key("late"); out.uint64(a->late);
+        out.endObject();
+    }
     out.endObject();
     return true;
 }
@@ -941,6 +947,7 @@ constexpr MethodEntry kDispatch[] = {
     {"combat.info", methodCombatInfo}, {"combat.events", methodCombatEvents},
     {"combat.damage", methodCombatDamage, true},
     {"animation.info", methodAnimationInfo},
+    {"audio.info", methodAudioInfo},  {"audio.mix", methodAudioMix},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

@@ -78,6 +78,7 @@ struct Session::Impl {
     HostKind host{HostKind::None};
     std::optional<ResultImage> image;   // the call's image (render.capture inline), moved to its outcome
     uint64_t changes{0};                // Session::changeCount
+    AudioMixOverrides audioMix;         // audio.mix's overrides: the session's, never the world's
     std::optional<PathPolicy> paths;                               // the sandbox, when serving
     const TypeInfo* tName{nullptr};
     const TypeInfo* tTransform{nullptr};
@@ -135,6 +136,11 @@ bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNod
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);
+// Audio (sub-project 11, step 4; audio.cpp).
+bool methodAudioInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                     JsonWriter& out);
+bool methodAudioMix(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
+                    JsonWriter& out);
 
 // One simulation step (input.cpp): the host's device events, then the events injected for
 // this step, into the world's input map (and the recording); the simulate systems with dt;

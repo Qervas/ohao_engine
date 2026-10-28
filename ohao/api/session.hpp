@@ -167,6 +167,39 @@ struct RenderStats {
     };
     std::optional<Latency> latency;
     std::optional<Pacing> pacing;
+    // Sub-project 11, a window host with sound (absent headless and with --mute): the mix's cost (its
+    // device callback's median per 10 ms of audio), the voices the device plays now, and the schedule's
+    // commands that started after their time.
+    struct Audio {
+        double mixMs{0.0};
+        uint32_t voices{0};
+        uint64_t late{0};
+    };
+    std::optional<Audio> audio;
+};
+
+// audio.mix's session overrides (sub-project 11): per bus a level replacing the game's, mute, solo; a
+// snapshot forced in place of the schedule's. Kept beside the session: never in the world, the
+// schedule or a snapshot; a window host's device applies them, a headless host only reports them.
+struct AudioMixOverrides {
+    struct Bus {
+        std::string name;
+        std::optional<float> db;
+        bool mute{false}, solo{false};
+    };
+    std::vector<Bus> buses;   // in the order first set
+    std::string snapshot;     // "": the schedule's
+};
+
+// audio.info's device half, from a window host's player (absent headless and with --mute).
+struct AudioDeviceState {
+    uint32_t sampleRate{0};
+    double horizonMs{0.0};
+    std::vector<uint32_t> busVoices;   // per bank bus: the schedule's voices the device plays
+    std::vector<float> busDb;          // per bank bus: the level the device drives it to
+    uint32_t voices{0};                // every voice the device plays now
+    uint64_t played{0}, late{0};
+    std::optional<double> mixMs;
 };
 
 // What a session runs inside, beyond its kind: render.capture's renderer.
@@ -194,6 +227,10 @@ public:
         bool meshShaders{false};
     };
     [[nodiscard]] virtual std::optional<GpuInfo> gpuInfo() { return std::nullopt; }
+    // audio.info's device half: nullopt when the host plays no sound (headless, --mute).
+    [[nodiscard]] virtual std::optional<AudioDeviceState> audioDevice() { return std::nullopt; }
+    // audio.mix: the session's overrides, all of them, each time they change.
+    virtual void setAudioMix(const AudioMixOverrides& mix) { (void)mix; }
 };
 
 class Session {

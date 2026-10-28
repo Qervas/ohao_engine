@@ -203,6 +203,9 @@ public:
     // A mixer without a device: renders `frames` interleaved frames into `out` (at least frames x
     // channels floats), advancing the engine clock. Returns the frames rendered (0 with a device).
     uint32_t render(std::span<float> out, uint32_t frames);
+    // The mix's cost: the median over the newest 512 periods (the device's data callbacks, or render()
+    // calls) of one period's mixing, scaled to 10 ms of audio, in ms; nullopt before the first.
+    [[nodiscard]] std::optional<double> mixMs() const;
 
     // Play sounds — returns INVALID_SOUND_HANDLE on failure (or when the voice cap drops it)
     [[nodiscard]] SoundHandle playSound(std::string_view path,

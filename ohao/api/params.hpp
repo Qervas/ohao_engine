@@ -258,6 +258,20 @@ struct CombatEventsParams {
     int64_t since{0};   // the seq of the last event already read (the previous reply's next)
     int32_t max{32};    // 1..64
 };
+// Sub-project 11, step 4.
+struct AudioInfoParams {
+    int64_t since{0};   // commands after this seq (the previous reply's next)
+    int32_t max{16};    // commands in one reply, 0..64
+};
+inline constexpr float kMinMixDb = -96.0f, kMaxMixDb = 12.0f;   // audio.mix's db
+struct AudioMixParams {
+    std::optional<std::string> bus;        // the bus db, mute and solo apply to
+    std::optional<float> db;               // its level, replacing the game's
+    std::optional<bool> mute;
+    std::optional<bool> solo;
+    std::optional<std::string> snapshot;   // forced in place of the schedule's; "" lets the schedule's back
+    bool clear{false};                     // every override dropped first
+};
 struct AnimationInfoParams {
     std::optional<uint64_t> entity;   // one animator; absent: every animator (the first 16)
     int64_t since{0};                 // events after this seq (the previous reply's next)

@@ -215,6 +215,8 @@ public:
     [[nodiscard]] const std::string& zone() const noexcept;       // the listener's zone's preset now
     [[nodiscard]] const std::string& snapshot() const noexcept;   // the snapshot now
     [[nodiscard]] AudioScheduleStats stats() const noexcept;
+    [[nodiscard]] float busDuckDb(std::size_t bus) const noexcept;   // a bus's duck level now (dB; 0: none)
+    [[nodiscard]] uint32_t snapshotBlendSteps() const noexcept;      // the last snapshot command's blend
     [[nodiscard]] double lastStepMs() const noexcept;             // the last step's time in this system
     [[nodiscard]] std::vector<ScheduledVoice> voices() const;     // in id order
     [[nodiscard]] const std::vector<AudioWarning>& warnings() const noexcept;

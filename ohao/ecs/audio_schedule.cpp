@@ -350,6 +350,7 @@ struct AudioSchedule::Impl {
     } heard;
     bool restored{false};
     bool trace{false};
+    uint32_t lastSnapshotBlend{0};   // the last snapshot command's blend (audio.info; never snapshotted)
 
     std::optional<AudioListener> ears;   // the step's listener (refreshed by each step and each play)
     uint32_t raysThisStep{0};
@@ -374,6 +375,7 @@ struct AudioSchedule::Impl {
     void push(AudioCommand c) {
         c.seq = nextSeq++;
         c.step = s.steps;
+        if (c.op == AudioCommand::Op::Snapshot) lastSnapshotBlend = c.blendSteps;
         if (trace) OHAO_LOG(Info, audio, "schedule: {}", describeAudioCommand(c, bank));
         stepCommands.push_back(c);
         log.push_back(std::move(c));
@@ -902,6 +904,10 @@ uint64_t AudioSchedule::steps() const noexcept { return m->s.steps; }
 const std::string& AudioSchedule::zone() const noexcept { return m->s.zone; }
 const std::string& AudioSchedule::snapshot() const noexcept { return m->s.snapshot; }
 AudioScheduleStats AudioSchedule::stats() const noexcept { return m->stats; }
+float AudioSchedule::busDuckDb(std::size_t bus) const noexcept {
+    return bus < m->s.busDuck.size() ? m->s.busDuck[bus] : 0.0f;
+}
+uint32_t AudioSchedule::snapshotBlendSteps() const noexcept { return m->lastSnapshotBlend; }
 const std::vector<AudioWarning>& AudioSchedule::warnings() const noexcept { return m->warnings; }
 std::string AudioSchedule::zoneAt(glm::vec3 p) const { return m->zoneAt(p); }
 

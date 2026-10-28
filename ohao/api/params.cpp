@@ -257,6 +257,18 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("since", &AnimationInfoParams::since)
             .doc("Events after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
         .field("max", &AnimationInfoParams::max).doc("Events in one reply (0: none)").unitless().min(0).max(64);
+    r.type<AudioInfoParams>("AudioInfoParams").doc("audio.info params")
+        .field("since", &AudioInfoParams::since)
+            .doc("Commands after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
+        .field("max", &AudioInfoParams::max).doc("Commands in one reply (0: none)").unitless().min(0).max(64);
+    r.type<AudioMixParams>("AudioMixParams").doc("audio.mix params")
+        .field("bus", &AudioMixParams::bus).doc("The bus that db, mute and solo set")
+        .field("db", &AudioMixParams::db).doc("The bus's level in dB, replacing the game's").unitless().min(kMinMixDb)
+            .max(kMaxMixDb)
+        .field("mute", &AudioMixParams::mute).doc("Silence the bus's subtree")
+        .field("solo", &AudioMixParams::solo).doc("Hear only soloed buses (with their parents and children)")
+        .field("snapshot", &AudioMixParams::snapshot).doc("Force this snapshot; \"\" gives the schedule's back")
+        .field("clear", &AudioMixParams::clear).doc("Drop every override first");
     r.type<CombatDamageParams>("CombatDamageParams").doc("combat.damage params")
         .field("entity", &CombatDamageParams::entity).doc("Who takes it, 16 hex digits (its Health or an ancestor's)")
             .required()

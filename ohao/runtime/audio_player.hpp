@@ -41,6 +41,26 @@ namespace ohao::runtime {
 // so check_live compares a window's schedule with a headless host's through log.read.
 [[nodiscard]] bool audioTraceRequested();
 
+// audio.mix's session overrides (sub-project 11 step 4): per bus a level (replacing the game's), mute and
+// solo; a snapshot forced in place of the schedule's. Device only: the schedule never sees them. A bus
+// the bank lacks is ignored.
+struct MixOverrides {
+    struct Bus {
+        std::string name;
+        std::optional<float> db;
+        bool mute{false}, solo{false};
+    };
+    std::vector<Bus> buses;
+    std::string snapshot;   // "": the schedule's
+};
+
+// A bus as the device has it now (audio.info's device half).
+struct DeviceBus {
+    float db{0.0f};          // driven to: the game's (snapshot and duck) or an override's
+    bool muted{false}, soloed{false};
+    uint32_t voices{0};      // the schedule's voices on it the device is playing
+};
+
 class AudioPlayer {
 public:
     // Plays through `audio` (the host's; it must outlive this). A bank's sounds are decoded from files
@@ -63,10 +83,18 @@ public:
     [[nodiscard]] std::size_t missing() const noexcept { return m_missing.size(); }   // sounds without a file, warned once
     [[nodiscard]] uint64_t anchors() const noexcept { return m_anchors; }  // times the clock was anchored
     [[nodiscard]] std::optional<SoundHandle> handleOf(uint32_t voice) const;
-    // The level a bus is driven to (dB: its snapshot's plus its deepest duck's; 0 for an unknown bus).
+    // The level the game drives a bus to (dB: its snapshot's plus its deepest duck's; 0 for an unknown
+    // bus), overrides aside.
     [[nodiscard]] float busLevelDb(std::size_t bus) const noexcept {
         return bus < m_snapshotDb.size() ? m_snapshotDb[bus] + m_duckDb[bus] : 0.0f;
     }
+
+    // audio.mix: replaces the overrides (applied now, over 2 ms, and again whenever a bank loads).
+    void setOverrides(MixOverrides mix);
+    [[nodiscard]] const MixOverrides& overrides() const noexcept { return m_mix; }
+    // Every bus of the bank as the device has it (empty before a bank).
+    [[nodiscard]] std::vector<DeviceBus> deviceBuses() const;
+    [[nodiscard]] const AudioBank* bank() const noexcept { return m_hasBank ? &m_bank : nullptr; }
     [[nodiscard]] uint32_t horizonFrames() const noexcept;
     [[nodiscard]] uint32_t stepFrames() const noexcept;
 
@@ -75,6 +103,9 @@ private:
     [[nodiscard]] uint64_t startFrameOf(uint64_t step);
     void play(const ecs::AudioCommand& c);
     void applyBuses(uint32_t rampFrames);
+    void applyOverrides(uint32_t rampFrames);   // the overrides into per-bus vectors, levels, mutes, solos
+    [[nodiscard]] float levelDb(std::size_t bus) const noexcept;
+    [[nodiscard]] double levelHz(std::size_t bus) const noexcept;
     void zone(const ecs::AudioCommand& c);
 
     AudioSystem* m_audio{nullptr};
@@ -94,6 +125,11 @@ private:
     std::vector<float> m_snapshotDb, m_duckDb;      // per bus: the snapshot's level and the duck's
     std::vector<double> m_snapshotHz;               // per bus: the snapshot's low-pass (0: none)
     std::string m_snapshotName, m_zoneName;         // what the device is in now
+    MixOverrides m_mix;
+    std::vector<std::optional<float>> m_overrideDb;   // per bus, from m_mix
+    std::vector<uint8_t> m_muted, m_soloed;           // per bus, from m_mix
+    std::vector<float> m_forcedDb;                    // per bus: the forced snapshot's (empty: none)
+    std::vector<double> m_forcedHz;
     SoundHandle m_bed{INVALID_SOUND_HANDLE};
     std::string m_bedName;
 

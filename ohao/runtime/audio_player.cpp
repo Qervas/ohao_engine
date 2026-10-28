@@ -56,6 +56,7 @@ void AudioPlayer::useBank(const AudioBank& bank) {
             if (s.bus == bank.buses[b].name) send = std::max(send, s.send);
         if (send > 0.0f) m_audio->setBusSend(static_cast<uint8_t>(b), send);
     }
+    applyOverrides(0);   // the session's audio.mix, kept across banks
 }
 
 void AudioPlayer::anchor(uint64_t step) {
@@ -77,9 +78,72 @@ uint64_t AudioPlayer::startFrameOf(uint64_t step) {
     return static_cast<uint64_t>(at);
 }
 
+float AudioPlayer::levelDb(std::size_t b) const noexcept {
+    if (b < m_overrideDb.size() && m_overrideDb[b]) return *m_overrideDb[b];
+    const float snapshot = b < m_forcedDb.size() ? m_forcedDb[b] : (b < m_snapshotDb.size() ? m_snapshotDb[b] : 0.0f);
+    return snapshot + (b < m_duckDb.size() ? m_duckDb[b] : 0.0f);
+}
+
+double AudioPlayer::levelHz(std::size_t b) const noexcept {
+    if (b < m_forcedHz.size()) return m_forcedHz[b];
+    return b < m_snapshotHz.size() ? m_snapshotHz[b] : 0.0;
+}
+
 void AudioPlayer::applyBuses(uint32_t rampFrames) {
     for (std::size_t b = 0; b < m_bank.buses.size(); ++b)
-        m_audio->setBus(static_cast<uint8_t>(b), m_snapshotDb[b] + m_duckDb[b], m_snapshotHz[b], rampFrames);
+        m_audio->setBus(static_cast<uint8_t>(b), levelDb(b), levelHz(b), rampFrames);
+}
+
+void AudioPlayer::setOverrides(MixOverrides mix) {
+    m_mix = std::move(mix);
+    if (ready() && m_hasBank) applyOverrides(ecs::kStealFadeFrames);
+}
+
+void AudioPlayer::applyOverrides(uint32_t rampFrames) {
+    const std::size_t n = m_bank.buses.size();
+    m_overrideDb.assign(n, std::nullopt);
+    m_muted.assign(n, 0);
+    m_soloed.assign(n, 0);
+    for (const MixOverrides::Bus& o : m_mix.buses) {
+        const int b = m_bank.bus(o.name);
+        if (b < 0) continue;
+        m_overrideDb[static_cast<std::size_t>(b)] = o.db;
+        m_muted[static_cast<std::size_t>(b)] = o.mute;
+        m_soloed[static_cast<std::size_t>(b)] = o.solo;
+    }
+    m_forcedDb.clear();
+    m_forcedHz.clear();
+    for (const SnapshotDesc& s : m_bank.snapshots) {
+        if (m_mix.snapshot.empty() || s.name != m_mix.snapshot) continue;
+        m_forcedDb.assign(n, 0.0f);
+        m_forcedHz.assign(n, 0.0);
+        for (const auto& [name, level] : s.buses)
+            if (const int b = m_bank.bus(name); b >= 0) {
+                m_forcedDb[static_cast<std::size_t>(b)] = level.db;
+                m_forcedHz[static_cast<std::size_t>(b)] = level.lowPassHz;
+            }
+    }
+    for (std::size_t b = 0; b < n; ++b) {
+        m_audio->setMute(static_cast<uint8_t>(b), m_muted[b] != 0);
+        m_audio->setSolo(static_cast<uint8_t>(b), m_soloed[b] != 0);
+    }
+    applyBuses(rampFrames);
+}
+
+std::vector<DeviceBus> AudioPlayer::deviceBuses() const {
+    std::vector<DeviceBus> out;
+    if (!m_hasBank) return out;
+    out.resize(m_bank.buses.size());
+    for (std::size_t b = 0; b < out.size(); ++b) {
+        out[b].db = levelDb(b);
+        out[b].muted = b < m_muted.size() && m_muted[b];
+        out[b].soloed = b < m_soloed.size() && m_soloed[b];
+    }
+    for (const auto& [voice, handle] : m_voices) {
+        const auto bus = m_voiceBus.find(voice);
+        if (bus != m_voiceBus.end() && bus->second < out.size() && m_audio->isPlaying(handle)) ++out[bus->second].voices;
+    }
+    return out;
 }
 
 void AudioPlayer::play(const ecs::AudioCommand& c) {
@@ -156,7 +220,7 @@ void AudioPlayer::submit(std::span<const ecs::AudioCommand> commands, uint64_t s
             case ecs::AudioCommand::Op::Bus:
                 if (c.bus < m_duckDb.size()) {
                     m_duckDb[c.bus] = c.db;
-                    m_audio->setBus(c.bus, m_snapshotDb[c.bus] + m_duckDb[c.bus], m_snapshotHz[c.bus], blend);
+                    m_audio->setBus(c.bus, levelDb(c.bus), levelHz(c.bus), blend);
                 }
                 break;
             case ecs::AudioCommand::Op::Snapshot: {
