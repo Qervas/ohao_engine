@@ -672,3 +672,47 @@ differs from the text above, this section holds.
 - **Budgets (OPEN ruling 16)** gate at the proposals: anim16 skin + bounds 0.25 ms, refit 0.60 ms;
   `anim16_step_ms` 0.05 ms, `pose16_sync_ms` 0.10 ms (`animStep` 1). The play-scene budgets wait for
   Task 2's enemies.
+
+## As built (step 2)
+
+Task 2 of the plan (2026-10-28): the enemy's full body. Change record:
+`docs/changes/2026-10-28-animation-step2.md`. Where the build differs from the text above, this
+section holds.
+
+- **Content (ruling 1).** Quaternius' "Character Enemy" (Toon Shooter Game Kit, CC0) in
+  `assets/characters/toon_enemy/`, rebuilt by `tools/anim/make_enemy.py`: pure Python, not Blender
+  (the session could not start Blender), from the staged upstream file checked by sha256; two runs
+  write the same bytes. One mesh on one 43-joint skin, metres, fitted to the 1.8 m capsule, facing
+  −Z; the kit's clips (idle, walk, run, walk_aim, run_aim, death) and made ones (`aim_idle`, the
+  additive `rest`, `aim_up`/`aim_down`, `fire` and `hit` relative to their first frame, a 2 s
+  `reload`). The rifle is the kit's `AK` from the same file in the `Index1.R` joint's frame, not the
+  separate `Rifle.glb` (another kit's atlas style, no grip transform). `Fox.glb` and `BrainStem.glb`
+  are deleted (ruling 10).
+- **The graph** (`assets/anim/enemy.animgraph.json`): body `move` (idle 0, walk 1.25, run 2.5 m/s:
+  the enemies walk at 2.5) and `combat` (the aim set by speed) by `mode`, `death` held as `dead`;
+  additive layers `aim` (`aimPitch` −60/0/+60), `fire`, `reload`, `hit`, masked to `Abdomen` and below.
+  The reload clip is authored at the enemies' `reloadTime` (2 s): `rateFrom` is not built. Events:
+  `mag_out` 0.6 s, `mag_in` 1.3 s, `bolt` 1.75 s, `body_fall` 0.55 s into `death`.
+- **The driver** `driveEnemyAnim` takes its state as pointers (a dead enemy has lost its character
+  components) and reads the step's combat events **after the step's last `restart`**: the round's
+  restart restores inside the combat step, before the animation step, so the restart step steps the
+  restored Animators exactly as the round's first step did (`t25_fight_states`: both Animators and
+  `world.hash` equal the round start's). Damage dealt between steps (`combat.damage`) is in the
+  previous step's events and flinches nothing.
+- **Death (OPEN ruling 7, provisional).** The rigid 90° tip is gone: the Transform stays upright where
+  the enemy stood, the character is parked exactly as before, the death clip falls. Test 16's and the
+  impact-mark test's lying-down assertions became "the `dead` state, the Transform upright". The only
+  other observable change: `combat.info` reports a dead enemy's `pos` at its feet, 0.3 m lower than the
+  tipped body's.
+- **Hit volumes (ruling 18).** Each enemy's body and head entities keep their ids (agents and tests
+  damage through them) with no mesh; rounds hit the capsule. Impact marks need a `BoxPrim` and are not
+  made on skinned enemies.
+- **`JointAttach`** poses the attached entity's whole subtree (the muzzle light under the rifle).
+- **Sounds.** `mag_out`, `mag_in`, `bolt`, `body_fall` from `make_weapons.py`; `CombatSounds` reads the
+  animation log by its own cursor and plays each where the entity is drawn (chest, or floor for a
+  fall) on the near curve, with an occlusion ray for anyone but the player.
+- **Budgets (OPEN ruling 16)** at the proposals. The skin and refit budgets of the play scene are on a
+  new capture, `play_anim_1080p` (the play scene stepped before every frame), because
+  `play_hud_1080p`'s capture never changes a pose; `play_hud_1080p`'s frame is gated at its pre-SP10
+  median (2.190 ms, a noisy run) + 0.20 ms. `anim_step_ms` 0.01, `pose_sync_ms` 0.02 (`animStep` 2).
+- **`tools/list` (OPEN ruling 13):** unchanged at 24,137 bytes (no new tool in step 2).
