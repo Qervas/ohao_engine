@@ -5,7 +5,7 @@
 {"jsonrpc":"2.0","id":5,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":6,"result":{"frame":30}}
 {"jsonrpc":"2.0","id":7,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,-4],"ground":true,"on":"Floor","surface":"concrete","footsteps":2}}
-{"jsonrpc":"2.0","id":8,"result":{"hash":"92b526cbd7805471","frame":30}}
+{"jsonrpc":"2.0","id":8,"result":{"hash":"e0302cfe0e3b9d31","frame":30}}
 {"jsonrpc":"2.0","id":9,"result":{"queued":1,"firstStep":30,"lastStep":30}}
 {"jsonrpc":"2.0","id":10,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":2}}
 {"jsonrpc":"2.0","id":11,"result":{"frame":35}}
@@ -14,8 +14,8 @@
 {"jsonrpc":"2.0","id":14,"result":{"created":0,"destroyed":0,"changed":17,"frame":0}}
 {"jsonrpc":"2.0","id":15,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":16,"result":{"frame":30}}
-{"jsonrpc":"2.0","id":17,"result":{"hash":"92b526cbd7805471","frame":30}}
+{"jsonrpc":"2.0","id":17,"result":{"hash":"e0302cfe0e3b9d31","frame":30}}
 {"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"PlayerTeleportParams.pos is outside its limits","data":[{"code":"E_RANGE","path":"/pos","message":"PlayerTeleportParams.pos is outside its limits","expected":"each component in [-1e+05, 1e+05]","got":"[0,0,200000]"}]}}
 {"jsonrpc":"2.0","id":19,"error":{"code":1,"message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","expected":"the id of an entity with a PlayerController","got":"\"5c0b1a7e00000002\""}]}}}
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"PhysicsContactsParams.max is outside its limits","data":[{"code":"E_RANGE","path":"/max","message":"PhysicsContactsParams.max is outside its limits","expected":"in [1, 64]","got":"0"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":36,"frame":30,"schemaHash":"b8b5e8c1f4b7b78c","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":30,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":36,"frame":30,"schemaHash":"069ecb31bb7257e4","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":30,"fixedDt":0.016666668}}}
