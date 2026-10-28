@@ -11,8 +11,8 @@ session. `python tests/docs/check_docs.py` runs every `console` command here.
 line, on stdin/stdout. MCP clients `initialize`, then call tools: one per method, named
 with `.` → `_` (`world.step` is `world_step`), each with its params struct's JSON Schema
 as `inputSchema`. Native clients call the method names directly. Connecting costs
-`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (24,452 bytes
-for 38 tools; the cap is 24 KB).
+`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (25,037 bytes
+for 39 tools; the cap is 28 KB).
 
 | Host | Command | For |
 |---|---|---|

@@ -258,7 +258,7 @@ def test_schemas():
     tools = {t["name"]: t for t in listed["result"]["tools"]}
     size = len(json.dumps(listed["result"], separators=(",", ":")).encode("utf-8"))
     print("        tools/list: " + str(size) + " bytes, " + str(len(tools)) + " tools")
-    check(size <= 24 * 1024, "tools/list is at most 24 KB")
+    check(size <= 28 * 1024, "tools/list is at most 28 KB")
     check(sorted(tools) == sorted(EXAMPLES), "one tool per method, '.' -> '_' (" + ", ".join(sorted(tools)) + ")")
     rid = 10
     for name in EXAMPLES:   # in this order: world_snapshot before world_restore

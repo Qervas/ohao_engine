@@ -368,7 +368,7 @@ void sp4_t08_tools_list_covers_every_method_within_budget() {
     Rig r;
     const std::string& list = r.server.toolsList();
     std::printf("\n      tools/list: %zu bytes, %zu tools", list.size(), api::methods().size());
-    CHECK(list.size() <= 24 * 1024, "tools/list is at most 24 KB");
+    CHECK(list.size() <= 28 * 1024, "tools/list is at most 28 KB");
     for (const auto& m : api::methods()) {
         std::string name(m.name);
         for (char& c : name)

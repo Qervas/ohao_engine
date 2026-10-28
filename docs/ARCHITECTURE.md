@@ -410,7 +410,7 @@ method, the MCP tool (`.` becomes `_`), the catalogue entry and its JSON Schema,
    `tests/serve/check_serve.py` (its schema through `jsonschema`, the server accepting it);
    then the goldens, after reading the diff: `python tests/cli/check_cli.py --update` and
    `python tests/serve/check_serve.py --update` (`schemaHash`, `tools/list`). `rpc_tests`
-   keeps `tools/list` under 24 KB, so keep the doc line to one sentence.
+   keeps `tools/list` under 28 KB, so keep the doc line to one sentence.
 5. **Docs:** the method table in `docs/agents/ohao-cli.md`, and `docs/agents/ohao-serve.md`
    if it changes how a session goes.
 

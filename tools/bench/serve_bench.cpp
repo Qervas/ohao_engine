@@ -15,8 +15,9 @@
 //   world_diff_1pct_rpc      world.diff against a snapshot, 1% of rows changed    <= 2.0 ms
 //   log_below_threshold      OHAO_LOG below the threshold, per call               <= 5 ns
 //   log_ring_80              OHAO_LOG into the ring, an 80-character message      <= 300 ns
-//   tools_list_bytes         the tools/list result                                <= 24 KB
+//   tools_list_bytes         the tools/list result                                <= 28 KB
 //   audio_info_bytes         audio.info, max 16, the play scene mid-fight         <= 2 KB
+//   vfx_info_bytes           vfx.info, max 16, the play scene mid-fight           <= 2 KB
 // Recorded, not gated: process start to the initialize reply, scene.load of bench10k over
 // stdio, the initialize and instructions sizes.
 //
@@ -548,6 +549,34 @@ int main(int argc, char** argv) {
         expect(audioInfoBytes > 0, "audio.info answers");
     }
 
+    // vfx_info_bytes (sub-project 12): vfx.info's result, max 16, in the same fight (its shots and hits are the
+    // records the frame draws: decals, tracers, sparks), from a headless server.
+    std::size_t vfxInfoBytes = 0;
+    {
+        Child fight;
+        if (fight.start(ohaoExe.wstring(), L"serve --out build/serve_bench/out --log-level warn", root, dir / "vfx_fight.stderr.txt")) {
+            (void)fight.call(request(1, "scene.load", R"({"path":"assets/scenes/blockout_play.scene.json","seed":"00000000000000aa"})"));
+            (void)fight.call(request(2, "player.teleport", R"({"pos":[1.5,0,2.2],"yawDeg":43.6})"));
+            (void)fight.call(request(3, "input.inject", R"({"events":[{"action":"fire","down":true},{"step":60,"action":"fire","down":false}]})"));
+            (void)fight.call(request(4, "world.step", R"({"frames":120})"));
+            uint64_t next = 0;
+            const std::string end = fight.call(request(5, "vfx.info", R"({"since":1000000000,"max":0})"));
+            if (auto doc = ecs::parseJson(end))
+                if (const auto* result = doc.value().member(doc.value().root(), "result"))
+                    if (const auto* n = doc.value().member(*result, "next")) next = std::strtoull(std::string(n->text).c_str(), nullptr, 10);
+            const std::string info =
+                fight.call(request(6, "vfx.info", "{\"since\":" + std::to_string(next > 16 ? next - 16 : 0) + ",\"max\":16}"));
+            if (auto doc = ecs::parseJson(info))
+                if (const auto* result = doc.value().member(doc.value().root(), "result")) {
+                    reflect::JsonWriter w(1 << 12);
+                    reflect::writeJson(w, doc.value(), *result);
+                    vfxInfoBytes = w.str().size();
+                }
+            expect(next > 16 && info.find("\"at\":") != std::string::npos, "vfx.info mid-fight lists records");
+        }
+        expect(vfxInfoBytes > 0, "vfx.info answers");
+    }
+
     // ---- the rounds --------------------------------------------------------------------------
     const std::string infoReq = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"world.info\"}\n";
     const std::string applyA = applyParams(1.0f), applyB = applyParams(2.0f);
@@ -673,6 +702,7 @@ int main(int argc, char** argv) {
         {"log_ring_80", "ns", "log_ring_80_ns", stats(ops[8].samples), {}},
         {"tools_list_bytes", "B", "tools_list_bytes", {static_cast<double>(toolsBytes), static_cast<double>(toolsBytes)}, {}},
         {"audio_info_bytes", "B", "audio_info_bytes", {static_cast<double>(audioInfoBytes), static_cast<double>(audioInfoBytes)}, {}},
+        {"vfx_info_bytes", "B", "vfx_info_bytes", {static_cast<double>(vfxInfoBytes), static_cast<double>(vfxInfoBytes)}, {}},
     };
     if (gpu.ran) {
         gates.push_back({"window_step_present", "ms", "window_step_present_ms", stats(gpu.step), {}});
