@@ -127,7 +127,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
-| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params); `player.info` at the spawn and after a walk, `player.teleport` (onto the Step, at rest, refused params), `physics.contacts` (the resting crates, an entity's pairs, `max`), a restore mid-fall and a restored walk reaching the same `world.hash`; combat (`sp7_t18_*`): `combat.info` before and after the first steps (the round, three combatants in id order, under 1 KB), `combat.events` (a burst's shots, `round_start`, the cursor), `combat.damage` (on an enemy and on its body box, the dead taking none, both enemies dead: won, the player dead: the restart 3 s later back at the round start's `world.hash`), refused params, `E_STATE` without combat |
+| `api_tests` | methods, commands and inverses, queries, summaries, params structs, the path sandbox, cancellation, the time model (phases, `watch`, `E_STATE`, realtime vs lockstep), `world.hash` and `world.diff`, input (inject, state, record, replay), `render.stats`; levels and physics (`level.info` counts, spawns and size, `level.reload` keeping the hash, `physics.raycast` hits, misses and refused params, `physics.info`, the warnings); `physics.events` after a drop through `world.apply` and `world.step` (the landings, the cursor, refused params); `player.info` at the spawn and after a walk, `player.teleport` (onto the Step, at rest, refused params), `physics.contacts` (the resting crates, an entity's pairs, `max`), a restore mid-fall and a restored walk reaching the same `world.hash`; combat (`sp7_t18_*`): `combat.info` before and after the first steps (the round, three combatants in id order, under 1 KB), `combat.events` (a burst's shots, `round_start`, the cursor), `combat.damage` (on an enemy and on its body box, the dead taking none, both enemies dead: won, the player dead: the restart 3 s later back at the round start's `world.hash`), refused params, `E_STATE` without combat; audio (sub-project 11 test 29, `t29_*`): `audio.info` headless (`device: "none"`, the snapshot, zone, buses, the fight's commands after a cursor, under 2 KB at `max` 16), `audio.mix` handing a host its overrides (a bus's db, mute, solo, a forced snapshot, `clear`; unknown names refused before anything changes) and never touching `world.hash` or the schedule |
 | `rpc_tests` | the protocol server in-process: framing, ordering, the error table, ids, cancellation, progress, ping while busy, MCP initialize/tools/logging, the queue cap; the named pipe (one local client, its DACL, a second client and a second server refused, remote clients refused against a control pipe) |
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
@@ -241,14 +241,16 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   fight headless reaching the same `world.hash`, `combat.info`, events and HUD picture; a realtime
   window's `render.stats` reports `latency` and `pacing` after injected mouse movements, a lockstep
   one neither (sp9 tests 19, 20); the fight's voice schedule from the window equal, command for
-  command, to a headless session's (`OHAO_AUDIO_TRACE=1` through `log.read`, sp11 test 28). `e2e_mcp.py`: a
+  command, to a headless session's (`OHAO_AUDIO_TRACE=1` through `log.read`, sp11 test 28); a realtime window with `--sound`
+  reporting `render.stats` `audio` (`mixMs`, `voices`, `late`), one without none (test 29). `e2e_mcp.py`: a
   stdlib-only MCP client runs a whole session against a hidden window (load, edit, snapshot,
   record, a flight, step with watch, captures, logs, restore, replay to the same hash, a
   capture bit-identical to the first; the blockout's level and physics; the play scene walked,
   `player_info`, `player_teleport`, `physics_contacts`, restored and walked again to the same
   hash and picture; the round fought: `combat_info`, EnemyA shot down, `combat_events`, a look
-  with the HUD, `combat_damage` killing the player, the restart, the room cleared and won),
-  validation clean through teardown.
+  with the HUD, `combat_damage` killing the player, the restart, the room cleared and won;
+  the fight listened to: `audio_info`'s newest commands, a bus muted and one soloed, `clear`,
+  `world_hash` untouched), validation clean through teardown.
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
@@ -283,7 +285,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   results in `build/scene_bench.json`. `serve_bench --check`: the protocol's budgets in
   `tests/bench/serve_budgets.json` (`ohao serve` as a child process on pipes, bench10k:
   round trips, transport overhead, apply, step, hash, diff, the logger's per-call costs, the
-  `tools/list` size; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
+  `tools/list` size; on the play scene after 120 steps of fire, `audio.info`'s size at `max` 16,
+  `audio_info_bytes`; then `ohao serve --window 1280x720 --hidden` on Cornell: a step until
   its frame is presented, a frame's readback, inline and PNG captures, an inline `rt_offline`
   capture at 16 spp (150 ms, Frank's ruling), the reader thread's CPU over 600 idle realtime steps; `--cpu-only` skips the window), results in
   `build/serve_bench.json`. `render_bench --check`: the renderer's GPU budgets in
@@ -900,6 +903,19 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     with a headless host's through `log.read`.
   - Sound shapes, curves and occlusion are the bank's (`shapes`, `occlude`), never code's: the
     slice's gunfire is 1–60 m, rolloff 1; near sounds 0.5–20 m, rolloff 1.5.
+  - **Agents** (step 4, `ohao/api/audio.cpp`) hear through `audio.info {since, max}`: the
+    schedule's half (snapshot, zone, listener, buses with their duck, voice and ray counts, the
+    commands after a cursor) everywhere, `device: "none"` headless; a window's `api::Host` adds
+    the device's half (sample rate, each bus's driven level and voices, `late`, `mixMs`). It
+    stays small: a bus's `db` only when not 0, a play's variant, gain, occlusion and outcome
+    only when not the default. `audio.mix {bus, db, mute, solo, snapshot, clear}` is for
+    listening: the session keeps the overrides and hands them whole to the host
+    (`Host::setAudioMix`), whose `AudioPlayer` applies them in the device and again when a bank
+    loads. **Never put them in the World, the schedule or a snapshot**: the schedule's commands,
+    `world.hash` and replays are the same with or without them. `ohao serve --window --sound`
+    opens a device (a serve window is mute without it); `render.stats` `audio` (`mixMs`, the
+    median time the device callback takes per 10 ms of audio; `voices`; `late`) is there only
+    when a player has a device.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

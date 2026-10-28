@@ -125,7 +125,10 @@ after the frame's steps (LiveHost):
   runtime::AudioPlayer  (LiveConfig::sound, ohao_game without --mute) the schedule's commands
                       since its cursor -> the AudioSystem, one step after their step on a
                       clock anchored to the device (late: at once, counted); the bank's files
-                      decoded when the bank loads (assets/local/audio, then assets/audio)
+                      decoded when the bank loads (assets/local/audio, then assets/audio);
+                      a bus's level is the schedule's snapshot and ducks unless a
+                      session's audio.mix overrides it (listening only: device-side,
+                      never the world, the schedule or a snapshot)
   runtime::CombatFx   (LiveConfig::effects) the combat log's shots and hits -> particle emits
                       (a muzzle burst at the drawn muzzle, sparks and the surface's dust),
                       realtime only; a lockstep capture draws none
@@ -602,6 +605,39 @@ Followed for the play scene's enemies and the player's arms (sub-project 10, ste
 ```console
 $ build/Release/ohao run assets/scenes/anim_rig.scene.json --script docs/agents/examples/animation.jsonl > /dev/null
 $ build/Release/anim_tests.exe > /dev/null
+```
+
+## Recipe: add a sound
+
+Followed for the slice's ambience beds (sub-project 11, step 3;
+`docs/specs/2026-10-28-audio-design.md`). What plays is decided in the step; the device only
+renders it, so a sound is tested on the schedule, without a device.
+
+1. **The file:** a WAV under `assets/audio/<group>/`, ours or CC0, made by a script in
+   `tools/audio/` that writes the same bytes twice (`make_weapons.py`, `make_footsteps.py`,
+   `make_ambience.py`). Variants are numbered files, named in the bank as `{n}`. Sounds staged
+   for local listening go to git-ignored `assets/local/audio/`, which is read first and never
+   committed.
+2. **The bank** (`assets/audio/slice.audio.json`, the `AudioMix` asset): a `sounds` entry with
+   `files`, `bus`, `priority` (higher is kept when a cap is reached), `shape` (its distance
+   curve, from `shapes`), `holdMs` (how long it holds its voice), and optionally `volume`,
+   `send` (to the reverb return) and `occlude`. Every error names its JSON pointer; `ohao
+   schema audio-bank [-o FILE]` writes the schema. Files are decoded when the bank loads, never on a play.
+3. **The event:** the schedule (`ecs/audio_schedule.cpp`) names the sound for a step's event:
+   `combatSoundNames` for the combat log, `animSoundNames` for clip events,
+   `footstepSound` for the physics log's footsteps by surface. A clip event of a new name
+   needs a line there; a new surface needs only its `footstep_<surface>` sound.
+4. **Test it on the schedule:** step a World with `installAudio` and read `audioSchedule(world)`'s
+   commands (`audio_schedule_tests` `t28_*`: the play, its voice, variant, occlusion and
+   outcome); `audio_system_tests` checks the bank has a file for every sound. In a session,
+   `audio.info` lists the same commands; `audio.mix` solos its bus to listen in a window
+   (`ohao serve --window --sound`).
+5. **Budgets:** `audio_bench` (`schedule_step_ms`, `submit_frame_ms`, `bank_load_ms`);
+   `audio_bench --listen DIR` renders the fight to a WAV with its schedule.
+
+```console
+$ build/Release/ohao schema audio-bank -o build/doc_tmp/audio_bank.schema.json > /dev/null
+$ build/Release/audio_schedule_tests.exe > /dev/null
 ```
 
 ## Recipe: add a golden scene

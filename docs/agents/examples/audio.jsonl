@@ -1,0 +1,5 @@
+{"method":"world.step","params":{"frames":1}}
+{"method":"input.inject","params":{"events":[{"step":0,"action":"fire","down":true},{"step":1,"action":"fire","down":false}]}}
+{"method":"world.step","params":{"frames":2}}
+{"method":"audio.info","params":{"since":2,"max":4}}
+{"method":"audio.mix","params":{"bus":"weapons","mute":true}}

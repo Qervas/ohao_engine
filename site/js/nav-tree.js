@@ -628,6 +628,11 @@ window.OHAO_NAV_TREE = [
         "id": "audio/system",
         "title": "AudioSystem facade",
         "href": "m/audio/system.html"
+      },
+      {
+        "id": "audio/schedule",
+        "title": "The voice schedule",
+        "href": "m/audio/schedule.html"
       }
     ]
   },

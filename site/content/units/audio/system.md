@@ -68,6 +68,47 @@ Without a device (`initialize(true)`), `render` pulls frames from the engine
 directly, so a test or `audio_bench` hears exactly what a sequence of plays and
 bus changes produces, the same bytes twice.
 
+## The reverb lives on the return
+
+The bank's first return bus carries a reverb between its group and its node, so
+what reaches it is only what buses sent, and what leaves it is wet. It is
+Freeverb (`reverb_node.hpp`, our own code of Jezar's public-domain design): per
+channel eight low-pass feedback combs in parallel, then four allpasses in series,
+the right channel's delays the left's plus 23 samples:
+
+{{cite ohao/audio/reverb_node.hpp "std::array<Comb, 8> combL, combR;"}}
+{{cite ohao/audio/audio_system.cpp "bus->reverb = std::make_unique<AudioReverbNode>();"}}
+
+A zone change is a crossfade, not a jump: the node holds two cores, the new one
+starts empty and their wet gains ramp in opposite directions over the frames
+`setReverb` names (the schedule's 30-step blend), so a crossfade costs two
+reverbs while it lasts. The preset crosses threads the way a bus's parameters do,
+as atomics and a version the node reads once a block:
+
+{{cite ohao/audio/audio_system.cpp "r.crossfade.store(crossfadeFrames, std::memory_order_relaxed);"}}
+
+The processing order is fixed and the feedback stores flush denormals, so the
+tail is the same bytes every run; `t27_*` checks each preset's decay against its
+design RT60 within 20%.
+
+## What the mix costs
+
+A window reports what the device's mixing takes (`render.stats` `audio.mixMs`).
+The engine is allocated beside a meter, the engine first, so the device callback
+that miniaudio hands the engine finds the meter through the same pointer:
+
+{{cite ohao/audio/audio_system.cpp "config.dataCallback = meteredDataCallback;   // the engine's own read, timed (mixMs)"}}
+
+The callback does what miniaudio's own does, read the engine, and times it; each
+period's time is scaled to 10 ms of audio, so periods of any length compare:
+
+{{cite ohao/audio/audio_system.cpp "ma_engine_read_pcm_frames(&box->engine, out, frames, nullptr);"}}
+
+The meter is a ring of the newest 512 periods in atomics: the device thread
+writes, a frame's `render.stats` reads, and neither waits. `mixMs()` is their
+median. `render()` without a device pushes into the same ring, so a test can read
+it too.
+
 ## Two factors per voice, a voice cap, and no limiter
 
 A voice's own gain is now two factors, pushed down with `ma_sound_set_volume`;

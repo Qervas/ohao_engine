@@ -768,14 +768,19 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "audio/system": {
         "what": [
-            "AudioSystem facade over miniaudio: SFX/Music/Ambient buses, handles, 3D listener, volume clamps.",
+            "AudioSystem facade over miniaudio: a bank's buses as groups and nodes of ours (gain in dB, low-pass, mute/solo, send), the Freeverb return, bank voices started on the frame, the mix's measured cost; the old category API as names for default-bank buses.",
         ],
         "how": [
-            "initialize → loadSound(path, category) → play / play3D → setCategoryVolume / setMasterVolume → shutdown",
-            "ma_engine/ma_sound forward-declared; SoundHandle 0 invalid.",
+            "initialize → loadBank → play(sound, variant, placement, startFrame) / stop(handle, fadeFrames) / setBus / setReverb → render (no device) or the device callback → shutdown",
+            "ma_engine/ma_sound forward-declared; SoundHandle 0 invalid; mixMs from a ring beside the engine.",
         ],
         "why": "Game-ready audio without OpenAL; one facade for tools and runtime.",
-        "workflow": ["initialize", "loadSound", "play/play3D", "set volumes", "shutdown"],
+        "workflow": ["initialize", "loadBank", "play / stop", "setBus / setReverb", "shutdown"],
+    },
+    "audio/schedule": {
+        "what": ["The voice schedule: what plays, where, how loud and which voice it takes, decided in the fixed step from its events; the window's player renders it; agents read and override it."],
+        "how": ["audio_schedule simulate system (installAudio) after animation; priority, caps, holdMs, ducks, snapshots, zones, graded occlusion; SnapshotHook; AudioPlayer on a device clock; audio.info and audio.mix."],
+        "why": "One decision per sound, from the step, so a window, a headless host and a replay hear the same thing.",
     },
     "systems/build": {
         "what": ["CMake options gate NRD, OIDN, DLSS, Jolt, tests; shaders custom target compiles GLSL→SPIR-V."],

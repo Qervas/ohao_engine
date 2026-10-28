@@ -17,5 +17,14 @@ MODULE = {
             workflow=['initialize()', 'loadSound(path, category) → handle', 'play / play3D / stop', 'setCategoryVolume / setMasterVolume', 'shutdown'],
             why='Game-ready audio without pulling OpenAL; one facade for tools and runtime.',
         ),
+        page(
+            'schedule',
+            'The voice schedule',
+            'Every sound decided in the step; the device only renders it.',
+            files=['ohao/ecs/audio_schedule.hpp', 'ohao/ecs/audio_schedule.cpp', 'ohao/runtime/audio_player.cpp', 'ohao/api/audio.cpp'],
+            design=['The step\'s last simulate system turns physics, combat and animation events into voice commands.', 'Priority, caps and holdMs pick what plays; ducks and the round\'s snapshot are commands too.', 'Runtime state, never hashed; it rides the World\'s snapshot through a SnapshotHook.', 'A window\'s AudioPlayer plays the commands a step later on a device clock; agents read them through audio.info.'],
+            workflow=['installAudio(world, assets)', 'world.step', 'audioSchedule(world).commandsSince(since, max, dropped)', 'AudioPlayer::submit', 'audio.info / audio.mix'],
+            why='A sound decided from the step is the same in a window, headless and in a replay, so it can be tested without a device.',
+        ),
     ],
 }

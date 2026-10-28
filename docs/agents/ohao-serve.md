@@ -11,8 +11,8 @@ session. `python tests/docs/check_docs.py` runs every `console` command here.
 line, on stdin/stdout. MCP clients `initialize`, then call tools: one per method, named
 with `.` → `_` (`world.step` is `world_step`), each with its params struct's JSON Schema
 as `inputSchema`. Native clients call the method names directly. Connecting costs
-`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (24,137 bytes
-for 36 tools; the cap is 24 KB).
+`initialize` (725 bytes, with 551 bytes of `instructions`) and `tools/list` (24,452 bytes
+for 38 tools; the cap is 24 KB).
 
 | Host | Command | For |
 |---|---|---|
@@ -276,6 +276,41 @@ In a window (`ohao serve --window`, or `ohao_game` on the scene for a person to 
 frame draws the player and moving bodies between their last two steps; in lockstep, and in
 every capture an agent asks for in lockstep, what is drawn is the last step exactly.
 
+## Listen
+
+Every sound is decided in the step by the voice schedule, from the step's physics, combat and
+animation events; a window's player only renders it, a step later. So an agent hears through the
+schedule, in any host:
+
+- `audio_info {since, max}`: the round's snapshot (`default`, `dead`, `won`), the listener's
+  reverb `zone`, every bus in the bank's order (its level in dB when a duck or snapshot moved it,
+  its cap, the voices held), voice and occlusion-ray counts, and the commands after `since`:
+  `play` (the sound, its voice, `pos` unless at the ear, `occl` behind walls, `outcome` when it
+  stole a voice or was dropped), `stop`, `bus` (a duck), `snapshot`, `zone`, `occlusion`,
+  `stop_world` (a restart or restore). Read on with `next`. Headless it says `device: "none"`.
+- `audio_mix {bus, db | mute | solo}`, `{snapshot}`, `{clear: true}`: listening overrides,
+  applied in a window's device only. They never reach the world, the schedule, `world_hash` or a
+  snapshot, so they are safe mid-test. A window opens a sound device with `ohao serve --window
+  --sound` (else it is mute); `audio_info` then adds the device's half (`sampleRate`, `late`,
+  `mixMs`, per bus `out` and `playing`), and `render_stats` an `audio` block (`mixMs`, the
+  callback's median per 10 ms of audio; `voices`; `late`).
+
+One round from the spawn, then weapons muted:
+
+```console
+$ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script docs/agents/examples/audio.jsonl
+{"method":"scene.load","result":{"entities":21}}
+{"method":"world.step","result":{"frame":1}}
+{"method":"input.inject","result":{"queued":2,"firstStep":1,"lastStep":2}}
+{"method":"world.step","result":{"frame":3}}
+{"method":"audio.info","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0},"commands":[{"seq":3,"step":2,"op":"play","sound":"fire","voice":1},{"seq":4,"step":2,"op":"play","sound":"impact_default","voice":2,"pos":[1.52,1.61,-3]},{"seq":5,"step":2,"op":"bus","bus":"foley","db":-3,"blend":1},{"seq":6,"step":2,"op":"bus","bus":"ambience","db":-6,"blend":1}],"next":6}}
+{"method":"audio.mix","result":{"device":"none","horizonMs":16.67,"snapshot":{"name":"default","blend":0},"zone":"room","listener":{"pos":[1.5,1.62,2.2]},"buses":[{"name":"master"},{"name":"world"},{"name":"weapons","cap":12,"voices":1,"mix":{"mute":true}},{"name":"impacts","cap":8,"voices":1},{"name":"foley","db":-3,"cap":10},{"name":"ambience","db":-6,"cap":4},{"name":"voice","cap":2},{"name":"ui","cap":4},{"name":"music","cap":2},{"name":"reverb"}],"voices":{"playing":2,"dropped":0,"stolen":0},"rays":{"cast":0,"capped":0}}}
+```
+
+The player's round plays at the ear (no `pos`); its impact on the north wall, 5 m off, at its
+place; the shot ducks foley by 3 dB and ambience by 6 (the bank's `ducks`). Commands 1 and 2,
+before `since`, were the room's zone with its bed and the default snapshot.
+
 ## Record and replay
 
 `input_record {path}` writes every event that reaches the input map with its step, plus a
@@ -408,8 +443,9 @@ to the first → load the blockout level → `level_info` → a ray down at the 
 `player_info` → look → snapshot → walk, turn by the mouse and jump → `player_info` and the
 footsteps → look → `player_teleport` → `physics_contacts` → restore → the same walk, to the
 same hash and the same picture → load the play scene again → `combat_info` → shoot EnemyA
-down → `combat_events` → look with the HUD → `combat_damage` kills the player → the restart
-→ clear the room → won.
+down → `audio_info`'s newest commands, a bus muted and one soloed, `clear` (`world_hash`
+unchanged) → `combat_events` → look with the HUD → `combat_damage` kills the player → the
+restart → clear the room → won.
 
 ```console
 $ python tests/serve/e2e_mcp.py > /dev/null   # gpu
