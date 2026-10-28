@@ -113,10 +113,11 @@ helper RT shadows and RT GI share in `rt_compute.cpp`:
 
 {{cite ohao/render/rt/rt_compute.cpp "ci.stage.pName = entry;"}}
 
-The query treats every intersection as opaque and stops at the first one it
-accepts; the answer is whether anything was committed.
+The query stops at the first hit it accepts; the answer is whether anything was
+committed. A candidate from an alpha-tested or blended instance is committed only where
+`rt/alpha_test.slang` says it is hit; every other triangle is opaque.
 
-{{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
+{{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
 
 {{cite shaders/rt/shadow_trace.slang "return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;"}}
 
@@ -365,7 +366,7 @@ exact zero:
 
 The fourth is not a coverage bit — GBuffer0 packs metallic there:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
 
 The test works only because that attachment clears to (0,0,0,0); a non-metallic
 surface passing exactly through the world origin is classified as sky and comes out

@@ -134,11 +134,11 @@ and the derivation above is the only code that assigns `m_moonDirection`, which 
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());"}}
 
-The sky still runs first, straight after the render graph, ahead of particles, SSS and SSR, because both of those read the lit image: an SSS tap at a skin silhouette and an SSR hit that lands on open sky should find the sky there, not black.
+The sky still runs first, straight after the render graph, ahead of SSS and SSR, because both of those read the lit image: an SSS tap at a skin silhouette and an SSR hit that lands on open sky should find the sky there, not black.
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "// 4.5. Sky pass — fills sky pixels with Preetham sky"}}
 
-The sky writes through its render pass as a colour attachment, and SSS and SSR read in compute shaders that no subpass dependency reaches, so a memory barrier from colour-attachment output to the compute and fragment stages follows the sky and particle passes whenever either ran. `engine_tests` holds the result to a frame that runs SSS: its top row must be lit sky, not black.
+The sky writes through its render pass as a colour attachment, and SSS and SSR read in compute shaders that no subpass dependency reaches, so a memory barrier from colour-attachment output to the compute and fragment stages follows the sky pass whenever it ran. `engine_tests` holds the result to a frame that runs SSS: its top row must be lit sky, not black.
 
 :::key
 The sky pass writes into the lighting pass's HDR image, not into "the frame". It reaches the tonemapper whatever runs after it; what it must precede is every pass that *reads* the lit image — SSS and SSR — or they see black where the sky will be.

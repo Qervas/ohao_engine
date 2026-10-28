@@ -200,9 +200,9 @@ the header. `ohao_core` owns the check:
 It does not own the numbers. Those are constants in `ohao/gpu/layout_meta.hpp`,
 deliberately separated from the renderer so a module can assert against the GPU ABI
 without including `renderer.hpp`: 128 bytes for `LightData`, 80 for `GPULight`,
-256 for the path tracer's push block, 48 for one material row.
+256 for the path tracer's push block, 64 for one material row.
 
-{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 48,"}}
+{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 64,"}}
 
 And that header belongs to no archive. `ohao/gpu/CMakeLists.txt` declares no target,
 and `ohao_gpu_vulkan`'s recursive glob is rooted at `ohao/gpu/vulkan/`, so nothing

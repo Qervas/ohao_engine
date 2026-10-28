@@ -35,7 +35,7 @@ includes name headers that are not in the tree at all.
 So this is a submission harness that the source glob compiles into `ohao_renderer`
 and that has never executed — no frame path uses it and no test runs it. The
 compute work that does reach a frame — SSAO, SSR, subsurface scattering, the
-particle update, the à-trous and NRD denoise chains, DLSS-RR where it is compiled
+effects' expand and sort, the à-trous and NRD denoise chains, DLSS-RR where it is compiled
 in — is recorded inline into the command buffer the frame is
 already recording and separated from the raster and ray-tracing work by pipeline
 barriers, not by a queue. What is worth reading here is the sync design, and the
@@ -204,9 +204,7 @@ SSS builds the `VkImageMemoryBarrier` for the lit image inline, because that ima
 the lighting pass's, not an `rtc::Image`; it hands the image back to
 `COMPUTE | FRAGMENT` once the vertical blur has written it in place, for SSR's compute
 read and post's fragment reads. The rest of the compute work
-ends elsewhere: the particle update publishes to
-`VERTEX_SHADER | DRAW_INDIRECT` so the indirect draw can read what it wrote, the
-à-trous passes chain COMPUTE→COMPUTE, and `nrd_compose.cpp` and `dlss_rr.cpp`
+ends elsewhere: the à-trous passes chain COMPUTE→COMPUTE, and `nrd_compose.cpp` and `dlss_rr.cpp`
 contain no `vkCmdPipelineBarrier` at all.
 
 :::key

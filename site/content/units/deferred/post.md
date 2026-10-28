@@ -33,7 +33,7 @@ albedo G-buffer's alpha — which the G-buffer pass filled from the R channel of
 material's glTF occlusion texture (1 without one; a metallicRoughness map's R channel is
 unused by glTF and never read as occlusion):
 
-{{cite shaders/core/gbuffer.frag "if (occlusionTexIdx < 4096u) ao = texture(textures[nonuniformEXT(occlusionTexIdx)], fragTexCoord).r;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "if (occlusionTexIdx < 4096u) ao = texture(textures[nonuniformEXT(occlusionTexIdx)], fragTexCoord).r;"}}
 
 — and leaves direct light and RT GI alone. The pass itself, its noise and its
 upsample are the SSAO unit's subject. Each frame `DeferredRenderer` hands the
@@ -293,7 +293,7 @@ motion vectors is the unjittered one:
 so the velocity a fragment writes is the true screen motion plus that frame's own
 jitter:
 
-{{cite shaders/core/gbuffer.frag "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
 
 The two positions being differenced are not in the same space, and nothing
 downstream compensates. A perfectly static camera therefore reports up to a

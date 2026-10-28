@@ -15,25 +15,25 @@ array of `vec4` and nothing else:
 
 The G-buffer fragment shader binds the *same buffer* in its own set under a different
 name and the same element type, `vec4 matRows[]`. A material is therefore a convention
-rather than a type: three consecutive vec4s, twelve float lanes, and a meaning per
+rather than a type: four consecutive vec4s, sixteen float lanes, and a meaning per
 lane that the producer and each consumer have to agree on independently. The
 closest-hit shader reassembles the row by hand, one indexed load per slot, before it
 knows what any lane holds:
 
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];"}}
+{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * kMaterialRows + 2u];"}}
 
 `layout_meta.hpp` is where that convention is written down. The stride there is
 derived from the slot count — `kMaterialBytes = kMaterialVec4s * sizeof(glm::vec4)`
 — and the derived value is then pinned against a literal:
 
-{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 48"}}
+{{cite ohao/gpu/layout_meta.hpp "static_assert(MaterialGpuPack::kBytes == 64"}}
 
-The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 12>`, and a
+The producer is tied to it: `MaterialTable::Pack` is a `std::array<float, 16>`, and a
 `static_assert` equates its size with `MaterialGpuPack::kBytes`.
 
 ## Integers that have to travel as floats
 
-Four of the twelve lanes hold bindless texture indices — uint32 values in an
+Five of the sixteen lanes hold bindless texture indices — uint32 values in an
 array whose element type is float. `pack` reinterprets the bits instead of
 converting the value:
 
@@ -65,7 +65,7 @@ textures.
 ## One writer, and the indices exist before the row does
 
 The pack is assembled in exactly one place. `MaterialTable::pack` turns a
-`MaterialDesc` into its twelve lanes in a single expression, and `add` appends the
+`MaterialDesc` into its sixteen lanes in a single expression, and `add` appends the
 row to a host array and marks its index dirty:
 
 {{cite ohao/render/scene/material_table.cpp "m_packs.push_back(pack(desc));"}}
@@ -105,7 +105,13 @@ from its R channel, for the ambient terms), since a path tracer needs no baked o
 
 {{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
-{{figure materials-pack-matrow "Conceptual byte map of one 48-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
+Row 3 holds the alpha mode (as a float), the alpha cutoff, the opacity and the base
+colour's alpha. They are plain floats, read by the G-buffer's alpha-tested variant, the
+path tracer's any-hit shader and the transparent pass:
+
+{{cite ohao/render/scene/material_table.cpp "static_cast<float>(static_cast<uint32_t>(d.alphaMode)), d.alphaCutoff, d.opacity, d.baseAlpha,"}}
+
+{{figure materials-pack-matrow "Conceptual byte map of one 64-byte material row, coloured by lane kind: scalar, bit-cast uint32 texture index, or unused. Lane names read from layout_meta.hpp and material_table.cpp; not a memory capture."}}
 
 :::why
 Interleaving the indices into the float rows keeps a whole material inside one
@@ -114,7 +120,7 @@ uints beside the colours — needs no bit-casting and no NaN/subnormal disciplin
 costs a second descriptor binding per consumer and a second buffer to keep in step.
 It does not save a fetch: the closest-hit already issues three separate loads from the
 table before it decodes a single index. OHAO pays for the one binding with the
-standing rule that four of the twelve lanes are opaque bits.
+standing rule that five of the sixteen lanes are opaque bits.
 :::
 
 ## The constants that are load-bearing, and the ones that are decoration
@@ -132,10 +138,12 @@ every producer uses:
 
 {{cite ohao/render/scene/render_scene_types.hpp "inline constexpr uint32_t kNoTexture = 0xFFFFFFFFu;"}}
 
-Every consumer hardcodes the stride 3 — `matRows[m * 3u + 0u]` in the G-buffer,
-`matID * 3u` in the closest-hit — so the static asserts are a lock, not a
-derivation: editing `kMaterialVec4s` breaks the build on the C++ side instead of
-updating the shader strides, because the strides are in the shaders.
+Every shader consumer takes the stride from `kMaterialRows`, a constant generated from
+`shaders/shared/layout.json` — `matRows[m * kMaterialRows + 0u]` in the G-buffer,
+`matID * kMaterialRows` in the closest-hit. `kMaterialVec4s` repeats that number by hand
+(its comment names `gpu::shared::kMaterialRows`), so the static asserts are a lock, not
+a derivation: editing one without the other breaks the size checks on the C++ side
+only.
 
 ## A header that only looks like padding
 
@@ -232,7 +240,7 @@ that scattered direction. Nothing is out of range, no assertion fires, the pack
 is exactly 80 bytes, and the units are wrong.
 
 :::key
-The static asserts prove that 48 is 48 and 80 is 80. Nothing proves that a lane
+The static asserts prove that 64 is 64 and 80 is 80. Nothing proves that a lane
 still means what its comment says, or that the GLSL copy of a struct still
 matches the C++ one. Every genuine defect in this unit is semantic — a stale
 comment, a re-hardcoded stride, an angle read as a radius — sitting underneath a
@@ -242,7 +250,7 @@ size contract that passes.
 ## Contracts
 
 - A `MaterialDesc` must carry finished bindless indices when it is registered. The table has no second pass that patches texture lanes in, so a texture uploaded after `registerMaterial` never reaches the row.
-- Nothing may do arithmetic on the four index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
+- Nothing may do arithmetic on the five index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.
 - Row 0 is the default material and the fallback for a short material list and a full table. Code that registers materials must not assume a returned handle is distinct from 0.
 - The light-buffer header is written by `LightTable::recordUploads`, whole, whenever the table is dirty. The environment index and intensity live in the table, so a light rebuild keeps them; anything else writing binding 11 would have to reproduce the 16-byte header.
 - The GLSL `GPULight` lives in three hand-maintained raygen copies. `OHAO_ASSERT_GPU_LAYOUT` sees none of them, and no test reflects the SPIR-V.

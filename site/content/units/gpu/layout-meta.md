@@ -21,7 +21,7 @@ pack implies:
 {{cite ohao/gpu/layout_meta.hpp "kMaterialVec4s * sizeof(glm::vec4);"}}
 
 Nor is the header purely declarative: `MaterialGpuPack` adds two constexpr accessors
-for the three-`vec4` material stride and pins them with static asserts against
+for the four-`vec4` material stride and pins them with static asserts against
 hand-computed answers, so an edit to `kMaterialVec4s` fails here rather than in a
 shader.
 
@@ -106,7 +106,7 @@ that keep the range at 16 bytes:
 
 `gbuffer.frag` declares the same four words in the same order:
 
-{{cite shaders/core/gbuffer.frag "layout(push_constant) uniform PushConstants { uint tilesX; uint tilesY; uint pad0; uint pad1; } pc;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "layout(push_constant) uniform PushConstants { uint tilesX; uint tilesY; uint pad0; uint pad1; } pc;"}}
 
 The size assertion pins the C++ struct, not the GLSL block; those two match by hand.
 The SSS constants the shader also needs — the tile size, the header length, the list
@@ -127,7 +127,7 @@ declaration is shared across shaders but not across the language boundary.
 ## One packer, two readers
 
 The material rows are where the deferred and path-traced pipelines meet. The G-buffer
-pass and the path tracer read the same 48-byte rows out of one storage buffer, and
+pass and the path tracer read the same 64-byte rows out of one storage buffer, and
 one function writes them:
 
 {{cite ohao/render/scene/material_table.cpp "d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),"}}
@@ -139,11 +139,11 @@ The size of a row is asserted against `MaterialGpuPack::kBytes`:
 but which float is which lane is not, and each reader restates it in a comment beside
 its own decode — in `gbuffer.frag`:
 
-{{cite shaders/core/gbuffer.frag "vec4 row1 = matRows[m * 3u + 1u];   // roughness, metallic, normalTex, emissiveTex"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec4 row1 = matRows[m * kMaterialRows + 1u];   // roughness, metallic, normalTex, emissiveTex"}}
 
 and in the closest-hit shader:
 
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)"}}
+{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams  = matColorBuf.matColors[matID * kMaterialRows + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)"}}
 
 All three agree today. Because there is a single packer the two pipelines cannot
 disagree about lane order, but the agreement is three hand-written copies of one
@@ -156,7 +156,7 @@ Inside `gbuffer.frag` the "no texture" value is decoded two different ways. Albe
 normal compare against the sentinel; roughness-metallic and emissive compare
 against a magnitude instead:
 
-{{cite shaders/core/gbuffer.frag "    if (roughMetalTexIdx < 4096u) {"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "    if (roughMetalTexIdx < 4096u) {"}}
 
 4096 is not arbitrary — it is the bindless array's capacity as the renderer
 constructs the manager:
@@ -179,8 +179,8 @@ actually bound.
 
 The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
 roughness, metallic, five bindless texture indices (albedo, normal, roughness-metallic,
-emissive, occlusion), an emissive strength and a subsurface strength — ten members packed
-into twelve floats, every lane used.
+emissive, occlusion), an emissive strength, a subsurface strength, the alpha mode, its cutoff, an opacity and
+the base colour's alpha — fourteen members packed into sixteen floats, every lane used.
 
 {{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
@@ -245,7 +245,7 @@ changed meaning, a shader block written against an older struct — passes it.
 - Nothing queries `maxPushConstantsSize`, and the path tracer's block exceeds Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
 - Three structs carry `OHAO_ASSERT_GPU_LAYOUT` (`LightData`, `GPULight`, `PTPushConstants`); `InstanceGpu`, `MeshGpu`, `Vertex`, `CameraUBO` and `DrawPushConstant` are size-checked with a bare `static_assert`. A layout edit must update the C++ struct, its GLSL twin and the assert together.
 - `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; six shaders read the GLSL copy. Only the C++ side is size-checked.
-- `MaterialTable::pack` is the only writer of the three-`vec4` material row; `gbuffer.frag` and `pt_closesthit.rchit` each decode it by hand. The row size is asserted, the lane order is not.
+- `MaterialTable::pack` is the only writer of the four-`vec4` material row; `gbuffer.frag` and `pt_closesthit.rchit` each decode it by hand. The row size is asserted, the lane order is not.
 - `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand; the path tracer's equivalent is a specialisation constant.
 - `Material` in `material.hpp` has no GPU consumer; add a field to `MaterialDesc`, not to `Material`, to reach a shader.
 - `PBRMaterialParams` is guarded only by `sizeof % 16 == 0`. If a shader ever binds it, replace that with an exact-byte `OHAO_ASSERT_GPU_LAYOUT` first.

@@ -144,9 +144,10 @@ be discarded without warning — correct for scene transforms, silent for anythi
 else. The matrix is the instance table's `world`, so a TLAS entry and the raster
 passes' model matrix are the same data.
 
-Instance flags carry exactly one bit:
+Every instance's flags carry this bit, and an instance with an alpha-tested or blended
+material adds `FORCE_NO_OPAQUE` to it:
 
-{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |"}}
 
 No raygen in `shaders/` requests `gl_RayFlagsCullBackFacingTrianglesEXT` or its
 front-facing twin, so the bit changes no behaviour today. What it insures against is

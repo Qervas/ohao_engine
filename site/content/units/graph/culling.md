@@ -39,16 +39,17 @@ The phases are the constants `kCullPhaseEarly`, `kCullPhaseLate` and `kCullPhase
 in `shaders/shared/layout.json`, generated into Slang and C++ alike. Their roles follow
 the two-pass occlusion scheme. A per-draw visibility buffer remembers what the last late
 phase saw. The early phase lists the draws that were visible then and are inside the
-frustum now:
+frustum now (an alpha-tested draw and a blended one are in no G-buffer list: the
+first is drawn by a discard pipeline after the late phase, the second by the forward pass):
 
-{{cite shaders/cull/instances.slang "member = frustum && visibility[i] != 0u && inFrustum;"}}
+{{cite shaders/cull/instances.slang "member = gbuffer && frustum && visibility[i] != 0u && inFrustum;"}}
 
 The early G-buffer pass draws them, and its depth is a good guess at this frame's
 occluders. The late phase then tests every draw against the frustum and a Hi-Z pyramid
 of that depth, records the result for the next frame, and lists only what is visible now
 and was not drawn early:
 
-{{cite shaders/cull/instances.slang "member = visible && !drawnEarly;"}}
+{{cite shaders/cull/instances.slang "member = gbuffer && visible && !drawnEarly;"}}
 
 A draw drawn early is never drawn again, and a draw that came into view this frame (or
 was disoccluded) is drawn late, so every visible draw is drawn exactly once. The G-buffer

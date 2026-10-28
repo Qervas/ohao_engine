@@ -22,7 +22,6 @@
 #include "runtime/click_capture.hpp"
 #include "runtime/audio_player.hpp"
 #include "runtime/clock.hpp"
-#include "runtime/combat_fx.hpp"
 #include "runtime/frame_capture.hpp"
 #include "runtime/frame_log.hpp"
 #include "runtime/image.hpp"
@@ -656,96 +655,6 @@ static void sp2b_t14_stats_are_medians_per_pass_in_registry_order() {
     CHECK(close, "each pass's median over the frames that ran it (bloom: two frames)");
 }
 
-// ---- sub-project 9, step 3: particles from combat (runtime/combat_fx.hpp) -------------------------
-
-static void sp9_t21_particles_from_events() {
-    using K = ecs::CombatEvent::Kind;
-    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
-    ecs::CombatEvent shot;
-    shot.kind = K::Shot;
-    shot.sourceId = player;
-    shot.point = {0.0f, 1.62f, 0.0f};    // the eye
-    shot.normal = {0.0f, 0.0f, -1.0f};   // the round's direction
-    const glm::vec3 muzzle(0.1f, 1.5f, -0.2f);
-    auto out = particlesFor(shot, player, muzzle);
-    CHECK(out.size() == 1 && out[0].type == ParticleType::MUZZLE_FLASH && out[0].position == muzzle &&
-              out[0].direction == shot.normal,
-          "the player's round: a muzzle burst at its drawn muzzle, along the round");
-    shot.sourceId = enemy;
-    out = particlesFor(shot, player, muzzle);
-    CHECK(out.size() == 1 && out[0].position == shot.point, "an enemy's: at its eye");
-    ecs::CombatEvent hit;
-    hit.kind = K::Hit;
-    hit.point = {1.0f, 1.0f, -5.0f};
-    hit.normal = {0.0f, 0.0f, 1.0f};
-    std::vector<glm::vec4> dustColours;
-    for (const char* surface : {"concrete", "metal", "wood", ""}) {
-        hit.surface = surface;
-        out = particlesFor(hit, player, muzzle);
-        CHECK(out.size() == 2 && out[0].type == ParticleType::IMPACT_SPARK && out[0].position == hit.point &&
-                  out[0].direction == hit.normal,
-              std::string("a hit on '") + surface + "': sparks along the normal");
-        if (out.size() == 2) dustColours.push_back(out[1].colorStart);
-    }
-    CHECK(dustColours.size() == 4 && dustColours[0] != dustColours[2] && dustColours[0] != dustColours[3] &&
-              dustColours[1] != dustColours[0],
-          "and a puff by its surface (concrete, metal, wood, default each their own)");
-    for (const K quiet : {K::Damage, K::Death, K::Reload, K::Reloaded, K::RoundStart, K::Restart, K::Win}) {
-        ecs::CombatEvent e;
-        e.kind = quiet;
-        CHECK(particlesFor(e, player, muzzle).empty(), "nothing else emits");
-    }
-
-    // A real fight: emits only while realtime; the player's burst at its muzzle light.
-    ecs::World w;
-    ecs::FileAssetResolver files(OHAO_SOURCE_DIR);
-    w.seedIds(5);
-    ecs::installPhysics(w, files);
-    ecs::installCombat(w);
-    const entt::entity p = w.createWithId(player, "Player");
-    w.registry().emplace<ecs::PlayerController>(p);
-    w.registry().emplace<ecs::Health>(p);
-    ecs::Weapon steady;
-    steady.spreadDeg = 0.0f;
-    steady.recoilPitchDeg = 0.0f;
-    steady.recoilYawDeg = 0.0f;
-    w.registry().emplace<ecs::Weapon>(p, steady);
-    const entt::entity head = w.create("Head", ecs::Transform{{0.0f, 1.62f, 0.0f}});
-    w.setParent(head, p);
-    w.registry().emplace<ecs::Camera>(head, ecs::Camera{75.0f, 0.05f, 100.0f, true});
-    const entt::entity m = w.create("Muzzle", ecs::Transform{{0.2f, -0.2f, -0.5f}});
-    w.setParent(m, head);
-    w.registry().emplace<ecs::Light>(m);
-    w.registry().emplace<ecs::Muzzle>(m);
-    const entt::entity wall = w.create("Wall", ecs::Transform{{0.0f, 1.0f, -6.0f}});
-    w.registry().emplace<ecs::Collider>(wall, ecs::Collider{ecs::ColliderShape::Box, {5.0f, 3.0f, 0.2f}, glm::vec3(0.0f), false, "metal"});
-    w.sync();
-    CombatFx fx;
-    (void)fx.collect(w, true);   // starts at the log's end
-    const auto fire = [&](bool down) {
-        InputEvent e;
-        e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
-        e.name = "fire";
-        const std::vector<InputEvent> events{e};
-        w.stepInput(events);
-        w.update(1.0f / 60.0f);
-    };
-    fire(true);
-    fire(false);
-    CHECK(fx.collect(w, false).empty(), "lockstep (not realtime): nothing emitted");
-    for (int i = 0; i < 12; ++i) fire(i % 2 == 0);   // the next round, past the cooldown
-    const auto live = fx.collect(w, true);
-    const glm::vec3 muzzleAt(w.registry().get<ecs::WorldTransform>(m).world[3]);
-    bool burst = false, sparks = false;
-    for (const auto& c : live) {
-        burst = burst || (c.type == ParticleType::MUZZLE_FLASH && glm::length(c.position - muzzleAt) < 1e-5f);
-        sparks = sparks || c.type == ParticleType::IMPACT_SPARK;
-    }
-    std::printf("\n      realtime: %zu emits", live.size());
-    CHECK(burst, "realtime: the burst at the player's muzzle light");
-    CHECK(sparks, "and the round's sparks on the wall");
-}
-
 // ---- sub-project 11, step 3: the audio player (runtime/audio_player.hpp) ---------------------------
 
 namespace t29 {
@@ -923,7 +832,6 @@ static void sp7_fx_the_capturing_click_never_fires() {
 
 int main() {
     std::printf("[combat sounds, capturing click]\n");
-    RUN(sp9_t21_particles_from_events);
     RUN(sp7_fx_the_capturing_click_never_fires);
     RUN(t29_player_clock);
     RUN(t29_preloaded);

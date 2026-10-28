@@ -45,7 +45,7 @@ Both are Slang: `trace` in `rt/gi_trace.slang`, and three entry points in
 binding numbers and descriptor set layout. All four load into plain compute
 pipelines through the helper RT GI shares with RT shadows in `rt_compute.cpp`:
 
-{{cite ohao/render/rt/rt_gi_technique.cpp "return rtc::createComputePipeline(m_device, "rt_gi_trace.slang.spv", "trace", m_traceSetLayout,"}}
+{{cite ohao/render/rt/rt_gi_technique.cpp "return rtc::createComputePipeline(m_device, "rt_gi_trace.slang.spv", "trace", traceSets,"}}
 
 ## The estimator, and where the albedo goes
 
@@ -339,10 +339,12 @@ nothing lights it, so it takes no GI either, and its guide reads as sky.
 
 The trace queries with ray mask `kRayMaskScene`: every visible scene instance, neither
 hidden ones (mask 0) nor light emitter meshes, so a bounce never reaches a light's mesh and
-adds the light a second time (hybrid/visibility). The query is forced opaque, so an alpha-masked surface is a solid bounce
-surface.
+adds the light a second time (hybrid/visibility). The query is not forced opaque: a
+candidate from an alpha-tested or blended instance is committed only where
+`rt/alpha_test.slang` says it is hit, so a cutout bounces only where it has material and a
+blended surface bounces nothing.
 
-{{cite shaders/rt/gi_trace.slang "RayQuery<RAY_FLAG_FORCE_OPAQUE> q;"}}
+{{cite shaders/rt/gi_trace.slang "RayQuery<RAY_FLAG_NONE> q;"}}
 
 The bounce albedo travels on `InstanceDesc` (default 0.73 grey); nothing derives it
 from the hit's material or texture, so a textured wall bounces one flat colour.

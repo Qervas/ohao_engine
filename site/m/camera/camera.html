@@ -62,7 +62,7 @@ $$</div>
 <p>No renderer reads the basis through these accessors either — it round-trips through the view matrix. `glm::lookAt` packs the three axes into the rotation block:</p>
 <div class="citation-chip"><code class="citation-code">viewMatrix = glm::lookAt(position, position + front, up);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:41</a></div>
 <p>and the path tracer&#x27;s raygen pulls them straight back out of the inverse, column by column, to build the pinhole ray:</p>
-<div class="citation-chip"><code class="citation-code">vec3 fwd = -vec3(pc.invView[2]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L155" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:155</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 fwd = -vec3(pc.invView[2]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L161" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:161</a></div>
 <p>So the accessors are a gameplay convenience; the vectors they expose are what the renderer actually consumes.</p>
 </div>
 <div class="section-rule"><h2 id="two-projections-from-one-camera">Two projections from one camera</h2></div>
@@ -70,7 +70,7 @@ $$</div>
 <p>`updateVectors` builds a projection matrix from the camera&#x27;s own fov, aspect, near and far:</p>
 <div class="citation-chip"><code class="citation-code">projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L44" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:44</a></div>
 <p>Exactly one of the two pipelines uses it. The deferred renderer takes it verbatim and applies the Vulkan Y-flip downstream, in `setCameraData`, not in the camera:</p>
-<div class="citation-chip"><code class="citation-code">m_proj[1][1] *= -1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L765" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:765</a></div>
+<div class="citation-chip"><code class="citation-code">m_proj[1][1] *= -1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L758" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:758</a></div>
 <p>The path tracer throws the matrix away and rebuilds one from the camera&#x27;s *fov only*, with the framebuffer&#x27;s true aspect and a far plane of 1000, unflipped because the raygen negates Y itself when forming the ray:</p>
 <div class="citation-chip"><code class="citation-code">glm::mat4 ptProj = glm::perspective(glm::radians(m_camera-&gt;getFov()), aspect, 0.1f, 1000.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L378" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:378</a></div>
 <p>`cornell_box`&#x27;s `camera.setFov(38.0f)` is therefore honoured by both: the path tracer reads the fov and nothing else, the deferred rasteriser reads the whole matrix.</p>
@@ -88,7 +88,7 @@ $$</div>
 P_{22} = \frac{1}{\tan(\phi/2)} \quad\Longrightarrow\quad \left(P^{-1}\right)_{22} = \tan(\phi/2)
 $$</div>
 <p>GLSL addresses that same element as the 0-indexed `[1][1]` of a column-major `mat4`, and that is the one the raygen reads. $P_{11}$, and the aspect baked into it, is never touched:</p>
-<div class="citation-chip"><code class="citation-code">float tanFovY = abs(pc.invProj[1][1]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L160" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:160</a></div>
+<div class="citation-chip"><code class="citation-code">float tanFovY = abs(pc.invProj[1][1]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L166" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:166</a></div>
 </div>
 <div class="section-rule"><h2 id="the-near-plane-is-twice-what-it-says">The near plane is twice what it says</h2></div>
 <div class="prose reveal">
@@ -97,7 +97,7 @@ $$</div>
 z_{\text{eye}} = \frac{2fn}{f+n}
 $$</div>
 <p>the harmonic mean of the near and far distances — with the camera&#x27;s permanent $n = 0.1$, $f = 100$ that is 0.1998. The GBuffer pipeline runs with depth clamping off, so that slab is clipped rather than flattened:</p>
-<div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_FALSE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L747" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:747</a></div>
+<div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_FALSE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L766" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:766</a></div>
 <p>The deferred pipeline&#x27;s effective near plane is therefore twice its nominal one, and the depth buffer only ever receives the outer half of GL&#x27;s depth mapping. CSM escapes: it is the single raster pipeline in the engine that enables depth clamp, so its slab is flattened rather than clipped:</p>
 <div class="citation-chip"><code class="citation-code">rasterizer.depthClampEnable = VK_TRUE; // Clamp depth to [0, 1]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L442" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:442</a></div>
 <p>Worse, the scalars travelling beside the matrix disagree with it. `renderDeferred` announces a 0.1–1000 range while handing over a matrix that ends at 100:</p>

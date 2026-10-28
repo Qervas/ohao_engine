@@ -76,7 +76,7 @@
 <p>The push block is a single `mat4`, 64 bytes, half the push-constant size every Vulkan device guarantees, and the C++ mirror pins that size:</p>
 <div class="citation-chip"><code class="citation-code">static_assert(sizeof(ShadowPushConstant) == 64);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.hpp#L121" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.hpp:121</a></div>
 <p>The renderer does not draw the cascades at all in a frame that traces: the `csm` pass is added to the graph only when RT shadows do not run.</p>
-<div class="citation-chip"><code class="citation-code">if (m_csmPass &amp;&amp; !rtShadows) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L302" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:302</a></div>
+<div class="citation-chip"><code class="citation-code">if (m_csmPass &amp;&amp; !rtShadows) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L303" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:303</a></div>
 </div>
 <div class="section-rule"><h2 id="the-host-s-shadow-fields-no-shader-reads">The host&#x27;s shadow fields no shader reads</h2></div>
 <div class="prose reveal">

@@ -117,7 +117,7 @@ inverses. They never have to be, because the shared encoder has no callers at
 all. The GBuffer pass carries its own private copy of the projection and applies
 the range remap itself, at the call site:
 
-{{cite shaders/core/gbuffer.frag "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
 `math.glsl` then supplies a *third* implementation, `octEncode`/`octDecode`,
 which is the only self-consistent $[0,1]$ pair in the tree and has zero callers.
@@ -184,11 +184,11 @@ glob compiles only stage files, and no stage file includes it.
 {{cite shaders/includes/common/encoding.glsl "// Used by: ssgi, volumetric_scatter"}}
 
 There is no shared noise or hash header at all. The shaders that need
-pseudo-randomness each roll their own: `particle_emit.comp` an integer
-bit-mixer, `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familiar
+pseudo-randomness each roll their own: `pt_anyhit.rahit` an integer
+bit-mixer (PCG), `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familiar
 `fract`-of-products shape.
 
-{{cite shaders/particles/particle_emit.comp "uint hash(uint x) {"}}
+{{cite shaders/rt/pt_anyhit.rahit "uint pcg(uint v) {"}}
 
 {{cite shaders/postprocess/sky.frag "p = fract(p * vec2(123.34, 456.21));"}}
 

@@ -11,7 +11,7 @@ standard: v2
 settles the character of the whole pipeline: it stores the interpolated **world
 position**, verbatim, with metallic in alpha.
 
-{{cite shaders/core/gbuffer.frag "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
 
 The lighting pass reads it straight back and never touches the depth buffer.
 
@@ -48,7 +48,7 @@ and `reconstruction.glsl`, the depth-to-position helper, now has no includer at 
 
 Normals are octahedron-encoded to two channels and then remapped into $[0,1]$.
 
-{{cite shaders/core/gbuffer.frag "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
 That remap is a UNORM convention, left from when the target was
 `R10G10B10A2_UNORM` and could not hold negatives. The allocator's comment still
@@ -95,7 +95,7 @@ Nothing does arithmetic on the lane, so the pattern survives intact — but the 
 "no texture" tests are not the same test. Albedo and normal compare against the
 sentinel; rough/metal and emissive compare against the array capacity.
 
-{{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}}
 
 4096 is the descriptor count the renderer asks `BindlessTextureManager` for at
 init — the value that becomes the variable-length array's `descriptorCount` — so
@@ -115,7 +115,7 @@ the emissive texture's colour (sRGB-decoded by the bindless sampler) times the
 material's emissive strength, the same radiance the path tracer's closest-hit shader
 emits:
 
-{{cite shaders/core/gbuffer.frag "emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;"}}
 
 {{cite shaders/rt/pt_closesthit.rchit "emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb * matParams2.y;"}}
 
@@ -139,7 +139,7 @@ regardless of what the source asset's emissive factor said.
 
 The motion vector is the raw NDC difference, halved, with no vertical flip.
 
-{{cite shaders/core/gbuffer.frag "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
 
 Vulkan's NDC y points down, the same direction as texture v, so
 $uv = 0.5\,ndc + 0.5$ in both axes and the halved difference *is* the UV delta

@@ -141,7 +141,7 @@ and no decode appears in the shader:
 An untextured material is therefore its base colour, once, in the path tracer as in the
 G-buffer, which computes the same product and ignores the vertex colour:
 
-{{cite shaders/core/gbuffer.frag "albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;"}}
 
 No per-material fallback texture is created for it: `modelMaterials` uploads only the
 textures the model carries, and row 2 of the material table has no texture slot beyond
@@ -169,11 +169,13 @@ The images carry mip chains for the raster passes' benefit and the path tracer n
 reads them, so minification aliasing is a real source of noise on high-frequency
 textures; it is not something sampler state can recover.
 
-The alpha test is inert. The any-hit shader samples the albedo alpha and ignores
-intersections below 0.5, but every BLAS geometry is built opaque and every `traceRayEXT`
-in the raygens passes `gl_RayFlagsOpaqueEXT`, so the pipeline never invokes it.
+The alpha test is opt-in. The any-hit shader multiplies the material's alpha by the albedo
+texture's alpha and ignores intersections below the material's cutoff, but every BLAS
+geometry is built opaque and the raygens add `gl_RayFlagsOpaqueEXT` to every
+`traceRayEXT` unless the scene has an instance with an alpha material. Such an instance
+is given `FORCE_NO_OPAQUE` in the TLAS, so only its triangles invoke the shader.
 
-{{cite shaders/rt/pt_anyhit.rahit "ignoreIntersectionEXT;"}}
+{{cite shaders/rt/pt_anyhit.rahit "if (alpha < alphaRow.y) ignoreIntersectionEXT;"}}
 
 ## What an edit costs, and the one word RT GI still needs
 

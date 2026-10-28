@@ -152,27 +152,27 @@ bias that changes every frame.
 
 ## The half of the frame the graph never sees
 
-{{figure deferred-orchestrator-frame-schedule "Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; sky and particles write the lighting image before SSS blurs it in place."}}
+{{figure deferred-orchestrator-frame-schedule "Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; the sky writes the lighting image before SSS blurs it in place."}}
 
-After `m_renderGraph.execute(cmd)` returns, sky, particles, SSS, SSR, post-processing
-and gizmos are recorded directly, each rolling its own barriers. `SSSPass` blurs the
+After `m_renderGraph.execute(cmd)` returns, sky, the effects' compute (`vfx.expand`,
+`vfx.sort`), SSS, SSR, the transparent pass, post-processing and gizmos are recorded directly, each rolling its own barriers. `SSSPass` blurs the
 skin tiles of the lit image *in place*, and SSR traces that same image at half
 resolution, so post-processing always reads the lighting output:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(), m_lightingPass->getOutputImage());"}}
 
-Sky and particles still come first. Both draw into the lighting image, and SSS's blur
-and SSR's reflections should see what they drew: an SSS pass recorded before the sky
+The sky still comes first. It draws into the lighting image, and SSS's blur
+and SSR's reflections should see what it drew: an SSS pass recorded before the sky
 would blur skin edges against a black background, and SSR would reflect none. Since
 `deferred_lighting.frag` sets `outColor = vec4(0.0)` wherever the GBuffer position
 sample is exactly zero, and `sky.frag` fills whatever the GBuffer left at far depth
 (it discards every depth below the cleared 1.0), the sky pass is the whole sky, and until it runs the
-background those taps and hits would read is black. Both write through render passes as colour
-attachments, which no compute read is ordered against, so when either ran a memory
+background those taps and hits would read is black. The sky writes through a render pass as a colour
+attachment, which no compute read is ordered against, so when it ran a memory
 barrier from colour-attachment output to the compute and fragment stages comes
 before SSS:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "// Sky and particles drew into the lit image as a color attachment; SSS (compute), SSR"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "// Sky drew into the lit image as a color attachment; SSS (compute), SSR and post sample"}}
 
 `onResize` keeps every screen-sized target at the output extent — the GBuffer,
 lighting, post, gizmo, sky, SSS, SSR and both RT techniques.
@@ -213,17 +213,15 @@ GI.
 {{cite ohao/render/deferred/deferred_lighting_pass.cpp "m_params.flags |= 32;"}}
 
 Two clocks feed the passes, and neither depends on any pass running. `m_totalTime`
-advances by the frame's delta on every frame, outside the particle block; the sky
-pass takes it as a star seed, and the particle pass compares it against the end of
-the last emit's longest lifetime to decide whether to run at all. The RT passes
+advances by the frame's delta on every frame; the sky
+pass takes it as a star seed. The RT passes
 are seeded instead by a frame counter, `m_framesSinceReset`, taken once per
 `render()` and handed to both RT shadows and RT GI with the render seed; TAA's jitter
 reads the same counter before it advances:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "const uint32_t rtFrame = m_framesSinceReset++;"}}
 
-`resetTemporalState` zeroes both clocks, keeps a pending particle lifetime by moving
-it onto the restarted clock, and drops RT shadows', RT GI's, TAA's and GPU culling's
+`resetTemporalState` zeroes both clocks and drops RT shadows', RT GI's, TAA's and GPU culling's
 history, so frame *k* after a reset traces the same rays, takes the same jitter and draws
 the same lists in every run with the same seed (the first frame's early pass draws
 nothing, its late pass everything visible). It records nothing and waits for nothing: it only marks state. The next frame's
@@ -238,8 +236,6 @@ stages alone:
 Commands on one queue are ordered by submission, so a barrier in a later submission waits
 for those stages of every earlier one; no device idle is needed.
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock"}}
-
 :::key
 `RenderGraph` here is a barrier calculator, not a scheduler and not a resource manager.
 Pass order, lifetimes and every barrier outside the eight graph passes are hand-written.
@@ -251,7 +247,7 @@ Pass order, lifetimes and every barrier outside the eight graph passes are hand-
 - A tracked texture read by two graph passes in a row gets a second barrier with `oldLayout = UNDEFINED` and `TOP_OF_PIPE` as its source: `currentLayout` is never refreshed during compilation.
 - `setRTShadowMask` and `setSSGITexture` must be called before `DeferredLightingPass::execute` records, which happens only if the RT passes are added to the graph ahead of lighting. A view handed over after lighting recorded is cleared again before the next frame's graph runs.
 - `frameIndex` must be the slot whose fence `VulkanRenderer` just waited: it selects the per-slot descriptor set each pass rewrites.
-- SSS blurs the lighting HDR image in place and SSR reads it, so anything drawn into it after them reaches the tonemapper but is neither blurred nor reflected. Sky and particles are recorded before both for that reason, followed by the colour-attachment-to-compute barrier; a new pass drawing into the lit image belongs in the same place.
+- SSS blurs the lighting HDR image in place and SSR reads it, so anything drawn into it after them reaches the tonemapper but is neither blurred nor reflected. The sky is recorded before both for that reason, followed by the colour-attachment-to-compute barrier; the transparent pass (blended surfaces and effects) is recorded after SSR on purpose, so a reflection never shows what stands in front of the mirror. A new pass drawing into the lit image belongs in one of those two places.
 - `importGraphTextures()` must run after any pass reallocates its images, or the graph holds destroyed `VkImage` handles.
 - `frameIndex` is a ring index of period 3, not a monotonic counter. Anything that needs a sequence (TAA's jitter, the RT seeds) takes `m_framesSinceReset`.
 - `resetTemporalState` must stay free of GPU waits and recorded work. A pass that clears history images does it in its next `execute`, behind a barrier whose source stages cover every earlier frame's use of them.

@@ -40,7 +40,7 @@ G-buffer's octahedral normal with its own copy of the decoder, which undoes the
 
 {{cite shaders/compute/ssao.slang "const float2 f = e * 2.0 - 1.0;"}}
 
-{{cite shaders/core/gbuffer.frag "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
 The shared GLSL encoder of the same name in `includes/common/encoding.glsl` returns
 [-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only

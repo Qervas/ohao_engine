@@ -47,7 +47,7 @@ hemisphere outward, turning any direction on the sphere into two numbers in
 [-1, 1] with no seam and near-uniform angular density. The G-buffer writes it
 biased into [0, 1] alongside two unrelated scalars:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
 
 At 16 bits per channel the encoding buys almost no precision over storing
 `N.xyz` directly — half-float already resolves a normal component far below the
@@ -59,7 +59,7 @@ it carries the subsurface strength, signed: a material with a `subsurface` stren
 `max(-w, 0)`. The positive half holds the emissive luminance, only so that an emissive
 surface takes no subsurface:
 
-{{cite shaders/core/gbuffer.frag "const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "const float subsurface = emissiveLuminance > 0.0 ? 0.0 : row2.z;"}}
 
 Emission itself has its own attachment, the sixth: the emissive texture's colour times
 the material's emissive strength, exactly what the path tracer's hit emits, which
@@ -71,7 +71,7 @@ A light's emitter mesh (the sphere or rectangle the `RenderScene` draws for a po
 or area light) writes its radiance there with alpha 1, from its instance rather than a
 material, black on its back side:
 
-{{cite shaders/core/gbuffer.frag "const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);"}}
 
 Lighting then outputs that radiance and nothing else, with no environment specular and a
 zero reflection weight, so SSR leaves the pixel alone; SSR also treats a march that lands
@@ -85,7 +85,7 @@ luminance against the path tracer's 0.367); with the attachment it is cyan, at 0
 
 Roughness is floored before storage:
 
-{{cite shaders/core/gbuffer.frag "roughness = max(roughness, 0.04);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "roughness = max(roughness, 0.04);"}}
 
 `initBRDFSurface` applies the same floor again, but only to the copy it owns:
 
@@ -118,7 +118,7 @@ fade, which it can move by at most 4%.
 GBuffer0 stores the interpolated world position outright rather than making
 consumers reconstruct it from depth:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer0 = vec4(fragWorldPos, metallic);"}}
 
 :::why
 Reconstruction from `D32_SFLOAT` plus an inverse view-projection is the standard
@@ -192,7 +192,7 @@ through the world origin is already misclassified today.
 The vertex stage carries two clip positions; the fragment stage differences them
 into a screen-space UV delta:
 
-{{cite shaders/core/gbuffer.frag "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outVelocity = (currentNDC - prevNDC) * 0.5;"}}
 
 The previous position is the vertex pushed through the instance's *previous* world
 matrix and the previous frame's view-projection, both read on the GPU:
@@ -309,7 +309,7 @@ glTF loader says otherwise, from Assimp's `TWOSIDED` key (glTF's `doubleSided`, 
 unless set); scene-file, OBJ and FBX materials stay double-sided. The culled pipeline
 takes counter-clockwise triangles as front faces, glTF's convention:
 
-{{cite ohao/render/deferred/gbuffer_pass.cpp "rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;"}}
+{{cite ohao/render/deferred/gbuffer_pass.cpp "// One-sided materials: back faces culled. Front faces are counter-clockwise as the"}}
 
 `cull_parity_gpu_test` renders closed boxes with one-sided and with double-sided
 materials and finds the images identical: the faces culled were hidden anyway.
@@ -322,7 +322,7 @@ owned by the pass, and appends the tile to the vertical blur's list the first ti
 it also flags the `kSSSRadiusTiles` (two) tile rows above and below for the
 horizontal blur, whose output the vertical one reads:
 
-{{cite shaders/core/gbuffer.frag "void flagSkin(uvec2 pixel) {"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "void flagSkin(uvec2 pixel) {"}}
 
 A plain read comes before the atomic, so most fragments of a tile already flagged
 take no atomic at all. Hidden fragments should not flag, so the shader declares early
@@ -332,7 +332,7 @@ a skin fragment drawn before the surface that later covers it still flags its ti
 which costs the blur a tile of work and changes no pixel, since the blur only acts
 where the final normal `w` is negative.
 
-{{cite shaders/core/gbuffer.frag "layout(early_fragment_tests) in;"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "layout(early_fragment_tests) in;"}}
 
 `execute()` resets the buffer before the render pass every frame — two empty
 indirect dispatches in the header, the tile mask zeroed for the frame's tile count —
@@ -380,7 +380,7 @@ and nobody holds a stale one only because nobody holds one at all.
 - The normal target's `w` is signed: emissive luminance when positive, minus the subsurface strength when negative. Every reader must clamp it to the half it means (`max(w, 0)` in lighting, `max(-w, 0)` in SSS).
 - The SSS tile buffer is one buffer shared by every frame in flight, reset by a transfer each frame; the barrier in `resetSSSTiles` orders that reset after the previous frame's SSS reads only because both are recorded on the same queue.
 - The only per-draw state is `firstInstance`, the draw's index in `RenderScene`'s draw table; the draw record gives the instance slot and the material slot, and the instance gives its material list, so the pass is only as correct as the draw table `RenderScene` uploads.
-- Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
+- Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}} — matching `BindlessTextureManager`'s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.
 - Back faces are culled only for one-sided materials, with counter-clockwise front faces. A one-sided material on a mesh wound the other way renders inside out; materials that never state their sidedness stay double-sided (`VK_CULL_MODE_NONE`).
 - The early and late render passes must stay compatible — the same attachments, formats, sample counts and subpass dependencies — because they share the framebuffer and the pipelines. A dependency added to one must be added to both.
 - `execute()` begins both render passes, and so performs all five clears, every frame — with no scene bound only the culling and the draws are skipped. Lighting, sky, SSR and TAA all sample these attachments; the clears are what make an empty frame defined, all-background rather than whatever memory held. {{cite ohao/render/deferred/gbuffer_pass.cpp "// Always run both render passes, scene or not: the early one's clears are what every"}}

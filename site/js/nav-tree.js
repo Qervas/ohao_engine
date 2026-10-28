@@ -492,11 +492,6 @@ window.OHAO_NAV_TREE = [
         "href": "m/shaders/core-gbuffer-lighting.html"
       },
       {
-        "id": "shaders/particles-sh",
-        "title": "Particle shaders",
-        "href": "m/shaders/particles-sh.html"
-      },
-      {
         "id": "shaders/overlay-gizmo",
         "title": "Overlay gizmo shaders",
         "href": "m/shaders/overlay-gizmo.html"
@@ -544,11 +539,6 @@ window.OHAO_NAV_TREE = [
         "id": "graph/async-compute",
         "title": "Async compute queue",
         "href": "m/graph/async-compute.html"
-      },
-      {
-        "id": "graph/particles",
-        "title": "Particle system",
-        "href": "m/graph/particles.html"
       },
       {
         "id": "graph/culling",

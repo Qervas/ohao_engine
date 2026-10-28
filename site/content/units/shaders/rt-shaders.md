@@ -59,38 +59,41 @@ grain back inside.
 
 {{cite shaders/rt/pt_miss.rmiss "payload.color = vec3(0.0);"}}
 
-## An any-hit shader that cannot run
+## An any-hit shader that runs only when a material asks
 
-`pt_anyhit.rahit` is a textbook alpha test — interpolate the UV, sample the
-bindless diffuse texture, drop the intersection below 0.5.
+`pt_anyhit.rahit` is an alpha test — read the material's alpha row, interpolate the UV,
+multiply the diffuse texture's alpha in, and drop the intersection below the cutoff
+(alpha-tested materials) or by a stochastic test against the alpha (blended ones).
 
-{{cite shaders/rt/pt_anyhit.rahit "ignoreIntersectionEXT;"}}
+{{cite shaders/rt/pt_anyhit.rahit "if (alpha < alphaRow.y) ignoreIntersectionEXT;"}}
 
-It is compiled, linked into the hit group, and never executed. Every
-`traceRayEXT` site in both profile raygens — nine offline, fourteen realtime —
-passes `gl_RayFlagsOpaqueEXT`, and both BLAS
-builders in `rt_acceleration_structure.cpp` stamp `VK_GEOMETRY_OPAQUE_BIT_KHR` on
-the geometry; either alone suppresses any-hit. The hybrid shadow trace has no hit
-shaders at all: it is a compute pass of inline ray queries, and its query forces
-opacity too and ends on the first hit.
+Most scenes never run it. Both BLAS builders in `rt_acceleration_structure.cpp` stamp
+`VK_GEOMETRY_OPAQUE_BIT_KHR` on the geometry, and the raygens trace through a macro that
+adds `gl_RayFlagsOpaqueEXT` to every ray, which suppresses any-hit, unless the scene's
+light header says an instance has an alpha material:
 
-{{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
+{{cite shaders/rt/pt_raygen.rgen "#define OHAO_RAY_OPAQUE (lightBuf.alphaRays == 1u ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT)"}}
+
+Every `traceRayEXT` site in both profile raygens — nine offline, fourteen realtime —
+goes through it. `RenderScene` sets the TLAS instance of an alpha-tested or blended
+material to `VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR`, which overrides the BLAS bit
+for that instance only, and an instance whose materials are all blended gets its own mask
+that camera rays alone see. A scene with no alpha material traces exactly as before alpha
+modes existed. The hybrid shadow trace has no hit shaders at all: it is a compute pass of
+inline ray queries that ends on the first hit, and for a non-opaque candidate it asks
+`rt/alpha_test.slang` whether the triangle counts before committing it.
+
+{{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
 
 Its visibility is the query's committed status — lit when nothing was committed:
 
 {{cite shaders/rt/shadow_trace.slang "return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;"}}
 
-The dead any-hit costs nothing, but the alpha cutout the path tracer is documented
-to support is inert everywhere, not only in shadow: the flag sits on the primary
-camera ray and on both indirect-chain bounce rays too, and the BLAS bit belongs to
-the geometry rather than to a ray type. A foliage or hair card is a solid quad to
-camera, GI and shadow rays alike.
-
 :::key
 Occlusion is signalled by the *absence* of a hit — the path tracer's miss shader
-running, the shadow query committing nothing — not by any hit shader. That is why
-the any-hit program can be dead without shadows breaking — and why alpha cutout is
-silently dead with it.
+running, the shadow query committing nothing — not by any hit shader. An alpha cutout
+works by making a hit disappear (`ignoreIntersectionEXT`, or a candidate the query never
+commits), which is why it needs the ray to be non-opaque in the first place.
 :::
 
 ## What the closest hit decodes, and the 24-bit fuse
@@ -332,5 +335,5 @@ translation unit, `ohao/render/rt/denoiser.hpp`, since deleted.
 - Latch any payload field you still need before tracing a shadow ray: the miss shader overwrites `color`, `hitDist` and `envPdf` on every ray, visibility rays included.
 - Binding 11's header sits at fixed byte offsets 0 / 4 / 8 with `GPULight[]` at 16, declared in four shaders and written in one C++ file. Change it in one place and the miss shader reads a light's position as an env-map index.
 - TLAS instances must be added in the order the global index / UV / material-ID arrays are concatenated: `instanceCustomIndex` *is* the triangle base offset, capped at 2²⁴.
-- Alpha-tested geometry is opaque to camera, GI and shadow rays alike — suppressed by `gl_RayFlagsOpaqueEXT` (`RAY_FLAG_FORCE_OPAQUE` in the Slang ray queries) at every call site *and* by `VK_GEOMETRY_OPAQUE_BIT_KHR` in the BLAS. Removing one does not revive it.
+- Alpha-tested and blended geometry reaches a ray only while the scene has an instance with such a material: the raygens' `OHAO_RAY_OPAQUE` drops `gl_RayFlagsOpaqueEXT` only then, and the TLAS instance carries `FORCE_NO_OPAQUE` over the BLAS's `VK_GEOMETRY_OPAQUE_BIT_KHR`. The hybrid ray queries decide through `rt/alpha_test.slang`.
 - Bindings 24/25 are demodulation factors matched to what the raygen already did — diffuse pre-divided, specular not. Demodulate the specular channel without changing `firstHitSpecColor`, or vice versa, and metals double-darken while dielectrics lose their Fresnel.

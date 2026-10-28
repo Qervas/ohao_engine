@@ -20,7 +20,7 @@ A deferred frame runs `scene.upload`, then the culling and G-buffer pairs
 (`cull.instances`, `gbuffer.early`, `hiz.build`, `cull.late`, `gbuffer.late`),
 `lights.cluster`, the screen-space and ray-traced inputs to lighting (`ssao`,
 `rt.shadows` and `rt.shadows.filter` or else `csm`, `rt.gi` and `rt.gi.denoise`),
-`lighting`, `sky`, `particles`, `sss`, `ssr`, the post stack (`post.bloom`, `post.taa`,
+`lighting`, `sky`, `vfx.expand`, `vfx.sort`, `sss`, `ssr`, `transparent`, the post stack (`post.bloom`, `post.taa`,
 `post.tonemap`), `gizmo`, and the way out: `capture.preview` during an inline capture,
 then `present` in a window or `readback` headless. A path-traced frame is
 `scene.upload`, `pt.render` and `pt.present` or `pt.readback`.

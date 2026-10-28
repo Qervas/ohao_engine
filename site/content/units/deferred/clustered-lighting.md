@@ -208,8 +208,7 @@ writes after the previous frame's fragment reads in queue order, is enough:
 ## What does not read the lists
 
 The deferred lighting pass is the lists' only reader. RT GI shades its bounce with its own
-selection, the four brightest lights by intensity, and particles are not lit by scene
-lights at all:
+selection, the four brightest lights by intensity, and the effects' expand pass lights each particle at its centre from the same lists:
 
 {{cite ohao/render/rt/rt_gi_technique.cpp "// The bounce's lights: the brightest by intensity, ties by order, emissive proxies out."}}
 

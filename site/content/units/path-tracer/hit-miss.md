@@ -79,7 +79,7 @@ model cannot reach the fallback either.
 Real meshes therefore get no flip, and every TLAS instance disables triangle
 culling, so a hit from behind keeps its outward normal.
 
-{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;"}}
+{{cite ohao/render/scene/render_scene.cpp "vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |"}}
 
 Nothing goes negative — every NEE branch clamps `N·V` to 0.001 — but `N·L` is
 clamped at zero, so every light on the far side contributes exactly nothing and
@@ -144,7 +144,7 @@ reason.
 The rasteriser has the real thing — a per-vertex tangent with handedness,
 Gram-Schmidt orthogonalised against the shading normal:
 
-{{cite shaders/core/gbuffer.frag "T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));"}}
 
 So one normal map perturbs in a UV-aligned frame under the deferred pipeline and in
 an arbitrary, N-dependent frame under the path tracer. The `mapN.z` component — the
@@ -159,7 +159,7 @@ smuggled through float bit patterns and `0xFFFFFFFF` meaning "none". The id itse
 is not stored per triangle: the triangle's slot is looked up in the slot stream
 and the instance's reference list turns the slot into a material:
 
-{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];"}}
+{{cite shaders/rt/pt_closesthit.rchit "vec4 matParams2 = matColorBuf.matColors[matID * kMaterialRows + 2u];"}}
 
 The texture indices are slots in the one bindless table the G-buffer also reads.
 Albedo and emissive textures live in it as `R8G8B8A8_SRGB`, so the sampler decodes

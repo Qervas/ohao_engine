@@ -182,7 +182,7 @@ light off a gun 20 cm from the camera. The render extract marks every instance u
 
 The draw carries `kDrawViewModel`, and no cascade lists it:
 
-{{cite shaders/cull/instances.slang "member = inFrustum && (d.info.y & (kDrawEmitter | kDrawViewModel)) == 0u;"}}
+{{cite shaders/cull/instances.slang "member = inFrustum && (d.info.y & (kDrawEmitter | kDrawViewModel | kDrawTransparent)) == 0u;"}}
 
 Its TLAS instance gets mask `kTlasMaskViewModel` (4). Only the path tracer's camera rays and a
 near-mirror's first specular ray use `kRayMaskCamera` (7); shadow, GI and bounce rays use
@@ -196,21 +196,21 @@ It is lit like any surface. `light_emitter_gpu_test`'s gun section holds it: the
 more than 24 px from its footprint, while the same box placed in the world at its drawn pose does
 shadow the room.
 
-## Sparks and sounds from the combat log
+## Effects and sounds from the combat log
 
-A window also turns the combat log into particles and audio, beside the footsteps. `CombatFx`
-reads the log by cursor each frame: a round is a muzzle burst at the drawn muzzle (the light below
-the gun, so the burst leaves the gun the player sees), a hit is sparks along the normal and a puff
-by the surface hit (concrete, metal, wood, default):
+The step turns the combat log into effects and audio, beside the footsteps. The `vfx` simulate
+system reads the step's combat events after its last `restart`: a round spawns its muzzle effect at
+the logical muzzle, a hit spawns the effect and decal of the surface it met, and a grenade's
+`explode` its boom, smoke and scorch. What it writes are records, plain data that snapshots carry and
+files and `world.hash` never see:
 
-{{cite ohao/runtime/combat_fx.cpp "return {ParticleSystem::presetImpactSpark(e.point, e.normal), dustFor(surface, e.point, e.normal)};"}}
+{{cite ohao/ecs/vfx.hpp "Records are plain data, runtime only: carried by snapshots (the World's SnapshotHook, chained with"}}
 
-It emits only while the timeline runs, and a lockstep capture turns the window's particles off, so a
-window capture equals a headless one:
+The window does not decide when an effect starts, so a window and a headless capture of the same
+world draw the same effects. The `vfx_draw` sync system hands the records to the `RenderScene` at
+an age counted in steps, with no clock or frame counter:
 
-{{cite ohao/runtime/combat_fx.cpp "if (!realtime) continue;"}}
-
-{{cite ohao/runtime/live_host.cpp "if (deferred) deferred->setParticlesDrawn(false);"}}
+{{cite ohao/ecs/vfx_draw.hpp "Every host installs it (the CLI context, LiveHost), so a window and a headless capture of"}}
 
 What plays is decided in the step by the voice schedule (sub-project 11) from the slice's sound bank,
 which caps the voices; over the cap the quietest at the listener of the lowest priority loses its
@@ -234,13 +234,13 @@ and one wall plays the sound `kOccludedGainDb` (-8 dB) quieter through a low-pas
 
 {{cite ohao/audio/audio_system.hpp "constexpr float kOccludedGainDb = -8.0f;"}}
 
-`runtime_tests`' `sp9_t21_particles_from_events` covers the particles without a window, and
+`vfx_tests` cover the effects without a window, and
 `audio_schedule_tests`' `t28_rules_moved` the sounds without a device.
 
 :::why
 Each piece here changes what the player sees and nothing the world is. The lead, the gun's remap and
-motion, the particles and the sounds are all presentation: `RenderPose`, a renderer's emitter list, an
-audio voice. None enters a step, `world.hash`, a file or a snapshot. That is what lets the feel work
+motion, the effects and the sounds are all presentation: `RenderPose`, an effect record, an
+audio voice. None enters `world.hash` or a file. That is what lets the feel work
 land without touching the determinism contract: a lockstep window, a headless capture and an agent's
 replay still agree bit for bit, because every one of them draws the step's world at rest.
 :::
@@ -255,10 +255,11 @@ cascade, GI or bounce ray. Particles and sounds come from the combat log, in a r
 
 ## Contracts
 
-- The look lead, the gun's motion, particles and sounds are presentation only: never `Transform`,
-  `world.hash`, a saved file or a snapshot.
-- A frame with `presentationDt` 0 (lockstep, headless, every capture) draws the gun at rest and no
-  particles.
+- The look lead, the gun's motion, effects and sounds are presentation only: never `Transform`,
+  `world.hash` or a saved file. (Effect records and the voice schedule ride in snapshots; the look
+  lead and the gun's pose do not.)
+- A frame with `presentationDt` 0 (lockstep, headless, every capture) draws the gun at rest; the
+  effects it draws are those of the step's records, the same in every host.
 - A new ray that should not see the gun passes `kRayMaskScene`; a new shadow pass must skip
   `kDrawViewModel` draws, as the CSM cascades do.
 - `depthScale` must keep the gun's near end beyond about twice the camera's near plane until the

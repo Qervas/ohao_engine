@@ -252,7 +252,7 @@ lands on screen, which is what the gate needs to see.
 
 Jimenez's separable SSS blurs *diffuse irradiance* and adds specular back afterwards,
 because a blurred highlight is exactly the wrong look for skin. This pass blurs the
-composited lit image — diffuse, specular, IBL, and whatever sky or particles were drawn
+composited lit image — diffuse, specular, IBL, and whatever sky was drawn
 before it — so specular is softened along with everything else, at the one fixed width.
 Closing that gap is not a kernel change: it needs the lighting pass to emit diffuse and
 specular separately. The vertical pass also writes alpha 1 at every pixel it blurs.
@@ -260,25 +260,25 @@ specular separately. The vertical pass also writes alpha 1 at every pixel it blu
 ## Ordering the graph does not see
 
 The render graph tracks barriers for CSM → GBuffer → SSAO → RT → Lighting. Sky,
-particles, SSS and SSR run *after* `m_renderGraph.execute(cmd)` on the raw command
+the effects' compute, SSS, SSR and the transparent pass run *after* `m_renderGraph.execute(cmd)` on the raw command
 buffer with hand-written barriers, so their transitions are invisible to the graph.
 
-Sky and particles draw into the lighting image first, through render passes, as
-colour-attachment writes, and neither render pass's dependencies reach a compute read.
-When either ran, a memory barrier from colour-attachment output to the compute and
-fragment stages makes their writes visible to SSS, SSR and post:
+The sky draws into the lighting image first, through a render pass, as
+colour-attachment writes, and that render pass's dependencies do not reach a compute read.
+When it ran, a memory barrier from colour-attachment output to the compute and
+fragment stages makes its writes visible to SSS, SSR and post:
 
 {{cite ohao/render/deferred/deferred_renderer.cpp "vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,"}}
 
 SSR issues the same barrier itself before its trace, unconditionally: it reads the
-lighting pass's two extra attachments, which no sky or particle pass touches.
+lighting pass's two extra attachments, which the sky pass does not touch.
 
 SSS's first act is a buffer barrier of its own, from the G-buffer pass's fragment
 writes of the tile lists to the indirect-command and compute reads of them. The pass
-registry lists the order — `lighting`, `sky`, `particles`, `sss`, `ssr`, then post's own
+registry lists the order — `lighting`, `sky`, `vfx.expand`, `vfx.sort`, `sss`, `ssr`, `transparent`, then post's own
 passes — and the timings come back in it.
 
-{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Lighting, then sky and particles, write the HDR lit image; SSS blurs its flagged tiles through a scratch image and writes them back in place; SSR traces it at half resolution and its resolve writes the reflection back in place, replacing the environment's; post reads the lit image."}}
+{{figure deferred-ssr-sss-dataflow "Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Lighting, then the sky, write the HDR lit image; SSS blurs its flagged tiles through a scratch image and writes them back in place; SSR traces it at half resolution and its resolve writes the reflection back in place, replacing the environment's; post reads the lit image."}}
 
 Resizing follows the same list by hand. `DeferredRenderer::onResize` forwards the new
 extent to every screen-sized pass, SSS and SSR included:
@@ -305,4 +305,4 @@ post-processing changes what ends up in the frame.
 - The lighting pass's `envSpecular` must be exactly what it added to the lit image, and `specularWeight` the weight it used, for every pixel: the resolve subtracts the one and multiplies by the other. A new specular term in the lighting pass that SSR should replace goes into `envSpecular`; one it should not (direct light) stays out of it.
 - SSS writes the lighting image in place, and so does SSR's resolve after it. SSS must run after everything that draws into the lit image and before everything that reads it (SSR, post); the lit image must be in `SHADER_READ_ONLY_OPTIMAL` when either starts, with its writers synchronized to compute, and is left there.
 - SSS depends on the G-buffer pass's tile buffer of the same frame: `GBufferPass::execute` must have reset it and drawn before `SSSPass::execute`. `setSSSWidth` above 10 is clamped, because the vertical kernel must stay within `kSSSRadiusTiles` tile rows.
-- `DeferredRenderer::cleanup()` releases the particle system, sky, gizmo, post-processing, lighting, CSM and GBuffer passes and nothing else. `m_sssPass`, `m_ssrPass`, `m_rtShadow` and `m_rtGI` survive it and are freed only when `~DeferredRenderer` destroys their `unique_ptr`s. Calling `cleanup()` manually and then destroying the `VkDevice` destroys all four against a dead device.
+- `DeferredRenderer::cleanup()` releases the effects renderer, sky, gizmo, post-processing, lighting, CSM and GBuffer passes and nothing else. `m_sssPass`, `m_ssrPass`, `m_rtShadow` and `m_rtGI` survive it and are freed only when `~DeferredRenderer` destroys their `unique_ptr`s. Calling `cleanup()` manually and then destroying the `VkDevice` destroys all four against a dead device.

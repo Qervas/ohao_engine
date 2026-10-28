@@ -58,9 +58,9 @@
 <div class="section-rule"><h2 id="the-light-struct-is-not-here">The light struct is not here</h2></div>
 <div class="prose reveal">
 <p>No header in `includes/common/` declares a light. The raster light record the deferred lighting pass and the clustering kernel read is `LightGpu`, four `vec4`s, declared once in `shaders/shared/layout.json` and generated into GLSL, Slang and C++ by `tools/gen_layout.py`:</p>
-<div class="citation-chip"><code class="citation-code">struct LightGpu {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.glsl#L250" target="_blank" rel="noopener">shaders/shared/layout.glsl:250</a></div>
+<div class="citation-chip"><code class="citation-code">struct LightGpu {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.glsl#L278" target="_blank" rel="noopener">shaders/shared/layout.glsl:278</a></div>
 <p>The C++ copy asserts every field&#x27;s offset and the 64-byte size, and the three copies come from one description, so the GLSL side of the boundary is checked too: editing `layout.glsl` by hand makes `gen_layout.py --check` fail, and editing the JSON without regenerating does the same.</p>
-<div class="citation-chip"><code class="citation-code">static_assert(offsetof(LightGpu, params) == 48);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/shared_layout.hpp#L331" target="_blank" rel="noopener">ohao/gpu/shared_layout.hpp:331</a></div>
+<div class="citation-chip"><code class="citation-code">static_assert(offsetof(LightGpu, params) == 48);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/shared_layout.hpp#L359" target="_blank" rel="noopener">ohao/gpu/shared_layout.hpp:359</a></div>
 <p>`constants.glsl` still carries three light-type macros, `LIGHT_TYPE_DIRECTIONAL` 0, `LIGHT_TYPE_POINT` 1 and `LIGHT_TYPE_SPOT` 2, matching the raster codes in `LightGpu.position.w`. The lighting shader compares bare integers and uses none of them.</p>
 <div class="citation-chip"><code class="citation-code">#define LIGHT_TYPE_DIRECTIONAL 0</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L19" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:19</a></div>
 </div>
@@ -78,7 +78,7 @@ $$</div>
 <p>That last step is where OHAO&#x27;s version gets interesting. The shared decoder undoes the remap on entry, so it expects $[0,1]$:</p>
 <div class="citation-chip"><code class="citation-code">vec2 f = encoded * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:16</a></div>
 <p>The shared *encoder* sitting immediately below it does not apply the forward remap — it returns $[-1,1]$ — so the two functions in the same file are not inverses. They never have to be, because the shared encoder has no callers at all. The GBuffer pass carries its own private copy of the projection and applies the range remap itself, at the call site:</p>
-<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L184" target="_blank" rel="noopener">shaders/core/gbuffer.frag:184</a></div>
+<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L198" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:198</a></div>
 <p>`math.glsl` then supplies a *third* implementation, `octEncode`/`octDecode`, which is the only self-consistent $[0,1]$ pair in the tree and has zero callers.</p>
 <div class="citation-chip"><code class="citation-code">vec2 octEncode(vec3 n) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/math.glsl#L177" target="_blank" rel="noopener">shaders/includes/common/math.glsl:177</a></div>
 <figure class="unit-figure reveal"><img src="../../assets/units/shaders-includes-common-oct-path.svg" alt="Producer/consumer split for the octahedral normal channel. Conceptual — a data-flow map read from the include graph and GBuffer1 layout, not a captured render or a measurement." loading="lazy" /><figcaption>Producer/consumer split for the octahedral normal channel. Conceptual — a data-flow map read from the include graph and GBuffer1 layout, not a captured render or a measurement.</figcaption></figure>
@@ -97,8 +97,8 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">// Used by: cloud.comp, water.frag (ray origin/direction from screen pixel)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/reconstruction.glsl#L49" target="_blank" rel="noopener">shaders/includes/common/reconstruction.glsl:49</a></div>
 <p>Both depth linearizers in `encoding.glsl` are in the same position: their comments name `ssgi`, `volumetric_scatter` and `dof_coc`, none of which is in the tree, and nothing calls either function. They are not entirely unchecked: the whole of `encoding.glsl` is spliced into `deferred_lighting.frag`, its one remaining includer, so its uncalled functions are still parsed on every shader build — they simply never reach a call site. `reconstruction.glsl` is not even parsed: the shader glob compiles only stage files, and no stage file includes it.</p>
 <div class="citation-chip"><code class="citation-code">// Used by: ssgi, volumetric_scatter</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L39" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:39</a></div>
-<p>There is no shared noise or hash header at all. The shaders that need pseudo-randomness each roll their own: `particle_emit.comp` an integer bit-mixer, `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familiar `fract`-of-products shape.</p>
-<div class="citation-chip"><code class="citation-code">uint hash(uint x) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_emit.comp#L40" target="_blank" rel="noopener">shaders/particles/particle_emit.comp:40</a></div>
+<p>There is no shared noise or hash header at all. The shaders that need pseudo-randomness each roll their own: `pt_anyhit.rahit` an integer bit-mixer (PCG), `sky.frag` and `dlss_tonemap.comp` float-valued hashes of the familiar `fract`-of-products shape.</p>
+<div class="citation-chip"><code class="citation-code">uint pcg(uint v) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_anyhit.rahit#L33" target="_blank" rel="noopener">shaders/rt/pt_anyhit.rahit:33</a></div>
 <div class="citation-chip"><code class="citation-code">p = fract(p * vec2(123.34, 456.21));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sky.frag#L38" target="_blank" rel="noopener">shaders/postprocess/sky.frag:38</a></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
@@ -122,12 +122,12 @@ $$</div>
         <div class="row"><code>ohao/gpu/shared_layout.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/scene/gbuffer_body.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/math.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/color.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/tonemapping.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/reconstruction.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/particles/particle_emit.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/sky.frag</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

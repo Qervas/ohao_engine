@@ -95,11 +95,6 @@ is reachable from outside the hierarchy — the getter is a public static on the
 
 {{cite ohao/render/deferred/render_pass_base.hpp "static const std::string& getShaderBasePath() { return s_shaderBasePath; }"}}
 
-`ParticleSystem`, which does not derive from `RenderPassBase` at all, calls it
-through that qualified name twice — once for its compute SPVs, once for its render
-SPVs — and prepends the result to each filename:
-
-{{cite ohao/render/particles/particle_system.cpp "basePath + "particles_particle_emit.comp.spv","}}
 :::
 
 ## Two error channels in one class
@@ -248,7 +243,7 @@ correctly — and then roughness into `b` and, in `a`, emissive luminance or min
 subsurface strength. Two of the four channels have moved out from under their
 documentation, and nothing failed to compile when they did:
 
-{{cite shaders/core/gbuffer.frag "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);"}}
 
 And the `RenderPassLike` concept restates the virtual interface:
 

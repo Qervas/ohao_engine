@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="the-decision-that-shapes-the-rest-position-lives-in-the-buffer">The decision that shapes the rest: position lives in the buffer</h2></div>
 <div class="prose reveal">
 <p>`gbuffer.frag` writes four colour attachments plus depth, and the first one settles the character of the whole pipeline: it stores the interpolated **world position**, verbatim, with metallic in alpha.</p>
-<div class="citation-chip"><code class="citation-code">outGBuffer0 = vec4(fragWorldPos, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L172" target="_blank" rel="noopener">shaders/core/gbuffer.frag:172</a></div>
+<div class="citation-chip"><code class="citation-code">outGBuffer0 = vec4(fragWorldPos, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L186" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:186</a></div>
 <p>The lighting pass reads it straight back and never touches the depth buffer.</p>
 <div class="citation-chip"><code class="citation-code">vec3 fragPos = gBuffer0Sample.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L205" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:205</a></div>
 <p>That target is `R16G16B16A16_SFLOAT` — IEEE binary16, an 11-bit significand. In the binade $[2^e, 2^{e+1})$ the spacing between representable values is</p>
@@ -52,7 +52,7 @@ $$</div>
 <div class="section-rule"><h2 id="what-the-fragment-shader-packs">What the fragment shader packs</h2></div>
 <div class="prose reveal">
 <p>Normals are octahedron-encoded to two channels and then remapped into $[0,1]$.</p>
-<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L184" target="_blank" rel="noopener">shaders/core/gbuffer.frag:184</a></div>
+<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L198" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:198</a></div>
 <p>That remap is a UNORM convention, left from when the target was `R10G10B10A2_UNORM` and could not hold negatives. The allocator&#x27;s comment still says `RGB10A2` and the shared header still calls itself the `A2R10G10B10` encoder, but the image is half-float now; the remap survives only because `decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder lives in `includes/common/encoding.glsl`, and `deferred_lighting.frag` is now its only consumer; the Slang passes — SSAO, SSR, RT shadows and RT GI — each carry their own `decodeOctahedron` with the same remap.</p>
 <div class="citation-chip"><code class="citation-code">vec2 f = encoded * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:16</a></div>
 <p>The header also carries an `encodeNormalOctahedron` with the same math as the one `gbuffer.frag` defines locally, and it has zero callers anywhere in `shaders/`: the only encode in the tree is the local one. Nothing structural forces that duplication — `gbuffer.frag` enables `GL_GOOGLE_include_directive` and includes `scene_data.glsl` and the generated `shared/layout.glsl`, just not `encoding.glsl`. The pair that must stay in lockstep is `gbuffer.frag`&#x27;s encoder against the header&#x27;s *decoder*; the header&#x27;s encoder is dead weight.</p>
@@ -60,9 +60,9 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">const uint slot = d.draw.w;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L39" target="_blank" rel="noopener">shaders/core/gbuffer.vert:39</a></div>
 <p>The fragment shader takes that submesh material slot, resolves it through the instance&#x27;s material-reference list into a row of `RenderScene`&#x27;s material table, and loads three `vec4`s from it: base colour and albedo texture, roughness, metallic, normal and emissive textures, and the rough/metal texture with the emissive and subsurface strengths. The same table feeds the path tracer, so the two renderers cannot disagree about which material a triangle has. A slot the instance has no reference for falls back to material 0.</p>
 <p>Bindless texture indices reach the shader by bit-copy rather than conversion; the table packer reinterprets each uint32 as a float:</p>
-<div class="citation-chip"><code class="citation-code">const auto bits = [](uint32_t u) { return std::bit_cast&lt;float&gt;(u); };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/material_table.cpp#L35" target="_blank" rel="noopener">ohao/render/scene/material_table.cpp:35</a></div>
+<div class="citation-chip"><code class="citation-code">const auto bits = [](uint32_t u) { return std::bit_cast&lt;float&gt;(u); };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/material_table.cpp#L37" target="_blank" rel="noopener">ohao/render/scene/material_table.cpp:37</a></div>
 <p>so `UINT32_MAX` arrives as a quiet NaN and is recovered with `floatBitsToUint`. Nothing does arithmetic on the lane, so the pattern survives intact — but the two &quot;no texture&quot; tests are not the same test. Albedo and normal compare against the sentinel; rough/metal and emissive compare against the array capacity.</p>
-<div class="citation-chip"><code class="citation-code">if (roughMetalTexIdx &lt; 4096u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L158" target="_blank" rel="noopener">shaders/core/gbuffer.frag:158</a></div>
+<div class="citation-chip"><code class="citation-code">if (roughMetalTexIdx &lt; 4096u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L172" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:172</a></div>
 <p>4096 is the descriptor count the renderer asks `BindlessTextureManager` for at init — the value that becomes the variable-length array&#x27;s `descriptorCount` — so the second form is strictly safer: it also rejects a stale but in-range-looking index that would otherwise read past the end of the array.</p>
 <div class="citation-chip"><code class="citation-code">if (!m_textureManager-&gt;initialize(m_device, m_physicalDevice, nullptr, 4096,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L127" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:127</a></div>
 <p>That sample is then read as ORM — R occlusion, G roughness, B metallic — though glTF defines only G and B, so an asset that packs nothing into R darkens by whatever sits there.</p>
@@ -70,26 +70,26 @@ $$</div>
 <div class="section-rule"><h2 id="the-emissive-attachment">The emissive attachment</h2></div>
 <div class="prose reveal">
 <p>Emission is the G-buffer&#x27;s fifth colour output, an `RGBA16F` attachment of its own: the emissive texture&#x27;s colour (sRGB-decoded by the bindless sampler) times the material&#x27;s emissive strength, the same radiance the path tracer&#x27;s closest-hit shader emits:</p>
-<div class="citation-chip"><code class="citation-code">emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L178" target="_blank" rel="noopener">shaders/core/gbuffer.frag:178</a></div>
+<div class="citation-chip"><code class="citation-code">emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L192" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:192</a></div>
 <div class="citation-chip"><code class="citation-code">emissive = textureLod(textures[nonuniformEXT(emissiveTexIdx)], texUV, 0.0).rgb * matParams2.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L180" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:180</a></div>
 <p>Lighting adds it unlit, in its own colour. It used to arrive as one luminance scalar in the normal target&#x27;s alpha, re-tinted with the albedo, so an emitter glowed in its base colour: DamagedHelmet&#x27;s cyan ring rendered dim grey. The alpha still carries that luminance, only to keep an emissive surface out of the SSS blur. Emission cannot glow *hard* yet: the strength lane, `row2.y`, is set to exactly `1.0f` for any material that has an emissive texture and left at 0 otherwise — model upload has no other path that raises it — and the bindless textures it multiplies are 8-bit, so the radiance is bounded by 1.0.</p>
-<div class="citation-chip"><code class="citation-code">if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L218" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:218</a></div>
+<div class="citation-chip"><code class="citation-code">if (m.emissiveTex != kNoTexture) m.emissiveStrength = 1.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/model_upload.cpp#L221" target="_blank" rel="noopener">ohao/render/scene/model_upload.cpp:221</a></div>
 <p>The sharper limitation is upstream of the shader: a material has no emissive colour factor at all, only a texture index and that strength. The shader gates on the *index*, so a material without a resolvable emissive map contributes nothing here regardless of what the source asset&#x27;s emissive factor said.</p>
 </div>
 <div class="section-rule"><h2 id="velocity-right-about-vulkan-and-about-objects">Velocity: right about Vulkan, and about objects</h2></div>
 <div class="prose reveal">
 <p>The motion vector is the raw NDC difference, halved, with no vertical flip.</p>
-<div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L103" target="_blank" rel="noopener">shaders/core/gbuffer.frag:103</a></div>
+<div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L106" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:106</a></div>
 <p>Vulkan&#x27;s NDC y points down, the same direction as texture v, so $uv = 0.5\,ndc + 0.5$ in both axes and the halved difference *is* the UV delta `taa_resolve.frag` subtracts to find history. A GL-derived version needs a `y` negate here; this one must not.</p>
 <p>The &quot;previous&quot; position pairs last frame&#x27;s view-projection with the instance&#x27;s **previous** world matrix, read from the instance table in the vertex shader:</p>
 <div class="citation-chip"><code class="citation-code">fragPrevPos = cam.prevViewProj * (inst.prevWorld * vec4(prevLocal, 1.0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L62" target="_blank" rel="noopener">shaders/core/gbuffer.vert:62</a></div>
 <p>(`prevLocal` is the vertex&#x27;s position, or on a skinned draw last frame&#x27;s deformed one, which the skin pass leaves in `boneWeights.xyz`)</p>
 <p>so a moving object is reprojected from where it was, and TAA&#x27;s history follows it rather than smearing it. What it does not capture is the other half of the pair: the current projection is Halton-jittered for TAA while the stored previous one is not:</p>
-<div class="citation-chip"><code class="citation-code">m_prevViewProj = m_proj * m_view;   // unjittered: next frame&#x27;s velocity carries its own jitter</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L666" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:666</a></div>
+<div class="citation-chip"><code class="citation-code">m_prevViewProj = m_proj * m_view;   // unjittered: next frame&#x27;s velocity carries its own jitter</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L662" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:662</a></div>
 <p>so a static camera over a static scene still writes a non-zero velocity — that frame&#x27;s jitter offset, and nothing else. It is smaller than it sounds: the Halton offsets are bounded by half a pixel, divided by the render resolution, and halved again on the way from NDC to UV.</p>
-<div class="citation-chip"><code class="citation-code">return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L182" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:182</a></div>
+<div class="citation-chip"><code class="citation-code">return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L183" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:183</a></div>
 <p>At 1080p that caps the velocity magnitude near $2.7 \times 10^{-4}$; with `motionScale` at 100 it is a `motionWeight` of at most 0.03, moving the history blend from 0.9 to about 0.89. Off the floor, and not by much.</p>
-<div class="citation-chip"><code class="citation-code">float motionWeight = clamp(velocityMag * params.motionScale, 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/taa_resolve.frag#L145" target="_blank" rel="noopener">shaders/postprocess/taa_resolve.frag:145</a></div>
+<div class="citation-chip"><code class="citation-code">float motionWeight = clamp(velocityMag * params.motionScale, 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/taa_resolve.frag#L148" target="_blank" rel="noopener">shaders/postprocess/taa_resolve.frag:148</a></div>
 </div>
 <div class="section-rule"><h2 id="the-lighting-pass-edits-the-material-it-just-unpacked">The lighting pass edits the material it just unpacked</h2></div>
 <div class="prose reveal">
@@ -142,7 +142,7 @@ $$</div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/scene/gbuffer_body.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
@@ -155,6 +155,7 @@ $$</div>
         <div class="row"><code>shaders/postprocess/taa_resolve.frag</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/env_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
@@ -162,7 +163,7 @@ $$</div>
         <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
       </div>
 
-<nav class="pager"><a href="compute.html"><div class="label">← Prev</div><div class="title">Compute shaders</div></a><a class="next" href="particles-sh.html"><div class="label">Next →</div><div class="title">Particle shaders</div></a></nav>
+<nav class="pager"><a href="compute.html"><div class="label">← Prev</div><div class="title">Compute shaders</div></a><a class="next" href="overlay-gizmo.html"><div class="label">Next →</div><div class="title">Overlay gizmo shaders</div></a></nav>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

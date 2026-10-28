@@ -608,7 +608,7 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Bloom/DoF after denoise so temporal filters are not fighting post effects.",
     },
     "shaders/layout": {
-        "what": ["Shader tree layout: core, rt, postprocess, compute, includes, shadow, particles. SPIR-V via CMake/compile script."],
+        "what": ["Shader tree layout: core, rt, postprocess, compute, includes, shadow, vfx. SPIR-V via CMake/compile script."],
         "how": ["PathTracer searches multiple relative SPIR-V paths; include root is shaders/."],
         "why": "Predictable layout beats hunting random .spv copies.",
     },
@@ -647,11 +647,6 @@ KNOWLEDGE: dict[str, dict] = {
         "what": ["Core raster pair: gbuffer.vert/frag MRT contract and deferred_lighting.frag."],
         "how": ["Bindless nonuniformEXT; lighting reconstructs position from depth."],
         "why": "These two shaders are the deferred product surface.",
-    },
-    "shaders/particles-sh": {
-        "what": ["Particle emit/update compute + render shaders."],
-        "how": ["Owned by particle_system pass."],
-        "why": "GPU particles stay off the deferred geometry path.",
     },
     "shaders/overlay-gizmo": {
         "what": ["Overlay gizmo vert/frag for debug draws."],
@@ -692,12 +687,7 @@ KNOWLEDGE: dict[str, dict] = {
     "graph/async-compute": {
         "what": ["Optional async compute queue path."],
         "how": ["async_compute_queue.hpp for overlapping work."],
-        "why": "Headroom for culling/particles off the graphics queue.",
-    },
-    "graph/particles": {
-        "what": ["Particle system orchestration (CPU/GPU)."],
-        "how": ["particle_system ties compute emit/update to draw."],
-        "why": "Effects without mesh component spam.",
+        "why": "Headroom for culling/effects off the graphics queue.",
     },
     "graph/culling": {
         "what": ["GpuCulling: RenderScene's draw table to indirect draw lists on the GPU (early, late and cascade phases; four lists a G-buffer phase: instance and meshlet, one-sided and double-sided)."],
@@ -757,7 +747,7 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "A fight held in saved components and one clock replays bit for bit, in a window, headless and over MCP.",
     },
     "runtime/feel": {
-        "what": ["The look lead, frame timing (latency and pacing to the confirmed present), the first-person gun, and particles and sounds from the combat log: a realtime window's presentation."],
+        "what": ["The look lead, frame timing (latency and pacing to the confirmed present), the first-person gun, and effects and sounds from the combat log: a realtime window's presentation."],
         "how": ["World::setPendingLook + interpolate through applyLook; FrameLog and PresentWaiter (present id/wait, the swapchain's host mutex); late input sampling (framesAhead); ViewModel and the view_model sync system (viewModelRemap, presentationDt); kDrawViewModel and kTlasMaskViewModel; CombatFx; game_audio's voice cap, distance curves and occlusion ray."],
         "why": "The window answers the hand within a frame while the step, world.hash, files and snapshots stay exactly what they were.",
     },

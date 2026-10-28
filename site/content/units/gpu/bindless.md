@@ -67,7 +67,7 @@ a storage buffer where the SPIR-V wants a combined image sampler — a descripto
 mismatch validation rejects at `vkCreateGraphicsPipelines`. That failure is loud. The
 silent one is the `< 4096u` guard in the next section.
 
-{{cite shaders/core/gbuffer.frag "layout(set = 0, binding = 0) uniform sampler2D textures[];"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "layout(set = 0, binding = 0) uniform sampler2D textures[];"}}
 
 No push constant carries the indices, and none carries the material either: the draws
 are indirect, and a command's `firstInstance` is the draw's index in `RenderScene`'s
@@ -95,11 +95,11 @@ shader, which validation reports at pipeline creation.
 float bit pattern (`std::bit_cast`), and the shader recovers it with
 `floatBitsToUint`. Albedo and normal are guarded against exactly that sentinel.
 
-{{cite shaders/core/gbuffer.frag "if (albedoTexIdx != 0xFFFFFFFFu)"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "albedo *= texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord).rgb;"}}
 
 Roughness/metallic and emissive are not. They use a range test instead:
 
-{{cite shaders/core/gbuffer.frag "if (roughMetalTexIdx < 4096u) {"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "if (roughMetalTexIdx < 4096u) {"}}
 
 That literal `4096` is the `maxTextures` argument the renderer happens to
 pass. Raising the array capacity to, say, 8192 would leave every roughness-metallic
@@ -154,8 +154,8 @@ channels into the scalar parameters, so a silently-defaulted rough-metal map dri
 `ao`, `roughness` and `metallic` to zero on three consecutive lines. The roughness
 floor two lines further down clamps that back to `0.04`:
 
-{{cite shaders/core/gbuffer.frag "roughness *= rm.g;  // G channel = Roughness"}}
-{{cite shaders/core/gbuffer.frag "roughness = max(roughness, 0.04);"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "roughness *= rm.g;  // G channel = Roughness"}}
+{{cite shaders/includes/scene/gbuffer_body.glsl "roughness = max(roughness, 0.04);"}}
 
 The result is not a fully occluded dielectric but a fully occluded *near-mirror* — the
 zeroed roughness is the more visible artifact of the two, and it is on the adjacent

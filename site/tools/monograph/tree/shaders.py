@@ -11,7 +11,7 @@ MODULE = {
         page(
             'layout',
             'Shader tree layout',
-            'core / rt / postprocess / compute / includes / shadow / particles.',
+            'core / rt / postprocess / compute / includes / shadow / vfx.',
             files=['shaders/CMakeLists.txt'],
             design=['SPIR-V outputs to build/shaders or bin/shaders; PathTracer searches multiple relative paths.', 'Active sources only — shaders/_disabled is archival and not in the build graph.', 'Include path: GL_GOOGLE_include_directive with shaders/ as root.'],
         ),
@@ -64,12 +64,6 @@ MODULE = {
             'gbuffer.vert/frag, deferred_lighting.frag MRT contract.',
             files=['shaders/core/gbuffer.vert', 'shaders/core/gbuffer.frag', 'shaders/core/deferred_lighting.frag'],
             design=['GBuffer MRT: albedo, normal, material, velocity (from current/prev clip pos), depth.', 'Bindless texture indices via nonuniformEXT; 0xFFFFFFFF = missing map.', 'deferred_lighting.frag: the froxel\'s light list + IBL + CSM + optional RT shadow/GI textures.'],
-        ),
-        page(
-            'particles-sh',
-            'Particle shaders',
-            'Emit, update, render.',
-            files=['shaders/particles/particle_emit.comp', 'shaders/particles/particle_update.comp', 'shaders/particles/particle_render.vert', 'shaders/particles/particle_render.frag'],
         ),
         page(
             'overlay-gizmo',

@@ -40,10 +40,10 @@ pass's HDR image:
 
 Calling that "the lighting output" would be wrong by this point in the frame.
 `SkyPass::setHDROutput` is wired to exactly that view and image, so the Preetham
-sky is already in it, and `createParticleFramebuffer` builds the forward particle
+sky is already in it, and `VfxRenderer::resize` builds the transparent pass's
 framebuffer from the same view:
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "VkImageView hdrView = m_lightingPass->getOutputView();"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "m_vfx->resize(m_width, m_height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView())"}}
 
 The subsurface blur is in it too: SSS writes this image in place, over the tiles
 the G-buffer flagged for subsurface materials, so it is the same image

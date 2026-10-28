@@ -28,12 +28,6 @@ MODULE = {
             files=['ohao/render/async/async_compute_queue.hpp', 'ohao/render/async/async_compute_queue.cpp'],
         ),
         page(
-            'particles',
-            'Particle system',
-            'CPU/GPU particle orchestration.',
-            files=['ohao/render/particles/particle_system.hpp', 'ohao/render/particles/particle_system.cpp'],
-        ),
-        page(
             'culling',
             'GPU culling',
             'The draw table to indirect lists: early/late two-pass occlusion, four lists a G-buffer phase, Hi-Z, cascades.',
