@@ -24,41 +24,39 @@ std::vector<reflect::MethodDoc> buildMethods() {
     return {
         {"engine.info", p.find<EngineInfoParams>(),
          "{protocolVersion, schemaHash, version, host, time, gpu?: {name, driver, rayTracing, meshShaders}}",
-         "The native handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host "
-         "and time state; gpu once the host has a device (a headless host creates it at its first render)."},
+         "Handshake: protocol version, schemaHash (key cached catalogues on it), engine version, host, time state; "
+         "gpu once the host has a device (headless: at its first render)."},
         {"schema.get", p.find<SchemaGetParams>(), "the catalogue (ohao_schema.json), compact",
          "Every component, field, enum, limit, unit, error code and method. Read once; key on schemaHash."},
         {"scene.validate", p.find<SceneValidateParams>(), "{ok, errors?, warnings?, upgraded?, more?}",
          "Checks a scene exactly as scene.load would, without touching the world. checkAssets also reports model "
          "files that do not exist (E_ASSET_NOT_FOUND)."},
         {"scene.load", p.find<SceneLoadParams>(), "{entities, preserved?, upgraded?, warnings?}",
-         "Loads a scene into the world, which must be empty unless replace is true (then it is cleared first; "
-         "snapshots are kept). All or nothing. seed fixes the id generator for later creates."},
+         "Loads a scene into the world, which must be empty unless replace (then cleared first; snapshots kept). "
+         "All or nothing. seed fixes the id generator for later creates."},
         {"scene.save", p.find<SceneSaveParams>(), "{scene} or {path, bytes}",
          "The canonical scene. Without a path it is returned as an object (compact)."},
         {"world.info", p.find<WorldInfoParams>(), "{entities, frame, schemaHash, idCounter, host, time}",
          "Cheap orientation: sizes, identity and the time state."},
         {"world.summary", p.find<WorldSummaryParams>(), "{entities, roots, components, bounds?, outline, moreRoots?}",
-         "Counts per component, bounds of entity origins and a capped hierarchy outline (more: children left out; "
-         "moreRoots: roots left out)."},
+         "Counts per component, bounds of entity origins, a capped hierarchy outline (more, moreRoots: children, "
+         "roots left out)."},
         {"world.query", p.find<WorldQueryParams>(), "{count, entities, missing?, next?}",
          "Entities in creation order, filtered (all filters must match) and projected. fields: \"/Type\" or "
          "\"/Type/field\"; without fields each entity is its file form."},
         {"world.apply", p.find<WorldApplyParams>(), "{applied, results, inverse}",
          "One atomic batch of commands, applied in order; on any error nothing changes. inverse undoes the batch."},
         {"world.step", p.find<WorldStepParams>(), "{frame, watch?: {entities, count, missing?, next?}}",
-         "Runs frames fixed steps: the simulate systems once per step, then the sync systems once. watch returns "
-         "fields after the last step, as world.query would. E_STATE while realtime is running. Cancellable between "
-         "steps."},
+         "Runs frames fixed steps (simulate systems per step, then sync once). watch returns fields after the last "
+         "step, as world.query. E_STATE while realtime runs. Cancellable between steps."},
         {"time.get", p.find<TimeGetParams>(), "{mode, paused, frame, fixedDt, fps?}",
-         "The time state: lockstep (steps on request) or realtime (steps from wall time), paused, the frame number "
-         "(steps run so far) and the fixed step."},
+         "Lockstep (steps on request) or realtime (from wall time), paused, frame (steps run) and the fixed step."},
         {"time.set", p.find<TimeSetParams>(), "as time.get",
          "Changes the mode, pause state or fixed step. Never runs or drops a step. Headless hosts: lockstep only "
          "(E_STATE)."},
         {"world.hash", p.find<WorldHashParams>(), "{hash, frame}",
-         "A 64-bit hash of the authoring state: ids, hierarchy, every saved component, the id generator and the "
-         "creation sequence. Equal hashes, equal worlds; runtime state is not hashed."},
+         "A 64-bit hash of the authoring state (ids, hierarchy, saved components, id generator, creation order). "
+         "Runtime state is not hashed."},
         {"world.diff", p.find<WorldDiffParams>(),
          "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
          "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\": a component added or removed) with old "
@@ -69,23 +67,22 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"input.state", p.find<InputStateParams>(), "{actions: {name: {held, pressed, released}}, axes: {name: value}}",
          "The input map as the last step saw it."},
         {"input.record", p.find<InputRecordParams>(), "{path, steps, events}",
-         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording in the output directory: each input event "
-         "with its step, a {step, hash} every 60 steps, the final hash. Starting releases all held input."},
+         "Starts ({path}) or stops ({stop: true}) a JSON-Lines recording in the output directory: input events by "
+         "step, {step, hash} every 60 steps, the final hash. Starting releases held input."},
         {"input.replay", p.find<InputReplayParams>(), "{steps, events, checkpoints, frame}",
          "Replays a recording in lockstep from the current world, which must hash as its start (load with its "
          "seed, or restore). E_REPLAY names the first diverging step. Cancellable."},
         {"world.snapshot", p.find<WorldSnapshotParams>(), "{name, entities, bytes}",
-         "Captures the world in memory under a name (replacing one with that name): ids, hierarchy, every saved "
-         "component, the id generator and the frame."},
+         "Captures the world in memory under a name (replacing it): ids, hierarchy, saved components, id generator, "
+         "frame."},
         {"world.restore", p.find<WorldRestoreParams>(), "{created, destroyed, changed, frame}",
          "Brings the world back to a snapshot, writing only what differs. The snapshot is kept for further restores."},
         {"render.capture", p.find<RenderCaptureParams>(),
          "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
          "deterministic, validation?} (+ the inline image)",
-         "Renders the world through its Camera (frames from a reset, the last kept) to a PNG (path) and/or an "
-         "inline preview (long side maxSize; region zooms). A window captures at its own size; in realtime, its "
-         "next presented frame (deterministic false). quality, post and exposure left out: render.settings'. "
-         "Cancellable, with progress."},
+         "Renders through the Camera (frames from a reset, the last kept) to a PNG (path) and/or an inline preview "
+         "(long side maxSize; region zooms). A window captures at its own size; realtime: its next presented frame "
+         "(deterministic false). Left-out quality, post, exposure: render.settings'. Cancellable, with progress."},
         {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
          "Reads, or with set changes, the host's renderer settings; members left out keep their value. Host state, "
          "never saved; captures default to them. E_STATE on a host that renders nothing."},
@@ -108,12 +105,11 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "The physics scene: bodies by motion, shapes by kind, steps run, awake dynamic bodies, pairs in contact."},
         {"physics.events", p.find<PhysicsEventsParams>(),
          "{events: [{seq, step, kind, a, b, an, bn, point, normal, speed, surface?}], next, dropped?}",
-         "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface "
-         "(world.step runs physics), oldest first. Pass the reply's next as since to read on."},
+         "Contacts begun/ended, triggers entered/exited and players' footsteps and landings, with the ground's surface, "
+         "oldest first; pass next as since to read on."},
         {"physics.contacts", p.find<PhysicsContactsParams>(),
          "{contacts: [{a, b, an, bn, trigger?, point, normal, since}], count, more?}",
-         "Body pairs touching now (resting ones included) and bodies inside triggers, by id; since is the step "
-         "they began in."},
+         "Body pairs touching now (resting included) and bodies in triggers, by id; since: the step they began."},
         {"player.info", p.find<PlayerInfoParams>(),
          "{entity, name, pos, yawDeg, pitchDeg, velocity, ground, on?, surface?, footsteps}",
          "The player: feet, facing, look, velocity, the body it stands on and its surface. Drive it with "
@@ -145,6 +141,9 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"audio.mix", p.find<AudioMixParams>(), "as audio.info, without commands",
          "Listening overrides in the device only (never the world, schedule or snapshots): a bus's db, mute, solo; "
          "a forced snapshot; clear."},
+        {"vfx.info", p.find<VfxInfoParams>(),
+         "{set, steps, caps, live, dropped?, particles, records: [{seq, step, effect|tracer|decal|light, at, on?}], next}",
+         "Effect spawn records the step wrote, after since; particles null headless."},
     };
 }
 
@@ -948,6 +947,7 @@ constexpr MethodEntry kDispatch[] = {
     {"combat.damage", methodCombatDamage, true},
     {"animation.info", methodAnimationInfo},
     {"audio.info", methodAudioInfo},  {"audio.mix", methodAudioMix},
+    {"vfx.info", methodVfxInfo},
 };
 
 const MethodEntry* findMethod(std::string_view name) {

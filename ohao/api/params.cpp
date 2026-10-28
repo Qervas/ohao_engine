@@ -46,7 +46,8 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("audio", LogChannelName::audio, "Audio")
         .value("api", LogChannelName::api, "API methods")
         .value("rpc", LogChannelName::rpc, "Protocol server")
-        .value("runtime", LogChannelName::runtime, "Window and main loop");
+        .value("runtime", LogChannelName::runtime, "Window and main loop")
+        .value("vfx", LogChannelName::vfx, "Effects");
 
     r.type<SchemaGetParams>("SchemaGetParams").doc("schema.get params");
     r.type<EngineInfoParams>("EngineInfoParams").doc("engine.info params");
@@ -261,6 +262,9 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("since", &AudioInfoParams::since)
             .doc("Commands after this seq: 0 for all the log holds, else the previous reply's next").unitless().min(0)
         .field("max", &AudioInfoParams::max).doc("Commands in one reply (0: none)").unitless().min(0).max(64);
+    r.type<VfxInfoParams>("VfxInfoParams").doc("vfx.info params")
+        .field("since", &VfxInfoParams::since).doc("Records after this seq (the previous next)").unitless().min(0)
+        .field("max", &VfxInfoParams::max).doc("Records in one reply").unitless().min(0).max(64);
     r.type<AudioMixParams>("AudioMixParams").doc("audio.mix params")
         .field("bus", &AudioMixParams::bus).doc("The bus that db, mute and solo set")
         .field("db", &AudioMixParams::db).doc("The bus's level in dB, replacing the game's").unitless().min(kMinMixDb)

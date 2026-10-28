@@ -84,6 +84,7 @@ EXAMPLES = {
     "animation_info": {"since": 0, "max": 8},
     "audio_info": {"since": 0, "max": 8},
     "audio_mix": {"bus": "master", "db": -6, "mute": False, "solo": False, "snapshot": "", "clear": True},
+    "vfx_info": {"since": 0, "max": 8},
 }
 # render_capture would start a GPU; render_stats before any capture is E_STATE (checked on
 # its own); input_replay would read the recording input_record is still writing (api_tests

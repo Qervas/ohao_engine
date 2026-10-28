@@ -33,7 +33,7 @@ enum class Denoiser : uint8_t { none, oidn, nrd, atrous, dlss };
 enum class PostEffect : uint8_t { bloom, taa, ssao };
 enum class Quality : uint8_t { realtime, reference };
 enum class LogLevelName : uint8_t { trace, debug, info, warn, error };
-enum class LogChannelName : uint8_t { render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime };
+enum class LogChannelName : uint8_t { render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime, vfx };
 
 struct SchemaGetParams {};
 struct EngineInfoParams {};
@@ -262,6 +262,10 @@ struct CombatEventsParams {
 struct AudioInfoParams {
     int64_t since{0};   // commands after this seq (the previous reply's next)
     int32_t max{16};    // commands in one reply, 0..64
+};
+struct VfxInfoParams {
+    int64_t since{0};   // records after this seq (the previous reply's next)
+    int32_t max{16};    // records in one reply, 0..64
 };
 inline constexpr float kMinMixDb = -96.0f, kMaxMixDb = 12.0f;   // audio.mix's db
 struct AudioMixParams {

@@ -136,6 +136,8 @@ bool methodCombatDamage(Session::Impl& s, const JsonDocument& doc, const JsonNod
 // Animation (sub-project 10, step 1; animation.cpp).
 bool methodAnimationInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                          JsonWriter& out);
+// Effects (sub-project 12; vfx.cpp).
+bool methodVfxInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx, JsonWriter& out);
 // Audio (sub-project 11, step 4; audio.cpp).
 bool methodAudioInfo(Session::Impl& s, const JsonDocument& doc, const JsonNode& params, DecodeContext& ctx,
                      JsonWriter& out);

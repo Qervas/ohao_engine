@@ -17,6 +17,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/vfx.hpp"
 #include "ecs/world.hpp"
 #include "reflect/json_writer.hpp"
 #include "reflect/schema.hpp"
@@ -179,7 +180,7 @@ static void t09_method_table_dispatch_and_errors() {
     CHECK(typo.code() == "E_UNKNOWN_FIELD" && typo.str("/error/data/0/path") == "/limt" &&
               typo.str("/error/data/0/suggestion") == "limit",
           "an unknown param is E_UNKNOWN_FIELD at its path, with a suggestion");
-    CHECK(api::methods().size() == 38, "thirty-eight methods");
+    CHECK(api::methods().size() == 39, "thirty-nine methods");
     for (const auto& m : api::methods()) {
         const Reply r(s.call(m.name, "{}"));
         CHECK(r.code() != "E_METHOD", "every documented method dispatches");
@@ -2765,6 +2766,62 @@ static void t29_audio_info() {
     aw.s.setHost(nullptr);
 }
 
+// ---- effects (sub-project 12 test 35, the step half) ---------------------------------------------
+
+struct VfxWorld : AudioWorld {
+    VfxWorld() { ecs::installVfx(w, files); }   // as the CLI context and the window host install it
+};
+
+static void t35_vfx_info_step() {
+    {
+        World w;
+        api::Session s(w, engineTypes());
+        CHECK(Reply(s.call("vfx.info")).code() == "E_STATE", "a world without the vfx system: E_STATE");
+    }
+    VfxWorld vw;
+    CHECK(vw.load(kPlayScene).ok(), "the play scene loads");
+    CHECK(Reply(vw.s.call("world.step", R"({"frames":1})")).ok(), "one step: the system reads the scene's set");
+    const Reply first(vw.s.call("vfx.info"));
+    std::printf("\n      %.600s", first.json("/result").c_str());
+    CHECK(first.ok() && first.str("/result/set") == "assets/vfx/slice.vfx.json", "the scene's set");
+    CHECK(first.json("/result/particles") == "null", "headless: no frame half (particles null)");
+    CHECK(first.str("/result/caps/records") == "256" && first.str("/result/caps/decals") == "256", "the set's caps");
+    CHECK(first.json("/result/live") == R"({"effect":0,"tracer":0,"decal":0,"light":0})" && !first.at("/result/dropped"),
+          "nothing live before a round is fired; nothing dropped (left out)");
+
+    vw.fight(120);
+    const Reply mid(vw.s.call("vfx.info", R"({"since":0,"max":64})"));
+    bool muzzle = false, impact = false, tracer = false;
+    for (uint32_t i = 0; mid.at("/result/records") && i < mid.at("/result/records")->count; ++i) {
+        const std::string at = "/result/records/" + std::to_string(i);
+        muzzle |= mid.str(at + "/effect") == "muzzle" && mid.at(at + "/at");
+        impact |= mid.str(at + "/effect").rfind("impact_", 0) == 0;
+        tracer |= mid.str(at + "/tracer") == "rifle";
+    }
+    CHECK(muzzle && impact, "live records mid-fight: muzzles and impacts, by name, with their place");
+    CHECK(tracer || mid.str("/result/live/tracer") == "0", "tracers by name when live");
+    const std::string next = mid.str("/result/next");
+    const Reply none(vw.s.call("vfx.info", "{\"since\":" + next + "}"));
+    CHECK(none.ok() && none.at("/result/records")->count == 0 && none.str("/result/next") == next, "nothing after next; next stays");
+    const Reply one(vw.s.call("vfx.info", R"({"since":0,"max":1})"));
+    CHECK(one.at("/result/records")->count == 1 && one.str("/result/next") == one.str("/result/records/0/seq"),
+          "max 1: the oldest live record; next is its seq (the cursor to pass back)");
+    const Reply zero(vw.s.call("vfx.info", R"({"max":0})"));
+    CHECK(zero.ok() && zero.at("/result/records")->count == 0, "max 0: no records");
+
+    // The budget: 16 records mid-fight, at most 2 KB (as audio.info's; serve_bench vfx_info_bytes, Task 4). The
+    // spec's first proposal, 1 KB, measured 1,593 bytes with names, places and attachments: Task 1 proposes 2 KB.
+    vw.fight(40);
+    const Reply sixteen(vw.s.call("vfx.info", R"({"since":0,"max":16})"));
+    std::printf("\n      max 16 mid-fight: %zu bytes, %u records", sixteen.json("/result").size(),
+                sixteen.at("/result/records") ? sixteen.at("/result/records")->count : 0u);
+    CHECK(sixteen.at("/result/records")->count == 16 && sixteen.json("/result").size() <= 2048, "16 records in at most 2 KB");
+
+    for (const char* bad : {R"({"max":65})", R"({"since":-1})"})
+        CHECK(Reply(vw.s.call("vfx.info", bad)).code() == "E_RANGE", "max over 64, since below 0: E_RANGE");
+    CHECK(Reply(vw.s.call("vfx.info", R"({"effect":"muzzle"})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
+}
+
 static void t29_audio_mix() {
     AudioWorld aw;
     CHECK(aw.load(kPlayScene).ok() && Reply(aw.s.call("world.step", R"({"frames":1})")).ok(), "the play scene, one step");
@@ -2943,6 +3000,7 @@ int main() {
     RUN(sp7_t18_combat_damage_kills);
     RUN(sp7_t18_combat_params_refused);
     RUN(t29_audio_info);
+    RUN(t35_vfx_info_step);
     RUN(t29_audio_mix);
     RUN(bench_apply_and_query_10k);
 
