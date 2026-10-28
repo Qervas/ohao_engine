@@ -81,6 +81,17 @@ SCENES = [
     ("play rt_realtime nrd",
      ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
+    # sub-project 12: the doorway's smoke (a VfxEmitter's spheres in the shadow and GI traces, its particles
+    # and the forward pass), through the raster and both path-traced modes.
+    ("smoke doorway deferred",
+     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
+    ("smoke doorway rt_offline",
+     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("smoke doorway rt_realtime",
+     ["build/Release/ohao.exe", "run", "assets/scenes/smoke_doorway.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
 ]
 
 LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)
