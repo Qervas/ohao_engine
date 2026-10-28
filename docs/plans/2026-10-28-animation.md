@@ -214,17 +214,17 @@
   - `void driveArmsAnim(const World&, entt::entity, const PlayerState&, const WeaponState&, const Weapon&, const InputMap&, std::span<const CombatEvent>, AnimParams&)`;
   - the arms graph: `idle`, `sprint`, `ads` (blend by `aim`), `fire` (additive per `shot`), `reload` (`rateFrom: weapon.reloadTime`, events `mag_out`, `mag_in`).
 
-- [ ] **Step 1: Content.**
+- [x] **Step 1: Content.**
   - A CC0 arms and rifle rig if one fits; else `make_fps_arms.py` (Blender 5.2.2).
   - The clips: idle, fire, reload with `mag_out` and `mag_in`, ADS in and hold, sprint.
   - Rebuilt byte for byte by a test that skips without Blender (as `check_level_assets.py` does).
   - Licence files beside it. Commit `feat(assets): the player's arms and rifle`.
-- [ ] **Step 2: Failing tests.**
+- [x] **Step 2: Failing tests.**
   - `t23_reload_mag_in_on_reloaded` (`reloadTime` 1.5 and 2.0: `mag_in` within one step of `Reloaded`).
   - The ADS cases (`WeaponState.aim` stepped over `adsTime`; the spread halved at 1 per OPEN ruling 11; a capture's field of view unchanged in lockstep).
   - `t25_play_scene_skinned`'s arms case.
   - Build; expected: FAIL.
-- [ ] **Step 3: The arms.**
+- [x] **Step 3: The arms.**
   - `arms_anim.cpp`, `arms.animgraph.json`. The `aim` action in the play scene's `InputActions` (right mouse button).
   - `WeaponState.aim` and `Weapon.adsTime` (saved), the spread in the weapon step.
   - `view_model.cpp`:
@@ -233,14 +233,14 @@
     - the ADS field of view at render rate in realtime only.
   - The arms keep `kDrawViewModel` and `kTlasMaskViewModel`.
   - Run `combat_tests`, `anim_tests`, `light_emitter_gpu_test` (its gun section with the arms: they change only their own pixels); expected: PASS.
-- [ ] **Step 4: The play scene and latency.**
+- [x] **Step 4: The play scene and latency.**
   - The box gun replaced by the arms in `blockout_play.scene.json`.
   - Run `check_live.py`, `e2e_mcp.py`, `check_validation.py`; expected: PASS.
   - Run `feel_bench --check`; expected: `look_latency_ms` ≤ 15 ms (pacing reported under SP9's ruling 21).
-- [ ] **Step 5: Goldens and expectations.**
+- [x] **Step 5: Goldens and expectations.**
   - `cli_blockout_play_deferred` and `cli_blockout_play_hud` move again (the arms): look, re-baseline in their own commit.
   - `WeaponState.aim` moves the `world.hash` expectations: diff, then `--update`.
-- [ ] **Step 6: Close.**
+- [x] **Step 6: Close.**
   - `check.py --all`.
   - Change record `...-animation-step3.md`.
   - Look shots `step3_arms_strip.png` (idle, fire, reload with its magazine, ADS, sprint) and `step3_reload_timing.png` (the arms' `mag_in` against the weapon's `Reloaded` step).
