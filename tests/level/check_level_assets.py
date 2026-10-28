@@ -160,10 +160,41 @@ def l1_blockout_scene_references_the_level():
     assert any("Camera" in e for e in scene["entities"]), "no camera"
 
 
+AUDIO_FIXTURE = os.path.join(ROOT, "tests", "level", "fixtures", "level_audio.gltf")
+
+
+def t27_verb_hint_schema():
+    # Sub-project 11 step 2: the `verb` hint (a ReverbZone's preset) is in the extras schema; the
+    # reverb-zone fixture's nodes validate; a verb that is not a non-empty string does not.
+    schema = json.load(open(SCHEMA))
+    assert "verb" in schema.get("properties", {}), "the extras schema has no verb"
+    for i, node in enumerate(json.load(open(AUDIO_FIXTURE))["nodes"]):
+        try:
+            jsonschema.validate(node.get("extras", {}), schema)
+        except jsonschema.ValidationError as e:
+            raise AssertionError(f"level_audio.gltf node {i} ({node.get('name')}): {e.message}")
+    for bad in ({"verb": 3}, {"verb": ""}):
+        try:
+            jsonschema.validate(bad, schema)
+        except jsonschema.ValidationError:
+            continue
+        raise AssertionError(f"{bad} validates")
+    # The fixture is generated: tests/level/make_audio_fixture.py reproduces it byte for byte.
+    out_dir = os.path.join(ROOT, "build", "level_check")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, f"level_audio_{os.getpid()}.gltf")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "level", "make_audio_fixture.py"), out],
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, f"make_audio_fixture.py exit {r.returncode}: {r.stderr[-400:]}"
+    rebuilt, checked_in = open(out, "rb").read(), open(AUDIO_FIXTURE, "rb").read()
+    os.remove(out)
+    assert rebuilt == checked_in, "level_audio.gltf differs from what make_audio_fixture.py writes: regenerate it"
+
+
 def main():
     for fn in (l1_every_checked_in_level_has_valid_hints, l1_blockout_hints_are_the_contract,
                l1_blockout_rebuilds_byte_identical, l1_blockout_scene_references_the_level,
-               a3_fps_arms_rebuild_byte_identical):
+               a3_fps_arms_rebuild_byte_identical, t27_verb_hint_schema):
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed, {len(skipped)} skipped")
     print(json.dumps({"suite": "check_level_assets", "passed": passed, "failed": failed,
