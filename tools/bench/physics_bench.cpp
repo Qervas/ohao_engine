@@ -38,7 +38,7 @@
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
-#include "runtime/game_audio.hpp"
+#include "ecs/audio_schedule.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -486,11 +486,12 @@ int main(int argc, char** argv) {
     const bool restarted = restarts == 55;
     if (!restarted) failures.push_back("round: " + std::to_string(restarts) + " restarts of 55 pressed");
 
-    // 9. The occlusion ray (sub-project 9 step 3, gated by the budgets' `feelStep`): what the window
-    // host spends deciding whether a wall stands between the listener and an enemy's sound
-    // (runtime::soundOccluded: one ray from the eye, passing through characters), against the level
-    // ray budget of 5 us. The blockout with the player at its spawn and the two enemies at theirs;
-    // rays to both enemies' eyes and to 62 points around the room, 64 a batch, N rounds of 100 batches.
+    // 9. The occlusion ray (sub-project 9 step 3, gated by the budgets' `feelStep`): what the audio
+    // schedule spends grading the walls between the listener and an enemy's sound (since
+    // sub-project 11, ecs::occlusionBetween: a ray from the eye through characters, on past the first
+    // wall to count a second), against the level ray budget of 5 us. The blockout with the player at
+    // its spawn and the two enemies at theirs; rays to both enemies' eyes and to 62 points around the
+    // room, 64 a batch, N rounds of 100 batches.
     std::vector<double> occlusionUs;
     std::size_t occludedRays = 0, totalRays = 0;
     for (int r = 0; r < rounds + 1; ++r) {
@@ -501,7 +502,7 @@ int main(int argc, char** argv) {
         addEnemy(b.world, 0xe2, "enemy", {}, 14.0f);
         b.world.sync();
         auto& reg = b.world.registry();
-        runtime::Listener listener;
+        ecs::AudioListener listener;
         listener.body = pl;
         listener.playerId = 0xb1a7e2;
         listener.position = reg.get<ecs::Transform>(pl).position + glm::vec3(0.0f, 1.62f, 0.0f);
@@ -514,7 +515,7 @@ int main(int argc, char** argv) {
         for (int batch = 0; batch < 100; ++batch) {
             std::size_t blocked = 0;
             const auto t0 = std::chrono::steady_clock::now();
-            for (const glm::vec3& s : sources) blocked += runtime::soundOccluded(b.world, listener, s);
+            for (const glm::vec3& s : sources) blocked += ecs::occlusionBetween(b.world, listener, s).walls > 0;
             const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
             if (r > 0) {
                 occlusionUs.push_back(us / double(sources.size()));

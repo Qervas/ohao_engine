@@ -3,11 +3,23 @@
   "driver": "enemy",
   "clips": {
     "idle": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "idle", "loop": true },
-    "walk": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk", "loop": true },
-    "run": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run", "loop": true },
+    "walk": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk", "loop": true,
+      "events": [ { "t": 0.08, "name": "foot_r" }, { "t": 0.60, "name": "foot_l" } ]
+    },
+    "run": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run", "loop": true,
+      "events": [ { "t": 0.12, "name": "foot_r" }, { "t": 0.49, "name": "foot_l" } ]
+    },
     "aim_idle": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "aim_idle", "loop": true },
-    "walk_aim": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk_aim", "loop": true },
-    "run_aim": { "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run_aim", "loop": true },
+    "walk_aim": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "walk_aim", "loop": true,
+      "events": [ { "t": 0.08, "name": "foot_r" }, { "t": 0.60, "name": "foot_l" } ]
+    },
+    "run_aim": {
+      "file": "assets/characters/toon_enemy/enemy.glb", "animation": "run_aim", "loop": true,
+      "events": [ { "t": 0.12, "name": "foot_r" }, { "t": 0.49, "name": "foot_l" } ]
+    },
     "death": {
       "file": "assets/characters/toon_enemy/enemy.glb", "animation": "death", "loop": false,
       "events": [ { "t": 0.55, "name": "body_fall" } ]

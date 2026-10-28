@@ -4,13 +4,17 @@
 
 #include "audio/audio_bank.hpp"
 #include "audio/audio_system.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/audio_schedule.hpp"
+#include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
+#include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
+#include "ecs/world_hash.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
 
@@ -22,6 +26,8 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +35,7 @@
 #include "common/harness.hpp"   // CHECK, RUN, the JSON summary line
 
 using namespace ohao::ecs;
+using ohao::InputEvent;
 
 namespace {
 
@@ -319,6 +326,665 @@ void t27_behind_cover_render() {
     CHECK(broadband <= -6.0, "broadband at least 6 dB down");
 }
 
+// =============================================================================
+// Test 28: the schedule (sub-project 11 step 3)
+// =============================================================================
+
+ohao::AudioBank sliceBank() {
+    std::ifstream f(std::filesystem::path(OHAO_SOURCE_DIR) / kSlice, std::ios::binary);
+    const std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto r = ohao::parseAudioBank(json);
+    return r ? std::move(r).value() : ohao::AudioBank{};
+}
+
+ohao::AudioBank bankFrom(const char* json) {
+    auto r = ohao::parseAudioBank(json);
+    if (!r) {
+        for (const auto& e : r.error()) std::printf("\n      bank error %s: %s", e.path.c_str(), e.message.c_str());
+        return {};
+    }
+    return std::move(r).value();
+}
+
+InputEvent actionEvent(const char* name, bool down) {
+    InputEvent e;
+    e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
+    e.name = name;
+    return e;
+}
+
+InputEvent axisSet(const char* name, float value) {
+    InputEvent e;
+    e.type = InputEvent::Type::AxisSet;
+    e.name = name;
+    e.value = value;
+    return e;
+}
+
+constexpr uint64_t kEnemyA = 0x5c0b1a7e00000010ull, kEnemyB = 0x5c0b1a7e00000020ull;
+
+// The play scene as hosts load it (levels, physics, combat, the round hook, animation, and the audio
+// schedule unless `audio` is false).
+struct Fight {
+    World w;
+    FileAssetResolver files{OHAO_SOURCE_DIR};
+    PhysicsScene* physics{nullptr};
+    CombatSystem* combat{nullptr};
+    AudioSchedule* audio{nullptr};
+    entt::entity player{entt::null};
+    bool loaded{false};
+
+    explicit Fight(bool withAudio = true) {
+        w.seedIds(7);
+        ohao::level::installLevels(w, files, engineTypes());
+        physics = &installPhysics(w, files);
+        combat = &installCombat(w);
+        installRoundHook(w, engineTypes());
+        installAnimation(w, files);
+        if (withAudio) audio = &installAudio(w, files);
+        loaded = static_cast<bool>(
+            loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json", engineTypes()));
+        if (loaded)
+            for (const char* sync : {"level", "player_spawn", "transform", "physics"}) w.runSync(sync);
+        for (auto [e, pc] : w.registry().view<const PlayerController>().each())
+            if (pc.input) player = e;
+    }
+    uint64_t playerId() const { return w.idOf(player); }
+    // n steps with `inputs(i)` at step i (counting from `from`); every command written, in order.
+    std::vector<AudioCommand> run(int n, const std::function<std::vector<InputEvent>(int)>& inputs = {}, int from = 0) {
+        std::vector<AudioCommand> all;
+        for (int i = 0; i < n; ++i) {
+            w.stepInput(inputs ? inputs(from + i) : std::vector<InputEvent>{});
+            w.update(kDt);
+            const auto c = audioCommands(w);
+            all.insert(all.end(), c.begin(), c.end());
+        }
+        return all;
+    }
+    // Faces `id` (an enemy) from where the player stands.
+    void face(uint64_t id) {
+        const glm::vec3 me = physics->playerInfo(player)->pos, it = w.registry().get<Transform>(w.findById(id)).position;
+        physics->teleportPlayer(player, me, glm::degrees(std::atan2(-(it.x - me.x), -(it.z - me.z))));
+    }
+};
+
+// The done demo's fight, scripted per step: bursts of fire every 40 steps (held 13), a walk forward
+// between steps 100 and 160, a reload at 300.
+std::vector<InputEvent> script(int i) {
+    std::vector<InputEvent> in;
+    if (i % 40 == 0) in.push_back(actionEvent("fire", true));
+    if (i % 40 == 13) in.push_back(actionEvent("fire", false));
+    if (i == 100) in.push_back(axisSet("move_forward", 1.0f));
+    if (i == 160) in.push_back(axisSet("move_forward", 0.0f));
+    if (i == 300) in.push_back(actionEvent("reload", true));
+    if (i == 302) in.push_back(actionEvent("reload", false));
+    return in;
+}
+
+std::vector<std::string> lines(const std::vector<AudioCommand>& cmds, const ohao::AudioBank& bank, bool skipResync = false) {
+    std::vector<std::string> out;
+    for (const auto& c : cmds)
+        if (!(skipResync && c.resync)) out.push_back(describeAudioCommand(c, bank));
+    return out;
+}
+
+// Prints where two dumps first differ (nothing when equal).
+void firstDiff(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+    for (std::size_t i = 0; i < std::max(a.size(), b.size()); ++i) {
+        const std::string x = i < a.size() ? a[i] : "(none)", y = i < b.size() ? b[i] : "(none)";
+        if (x == y) continue;
+        std::printf("\n      first difference at line %zu of %zu/%zu:\n        %s\n        %s", i, a.size(), b.size(), x.c_str(), y.c_str());
+        return;
+    }
+}
+
+std::size_t countOp(const std::vector<AudioCommand>& cmds, AudioCommand::Op op) {
+    return static_cast<std::size_t>(std::count_if(cmds.begin(), cmds.end(), [op](const AudioCommand& c) { return c.op == op; }));
+}
+
+// Every case of runtime_tests' sp6_t13_*, sp7_fx_sounds_by_event_and_surface, sp9_t21_voice_cap,
+// distance_curves, occlusion_ray and sp10_t23_*, restated on the schedule.
+void t28_rules_moved() {
+    // Which sounds a combat event names (sp7_fx_sounds_by_event_and_surface).
+    using K = CombatEvent::Kind;
+    constexpr uint64_t player = 0xb1a7e2, enemy = 0xe1;
+    const auto ev = [](K kind, uint64_t source, uint64_t target, float amount = 0.0f, std::string surface = {}) {
+        CombatEvent e;
+        e.kind = kind;
+        e.sourceId = source;
+        e.targetId = target;
+        e.amount = amount;
+        e.surface = std::move(surface);
+        return e;
+    };
+    using V = std::vector<std::string>;
+    CHECK(combatSoundNames(ev(K::Shot, player, 0), player) == V{"fire"}, "the player's round: fire");
+    CHECK(combatSoundNames(ev(K::Shot, enemy, 0), player) == V{"enemy_fire"}, "an enemy's round: enemy_fire");
+    CHECK(combatSoundNames(ev(K::Hit, player, 7, 4.0f, "metal"), player) == V{"impact_metal"}, "a hit: its surface's impact");
+    CHECK(combatSoundNames(ev(K::Hit, enemy, player, 4.0f, "default"), player) == V{"impact_default"}, "on anything");
+    CHECK(combatSoundNames(ev(K::Damage, enemy, player, 8.0f), player) == V{"hurt"}, "damage to the player: hurt");
+    CHECK(combatSoundNames(ev(K::Damage, player, enemy, 25.0f), player).empty(), "damage to anyone else: nothing");
+    CHECK(combatSoundNames(ev(K::Death, player, enemy), player) == V{"death"}, "a death");
+    CHECK(combatSoundNames(ev(K::Reload, player, 0, 0.0f), player) == (V{"empty", "reload"}), "the magazine ran dry");
+    CHECK(combatSoundNames(ev(K::Reload, player, 0, 12.0f), player) == V{"reload"}, "a reload by the key");
+    CHECK(combatSoundNames(ev(K::Reload, enemy, 0, 0.0f), player).empty(), "an enemy's reload: nothing");
+    for (const K quiet : {K::Reloaded, K::RoundStart, K::Restart, K::Win})
+        CHECK(combatSoundNames(ev(quiet, player, 0), player).empty(), "and nothing else");
+    for (const char* own : {"fire", "hurt", "reload", "empty"}) CHECK(combatSoundAtEar(own), "the player's own at the ear");
+    CHECK(!combatSoundAtEar("enemy_fire") && !combatSoundAtEar("impact_metal") && !combatSoundAtEar("death"), "the rest at their point");
+
+    // Handling and footsteps from animation events (sp10_t23_handling_sounds).
+    const auto anim = [](std::string name) {
+        AnimEvent e;
+        e.entity = 0xe1;
+        e.clip = "reload";
+        e.name = std::move(name);
+        return e;
+    };
+    for (const char* n : {"mag_out", "mag_in", "bolt", "body_fall"}) CHECK(animSoundNames(anim(n)) == V{n}, "a handling event plays its own sound");
+    CHECK(animSoundNames(anim("foot_l")) == V{"footstep"} && animSoundNames(anim("foot_r")) == V{"footstep"},
+          "a foot event plays a footstep");
+    CHECK(animSoundNames(anim("tick")).empty(), "and nothing else");
+
+    // The arms' events are the player's (sp10_t23_arms_sounds_are_the_players).
+    {
+        World w;
+        const entt::entity p = w.createWithId(0xb1a7e2, "Player");
+        const entt::entity head = w.createWithId(0xb1a7e3, "Head");
+        w.setParent(head, p);
+        const entt::entity gun = w.createWithId(0xb1a7e4, "Gun");
+        w.setParent(gun, head);
+        const entt::entity arms = w.createWithId(0xb1a7e6, "Arms");
+        w.setParent(arms, gun);
+        (void)w.createWithId(0xe1, "Enemy");
+        CHECK(animSoundOwner(w, 0xb1a7e6, 0xb1a7e2) == 0xb1a7e2, "the arms' events are the player's");
+        CHECK(animSoundOwner(w, 0xb1a7e2, 0xb1a7e2) == 0xb1a7e2, "the player's own");
+        CHECK(animSoundOwner(w, 0xe1, 0xb1a7e2) == 0xe1, "an enemy's are its own");
+        CHECK(animSoundOwner(w, 0xb1a7e6, 0) == 0xb1a7e6, "no player: everyone's their own");
+    }
+
+    // Footsteps: louder with speed, by the ground's surface (sp6_t13_*).
+    CHECK(near(footstepScale(false, 4.0f), 0.65f) && near(footstepScale(false, 6.5f), 0.9f), "a walk 0.65, a sprint 0.9");
+    CHECK(near(footstepScale(true, 3.0f), 0.5f) && near(footstepScale(true, 1.0f), 0.4f), "a landing by its impact, at least 0.4");
+    const ohao::AudioBank slice = sliceBank();
+    CHECK(footstepSound(slice, "metal") == "footstep_metal" && footstepSound(slice, "glass") == "footstep_default",
+          "a surface's footsteps, else default's");
+
+    // The distance curves are the bank's shapes, on miniaudio's model (sp9_t21_distance_curves).
+    const ohao::ShapeDesc* gun = slice.shape("gunfire");
+    const ohao::ShapeDesc* nearShape = slice.shape("near");
+    CHECK(gun && gun->minDistance == 1.0f && gun->maxDistance == 60.0f && gun->rolloff == 1.0f, "gunfire: 1 m to 60 m, rolloff 1");
+    CHECK(nearShape && nearShape->minDistance == 0.5f && nearShape->maxDistance == 20.0f && nearShape->rolloff == 1.5f,
+          "near: 0.5 m to 20 m, rolloff 1.5");
+    if (!gun || !nearShape) return;
+    for (const float d : {0.25f, 1.0f, 3.0f, 10.0f, 60.0f, 100.0f}) {
+        CHECK(distanceGain(d, *gun) == ohao::AudioSystem::distanceGain(d, ohao::SoundShape{1.0f, 60.0f, 1.0f, false}),
+              "the schedule's curve is the mixer's (gunfire)");
+        CHECK(distanceGain(d, *nearShape) == ohao::AudioSystem::distanceGain(d, ohao::SoundShape{0.5f, 20.0f, 1.5f, false}),
+              "and near's");
+    }
+
+    // Where each plays, and which get a ray (planCombatSound, planAnimSound, Footsteps).
+    Fight f;
+    CHECK(f.loaded && f.audio, "the play scene with its schedule");
+    if (!f.loaded || !f.audio) return;
+    (void)f.run(1);
+    const uint64_t me = f.playerId();
+    const glm::vec3 eye{-2.5f, 1.9f, -2.0f}, at{-2.5f, 1.4f, -2.0f};
+    const auto rays = [&] { return f.audio->stats().raysCast; };
+    uint64_t r0 = rays();
+    const auto theirs = f.audio->play({"enemy_fire", kEnemyA, eye});
+    CHECK(theirs && theirs->spatial && theirs->pos == eye && rays() == r0 + 1, "an enemy's round: at its eye, one ray");
+    r0 = rays();
+    const auto own = f.audio->play({"fire", me, eye});
+    CHECK(own && !own->spatial && rays() == r0, "the player's own: at the ear, no ray");
+    const auto impact = f.audio->play({"impact_metal", kEnemyA, at});
+    CHECK(impact && impact->spatial && impact->pos == at && rays() == r0, "an impact: at it, no ray");
+    const auto handling = f.audio->play({"mag_out", kEnemyA, at});
+    CHECK(handling && handling->spatial && rays() == r0 + 1, "an enemy's handling: at it, with a ray");
+    r0 = rays();
+    const auto ownHandling = f.audio->play({"mag_in", me, at, true});
+    CHECK(ownHandling && !ownHandling->spatial && rays() == r0, "the player's own handling: at the ear, no ray");
+    const auto ownStep = f.audio->play({"footstep_concrete", me, {1.5f, 0.0f, 2.2f}});
+    CHECK(ownStep && ownStep->spatial && rays() == r0, "the player's own footstep: at its feet, no ray");
+    const auto theirStep = f.audio->play({"footstep_concrete", kEnemyA, {-2.5f, 0.3f, -2.0f}});
+    CHECK(theirStep && theirStep->spatial && rays() == r0 + 1, "an enemy's footstep: a ray");
+    CHECK(own && theirs && own->gain == slice.sounds[static_cast<std::size_t>(slice.sound("fire"))].volume &&
+              theirs->gain == slice.sounds[static_cast<std::size_t>(slice.sound("enemy_fire"))].volume,
+          "the gain is the bank's volume (Feel's: fire 0.85, enemy_fire 0.7)");
+
+    // A wall between the listener and an enemy's round: occluded (sp9_t21_occlusion_ray).
+    {
+        World w;
+        FileAssetResolver files{OHAO_SOURCE_DIR};
+        (void)installPhysics(w, files);
+        AudioSchedule& audio = installAudio(w, files);
+        audio.setBank(slice);
+        const entt::entity ground = w.create("Ground", Transform{{0.0f, -0.5f, 0.0f}});
+        w.registry().emplace<Collider>(ground, Collider{ColliderShape::Box, {30.0f, 0.5f, 30.0f}});
+        const entt::entity p = w.create("Player");
+        w.registry().emplace<PlayerController>(p);
+        const entt::entity head = w.create("Head", Transform{{0.0f, 1.62f, 0.0f}});
+        w.setParent(head, p);
+        w.registry().emplace<Camera>(head, Camera{75.0f, 0.05f, 100.0f, true});
+        PlayerController enemyPc;
+        enemyPc.input = false;
+        const entt::entity enemy = w.create("Enemy", Transform{{0.0f, 0.0f, -10.0f}});
+        w.registry().emplace<PlayerController>(enemy, enemyPc);
+        w.update(kDt);
+        const glm::vec3 enemyEye = glm::vec3(w.registry().get<WorldTransform>(enemy).world[3]) + glm::vec3(0.0f, 1.6f, 0.0f);
+        const auto open = audio.play({"enemy_fire", w.idOf(enemy), enemyEye});
+        CHECK(open && open->occl.walls == 0, "in the open: heard (the source's own capsule passed through)");
+        const entt::entity wall = w.create("Wall", Transform{{0.0f, 1.5f, -5.0f}});
+        w.registry().emplace<Collider>(wall, Collider{ColliderShape::Box, {4.0f, 2.0f, 0.1f}});
+        w.update(kDt);
+        const auto blocked = audio.play({"enemy_fire", w.idOf(enemy), enemyEye});
+        CHECK(blocked && blocked->occl.walls == 1 && near(blocked->occl.db, -8.0f) && blocked->occl.lowPassHz == 1200.0,
+              "a wall between: -8 dB and the 1.2 kHz low-pass");
+        const auto ownRound = audio.play({"fire", w.idOf(p), enemyEye});
+        CHECK(ownRound && ownRound->occl.walls == 0, "the player's own round: no ray, never occluded");
+    }
+
+    // The voice cap (sp9_t21_voice_cap): 30 rounds at 1..30 m alternately near and far on a bus capped
+    // at 12; the 12 loudest at the listener hold voices, the rest are lost (dropped, or stolen by a
+    // louder one), and the player's own round (higher priority, at the ear) always gets a voice.
+    {
+        Fight g;
+        if (!g.loaded) return;
+        (void)g.run(1);
+        const auto ears = listenerAtStep(g.w);
+        if (!ears) return;
+        const int weapons = slice.bus("weapons");
+        std::map<uint32_t, float> started;   // voice -> distance
+        std::set<uint32_t> lost;
+        for (int i = 0; i < 30; ++i) {
+            const float d = static_cast<float>(i % 2 == 0 ? 1 + i / 2 : 30 - i / 2);
+            const auto c = g.audio->play({"enemy_fire", g.playerId(), ears->position + glm::vec3(0.0f, 0.0f, -d)});
+            if (!c) continue;
+            if (c->outcome == AudioCommand::Outcome::Dropped) lost.insert(c->voice);
+            started[c->voice] = d;
+        }
+        for (const auto& c : g.audio->stepCommands())
+            if (c.op == AudioCommand::Op::Stop) lost.insert(c.voice);
+        std::size_t held = 0;
+        float quietestKept = 1.0f, loudestLost = 0.0f;
+        for (const ScheduledVoice& v : g.audio->voices()) {
+            if (v.bus != weapons) continue;
+            ++held;
+            quietestKept = std::min(quietestKept, distanceGain(started[v.id], *gun));
+        }
+        for (const uint32_t v : lost) loudestLost = std::max(loudestLost, distanceGain(started[v], *gun));
+        std::printf("\n      %zu held on weapons, %zu lost", held, lost.size());
+        CHECK(held == 12 && lost.size() == 18, "12 hold (the bus cap), 18 lost");
+        CHECK(loudestLost < quietestKept, "the ones lost are the quietest at the listener");
+        const auto mine = g.audio->play({"fire", g.playerId(), ears->position});
+        CHECK(mine && mine->outcome == AudioCommand::Outcome::Stole, "the player's own round takes a voice (the quietest's)");
+    }
+
+    // Footsteps by surface, round robin, every one the walk logged (sp6_t13_footsteps_play_the_walk).
+    {
+        World w;
+        FileAssetResolver files{OHAO_SOURCE_DIR};
+        (void)installPhysics(w, files);
+        AudioSchedule& audio = installAudio(w, files);
+        audio.setBank(slice);
+        const entt::entity ground = w.create("Ground", Transform{{0.0f, -0.5f, 0.0f}});
+        Collider floor{ColliderShape::Box, {30.0f, 0.5f, 30.0f}};
+        floor.surface = "metal";
+        w.registry().emplace<Collider>(ground, floor);
+        const entt::entity p = w.create("Player");
+        w.registry().emplace<PlayerController>(p);
+        const entt::entity head = w.create("Head", Transform{{0.0f, 1.62f, 0.0f}});
+        w.setParent(head, p);
+        w.registry().emplace<Camera>(head, Camera{75.0f, 0.05f, 100.0f, true});
+        std::size_t logged = 0;
+        std::vector<uint32_t> variants;
+        const int metal = slice.sound("footstep_metal");
+        for (int i = 0; i < 90; ++i) {
+            w.stepInput(i == 0 ? std::vector<InputEvent>{axisSet("move_forward", 1.0f)} : std::vector<InputEvent>{});
+            w.update(kDt);
+            for (const auto& e : physicsEvents(w)) logged += e.kind == PhysicsEvent::Kind::Footstep;
+            for (const auto& c : audioCommands(w))
+                if (c.op == AudioCommand::Op::Play && c.sound == metal && c.spatial) variants.push_back(c.variant);
+        }
+        bool robin = !variants.empty();
+        for (std::size_t i = 0; i < variants.size(); ++i) robin = robin && variants[i] == i;
+        std::printf("\n      %zu footsteps logged, %zu scheduled", logged, variants.size());
+        CHECK(logged >= 6 && variants.size() == logged, "every footstep the steps logged is scheduled once, on its surface's sound");
+        CHECK(robin, "variants in turn (the device takes them modulo the files: round robin)");
+    }
+}
+
+// Over a bus cap: a lower priority is stolen first, then the quieter, then the older; a new voice
+// that would lose is dropped; the global cap the same; the same choices every run; a voice ending in
+// a step frees its place for that step.
+void t28_priority_and_steal() {
+    const char* json = R"({
+      "buses": {"master": {}, "world": {"parent": "master"}, "weapons": {"parent": "world", "cap": 3},
+                "impacts": {"parent": "world", "cap": 2}},
+      "voices": 4,
+      "shapes": {"near": {"min": 1, "max": 50, "rolloff": 1}},
+      "sounds": {
+        "shot":  {"files": "t/shot", "bus": "weapons", "priority": 200, "shape": "near", "holdMs": 1000},
+        "pop":   {"files": "t/pop", "bus": "weapons", "priority": 100, "shape": "near", "holdMs": 1000},
+        "own":   {"files": "t/own", "bus": "weapons", "priority": 250, "shape": "ear", "holdMs": 1000},
+        "hit":   {"files": "t/hit", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 1000},
+        "short": {"files": "t/short", "bus": "weapons", "priority": 200, "shape": "near", "holdMs": 50}
+      }
+    })";
+    const ohao::AudioBank bank = bankFrom(json);
+    CHECK(!bank.sounds.empty(), "the test bank parses");
+    using O = AudioCommand::Outcome;
+    const auto scenario = [&](std::vector<std::string>& out) {
+        Room r({0.0f, 0.0f, 0.0f});
+        r.audio->setBank(bank);
+        (void)r.run(1);
+        const auto at = [](float d) { return glm::vec3(0.0f, 0.0f, -d); };
+        const auto play = [&](const char* s, float d) { return *r.audio->play({s, 0, at(d)}); };
+        const AudioCommand p2 = play("pop", 2), p4 = play("pop", 4), s3 = play("shot", 3);
+        const AudioCommand s1 = play("shot", 1);   // over weapons' 3: the pops are lower; the quieter goes
+        const AudioCommand s10 = play("shot", 10);   // the other pop
+        const AudioCommand s20 = play("shot", 20);   // no lower priority, no quieter equal: dropped
+        const AudioCommand sHalf = play("shot", 0.5f);   // equal priority, the quietest (10 m) goes
+        out = lines({p2, p4, s3, s1, s10, s20, sHalf}, bank);
+        CHECK(s1.outcome == O::Stole && s1.victim == p4.voice, "a lower priority first, the quieter of two");
+        CHECK(s10.outcome == O::Stole && s10.victim == p2.voice, "then the other lower priority");
+        CHECK(s20.outcome == O::Dropped, "a new voice that would lose is dropped");
+        CHECK(sHalf.outcome == O::Stole && sHalf.victim == s10.voice, "equal priority: the quietest");
+        // The global cap (4): weapons hold 3, an impact the fourth; a louder impact takes the quieter one.
+        const AudioCommand h2 = play("hit", 2);
+        CHECK(h2.outcome == O::Played, "the fourth voice");
+        const AudioCommand h1 = play("hit", 1);
+        CHECK(h1.outcome == O::Stole && h1.victim == h2.voice, "the global cap: one victim, the quieter impact");
+        // The player's own round (higher priority, at the ear) is never dropped for anything below it.
+        const AudioCommand mine = play("own", 0);
+        CHECK(mine.outcome == O::Stole, "the player's own takes a voice");
+        out.push_back(describeAudioCommand(h2, bank));
+        out.push_back(describeAudioCommand(h1, bank));
+        out.push_back(describeAudioCommand(mine, bank));
+    };
+    std::vector<std::string> a, b;
+    scenario(a);
+    scenario(b);
+    CHECK(!a.empty() && a == b, "the same choices every run");
+
+    // Ties: three equal shots, a louder one takes the oldest.
+    {
+        Room r({0.0f, 0.0f, 0.0f});
+        r.audio->setBank(bank);
+        (void)r.run(1);
+        const auto first = *r.audio->play({"shot", 0, {0.0f, 0.0f, -5.0f}});
+        (void)r.audio->play({"shot", 0, {0.0f, 0.0f, 5.0f}});
+        (void)r.audio->play({"shot", 0, {5.0f, 0.0f, 0.0f}});
+        const auto louder = *r.audio->play({"shot", 0, {0.0f, 0.0f, -1.0f}});
+        CHECK(louder.outcome == O::Stole && louder.victim == first.voice, "equal priority and loudness: the oldest");
+    }
+    // A voice ending in a step frees its place in that step.
+    {
+        Room r({0.0f, 0.0f, 0.0f});
+        r.audio->setBank(bank);
+        (void)r.run(1);
+        (void)r.audio->play({"short", 0, {0.0f, 0.0f, -1.0f}});   // 50 ms: 3 steps
+        (void)r.audio->play({"shot", 0, {0.0f, 0.0f, -1.0f}});
+        (void)r.audio->play({"shot", 0, {0.0f, 0.0f, -1.0f}});
+        (void)r.run(3);
+        const auto next = *r.audio->play({"shot", 0, {0.0f, 0.0f, -30.0f}});
+        CHECK(next.outcome == O::Played, "the short voice ended this step: a free place, nothing stolen");
+    }
+}
+
+// Which file a machine has never changes a command: the hold is the bank's.
+void t28_hold_declared() {
+    ohao::AudioBank a = sliceBank(), b = sliceBank();
+    for (auto& s : b.sounds)
+        if (s.name == "fire") s.files = "weapons/reload";   // another, longer file; the same holdMs
+    const auto run = [](const ohao::AudioBank& bank) {
+        Fight f;
+        f.audio->setBank(bank);
+        f.face(kEnemyA);
+        return lines(f.run(240, script), bank);
+    };
+    const auto x = run(a), y = run(b);
+    CHECK(!x.empty() && x == y, "the same commands with the sound's file swapped for a longer one");
+}
+
+// A `fire` ducks its buses while it holds (attack 1 step, release 15), a hurt the world; the deepest
+// duck on a bus wins.
+void t28_duck_rules() {
+    const char* json = R"({
+      "buses": {"master": {}, "world": {"parent": "master"}, "weapons": {"parent": "world"},
+                "foley": {"parent": "world"}, "ambience": {"parent": "world"}, "voice": {"parent": "master"}},
+      "sounds": {
+        "fire":   {"files": "t/fire", "bus": "weapons", "priority": 250, "shape": "ear", "holdMs": 450},
+        "reload": {"files": "t/reload", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 900},
+        "hurt":   {"files": "t/hurt", "bus": "voice", "priority": 240, "shape": "ear", "holdMs": 300}
+      },
+      "ducks": [
+        {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
+        {"on": "fire", "bus": "foley", "db": -3, "attackSteps": 1, "releaseSteps": 15},
+        {"on": "reload", "bus": "foley", "db": -5, "attackSteps": 2, "releaseSteps": 10},
+        {"on": "hurt", "bus": "world", "db": -4, "attackSteps": 1, "releaseSteps": 18}
+      ]
+    })";
+    const ohao::AudioBank bank = bankFrom(json);
+    Room r({0.0f, 0.0f, 0.0f});
+    r.audio->setBank(bank);
+    (void)r.run(1);
+    const auto busCmds = [&](std::span<const AudioCommand> cmds) {
+        std::map<std::string, std::pair<float, uint32_t>> out;
+        for (const auto& c : cmds)
+            if (c.op == AudioCommand::Op::Bus) out[bank.buses[c.bus].name] = {c.db, c.blendSteps};
+        return out;
+    };
+    (void)r.audio->play({"fire", 0, {}});   // at step 1: held 27 steps (450 ms)
+    auto now = busCmds(r.audio->stepCommands());
+    CHECK(now.size() == 2 && now["ambience"] == std::make_pair(-6.0f, 1u) && now["foley"] == std::make_pair(-3.0f, 1u),
+          "fire: ambience -6 dB and foley -3 dB, attack 1 step");
+    (void)r.run(5);
+    (void)r.audio->play({"reload", 0, {}});   // at step 6: held 54 steps
+    now = busCmds(r.audio->stepCommands());
+    CHECK(now.size() == 1 && now["foley"] == std::make_pair(-5.0f, 2u), "a deeper duck on foley wins (-5 dB, its attack)");
+    std::map<uint64_t, std::map<std::string, std::pair<float, uint32_t>>> byStep;
+    for (int i = 0; i < 60; ++i) {
+        (void)r.run(1);
+        const auto c = busCmds(r.audio->stepCommands());
+        if (!c.empty()) byStep[r.audio->steps()] = c;
+    }
+    CHECK(byStep.count(28) && byStep[28].size() == 1 && byStep[28]["ambience"] == std::make_pair(0.0f, 15u),
+          "fire's hold ends at step 28: ambience back over 15 steps, foley held by the reload");
+    CHECK(byStep.count(60) && byStep[60]["foley"] == std::make_pair(0.0f, 10u), "the reload's hold ends at step 60: foley back over 10");
+    (void)r.audio->play({"hurt", 0, {}});
+    now = busCmds(r.audio->stepCommands());
+    CHECK(now.size() == 1 && now["world"] == std::make_pair(-4.0f, 1u), "hurt: world -4 dB");
+}
+
+// dead on the player's death, the default on the restart (dead's out-blend), won on the win, each with
+// its blend; a restart writes stop_world first.
+void t28_snapshot_from_round() {
+    Fight f;
+    CHECK(f.loaded && f.audio, "the play scene");
+    if (!f.loaded || !f.audio) return;
+    // Each snapshot command: its name and blend (a resync's name marked with '*').
+    const auto snaps = [](const std::vector<AudioCommand>& cmds) {
+        std::vector<std::pair<std::string, uint32_t>> out;
+        for (const auto& c : cmds)
+            if (c.op == AudioCommand::Op::Snapshot) out.emplace_back(c.snapshot + (c.resync ? "*" : ""), c.blendSteps);
+        return out;
+    };
+    using P = std::vector<std::pair<std::string, uint32_t>>;
+    CHECK(snaps(f.run(1)) == (P{{"default", 0}}), "the first step: default, at once");
+    (void)f.combat->damage(f.player, 1000.0f, entt::null, {});
+    CHECK(snaps(f.run(1)) == (P{{"dead", 18}}), "the player's death: dead over its 18 steps");
+    std::vector<AudioCommand> restart;
+    for (int i = 0; i < 400 && countOp(restart, AudioCommand::Op::StopWorld) == 0; ++i) restart = f.run(1);
+    CHECK(!restart.empty() && restart.front().op == AudioCommand::Op::StopWorld && restart.front().blendSteps == kStopWorldSteps,
+          "the restart: stop_world first, over 3 steps");
+    CHECK(snaps(restart) == (P{{"default*", 30}, {"default", 0}}),
+          "then the device back to the default over dead's 30 out-steps (resync), and the round's start's own default");
+    f.w.registry().replace<Health>(f.player, Health{10000.0f, 10000.0f});
+    (void)f.combat->damage(f.w.findById(kEnemyA), 1000.0f, entt::null, {});
+    (void)f.combat->damage(f.w.findById(kEnemyB), 1000.0f, entt::null, {});
+    P won;
+    for (int i = 0; i < 3 && won.empty(); ++i) won = snaps(f.run(1));
+    CHECK(won == (P{{"won", 60}}), "both enemies dead: won over its 60 steps");
+    const auto back = f.run(1, [](int) { return std::vector<InputEvent>{actionEvent("restart", true)}; });
+    CHECK(snaps(back) == (P{{"default*", 30}, {"default", 0}}), "the restart key: the default, over won's 30 out-steps");
+}
+
+// The done demo's fight twice from a fresh load: the same schedule.
+void t28_same_fight_same_schedule() {
+    const auto once = [] {
+        Fight f;
+        f.face(kEnemyA);
+        return lines(f.run(600, script), f.audio->bank());
+    };
+    const auto a = once(), b = once();
+    std::size_t plays = 0;
+    for (const auto& l : a) plays += l.rfind("play", 0) == 0;
+    std::printf("\n      %zu commands, %zu plays", a.size(), plays);
+    CHECK(plays > 50 && a == b, "identical dumps (every field but seq)");
+}
+
+// A snapshot mid-burst, restored and stepped the same: the same commands (the restore's resync aside).
+void t28_restore_mid_fight() {
+    Fight f;
+    f.face(kEnemyA);
+    (void)f.run(205, script);   // step 205: mid-burst (fire held from 200)
+    Snapshot snap;
+    takeSnapshot(f.w, engineTypes(), snap);
+    const auto a = f.run(120, script, 205);
+    restoreSnapshot(f.w, snap);
+    const auto b = f.run(120, script, 205);
+    const auto la = lines(a, f.audio->bank()), lb = lines(b, f.audio->bank(), true);
+    std::printf("\n      %zu commands; %zu resync after the restore", la.size(), b.size() - lb.size());
+    CHECK(!la.empty() && la == lb, "the same commands, every field but seq");
+    CHECK(countOp(b, AudioCommand::Op::StopWorld) >= 1, "the restore stops what the device still played (stop_world, resync)");
+}
+
+// The commands after a round restart equal those after the round's start, through the same inputs.
+void t28_restart_like_start() {
+    Fight f;
+    const auto start = f.run(90);
+    (void)f.run(60);
+    const auto restart = f.run(90, [](int i) { return i == 0 ? std::vector<InputEvent>{actionEvent("restart", true)}
+                                                             : i == 1 ? std::vector<InputEvent>{actionEvent("restart", false)}
+                                                                      : std::vector<InputEvent>{}; });
+    CHECK(!restart.empty() && restart.front().op == AudioCommand::Op::StopWorld, "the restart's stop_world first");
+    std::vector<AudioCommand> after(restart.begin() + (restart.empty() ? 0 : 1), restart.end());
+    const auto la = lines(start, f.audio->bank()), lb = lines(after, f.audio->bank(), true);
+    std::printf("\n      %zu commands after the start, %zu after the restart", la.size(), lb.size());
+    CHECK(!la.empty() && la == lb, "the same commands, step numbers included");
+}
+
+// Whether the scripted recording replays the world (world.hash at its end), with or without the schedule.
+bool worldReplays(bool withAudio, int from = 1, int steps = 300) {
+    Fight f(withAudio);
+    f.w.registry().replace<Health>(f.player, Health{10000.0f, 10000.0f});
+    f.face(kEnemyA);
+    (void)f.run(from, script);
+    Snapshot start, table;
+    takeSnapshot(f.w, engineTypes(), start);
+    (void)f.run(steps, script, from);
+    const uint64_t a = hashWorld(f.w, engineTypes(), table);
+    restoreSnapshot(f.w, start);
+    (void)f.run(steps, script, from);
+    const uint64_t b = hashWorld(f.w, engineTypes(), table);
+    std::printf("\n      %s, from step %d for %d: %016llx / %016llx", withAudio ? "with the schedule" : "without", from, steps,
+                static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+    return a == b;
+}
+
+// input.record then input.replay: the same schedule. The input map's held keys are not in a snapshot,
+// so the recording runs from step 100 to 300 (the walk, seven bursts, the enemies' fire), nothing held
+// at either end. Whether the world replays is the simulation's: the same with the schedule as without
+// (a recording from step 20 to 320 does not replay world.hash either way; one from 100 to 300 does).
+void t28_replay() {
+    CHECK(worldReplays(false, 20, 300) == worldReplays(true, 20, 300), "the schedule changes nothing about whether the world replays");
+    CHECK(worldReplays(false, 100, 200) && worldReplays(true, 100, 200), "the recording's world replays, with the schedule or without");
+    Fight f;
+    f.w.registry().replace<Health>(f.player, Health{10000.0f, 10000.0f});   // no death: no restart countdown
+    f.face(kEnemyA);
+    (void)f.run(100, script);
+    Snapshot start;
+    takeSnapshot(f.w, engineTypes(), start);
+    std::vector<std::vector<InputEvent>> recorded;
+    std::vector<AudioCommand> a;
+    for (int i = 100; i < 300; ++i) {
+        recorded.push_back(script(i));
+        const auto c = f.run(1, [&](int) { return recorded.back(); });
+        a.insert(a.end(), c.begin(), c.end());
+    }
+    Snapshot table;
+    const uint64_t endA = hashWorld(f.w, engineTypes(), table);
+    restoreSnapshot(f.w, start);
+    const auto b = f.run(200, [&](int i) { return recorded[static_cast<std::size_t>(i)]; });
+    const uint64_t endB = hashWorld(f.w, engineTypes(), table);
+    std::printf("\n      world.hash after the recording %016llx, after the replay %016llx", static_cast<unsigned long long>(endA),
+                static_cast<unsigned long long>(endB));
+    const auto la = lines(a, f.audio->bank()), lb = lines(b, f.audio->bank(), true);
+    firstDiff(la, lb);
+    CHECK(endA == endB, "the world replays (the same world.hash)");
+    CHECK(!la.empty() && la == lb, "the replay's schedule is the recording's");
+}
+
+// An enemy's run: footsteps at its clip's foot_l and foot_r steps, on its ground's surface, occluded
+// by the walls between; its physics footsteps play nothing.
+void t28_enemy_footsteps_on_feet() {
+    Fight f;
+    CHECK(f.loaded && f.audio, "the play scene");
+    if (!f.loaded || !f.audio) return;
+    f.w.registry().replace<Health>(f.player, Health{10000.0f, 10000.0f});
+    f.face(kEnemyA);
+    const AnimationSystem* anim = animationSystem(f.w);
+    std::size_t feet = 0, steps = 0, physicsSteps = 0, mismatched = 0, wrongSurface = 0, wrongOcclusion = 0;
+    for (int i = 0; i < 400; ++i) {
+        // Both enemies run a circle (their walk speed, turning 90 degrees a second): the step's physics
+        // walks them by their MoveIntent, before their AI writes its own.
+        for (const uint64_t id : {kEnemyA, kEnemyB})
+            if (const entt::entity e = f.w.findById(id); e != entt::null && f.w.registry().all_of<MoveIntent>(e))
+                f.w.registry().replace<MoveIntent>(e, MoveIntent{{0.0f, 1.0f}, 180.0f + 1.5f * static_cast<float>(i), 0.0f, false, false});
+        (void)f.run(1);
+        std::map<uint64_t, std::size_t> footEvents, footPlays;
+        for (const AnimEvent& e : anim->stepEvents())
+            if ((e.name == "foot_l" || e.name == "foot_r") && (e.entity == kEnemyA || e.entity == kEnemyB)) ++footEvents[e.entity], ++feet;
+        for (const PhysicsEvent& e : physicsEvents(f.w)) {
+            const bool enemy = e.aId == kEnemyA || e.aId == kEnemyB;
+            physicsSteps += e.kind == PhysicsEvent::Kind::Footstep && enemy;
+            if (e.kind == PhysicsEvent::Kind::Land && enemy) ++footEvents[e.aId], ++feet;   // landings stay physics'
+        }
+        const auto ears = listenerAtStep(f.w);
+        for (const AudioCommand& c : audioCommands(f.w)) {
+            if (c.op != AudioCommand::Op::Play || (c.source != kEnemyA && c.source != kEnemyB)) continue;
+            const std::string& name = f.audio->bank().sounds[c.sound].name;
+            if (name.rfind("footstep_", 0) != 0) continue;
+            ++footPlays[c.source], ++steps;
+            const auto info = f.physics->playerInfo(f.w.findById(c.source));
+            wrongSurface += !info || name != footstepSound(f.audio->bank(), info->surface.empty() ? "default" : info->surface);
+            if (ears) wrongOcclusion += occlusionBetween(f.w, *ears, c.pos).walls != c.occl.walls;
+        }
+        mismatched += footEvents != footPlays;
+    }
+    std::printf("\n      %zu foot events, %zu footsteps scheduled, %zu physics footsteps of enemies (not played)", feet, steps,
+                physicsSteps);
+    CHECK(feet > 4 && steps == feet && mismatched == 0, "one footstep per foot event, in its step");
+    CHECK(wrongSurface == 0, "on the enemy's ground's surface");
+    CHECK(wrongOcclusion == 0, "occluded by the walls between, as a ray at the step says");
+}
+
+// world.hash after a fight is the same with and without the schedule.
+void t28_hash_unchanged() {
+    Fight with(true), without(false);
+    with.face(kEnemyA);
+    without.face(kEnemyA);
+    (void)with.run(400, script);
+    (void)without.run(400, script);
+    Snapshot ta, tb;
+    const uint64_t a = hashWorld(with.w, engineTypes(), ta), b = hashWorld(without.w, engineTypes(), tb);
+    std::printf("\n      world.hash %016llx with audio, %016llx without", static_cast<unsigned long long>(a),
+                static_cast<unsigned long long>(b));
+    CHECK(a == b, "the same world.hash");
+}
+
 // ---- --listen DIR: step 2's listening renders ------------------------------------------------------
 //
 // step2_zones.wav: the play scene's player fires a burst in the room, then stands outside the doorway
@@ -529,6 +1195,17 @@ int main(int argc, char** argv) {
     RUN(t27_occlusion_recast);
     RUN(t27_ray_cap);
     RUN(t27_behind_cover_render);
+    RUN(t28_rules_moved);
+    RUN(t28_priority_and_steal);
+    RUN(t28_hold_declared);
+    RUN(t28_duck_rules);
+    RUN(t28_snapshot_from_round);
+    RUN(t28_same_fight_same_schedule);
+    RUN(t28_restore_mid_fight);
+    RUN(t28_restart_like_start);
+    RUN(t28_replay);
+    RUN(t28_enemy_footsteps_on_feet);
+    RUN(t28_hash_unchanged);
     if (argc == 3 && std::string_view(argv[1]) == "--listen") {
         g_listenDir = argv[2];
         RUN(step2_listen);
