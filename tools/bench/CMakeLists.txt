@@ -51,6 +51,19 @@ endif()
 ohao_add_test(physics_bench LABEL bench SERIAL TIMEOUT 600
     COMMAND physics_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/physics_budgets.json)
 
+# The mixer's budgets (sub-project 11, step 1: mix_10ms_ms, 32 voices on the slice's buses without a
+# device). CPU, headless. Exit 2 = noisy run (tools/check.py reruns it).
+add_executable(audio_bench audio_bench.cpp bench_env.hpp)
+target_compile_features(audio_bench PRIVATE cxx_std_20)
+target_link_libraries(audio_bench PRIVATE ohao_audio ohao_core ohao_test_harness nlohmann_json::nlohmann_json)
+target_compile_definitions(audio_bench PRIVATE OHAO_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+if(MSVC)
+    target_link_options(audio_bench PRIVATE /FORCE:MULTIPLE /IGNORE:4088)
+    target_link_libraries(audio_bench PRIVATE psapi)
+endif()
+ohao_add_test(audio_bench LABEL bench SERIAL TIMEOUT 600
+    COMMAND audio_bench --check ${CMAKE_SOURCE_DIR}/tests/bench/audio_budgets.json)
+
 # The renderer's GPU budgets (sub-project 2b, step 1): headless captures of fixed scenes,
 # per-pass timestamps, a GPU calibration kernel. Exit 2 = noisy run (tools/check.py reruns it).
 add_executable(render_bench render_bench.cpp bench_env.hpp gpu_calibration.hpp)
