@@ -899,6 +899,27 @@ bool t27_reverb_send_per_bus() {
     return true;
 }
 
+// A mixer whose buses send to the return is destroyed cleanly, however many feed it. miniaudio
+// 0.11.21's ma_node_uninit detaches only the first node feeding each input, so the return, destroyed
+// first, left the others linked to its freed group, and audio_bench died in teardown about one run in
+// ten. 300 mixers in one process, four senders each, fault or hang without the fix.
+bool t27_teardown_with_sends() {
+    TEST_BEGIN("t27_teardown_with_sends");
+    int built = 0;
+    for (int i = 0; i < 300; ++i) {
+        AudioSystem a;
+        if (!t26::mixer(a)) break;
+        const auto& bank = a.bank();
+        for (const char* bus : {"world", "weapons", "foley", "ui"}) a.setBusSend(static_cast<uint8_t>(bank.bus(bus)), 0.2f);
+        (void)a.play(static_cast<uint16_t>(bank.sound("click")), 0, t26::atEar());
+        (void)t26::renderLeft(a, 480);
+        ++built;
+    }
+    EXPECT_EQ(built, 300);
+    TEST_PASS();
+    return true;
+}
+
 // =============================================================================
 // TEST RUNNER
 // =============================================================================
@@ -948,6 +969,7 @@ void runAllTests() {
     std::cout << "\n\033[1m--- Test 27: the reverb return ---\033[0m" << std::endl;
     t27_reverb_preset_tail();
     t27_reverb_send_per_bus();
+    t27_teardown_with_sends();
     std::error_code ec;
     std::filesystem::remove_all(t26::soundRoot(), ec);
 

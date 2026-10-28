@@ -464,6 +464,18 @@ void AudioSystem::buildBuses() {
 }
 
 void AudioSystem::destroyBuses() {
+    // Every link is cut before any node goes. miniaudio 0.11.21's ma_node_uninit detaches only the
+    // first node feeding each input (ma_node_detach_full reads pNext after the detach cleared it):
+    // the return, last in the bank and so destroyed first, has a sender per bus, and the others kept
+    // pointing into its freed group; detaching them later wrote there (audio_bench faulted in teardown
+    // about one run in ten).
+    for (const auto& b : m_buses) {
+        if (!b) continue;
+        if (b->nodeInit) ma_node_detach_all_output_buses(&b->node.base);
+        if (b->reverbInit) ma_node_detach_all_output_buses(&b->reverb->base);
+        if (b->groupInit) ma_node_detach_all_output_buses(&b->group);
+        b->sendAttached = false;
+    }
     while (!m_buses.empty()) m_buses.pop_back();   // children first
 }
 
