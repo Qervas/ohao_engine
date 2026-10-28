@@ -87,6 +87,11 @@ public:
     // Per-material sidedness (glTF doubleSided, through Assimp's TWOSIDED): 0 one-sided, its
     // back faces culled. Empty (OBJ, FBX): every material double-sided.
     std::vector<uint8_t> materialDoubleSided;
+    // Per-material alpha (glTF alphaMode, alphaCutoff, baseColorFactor.a, through Assimp): mode 0
+    // opaque, 1 mask, 2 blend (render::AlphaMode). Empty: every material opaque.
+    std::vector<uint8_t> materialAlphaMode;
+    std::vector<float> materialAlphaCutoff;
+    std::vector<float> materialBaseAlpha;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

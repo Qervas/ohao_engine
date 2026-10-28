@@ -97,6 +97,13 @@ void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelin
 
 bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
                            uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline) {
+    return createComputePipeline(device, spirv, entry, std::span<const VkDescriptorSetLayout>(&setLayout, 1), pushBytes,
+                                 layout, pipeline);
+}
+
+bool createComputePipeline(VkDevice device, const char* spirv, const char* entry,
+                           std::span<const VkDescriptorSetLayout> setLayouts, uint32_t pushBytes, VkPipelineLayout& layout,
+                           VkPipeline& pipeline) {
     const auto code = readFile(std::string("bin/shaders/") + spirv);
     if (code.empty()) {
         OHAO_LOG(Error, render, "RT: failed to load {}", spirv);
@@ -114,8 +121,8 @@ bool createComputePipeline(VkDevice device, const char* spirv, const char* entry
     pushRange.size = pushBytes;
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &setLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    layoutInfo.pSetLayouts = setLayouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
     VkResult result = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &layout);
@@ -133,6 +140,21 @@ bool createComputePipeline(VkDevice device, const char* spirv, const char* entry
     if (result != VK_SUCCESS)
         OHAO_LOG(Error, render, "RT: {} pipeline of {} failed (err={})", entry, spirv, static_cast<int>(result));
     return result == VK_SUCCESS;
+}
+
+VkShaderModule loadShaderModule(VkDevice device, const char* spirv) {
+    const auto code = readFile(std::string("bin/shaders/") + spirv);
+    if (code.empty()) {
+        OHAO_LOG(Error, render, "failed to load {}", spirv);
+        return VK_NULL_HANDLE;
+    }
+    VkShaderModuleCreateInfo mi{};
+    mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    mi.codeSize = code.size();
+    mi.pCode = reinterpret_cast<const uint32_t*>(code.data());
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(device, &mi, nullptr, &module) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return module;
 }
 
 bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,

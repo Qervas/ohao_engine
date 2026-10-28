@@ -224,6 +224,18 @@ def f32(v):
     return struct.unpack("<f", struct.pack("<f", v))[0]
 
 
+def solid(material):
+    """The upstream rifle's materials say alphaMode BLEND with a base colour alpha of 1 and no
+    texture: nothing in them is transparent (an exporter's default). They are written opaque, so the
+    engine draws them in the G-buffer (sub-project 12 reads glTF alpha modes)."""
+    m = dict(material)
+    pbr = m.get("pbrMetallicRoughness", {})
+    if (m.get("alphaMode") == "BLEND" and pbr.get("baseColorFactor", [1, 1, 1, 1])[3] == 1
+            and "baseColorTexture" not in pbr):
+        del m["alphaMode"]
+    return m
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--source", required=True, help="directory holding Character_Enemy.glb")
@@ -502,7 +514,7 @@ def main():
             rhi = [max(a, b) for a, b in zip(rhi, x)]
         if p["material"] not in rmatIndex:
             rmatIndex[p["material"]] = len(rmats)
-            rmats.append(g["materials"][p["material"]])
+            rmats.append(solid(g["materials"][p["material"]]))
         rprims.append({
             "attributes": {"POSITION": rout.add(pos, 5126, "VEC3", 34962, True),
                            "NORMAL": rout.add(nrm, 5126, "VEC3", 34962),

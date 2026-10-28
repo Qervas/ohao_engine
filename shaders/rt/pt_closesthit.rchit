@@ -29,7 +29,7 @@ layout(set = 0, binding = 4, std430)  readonly buffer VertexArena { float vtx[];
 layout(set = 0, binding = 5, std430)  readonly buffer IndexArena { uint idx[]; };          // mesh-local
 layout(set = 0, binding = 8, std430)  readonly buffer MeshTable { MeshGpu meshes[]; };
 layout(set = 0, binding = 9, std430)  readonly buffer TriangleSlots { uint triSlot[]; };
-// Material table: 3 vec4s per material (layout::MaterialGpuPack)
+// Material table: kMaterialRows vec4s per material (layout::MaterialGpuPack)
 //   [matID*3+0] = (baseColor.rgb, albedoTexIdx as float bits)
 //   [matID*3+1] = (roughness, metallic, normalTexIdx bits, emissiveTexIdx bits)
 //   [matID*3+2] = (roughMetalTexIdx bits, emissiveStrength, subsurface (raster SSS only),
@@ -121,9 +121,9 @@ void main() {
     // === Material lookup — 3 vec4s per material ===
     uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];
     uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
-    vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
-    vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
-    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
+    vec4 matColor   = matColorBuf.matColors[matID * kMaterialRows + 0u];  // (baseColor.rgb, diffuseTexIdx)
+    vec4 matParams  = matColorBuf.matColors[matID * kMaterialRows + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
+    vec4 matParams2 = matColorBuf.matColors[matID * kMaterialRows + 2u];  // (roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
 
     // Decode texture indices (stored as uint bits in float)
     uint diffuseTexIdx    = boundTexture(floatBitsToUint(matColor.a));

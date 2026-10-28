@@ -18,6 +18,7 @@ bool MaterialTable::initialize(GpuAllocator& allocator) {
     }
     m_packs.reserve(kCapacity);
     m_doubleSided.reserve(kCapacity);
+    m_alphaMode.reserve(kCapacity);
     add(MaterialDesc{});   // index 0: the default material
     return true;
 }
@@ -27,6 +28,7 @@ void MaterialTable::shutdown() {
     m_buffer = GpuBuffer{};
     m_packs.clear();
     m_doubleSided.clear();
+    m_alphaMode.clear();
     m_dirty.clear();
     m_allocator = nullptr;
 }
@@ -37,6 +39,7 @@ MaterialTable::Pack MaterialTable::pack(const MaterialDesc& d) {
         d.baseColor.r, d.baseColor.g, d.baseColor.b, bits(d.albedoTex),
         d.roughness, d.metallic, bits(d.normalTex), bits(d.emissiveTex),
         bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),
+        static_cast<float>(static_cast<uint32_t>(d.alphaMode)), d.alphaCutoff, d.opacity, d.baseAlpha,
     };
 }
 
@@ -53,6 +56,7 @@ MaterialHandle MaterialTable::add(const MaterialDesc& desc) {
     const auto index = static_cast<uint32_t>(m_packs.size());
     m_packs.push_back(pack(desc));
     m_doubleSided.push_back(desc.doubleSided ? 1u : 0u);
+    m_alphaMode.push_back(static_cast<uint8_t>(desc.alphaMode));
     m_dirty.insert(index);
     return MaterialHandle{index, 0};
 }

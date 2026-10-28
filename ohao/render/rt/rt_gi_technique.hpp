@@ -34,6 +34,12 @@ public:
     const char* getName() const override { return "RT GI"; }
     bool needsRT() const override { return true; }
 
+    // The trace's sets 1 and 2 (rt/alpha_test.slang): rtc::AlphaTables' layout and the bindless
+    // textures'. Before init (its pipeline needs them; without them init fails: no RT GI).
+    void setAlphaLayouts(VkDescriptorSetLayout tables, VkDescriptorSetLayout textures) noexcept {
+        m_alphaTablesLayout = tables;
+        m_texturesLayout = textures;
+    }
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               uint32_t width, uint32_t height) override;
     void resize(uint32_t width, uint32_t height) override;
@@ -124,6 +130,7 @@ private:
     VkPipelineLayout m_traceLayout = VK_NULL_HANDLE, m_temporalLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_atrousLayout = VK_NULL_HANDLE, m_upsampleLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_traceSetLayout = VK_NULL_HANDLE, m_temporalSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_alphaTablesLayout = VK_NULL_HANDLE, m_texturesLayout = VK_NULL_HANDLE;   // setAlphaLayouts
     VkDescriptorSetLayout m_atrousSetLayout = VK_NULL_HANDLE, m_upsampleSetLayout = VK_NULL_HANDLE;
 
     // One set of each per frame in flight (written at record time); the a-trous pass has two

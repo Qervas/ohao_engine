@@ -129,6 +129,10 @@ struct MeshSource {
     std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;
 };
 
+// A material's alpha mode (render::AlphaMode): opaque, alpha-tested (Mask: cut below 0.5),
+// or blended (Blend: drawn by the sorted forward pass).
+enum class MaterialAlpha : uint8_t { Opaque, Mask, Blend };
+
 // The material of a mesh without its own materials (primitives); for a model with
 // materials it only feeds the legacy RT GI word. Same rules as uploadModel's override.
 struct MaterialOverride {
@@ -137,6 +141,8 @@ struct MaterialOverride {
     float metallic{0.0f};
     float emissiveStrength{0.0f};
     float subsurface{0.0f};   // 0: none; > 0 the screen-space subsurface blur's strength (skin, wax)
+    MaterialAlpha alphaMode{MaterialAlpha::Opaque};
+    float opacity{1.0f};      // coverage (Blend: how much of what is behind it is covered; Mask: cut below 0.5)
 };
 
 // Instantiate's bookkeeping: tagged when MeshSource/MaterialOverride change; the error

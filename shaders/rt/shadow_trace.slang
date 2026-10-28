@@ -18,6 +18,7 @@
 // dimension): it changes per frame so the accumulation converges, and repeats exactly after
 // a reset. Light l of the buffer is visibility channel l: the lighting pass's params.w.
 import shared.layout;
+import rt.alpha_test;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rg32ui")]] RWTexture2D<uint2> meta;
@@ -148,10 +149,16 @@ float traceOne(uint pixelKey, uint l, uint s, float3 p, float3 origin, float3 n)
     ray.TMin = 0.001;
     ray.Direction = dir;
     ray.TMax = tMax;
-    // Any opaque hit occludes: the first one ends the search.
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
+    // Any hit occludes: the first one ends the search. An instance with an alpha-tested or blended
+    // material is non-opaque: its candidates occlude where rt/alpha_test.slang says they are hit.
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
     q.TraceRayInline(scene, 0, kRayMaskScene, ray);   // a light's emitter mesh never occludes
-    q.Proceed();
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            alphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
     return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
 

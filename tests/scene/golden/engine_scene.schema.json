@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash cddd2b64e9a5dde0. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash 667173fa20c11cce. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -159,6 +159,10 @@
         "MouseRight",
         "MouseMiddle"
       ]
+    },
+    "MaterialAlpha": {
+      "description": "A material's alpha mode (glTF's alphaMode)",
+      "enum": ["Opaque", "Mask", "Blend"]
     },
     "ColliderShape": {
       "description": "A collider's shape, fitted to the entity's mesh unless a size is given.",
@@ -591,6 +595,16 @@
         "subsurface": {
           "description": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emissiveStrength > 0.",
           "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "alphaMode": {
+          "description": "Opaque, alpha-tested (Mask) or blended (Blend)",
+          "default": "Opaque",
+          "allOf": [{ "$ref": "#/$defs/MaterialAlpha" }]
+        },
+        "opacity": {
+          "description": "Coverage: Blend's blend factor, Mask's test (cut below 0.5)",
+          "default": 1,
           "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         }
       },

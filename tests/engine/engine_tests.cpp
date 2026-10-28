@@ -429,9 +429,9 @@ void runMetaTests() {
     TEST_BEGIN("GPU layout contracts");
     {
         static_assert(sizeof(GPULight) == layout::kGPULightBytes);
-        static_assert(layout::MaterialGpuPack::kBytes == 48);
-        static_assert(layout::MaterialGpuPack::byteOffset(1) == 48);
-        EXPECT(layout::MaterialGpuPack::vec4Count(2) == 6, "2 materials = 6 vec4s");
+        static_assert(layout::MaterialGpuPack::kBytes == 64);
+        static_assert(layout::MaterialGpuPack::byteOffset(1) == 64);
+        EXPECT(layout::MaterialGpuPack::vec4Count(2) == 8, "2 materials = 8 vec4s");
         EXPECT(GpuPod<GPULight>, "GPULight is GpuPod");
         TEST_PASS();
     }
@@ -3058,6 +3058,14 @@ static void runRenderSceneTests() {
                "row 1: roughness, metallic, normal and emissive textures");
         EXPECT(bits(p[8]) == 9u && p[9] == 2.0f && p[10] == 0.0f && bits(p[11]) == 11u,
                "row 2: rough/metal texture, emissive strength, subsurface, occlusion texture");
+        EXPECT(p[12] == 0.0f && p[13] == 0.5f && p[14] == 1.0f && p[15] == 1.0f,
+               "row 3: opaque, cutoff 0.5, opacity 1, base colour alpha 1 by default");
+        d.alphaMode = AlphaMode::Blend;
+        d.opacity = 0.25f;
+        d.baseAlpha = 0.5f;
+        const MaterialTable::Pack pb = MaterialTable::pack(d);
+        EXPECT(pb[12] == 2.0f && pb[14] == 0.25f && pb[15] == 0.5f, "row 3: blend, opacity and base colour alpha");
+        d.alphaMode = AlphaMode::Opaque;
         // An edit is a new registration: the table never rewrites a live material.
         d.baseColor = {1, 0, 0};
         EXPECT(MaterialTable::pack(d)[0] == 1.0f, "the edited color is what gets packed");

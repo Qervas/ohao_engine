@@ -105,6 +105,7 @@ void InstanceTable::write(uint32_t slot, const InstanceDesc& desc, uint32_t mate
     if (std::memcmp(dst, refs, sizeof(refs)) != 0) {
         std::memcpy(dst, refs, sizeof(refs));
         m_dirtyRefs.insert(slot);
+        m_drawsDirty = true;   // a draw's material decides its sidedness and alpha mode (kDrawMask, kDrawTransparent)
     }
 }
 

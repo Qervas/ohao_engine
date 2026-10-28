@@ -29,6 +29,13 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
 
     registerKeyEnum(r);
 
+    r.enumeration<MaterialAlpha>("MaterialAlpha")
+        .doc("A material's alpha mode (glTF's alphaMode)")
+        .value("Opaque", MaterialAlpha::Opaque, "Opaque: opacity is ignored")
+        .value("Mask", MaterialAlpha::Mask, "Alpha-tested: cut where opacity is below 0.5, in raster and every ray")
+        .value("Blend", MaterialAlpha::Blend,
+               "Blended by opacity in the sorted forward pass; casts no shadow and bounces no GI in the hybrid frame");
+
     r.enumeration<ColliderShape>("ColliderShape")
         .doc("A collider's shape, fitted to the entity's mesh unless a size is given.")
         .value("Box", ColliderShape::Box, "The mesh's bounding box")
@@ -138,6 +145,9 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("subsurface", &MaterialOverride::subsurface)
             .doc("Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under "
                  "the surface; 0 = none. Ignored where emissiveStrength > 0.")
+            .unitless().min(0.0).max(1.0)
+        .field("alphaMode", &MaterialOverride::alphaMode).doc("Opaque, alpha-tested (Mask) or blended (Blend)")
+        .field("opacity", &MaterialOverride::opacity).doc("Coverage: Blend's blend factor, Mask's test (cut below 0.5)")
             .unitless().min(0.0).max(1.0);
 
     r.type<Camera>("Camera").component().singleton().host(makeComponentOps<Camera>())

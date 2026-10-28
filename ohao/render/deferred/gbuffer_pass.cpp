@@ -47,6 +47,7 @@ void GBufferPass::cleanup() {
     safeDestroy(m_cullBackPipeline);
     for (VkPipeline& p : m_meshPipelines) safeDestroy(p);
     for (VkPipeline& p : m_pullPipelines) safeDestroy(p);
+    for (VkPipeline& p : m_maskPipelines) safeDestroy(p);
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
@@ -201,6 +202,24 @@ void GBufferPass::drawPass(VkCommandBuffer cmd, uint32_t frameIndex, bool late, 
             } else if (m_pullPipelines[k] != VK_NULL_HANDLE) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pullPipelines[k]);
                 m_culling->drawMeshletFallback(cmd, (late ? 2u : 0u) + k);
+            }
+        }
+        // The alpha-tested draws (in no list): every one, in draw order, after the opaque ones so
+        // their discards cost no early depth to the rest. firstInstance is the draw's index, as
+        // the culling's commands give it.
+        if (late && !wire && m_maskPipelines[0] != VK_NULL_HANDLE) {
+            const auto all = m_renderScene->draws();
+            for (uint32_t k = 0; k < 2; ++k) {
+                bool bound = false;
+                for (const uint32_t i : m_renderScene->maskDraws()) {
+                    const auto& d = all[i];
+                    if ((k == 0) != d.oneSided) continue;
+                    if (!bound) {
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_maskPipelines[k]);
+                        bound = true;
+                    }
+                    vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, d.vertexOffset, i);
+                }
             }
         }
     }
@@ -856,6 +875,21 @@ bool GBufferPass::createPipeline() {
         vkDestroyShaderModule(m_device, vertShader, nullptr);
         vkDestroyShaderModule(m_device, fragShader, nullptr);
         return false;
+    }
+
+    // Alpha-tested materials: the same state with core/gbuffer_mask.frag (a discard; no forced
+    // early depth test), [0] culling back faces, [1] none.
+    if (VkShaderModule maskFrag = loadShaderModule("core_gbuffer_mask.frag.spv")) {
+        shaderStages[1].module = maskFrag;
+        for (uint32_t k = 0; k < 2; ++k) {
+            rasterizer.cullMode = k == 0 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+            if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_maskPipelines[k]) !=
+                VK_SUCCESS)
+                m_maskPipelines[k] = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(m_device, maskFrag, nullptr);
+        shaderStages[1].module = fragShader;
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     }
 
     // The meshlet path: the same fragment shader and state, its own geometry stages.

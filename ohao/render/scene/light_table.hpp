@@ -40,6 +40,9 @@ public:
 
     void set(std::span<const LightDesc> lights);
     void setEnvMapTextureIndex(uint32_t texIdx);
+    // Whether a TLAS instance is non-opaque (an alpha material): the path tracer's rays then stop
+    // forcing opacity (header word 3).
+    void setAlphaRays(bool on);
     void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
@@ -69,6 +72,7 @@ private:
     std::vector<GPULight> m_rt;
     uint32_t m_envMapTexIdx{kNoTexture};
     float m_envIntensity{1.0f};
+    bool m_alphaRays{false};
     bool m_dirty{true};
 };
 

@@ -23,6 +23,7 @@
 // Every sample hashes (render seed, frame index since the reset, pixel, ray, dimension), so
 // the accumulation converges and repeats exactly after a reset.
 import shared.layout;
+import rt.alpha_test;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] Texture2D<float4> gPosition;   // xyz world position, w metallic; (0,0,0,0) sky
@@ -122,9 +123,16 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
     ray.TMin = 0.001;
     ray.Direction = dir;
     ray.TMax = kRayLength;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
+    // The closest hit; an alpha-tested or blended instance's candidates count where
+    // rt/alpha_test.slang says they are hit (a blended surface bounces nothing).
+    RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(scene, RAY_FLAG_NONE, kRayMaskScene, ray);   // light emitters: camera and mirror rays only
-    while (q.Proceed()) {}
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            alphaHit(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
     if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
         const uint slot = q.CommittedInstanceID();   // the instance's custom index: its table slot

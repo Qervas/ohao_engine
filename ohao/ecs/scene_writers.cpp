@@ -164,6 +164,17 @@ void writeFields(const MaterialOverride& v, const MaterialOverride* omit, FieldS
     if (!omit || !same(v.metallic, omit->metallic)) t.f32("\"metallic\"", v.metallic);
     if (!omit || !same(v.emissiveStrength, omit->emissiveStrength)) t.f32("\"emissiveStrength\"", v.emissiveStrength);
     if (!omit || !same(v.subsurface, omit->subsurface)) t.f32("\"subsurface\"", v.subsurface);
+    if (!omit || v.alphaMode != omit->alphaMode) {
+        static constexpr std::string_view kModes[] = {"\"Opaque\"", "\"Mask\"", "\"Blend\""};
+        const auto raw = static_cast<uint8_t>(v.alphaMode);
+        if (raw < std::size(kModes)) {
+            t.token("\"alphaMode\"", kModes[raw]);
+        } else {
+            t.fail("value " + std::to_string(static_cast<int64_t>(raw)) + " is not registered in enum MaterialAlpha");
+            t.null("\"alphaMode\"");
+        }
+    }
+    if (!omit || !same(v.opacity, omit->opacity)) t.f32("\"opacity\"", v.opacity);
 }
 
 void writeFields(const Camera& v, const Camera* omit, FieldSink& out) {

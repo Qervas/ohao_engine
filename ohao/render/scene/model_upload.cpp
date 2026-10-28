@@ -212,6 +212,9 @@ std::vector<MaterialDesc> modelMaterials(BindlessTextureManager* textures, const
             mats[i].roughness = model.materialColors[i].w;
             mats[i].metallic = i < model.materialMetallic.size() ? model.materialMetallic[i] : 0.0f;
             mats[i].doubleSided = i >= model.materialDoubleSided.size() || model.materialDoubleSided[i] != 0;
+            if (i < model.materialAlphaMode.size()) mats[i].alphaMode = static_cast<AlphaMode>(model.materialAlphaMode[i]);
+            if (i < model.materialAlphaCutoff.size()) mats[i].alphaCutoff = model.materialAlphaCutoff[i];
+            if (i < model.materialBaseAlpha.size()) mats[i].baseAlpha = model.materialBaseAlpha[i];
         }
         uploadTextures(textures, model, mats);
         for (auto& m : mats)

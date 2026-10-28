@@ -8,14 +8,14 @@
 
 namespace ohao::render {
 
-// Material table: a fixed-capacity device-local array of 48-byte packs (the
-// MaterialGpuPack layout, emissive strength in row 2 .y, the legacy RT tint texture
-// in row 2 .z). Index 0 is the default
-// material. Writes are staged through the frame slot's staging buffer.
+// Material table: a fixed-capacity device-local array of 64-byte packs (the
+// MaterialGpuPack layout, gpu::shared::kMaterialRows rows: emissive strength in row 2 .y,
+// subsurface in row 2 .z, alpha in row 3). Index 0 is the default material. Writes are
+// staged through the frame slot's staging buffer.
 class MaterialTable {
 public:
     static constexpr uint32_t kCapacity = 4096;
-    using Pack = std::array<float, 12>;
+    using Pack = std::array<float, 16>;
     static_assert(sizeof(Pack) == layout::MaterialGpuPack::kBytes);
 
     [[nodiscard]] bool initialize(GpuAllocator& allocator);   // registers MaterialDesc{} as index 0
@@ -26,6 +26,11 @@ public:
     [[nodiscard]] uint32_t count() const noexcept { return static_cast<uint32_t>(m_packs.size()); }
     [[nodiscard]] bool doubleSided(uint32_t index) const noexcept {
         return index >= m_doubleSided.size() || m_doubleSided[index] != 0;
+    }
+    // Host copy of a material's alpha mode (the draw table's kDrawMask / kDrawTransparent, the
+    // TLAS instances' masks and flags).
+    [[nodiscard]] AlphaMode alphaMode(uint32_t index) const noexcept {
+        return index < m_alphaMode.size() ? static_cast<AlphaMode>(m_alphaMode[index]) : AlphaMode::Opaque;
     }
     [[nodiscard]] static Pack pack(const MaterialDesc& desc);
 
@@ -39,6 +44,7 @@ private:
     GpuBuffer m_buffer;
     std::vector<Pack> m_packs;
     std::vector<uint8_t> m_doubleSided;   // host only: the draw table's face-culling flag
+    std::vector<uint8_t> m_alphaMode;     // host only: AlphaMode
     std::set<uint32_t> m_dirty;
 };
 

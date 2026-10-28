@@ -33,6 +33,12 @@ public:
     const char* getName() const override { return "RT Shadows"; }
     bool needsRT() const override { return true; }
 
+    // The trace's sets 1 and 2 (rt/alpha_test.slang): rtc::AlphaTables' layout and the bindless
+    // textures'. Before init (its pipeline needs them; without them init fails and CSM shadows).
+    void setAlphaLayouts(VkDescriptorSetLayout tables, VkDescriptorSetLayout textures) noexcept {
+        m_alphaTablesLayout = tables;
+        m_texturesLayout = textures;
+    }
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               uint32_t width, uint32_t height) override;
     void resize(uint32_t width, uint32_t height) override;
@@ -128,6 +134,8 @@ private:
     VkPipeline m_tracePipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_tracePipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_traceSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_alphaTablesLayout = VK_NULL_HANDLE;   // setAlphaLayouts
+    VkDescriptorSetLayout m_texturesLayout = VK_NULL_HANDLE;
 
     // Filter pipeline (compute)
     VkPipeline m_filterPipeline = VK_NULL_HANDLE;

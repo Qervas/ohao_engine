@@ -51,6 +51,11 @@ struct MeshData {
     std::string debugName;
 };
 
+// glTF's alphaMode (gpu::shared::kAlphaOpaque / kAlphaMask / kAlphaBlend). Mask: alpha-tested
+// against alphaCutoff in the G-buffer (a discard pipeline) and by every ray; Blend: drawn by the
+// forward pass (transparent), never in the G-buffer, Hi-Z or CSM, seen by camera rays only.
+enum class AlphaMode : uint8_t { Opaque = 0, Mask = 1, Blend = 2 };
+
 struct MaterialDesc {
     glm::vec3 baseColor{0.8f};
     float roughness{0.5f};
@@ -68,6 +73,13 @@ struct MaterialDesc {
     // False: one-sided, its back faces culled in raster (glTF's doubleSided: false). Materials
     // that never say (scene-file materials, OBJ, FBX) stay double-sided.
     bool doubleSided{true};
+    // Alpha (table row 3): the mode, the mask's cutoff, an opacity factor (MaterialOverride) and
+    // the base colour's alpha (glTF baseColorFactor.a). Coverage = baseAlpha x the albedo
+    // texture's alpha x opacity.
+    AlphaMode alphaMode{AlphaMode::Opaque};
+    float alphaCutoff{0.5f};
+    float opacity{1.0f};
+    float baseAlpha{1.0f};
 };
 
 struct InstanceDesc {

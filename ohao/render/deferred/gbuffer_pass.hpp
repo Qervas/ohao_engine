@@ -22,7 +22,8 @@ class GpuCulling;
 // vkCmdDrawIndexedIndirectCount (core/gbuffer.vert; firstInstance indexes RenderScene's draw
 // table), then meshlet draws with task and mesh shaders (cull/meshlets.slang) or, without
 // them, the fallback's per-meshlet draws through its pull vertex shader; one-sided materials
-// with back faces culled. Set 0 = bindless textures, set 1 "scene" = {instances, materials,
+// with back faces culled. The late part then draws the alpha-tested (MASK) draws, which no
+// list holds, one by one through core/gbuffer_mask.frag. Set 0 = bindless textures, set 1 "scene" = {instances, materials,
 // material refs, camera UBO, SSS tiles, draw table, vertex arena, meshlets, meshlet vertices,
 // meshlet triangles, culling commands, Hi-Z pyramid}, one set per frame slot.
 class GBufferPass : public RenderPassBase {
@@ -85,6 +86,14 @@ public:
     // every visible fragment of a subsurface material flags its 16x16 tile; SSSPass dispatches
     // over the lists (indirect). Host-mapped: the tiles flagged by the last frame whose fence
     // has been waited on.
+    // The scene set (set 1 of core/gbuffer.vert: instances, materials, refs, camera UBO, ..., draw
+    // table) and its layout, for the transparent pass's blended meshes, which reuse gbuffer.vert. A
+    // slot's set is written by this frame's execute().
+    [[nodiscard]] VkDescriptorSetLayout sceneSetLayout() const { return m_sceneLayout; }
+    [[nodiscard]] VkDescriptorSet sceneSet(uint32_t slot) const {
+        return slot < m_sceneSets.size() ? m_sceneSets[slot] : VK_NULL_HANDLE;
+    }
+
     [[nodiscard]] VkBuffer sssTileBuffer() const { return m_sssTiles.buffer; }
     [[nodiscard]] VkExtent2D sssTiles() const;
     [[nodiscard]] uint32_t sssTilesFlagged() const;
@@ -135,6 +144,9 @@ private:
     // shaders (when supported) and the fallback's pull vertex shader.
     std::array<VkPipeline, 2> m_meshPipelines{};
     std::array<VkPipeline, 2> m_pullPipelines{};
+    // Alpha-tested materials (RenderScene::maskDraws, kDrawMask): core/gbuffer_mask.frag, [0] one-
+    // sided (back faces culled), [1] double-sided, drawn one by one after the late phase's lists.
+    std::array<VkPipeline, 2> m_maskPipelines{};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     bool m_meshShaderSupported{false};
     // The stages the scene set and the push block reach: vertex and fragment, task and mesh

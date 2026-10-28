@@ -195,7 +195,9 @@ bool RTShadowTechnique::createDescriptorResources() {
 }
 
 bool RTShadowTechnique::createTracePipeline() {
-    return rtc::createComputePipeline(m_device, "rt_shadow_trace.slang.spv", "trace", m_traceSetLayout,
+    if (!m_alphaTablesLayout || !m_texturesLayout) return false;
+    const VkDescriptorSetLayout sets[] = {m_traceSetLayout, m_alphaTablesLayout, m_texturesLayout};
+    return rtc::createComputePipeline(m_device, "rt_shadow_trace.slang.spv", "trace", sets,
                                       sizeof(shared::ShadowTracePush), m_tracePipelineLayout, m_tracePipeline);
 }
 
@@ -216,6 +218,7 @@ void RTShadowTechnique::collectSlot(uint32_t slot) {
 void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     m_rendered = false;
     if (!m_tracePipeline || input.tlas == VK_NULL_HANDLE) return;
+    if (input.alphaTables == VK_NULL_HANDLE || input.textures == VK_NULL_HANDLE) return;
     if (input.lights.empty()) return;   // no light casts shadows: nothing reads the visibility
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const bool reference = input.quality == RenderQuality::Reference;
@@ -300,7 +303,8 @@ void RTShadowTechnique::render(VkCommandBuffer cmd, const ShadowInput& input) {
     vkUpdateDescriptorSets(m_device, 9, writes, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipelineLayout, 0, 1, &set, 0, nullptr);
+    const VkDescriptorSet sets[] = {set, input.alphaTables, input.textures};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipelineLayout, 0, 3, sets, 0, nullptr);
     shared::ShadowTracePush pc{};
     pc.extent = u4(input.width, input.height, m_lightCount,
                            std::min(input.maxLightsPerPixel, shared::kShadowLightsPerPixel));

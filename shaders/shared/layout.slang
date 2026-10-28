@@ -37,6 +37,32 @@ static const uint kDrawEmitter = 2u;
 static const uint kDrawViewModel = 4u;
 // DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
 static const uint kDrawSkinned = 8u;
+// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer_mask.frag); a CSM cascade draws it as opaque
+static const uint kDrawMask = 16u;
+// DrawRecord.info.y bit: a blended material (glTF BLEND): in no G-buffer, Hi-Z or CSM list; the forward pass (transparent) draws it, sorted back to front
+static const uint kDrawTransparent = 32u;
+// a material's alpha mode (its row 3, x): opaque
+static const uint kAlphaOpaque = 0u;
+// a material's alpha mode: alpha-tested against row 3, y (the cutoff); base colour alpha times the albedo texture's alpha times row 3, z (opacity)
+static const uint kAlphaMask = 1u;
+// a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)
+static const uint kAlphaBlend = 2u;
+// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (roughness, metallic, normalTex, emissiveTex), 2 (roughMetalTex, emissiveStrength, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha)
+static const uint kMaterialRows = 4u;
+// vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
+static const uint kVfxGroupSize = 64u;
+// vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order
+static const uint kVfxSortMax = 1024u;
+// an emitter's colour and alpha curves hold at most this many keys on the GPU (VfxEmitterGpu)
+static const uint kVfxCurveKeys = 4u;
+// VfxEmitterGpu.look.x: additive (order-independent, never sorted)
+static const uint kVfxBlendAdditive = 0u;
+// VfxEmitterGpu.look.x: alpha blended (straight alpha)
+static const uint kVfxBlendAlpha = 1u;
+// VfxEmitterGpu.look.x: premultiplied alpha
+static const uint kVfxBlendPremultiplied = 2u;
+// VfxEmitterGpu.look.z: no texture (a soft round dot)
+static const uint kVfxNoTexture = 4294967295u;
 // skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
 static const uint kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
@@ -49,10 +75,12 @@ static const uint kTlasMaskScene = 1u;
 static const uint kTlasMaskEmitter = 2u;
 // TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
 static const uint kTlasMaskViewModel = 4u;
+// TLAS instance mask of an instance whose every material is blended (glTF BLEND): only the path tracer's camera rays see it, so in the hybrid frame it casts no shadow and bounces no GI
+static const uint kTlasMaskTransparent = 8u;
 // ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
 static const uint kRayMaskScene = 1u;
-// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters and first-person guns
-static const uint kRayMaskCamera = 7u;
+// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters, first-person guns and blended instances
+static const uint kRayMaskCamera = 15u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 static const uint kMeshletMaxVertices = 64u;
 // a meshlet's triangles at most (the mesh shader's output primitives)
@@ -291,6 +319,75 @@ struct PreviewPush
 {
     uint4 src;   // the source rectangle of the final image: x, y its origin, z, w its size
     uint4 dst;   // x, y the preview's size (each at most the source's)
+};
+
+// one emitter of the effect set (vfx::EmitterDesc), the closed form's parameters (vfx/particle_math.hpp)
+struct VfxEmitterGpu
+{
+    float4 lifeSpeed;   // x, y life range (s); z, w speed range (m/s)
+    float4 shape;   // x size at birth, y size at death (m); z the cone's half angle (deg); w gravity (m/s^2 along -Y)
+    float4 motion;   // x drag (1/s); y offset along the record's -Z (m); z intensity (HDR multiplier); w soft fade distance (m, 0 hard)
+    uint4 look;   // x blend (kVfxBlend*), y 1 lit, z texture (bindless index, kVfxNoTexture), w frame mode (0 life, 1 random, 2 fixed) | fixed frame << 8
+    uint4 atlas;   // x columns, y rows of the flipbook; z colour keys, w alpha keys (1..kVfxCurveKeys)
+    float4 color0;   // colour key 0: x t (0..1 of life), yzw linear rgb
+    float4 color1;   // colour key 1
+    float4 color2;   // colour key 2
+    float4 color3;   // colour key 3
+    float4 alphaT;   // the alpha keys' times
+    float4 alphaV;   // the alpha keys' values
+};
+
+// one emitter of one effect record this frame: its particles are a range of the expansion buffer
+struct VfxBatchGpu
+{
+    column_major float4x4 pose;   // the record's world pose (origin; particles thrown along -Z)
+    uint4 info;   // x the emitter (VfxEmitterGpu index), y the record's seed, z the first particle slot, w the particle count
+    float4 timing;   // x the record's age (s): (step - spawnStep - 1 + alpha) * dt
+};
+
+// one particle as vfx.expand evaluated it this frame
+struct VfxParticleGpu
+{
+    float4 posSize;   // xyz world position, w size (m; 0 dead)
+    float4 color;   // rgb lit colour times intensity (linear HDR), a alpha
+    uint4 info;   // x flipbook frame, y the batch, z sort key (the view distance's float bits), w 1 alive
+    float4 light;   // rgb the light it received (tests read it: lit particles only), w unused
+};
+
+// vfx.expand (vfx/expand.slang) push constants (128 bytes: the guaranteed push constant size)
+struct VfxExpandPush
+{
+    column_major float4x4 viewProj;   // the jittered view-projection (screen positions for the froxel and RT GI lookups)
+    float4 viewZ;   // the view matrix's third row: a point's view depth is -(dot(viewZ.xyz, p) + viewZ.w) (the froxel's slice)
+    float4 camera;   // xyz the camera's position; w the environment's intensity with flag 4, else the constant ambient intensity
+    float4 screen;   // x, y the frame's size; z, w the froxel slice scale and bias (ClusterPush.screen.zw)
+    uint4 config;   // x particle slots, y batches, z lights (without clusters), w flags: 1 clustered, 2 RT GI, 4 environment, 8 TLAS (sun shadow ray)
+};
+
+// vfx.sort (vfx/sort.slang) push constants, one workgroup a batch
+struct VfxSortPush
+{
+    uint4 range;   // x the batch's first particle slot, y its count (<= kVfxSortMax)
+};
+
+// the transparent pass's particle shaders (vfx/particle.slang) push constants
+struct VfxDrawPush
+{
+    column_major float4x4 viewProj;   // the jittered view-projection the G-buffer was drawn with
+    float4 right;   // xyz the camera's right axis; w the projection's depth A (proj[2][2])
+    float4 up;   // xyz the camera's up axis; w the projection's depth B (proj[3][2]): view depth = B / (depth + A)
+    uint4 range;   // x the batch's first particle slot, y the emitter, z 1 sorted
+    float4 screen;   // x, y the frame's size; z the camera's near plane
+};
+
+// the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants
+struct ForwardPush
+{
+    column_major float4x4 view;   // the view matrix (the froxel's slice)
+    float4 camera;   // xyz the camera's position, w the constant ambient intensity
+    float4 screen;   // x, y the frame's size; z, w the froxel slice scale and bias
+    uint4 config;   // x lights (without clusters), y flags: 1 clustered, 2 RT GI, 4 environment (IBL), 8 TLAS (sun shadow ray)
+    float4 env;   // x the environment's intensity
 };
 
 // ibl/env_prefilter.slang push constants

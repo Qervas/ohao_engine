@@ -4,10 +4,15 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "includes/scene/scene_data.glsl"
+#include "shared/layout.glsl"
 
-// Path Tracer Any-Hit Shader — Alpha Testing
-// Runs for every intersection. If the diffuse texture alpha < 0.5,
-// the hit is ignored and the ray continues through (transparency).
+// Path tracer any-hit: alpha (sub-project 12, "Materials: alpha modes"). It runs only for
+// instances the TLAS marks non-opaque (an alpha-tested or blended material): coverage is the
+// base colour's alpha x the albedo texture's (lod 0) x opacity (material row 3).
+//   opaque   accepted (another material made the instance non-opaque);
+//   mask     ignored below the cutoff, as core/gbuffer_mask.frag and rt/alpha_test.slang;
+//   blend    stochastic opacity: accepted with probability = coverage, by a hash of the ray
+//            (launch pixel, origin, direction) and the hit, so samples converge to the blend.
 
 hitAttributeEXT vec2 baryCoord;
 
@@ -25,6 +30,12 @@ layout(constant_id = 1) const uint OHAO_BINDLESS_COUNT = 4096u;
 
 vec2 vtxUV(uint v) { uint b = v * 25u + 9u; return vec2(vtx[b], vtx[b + 1u]); }
 
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
 void main() {
     // Barycentric interpolation
     float u = baryCoord.x;
@@ -36,24 +47,29 @@ void main() {
     MeshGpu mesh = meshes[inst.mesh];
     uint slot = triSlot[mesh.triangleSlotOffset + uint(gl_PrimitiveID)];
     uint matID = OHAO_MATERIAL_INDEX(inst, slot, materialRefs);
-    vec4 matColor = matColorBuf.matColors[matID * 3u + 0u];
+    vec4 matColor = matColorBuf.matColors[matID * kMaterialRows + 0u];
+    vec4 alphaRow = matColorBuf.matColors[matID * kMaterialRows + 3u];   // mode, cutoff, opacity, base alpha
+    uint mode = uint(alphaRow.x + 0.5);
+    if (mode == kAlphaOpaque) return;
     uint diffuseTexIdx = floatBitsToUint(matColor.a);
 
-    // If no texture (or none bound at that index), accept hit (opaque)
-    if (diffuseTexIdx >= OHAO_BINDLESS_COUNT) return;
-
-    // Interpolate UVs
-    uint baseIdx = mesh.indexOffset + uint(gl_PrimitiveID) * 3u;
-    uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];
-    uint i1 = mesh.vertexOffset + idx[baseIdx + 1u];
-    uint i2 = mesh.vertexOffset + idx[baseIdx + 2u];
-    vec2 texUV = w * vtxUV(i0) + u * vtxUV(i1) + v * vtxUV(i2);
-
-    // Sample alpha
-    float alpha = textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).a;
-
-    // Alpha test — discard if transparent
-    if (alpha < 0.5) {
-        ignoreIntersectionEXT;
+    float alpha = alphaRow.w * alphaRow.z;
+    if (diffuseTexIdx < OHAO_BINDLESS_COUNT) {
+        uint baseIdx = mesh.indexOffset + uint(gl_PrimitiveID) * 3u;
+        uint i0 = mesh.vertexOffset + idx[baseIdx + 0u];
+        uint i1 = mesh.vertexOffset + idx[baseIdx + 1u];
+        uint i2 = mesh.vertexOffset + idx[baseIdx + 2u];
+        vec2 texUV = w * vtxUV(i0) + u * vtxUV(i1) + v * vtxUV(i2);
+        alpha *= textureLod(textures[nonuniformEXT(diffuseTexIdx)], texUV, 0.0).a;
     }
+
+    if (mode == kAlphaMask) {
+        if (alpha < alphaRow.y) ignoreIntersectionEXT;
+        return;
+    }
+    // Blend: a uniform number from the ray and the hit (deterministic run to run).
+    uint h = pcg(gl_LaunchIDEXT.x ^ pcg(gl_LaunchIDEXT.y ^ pcg(uint(gl_PrimitiveID) ^ pcg(gl_InstanceCustomIndexEXT))));
+    h = pcg(h ^ floatBitsToUint(gl_WorldRayOriginEXT.x) ^ pcg(floatBitsToUint(gl_WorldRayOriginEXT.y) ^
+                                                             floatBitsToUint(gl_WorldRayDirectionEXT.z)));
+    if (float(h >> 8u) * (1.0 / 16777216.0) >= alpha) ignoreIntersectionEXT;
 }

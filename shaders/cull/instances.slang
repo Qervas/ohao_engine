@@ -82,20 +82,25 @@ void classify(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID, uint
                                    instances[base + 3u], d.aabbMin.xyz, d.aabbMax.xyz, pc.config.y == kCullPhaseShadow);
         const bool inFrustum = !frustum || b.inFrustum;
         bool member;
+        // An alpha-tested draw is drawn by the G-buffer's discard pipeline after the late phase,
+        // a blended one by the forward pass: neither is in a G-buffer list (nor, blended, in a
+        // cascade's: a transparent surface casts no shadow).
+        const bool gbuffer = (d.info.y & (kDrawMask | kDrawTransparent)) == 0u;
         if (pc.config.y == kCullPhaseEarly)
         {
-            member = frustum && visibility[i] != 0u && inFrustum;
+            member = gbuffer && frustum && visibility[i] != 0u && inFrustum;
         }
         else if (pc.config.y == kCullPhaseLate)
         {
             const bool drawnEarly = frustum && visibility[i] != 0u && inFrustum;
             const bool visible = inFrustum && !((flags & kCullOcclusion) != 0u && occluded(hiz, pc.hiz.xy, pc.hiz.z, b));
-            member = visible && !drawnEarly;
+            member = gbuffer && visible && !drawnEarly;
             visibility[i] = visible ? 1u : 0u;
         }
         else
         {
-            member = inFrustum && (d.info.y & (kDrawEmitter | kDrawViewModel)) == 0u;   // a light's mesh, a first-person gun: no shadow
+            // A light's mesh, a first-person gun and a blended surface: no shadow.
+            member = inFrustum && (d.info.y & (kDrawEmitter | kDrawViewModel | kDrawTransparent)) == 0u;
         }
         uint k = 0u;
         if (pc.extra.y >= 2u && (d.info.y & kDrawOneSided) == 0u) k = 1u;

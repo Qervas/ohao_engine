@@ -5,6 +5,7 @@
 // and the small host-written buffers a frame slot owns.
 
 #include <vulkan/vulkan.h>
+#include <span>
 #include <cstdint>
 
 namespace ohao::rtc {
@@ -41,6 +42,13 @@ void transition(VkCommandBuffer cmd, Image& img, VkImageLayout layout, VkPipelin
 // push constants. Logs and returns false when the SPIR-V is missing or creation fails.
 bool createComputePipeline(VkDevice device, const char* spirv, const char* entry, VkDescriptorSetLayout setLayout,
                            uint32_t pushBytes, VkPipelineLayout& layout, VkPipeline& pipeline);
+// The same with several descriptor sets, set i = setLayouts[i].
+bool createComputePipeline(VkDevice device, const char* spirv, const char* entry,
+                           std::span<const VkDescriptorSetLayout> setLayouts, uint32_t pushBytes, VkPipelineLayout& layout,
+                           VkPipeline& pipeline);
+
+// A shader module of bin/shaders/<spirv> (null, logged, when missing) for a graphics pipeline.
+VkShaderModule loadShaderModule(VkDevice device, const char* spirv);
 
 bool createHostBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize size, VkBufferUsageFlags usage,
                       HostBuffer& out);

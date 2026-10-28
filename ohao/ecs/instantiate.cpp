@@ -85,6 +85,8 @@ render::MaterialDesc describe(const MaterialOverride& o) {
     d.metallic = o.metallic;
     d.emissiveStrength = o.emissiveStrength;
     d.subsurface = o.subsurface;
+    d.alphaMode = static_cast<render::AlphaMode>(o.alphaMode);
+    d.opacity = o.opacity;
     return d;
 }
 

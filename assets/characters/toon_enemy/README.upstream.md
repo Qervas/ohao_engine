@@ -42,4 +42,6 @@ Rebuild with `python tools/anim/make_enemy.py --source <dir holding Character_En
 - **`rifle.glb`:** the upstream `AK` mesh alone, its vertices in the `Index1.R` joint's frame,
   fitted as above: attached there with an identity `Transform` it sits in the hand as upstream.
   The kit's separate `Rifle.glb` (poly.pizza `KjHL5JJrxU`) was not used: it is texture-atlased
-  in another style and has no grip transform for this rig.
+  in another style and has no grip transform for this rig. Upstream's `Wood` and `Grey2`
+  materials say `alphaMode: BLEND` with a base colour alpha of 1 and no texture (nothing in them
+  is transparent): they are written opaque (`solid()`), so the engine draws them in the G-buffer.

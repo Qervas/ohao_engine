@@ -43,6 +43,32 @@ inline constexpr uint32_t kDrawEmitter = 2u;
 inline constexpr uint32_t kDrawViewModel = 4u;
 // DrawRecord.info.y bit: a skinned instance's own deformed mesh (skin/skin.slang): its vertices' boneWeights.xyz hold last frame's position (motion vectors), not weights
 inline constexpr uint32_t kDrawSkinned = 8u;
+// DrawRecord.info.y bit: an alpha-tested material (glTF MASK): in no G-buffer culling list, drawn after the late phase by the G-buffer's discard pipeline (core/gbuffer_mask.frag); a CSM cascade draws it as opaque
+inline constexpr uint32_t kDrawMask = 16u;
+// DrawRecord.info.y bit: a blended material (glTF BLEND): in no G-buffer, Hi-Z or CSM list; the forward pass (transparent) draws it, sorted back to front
+inline constexpr uint32_t kDrawTransparent = 32u;
+// a material's alpha mode (its row 3, x): opaque
+inline constexpr uint32_t kAlphaOpaque = 0u;
+// a material's alpha mode: alpha-tested against row 3, y (the cutoff); base colour alpha times the albedo texture's alpha times row 3, z (opacity)
+inline constexpr uint32_t kAlphaMask = 1u;
+// a material's alpha mode: blended by base colour alpha times the albedo texture's alpha times row 3, z (opacity)
+inline constexpr uint32_t kAlphaBlend = 2u;
+// float4 rows a material holds in the material table: 0 (baseColor, albedoTex), 1 (roughness, metallic, normalTex, emissiveTex), 2 (roughMetalTex, emissiveStrength, subsurface, occlusionTex), 3 (alpha mode, cutoff, opacity, base colour alpha)
+inline constexpr uint32_t kMaterialRows = 4u;
+// vfx.expand (vfx/expand.slang): particles a workgroup evaluates, one a thread
+inline constexpr uint32_t kVfxGroupSize = 64u;
+// vfx.sort (vfx/sort.slang): an alpha-blended batch of at most this many particles is sorted back to front in one workgroup (bitonic); a larger one draws in index order
+inline constexpr uint32_t kVfxSortMax = 1024u;
+// an emitter's colour and alpha curves hold at most this many keys on the GPU (VfxEmitterGpu)
+inline constexpr uint32_t kVfxCurveKeys = 4u;
+// VfxEmitterGpu.look.x: additive (order-independent, never sorted)
+inline constexpr uint32_t kVfxBlendAdditive = 0u;
+// VfxEmitterGpu.look.x: alpha blended (straight alpha)
+inline constexpr uint32_t kVfxBlendAlpha = 1u;
+// VfxEmitterGpu.look.x: premultiplied alpha
+inline constexpr uint32_t kVfxBlendPremultiplied = 2u;
+// VfxEmitterGpu.look.z: no texture (a soft round dot)
+inline constexpr uint32_t kVfxNoTexture = 4294967295u;
 // skin (skin/skin.slang): vertices a workgroup; skin.bounds: meshlets a workgroup
 inline constexpr uint32_t kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
@@ -55,10 +81,12 @@ inline constexpr uint32_t kTlasMaskScene = 1u;
 inline constexpr uint32_t kTlasMaskEmitter = 2u;
 // TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
 inline constexpr uint32_t kTlasMaskViewModel = 4u;
+// TLAS instance mask of an instance whose every material is blended (glTF BLEND): only the path tracer's camera rays see it, so in the hybrid frame it casts no shadow and bounces no GI
+inline constexpr uint32_t kTlasMaskTransparent = 8u;
 // ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
 inline constexpr uint32_t kRayMaskScene = 1u;
-// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters and first-person guns
-inline constexpr uint32_t kRayMaskCamera = 7u;
+// ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters, first-person guns and blended instances
+inline constexpr uint32_t kRayMaskCamera = 15u;
 // a meshlet's vertices at most (the mesh shader's output vertices)
 inline constexpr uint32_t kMeshletMaxVertices = 64u;
 // a meshlet's triangles at most (the mesh shader's output primitives)
@@ -363,6 +391,109 @@ struct alignas(16) PreviewPush {
 static_assert(offsetof(PreviewPush, src) == 0);
 static_assert(offsetof(PreviewPush, dst) == 16);
 static_assert(sizeof(PreviewPush) == 32);
+
+// one emitter of the effect set (vfx::EmitterDesc), the closed form's parameters (vfx/particle_math.hpp)
+struct alignas(16) VfxEmitterGpu {
+    alignas(16) std::array<float, 4> lifeSpeed{};
+    alignas(16) std::array<float, 4> shape{};
+    alignas(16) std::array<float, 4> motion{};
+    alignas(16) std::array<uint32_t, 4> look{};
+    alignas(16) std::array<uint32_t, 4> atlas{};
+    alignas(16) std::array<float, 4> color0{};
+    alignas(16) std::array<float, 4> color1{};
+    alignas(16) std::array<float, 4> color2{};
+    alignas(16) std::array<float, 4> color3{};
+    alignas(16) std::array<float, 4> alphaT{};
+    alignas(16) std::array<float, 4> alphaV{};
+};
+static_assert(offsetof(VfxEmitterGpu, lifeSpeed) == 0);
+static_assert(offsetof(VfxEmitterGpu, shape) == 16);
+static_assert(offsetof(VfxEmitterGpu, motion) == 32);
+static_assert(offsetof(VfxEmitterGpu, look) == 48);
+static_assert(offsetof(VfxEmitterGpu, atlas) == 64);
+static_assert(offsetof(VfxEmitterGpu, color0) == 80);
+static_assert(offsetof(VfxEmitterGpu, color1) == 96);
+static_assert(offsetof(VfxEmitterGpu, color2) == 112);
+static_assert(offsetof(VfxEmitterGpu, color3) == 128);
+static_assert(offsetof(VfxEmitterGpu, alphaT) == 144);
+static_assert(offsetof(VfxEmitterGpu, alphaV) == 160);
+static_assert(sizeof(VfxEmitterGpu) == 176);
+
+// one emitter of one effect record this frame: its particles are a range of the expansion buffer
+struct alignas(16) VfxBatchGpu {
+    alignas(16) std::array<float, 16> pose{};
+    alignas(16) std::array<uint32_t, 4> info{};
+    alignas(16) std::array<float, 4> timing{};
+};
+static_assert(offsetof(VfxBatchGpu, pose) == 0);
+static_assert(offsetof(VfxBatchGpu, info) == 64);
+static_assert(offsetof(VfxBatchGpu, timing) == 80);
+static_assert(sizeof(VfxBatchGpu) == 96);
+
+// one particle as vfx.expand evaluated it this frame
+struct alignas(16) VfxParticleGpu {
+    alignas(16) std::array<float, 4> posSize{};
+    alignas(16) std::array<float, 4> color{};
+    alignas(16) std::array<uint32_t, 4> info{};
+    alignas(16) std::array<float, 4> light{};
+};
+static_assert(offsetof(VfxParticleGpu, posSize) == 0);
+static_assert(offsetof(VfxParticleGpu, color) == 16);
+static_assert(offsetof(VfxParticleGpu, info) == 32);
+static_assert(offsetof(VfxParticleGpu, light) == 48);
+static_assert(sizeof(VfxParticleGpu) == 64);
+
+// vfx.expand (vfx/expand.slang) push constants (128 bytes: the guaranteed push constant size)
+struct alignas(16) VfxExpandPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<float, 4> viewZ{};
+    alignas(16) std::array<float, 4> camera{};
+    alignas(16) std::array<float, 4> screen{};
+    alignas(16) std::array<uint32_t, 4> config{};
+};
+static_assert(offsetof(VfxExpandPush, viewProj) == 0);
+static_assert(offsetof(VfxExpandPush, viewZ) == 64);
+static_assert(offsetof(VfxExpandPush, camera) == 80);
+static_assert(offsetof(VfxExpandPush, screen) == 96);
+static_assert(offsetof(VfxExpandPush, config) == 112);
+static_assert(sizeof(VfxExpandPush) == 128);
+
+// vfx.sort (vfx/sort.slang) push constants, one workgroup a batch
+struct alignas(16) VfxSortPush {
+    alignas(16) std::array<uint32_t, 4> range{};
+};
+static_assert(offsetof(VfxSortPush, range) == 0);
+static_assert(sizeof(VfxSortPush) == 16);
+
+// the transparent pass's particle shaders (vfx/particle.slang) push constants
+struct alignas(16) VfxDrawPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<float, 4> right{};
+    alignas(16) std::array<float, 4> up{};
+    alignas(16) std::array<uint32_t, 4> range{};
+    alignas(16) std::array<float, 4> screen{};
+};
+static_assert(offsetof(VfxDrawPush, viewProj) == 0);
+static_assert(offsetof(VfxDrawPush, right) == 64);
+static_assert(offsetof(VfxDrawPush, up) == 80);
+static_assert(offsetof(VfxDrawPush, range) == 96);
+static_assert(offsetof(VfxDrawPush, screen) == 112);
+static_assert(sizeof(VfxDrawPush) == 128);
+
+// the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants
+struct alignas(16) ForwardPush {
+    alignas(16) std::array<float, 16> view{};
+    alignas(16) std::array<float, 4> camera{};
+    alignas(16) std::array<float, 4> screen{};
+    alignas(16) std::array<uint32_t, 4> config{};
+    alignas(16) std::array<float, 4> env{};
+};
+static_assert(offsetof(ForwardPush, view) == 0);
+static_assert(offsetof(ForwardPush, camera) == 64);
+static_assert(offsetof(ForwardPush, screen) == 80);
+static_assert(offsetof(ForwardPush, config) == 96);
+static_assert(offsetof(ForwardPush, env) == 112);
+static_assert(sizeof(ForwardPush) == 128);
 
 // ibl/env_prefilter.slang push constants
 struct alignas(16) EnvPrefilterPush {

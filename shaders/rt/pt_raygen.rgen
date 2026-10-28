@@ -24,8 +24,14 @@ struct GPULight {
 };
 layout(set = 0, binding = 11) readonly buffer LightBuffer {
     uint lightCount;
+    uint envMapTexIdx;
+    float envIntensity;
+    uint alphaRays;   // 1: an instance is non-opaque (alpha-tested or blended material): pt_anyhit decides
     GPULight lights[];
 } lightBuf;
+// Rays force opacity unless an instance has an alpha material (RenderScene's light header, word 3):
+// a scene without one traces exactly as before alpha modes existed.
+#define OHAO_RAY_OPAQUE (lightBuf.alphaRays == 1u ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT)
 
 layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
 layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
@@ -195,7 +201,7 @@ void main() {
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
     // ================================================================
     payload.hitDist = -1.0;
-    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskCamera, 0, 0, 0,
+    traceRayEXT(topLevelAS, OHAO_RAY_OPAQUE, kRayMaskCamera, 0, 0, 0,
                  rayOrigin, 0.001, rayDir, 10000.0, 0);
     firstHitPos  = payload.hitPos;
     firstHitDist = payload.hitDist;
@@ -392,7 +398,7 @@ void main() {
             if (NdotL > 0.0 && weight > 0.0) {
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
-                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                     kRayMaskScene, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, L, shadowDist, 0);
 
@@ -452,7 +458,7 @@ void main() {
             if (NdotL_env > 0.0 && envPdf > 0.0) {
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
-                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                     kRayMaskScene, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, envDir, 10000.0, 0);
 
@@ -553,7 +559,7 @@ void main() {
 
         for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
             payload.hitDist = -1.0;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT,
+            traceRayEXT(topLevelAS, OHAO_RAY_OPAQUE,
                          bounce == 1u && firstHitMirror ? kRayMaskCamera : kRayMaskScene, 0, 0, 0,
                          specRayOrigin, 0.001, specRayDir, 10000.0, 0);
 
@@ -674,7 +680,7 @@ void main() {
                 if (NdotL > 0.0 && weight > 0.0) {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
-                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                         kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
 
@@ -720,7 +726,7 @@ void main() {
                 if (NdotL_env > 0.0 && envPdf > 0.0) {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
-                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                         kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
 
@@ -852,7 +858,7 @@ void main() {
 
         for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
             payload.hitDist = -1.0;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, kRayMaskScene, 0, 0, 0,
+            traceRayEXT(topLevelAS, OHAO_RAY_OPAQUE, kRayMaskScene, 0, 0, 0,
                          diffRayOrigin, 0.001, diffRayDir, 10000.0, 0);
 
             // Sub-plan 3.D: capture first secondary diffuse hit distance (single segment)
@@ -973,7 +979,7 @@ void main() {
                 if (NdotL > 0.0 && weight > 0.0) {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
-                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                         kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
 
@@ -1019,7 +1025,7 @@ void main() {
                 if (NdotL_env > 0.0 && envPdf > 0.0) {
                     payload.hitDist = 999.0;
                     traceRayEXT(topLevelAS,
-                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        gl_RayFlagsTerminateOnFirstHitEXT | OHAO_RAY_OPAQUE | gl_RayFlagsSkipClosestHitShaderEXT,
                         kRayMaskScene, 0, 0, 0,
                         bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
 

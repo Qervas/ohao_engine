@@ -30,9 +30,10 @@ Microsoft or Crytek.
 ## What they exercise, and what they do not
 
 Core metallic-roughness: base color, metallicRoughness (G roughness, B metallic),
-normal, emissive and occlusion textures, node transforms, double-sidedness. Not loaded or
-shaded, so not validated by this pack: `KHR_materials_*` extensions (clearcoat,
-transmission, volume, IOR, specular, sheen, iridescence, anisotropy) and alpha.
-FlightHelmet's `LensesMat` is `alphaMode: BLEND` and three Sponza materials are
-`alphaMode: MASK`; the frame has no alpha path, so those surfaces render opaque.
-ClearCoatTest and TransmissionTest were deliberately left out for that reason.
+normal, emissive and occlusion textures, node transforms, double-sidedness, and alpha
+(sub-project 12 step 2): FlightHelmet's `LensesMat` is `alphaMode: BLEND`, drawn by the
+transparent pass over the eyes behind it; three Sponza materials are `alphaMode: MASK`, cut by
+their textures' alpha in the G-buffer, RT shadows, RT GI and the path tracer. Not loaded or
+shaded, so not validated by this pack: `KHR_materials_*` extensions (clearcoat, transmission,
+volume, IOR, specular, sheen, iridescence, anisotropy). ClearCoatTest and TransmissionTest were
+deliberately left out for that reason; AlphaBlendModeTest is not in the pack.

@@ -6,6 +6,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <assimp/GltfMaterial.h>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -385,6 +386,9 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
     model->materialColors.resize(numMats, glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
     model->materialMetallic.resize(numMats, 0.0f);
     model->materialDoubleSided.resize(numMats, 1u);
+    model->materialAlphaMode.resize(numMats, 0u);
+    model->materialAlphaCutoff.resize(numMats, 0.5f);
+    model->materialBaseAlpha.resize(numMats, 1.0f);
     model->materialTextureIndex.resize(numMats, -1);
     model->materialNormalTexIndex.resize(numMats, -1);
     model->materialRoughMetalTexIndex.resize(numMats, -1);
@@ -415,6 +419,19 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path, const Mesh
         int twoSided = 1;
         if (mat->Get(AI_MATKEY_TWOSIDED, twoSided) == aiReturn_SUCCESS)
             model->materialDoubleSided[m] = twoSided != 0 ? 1u : 0u;
+        // glTF's alpha: alphaMode (OPAQUE, MASK, BLEND), alphaCutoff (MASK, default 0.5) and the
+        // base colour factor's alpha, which coverage multiplies with the albedo texture's.
+        aiString alphaMode;
+        if (mat->Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == aiReturn_SUCCESS) {
+            const std::string mode = alphaMode.C_Str();
+            model->materialAlphaMode[m] = mode == "MASK" ? 1u : mode == "BLEND" ? 2u : 0u;
+        }
+        float cutoff = 0.5f;
+        if (mat->Get(AI_MATKEY_GLTF_ALPHACUTOFF, cutoff) == aiReturn_SUCCESS) model->materialAlphaCutoff[m] = cutoff;
+        aiColor4D base(1.0f, 1.0f, 1.0f, 1.0f);
+        if (mat->Get(AI_MATKEY_BASE_COLOR, base) == aiReturn_SUCCESS) model->materialBaseAlpha[m] = base.a;
+        else if (float opacity = 1.0f; mat->Get(AI_MATKEY_OPACITY, opacity) == aiReturn_SUCCESS)
+            model->materialBaseAlpha[m] = opacity;
 
         // Textures
         model->materialTextureIndex[m] = loadAssimpTexture(scene, mat,

@@ -22,14 +22,15 @@ namespace layout {
 inline constexpr std::size_t kLightDataBytes       = 128;
 inline constexpr std::size_t kGPULightBytes        = 80;  // 5 * vec4
 inline constexpr std::size_t kPTPushConstantsBytes = 256;
-inline constexpr std::size_t kMaterialVec4s        = 3;
+inline constexpr std::size_t kMaterialVec4s        = 4;   // gpu::shared::kMaterialRows
 inline constexpr std::size_t kMaterialBytes        = kMaterialVec4s * sizeof(glm::vec4);
 
 // ─── Material SSBO packing (render::MaterialTable; gbuffer.frag, pt_closesthit) ─
 //
-// matColors[matID * 3 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
-// matColors[matID * 3 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
-// matColors[matID * 3 + 2] = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
+// matColors[matID * 4 + 0] = vec4(baseColor.rgb, uintBitsToFloat(diffuseTexIdx))
+// matColors[matID * 4 + 1] = vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
+// matColors[matID * 4 + 2] = vec4(roughMetalTexIdx, emissiveStrength, subsurface, occlusionTexIdx)
+// matColors[matID * 4 + 3] = vec4(alphaMode, alphaCutoff, opacity, baseColorAlpha)
 
 struct MaterialGpuPack {
     static constexpr std::size_t kSlots     = kMaterialVec4s;
@@ -39,6 +40,7 @@ struct MaterialGpuPack {
     static constexpr int kBaseColorSlot = 0;
     static constexpr int kPbrSlot       = 1;
     static constexpr int kExtraSlot     = 2;
+    static constexpr int kAlphaSlot     = 3;
 
     /// Byte offset of material `id` in the SSBO.
     [[nodiscard]] static constexpr std::size_t byteOffset(uint32_t materialId) noexcept {
@@ -51,9 +53,9 @@ struct MaterialGpuPack {
     }
 };
 
-static_assert(MaterialGpuPack::kBytes == 48, "material pack is 3 * 16 bytes");
-static_assert(MaterialGpuPack::byteOffset(2) == 96);
-static_assert(MaterialGpuPack::vec4Count(4) == 12);
+static_assert(MaterialGpuPack::kBytes == 64, "material pack is 4 * 16 bytes");
+static_assert(MaterialGpuPack::byteOffset(2) == 128);
+static_assert(MaterialGpuPack::vec4Count(4) == 16);
 
 template<GpuPod T>
 [[nodiscard]] consteval std::size_t gpu_sizeof() noexcept {

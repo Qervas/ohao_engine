@@ -226,7 +226,9 @@ bool RTGITechnique::createDescriptorResources() {
 }
 
 bool RTGITechnique::createPipelines() {
-    return rtc::createComputePipeline(m_device, "rt_gi_trace.slang.spv", "trace", m_traceSetLayout,
+    if (!m_alphaTablesLayout || !m_texturesLayout) return false;
+    const VkDescriptorSetLayout traceSets[] = {m_traceSetLayout, m_alphaTablesLayout, m_texturesLayout};
+    return rtc::createComputePipeline(m_device, "rt_gi_trace.slang.spv", "trace", traceSets,
                                       sizeof(shared::GITracePush), m_traceLayout, m_tracePipeline) &&
            rtc::createComputePipeline(m_device, "rt_gi_denoise.slang.temporal.spv", "temporal", m_temporalSetLayout,
                                       sizeof(shared::GIDenoisePush), m_temporalLayout, m_temporalPipeline) &&
@@ -248,6 +250,7 @@ void RTGITechnique::prepareHalfImages(VkCommandBuffer cmd) {
 void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_rendered = false;
     if (!m_tracePipeline || input.tlas == VK_NULL_HANDLE || input.instances == VK_NULL_HANDLE) return;
+    if (input.alphaTables == VK_NULL_HANDLE || input.textures == VK_NULL_HANDLE) return;
     if (input.frameSlot >= MAX_FRAMES_IN_FLIGHT) return;
     const bool reference = input.quality == RenderQuality::Reference;
     if (!reference && input.velocityBuffer == VK_NULL_HANDLE) return;
@@ -335,7 +338,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_traceLayout, 0, 1, &set, 0, nullptr);
+    const VkDescriptorSet traceSets[] = {set, input.alphaTables, input.textures};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_traceLayout, 0, 3, traceSets, 0, nullptr);
     shared::GITracePush pc{};
     pc.extent = u4(m_traceExtent.width, m_traceExtent.height, m_width, m_height);
     pc.seed = u4(input.renderSeed, input.frameIndex, m_rays, lightCount);

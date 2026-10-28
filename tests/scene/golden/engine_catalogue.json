@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "cddd2b64e9a5dde0",
+  "schemaHash": "667173fa20c11cce",
   "units": [
     "m",
     "m/s",
@@ -295,6 +295,23 @@
         { "name": "MouseLeft", "value": 1000, "doc": "The Left mouse button" },
         { "name": "MouseRight", "value": 1001, "doc": "The Right mouse button" },
         { "name": "MouseMiddle", "value": 1002, "doc": "The Middle mouse button" }
+      ]
+    },
+    {
+      "name": "MaterialAlpha",
+      "doc": "A material's alpha mode (glTF's alphaMode)",
+      "values": [
+        { "name": "Opaque", "value": 0, "doc": "Opaque: opacity is ignored" },
+        {
+          "name": "Mask",
+          "value": 1,
+          "doc": "Alpha-tested: cut where opacity is below 0.5, in raster and every ray"
+        },
+        {
+          "name": "Blend",
+          "value": 2,
+          "doc": "Blended by opacity in the sorted forward pass; casts no shadow and bounces no GI in the hybrid frame"
+        }
       ]
     },
     {
@@ -1279,6 +1296,40 @@
           "type": "f32",
           "default": 0,
           "doc": "Subsurface scattering (skin, wax): how much of the lit colour the screen-space blur spreads under the surface; 0 = none. Ignored where emissiveStrength > 0.",
+          "unit": "1",
+          "min": 0,
+          "max": 1,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "alphaMode",
+          "type": "MaterialAlpha",
+          "default": "Opaque",
+          "doc": "Opaque, alpha-tested (Mask) or blended (Blend)",
+          "unit": null,
+          "min": null,
+          "max": null,
+          "uiRange": null,
+          "step": null,
+          "tooltip": "",
+          "color": false,
+          "angle": false,
+          "hidden": false,
+          "readOnly": false,
+          "aliases": []
+        },
+        {
+          "name": "opacity",
+          "type": "f32",
+          "default": 1,
+          "doc": "Coverage: Blend's blend factor, Mask's test (cut below 0.5)",
           "unit": "1",
           "min": 0,
           "max": 1,

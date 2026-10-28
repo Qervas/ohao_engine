@@ -55,6 +55,10 @@ struct ShadowInput {
 
     // RT-specific: the RenderScene's TLAS (null if rasterization-only)
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+    // Set 1 and 2 of the trace (rt/alpha_test.slang): RenderScene's tables (rtc::AlphaTables)
+    // and the bindless textures, for alpha-tested and blended candidates.
+    VkDescriptorSet alphaTables = VK_NULL_HANDLE;
+    VkDescriptorSet textures = VK_NULL_HANDLE;
 };
 
 struct ShadowOutput {
@@ -94,6 +98,10 @@ struct GIInput {
     RenderQuality quality = RenderQuality::Realtime;
 
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;   // RenderScene TLAS (custom index = slot)
+    // Set 1 and 2 of the trace (rt/alpha_test.slang): RenderScene's tables (rtc::AlphaTables)
+    // and the bindless textures, for alpha-tested and blended candidates.
+    VkDescriptorSet alphaTables = VK_NULL_HANDLE;
+    VkDescriptorSet textures = VK_NULL_HANDLE;
     VkBuffer instances = VK_NULL_HANDLE;                // RenderScene instance table (InstanceGpu[])
 
     // The scene's lights; a bounce is lit by the kGIMaxLights brightest (emissive proxies
