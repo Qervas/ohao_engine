@@ -164,6 +164,8 @@ float traceOne(uint pixelKey, uint l, uint s, float3 p, float3 origin, float3 n)
     // Smoke: the sample is lit with the probability the cloud lets light through (its transmittance),
     // so the filter's average is that transmittance; with no smoke it is always lit.
     const float T = smokeTransmittance(origin, dir, tMax);
+    // No smoke on the ray: lit, and no draw. rand01 is below 1, so this is the draw's own answer.
+    if (T >= 1.0) return 1.0;
     return rand01(pixelKey, l, s, 2u) < T ? 1.0 : 0.0;
 }
 
