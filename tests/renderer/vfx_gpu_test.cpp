@@ -159,9 +159,9 @@ void floorPlane(ecs::World& w) {
     w.registry().emplace<ecs::MaterialOverride>(f, ecs::MaterialOverride{glm::vec3(0.5f), 0.9f, 0.0f, 0.0f});
 }
 
-std::string save(ecs::World& w, const std::string& tag) {
+std::string save(ecs::World& w, const std::string& tag, const std::string& set = {}) {
     const entt::entity s = w.create("Effects", ecs::Transform{});
-    w.registry().emplace<ecs::VfxSet>(s, ecs::VfxSet{ecs::AssetRef{setPath(), {}}});
+    w.registry().emplace<ecs::VfxSet>(s, ecs::VfxSet{ecs::AssetRef{set.empty() ? setPath() : set, {}}});
     const std::string rel = scratch(tag) + ".scene.json";
     auto text = ecs::saveScene(w, engineTypes(), ecs::SaveOptions{reflect::JsonLayout::Compact});
     if (!text) return {};
@@ -183,6 +183,7 @@ struct Options {
     std::vector<std::string> post{};   // none: the lit image tonemapped only
     int warmFrames{0};                 // frames rendered between a warm-up capture and the capture
     std::function<void(VulkanRenderer&)> settings{};
+    std::function<void(ecs::World&)> afterLoad{};   // the scene loaded, before any step (a test places records)
 };
 
 // The scene loaded, stepped `steps` times and captured; the transparent pass's objects and particles.
@@ -201,6 +202,7 @@ Frame capture(const std::string& scenePath, const Options& o, const std::string&
         std::printf("  scene.load %s: %s\n", scenePath.c_str(), loaded.substr(0, 300).c_str());
         return out;
     }
+    if (o.afterLoad) o.afterLoad(world);
     if (o.steps > 0) {
         const std::string stepped = session.call("world.step", "{\"frames\":" + std::to_string(o.steps) + "}");
         if (stepped.rfind("{\"result\"", 0) != 0) std::printf("\n      world.step: %s", stepped.substr(0, 300).c_str());
@@ -556,6 +558,166 @@ void t32_forward_parity() {
 
 } // namespace
 
+// ---- t33_decal_footprint, t33_decal_wraps -----------------------------------------------------
+// The decal records are placed where a test names (a fight would write them where it hits; here the
+// spot is the test's). A frame with the decals against one with the decals pass switched off differs
+// only where the decals project; a face within 60 degrees of the decal's normal takes it, one further
+// off does not.
+
+// The decal's pose for a record at `at` facing `normal` (as ecs/vfx's poseAlong: its -Z is the normal).
+glm::mat4 decalPose(glm::vec3 at, glm::vec3 normal) {
+    const glm::vec3 z = -glm::normalize(normal);
+    const glm::vec3 helper = std::fabs(z.y) < 0.999f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    const glm::vec3 x = glm::normalize(glm::cross(helper, z));
+    const glm::vec3 y = glm::cross(z, x);
+    return glm::mat4(glm::vec4(x, 0.0f), glm::vec4(y, 0.0f), glm::vec4(z, 0.0f), glm::vec4(at, 1.0f));
+}
+
+// The decal tests' camera: 1.5 m up, looking down -Z, kFov high.
+const glm::vec3 kEye(0.0f, 1.5f, 0.0f);
+
+// A world point's pixel (top row first) through the test camera.
+glm::vec2 screenOf(glm::vec3 world) {
+    const glm::vec3 p = world - kEye;
+    const float t = std::tan(glm::radians(kFov) * 0.5f), aspect = float(kWidth) / float(kHeight);
+    const float depth = -p.z;
+    return {(0.5f + 0.5f * p.x / (depth * t * aspect)) * kWidth, (0.5f - 0.5f * p.y / (depth * t)) * kHeight};
+}
+
+// The slice set's decal index by name (the set the play scene names).
+int sliceDecal(const char* name) {
+    std::ifstream in(std::string(OHAO_SOURCE_DIR) + "/assets/vfx/slice.vfx.json", std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto set = ohao::vfx::parseVfxSet(text);
+    return set ? set.value().decal(name) : -1;
+}
+
+void placeDecal(ecs::World& w, const char* decal, glm::vec3 at, glm::vec3 normal) {
+    ecs::VfxRecord r;
+    r.kind = ecs::VfxRecord::Kind::Decal;
+    r.effect = static_cast<uint16_t>(sliceDecal(decal));
+    r.seed = 1;
+    r.pose = decalPose(at, normal);
+    ecs::vfxSystem(w)->addRecordForTest(r);
+}
+
+// A box turned by `yawDeg` about Y: its front face (+Z) faces the camera `yawDeg` off the view.
+void slant(ecs::World& w, const char* name, glm::vec3 centre, float yawDeg) {
+    ecs::Transform t{centre};
+    t.rotation = glm::angleAxis(glm::radians(yawDeg), glm::vec3(0.0f, 1.0f, 0.0f));
+    const entt::entity e = w.create(name, t);
+    w.registry().emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::BoxPrim{{-1.0f, -1.0f, -0.1f}, {1.0f, 1.0f, 0.1f}, glm::vec3(0.8f)}});
+    w.registry().emplace<ecs::MaterialOverride>(e, ecs::MaterialOverride{glm::vec3(0.8f), 0.9f, 0.0f, 0.0f});
+}
+
+// The centre of a `slant` box's front face.
+glm::vec3 slantFace(glm::vec3 centre, float yawDeg) {
+    return centre + glm::angleAxis(glm::radians(yawDeg), glm::vec3(0.0f, 1.0f, 0.0f)) * glm::vec3(0.0f, 0.0f, 0.1f);
+}
+
+// A wall at z = -5.8 (its face), two slanted boxes in front of it (45 and 61 degrees), the camera at the origin.
+std::string decalScene(const std::string& tag) {
+    ecs::World w;
+    w.seedIds(33);
+    sun(w);
+    box(w, "Wall", {-6.0f, 0.0f, -6.2f}, {6.0f, 4.0f, -5.8f}, ecs::MaterialOverride{glm::vec3(0.8f), 0.9f, 0.0f, 0.0f});
+    slant(w, "SlantA", {-1.0f, 1.5f, -3.6f}, 45.0f);
+    slant(w, "SlantB", {1.0f, 1.5f, -3.6f}, 61.0f);
+    camera(w, View{{0.0f, 1.5f, 0.0f}, 0.0f, 0.0f});
+    return save(w, tag, "assets/vfx/slice.vfx.json");   // the decals are the slice's
+}
+
+// Pixels that differ between two frames within `radius` of a world point's pixel.
+int changedNear(const Frame& a, const Frame& b, glm::vec3 p, int radius) {
+    const glm::vec2 c = screenOf(p);
+    int n = 0;
+    for (int y = int(c.y) - radius; y <= int(c.y) + radius; ++y)
+        for (int x = int(c.x) - radius; x <= int(c.x) + radius; ++x)
+            if (x >= 0 && y >= 0 && x < int(kWidth) && y < int(kHeight) && pixel(a, x, y) != pixel(b, x, y)) ++n;
+    return n;
+}
+
+// The options of a decal frame: RT GI off (a dark decal would darken the light it bounces, outside its
+// footprint, which is not what this checks), the decals pass on or off.
+Options decalFrame(bool decals) {
+    Options o;
+    o.settings = [decals](VulkanRenderer& r) {
+        if (auto* d = r.getDeferredRenderer()) {
+            d->setRTGIEnabled(false);
+            d->setDecalsDrawn(decals);
+        }
+    };
+    return o;
+}
+
+void t33_decal_footprint() {
+    const std::string scene = decalScene("decal_footprint");
+    const glm::vec3 at(0.0f, 1.5f, -5.8f);   // on the wall's face, facing the camera
+    Options on = decalFrame(true), off = decalFrame(false);
+    on.afterLoad = [&](ecs::World& w) { placeDecal(w, "scorch", at, {0.0f, 0.0f, 1.0f}); };
+    off.afterLoad = on.afterLoad;
+    const Frame a = capture(scene, on, "decal_footprint_on");
+    const Frame b = capture(scene, off, "decal_footprint_off");
+    if (!sameSize(a, b)) {
+        check(false, "both frames captured");
+        return;
+    }
+    {
+        const Frame again = capture(scene, on);   // the same decal frame again: the run-to-run floor
+        std::size_t same = 0;
+        for (std::size_t i = 0; i < a.rgba.size() && i < again.rgba.size(); ++i) same += a.rgba[i] != again.rgba[i];
+        std::printf("\n      run to run: %zu bytes differ between two identical decal frames", same);
+    }
+    // The scorch: 1.6 m across on the face, its corners projected.
+    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+    for (const float sx : {-0.8f, 0.8f})
+        for (const float sy : {-0.8f, 0.8f}) {
+            const glm::vec2 s = screenOf(at + glm::vec3(sx, sy, 0.0f));
+            x0 = std::min(x0, s.x), x1 = std::max(x1, s.x), y0 = std::min(y0, s.y), y1 = std::max(y1, s.y);
+        }
+    const float margin = 12.0f;
+    int changed = 0, outside = 0;
+    uint32_t ox0 = kWidth, ox1 = 0, oy0 = kHeight, oy1 = 0;
+    int maxOutside = 0;
+    for (uint32_t y = 0; y < kHeight; ++y)
+        for (uint32_t x = 0; x < kWidth; ++x)
+            if (pixel(a, x, y) != pixel(b, x, y)) {
+                ++changed;
+                if (x < x0 - margin || x > x1 + margin || y < y0 - margin || y > y1 + margin) {
+                    ++outside;
+                    ox0 = std::min(ox0, x), ox1 = std::max(ox1, x), oy0 = std::min(oy0, y), oy1 = std::max(oy1, y);
+                    for (int c = 0; c < 3; ++c)
+                        maxOutside = std::max(maxOutside, std::abs(int(a.rgba[(y * kWidth + x) * 4 + c]) - int(b.rgba[(y * kWidth + x) * 4 + c])));
+                }
+            }
+    std::printf("\n      outside: x %u..%u, y %u..%u, largest difference %d levels", ox0, ox1, oy0, oy1, maxOutside);
+    std::printf("\n      %d pixels differ; the scorch covers x %.0f..%.0f, y %.0f..%.0f; %d outside it", changed, x0, x1, y0, y1,
+                outside);    check(changed > 50, "the decal shows on the wall");
+    check(outside == 0, "nothing changes outside the decal's footprint");
+}
+
+void t33_decal_wraps() {
+    const std::string scene = decalScene("decal_wraps");
+    const glm::vec3 pA = slantFace({-1.0f, 1.5f, -3.6f}, 45.0f), pB = slantFace({1.0f, 1.5f, -3.6f}, 61.0f);
+    Options on = decalFrame(true), off = decalFrame(false);
+    on.afterLoad = [&](ecs::World& w) {
+        placeDecal(w, "scorch", pA, {0.0f, 0.0f, 1.0f});
+        placeDecal(w, "scorch", pB, {0.0f, 0.0f, 1.0f});
+    };
+    off.afterLoad = on.afterLoad;
+    const Frame a = capture(scene, on, "decal_wraps_on");
+    const Frame b = capture(scene, off, "decal_wraps_off");
+    if (!sameSize(a, b)) {
+        check(false, "both frames captured");
+        return;
+    }
+    const int nA = changedNear(a, b, pA, 24), nB = changedNear(a, b, pB, 24);
+    std::printf("\n      %d pixels changed on the 45-degree face (at %.0f, %.0f), %d on the 61-degree face (at %.0f, %.0f)", nA,
+                screenOf(pA).x, screenOf(pA).y, nB, screenOf(pB).x, screenOf(pB).y);
+    check(nA > 20, "a face 45 degrees off the decal's normal takes it");
+    check(nB == 0, "a face 61 degrees off is refused (the 60-degree threshold)");
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--keep") == 0) g_keep = true;
@@ -566,6 +728,8 @@ int main(int argc, char** argv) {
     run("t32_blend_no_shadow", t32_blend_no_shadow);
     run("t32_capture_any_history", t32_capture_any_history);
     run("t32_forward_parity", t32_forward_parity);
+    run("t33_decal_footprint", t33_decal_footprint);
+    run("t33_decal_wraps", t33_decal_wraps);
     std::remove((std::string(OHAO_SOURCE_DIR) + "/" + setPath()).c_str());
     return ohao::test::finish("vfx_gpu_test", g_passed, g_failed, g_failures);
 }

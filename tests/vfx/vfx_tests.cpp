@@ -17,6 +17,7 @@
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
 #include "vfx/particle_math.hpp"
+#include "vfx/tracer_math.hpp"
 #include "vfx/vfx_set.hpp"
 
 #include <algorithm>
@@ -369,7 +370,10 @@ void t31_records_from_events() {
                     const auto* p = reg.try_get<Parent>(up);
                     up = p ? p->entity : entt::null;
                 }
-                decalsOk &= find(VfxRecord::Kind::Decal, decal) == (onPlayer ? 0 : 1);
+                // A character is decaled only on a mesh box its round crosses; the play scene's enemies are
+                // skinned (no box: ruling 18), so none is made there.
+                const bool character = reg.try_get<PlayerController>(e.target) != nullptr;
+                decalsOk &= find(VfxRecord::Kind::Decal, decal) == (onPlayer || character ? 0 : 1);
                 ++checked;
             } else if (e.kind == CombatEvent::Kind::Explode) {
                 ++explodes;
@@ -526,6 +530,167 @@ void t31_hash_unchanged() {
 
 } // namespace
 
+// Decals (sub-project 12, test 33, the CPU half): the ring of 256 is the set's cap (the oldest reused,
+// dropped and counted), the rest of the impact marks' rules move to the records: a character's decal
+// on the mesh box its round crosses (and it stays on it after its death), none on the player, a
+// restart clears them, and no entity is made (the marks' quads are gone).
+std::vector<InputEvent> holdFire(int i) {
+    std::vector<InputEvent> in;
+    if (i == 0) in.push_back(actionEvent("fire", true));
+    if (i % 200 == 199) in.push_back(actionEvent("reload", true));
+    if (i % 200 == 0 && i > 0) in.push_back(actionEvent("reload", false));
+    return in;
+}
+
+void t33_decal_ring() {
+    Fight f;
+    CHECK(f.loaded && f.vfx, "the play scene with the vfx system");
+    if (!f.loaded || !f.vfx) return;
+    const std::size_t entities = f.w.registry().storage<entt::entity>().size();
+    // Nobody dies (a death's restart clears the ring): every combatant has health to spare.
+    std::vector<entt::entity> combatants;
+    for (auto [e, h] : f.w.registry().view<Health>().each()) combatants.push_back(e);
+    for (const entt::entity e : combatants) f.w.registry().replace<Health>(e, Health{100000.0f, 100000.0f});
+    const auto decal = static_cast<std::size_t>(VfxRecord::Kind::Decal);
+    std::size_t written = 0;
+    for (int i = 0; i < 4000; ++i) {
+        const auto w = f.run(1, holdFire, i);
+        for (const VfxRecord& r : w) written += r.kind == VfxRecord::Kind::Decal ? 1 : 0;
+    }
+    const VfxStats st = f.vfx->stats();
+    std::printf("\n      %zu decals written, %u live, %llu dropped", written, st.live[decal],
+                static_cast<unsigned long long>(st.dropped[decal]));
+    CHECK(written > 256, "more hits than the ring holds");
+    CHECK(st.live[decal] == 256 && st.dropped[decal] == written - 256,
+          "256 live; the oldest dropped and counted (the set's cap)");
+    CHECK(f.w.registry().storage<entt::entity>().size() == entities, "no entity made by the hits (the marks' quads are gone)");
+}
+
+void t33_decal_follows() {
+    Fight f;
+    CHECK(f.loaded && f.vfx, "the play scene with the vfx system");
+    if (!f.loaded || !f.vfx) return;
+    f.w.registry().replace<Health>(f.player, Health{100000.0f, 100000.0f});
+    const entt::entity enemy = f.w.findById(kEnemyA);
+    // The play scene's enemies are skinned: no box, no decal (ruling 18). Give EnemyA a body box in
+    // front of its chest, as a mesh box child, so a round that crosses it has one to land on.
+    const entt::entity body = f.w.createWithId(0xe1e2, "EnemyA Body");
+    f.w.registry().emplace<MeshSource>(body, MeshSource{BoxPrim{{-0.25f, 0.0f, -0.17f}, {0.25f, 1.42f, 0.17f}, glm::vec3(0.6f)}});
+    f.w.setParent(body, enemy);
+    f.face(kEnemyA);
+    const auto kind = VfxRecord::Kind::Decal;
+    std::size_t onBody = 0, offBox = 0;
+    std::vector<VfxRecord> placed;
+    for (int i = 0; i < 400; ++i) {
+        const auto w = f.run(1, script, i);
+        for (const VfxRecord& r : w)
+            if (r.kind == kind && r.on != entt::null) placed.push_back(r);
+    }
+    // A decal on the level's walls is on the level's own entity; only the enemy's parts count here.
+    const auto partOf = [&](entt::entity e) {
+        for (int depth = 0; depth < 64 && e != entt::null && f.w.registry().valid(e); ++depth) {
+            if (e == enemy) return true;
+            const auto* p = f.w.registry().try_get<Parent>(e);
+            e = p ? p->entity : entt::null;
+        }
+        return false;
+    };
+    for (const VfxRecord& r : placed) {
+        if (r.on == body) ++onBody;
+        else if (partOf(r.on)) ++offBox;
+    }
+    std::printf("\n      %zu decals on the body box, %zu on other parts of EnemyA", onBody, offBox);
+    CHECK(onBody > 0, "a round across EnemyA's body box leaves its decal on the box");
+    CHECK(offBox == 0, "no decal on an enemy but on its box");
+    // The decal's place is the box's: its pose in the box's frame is where the round hit it, on the face
+    // toward the player (the box's -Z, out of the box, faces the player: the enemy faces it).
+    bool onFace = !placed.empty();
+    for (const VfxRecord& r : placed) {
+        if (r.on != body) continue;
+        const glm::vec3 local = glm::vec3(r.pose[3]);   // a decal's pose is local to what it is on
+        onFace &= std::fabs(std::fabs(local.z) - 0.17f) < 1e-3f && std::fabs(local.x) <= 0.25f && local.y >= 0.0f &&
+                  local.y <= 1.42f;
+    }
+    CHECK(onFace, "on a face of the body box");
+    // Killed (its Transform stays upright; the death clip falls): the decal stays on the box.
+    const std::size_t before = placed.size();
+    f.combat->damage(enemy, 1000.0f, f.player, {});
+    (void)f.run(5, {});
+    std::size_t after = 0;
+    for (const VfxRecord& r : f.vfx->records()) after += r.kind == kind && r.on == body ? 1 : 0;
+    CHECK(after > 0 && before > 0, "the decals on the box survive its death");
+}
+
+void t33_no_decal_on_player() {
+    Fight f;
+    CHECK(f.loaded && f.vfx, "the play scene with the vfx system");
+    if (!f.loaded || !f.vfx) return;
+    std::vector<CombatEvent> events;
+    std::vector<VfxRecord> written;
+    f.face(kEnemyA);
+    for (int i = 0; i < 600; ++i) {
+        const auto w = f.run(1, script, i, &events);
+        written.insert(written.end(), w.begin(), w.end());
+    }
+    std::size_t hitsOnPlayer = 0;
+    for (const CombatEvent& e : events) hitsOnPlayer += e.kind == CombatEvent::Kind::Hit && e.target == f.player ? 1 : 0;
+    std::size_t onPlayer = 0;
+    for (const VfxRecord& r : written) onPlayer += r.kind == VfxRecord::Kind::Decal && r.on == f.player ? 1 : 0;
+    std::printf("\n      %zu hits on the player; %zu decals on it", hitsOnPlayer, onPlayer);
+    CHECK(hitsOnPlayer == 0 || onPlayer == 0, "a round into the player marks nothing on the player");
+    CHECK(onPlayer == 0, "no decal record on the input-driven player");
+}
+
+void t33_decal_restart_clears() {
+    Fight f;
+    CHECK(f.loaded && f.vfx, "the play scene with the vfx system");
+    if (!f.loaded || !f.vfx) return;
+    for (int i = 0; i < 120; ++i) (void)f.run(1, holdFire, i);
+    const auto decal = static_cast<std::size_t>(VfxRecord::Kind::Decal);
+    const uint32_t before = f.vfx->stats().live[decal];
+    (void)f.run(1, [](int s) {
+        std::vector<InputEvent> in;
+        if (s == 0) in.push_back(actionEvent("restart", true));
+        return in;
+    });
+    CHECK(before > 0, "decals before the restart");
+    CHECK(f.vfx->stats().live[decal] == 0, "a restart clears every decal");
+}
+
+// Tracers (sub-project 12, test 33, the timing): the head at speed * age along the round, clamped at
+// the hit; the tail `length` behind the head, clamped at it; nothing before the round is fired; a
+// streak of the set's width, facing the eye (across the round).
+void t33_tracer_timing() {
+    const glm::vec3 from(0.0f, 1.5f, 0.0f), to(0.0f, 1.5f, -20.0f);   // a 20 m round
+    const glm::vec3 eye(3.0f, 1.5f, 1.0f), dir(0.0f, 0.0f, -1.0f);
+    const float speed = 420.0f, length = 1.8f, width = 0.012f;
+    bool headOk = true, tailOk = true, faceOk = true, widthOk = true, endOk = true;
+    for (int k = 1; k <= 120; ++k) {   // 0.0167 s to 2 s
+        const float age = static_cast<float>(k) / 60.0f;
+        const vfx::TracerQuad q = vfx::tracerQuad(from, to, speed, length, width, age, eye);
+        const float head = std::min(speed * age, 20.0f), tail = std::max(0.0f, head - length);
+        if (!q.visible) {
+            headOk = false;
+            continue;
+        }
+        headOk &= std::fabs(q.head - head) < 1e-4f;
+        tailOk &= std::fabs(q.tail - tail) < 1e-4f;
+        const glm::vec3 p0 = q.corners[0].pos, p1 = q.corners[2].pos;   // the tail's and the head's corners
+        headOk &= std::fabs(glm::dot(p1 - from, dir) - head) < 1e-3f;
+        tailOk &= std::fabs(glm::dot(p0 - from, dir) - tail) < 1e-3f;
+        const glm::vec3 across = q.corners[1].pos - q.corners[0].pos;
+        widthOk &= std::fabs(glm::length(across) - width) < 1e-5f;
+        faceOk &= std::fabs(glm::dot(glm::normalize(across), dir)) < 1e-4f &&
+                  std::fabs(glm::dot(glm::normalize(across), glm::normalize(eye - q.centre))) < 1e-4f;
+        if (age >= 20.0f / speed) endOk &= std::fabs(q.head - 20.0f) < 1e-4f;   // clamped at the hit
+    }
+    CHECK(!vfx::tracerQuad(from, to, speed, length, width, 0.0f, eye).visible, "nothing before the round is fired");
+    CHECK(headOk, "the head at speed * age along the round, clamped at the hit");
+    CHECK(tailOk, "the tail length behind the head, clamped at it");
+    CHECK(widthOk && faceOk, "the set's width, across the round and facing the eye");
+    CHECK(endOk, "past the hit the head stays at the hit");
+}
+
 int main() {
     std::printf("vfx_tests\n");
     RUN(t31_set_parse);
@@ -536,5 +701,10 @@ int main() {
     RUN(t31_caps);
     RUN(t31_replay);
     RUN(t31_hash_unchanged);
+    RUN(t33_decal_ring);
+    RUN(t33_decal_follows);
+    RUN(t33_no_decal_on_player);
+    RUN(t33_decal_restart_clears);
+    RUN(t33_tracer_timing);
     return ohao::test::finish("vfx_tests");
 }
