@@ -231,9 +231,16 @@ drive it, beside `input.inject` (fire with `fire` down and up, `reload`, `restar
   entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead
   enemy plays its death clip from the next step, its `Transform` upright where it stood. 0 to
   10,000; `E_NOT_FOUND` for what has no `Health`.
-- `animation_info {entity?, since?, max?}`: each enemy's animation layers (body: `move`,
-  `combat`, `death`, `dead`; additive `aim`, `fire`, `reload`, `hit`) and the animation events
-  (`mag_out`, `mag_in`, `bolt`, `body_fall`) after a cursor.
+- `animation_info {entity?, since?, max?}`: every `Animator`'s layers (each state, its clip and
+  the time into it, the fade) and the animation events after a cursor. The enemies' body layer
+  is `move`, `combat`, `death` or `dead`, with additive `aim`, `fire`, `reload`, `hit`; the
+  player's arms (`Arms`, below the view model) are `ready` (the hip-to-sights blend by `aim`),
+  `sprint` or `reload`, with an additive `fire`. Events: `mag_out`, `mag_in`, `bolt`,
+  `body_fall`. An Animator is saved integers, so a state is forced like any edit:
+  `world_apply` `component.set` on `Animator` with `layers: [{state, steps}]` (one per layer, in
+  the graph's order), then `world_step` and read it back. `render_stats` reports `skinning`
+  (the skinned instances, how many the newest frame skinned, their vertices, BLAS refits and
+  rebuilds).
 
 Kill both enemies by hand and read what the round says:
 

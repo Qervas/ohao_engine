@@ -20,6 +20,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_gpu_vulkan` | `gpu/vulkan/` | `ohao_scene`, `ohao_core`, Vulkan, VMA | device and queues, `VulkanRenderer` (the facade), frame resources, bindless textures, the allocator |
 | `ohao_renderer` | `render/` | `ohao_gpu_vulkan`, `ohao_scene`, `ohao_core` (NRD, OIDN, NGX optional) | `RenderScene` (the persistent GPU scene), deferred passes, path tracers, denoisers, the render graph |
 | `ohao_ecs` | `ecs/` | `ohao_core`, `ohao_renderer`, `ohao_scene`, `ohao_reflect`, `ohao_physics`, EnTT (simdjson privately) | `World` (simulate and sync phases, its `InputMap` bound from `InputActions`), components, systems (spin, fly controller, transform, instantiate, physics, render extract), the scene codec, snapshots, the world hash and diff, the scene view. The physics system (`physics_scene`, installed by `installPhysics`) builds Jolt bodies from `Collider`/`RigidBody`; `physicsScene(world)` reaches it. |
+| `ohao_anim` | `anim/` | `ohao_core`, glm (simdjson privately) | skeletal animation without ECS or Vulkan: glTF skins and clips (`gltf_anim`), binding clips to skeletons by joint name, sampling, `.animgraph.json` graphs (parse, bind, validate with JSON pointers), one layer's step (`stepLayer`) and a pose (`evaluatePose`), the skinning palette |
 | `ohao_level` | `level/` | `ohao_core`, glm (simdjson privately) | `readGltfStructure`: a glTF file's node tree, `extras`, lights, cameras and mesh counts, read from its JSON |
 | `ohao_level_world` | `level/` | `ohao_level`, `ohao_ecs`, `ohao_reflect` | levels in the world: hints (`level_hints`), the `level` sync system (`installLevels`), and what `level.info`/`level.reload` read (`levelSummary`, `levelDiagnostics`, `reloadLevel`) |
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
@@ -30,7 +31,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
 `env_demo`, `ohao_game`), the CLI (`tools/ohao`), `scene_bench`, `serve_bench`,
-`render_bench` and `level_bench` (`tools/bench`; they share the bench10k builder,
+`render_bench`, `level_bench`, `physics_bench` and `feel_bench` (`tools/bench`; they share the bench10k builder,
 `bench_world.hpp`, and the calibration and load record, `bench_env.hpp`).
 
 Dependency rules:
@@ -105,6 +106,13 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     pose of what it hit, so every host, its renderer
                     made early or late, holds the same marks; a restart
                     clears them; never in the registry
+    animation       every Animator in id order: its graph's driver        installed by installAnimation
+                    (enemy, arms) writes AnimParams from saved state and  (after installCombat)
+                    the step's combat events after its last restart;
+                    each layer takes its first holding transition (a
+                    parameter, an event, its clip's end), advances its
+                    integer steps and fade, and fires the clip events it
+                    crossed (a log of 1,024: animation.info)
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
 after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game), through one
 AudioSystem capped at 24 SFX voices (runtime/game_audio.hpp):
@@ -143,10 +151,18 @@ World::sync()
                   depthScale of the eye, on screen as through fovDeg),
                   sway, bob and kick at World::presentationDt (0: the
                   rest pose); drawn as kDrawViewModel (no CSM cascade,
-                  TLAS mask 4: camera rays only)
+                  TLAS mask 4: camera rays only); aiming, in realtime
+                  frames only, a DrawnFov on the camera (75 -> 55)
+  pose            every Animator: layers sampled at (steps - 1 +        installed by installAnimation
+                  alpha), blended by mask and mode -> AnimPose (runtime:
+                  model matrices, the palette and last sync's palette,
+                  a posed box); JointAttach children -> RenderPose at
+                  their joint, subtree included
   render_extract  MeshRenderer/Light -> RenderScene instance slots    installed by a host with
-                  (at RenderPose when there is one)
-                  and the light list; setLights gives each point,      a renderer (addSyncAfter)
+                  (at RenderPose when there is one)                    a renderer (addSyncAfter)
+                  and the light list; a SkinnedMesh entity first gets
+                  its own mesh (registerSkinnedInstance), then each
+                  frame its palette; setLights gives each point,
                   spot and area light an emitter instance (its
                   sphere or rectangle, seen by camera and mirror rays;
                   a spot's shines toward the camera by its cone:
@@ -200,6 +216,10 @@ name the `render.settings` member that turns a pass off or reshapes it; a pass t
 is not registered in the frame's graph and costs nothing:
 
 ```
+skin                only instances whose palette changed: deform their own mesh copy,
+                    last frame's position into the copy's boneWeights.xyz (kDrawSkinned)
+skin.bounds         their meshlets' spheres from the deformed vertices
+rt.blas.refit       their BLASes refit to the pose (rebuilt every 120 refits)
 scene.upload        table rows, BLAS builds, TLAS build/refit, the draw table
 csm                 shadow cascades, only when rt.shadows does not run   [csm.cascades, csm.size]
 cull.instances      early lists: last frame's visible draws in the frustum   [occlusionCulling]
@@ -227,7 +247,8 @@ present | readback  window: blit to the swapchain (+ requested copy); headless: 
 
 `quality: reference` swaps the realtime shadow and GI passes for their converging forms
 (8 shadow rays to every light, 32 GI rays at full resolution, averaged over the frames).
-A path-traced frame is `scene.upload`, `pt.render`, then `pt.present` or `pt.readback`.
+A path-traced frame is the skin passes, `scene.upload`, `pt.render`, then `pt.present` or
+`pt.readback`.
 
 The window host, `runtime::LiveHost` (`ohao_game`; `ohao serve --window`), runs this per
 frame: poll the window; run the queued protocol requests (`rpc::Server::poll`, waiting up
@@ -538,6 +559,46 @@ Followed for the blockout (`assets/levels/blockout_room.glb`, sub-project 5).
 ```console
 $ build/Release/ohao level assets/levels/blockout_room.glb > /dev/null
 $ python tests/level/check_level_assets.py > /dev/null
+```
+
+## Recipe: add an animated character
+
+Followed for the play scene's enemies and the player's arms (sub-project 10, steps 2 and 3;
+`docs/specs/2026-10-28-animation-design.md`).
+
+1. **The file:** one glTF binary holding a skinned mesh, its skin and its clips, in meters,
+   facing −Z. Committed art is CC0 or ours and is rebuilt by a script in `tools/anim/` that
+   writes the same bytes twice (`make_enemy.py` from a staged CC0 pack, pure Python;
+   `make_fps_arms.py` in Blender 5.2.2), with `LICENSE.md` and `README.upstream.md` beside it
+   (`assets/characters/<name>/`). An additive clip is authored as rest × delta: re-reference a
+   pack clip to its own first frame before using it additively.
+2. **The graph** (`assets/anim/<name>.animgraph.json`): `skeleton {file, skin}`, a `driver`,
+   `clips` (`file`, `animation`, `loop`, `rate` or `rateFrom {param, at}`, `events [{t,
+   name}]`), `params` (`float` or `bool`), and `layers` (`replace` or `additive`, a joint
+   `mask`, `states`: a clip or a `blend1d` over a parameter, and `transitions` on a
+   parameter, an event or `clipEnd`, with a `fade` in steps). Every error names its JSON
+   pointer; a one-shot state with no way out is one.
+3. **The driver** (`ecs/<name>_anim.cpp`, registered in `installAnimation`): writes the
+   graph's parameters and events from **saved** state only, and reads the step's combat
+   events after its last `restart` (`driveEnemyAnim`, `driveArmsAnim`). A parameter no
+   driver writes reads 0.
+4. **The entity:** `MeshSource {ModelAsset {asset, mesh}}`, `SkinnedMesh {file, skin}` and
+   `Animator {graph}`; things it holds are children with `JointAttach {joint}` and their own
+   `Transform` in the joint's frame (the rifle in `Index1.R`, the muzzle at the barrel's
+   tip). A first-person rig goes under a `ViewModel` root; author what should show at least
+   0.25 m from the eye and within 30° of the eye line.
+5. **Check it:** `animation.info` (the states, clip times and events); force a state with
+   `component.set` on `Animator`; step and read it back. Tests: the states each driver input
+   gives in the same step (`combat_tests` `t23_*`), a restore or restart replaying the same
+   Animators and `world.hash` (`t25_fight_states`), and the skinned frame (`skinning_gpu_test`,
+   `check_validation.py`).
+6. **Budgets:** `physics_bench` times the `animation` step and the `pose` sync
+   (`anim_step_ms`, `pose_sync_ms` for the play scene), `render_bench` the `skin`,
+   `skin.bounds` and `rt.blas.refit` passes (`play_anim_1080p`).
+
+```console
+$ build/Release/ohao run assets/scenes/anim_rig.scene.json --script docs/agents/examples/animation.jsonl > /dev/null
+$ build/Release/anim_tests.exe > /dev/null
 ```
 
 ## Recipe: add a golden scene

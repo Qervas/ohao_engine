@@ -316,8 +316,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   and feel's, gated by `feelStep`: the window host's occlusion ray for an enemy's sound in the
   blockout, per ray, `occlusion_ray_us`, 5 µs; and animation's, gated by `animStep`: the
   `animation` simulate system over 16 rigs, `anim16_step_ms` 0.05 ms, and the `pose` sync system,
-  `pose16_sync_ms` 0.1 ms; the play scene's two enemies, `anim_step_ms` 0.01 ms and `pose_sync_ms`
-  0.02 ms), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
+  `pose16_sync_ms` 0.1 ms; the play scene's three animators, its two enemies and the player's arms,
+  `anim_step_ms` 0.01 ms and `pose_sync_ms` 0.02 ms), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
   `feel_bench --check`: input-to-present latency and frame pacing (sub-project 9) in a *visible*
   1920x1080 window (a hidden one may never present), the play scene played for a scripted minute
   per present mode (`--modes`, `--seconds`, `--warmup`) while a mouse movement is fed every 40–60
@@ -762,8 +762,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (the CLI
   context and `LiveHost` call it after `installCombat`) adds the `animation` simulate system and the
   `pose` sync system (before `render_extract`).
-  - The saved `Animator` holds integers only: each layer's state, its steps, the state faded from and
-    its steps, the fade's length and progress. A pose is a function of them and alpha, sampled at
+  - **A pose is presentation; animator state is saved integers.** The saved `Animator` holds
+    integers only: each layer's state, its steps, the state faded from and
+    its steps, the fade's length and progress. Never keep a clip time or a pose in a saved
+    component; force a state with `component.set` on `Animator` (`animation.info` reads it back). A pose is a function of them and alpha, sampled at
     `(steps - 1 + alpha)` steps of 1/60 s; the pose (`AnimPose`) is runtime, never saved or hashed.
     Clip events fire in the step, in id order, into a log of 1,024 (`animation.info`).
   - **A skinned instance is its own mesh.** The render extract gives an entity with `SkinnedMesh`
