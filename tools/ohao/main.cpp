@@ -3,6 +3,7 @@
 //   ohao schema   [-o dir]
 //   ohao schema   level-extras [-o file]   the level hint keys as a JSON Schema for a glTF node's extras
 //   ohao schema   audio-bank [-o file]     the .audio.json format (sound bank and mix) as a JSON Schema
+//   ohao schema   vfx-set [-o file]        the .vfx.json format (effects, decals, tracers) as a JSON Schema
 //   ohao validate <scene> [--check-assets] [--limit N]
 //   ohao fmt      <scene> [--check] [--compact] [-o out]
 //   ohao apply    <scene> <commands.json> [-o out] [--seed S]
@@ -51,6 +52,7 @@
 #include "ecs/json_parse.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
+#include "ecs/vfx.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
@@ -295,6 +297,7 @@ struct Context {
         ecs::installAnimation(*world, *assets);                  // animators step after combat
         // The audio schedule: the step's last (OHAO_AUDIO_TRACE=1 logs its commands).
         ecs::installAudio(*world, *assets).setTrace(runtime::audioTraceRequested());
+        ecs::installVfx(*world, *assets);                        // effects' spawn records, before the schedule
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
         render->bind(*world);
@@ -344,13 +347,16 @@ std::string loadScene(Context& c, const std::string& scene, const std::string& s
 }
 
 int cmdSchema(const Args& a) {
-    if (a.positional.size() == 1 && (a.positional[0] == "level-extras" || a.positional[0] == "audio-bank")) {
+    if (a.positional.size() == 1 &&
+        (a.positional[0] == "level-extras" || a.positional[0] == "audio-bank" || a.positional[0] == "vfx-set")) {
         // The level hint keys as a JSON Schema for one glTF node's extras (checked in as
-        // tests/level/extras_schema.json), or the .audio.json format (sub-project 11).
-        const bool audio = a.positional[0] == "audio-bank";
-        const std::string file = opt(a, "-o", audio ? "audio_bank.schema.json" : "level_extras.schema.json");
+        // tests/level/extras_schema.json), the .audio.json format (sub-project 11) or the .vfx.json
+        // format (sub-project 12).
+        const bool audio = a.positional[0] == "audio-bank", vfxSet = a.positional[0] == "vfx-set";
+        const std::string file =
+            opt(a, "-o", audio ? "audio_bank.schema.json" : vfxSet ? "vfx_set.schema.json" : "level_extras.schema.json");
         std::ofstream f(file, std::ios::binary | std::ios::trunc);
-        f << (audio ? audioBankJsonSchema() : level::extrasJsonSchema());
+        f << (audio ? audioBankJsonSchema() : vfxSet ? vfx::vfxSetJsonSchema() : level::extrasJsonSchema());
         if (!f) {
             emit(errorDoc("E_IO", "cannot write " + file));
             return kInput;
@@ -358,7 +364,7 @@ int cmdSchema(const Args& a) {
         emit("{\"result\":{\"files\":[" + jsonString(file) + "]}}");
         return kOk;
     }
-    if (!a.positional.empty()) return usage("schema takes no scene (or `level-extras`, `audio-bank`)");
+    if (!a.positional.empty()) return usage("schema takes no scene (or `level-extras`, `audio-bank`, `vfx-set`)");
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);

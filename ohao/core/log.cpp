@@ -12,7 +12,7 @@ namespace {
 constexpr std::string_view kLevelNames[] = {"trace", "debug", "info", "warn", "error", "off"};
 constexpr char kLevelLetters[] = {'T', 'D', 'I', 'W', 'E', '-'};
 constexpr std::string_view kChannelNames[] = {"render", "gpu", "validation", "ecs", "asset",
-                                              "physics", "audio", "api", "rpc", "runtime"};
+                                              "physics", "audio", "api", "rpc", "runtime", "vfx"};
 static_assert(std::size(kChannelNames) == static_cast<std::size_t>(Channel::Count));
 
 // "I render: message", one fwrite per line. A run of identical records prints once, then

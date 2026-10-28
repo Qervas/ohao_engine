@@ -18,7 +18,9 @@
 // none may leave it). Combat (sub-project 7, gated by the budgets' `combatStep`): step 1
 // combat_shot_ms (the combat system's part of a step in which the player fires a round into a box
 // with Health; every round must damage it). Feel (sub-project 9, gated by `feelStep`): step 3
-// occlusion_ray_us (the window host's occlusion ray for an enemy's sound, per ray).
+// occlusion_ray_us (the window host's occlusion ray for an enemy's sound, per ray). VFX
+// (sub-project 12, gated by `vfxStep`): step 1 vfx_step_ms (the vfx system's step over the play
+// scene's scripted fight).
 //
 // The machine is recorded as level_bench records it (bench_env.hpp): a calibration loop before and
 // after against the reference, and every other process's CPU. A run >25% slower than the
@@ -35,6 +37,7 @@
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
+#include "ecs/vfx.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
@@ -153,6 +156,7 @@ int main(int argc, char** argv) {
     int currentStep = 0, combatStep = 0;   // physics' build step (sub-project 6), combat's (7)
     int feelStep = 0;                       // feel's (9): the occlusion ray
     int animStep = 0;                       // animation's (10): the animator step and pose
+    int vfxStep = 0;                        // vfx's (12): the spawn records' step
     double maxSlowdown = 1.25, maxExternal = 50.0;
     if (!checkPath.empty()) {
         std::ifstream f(checkPath);
@@ -170,6 +174,7 @@ int main(int argc, char** argv) {
         combatStep = doc.value("combatStep", 0);
         feelStep = doc.value("feelStep", 0);
         animStep = doc.value("animStep", 0);
+        vfxStep = doc.value("vfxStep", 0);
         if (doc.contains("noise")) {
             maxSlowdown = doc["noise"].value("maxCalibrationSlowdown", maxSlowdown);
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
@@ -592,6 +597,60 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 12. VFX (sub-project 12 step 1, gated by the budgets' `vfxStep`): the play scene's fight as every
+    // host installs it (levels, physics, combat, the round, animation, the audio schedule, vfx), the
+    // player (who cannot die) firing bursts every 40 steps (held 13) and throwing a grenade at step 20.
+    // vfx_step_ms: the `vfx` simulate system's step (records from the step's shots, hits and the
+    // explosion, placed emitters, caps and expiry), its own timing. N rounds of 300 steps; the run
+    // must write effect records and the explosion's.
+    std::vector<double> vfxMs;
+    std::size_t vfxWritten = 0;
+    bool vfxExploded = false;
+    for (int r = 0; r < rounds + 1; ++r) {
+        ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+        ecs::World w;
+        w.seedIds(7);
+        level::installLevels(w, files, engineTypes());
+        ecs::installPhysics(w, files);
+        ecs::installCombat(w);
+        ecs::installRoundHook(w, engineTypes());
+        ecs::installAnimation(w, files);
+        ecs::installAudio(w, files);
+        ecs::VfxSystem& vfx = ecs::installVfx(w, files);
+        if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
+                                engineTypes())) {
+            failures.push_back("vfx: blockout_play.scene.json did not load");
+            break;
+        }
+        auto& reg = w.registry();
+        for (auto [e, pc] : reg.view<const ecs::PlayerController>().each())
+            if (pc.input) reg.replace<ecs::Health>(e, ecs::Health{1e6f, 1e6f});
+        w.sync();
+        const auto action = [](const char* name, bool down) {
+            InputEvent e;
+            e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
+            e.name = name;
+            return e;
+        };
+        for (int step = 0; step < 300; ++step) {
+            std::vector<InputEvent> in;
+            if (step % 40 == 0) in.push_back(action("fire", true));
+            if (step % 40 == 13) in.push_back(action("fire", false));
+            if (step == 20) in.push_back(action("grenade", true));
+            if (step == 21) in.push_back(action("grenade", false));
+            w.stepInput(in);
+            w.simulate(kDt);
+            w.sync();
+            for (const auto& e : ecs::combatEvents(w)) vfxExploded |= e.kind == ecs::CombatEvent::Kind::Explode;
+            if (r > 0) vfxMs.push_back(vfx.lastStepMs());
+        }
+        if (r > 0) vfxWritten += vfx.stats().written;
+    }
+    const bool vfxFought = vfxWritten > 0 && vfxExploded;
+    if (!vfxFought)
+        failures.push_back("vfx: " + std::to_string(vfxWritten) + " records written, explosion " +
+                           (vfxExploded ? "seen" : "missing") + " (want records and the explosion)");
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -649,7 +708,11 @@ int main(int argc, char** argv) {
     std::printf("  pose_sync_ms            median %8.4f   p95 %8.4f   (%zu syncs, the play scene)\n", spp.median, spp.p95,
                 playPoseMs.size());
     const Verdict vpp = judge(budgets, animStep, "pose_sync_ms", spp.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp})
+    const Stats svx = stats(vfxMs);
+    std::printf("  vfx_step_ms             median %8.4f   p95 %8.4f   (%zu steps, %zu records written)\n", svx.median, svx.p95,
+                vfxMs.size(), vfxWritten);
+    const Verdict vvx = judge(budgets, vfxStep, "vfx_step_ms", svx.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
                         v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
@@ -657,7 +720,7 @@ int main(int argc, char** argv) {
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
             name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
-            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms")
+            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms" && name != "vfx_step_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -695,6 +758,8 @@ int main(int argc, char** argv) {
                            {"verdict", vpa.verdict}};
     out["pose_sync_ms"] = {{"median", spp.median}, {"p95", spp.p95}, {"min", spp.min}, {"syncs", playPoseMs.size()},
                            {"verdict", vpp.verdict}};
+    out["vfx_step_ms"] = {{"median", svx.median}, {"p95", svx.p95}, {"min", svx.min}, {"steps", vfxMs.size()},
+                          {"written", vfxWritten}, {"verdict", vvx.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
@@ -711,7 +776,7 @@ int main(int argc, char** argv) {
 
     const bool wrong =
         !landed || restWrites != 0 || begins != 1000 || !walked || !contained || !fought || !hunted ||
-        !restarted;   // no machine excuses these
+        !restarted || !vfxFought;   // no machine excuses these
     for (const auto& f : failures) std::printf("  FAIL: %s\n", f.c_str());
     if (noisy)
         std::printf("  NOISY: %s%s%s; the timings above are not a verdict on the code\n",

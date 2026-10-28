@@ -8,7 +8,7 @@
 //   OHAO_LOG(Info, render, "deferred renderer ready ({}x{})", w, h);
 //
 // Levels: Trace, Debug, Info, Warn, Error. Channels: render, gpu, validation, ecs, asset,
-// physics, audio, api, rpc, runtime. The format string is std::format's, checked at compile
+// physics, audio, api, rpc, runtime, vfx. The format string is std::format's, checked at compile
 // time. Messages are cut at 1 KB. Identical consecutive records collapse into one with a
 // repeat count. OHAO_LOG_LEVEL=trace|debug|info|warn|error|off sets the threshold at start.
 
@@ -27,7 +27,7 @@ namespace ohao::log {
 enum class Level : uint8_t { Trace, Debug, Info, Warn, Error, Off };
 
 enum class Channel : uint8_t {
-    render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime, Count
+    render, gpu, validation, ecs, asset, physics, audio, api, rpc, runtime, vfx, Count
 };
 
 inline constexpr std::size_t kRingCapacity = 4096;

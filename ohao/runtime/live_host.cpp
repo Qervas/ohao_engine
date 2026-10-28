@@ -3,6 +3,7 @@
 #include "core/log.hpp"
 #include "ecs/animation.hpp"
 #include "ecs/audio_schedule.hpp"
+#include "ecs/vfx.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/combat_hud.hpp"
 #include "ecs/impact_marks.hpp"
@@ -81,6 +82,7 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     // The audio schedule: the step's last. OHAO_AUDIO_TRACE=1 logs its commands (check_live compares
     // a window's with a headless host's).
     ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
+    ecs::installVfx(*m_world, *m_assets);   // effects' spawn records (inserted before the schedule)
     ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());

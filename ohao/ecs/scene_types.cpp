@@ -424,6 +424,20 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("priority", &ReverbZone::priority).doc("Higher wins where zones overlap").unitless()
         .field("size", &ReverbZone::size).doc("The box's half extents; zero fits it to the entity's mesh").unit("m").min(0.0);
 
+    // ---- effects (sub-project 12) -------------------------------------------------------
+    r.type<VfxSet>("VfxSet").component().singleton().host(makeComponentOps<VfxSet>())
+        .doc("The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form "
+             "particles), decals, tracers and which combat events spawn them. Without one, the default set.")
+        .field("asset", &VfxSet::asset).doc("Project-relative path of the .vfx.json file, '/' separators");
+    r.type<VfxEmitter>("VfxEmitter").component().host(makeComponentOps<VfxEmitter>())
+        .doc("A placed effect at the entity's pose: while active, rate spawns a second by step count from the step "
+             "it became active, or one spawn when it becomes active with rate 0.")
+        .field("effect", &VfxEmitter::effect).doc("An effect of the world's .vfx.json").maxLength(64)
+        .field("rate", &VfxEmitter::rate).doc("Spawns a second while active; 0: one when it becomes active").unit("Hz")
+            .min(0.0).max(1000.0)
+        .field("seed", &VfxEmitter::seed).doc("Varies its particles' random draws").unitless()
+        .field("active", &VfxEmitter::active).doc("Spawning; turning it on starts the count again");
+
     // ---- animation (sub-project 10) ----------------------------------------------------
     r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())
         .doc("A skinned mesh: the entity's MeshSource (a ModelAsset with `mesh`) is deformed by a skin of a glTF file, "

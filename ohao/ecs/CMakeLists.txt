@@ -10,3 +10,6 @@ target_link_libraries(ohao_ecs PUBLIC ohao_core ohao_renderer ohao_scene ohao_re
 target_link_libraries(ohao_ecs PRIVATE ohao_simdjson)
 # The audio schedule reads the world's .audio.json (the bank, plain data: no miniaudio).
 target_link_libraries(ohao_ecs PRIVATE ohao_audio_bank)
+# The vfx system reads the world's .vfx.json and writes spawn records (sub-project 12); its record
+# type names the set's types, so the link is public.
+target_link_libraries(ohao_ecs PUBLIC ohao_vfx)

@@ -329,6 +329,8 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<JointAttach>(r, checked);
     ok &= complete<AudioMix>(r, checked);
     ok &= complete<ReverbZone>(r, checked);
+    ok &= complete<VfxSet>(r, checked);
+    ok &= complete<VfxEmitter>(r, checked);
     CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -348,7 +350,8 @@ static void t01_authoring_and_runtime_split() {
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
                               "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round",
-                              "SkinnedMesh", "Animator", "JointAttach", "AudioMix", "ReverbZone"}) {
+                              "SkinnedMesh", "Animator", "JointAttach", "AudioMix", "ReverbZone", "VfxSet",
+                              "VfxEmitter"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -623,6 +626,15 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
                 w.registry().emplace<ReverbZone>(
                     e, ReverbZone{"preset_" + std::to_string(rng() % 4), static_cast<int32_t>(rng() % 21) - 10,
                                   {8.0f * unit(), 3.0f * unit(), 8.0f * unit()}});
+        // The effect set and placed emitters (sub-project 12 step 1), after them for the same reason.
+        if (rng() % 2)
+            w.registry().emplace<VfxSet>(es[rng() % es.size()],
+                                         VfxSet{AssetRef{"assets/vfx/v_" + std::to_string(seed) + ".vfx.json", {}}});
+        for (const entt::entity e : es)
+            if (rng() % 8 == 0)
+                w.registry().emplace<VfxEmitter>(
+                    e, VfxEmitter{"effect_" + std::to_string(rng() % 4), 20.0f * unit(), static_cast<uint32_t>(rng()),
+                                  rng() % 2 == 0});
     }
 }
 

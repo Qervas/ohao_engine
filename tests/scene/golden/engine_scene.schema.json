@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 6cc87a625dfae435. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash cddd2b64e9a5dde0. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -59,6 +59,8 @@
         "Round": { "$ref": "#/$defs/Round" },
         "AudioMix": { "$ref": "#/$defs/AudioMix" },
         "ReverbZone": { "$ref": "#/$defs/ReverbZone" },
+        "VfxSet": { "$ref": "#/$defs/VfxSet" },
+        "VfxEmitter": { "$ref": "#/$defs/VfxEmitter" },
         "SkinnedMesh": { "$ref": "#/$defs/SkinnedMesh" },
         "Animator": { "$ref": "#/$defs/Animator" },
         "JointAttach": { "$ref": "#/$defs/JointAttach" }
@@ -1442,6 +1444,46 @@
               "maxItems": 3
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VfxSet": {
+      "description": "The world's effect set (one per world): a .vfx.json declaring the effects (emitters of closed-form particles), decals, tracers and which combat events spawn them. Without one, the default set.",
+      "type": "object",
+      "properties": {
+        "asset": {
+          "description": "Project-relative path of the .vfx.json file, '/' separators",
+          "default": { "path": "" },
+          "allOf": [{ "$ref": "#/$defs/AssetRef" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VfxEmitter": {
+      "description": "A placed effect at the entity's pose: while active, rate spawns a second by step count from the step it became active, or one spawn when it becomes active with rate 0.",
+      "type": "object",
+      "properties": {
+        "effect": {
+          "description": "An effect of the world's .vfx.json",
+          "default": "",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
+        },
+        "rate": {
+          "description": "Spawns a second while active; 0: one when it becomes active",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1000 }]
+        },
+        "seed": {
+          "description": "Varies its particles' random draws",
+          "default": 0,
+          "allOf": [{ "type": "integer", "minimum": 0, "maximum": 4294967295 }]
+        },
+        "active": {
+          "description": "Spawning; turning it on starts the count again",
+          "default": true,
+          "allOf": [{ "type": "boolean" }]
         }
       },
       "additionalProperties": false

@@ -85,6 +85,8 @@ public:
     // Inserts right after / before the sync system named `anchor` (appends if there is none).
     void addSyncAfter(std::string_view anchor, std::string name, SyncSystem fn);
     void addSyncBefore(std::string_view anchor, std::string name, SyncSystem fn);
+    // Inserts right before the simulate system named `anchor` (appends if there is none).
+    void addSimulateBefore(std::string_view anchor, std::string name, SimulateSystem fn);
     // One fixed step: every simulate system, in order.
     void simulate(float dt);
     // Every sync system, in order.

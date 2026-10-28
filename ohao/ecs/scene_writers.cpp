@@ -399,6 +399,18 @@ void writeFields(const ReverbZone& v, const ReverbZone* omit, FieldSink& out) {
     if (!omit || !same(v.size, omit->size)) vec3(t, "\"size\"", v.size);
 }
 
+void writeFields(const VfxSet& v, const VfxSet* omit, FieldSink& out) {
+    if (!omit || v.asset != omit->asset) assetRef(out.tree, "\"asset\"", v.asset);
+}
+
+void writeFields(const VfxEmitter& v, const VfxEmitter* omit, FieldSink& out) {
+    LayoutTree& t = out.tree;
+    if (!omit || v.effect != omit->effect) t.string("\"effect\"", v.effect);
+    if (!omit || !same(v.rate, omit->rate)) t.f32("\"rate\"", v.rate);
+    if (!omit || v.seed != omit->seed) t.i64("\"seed\"", v.seed);
+    if (!omit || v.active != omit->active) t.boolean("\"active\"", v.active);
+}
+
 void writeFields(const Health& v, const Health* omit, FieldSink& out) {
     if (!omit || !same(v.max, omit->max)) out.tree.f32("\"max\"", v.max);
     if (!omit || !same(v.current, omit->current)) out.tree.f32("\"current\"", v.current);

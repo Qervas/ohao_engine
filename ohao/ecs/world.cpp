@@ -284,6 +284,11 @@ void World::addSyncBefore(std::string_view anchor, std::string name, SyncSystem 
     m_sync.emplace(it, std::move(name), std::move(fn));
 }
 
+void World::addSimulateBefore(std::string_view anchor, std::string name, SimulateSystem fn) {
+    const auto it = std::find_if(m_simulate.begin(), m_simulate.end(), [&](const auto& s) { return s.first == anchor; });
+    m_simulate.emplace(it, std::move(name), std::move(fn));
+}
+
 std::vector<std::string> World::simulateNames() const {
     std::vector<std::string> out;
     for (const auto& [name, fn] : m_simulate) out.push_back(name);

@@ -22,6 +22,7 @@
     "Round": 1,
     "SkinnedMesh": 1,
     "Transform": 1,
+    "VfxSet": 1,
     "ViewModel": 1,
     "Weapon": 1
   },
@@ -70,6 +71,7 @@
       "Name": { "value": "Controls" },
       "Round": {},
       "AudioMix": { "asset": { "path": "assets/audio/slice.audio.json" } },
+      "VfxSet": { "asset": { "path": "assets/vfx/slice.vfx.json" } },
       "InputActions": {
         "actions": [
           { "action": "jump", "key": "Space" },
