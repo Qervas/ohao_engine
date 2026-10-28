@@ -71,7 +71,11 @@ upload, and only for instances whose palette changed: `skin` deforms the vertice
 palette, `skin.bounds` recomputes each meshlet's sphere, and `rt.blas.refit` refits the BLAS,
 rebuilding it every 120 refits:
 
-{{cite ohao/render/scene/render_scene.cpp "const bool rebuild = s.refits >= kBlasRefitsPerRebuild;"}}
+{{cite ohao/render/scene/render_scene.cpp "m->blasUpdates.push_back({mesh->blas, s.refits >= kBlasRefitsPerRebuild, false});"}}
+
+A frame's updates go to the GPU in one build call, each with its own slice of scratch, so they
+build side by side. One call each, behind a barrier each, ran them one after another: the play
+scene's three refits measured 0.101 ms that way and 0.049 ms batched.
 
 Motion vectors need last frame's deformed position. The copy's vertices no longer need joints
 or weights (the skin pass reads those from the base mesh), so the skin pass writes last frame's

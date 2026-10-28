@@ -97,9 +97,9 @@ $$</div>
 <p>Ray tracing does not use them: each mesh&#x27;s BLAS is built from its original triangles.</p>
 <div class="citation-chip"><code class="citation-code">// triangles. Each mesh owns one BLAS built against the arenas, from its original</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/mesh_registry.hpp#L14" target="_blank" rel="noopener">ohao/render/scene/mesh_registry.hpp:14</a></div>
 <p>`RenderScene` carries a submesh&#x27;s meshlets into its draw: `DrawRecord.info.z` is the first meshlet and `info.w` the count:</p>
-<div class="citation-chip"><code class="citation-code">d.firstMeshlet, d.meshletCount};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L291" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:291</a></div>
+<div class="citation-chip"><code class="citation-code">d.firstMeshlet, d.meshletCount};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L293" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:293</a></div>
 <p>and `aabbMin.w`, as a uint&#x27;s bits, the draw&#x27;s first *meshlet entry*: the number of meshlets of all the draws before it. Entries number every meshlet of every draw in draw order, which is what the fallback culls one by one:</p>
-<div class="citation-chip"><code class="citation-code">r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast&lt;float&gt;(entries)};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L292" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:292</a></div>
+<div class="citation-chip"><code class="citation-code">r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast&lt;float&gt;(entries)};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L294" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:294</a></div>
 </div>
 <div class="section-rule"><h2 id="task-and-mesh-shaders">Task and mesh shaders</h2></div>
 <div class="prose reveal">
