@@ -884,6 +884,49 @@ particle system is deleted. What differs from the design above, and why:
   decals). `physics_bench vfx_sync_ms` times `vfxFrameOf` (records to the frame's effects), the sync
   system's work; the renderer's host-side `prepare` is in render_bench's CPU column.
 
+## As built (step 3)
+
+`docs/changes/2026-10-28-vfx-step3.md` has the numbers. What changed from the text above:
+
+- **The decals pass** (`render/vfx/decal_pass.*`, `shaders/vfx/decal.slang`) is a raster pass after
+  `gbuffer.late` (`pass_registry`'s `decals`), in the graph before `lights.cluster`. Its render pass loads
+  and stores the G-buffer's albedo and normal in their read layout, and samples the position target and the
+  depth (neither attached). The box is the record's pose scaled by the decal's size and
+  depth; a pixel is decaled only if the surface the position target holds there is inside it, so no depth
+  test and no depth reconstruction are needed.
+- **The 60° test** is against the surface's normal from the position target's neighbours (a finite
+  difference, toward the eye), not the G-buffer's normal: this pass writes that normal, and a render pass
+  cannot read a target it writes.
+- **Normal and roughness are replaced, albedo blends.** The G-buffer's normal is octahedral, so it does not
+  blend; the decal replaces it, and its roughness, where its texture's alpha is at least 0.5 (the shape is
+  hard; the albedo blends inside it). This is the spec's own fallback (OPEN ruling 16); the albedo keeps the
+  G-buffer's AO (its alpha) and the normal target keeps its luminance (its alpha).
+- **The first-person gun is not masked** by a flag (the G-buffer has none, and the emissive alpha is a
+  lighting input). Instead no decal lands nearer the eye than 0.6 m (`DecalPush.screen.z`), which covers the
+  gun's 0.27 m reach. OPEN: a view-model flag in the G-buffer would replace it.
+- **Emitters and the sky** are masked as specified (position metallic −1; depth 1).
+- **Placement** moved from `ecs/impact_marks` to `ecs/vfx.cpp` (`hitBoxes`): a hit on a character's part (its
+  entity or any descendant with a `PlayerController` above it) is decaled on the mesh box the round crosses,
+  along the round of the same step's shot, or not at all. The play scene's enemies are skinned and have no
+  box (ruling 18), so the play scene makes no decal on an enemy, as the marks did not.
+- **The ring** is the set's `caps.decals` (256), dropped oldest-first and counted, as the other records;
+  `impact_marks` stopped drawing and its quads, mesh, material and simulate system are deleted.
+- **Tracers** (`vfx/tracer_math.hpp`, `shaders/vfx/tracer.slang`): the head at `speed · age` clamped at the
+  hit, the tail `length` behind it clamped at the head, facing the eye, six host-built vertices a tracer in a
+  per-slot vertex buffer, additive, one object of kind 2 in the transparent pass's list. Their timing is
+  tested on the CPU (`t33_tracer_timing`); the GPU shows them through the same pass.
+- **Content**: `tools/vfx/make_flipbooks.py` (numpy, fixed seeds; `--check` regenerates byte for byte) makes
+  `smoke_8x8`, `flash_4x1`, `spark`, `decal_bullet` (albedo and normal) and `decal_scorch`, ours (MIT);
+  `assets/vfx/README.md` says what each is. The set's file paths are project-relative (`assets/vfx/...`),
+  as every asset's are. No CC0 texture was used.
+- **Seams for tests**: `VfxSystem::addRecordForTest` (the GPU decal tests place a record where they name) and
+  `DeferredRenderer::setDecalsDrawn` (a frame with and without the pass).
+- **Not built**: `t33_decal_golden` (a separate scripted golden). The play scene's HUD golden
+  (`cli_blockout_play_hud`, a 45-step fight) carries the decals and was moved for that reason. `t33_marks_gone`
+  has no test of its own: the mark type is gone, and the ring test checks the entity count is unchanged.
+- **Budgets**: `decals` (play_vfx_1080p) is pending at 0.05 ms, measured 0.004 ms on the scene's few decals;
+  gated when Task 4's scripted moment (64 decals in view) is measured.
+
 ## Rulings for Frank
 
 PROVISIONAL 1–9 and OPEN 10–27 await Frank, each with its recommendation.

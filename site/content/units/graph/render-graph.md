@@ -88,7 +88,7 @@ render pass, because that value is what the graph will use as the *source* layou
 of the next barrier. The G-buffer pass declares `SHADER_READ_ONLY_OPTIMAL` for
 its colour handles and `DEPTH_STENCIL_READ_ONLY_OPTIMAL` for depth —
 
-{{cite ohao/render/deferred/deferred_renderer.cpp "builder.declareColorWrite(m_graphNormalHandle,"}}
+{{cite ohao/render/deferred/deferred_renderer.cpp "builder.declareDepthWrite(m_graphDepthHandle,"}}
 
 — because that is what the attachment descriptions of its late render pass, the
 second of its two, say, in a different file that the graph never reads.

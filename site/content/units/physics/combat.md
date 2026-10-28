@@ -107,10 +107,11 @@ a world with a hash, and every restart is tested against it.
 
 The muzzle flash is a light the step turns on for `Muzzle.time`; the HUD is a list of
 rectangles and glyphs laid out from combat state; impact marks are 64 runtime quads attached to
-what was hit. Marks are taken from the log by a simulate system right after `combat`, against the
-step's poses:
+what was hit. A hit leaves a decal record, a projected box on the mesh box the round crosses (a
+character's) or on what it hit. The `vfx` system takes the records from the log right after `combat`,
+against the step's poses:
 
-{{cite ohao/ecs/combat.cpp "[](World& w, float) { impactMarksOf(w).observe(w); });"}}
+{{cite ohao/ecs/vfx.cpp "hitBoxes(reg, character, e.point - dir * 0.05f, dir, best, 0);"}}
 
 A headless host makes its renderer at its first capture. When marks were taken by the renderer,
 it read the whole log then and attached each mark by its target's pose *then*: an enemy that had
