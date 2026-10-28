@@ -164,6 +164,9 @@ void writeEvent(Session::Impl& s, const ecs::CombatEvent& e, JsonWriter& out) {
         case Kind::Reloaded:
             out.key("ammo"); out.uint64(static_cast<uint64_t>(std::max(0.0f, e.amount)));
             break;
+        case Kind::Explode:
+            out.key("point"); writeVec3(out, e.point, 1e3f);
+            break;
         default:
             break;
     }

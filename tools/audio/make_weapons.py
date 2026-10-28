@@ -7,6 +7,7 @@ partials with fixed seeds, so the files are ours (MIT, as the repo) and rebuild 
     fire             the player's rifle: a sharp crack over a low thump and a short noise tail
     enemy_fire       an enemy's, heard from afar: darker, a slap off the walls, a 1.2 s roll
     impact_<surface> a round striking default, concrete, metal or wood
+    explode          the test grenade (G in play): a low boom, a crack, debris, a 2.2 s roll
     death            a heavier thump with a falling tone
     reload           magazine out, magazine in, a bolt pull
     empty            the dry click of an empty magazine
@@ -83,6 +84,19 @@ def distant_shot(seed):
     roll = lowpass(rng.standard_normal(t.size), 320.0) * envelope(t, 0.03, 0.05, 0.32) * 1.1
     air = lowpass(rng.standard_normal(t.size), 900.0) * envelope(t, 0.02, 0.02, 0.18) * 0.35
     return finish(crack + body * 1.4 + thump * 1.2 + slap + roll + air, length, 0.8)
+
+
+def explode():
+    """The test grenade going off (Frank's hand test, a source to place and listen to): a falling low
+    boom, a broadband crack, debris, and a long low roll (2.2 s)."""
+    rng = np.random.default_rng(131)
+    length = 2.2
+    t = timeline(length)
+    boom = np.sin(2 * np.pi * np.cumsum(55.0 * np.exp(-1.5 * t) + 25.0) / RATE) * envelope(t, 0.0, 0.004, 0.35)
+    crack = bandpass(rng.standard_normal(t.size), 800.0, 8000.0) * envelope(t, 0.0, 0.001, 0.025)
+    debris = bandpass(rng.standard_normal(t.size), 1500.0, 6000.0) * envelope(t, 0.08, 0.05, 0.25) * 0.25
+    roll = lowpass(rng.standard_normal(t.size), 200.0) * envelope(t, 0.02, 0.06, 0.6) * 2.5
+    return finish(boom * 1.4 + crack * 1.2 + debris + roll, length, 0.9)
 
 
 def impact(surface, seed):
@@ -204,6 +218,7 @@ def main():
         "impact_concrete": impact("concrete", 23),
         "impact_metal": impact("metal", 29),
         "impact_wood": impact("wood", 31),
+        "explode": explode(),
         "death": death(),
         "reload": reload(),
         "empty": empty(),

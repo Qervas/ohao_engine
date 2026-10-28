@@ -15,7 +15,9 @@
 //   a fly scene:  WASD move · Q/E down/up · hold right mouse to look · Shift faster · Esc quits
 //   play mode (a scene with a PlayerController, e.g. assets/scenes/blockout_play.scene.json):
 //                 the mouse is captured while the window has focus and looks; WASD walk,
-//                 Shift sprints, Space jumps, the left button fires, R reloads, Enter restarts;
+//                 Shift sprints, Space jumps, the left button fires, the right aims, R reloads,
+//                 Enter restarts, G throws a test grenade (no damage: a sound to place, going
+//                 off 2.5 s after the throw; audio spec ruling 23);
 //                 Esc (release_mouse) frees the mouse, a click takes it again (that click
 //                 never fires); close the window to quit. Footsteps and weapons sound
 //                 (assets/audio/footsteps, assets/audio/weapons; --mute silences them); a HUD

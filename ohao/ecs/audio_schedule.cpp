@@ -245,6 +245,7 @@ std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerI
         case K::Shot: return {byPlayer ? "fire" : "enemy_fire"};
         case K::Hit: return {"impact_" + (e.surface.empty() ? std::string("default") : e.surface)};
         case K::Death: return {"death"};
+        case K::Explode: return {"explode"};
         case K::Reload:
             if (!byPlayer) return {};
             if (e.amount == 0.0f) return {"empty", "reload"};
@@ -794,9 +795,11 @@ struct AudioSchedule::Impl {
                 }
         for (std::size_t i = afterRestart; i < combatEvents.size(); ++i) {
             const CombatEvent& e = combatEvents[i];
+            // A grenade is a world source, not the thrower's own sound: occluded like an enemy's.
+            const uint64_t owner = e.kind == CombatEvent::Kind::Explode ? 0 : e.sourceId;
             for (std::string name : combatSoundNames(e, playerId)) {
                 if (name.rfind("impact_", 0) == 0 && bank.sound(name) < 0) name = "impact_default";
-                (void)playRequest({name, e.sourceId, e.point, combatSoundAtEar(name)});
+                (void)playRequest({name, owner, e.point, combatSoundAtEar(name)});
             }
         }
         if (const AnimationSystem* anim = animationSystem(world))

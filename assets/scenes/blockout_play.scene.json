@@ -78,7 +78,8 @@
           { "action": "fire", "key": "MouseLeft" },
           { "action": "aim", "key": "MouseRight" },
           { "action": "reload", "key": "R" },
-          { "action": "restart", "key": "Enter" }
+          { "action": "restart", "key": "Enter" },
+          { "action": "grenade", "key": "G" }
         ],
         "axes": [
           { "axis": "move_forward", "positive": "W", "negative": "S" },

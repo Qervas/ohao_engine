@@ -314,8 +314,70 @@ struct CombatSystem::Impl {
             for (const auto& [id, e] : order)
                 if (reg.valid(e) && reg.all_of<Weapon>(e)) updateWeapon(e, dt, *physics);
         }
+        if (physics && dt > 0.0f) stepGrenades(dt, *physics);
         stepRound(dt);
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+
+    // ---- the test grenade (audio spec ruling 23; combat.hpp, combat::kGrenade*) ------------------
+    struct Grenade {
+        glm::vec3 pos{0.0f}, vel{0.0f};
+        float fuse{0.0f};   // s left
+        bool resting{false};
+        entt::entity thrower{entt::null};
+    };
+    std::vector<Grenade> grenades;   // in throw order
+    float grenadeCooldown{0.0f};
+
+    // The input-driven, living player throws on `grenade`; every grenade flies (a ballistic arc,
+    // stopping where a ray along this step's move first meets a body other than the thrower's) and
+    // goes off when its fuse runs out: an Explode event at its place.
+    void stepGrenades(float dt, PhysicsScene& physics) {
+        grenadeCooldown = std::max(0.0f, grenadeCooldown - dt);
+        entt::entity player = entt::null;
+        uint64_t bestId = UINT64_MAX;
+        for (auto [e, pc] : reg.view<const PlayerController>().each()) {
+            const uint64_t id = world.idOf(e);
+            if (pc.input && id < bestId) bestId = id, player = e;
+        }
+        if (player != entt::null && alive(player) && grenadeCooldown <= kTimeEps && world.input().pressed(combat::kGrenadeAction))
+            if (const auto info = physics.playerInfo(player)) {
+                const glm::vec3 eye = info->pos + glm::vec3(0.0f, reg.get<PlayerController>(player).eyeHeight, 0.0f);
+                const glm::vec3 look = yawQuat(info->yawDeg) * pitchQuat(info->pitchDeg) * glm::vec3(0.0f, 0.0f, -1.0f);
+                Grenade g;
+                g.pos = eye + look * combat::kGrenadeAhead;
+                g.vel = look * combat::kGrenadeSpeed + glm::vec3(0.0f, combat::kGrenadeLift, 0.0f);
+                g.fuse = combat::kGrenadeFuse;
+                g.thrower = player;
+                grenades.push_back(g);
+                grenadeCooldown = combat::kGrenadeCooldown;
+            }
+        for (Grenade& g : grenades) {
+            if (!g.resting) {
+                const glm::vec3 next = g.pos + g.vel * dt + glm::vec3(0.0f, 0.5f * combat::kGrenadeGravity * dt * dt, 0.0f);
+                const glm::vec3 move = next - g.pos;
+                const float len = glm::length(move);
+                const auto hit = len > 0.0f ? physics.raycastFrom(g.pos, move / len, len, g.thrower) : std::nullopt;
+                if (hit) {
+                    g.pos = hit->point + hit->normal * 0.05f;
+                    g.vel = glm::vec3(0.0f);
+                    g.resting = true;
+                } else {
+                    g.pos = next;
+                    g.vel.y += combat::kGrenadeGravity * dt;
+                }
+            }
+            g.fuse -= dt;
+        }
+        for (const Grenade& g : grenades)
+            if (g.fuse <= kTimeEps) {
+                CombatEvent ev;
+                ev.kind = CombatEvent::Kind::Explode;
+                ev.source = g.thrower;
+                ev.point = g.pos;
+                push(ev);
+            }
+        std::erase_if(grenades, [](const Grenade& g) { return g.fuse <= kTimeEps; });
     }
 
     // ---- the round (step 3) ------------------------------------------------------------------
@@ -391,6 +453,8 @@ struct CombatSystem::Impl {
             roundInfo.phase = RoundPhase::Playing;
             roundInfo.restartIn = 0.0f;
             deadFor = 0.0f;
+            grenades.clear();   // runtime: the round's start had none in flight
+            grenadeCooldown = 0.0f;
             pushRound(CombatEvent::Kind::Restart);
         }
     }
@@ -464,6 +528,7 @@ const char* combatEventKindName(CombatEvent::Kind kind) noexcept {
         case CombatEvent::Kind::RoundStart: return "round_start";
         case CombatEvent::Kind::Restart: return "restart";
         case CombatEvent::Kind::Win: return "win";
+        case CombatEvent::Kind::Explode: return "explode";
     }
     return "?";
 }

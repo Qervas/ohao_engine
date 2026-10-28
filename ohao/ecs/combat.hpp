@@ -21,8 +21,9 @@ namespace ohao::ecs {
 class World;
 
 struct CombatEvent {
-    // RoundStart, Restart and Win (step 3) name no source or target.
-    enum class Kind : uint8_t { Shot, Hit, Damage, Death, Reload, Reloaded, RoundStart, Restart, Win };
+    // RoundStart, Restart and Win (step 3) name no source or target. Explode: a grenade went off at
+    // `point`, `source` the thrower.
+    enum class Kind : uint8_t { Shot, Hit, Damage, Death, Reload, Reloaded, RoundStart, Restart, Win, Explode };
     Kind kind{Kind::Shot};
     uint64_t step{0};                 // the combat step it happened in (1 = the first)
     uint64_t seq{0};                  // position in the log
@@ -83,8 +84,24 @@ CombatSystem& installCombat(World& world);
 [[nodiscard]] const CombatSystem* combatSystem(const World& world);
 // The latest step's events (empty without combat).
 [[nodiscard]] std::span<const CombatEvent> combatEvents(const World& world);
-// shot, hit, damage, death, reload, reloaded, round_start, restart, win.
+// shot, hit, damage, death, reload, reloaded, round_start, restart, win, explode.
 [[nodiscard]] const char* combatEventKindName(CombatEvent::Kind kind) noexcept;
+
+namespace combat {
+// The test grenade (Frank's hand test, audio spec ruling 23): a sound source a player can place.
+// The input-driven, living player's `grenade` action (G in the play scene) throws one from the eye
+// along the look plus a lift; it flies a ballistic arc in the combat step, stops where it first
+// meets a body, and goes off kFuse after the throw: an Explode event at its place, which the audio
+// schedule plays as `explode`. No damage. Runtime only: never saved, hashed or snapshotted; a
+// round's restart clears those in flight.
+inline constexpr const char* kGrenadeAction = "grenade";
+inline constexpr float kGrenadeSpeed = 9.0f;       // m/s along the look
+inline constexpr float kGrenadeLift = 3.0f;        // m/s added straight up
+inline constexpr float kGrenadeGravity = -9.81f;   // m/s^2
+inline constexpr float kGrenadeFuse = 2.5f;        // s from the throw
+inline constexpr float kGrenadeCooldown = 1.0f;    // s between throws
+inline constexpr float kGrenadeAhead = 0.4f;       // m in front of the eye it leaves from
+} // namespace combat
 
 namespace combat {
 // Counter-based random numbers: a function of (seed, shot, i), in [0, 1).

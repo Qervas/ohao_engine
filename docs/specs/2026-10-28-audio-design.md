@@ -526,6 +526,12 @@ Empty until Frank plays `build/Release/ohao_game.exe assets/scenes/blockout_play
 with headphones and with speakers. Each item is closed by his note, a fix with its test, or a ruling
 that it stays.
 
+**A sound to place (ruling 23):** an enemy stops firing once you are behind a wall, so for
+direction and distance (U1), cover (U2) and room against outside (U3) press **G**: a grenade flies
+about 9 m along your look and goes off 2.5 s after the throw. Throw, then turn or walk before it
+sounds: in front, to one side, behind you, behind the pillar, through the doorway, from inside the
+room and from outside it.
+
 | # | Item | What to try | Frank's note | Status |
 |---|---|---|---|---|
 | U1 | Direction and distance | Walk around a firing enemy: left/right is clear, far is quieter and duller | | open |
@@ -909,3 +915,19 @@ OPEN (judgment calls; recommendations given):
     rule are gone, and `assets/audio/weapons/hurt.wav` with its generator. The impacts of the
     player's rounds, the enemies' `death` and `body_fall` stay; the HUD's red vignette still marks
     a hit. Ruling 8's hurt duck is void with it.
+23. **A test grenade on G, for placing a sound** (Frank, 2026-10-28 hand test: "if we duck behind
+    a wall, enemy won't shoot. so grenade is a good call"). RULED. The play scene binds `grenade`
+    to G. The input-driven, living player throws from 0.4 m ahead of the eye along the look at
+    9 m/s plus 3 m/s straight up, under −9.81 m/s²; once a second at most. It flies in the combat
+    step (after the weapons, before the round), stops where a ray along a step's move first meets a
+    body other than the thrower's (no bounce: it stays 5 cm off what it touched, a wall included),
+    and 2.5 s after the throw (150 steps) goes off: an `explode` combat event at its place, which the
+    schedule plays as `explode` (bank: bus `weapons`, priority 230, shape `blast` 2–80 m rolloff 1,
+    send 0.4, occluded) with no owner, so walls cut it as they cut an enemy's shot even though the
+    player threw it. On the ground it waits out the fuse rather than going off at rest, so the
+    player can turn or walk before it sounds. No damage, HUD or effect. The grenade in flight is
+    runtime state of the combat system: never saved, hashed or snapshotted (a `world.restore`
+    keeps the ones in flight; a restart clears them). The clip is ours,
+    `tools/audio/make_weapons.py` `explode()`, 2.2 s. Test 30, `t30_grenade_explode_pans`: one
+    throw, one `explode` voice at step throw + 149 on the arc's landing within 1 cm, panned +13.9 dB
+    right facing west and −13.9 dB facing east (the grenade to the north).

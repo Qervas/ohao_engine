@@ -180,11 +180,11 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --seed 00000
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"player.info","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0.6804,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,3.265,-4],"ground":false,"footsteps":1}}
-{"method":"world.hash","result":{"hash":"a066fa250a4e5111","frame":30}}
+{"method":"world.hash","result":{"hash":"05b3348c70d25df8","frame":30}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":22,"frame":0}}
 {"method":"input.inject","result":{"queued":3,"firstStep":0,"lastStep":21}}
 {"method":"world.step","result":{"frame":30}}
-{"method":"world.hash","result":{"hash":"a066fa250a4e5111","frame":30}}
+{"method":"world.hash","result":{"hash":"05b3348c70d25df8","frame":30}}
 {"method":"player.teleport","result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":1}}
 {"method":"physics.contacts","result":{"contacts":[{"a":"506f14503a54ecba","b":"5cfbb21776b390b8","an":"CrateB","bn":"CrateA","point":[1.1,0.6,-1.9],"normal":[0,-1,0],"since":31},{"a":"5cfbb21776b390b8","b":"fb31dd4d0994b3f6","an":"CrateA","bn":"Floor","point":[1,0,-1.4],"normal":[0,-1,0],"since":31}],"count":2}}
 ```
@@ -216,8 +216,11 @@ $ build/Release/ohao.exe run assets/scenes/blockout_play.scene.json --script doc
 
 The play scene is a round: two enemies (EnemyA `5c0b1a7e00000010`, EnemyB `5c0b1a7e00000020`)
 that see the player, chase and shoot in bursts; the player dead, the round restarts 3 s later
-at its start; both enemies dead, it is won and waits for `restart` (Enter). Three tools read and
-drive it, beside `input.inject` (fire with `fire` down and up, `reload`, `restart`):
+at its start; both enemies dead, it is won and waits for `restart` (Enter). `grenade` (G) throws
+a test grenade that does no damage: it lands about 9 m along the look and goes off 2.5 s after
+the throw as an `explode` event and sound at its place, a source to listen to (audio spec ruling
+23). Three tools read and drive it, beside `input.inject` (fire with `fire` down and up,
+`reload`, `restart`, `grenade`):
 
 - `combat_info {}`: the combat steps, the round (`phase` playing, dead or won, `restartIn` while
   dead, `restarts`) and every combatant in id order: `health`, `max`, `dead`, `pos` (its feet),
@@ -225,7 +228,8 @@ drive it, beside `input.inject` (fire with `fire` down and up, `reload`, `restar
   idle, chase, attack or dead; `lastSeen`, where it last saw the player). Aim with
   `player_teleport {pos: its own pos, yawDeg}` toward an enemy's `pos`, then fire.
 - `combat_events {since, max}`: shots (eye, `dir`, `coneDeg`), hits (what, where, `surface`),
-  damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`;
+  damage (`amount`, `health` after), deaths, reloads (`ammo`), `round_start`, `restart`, `win`,
+  `explode` (`point`);
   read on with the reply's `next`, as `physics_events`.
 - `combat_damage {entity, amount, source?}`: takes hit points as a round would, from the
   entity's `Health` or its nearest ancestor's (an enemy's body or head entity is fine); a dead

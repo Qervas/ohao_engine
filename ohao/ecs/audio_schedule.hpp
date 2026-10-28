@@ -154,8 +154,8 @@ struct SoundRequest {
 
 // ---- the rules (Feel's runtime players', sub-projects 6, 7, 9, 10; moved here unchanged) -----------
 // The sounds a combat event names: the player's round "fire", anyone else's "enemy_fire"; a hit
-// "impact_<surface>"; a death "death"; the player's reload "reload", after "empty" when the magazine
-// ran dry. Nothing else: damage makes no sound (the player's hurt cue masked the enemy's shot that
+// "impact_<surface>"; a death "death"; a grenade going off "explode" (at its place); the player's
+// reload "reload", after "empty" when the magazine ran dry. Nothing else: damage makes no sound (the player's hurt cue masked the enemy's shot that
 // caused it; Frank's hand test, audio spec ruling 22).
 [[nodiscard]] std::vector<std::string> combatSoundNames(const CombatEvent& e, uint64_t playerId);
 // The player's own combat sounds (at the ear): fire, reload, empty.

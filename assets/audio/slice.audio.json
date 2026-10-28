@@ -15,7 +15,8 @@
   "voices": 32,
   "shapes": {
     "gunfire": {"min": 1, "max": 60, "rolloff": 1},
-    "near":    {"min": 0.5, "max": 20, "rolloff": 1.5}
+    "near":    {"min": 0.5, "max": 20, "rolloff": 1.5},
+    "blast":   {"min": 2, "max": 80, "rolloff": 1}
   },
   "sounds": {
     "fire":             {"files": "weapons/fire", "bus": "weapons", "priority": 250, "shape": "ear", "holdMs": 450, "volume": 0.85, "send": 0.15},
@@ -24,6 +25,7 @@
     "impact_metal":     {"files": "weapons/impact_metal", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_wood":      {"files": "weapons/impact_wood", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_default":   {"files": "weapons/impact_default", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
+    "explode":          {"files": "weapons/explode", "bus": "weapons", "priority": 230, "shape": "blast", "holdMs": 1500, "volume": 0.9, "send": 0.4, "occlude": true},
     "death":            {"files": "weapons/death", "bus": "voice", "priority": 240, "shape": "near", "holdMs": 800, "volume": 0.85},
     "reload":           {"files": "weapons/reload", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 900, "volume": 0.85, "send": 0.1},
     "empty":            {"files": "weapons/empty", "bus": "foley", "priority": 180, "shape": "ear", "holdMs": 120, "volume": 0.85},
