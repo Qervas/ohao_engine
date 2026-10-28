@@ -28,6 +28,8 @@
     {"scene": "bench100k_1080p", "name": "lights.cluster", "passes": ["lights.cluster"], "budgetMs": 0.10, "gatedFrom": 13},
     {"scene": "meshlet_build_1m", "name": "build (CPU)", "measure": "meshletBuild", "budgetMs": 60, "gatedFrom": 12},
     {"scene": "play_hud_1080p", "name": "hud", "passes": ["hud"], "budgetMs": 0.05, "gatedFrom": 15, "source": "sub-project 7 spec, 'Performance budgets': the hud pass at 1080p"},
-    {"scene": "play_fx_1080p", "name": "particles", "passes": ["particles"], "budgetMs": 0.10, "gatedFrom": 15, "source": "sub-project 9 spec, 'Hand feel and close': a fixed 2,000-particle burst at 1080p"}
+    {"scene": "play_fx_1080p", "name": "particles", "passes": ["particles"], "budgetMs": 0.10, "gatedFrom": 15, "source": "sub-project 9 spec, 'Hand feel and close': a fixed 2,000-particle burst at 1080p"},
+    {"scene": "anim16_1080p", "name": "skin", "passes": ["skin", "skin.bounds"], "budgetMs": 0.25, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': 16 rigs posed every frame (proposed for Frank, OPEN ruling 16)"},
+    {"scene": "anim16_1080p", "name": "rt.blas.refit", "passes": ["rt.blas.refit"], "budgetMs": 0.60, "gatedFrom": 15, "source": "sub-project 10 spec, 'Performance budgets': 16 rigs refit every frame (proposed for Frank, OPEN ruling 16)"}
   ]
 }

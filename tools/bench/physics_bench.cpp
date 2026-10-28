@@ -27,6 +27,7 @@
 // count) is a failure whatever the machine.
 #include "common/harness.hpp"
 #include "core/log.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
@@ -150,6 +151,7 @@ int main(int argc, char** argv) {
     nlohmann::json budgets;
     int currentStep = 0, combatStep = 0;   // physics' build step (sub-project 6), combat's (7)
     int feelStep = 0;                       // feel's (9): the occlusion ray
+    int animStep = 0;                       // animation's (10): the animator step and pose
     double maxSlowdown = 1.25, maxExternal = 50.0;
     if (!checkPath.empty()) {
         std::ifstream f(checkPath);
@@ -166,6 +168,7 @@ int main(int argc, char** argv) {
         currentStep = doc.value("currentStep", 0);
         combatStep = doc.value("combatStep", 0);
         feelStep = doc.value("feelStep", 0);
+        animStep = doc.value("animStep", 0);
         if (doc.contains("noise")) {
             maxSlowdown = doc["noise"].value("maxCalibrationSlowdown", maxSlowdown);
             maxExternal = doc["noise"].value("maxExternalCorePct", maxExternal);
@@ -520,6 +523,40 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 10. Animation (sub-project 10 step 1, gated by the budgets' `animStep`): 16 test rigs, each
+    // running wave from another phase. anim16_step_ms: the `animation` simulate system's step (each
+    // layer's transition, advance and events); pose16_sync_ms: the `pose` sync system (sample, model
+    // matrices, palettes and posed boxes), one sync a step, as a window's frame. The systems time
+    // themselves (AnimationSystem::lastStepMs, lastPoseMs). N rounds of 300 steps.
+    std::vector<double> animStepMs, poseSyncMs;
+    for (int r = 0; r < rounds + 1; ++r) {
+        ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+        ecs::World w;
+        ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
+        for (int i = 0; i < 16; ++i) {
+            const entt::entity e = w.createWithId(0xa16a0000ull + static_cast<uint64_t>(i) + 1, "Rig",
+                                                  ecs::Transform{glm::vec3(float(i % 4), 0.0f, float(i / 4))});
+            auto& reg = w.registry();
+            ecs::AssetRef rig;
+            rig.path = "tests/anim/fixtures/rig.glb";
+            reg.emplace<ecs::MeshSource>(e, ecs::MeshSource{ecs::ModelAsset{rig, "Column"}});
+            reg.emplace<ecs::SkinnedMesh>(e, ecs::SkinnedMesh{rig, "RigSkin"});
+            ecs::Animator a;
+            a.graph.path = "tests/anim/fixtures/rig.animgraph.json";
+            a.layers = {ecs::AnimLayerState{"wave", static_cast<uint32_t>(7 * i)}, ecs::AnimLayerState{"still", 0}};
+            reg.emplace<ecs::Animator>(e, std::move(a));
+        }
+        w.sync();   // the first pose loads the rig and its graph
+        for (int step = 0; step < 300; ++step) {
+            w.simulate(1.0f / 60.0f);
+            w.sync();
+            if (r > 0) {
+                animStepMs.push_back(anim.lastStepMs());
+                poseSyncMs.push_back(anim.lastPoseMs());
+            }
+        }
+    }
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -565,14 +602,20 @@ int main(int argc, char** argv) {
     std::printf("  occlusion_ray_us        median %8.4f   p95 %8.4f   (%zu rays, %zu blocked)\n", so.median, so.p95, totalRays,
                 occludedRays);
     const Verdict vo = judge(budgets, feelStep, "occlusion_ray_us", so.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo})
+    const Stats sas = stats(animStepMs), sps = stats(poseSyncMs);
+    std::printf("  anim16_step_ms          median %8.4f   p95 %8.4f   (%zu steps)\n", sas.median, sas.p95, animStepMs.size());
+    const Verdict vas = judge(budgets, animStep, "anim16_step_ms", sas.median, failures);
+    std::printf("  pose16_sync_ms          median %8.4f   p95 %8.4f   (%zu syncs)\n", sps.median, sps.p95, poseSyncMs.size());
+    const Verdict vps = judge(budgets, animStep, "pose16_sync_ms", sps.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
                         v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
     for (const auto& [name, b] : budgets.items())
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
-            name != "round_restart_ms" && name != "occlusion_ray_us")
+            name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
+            name != "pose16_sync_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -602,6 +645,10 @@ int main(int argc, char** argv) {
                                {"verdict", vrs.verdict}};
     out["occlusion_ray_us"] = {{"median", so.median}, {"p95", so.p95}, {"min", so.min}, {"rays", totalRays},
                                {"blocked", occludedRays}, {"verdict", vo.verdict}};
+    out["anim16_step_ms"] = {{"median", sas.median}, {"p95", sas.p95}, {"min", sas.min}, {"steps", animStepMs.size()},
+                             {"verdict", vas.verdict}};
+    out["pose16_sync_ms"] = {{"median", sps.median}, {"p95", sps.p95}, {"min", sps.min}, {"syncs", poseSyncMs.size()},
+                             {"verdict", vps.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},

@@ -33,6 +33,7 @@
 #include "bench_world.hpp"
 #include "common/harness.hpp"
 #include "core/log.hpp"
+#include "ecs/animation.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/components.hpp"
 #include "ecs/json_parse.hpp"
@@ -82,7 +83,14 @@ struct SceneSpec {
     std::optional<float> exposure;
     bool hud{false};   // the combat HUD over the frame (sub-project 7: the hud pass)
     bool fx{false};    // a burst of kFxParticles in front of the camera (sub-project 9: the particles pass)
+    // Sub-project 10: the world steps before every frame (one fixed step, then one sync and the
+    // frame, as a window runs), so the skinned instances' poses change every frame.
+    bool animate{false};
 };
+
+// anim16_1080p: the blockout room with 16 test rigs (tests/anim/fixtures/rig.glb) on a 4 x 4 grid,
+// each running wave from another phase (7 steps apart).
+constexpr int kAnimRigs = 16;
 
 // play_fx_1080p's burst: alive through every warm-up and timed frame (the renderer's fixed
 // 1/60 s frame step: 105 frames are 1.75 s), so each timed frame updates and draws all of them.
@@ -102,11 +110,15 @@ const std::vector<SceneSpec>& sceneSpecs() {
         {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, true},
         // The same view with 2,000 sparks in front of the eye: the only capture drawing particles.
         {"play_fx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true},
+        // 16 skinned rigs in the blockout, every pose changing every frame: skin, skin.bounds and
+        // rt.blas.refit at full load (sub-project 10).
+        {"anim16_1080p", "build/render_bench/anim16.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
     };
     return s;
 }
 
 const reflect::TypeRegistry& engineTypes();
+std::string readText(const fs::path& p);
 
 // bench10k and bench100k (bench_world.hpp's render scenes) as scene files, for the run's
 // scene.load; only those the run renders.
@@ -120,6 +132,30 @@ bool writeBenchScenes(const std::string& only) {
         if (!text) return false;
         std::ofstream(std::string("build/render_bench/") + name + ".scene.json", std::ios::binary | std::ios::trunc)
             << text.value();
+    }
+    if (only.empty() || only.rfind("anim16", 0) == 0) {
+        // The blockout room's scene with the rigs added to its entities (and their types to its header).
+        std::string text = readText("assets/scenes/blockout_room.scene.json");
+        const auto header = text.find("\"components\": {");
+        if (header == std::string::npos) return false;
+        text.insert(header + 15, "\n    \"Animator\": 1,\n    \"MeshSource\": 1,\n    \"SkinnedMesh\": 1,");
+        const auto end = text.rfind("\n  ]");
+        if (end == std::string::npos) return false;
+        std::string rigs;
+        for (int i = 0; i < kAnimRigs; ++i) {
+            char id[17];
+            std::snprintf(id, sizeof id, "a16a0000000000%02x", i + 1);
+            const float x = -2.0f + 1.2f * static_cast<float>(i % 4), z = -2.0f + 1.2f * static_cast<float>(i / 4);
+            rigs += ",\n    { \"id\": \"" + std::string(id) + "\", \"Name\": { \"value\": \"Rig" + std::to_string(i) +
+                    "\" }, \"Transform\": { \"position\": [" + std::to_string(x) + ", 0, " + std::to_string(z) +
+                    "] }, \"MeshSource\": { \"source\": { \"ModelAsset\": { \"asset\": { \"path\": "
+                    "\"tests/anim/fixtures/rig.glb\" }, \"mesh\": \"Column\" } } }, \"SkinnedMesh\": { \"file\": { "
+                    "\"path\": \"tests/anim/fixtures/rig.glb\" }, \"skin\": \"RigSkin\" }, \"Animator\": { \"graph\": "
+                    "{ \"path\": \"tests/anim/fixtures/rig.animgraph.json\" }, \"layers\": [ { \"state\": \"wave\", "
+                    "\"steps\": " + std::to_string(7 * i) + " }, { \"state\": \"still\", \"steps\": 0 } ] } }";
+        }
+        text.insert(end, rigs);
+        std::ofstream("build/render_bench/anim16.scene.json", std::ios::binary | std::ios::trunc) << text;
     }
     return true;
 }
@@ -669,6 +705,7 @@ struct Gpu {
         world = std::make_unique<ecs::World>();
         session = std::make_unique<api::Session>(*world, engineTypes());
         session->setAssetResolver(assets.get());
+        ecs::installAnimation(*world, *assets);   // anim16's poses, as the CLI context installs it
         host->bind(*world);
         session->setHost(host.get());
     }
@@ -712,7 +749,7 @@ struct Gpu {
         }
         api::RenderRequest r;
         r.mode = "deferred";
-        r.frames = frames;
+        r.frames = spec.animate ? 1 : frames;   // animated: the capture sets the view and the passes up
         r.width = spec.width;
         r.height = spec.height;
         r.post = spec.post;
@@ -720,6 +757,16 @@ struct Gpu {
         r.hud = spec.hud;
         const api::RenderOutcome o = host->capture(r);
         if (!o.errors.empty()) return o.errors.front().code + ": " + o.errors.front().message;
+        if (spec.animate) {
+            // A window's frame: a fixed step, one sync, the frame (the poses change every frame).
+            VulkanRenderer* renderer = host->renderer();
+            for (int f = 0; f < frames; ++f) {
+                world->simulate(1.0f / 60.0f);
+                world->sync();
+                renderer->render();
+            }
+            renderer->waitForSubmitted(renderer->framesSubmitted());
+        }
         return {};
     }
 };

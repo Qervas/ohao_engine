@@ -1,9 +1,12 @@
 {
-  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md and docs/specs/2026-10-27-feel-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel). Changing a budget needs Frank's OK.",
+  "comment": "Specs docs/specs/2026-10-26-player-physics-design.md, docs/specs/2026-10-27-combat-design.md, docs/specs/2026-10-27-feel-design.md and docs/specs/2026-10-28-animation-design.md, 'Performance budgets'. Targets gated from the step that delivers them (currentStep for physics, combatStep for combat, feelStep for feel, animStep for animation). Changing a budget needs Frank's OK; the animation ones are the spec's proposals, OPEN ruling 16.",
   "currentStep": 5,
   "combatStep": 3,
   "feelStep": 3,
+  "animStep": 1,
   "budgets": {
+    "anim16_step_ms": { "max": 0.05, "gatedFrom": 1 },
+    "pose16_sync_ms": { "max": 0.10, "gatedFrom": 1 },
     "occlusion_ray_us": { "max": 5, "gatedFrom": 3 },
     "combat_shot_ms": { "max": 0.02, "gatedFrom": 1 },
     "combat_step_ms": { "max": 0.05, "gatedFrom": 2 },
