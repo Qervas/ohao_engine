@@ -785,6 +785,55 @@ green, with a change record `docs/changes/YYYY-MM-DD-vfx-stepN.md`:
 5. **A `MASK` texture whose alpha is exactly the cutoff:** the G-buffer, the shadow ray, the GI ray
    and the path tracer agree (Task 2, `t32_mask_rays`).
 
+## As built (step 1)
+
+The data and the step (plan Task 1, `docs/changes/2026-10-28-vfx-step1.md`). Nothing drawn changes:
+the old `render/particles` and `combat_fx` path still draws in windows until step 2. What differs from
+the design above, and why:
+
+- **Seeds come from the vfx step and the event's index, not the event's `seq`.** A record's seed is
+  `vfxHash(vfx step, 8 × index + part, 0xEF7)`, where the index counts the step's combat events after
+  its last `restart`. The combat log's `seq` is not part of a snapshot or of a round restart, so a
+  seed from it would differ after a restore or a restart; the vfx step counter is restored with the
+  records. `sourceSeq` still holds the event's `seq` for agents and tests, never for a seed.
+- **The muzzle is the logical eye, 0.5 m ahead** (`kMuzzleAhead`), not the `Muzzle` entity. The play
+  scene's `Muzzle` is a `JointAttach` on the arms' `gun` joint and the enemies' rifles: the pose
+  system places it, which is presentation and never read by the step. Every host writes the same
+  point. Step 2 draws muzzle effects from the drawn muzzle in live windows ("Determinism").
+- **A tracer ends at the same shooter's next `hit` in the step**, else 60 m along the round
+  (`kTracerMiss`); the shot's ordinal is `WeaponState.shots`, `shots % every == 0`.
+- **Decals attach to the `hit`'s target by its pose at the step, without the body-box re-cast.**
+  Nothing is placed on the input-driven player or its subtree. The re-cast against an enemy's body
+  boxes, the decal ring and `impact_marks` stopping drawing are step 3's (OPEN ruling 12). An
+  explosion's scorch is posed with −Z up, so it projects straight down.
+- **A restart puts back the round start's records** rather than clearing: the round's snapshot is
+  restored through the vfx `SnapshotHook` inside the combat step, and the vfx step then reads only
+  the events after the restart. The round start's snapshot is taken before the round's first vfx
+  step, so it holds none, and the steps after a restart write the round's records again, step
+  numbers and seeds included (`t31_replay`).
+- **The record** is `{kind, effect, seed, seq, spawnStep, sourceSeq, source, on, pose, a, b, life}`:
+  `seq` orders records for the `vfx.info` cursor, `source` is the shooter, `life` the effect's
+  longest life (0: kept until its cap drops it). It expires once `(step − spawnStep) · dt > life`.
+- **`World::addSimulateBefore(anchor, name, fn)`** places `vfx` before `audio_schedule` whatever
+  order the hosts install in; the log channel `vfx` is new (and `log.read`'s channel list with it).
+- **`render_host` installs nothing:** the CLI context installs the simulation systems for `ohao run`
+  and `ohao serve` alike (`tools/ohao/main.cpp`); `render_host` adds only render-side systems.
+- **`vfx.info`'s records are `{seq, step, effect|tracer|decal|light: name, at, on?}`** (`at` the world
+  position, a decal's through its body's pose; `on` only for an attached decal), with `set`, `steps`,
+  `caps`, `live` by kind, `dropped` by kind only when any were, `particles: null` headless, and
+  `next`. 16 records measured 1,593 bytes: the 1 KB proposal cannot hold 16, so `t35_vfx_info_step`
+  holds them to 2 KB, as `audio.info` (OPEN ruling 20). `serve_bench vfx_info_bytes` stays Task 4's.
+- **`tools/list`:** 24,855 bytes with `vfx_info` added; eleven method descriptions trimmed of repeated
+  prose (no field dropped) bring it to 24,560 of 24,576, 39 tools. 16 bytes remain: step 4's frame
+  half and the settings schema need room found again (OPEN ruling 20).
+- **`VfxEmitter.rate`** is in `Hz` (the registry's unit for a count per second).
+- **The closed form is checked against an RK4 integration at 1 ms**, not Euler: explicit Euler's own
+  error under gravity alone is g·T·dt/2, 9.8 mm at 1 ms over 2 s, above the 1 mm the test asserts. Worst
+  difference 0.26 mm (drag 0), 0.004 mm (drag 4).
+- **Not yet tested:** `t31_window_equals_headless` (`check_live.py`) and an `input.replay` of a fight
+  through `vfx.info` come with the GPU harnesses' VFX legs in step 4; `t31_replay` covers two runs, a
+  restore mid-fight and a round restart.
+
 ## Rulings for Frank
 
 PROVISIONAL 1–9 and OPEN 10–27 await Frank, each with its recommendation.
