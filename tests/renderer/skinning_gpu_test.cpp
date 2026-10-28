@@ -47,6 +47,7 @@ namespace {
 
 int g_passed = 0, g_failed = 0;
 std::vector<std::string> g_failures;
+std::string g_dump;   // --dump <file>
 
 void check(bool ok, const std::string& what) {
     if (ok) {
@@ -274,6 +275,14 @@ void t24_motion_vectors_of_a_limb() {
     }
     std::printf("  after one step: %zu of %zu vertices moved; the foot's %zu vertices, %zu still; previous match %zu\n",
                 moving, gpu.size(), foot, stillFoot, m.previous);
+    // --dump <file>: the read-back range as CSV (x, y, z, previous x, y, z), for the change record's
+    // motion plot.
+    if (!g_dump.empty()) {
+        std::ofstream csv(g_dump, std::ios::binary);
+        for (const Vertex& v : gpu)
+            csv << v.position.x << ',' << v.position.y << ',' << v.position.z << ',' << v.boneWeights.x << ','
+                << v.boneWeights.y << ',' << v.boneWeights.z << '\n';
+    }
     check(m.previous == m.total && m.positions == m.total && m.total == 96,
           "t24: previous positions = last frame's palette's skin, positions = this frame's");
     check(moving > 0, "t24: the swinging limb has motion");
@@ -371,7 +380,9 @@ void t24_unchanged_pose_skips() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::string(argv[i]) == "--dump") g_dump = argv[i + 1];
     t24_skin_matches_cpu();
     t24_two_instances_two_poses();
     t24_motion_vectors_of_a_limb();

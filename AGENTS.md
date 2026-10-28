@@ -108,6 +108,7 @@ $ build/Release/denoise_parse_test.exe > /dev/null
 $ build/Release/sobol_test.exe > /dev/null
 $ build/Release/level_physics_tests.exe > /dev/null
 $ build/Release/combat_tests.exe > /dev/null
+$ build/Release/anim_tests.exe > /dev/null
 $ python tests/cli/check_cli.py --cpu-only > /dev/null
 $ python tests/reflect/check_scene_schema.py > /dev/null
 $ python tests/check/check_tests.py > /dev/null
@@ -129,6 +130,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `systems_tests` | engine-provided systems (spin, the fly controller) |
 | `level_physics_tests` | level collision: colliders fitted from meshes (box, sphere, capsule, convex, mesh), `UCX_` hulls as one compound body, a dynamic mesh made convex, non-uniform and mirrored scale; rays against the blockout (spawns, doorway, wall, ramp), its crates stepped to rest, a render-only level, a still world doing no work; physics in the world's step (test 10): dropped crates land and rest at their authored places, contact begin events at the right step and speed, a settled world writing nothing, an edit teleporting a dynamic body, motion vectors over two steps in one frame, a destroyed body ending its contacts, trigger enter and exit, substeps, two runs identical bit for bit, the event log's cursor; the player (test 11): spawns at the player spawn facing its yaw, walks 4.0 m in 60 steps, stopped by the north wall, climbs the 0.3 m step, the platform and the ramp, pushes a crate, jumps 1.22 m, seen by a trigger; kinematic bodies moved by velocity; the camera (test 12): the head at eyeHeight, pitch clamped at ±89° (and set by an edited head), yaw turning the body, render interpolation drawing the head and a falling crate between steps while `world.hash` and the saved file stay the step's, `blockout_play.scene.json` viewed from the spawn before any step; footsteps (test 13): a footstep every 0.75 m walked and 0.95 m sprinted, the surface of the ground body (the blockout's `surf` hints, an edited `Collider.surface`, `default`), one land after a 0.5 m drop at the free-fall speed and none after 0.2 m, none standing or in the air; replay (test 14): `BodyMotion` following awake bodies (and neither saved nor hashed), restores replaying bit for bit mid-fall, mid-jump, from the loaded spawn and with crates resting on each other, sleeping bodies put back to sleep, a body put back however close it settled, a body rebuilt since the snapshot falling back to `BodyMotion` |
 | `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones lying down with no character, their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies; the round (test 17): `round_start` once, a restart 180 steps after the player's death equal to the round's start (`world.hash`, poses, health, ammo, a knocked crate), the `restart` key, a dead player neither walking, turning nor firing, a win once both enemies die (waiting for `restart`, which brings both back), no round without `Round`, the same play after a restart, and after a won round's restart, bit for bit, and the play scene's won round restarting to the round start's `world.hash` (its enemies' yaw of exactly 180, rotations bit for bit); presentation (`fx_*`): the muzzle light on for its 3 steps then off, impact marks (64 at most, the oldest reused, never saved or hashed, on an enemy's body box and following it, none on the player, cleared by a restart), the HUD list (health, ammunition, the crosshair opened by bloom, the hit marker for 0.15 s and the vignette for 0.3 s, DEAD with the restart countdown, CLEARED, nothing without a player); the first-person gun (sub-project 9 test 21, `t21_*`): the rest pose (the remap only), the remap (every point within `depthScale` of its distance, projected through the scene's 75° where the original lands through 60°), sway lagging a 10° turn by 0.8° and returning, one bob cycle per 0.75 m walked (none standing or in the air), a kick of 3 cm and 2.5° per round returning, a restart resetting it, `world.hash`, saves and snapshots untouched by it; the won screen without crosshair or hit marker |
+| `anim_tests` | animation (sub-project 10, tests 22 and 23, on the generated rig `tests/anim/fixtures/`, `tools/anim/make_test_rig.py`): the glTF reader (skin joints, parents, inverse binds; every sampler kind and channel path to the bit; morph channels dropped with a warning), sampling (LINEAR nlerp, STEP, CUBICSPLINE; loop and clamp; a key exact at its time), the bind pose's identity palette, Assimp's bone order mapped to the skin's joints by name (and the rig's 96 vertices kept: no join across weights), 1-D blends, masked additive layers, graph errors with their JSON pointers; the step: transitions on a parameter, an event and the clip's end (61 steps for 1 s), fades counted in steps, events once per crossing and in id order within a step, a restore mid-fade replaying the same Animator and `world.hash`, the pose never in the hash |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
 | `check_tests.py` | `tools/check.py` itself, against fixtures in `build/check_fixture`; every built test executable registered; `render_bench --evaluate` on fixture results (pending budgets reported, a gated miss named by pass, noisy runs never a pass) |
@@ -151,6 +153,7 @@ $ build/Release/deferred_determinism_gpu_test.exe > /dev/null   # gpu
 $ build/Release/cull_parity_gpu_test.exe > /dev/null   # gpu
 $ build/Release/light_cluster_gpu_test.exe > /dev/null   # gpu
 $ build/Release/light_emitter_gpu_test.exe > /dev/null   # gpu
+$ build/Release/skinning_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
@@ -203,6 +206,15 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   as the light held still; the first-person gun (`ViewModel`, sub-project 9): a capture with
   the gun against one without it differs only inside the gun's footprint (it shadows and
   lights nothing), where a plain box at the gun's drawn place changes pixels outside it.
+  `skinning_gpu_test` (sub-project 10, test 24, the rig): the deformed range read back equals a
+  CPU skin of the same palette (positions, normals, 1e-5 relative); two instances of one mesh hold
+  their own poses; after a window frame (a step, one sync, the frame) the copy's previous positions
+  are last frame's skin (the foot, joint 0 only, has no motion); the raised arm changes the deferred
+  frame and the path tracer's in the same place; a moving pose refits its BLAS every frame and
+  rebuilds it after 120 refits; a still pose runs no skin, bounds or refit work; `render.stats`
+  `skinning`. `cull_parity_gpu_test` test 8: a rig whose bind box is off screen draws its raised arm,
+  culling on = off, mesh shaders = fallback = instances. `deferred_determinism_gpu_test` covers the
+  rig (deferred exact, path traced within the floor).
   `check_live.py`: `ohao serve --window` (a hidden window, validation on) driven
   end to end: load, apply, step with watch, inject, captures (inline JPEG and PNG
   previews, a region, another size refused), log.read; a lockstep window capture equals a
@@ -231,13 +243,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Validation** (`OHAO_VALIDATION=1`): zero messages, teardown included. Each message
   is a record on the logger's `validation` channel, on stderr as
   `W validation: <VUID> | <text>` (`E` for errors; a run of identical ones ends with
-  `... repeated N more times`). `check_validation.py` renders Cornell and the helmet,
-  deferred and path traced (offline, realtime, realtime through NRD), under the layers;
+  `... repeated N more times`). `check_validation.py` renders Cornell, the helmet and the
+  skinned animation rig, deferred and path traced (offline, realtime, realtime through NRD), under the layers;
   `--json FILE` gives each scene's message count, first VUID and per-VUID counts.
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
-- **Render goldens** (`tests/golden/manifest.json`, 27 scenes: 8 examples, 19 through
-  `ohao run`; seven at the deferred frame's `reference` quality; eight of them the Khronos
+- **Render goldens** (`tests/golden/manifest.json`, 30 scenes: 8 examples, 22 through
+  `ohao run`; eight at the deferred frame's `reference` quality; three the skinned animation rig
+  mid-wave, `anim_rig.scene.json` (deferred, reference, path traced); eight of them the Khronos
   validation pack, `assets/khronos/README.md`; two an area light, `area_light.scene.json`;
   one the level pipeline's blockout, `blockout_room.scene.json`; two the play scene through
   the player's head, `blockout_play.scene.json`, one of them with the HUD after 45 steps of the
@@ -266,8 +279,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   headless captures of `cornell_720p`, `helmet_game_720p`/`_1080p`,
   `bench10k_1080p`/`bench100k_1080p`, `play_hud_1080p` (the play scene with its HUD: the
   `hud` pass, 0.05 ms) and `play_fx_1080p` (the same view with a burst of 2,000 particles
-  alive through every frame, the only capture drawing any: the `particles` pass, 0.1 ms), 5
-  warm-up and 100 timed frames each, every pass's median
+  alive through every frame, the only capture drawing any: the `particles` pass, 0.1 ms) and
+  `anim16_1080p` (16 skinned rigs in the blockout, the world stepped before every frame so every
+  pose changes: `skin` + `skin.bounds` 0.25 ms, `rt.blas.refit` 0.6 ms, sub-project 10's
+  proposals), 5 warm-up and 100 timed frames each, every pass's median
   and p95 from GPU timestamps, and `meshlet_build_1m` (the meshlet builder on a million
   triangles, CPU, median of 9), results in `build/render_bench.json` (the per-pass baseline
   every renderer change is judged by); `--only SCENE`, `--frames N`, `--geometry
@@ -296,8 +311,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `combat_shot_ms`, with two enemies attacking, `combat_step_ms`, and a whole step with 16
   enemies chasing, `enemies16_step_ms`; restoring the play scene's round start, `round_restart_ms`;
   and feel's, gated by `feelStep`: the window host's occlusion ray for an enemy's sound in the
-  blockout, per ray, `occlusion_ray_us`, 5 µs), CPU, results in `build/physics_bench.json`; the
-  same noisy-run rules.
+  blockout, per ray, `occlusion_ray_us`, 5 µs; and animation's, gated by `animStep`: the
+  `animation` simulate system over 16 rigs, `anim16_step_ms` 0.05 ms, and the `pose` sync system,
+  `pose16_sync_ms` 0.1 ms), CPU, results in `build/physics_bench.json`; the same noisy-run rules.
   `feel_bench --check`: input-to-present latency and frame pacing (sub-project 9) in a *visible*
   1920x1080 window (a hidden one may never present), the play scene played for a scripted minute
   per present mode (`--modes`, `--seconds`, `--warmup`) while a mouse movement is fed every 40–60
@@ -735,6 +751,30 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     rolloff 1.5 (`SoundShape`); an enemy's round or footstep casts one ray from the listener
     (`soundOccluded`: `raycastFrom`, passing through characters), blocked: 8 dB down through a
     1.2 kHz low-pass node. `AudioSystem::initialize(true)` is a mixer without a device, for tests.
+- **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). `ohao/anim` (no ECS,
+  no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
+  import is not used), binds clips to skeletons by joint name, and parses and validates
+  `.animgraph.json` (every error with its JSON pointer). `installAnimation(world, assets)` (the CLI
+  context and `LiveHost` call it after `installCombat`) adds the `animation` simulate system and the
+  `pose` sync system (before `render_extract`).
+  - The saved `Animator` holds integers only: each layer's state, its steps, the state faded from and
+    its steps, the fade's length and progress. A pose is a function of them and alpha, sampled at
+    `(steps - 1 + alpha)` steps of 1/60 s; the pose (`AnimPose`) is runtime, never saved or hashed.
+    Clip events fire in the step, in id order, into a log of 1,024 (`animation.info`).
+  - **A skinned instance is its own mesh.** The render extract gives an entity with `SkinnedMesh`
+    a mesh from `RenderScene::registerSkinnedInstance(base)`: its own vertex range (the base's
+    copied), the base's indices and triangle slots, copies of its meshlets, an updatable BLAS. The
+    `skin`, `skin.bounds` and `rt.blas.refit` passes run before `scene.upload` (whose TLAS build reads
+    the refit BLAS), only for the instances whose palettes changed. Nothing changes for consumers:
+    they read the instance's mesh as any other.
+  - The copy's `boneWeights.xyz` hold last frame's position (draw flag `kDrawSkinned`): the motion
+    vectors' source in `gbuffer.vert` and `cull/meshlets.slang`. Nothing may read a skinned copy's
+    joints or weights; the skin pass reads them from the base mesh.
+  - The previous palette is the previous *sync's*, as `WorldTransform::prevWorld` is: a capture
+    (which syncs for the view, then per frame) and `world.step` (which syncs) start without motion.
+    A window frame (steps, one sync, the frame) has it.
+  - The model loader keeps a skinned file's vertices as written (no `JoinIdenticalVertices`):
+    Assimp's join ignores joints and weights and merged seam vertices with different weights.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of
