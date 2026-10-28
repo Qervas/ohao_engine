@@ -153,6 +153,10 @@ void writeInfo(Session::Impl& s, const ecs::AudioSchedule& schedule, bool comman
         if (const float db = r2(gameDb(bank, schedule, b)); db != 0.0f) { out.key("db"); out.float32(db); }
         if (bank.buses[b].cap) { out.key("cap"); out.uint64(bank.buses[b].cap); }
         if (busVoices[b]) { out.key("voices"); out.uint64(busVoices[b]); }
+        if (device && b < device->busDb.size()) {   // the device's half: what it drives the bus to, what sounds on it
+            if (const float db = r2(device->busDb[b]); db != r2(gameDb(bank, schedule, b))) { out.key("out"); out.float32(db); }
+            if (b < device->busVoices.size() && device->busVoices[b]) { out.key("playing"); out.uint64(device->busVoices[b]); }
+        }
         if (const auto* o = overrideOf(s.audioMix, bank.buses[b].name)) {
             out.key("mix");
             out.beginObject();

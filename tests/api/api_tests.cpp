@@ -2654,6 +2654,8 @@ struct AudioWorld : LevelWorld {
 struct FakeAudioHost : api::Host {
     api::AudioMixOverrides mix;
     int mixes{0};
+    std::vector<float> busDb;          // what the device drives each bank bus to
+    std::vector<uint32_t> busVoices;   // what sounds on each
     [[nodiscard]] api::HostKind kind() const noexcept override { return api::HostKind::Window; }
     [[nodiscard]] api::RenderOutcome capture(const api::RenderRequest&) override { return {}; }
     [[nodiscard]] std::optional<api::RenderStats> renderStats(int) override {
@@ -2669,6 +2671,8 @@ struct FakeAudioHost : api::Host {
         d.voices = 3;
         d.late = 2;
         d.mixMs = 0.0712;
+        d.busDb = busDb;
+        d.busVoices = busVoices;
         return d;
     }
     void setAudioMix(const api::AudioMixOverrides& m) override {
@@ -2747,6 +2751,15 @@ static void t29_audio_info() {
     CHECK(win.str("/result/device") == "default" && win.str("/result/sampleRate") == "48000" && win.str("/result/late") == "2" &&
               win.str("/result/mixMs") == "0.071" && win.str("/result/voices/device") == "3",
           "a window adds the device's half: rate, late commands, the mix's cost, its voices");
+    host.busDb.assign(10, 0.0f);
+    host.busVoices.assign(10, 0);
+    host.busDb[2] = -96.0f;   // weapons, as a mute drives it
+    host.busVoices[2] = 2;
+    const Reply buses(aw.s.call("audio.info", R"({"max":0})"));
+    std::printf("\n      window buses: %s | %s", busEntry(buses, "master").c_str(), busEntry(buses, "weapons").c_str());
+    CHECK(busEntry(buses, "master") == R"({"name":"master"})" &&
+              busEntry(buses, "weapons").find(R"("out":-96,"playing":2)") != std::string::npos,
+          "per bus, the device's level when it is not the game's, and the voices sounding on it");
     const Reply stats(aw.s.call("render.stats"));
     CHECK(stats.json("/result/audio") == R"({"mixMs":0.071,"voices":7,"late":2})", "render.stats carries the host's audio");
     aw.s.setHost(nullptr);
