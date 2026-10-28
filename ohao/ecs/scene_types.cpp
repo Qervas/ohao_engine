@@ -410,6 +410,11 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("restartDelay", &Round::restartDelay).doc("From the player's death to the restart").unit("s").min(0.0)
             .max(600.0)
         .field("restart", &Round::restart).doc("Action that restarts the round now").maxLength(64);
+    r.type<AudioMix>("AudioMix").component().singleton().host(makeComponentOps<AudioMix>())
+        .doc("The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, "
+             "the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the "
+             "snapshots and the reverb presets. Without one, the default bank (master over sfx, music, ambient).")
+        .field("asset", &AudioMix::asset).doc("Project-relative path of the .audio.json file, '/' separators");
 
     // ---- animation (sub-project 10) ----------------------------------------------------
     r.type<SkinnedMesh>("SkinnedMesh").component().host(makeComponentOps<SkinnedMesh>())

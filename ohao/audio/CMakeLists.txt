@@ -14,6 +14,7 @@ target_link_libraries(ohao_audio PUBLIC
     ohao_core
     miniaudio
     glm
+    PRIVATE ohao_simdjson   # the .audio.json reader (audio_bank.cpp)
 )
 
 # miniaudio needs platform audio backends

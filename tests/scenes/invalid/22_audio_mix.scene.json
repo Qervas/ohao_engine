@@ -1,0 +1,8 @@
+{
+  "format": "ohao.scene",
+  "version": 1,
+  "entities": [
+    { "id": "0000000000000221", "AudioMix": { "assett": { "path": "assets/audio/slice.audio.json" } } },
+    { "id": "0000000000000222", "AudioMix": { "asset": "assets/audio/slice.audio.json" } }
+  ]
+}

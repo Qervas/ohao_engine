@@ -327,6 +327,7 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<AnimLayerState>(r, checked);
     ok &= complete<Animator>(r, checked);
     ok &= complete<JointAttach>(r, checked);
+    ok &= complete<AudioMix>(r, checked);
     CHECK(ok,"every member of every registered type is registered or skipped");
     CHECK(checked == static_cast<int>(r.types().size()), "every registered type was checked");
 }
@@ -346,7 +347,7 @@ static void t01_authoring_and_runtime_split() {
                               "Environment", "Spin", "InputActions", "FlyController", "Level", "SpawnPoint", "Socket",
                               "Collider", "RigidBody", "PlayerController", "Health", "Weapon", "WeaponState",
                               "WeaponTrigger", "Muzzle", "ViewModel", "MoveIntent", "Enemy", "EnemyState", "Round",
-                              "SkinnedMesh", "Animator", "JointAttach"}) {
+                              "SkinnedMesh", "Animator", "JointAttach", "AudioMix"}) {
         const auto* t = r.find(saved);
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
@@ -611,6 +612,10 @@ static void buildRandomWorld(World& w, uint64_t seed, int n) {
                 w.registry().emplace<EnemyState>(e, st);
             }
         }
+        // The audio mix (sub-project 11 step 1), a singleton, last so the draws above stay as they were.
+        if (rng() % 2)
+            w.registry().emplace<AudioMix>(es[rng() % es.size()],
+                                           AudioMix{AssetRef{"assets/audio/a_" + std::to_string(seed) + ".audio.json", {}}});
     }
 }
 

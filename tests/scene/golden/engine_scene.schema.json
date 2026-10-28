@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash c7bf5b22cac98af4. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash beb22c566b1e50d8. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -57,6 +57,7 @@
         "Enemy": { "$ref": "#/$defs/Enemy" },
         "EnemyState": { "$ref": "#/$defs/EnemyState" },
         "Round": { "$ref": "#/$defs/Round" },
+        "AudioMix": { "$ref": "#/$defs/AudioMix" },
         "SkinnedMesh": { "$ref": "#/$defs/SkinnedMesh" },
         "Animator": { "$ref": "#/$defs/Animator" },
         "JointAttach": { "$ref": "#/$defs/JointAttach" }
@@ -1398,6 +1399,18 @@
           "default": "restart",
           "allOf": [{ "type": "string" }],
           "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioMix": {
+      "description": "The world's sound bank and mix (one per world): an .audio.json declaring the buses and their voice caps, the sounds (files, bus, priority, distance shape, how long each holds its voice), the ducks, the snapshots and the reverb presets. Without one, the default bank (master over sfx, music, ambient).",
+      "type": "object",
+      "properties": {
+        "asset": {
+          "description": "Project-relative path of the .audio.json file, '/' separators",
+          "default": { "path": "" },
+          "allOf": [{ "$ref": "#/$defs/AssetRef" }]
         }
       },
       "additionalProperties": false

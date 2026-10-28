@@ -480,6 +480,13 @@ struct Round {
     std::string restart{"restart"}; // action that restarts the round now
 };
 
+// The world's sound bank and mix, one per world (sub-project 11): a `.audio.json` naming the buses,
+// sounds, ducks, snapshots and reverb presets (audio/audio_bank.hpp). Without one, hosts mix with
+// the default bank (master over sfx, music and ambient).
+struct AudioMix {
+    AssetRef asset;   // an .audio.json, project-relative
+};
+
 // ---- input (core/input.hpp; the World's InputMap, read by simulate systems) -----------------
 
 struct ActionBinding {

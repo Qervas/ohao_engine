@@ -1,15 +1,22 @@
 #pragma once
 
 /**
- * AudioSystem — miniaudio facade (3D listener, SFX/Music/Ambient buses).
+ * AudioSystem — miniaudio facade: a 3D listener and a mixer of buses (sub-project 11 step 1,
+ * docs/specs/2026-10-28-audio-design.md).
  *
- * Art notes:
- *   - SoundHandle validity helpers + operator bool
- *   - SoundCategory with to_underlying / name helpers
- *   - Result-friendly play APIs stay handle-based (INVALID_SOUND_HANDLE = fail)
- *   - string_view paths; clamp volumes to [0,1]
+ * The buses are a bank's (audio_bank.hpp): each is a sound group feeding a bus node (gain ramped
+ * linearly in dB, a low-pass ramped in log frequency, a mute/solo gate, a send to the bank's return
+ * bus), nested under the root, which feeds the endpoint. A fresh system has the default bank's
+ * buses (master over sfx, music and ambient); loadBank replaces them with a game's and decodes its
+ * sounds into memory, so playing a bank sound opens no file. The category API (SoundCategory, file
+ * paths) plays into the default bank's buses and stays until the voice schedule replaces its
+ * callers (step 3).
+ *
+ * A mixer without a device (initialize(true)) is rendered by render(): the engine's clock advances
+ * only by what is read, so tests and benches render deterministic audio.
  */
 
+#include "audio/audio_bank.hpp"
 #include "core/concepts.hpp"
 
 #include <glm/glm.hpp>
@@ -18,17 +25,21 @@
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <compare>
 #include <array>
 #include <optional>
+#include <span>
+#include <vector>
 
 // Forward declare miniaudio types to avoid including the massive header here
 struct ma_engine;
 struct ma_sound;
 
 namespace ohao {
-struct AudioLowPass;   // a miniaudio low-pass node (its type is anonymous: wrapped in the .cpp)
+struct AudioLowPass;     // a miniaudio low-pass node (its type is anonymous: wrapped in the .cpp)
+struct AudioVoiceSource; // a bank voice's data source: its start delay, its decoded data, its stop fade
 }
 
 namespace ohao {
@@ -78,9 +89,14 @@ struct MaLpfNodeDeleter {
     void operator()(AudioLowPass* node) const;
 };
 
+struct VoiceSourceDeleter {
+    void operator()(AudioVoiceSource* source) const;
+};
+
 using MaEnginePtr = std::unique_ptr<ma_engine, MaEngineDeleter>;
 using MaSoundPtr = std::unique_ptr<ma_sound, MaSoundDeleter>;
 using MaLpfNodePtr = std::unique_ptr<AudioLowPass, MaLpfNodeDeleter>;
+using VoiceSourcePtr = std::unique_ptr<AudioVoiceSource, VoiceSourceDeleter>;
 
 // How a positioned sound fades with distance (miniaudio's inverse model: full volume within
 // minDistance, minDistance / (minDistance + rolloff * (d - minDistance)) out to maxDistance, then
@@ -103,8 +119,17 @@ struct VoiceInfo {
     glm::vec3 position{0.0f};
     SoundShape shape;
     float baseVolume{1.0f};   // as asked
-    float volume{1.0f};       // set on the sound: base x occlusion x category x master
+    float volume{1.0f};       // set on the sound: base x occlusion (category and master are its bus's)
     double lowPassHz{0.0};    // 0: none
+};
+
+// Where and how loud a bank sound plays: at the listener (not spatial), or at a position on a
+// distance shape, occluded or not.
+struct VoicePlacement {
+    bool spatial{false};
+    glm::vec3 position{0.0f};
+    SoundShape shape;
+    float volume{1.0f};   // times the bank sound's own volume
 };
 
 class AudioSystem {
@@ -125,6 +150,42 @@ public:
 
     // Listener (camera)
     void setListenerPosition(const glm::vec3& pos, const glm::vec3& forward, const glm::vec3& up);
+
+    // ---- the bank and its buses (sub-project 11) -------------------------------------------
+    // Replaces the buses with the bank's and decodes its sounds (each variant at the engine's rate)
+    // from files under `root` (local folder first, audio_bank.hpp). Every playing sound stops. A
+    // sound without a file in any folder is kept, with no variants, and warned about once.
+    bool loadBank(const AudioBank& bank, const std::filesystem::path& root);
+    [[nodiscard]] const AudioBank& bank() const noexcept { return m_bank; }
+    [[nodiscard]] uint32_t variantCount(uint16_t sound) const;
+    [[nodiscard]] double bankLoadMs() const noexcept { return m_bankLoadMs; }   // the last loadBank's
+
+    // Plays a bank sound's variant (modulo its count) on the sound's bus, at `startFrame` on the
+    // engine clock (0 or a past frame: at once): its source reads startFrame - engineFrame() frames
+    // of silence first, exact to the frame without a device. Not under the category voice cap: the
+    // voice schedule (step 3) decides what plays.
+    [[nodiscard]] SoundHandle play(uint16_t sound, uint32_t variant, const VoicePlacement& placement,
+                                   uint64_t startFrame = 0);
+    // Stops a sound with a linear fade over `fadeFrames` (0: at once). A bank sound's source fades
+    // and ends itself, from the next frame it reads.
+    void stop(SoundHandle handle, uint32_t fadeFrames);
+
+    // A bus's level: its gain in dB (linear in dB over `rampFrames`) and its low-pass (0: none;
+    // ramped in log frequency over the same frames). From the next processed frame.
+    void setBus(uint8_t bus, float db, double lowPassHz, uint32_t rampFrames);
+    // Mute silences a bus's subtree; solo silences every bus that is not a soloed one, its
+    // ancestor or its descendant. Both change over 2 ms (96 frames at 48 kHz).
+    void setMute(uint8_t bus, bool muted);
+    void setSolo(uint8_t bus, bool soloed);
+    // How much of a bus goes to the bank's return bus (the reverb, step 2), 0..1.
+    void setBusSend(uint8_t bus, float level);
+
+    [[nodiscard]] uint64_t engineFrame() const;   // the engine clock, in frames
+    [[nodiscard]] uint32_t sampleRate() const;
+    [[nodiscard]] uint32_t channels() const;
+    // A mixer without a device: renders `frames` interleaved frames into `out` (at least frames x
+    // channels floats), advancing the engine clock. Returns the frames rendered (0 with a device).
+    uint32_t render(std::span<float> out, uint32_t frames);
 
     // Play sounds — returns INVALID_SOUND_HANDLE on failure (or when the voice cap drops it)
     [[nodiscard]] SoundHandle playSound(std::string_view path,
@@ -188,16 +249,34 @@ public:
 
 private:
     struct SoundInstance {
+        VoiceSourcePtr source;  // a bank sound's data source (destroyed last)
         MaLpfNodePtr lowPass;   // declared before the sound: the sound (its input) goes first
         MaSoundPtr sound;
         SoundCategory category = SoundCategory::SFX;
         float baseVolume = 1.0f;
         bool spatial = false;
+        bool bank = false;      // a bank sound (play()): outside the category voice cap
+        bool stopping = false;  // fading out by stop(): freed once it has stopped
         glm::vec3 position{0.0f};
         SoundShape shape;
     };
+    struct Bus;
+    struct BusDeleter {
+        void operator()(Bus* bus) const;
+    };
+    struct Decoded;
+    struct DecodedDeleter {
+        void operator()(Decoded* d) const;
+    };
 
     void updateSoundVolume(SoundInstance& instance);
+    void buildBuses();          // m_bank's buses into the graph (none built yet)
+    void destroyBuses();
+    void pushGates();           // mute and solo into every bus's gate
+    [[nodiscard]] Bus* busFor(SoundCategory category) const;
+    [[nodiscard]] Bus* busAt(uint8_t bus) const;
+    // Routes an occluded sound (initialized without a group) into `bus` through a low-pass.
+    void routeOccluded(SoundInstance& instance, Bus* bus);
     [[nodiscard]] SoundHandle nextHandle();
     // The voice cap for a new SFX sound this loud at the listener: false when it is dropped;
     // otherwise room is made (the quietest playing sound stopped if at the cap). Under m_mutex.
@@ -220,6 +299,14 @@ private:
     glm::vec3 m_listener{0.0f};
     uint32_t m_voiceLimit{0};
     uint64_t m_voicesDropped{0};
+
+    AudioBank m_bank;
+    std::vector<std::unique_ptr<Bus, BusDeleter>> m_buses;   // the bank's order: parents first
+    std::array<int, 3> m_categoryBus{{0, 0, 0}};
+    // Per bank sound, its decoded variants.
+    std::vector<std::vector<std::unique_ptr<Decoded, DecodedDeleter>>> m_decoded;
+    double m_bankLoadMs{0.0};
+    bool m_withoutDevice{false};
 };
 
 } // namespace ohao

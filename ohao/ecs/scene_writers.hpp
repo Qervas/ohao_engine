@@ -47,6 +47,7 @@ void writeFields(const MoveIntent& v, const MoveIntent* omit, FieldSink& out);
 void writeFields(const Enemy& v, const Enemy* omit, FieldSink& out);
 void writeFields(const EnemyState& v, const EnemyState* omit, FieldSink& out);
 void writeFields(const Round& v, const Round* omit, FieldSink& out);
+void writeFields(const AudioMix& v, const AudioMix* omit, FieldSink& out);
 void writeFields(const SkinnedMesh& v, const SkinnedMesh* omit, FieldSink& out);
 void writeFields(const Animator& v, const Animator* omit, FieldSink& out);
 void writeFields(const JointAttach& v, const JointAttach* omit, FieldSink& out);

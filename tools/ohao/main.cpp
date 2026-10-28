@@ -2,6 +2,7 @@
 //
 //   ohao schema   [-o dir]
 //   ohao schema   level-extras [-o file]   the level hint keys as a JSON Schema for a glTF node's extras
+//   ohao schema   audio-bank [-o file]     the .audio.json format (sound bank and mix) as a JSON Schema
 //   ohao validate <scene> [--check-assets] [--limit N]
 //   ohao fmt      <scene> [--check] [--compact] [-o out]
 //   ohao apply    <scene> <commands.json> [-o out] [--seed S]
@@ -43,6 +44,7 @@
 // Exit codes: 0 ok; 1 a validation, usage or input error; 2 an asset or instantiate error;
 // 3 a GPU or internal error. No Vulkan device is created unless something renders.
 #include "api/session.hpp"
+#include "audio/audio_bank.hpp"
 #include "core/log.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/json_parse.hpp"
@@ -338,12 +340,13 @@ std::string loadScene(Context& c, const std::string& scene, const std::string& s
 }
 
 int cmdSchema(const Args& a) {
-    if (a.positional.size() == 1 && a.positional[0] == "level-extras") {
+    if (a.positional.size() == 1 && (a.positional[0] == "level-extras" || a.positional[0] == "audio-bank")) {
         // The level hint keys as a JSON Schema for one glTF node's extras (checked in as
-        // tests/level/extras_schema.json).
-        const std::string file = opt(a, "-o", "level_extras.schema.json");
+        // tests/level/extras_schema.json), or the .audio.json format (sub-project 11).
+        const bool audio = a.positional[0] == "audio-bank";
+        const std::string file = opt(a, "-o", audio ? "audio_bank.schema.json" : "level_extras.schema.json");
         std::ofstream f(file, std::ios::binary | std::ios::trunc);
-        f << level::extrasJsonSchema();
+        f << (audio ? audioBankJsonSchema() : level::extrasJsonSchema());
         if (!f) {
             emit(errorDoc("E_IO", "cannot write " + file));
             return kInput;
@@ -351,7 +354,7 @@ int cmdSchema(const Args& a) {
         emit("{\"result\":{\"files\":[" + jsonString(file) + "]}}");
         return kOk;
     }
-    if (!a.positional.empty()) return usage("schema takes no scene (or `level-extras`)");
+    if (!a.positional.empty()) return usage("schema takes no scene (or `level-extras`, `audio-bank`)");
     const fs::path dir = opt(a, "-o", ".");
     std::error_code ec;
     fs::create_directories(dir, ec);
