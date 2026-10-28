@@ -943,7 +943,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     opens a device (a serve window is mute without it); `render.stats` `audio` (`mixMs`, the
     median time the device callback takes per 10 ms of audio; `voices`; `late`) is there only
     when a player has a device.
-- **VFX** (sub-project 12, `docs/specs/2026-10-28-vfx-design.md`; steps 1 and 2 of 4 built). A world's
+- **VFX** (sub-project 12, `docs/specs/2026-10-28-vfx-design.md`; steps 1–3 built, step 4 in progress). A world's
   effects are one `.vfx.json` set (`ohao/vfx/vfx_set.*`, errors at JSON pointers, `ohao schema
   vfx-set`), named by the saved singleton `VfxSet`; without one, the default set. `installVfx` (the
   CLI context and `LiveHost`, after `installAudio`) adds the `vfx` simulate system before
@@ -977,6 +977,18 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     closed blended mesh draws its far faces over its near ones (no depth write between blended
     faces): a pane is a quad. The G-buffer's normal target is `R16G16B16A16_SFLOAT` (attachment 1;
     recorded for step 3's decals, OPEN ruling 16).
+  - **Smoke in RT** (step 4): a smoke record publishes closed-form proxy spheres (`ohao/vfx/smoke_math.hpp`,
+    `caps.proxies` at most, 256 uploaded). They reach the RT traces through set 1 binding 7
+    (`rt/smoke_proxy.slang`; the header's flag is `render.settings vfx.smokeInGi`): `shadow_trace` draws
+    its visibility stochastically with `T`, `gi_trace` multiplies radiance by `T` and adds 0.12 in-scatter
+    by `1 - T`. With no spheres `T` is exactly 1, so a scene without smoke is bit-identical. A sphere is
+    the emitter's pose plus up to 0.6 R of offset: a cloud placed on a wall plane is half outside it.
+  - **Decals are raster only** (no RT decal); tracers and particles are sorted back to front by integer
+    keys (distance bits, then id); the transparent pass runs after SSR, so SSR never sees a particle.
+  - **A GPU test that loads a level must install what the CLI installs** (`level::installLevels`, then
+    `installPhysics`, as `tools/ohao/main.cpp` does). Without it the blockout is never expanded, the
+    scene has no instances, `scene.upload` builds no TLAS, and RT shadows and RT GI silently do not run
+    (the frame is the sky, the passes list has no `rt.gi`). `vfx_gpu_test`'s `capture()` does this.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

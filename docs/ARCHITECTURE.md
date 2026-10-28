@@ -641,6 +641,32 @@ $ build/Release/ohao schema audio-bank -o build/doc_tmp/audio_bank.schema.json >
 $ build/Release/audio_schedule_tests.exe > /dev/null
 ```
 
+## Recipe: add an effect
+
+Sub-project 12 (`docs/specs/2026-10-28-vfx-design.md`). An effect is data: an entry in the set, a
+texture if it needs one, and a binding that says when it plays. Native code changes only for a new
+kind of record.
+
+1. **The texture:** a PNG under `assets/vfx/`, written by `tools/vfx/make_flipbooks.py` (fixed seeds,
+   the same bytes twice) or CC0 with `LICENSE.md` and `README.upstream.md`. Describe it in
+   `assets/vfx/README.md`.
+2. **The effect:** an entry in `assets/vfx/slice.vfx.json`'s `effects`: `emitters` (`count`, `life`,
+   `speed`, `size`, colour and alpha curves, `blend`, `lit`, `texture`, `frames`), and optionally a
+   `light` (a flash that fades over its `time`) and a `proxy` (smoke spheres for RT shadows and GI).
+   Every error names its JSON pointer; `ohao schema vfx-set` writes the schema.
+3. **The binding:** the set's `events` name it: `shot` (the muzzle), `hit` (per surface, with a
+   `fallback`), `explode` (the boom, smoke and scorch). A level node takes an emitter with the `vfx`
+   hint (`extras.vfx = "smoke_cloud"`); a scene places one with a `VfxEmitter`.
+4. **Test it on the step:** `vfx_tests` (test 31: `t31_records_from_events`, `t31_placed_emitter`)
+   reads the records a fight writes; `vfx.info` lists them in a session; `vfx_gpu_test` reads the frame.
+5. **Budgets:** `render_bench --only play_vfx_1080p --check tests/bench/render_budgets.json`
+   (`vfx.expand`, `vfx.sort`, `transparent`, `decals`).
+
+```console
+$ build/Release/ohao schema vfx-set -o build/doc_tmp/vfx_set.schema.json > /dev/null
+$ build/Release/vfx_tests.exe > /dev/null
+```
+
 ## Recipe: add a golden scene
 
 Followed for `cli_helmet_game_deferred` (sub-project 4, step 11).

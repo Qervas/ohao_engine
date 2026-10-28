@@ -119,7 +119,7 @@ committed. A candidate from an alpha-tested or blended instance is committed onl
 
 {{cite shaders/rt/shadow_trace.slang "RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;"}}
 
-{{cite shaders/rt/shadow_trace.slang "return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;"}}
+{{cite shaders/rt/shadow_trace.slang "return rand01(pixelKey, l, s, 2u) < T ? 1.0 : 0.0;"}}
 
 :::why
 The rejected alternative is a closest-hit query reporting hit distance — the

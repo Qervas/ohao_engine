@@ -87,7 +87,7 @@ inline ray queries that ends on the first hit, and for a non-opaque candidate it
 
 Its visibility is the query's committed status — lit when nothing was committed:
 
-{{cite shaders/rt/shadow_trace.slang "return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;"}}
+{{cite shaders/rt/shadow_trace.slang "return rand01(pixelKey, l, s, 2u) < T ? 1.0 : 0.0;"}}
 
 :::key
 Occlusion is signalled by the *absence* of a hit — the path tracer's miss shader
@@ -281,13 +281,13 @@ ray from the secondary hit and takes the hit surface's normal as the negated ray
 direction: a one-bounce estimate with a direct-light shortcut at the hit, not a
 path tracer (see the hybrid GI technique).
 
-{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(hit, -dir);"}}
+{{cite shaders/rt/gi_trace.slang "return albedo * (1.0 / kPi) * directAt(at, -dir) * T + inscatter;"}}
 
 There is no miss shader in either. The query's committed status is the whole answer:
 a shadow ray that commits nothing is lit, and a GI ray that commits nothing samples
 the environment map in its direction, or returns black when none is bound.
 
-{{cite shaders/rt/gi_trace.slang "if (pc.flags.y == 0u) return float3(0.0);"}}
+{{cite shaders/rt/gi_trace.slang "if (pc.flags.y == 0u) return inscatter;"}}
 
 Both draw their random numbers from an integer PCG hash, keyed by the render seed
 and the frame index since the last temporal reset as well as the pixel and sample,
