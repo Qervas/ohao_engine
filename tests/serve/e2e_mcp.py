@@ -314,6 +314,38 @@ def fight_the_round(c):
           "combat_damage with an amount past 10,000: -32602, E_RANGE")
 
 
+def throw_the_grenade(c):
+    """sub-project 12 (ruling 23): the play scene's grenade thrown and left to boom 151 steps on. The
+    boom writes its records (an effect, a transient light, the scorch decal), the frame shows them, and a
+    restore and the same throw reach the same world hash and picture."""
+    loaded, _, err = c.tool("scene_load", {"path": "assets/scenes/blockout_play.scene.json", "replace": True})
+    check(not err and loaded.get("entities", 0) > 0, "scene_load the play scene for a grenade (replace)")
+    snap, _, err = c.tool("world_snapshot", {"name": "vfx"})
+    check(not err and snap is not None, "world_snapshot before the throw")
+
+    def throw(tag):
+        _, _, e1 = c.tool("input_inject", {"events": [{"action": "grenade", "down": True},
+                                                       {"step": 1, "action": "grenade", "down": False}]})
+        stepped, _, e2 = c.tool("world_step", {"frames": 151})
+        _, img, e3 = c.tool("render_capture", {"inline": True, "path": OUT + "/boom_%s.png" % tag})
+        return stepped, img, bool(e1 or e2 or e3)
+
+    stepped, img1, err = throw("1")
+    check(not err and stepped is not None and img1 is not None, "the grenade thrown, 151 steps to the boom, a frame")
+    info, _, err = c.tool("vfx_info", {"since": 0, "max": 16})
+    kinds = {k for r in (info or {}).get("records", []) for k in ("effect", "light", "decal") if k in r}
+    check(not err and kinds == {"effect", "light", "decal"},
+          "the boom wrote an effect, a light and a decal (%s)" % sorted(kinds))
+    hash1 = (c.tool("world_hash")[0] or {}).get("hash")
+    restored, _, err = c.tool("world_restore", {"name": "vfx"})
+    check(not err and restored is not None, "world_restore to the throw's start")
+    _, img2, err = throw("2")
+    hash2 = (c.tool("world_hash")[0] or {}).get("hash")
+    check(not err and hash1 is not None and hash1 == hash2, "the same throw after a restore reaches the same world hash")
+    check(read_bytes(OUT + "/boom_1.png") == read_bytes(OUT + "/boom_2.png"),
+          "the boom's picture after the restore equals the first, byte for byte")
+
+
 def main():
     if not os.path.exists(OHAO):
         print("ohao is not built: " + OHAO)
@@ -486,6 +518,7 @@ def main():
 
     walk_the_level(c)
     fight_the_round(c)
+    throw_the_grenade(c)
 
     code, err_text = c.close()
     live = [l for l in err_text.splitlines() if "live host:" in l]
