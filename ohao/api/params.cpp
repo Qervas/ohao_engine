@@ -194,6 +194,12 @@ void registerParams(reflect::TypeRegistry& r) {
     r.type<CsmSettings>("CsmSettings").doc("Cascaded shadow maps: the fallback without RT shadows")
         .field("cascades", &CsmSettings::cascades).doc("Cascades drawn").unitless().min(1).max(4)
         .field("size", &CsmSettings::size).doc("Each cascade's size").unit("px").min(512).max(4096);
+    r.type<VfxSettings>("VfxSettings").doc("Effects' presentation switches (A/B captures)")
+        .field("particles", &VfxSettings::particles).doc("Lit particles")
+        .field("soft", &VfxSettings::soft).doc("Soft particle fade (off: hard)")
+        .field("tracers", &VfxSettings::tracers).doc("Tracers")
+        .field("decals", &VfxSettings::decals).doc("Decals")
+        .field("smokeInGi", &VfxSettings::smokeInGi).doc("Smoke shades RT shadows and GI");
     r.type<RenderSettings>("RenderSettings").doc("The host's renderer settings; the defaults are the budgeted frame")
         .field("quality", &RenderSettings::quality).doc("Deferred quality")
         .field("rtShadows", &RenderSettings::rtShadows).doc("RT shadows")
@@ -204,10 +210,11 @@ void registerParams(reflect::TypeRegistry& r) {
         .field("geometry", &RenderSettings::geometry).doc("G-buffer geometry path")
         .field("occlusionCulling", &RenderSettings::occlusionCulling).doc("The late pass's Hi-Z occlusion test")
         .field("csm", &RenderSettings::csm).doc("Cascaded shadow maps")
-        .field("exposure", &RenderSettings::exposure).doc("Exposure").unitless().min(0.001).max(64.0);
+        .field("exposure", &RenderSettings::exposure).doc("Exposure").unitless().min(0.001).max(64.0)
+        .field("vfx", &RenderSettings::vfx).doc("Effects' switches");
     r.type<RenderSettingsParams>("RenderSettingsParams").doc("render.settings params")
         .field("set", &RenderSettingsParams::set)
-            .doc("Settings to change: the members given change, the rest keep their value; absent: read only");
+            .doc("Members to change (the rest keep theirs); absent: read only");
     r.type<RenderStatsParams>("RenderStatsParams").doc("render.stats params")
         .field("frames", &RenderStatsParams::frames)
             .doc("Medians over the newest this many finished frames (the renderer keeps 120)")

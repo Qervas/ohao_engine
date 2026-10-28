@@ -273,6 +273,12 @@ public:
         uint32_t csmCascades{4};         // the CSM fallback (without RT shadows): 1-4
         uint32_t csmSize{2048};          // 512-4096
         float exposure{0.6f};            // the post stack's; a fresh renderer starts here
+        // render.settings vfx (sub-project 12): presentation switches for A/B captures, all on.
+        bool vfxParticles{true};         // the lit particles
+        bool vfxSoft{true};              // their soft fade against the scene's depth
+        bool vfxTracers{true};
+        bool vfxDecals{true};
+        bool vfxSmokeInGi{true};         // RT shadows and RT GI attenuate through the smoke proxies
     };
     void setRenderSettings(const RenderSettings& s);
     [[nodiscard]] RenderSettings renderSettings() const;

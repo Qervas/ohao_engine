@@ -2822,6 +2822,42 @@ static void t35_vfx_info_step() {
     CHECK(Reply(vw.s.call("vfx.info", R"({"effect":"muzzle"})")).code() == "E_UNKNOWN_FIELD", "an unknown member is refused");
 }
 
+// test 35, the frame half (sub-project 12): vfx.info's particles and render.stats' vfx come from the host's
+// newest frame (a headless session has none: null, absent); render.settings' vfx group reads and sets the
+// presentation switches, and no switch changes world.hash.
+static void t35_vfx_frame_and_settings() {
+    VfxWorld vw;
+    CHECK(vw.load(kPlayScene).ok() && Reply(vw.s.call("world.step", R"({"frames":1})")).ok(), "the play scene, one step");
+    CHECK(Reply(vw.s.call("vfx.info")).json("/result/particles") == "null", "no host: vfx.info's particles null");
+    FakeHost host;
+    vw.s.setHost(&host);
+    CHECK(Reply(vw.s.call("vfx.info")).json("/result/particles") == "null", "a host with no frame yet: particles null");
+    api::RenderStats frame;
+    frame.frame = 9;
+    frame.frames = 1;
+    frame.vfx = api::RenderStats::Vfx{7, 3, 2, 1, 5, 4};
+    host.stats = frame;
+    const Reply info(vw.s.call("vfx.info"));
+    CHECK(info.json("/result/particles") == "7", "the newest frame's lit particles");
+    CHECK(!host.statsAsked.empty() && host.statsAsked.back() == 1, "vfx.info reads the newest frame");
+    const Reply stats(vw.s.call("render.stats"));
+    CHECK(stats.json("/result/vfx") == R"({"particles":7,"objectsSorted":3,"decalsDrawn":2,"tracers":1,"proxies":5,"particlesSortedMax":4})",
+          "render.stats carries the vfx group");
+    host.stats.reset();
+    CHECK(Reply(vw.s.call("render.stats")).code() == "E_STATE", "no frame: render.stats is E_STATE, as before");
+
+    host.settings = api::RenderSettings{};
+    const Reply read(vw.s.call("render.settings"));
+    CHECK(read.json("/result/vfx") == R"({"particles":true,"soft":true,"tracers":true,"decals":true,"smokeInGi":true})",
+          "every vfx switch reads on by default");
+    const std::string hashBefore = vw.s.call("world.hash");
+    const Reply set(vw.s.call("render.settings", R"({"set":{"vfx":{"smokeInGi":false,"tracers":false}}})"));
+    CHECK(set.ok(), "render.settings sets the vfx switches");
+    CHECK(host.settings && !host.settings->vfx.smokeInGi && !host.settings->vfx.tracers && host.settings->vfx.particles,
+          "only the members given change");
+    CHECK(vw.s.call("world.hash") == hashBefore, "no switch changes world.hash");
+}
+
 static void t29_audio_mix() {
     AudioWorld aw;
     CHECK(aw.load(kPlayScene).ok() && Reply(aw.s.call("world.step", R"({"frames":1})")).ok(), "the play scene, one step");
@@ -3001,6 +3037,7 @@ int main() {
     RUN(sp7_t18_combat_params_refused);
     RUN(t29_audio_info);
     RUN(t35_vfx_info_step);
+    RUN(t35_vfx_frame_and_settings);
     RUN(t29_audio_mix);
     RUN(bench_apply_and_query_10k);
 

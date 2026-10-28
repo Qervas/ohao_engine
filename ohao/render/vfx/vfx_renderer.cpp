@@ -526,7 +526,7 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
     // range of slots. A batch whose particles are all unborn or dead is skipped; past the set's
     // particle cap the rest are dropped (counted).
     const render::VfxFrame& frame = scene.vfx();
-    if (frame.set) {
+    if (frame.set && m_particlesEnabled) {
         const vfx::VfxSet& set = *frame.set;
         for (const vfx::EffectDesc& effect : set.effects) {
             m_emitterBase.push_back(static_cast<uint32_t>(m_emitterTable.size()));
@@ -538,7 +538,9 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
                     rows = std::max(t.rows, 1u);
                     if (static_cast<size_t>(em.texture) < frame.textures.size()) texture = frame.textures[static_cast<size_t>(em.texture)];
                 }
-                m_emitterTable.push_back(packEmitter(em, texture, cols, rows));
+                shared::VfxEmitterGpu g = packEmitter(em, texture, cols, rows);
+                if (!m_softEnabled) g.motion[3] = 0.0f;   // render.settings vfx.soft off: the shader's hard edge (motion.w > 0 only)
+                m_emitterTable.push_back(g);
             }
         }
         const uint32_t cap = std::max(set.caps.particles, 1u);
@@ -592,6 +594,7 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
                 m_batches.push_back(b);
                 total += em.count;
                 m_stats.sortedBatches += sorted ? 1u : 0u;
+                if (sorted) m_stats.particlesSortedMax = std::max(m_stats.particlesSortedMax, em.count);
             }
         }
         m_stats.particles = total;
@@ -602,7 +605,8 @@ void VfxRenderer::prepare(uint32_t slot, const render::RenderScene& scene, const
     // along the round (clamped at its end), the tail `length` behind it. Six vertices each; a tracer
     // not yet fired (head at its tail) is skipped. Objects of kind 2, index = the tracer's quad.
     m_tracerVerts.clear();
-    for (const render::VfxFrameTracer& t : frame.tracers) {
+    static const std::vector<render::VfxFrameTracer> kNoTracers;
+    for (const render::VfxFrameTracer& t : m_tracersEnabled ? frame.tracers : kNoTracers) {
         const vfx::TracerQuad q = vfx::tracerQuad(t.from, t.to, t.speed, t.length, t.width, t.age, view.cameraPos);
         if (!q.visible) continue;
         for (const vfx::TracerQuad::Corner& c : q.corners) {

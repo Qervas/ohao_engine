@@ -9,6 +9,7 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/scene/render_scene.hpp"
+#include "render/vfx/vfx_renderer.hpp"
 #include "runtime/image.hpp"
 #include "runtime/scene_view_apply.hpp"
 
@@ -309,6 +310,7 @@ api::RenderSettings readRenderSettings(const VulkanRenderer& renderer) {
     s.occlusionCulling = r.occlusionCulling;
     s.csm = {static_cast<int32_t>(r.csmCascades), static_cast<int32_t>(r.csmSize)};
     s.exposure = r.exposure;
+    s.vfx = {r.vfxParticles, r.vfxSoft, r.vfxTracers, r.vfxDecals, r.vfxSmokeInGi};
     return s;
 }
 
@@ -330,6 +332,11 @@ void applyRenderSettings(VulkanRenderer& renderer, const api::RenderSettings& s)
     r.csmCascades = static_cast<uint32_t>(std::clamp(s.csm.cascades, 1, 4));
     r.csmSize = static_cast<uint32_t>(std::clamp(s.csm.size, 512, 4096));
     r.exposure = s.exposure;
+    r.vfxParticles = s.vfx.particles;
+    r.vfxSoft = s.vfx.soft;
+    r.vfxTracers = s.vfx.tracers;
+    r.vfxDecals = s.vfx.decals;
+    r.vfxSmokeInGi = s.vfx.smokeInGi;
     renderer.setRenderSettings(r);
 }
 
@@ -363,6 +370,22 @@ std::optional<api::RenderStats> renderStats(VulkanRenderer& renderer, int count)
     }
     if (const auto& k = renderer.renderScene().stats().skinning; k.instances > 0)
         st->skinning = api::RenderStats::Skinning{k.instances, k.skinned, k.vertices, k.blasRefits, k.blasRebuilds};
+    if (st) {
+        if (DeferredRenderer* d = renderer.getDeferredRenderer()) {
+            // The newest frame's effects: what the last prepare built, and the records the frame drew from.
+            const render::VfxFrame& frame = renderer.renderScene().vfx();
+            api::RenderStats::Vfx v;
+            v.proxies = static_cast<uint32_t>(frame.smoke.size());
+            v.decalsDrawn = d->decalsDrawn() ? static_cast<uint32_t>(frame.decals.size()) : 0u;
+            if (const VfxRenderer* vr = d->vfxRenderer()) {
+                v.particles = vr->stats().particles;
+                v.objectsSorted = vr->stats().objects;
+                v.tracers = vr->stats().tracers;
+                v.particlesSortedMax = vr->stats().particlesSortedMax;
+            }
+            st->vfx = v;
+        }
+    }
     return st;
 }
 

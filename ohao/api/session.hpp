@@ -149,6 +149,13 @@ struct RenderStats {
         uint64_t vertices{0}, blasRefits{0}, blasRebuilds{0};
     };
     std::optional<Skinning> skinning;
+    // Sub-project 12 (absent when the host has no deferred renderer): the newest frame's effects. Particles
+    // are the lit slots expanded; objectsSorted the transparent objects drawn; decalsDrawn the decal records
+    // in view; proxies the smoke spheres the traces may read; particlesSortedMax the largest sorted batch.
+    struct Vfx {
+        uint32_t particles{0}, objectsSorted{0}, decalsDrawn{0}, tracers{0}, proxies{0}, particlesSortedMax{0};
+    };
+    std::optional<Vfx> vfx;
     // Sub-project 9, a window host in realtime only (absent headless and in lockstep): a look
     // movement's latency, poll to the present of the first frame showing it in full, over the
     // newest `frames` frames that carried look; and the frames' pacing.

@@ -366,6 +366,13 @@ void VulkanRenderer::setRenderSettings(const RenderSettings& s) {
         d.setRTGIRealtime(s.rtGIFullResolution, s.rtGIRays);
     d.setSSREnabled(s.ssr);
     d.setSSSEnabled(s.sss);
+    d.setDecalsDrawn(s.vfxDecals);
+    d.setSmokeInGi(s.vfxSmokeInGi);
+    if (VfxRenderer* v = d.vfxRenderer()) {
+        v->setParticlesEnabled(s.vfxParticles);
+        v->setSoftEnabled(s.vfxSoft);
+        v->setTracersEnabled(s.vfxTracers);
+    }
     if (s.csmCascades != d.csmCascades() || s.csmSize != d.csmSize()) d.configureCSM(s.csmCascades, s.csmSize);
     if (GpuCulling* c = d.culling()) {
         GpuCulling::Settings cs = c->settings();
@@ -391,6 +398,13 @@ VulkanRenderer::RenderSettings VulkanRenderer::renderSettings() const {
     s.rtGIRays = d.rtGIRays();
     s.ssr = d.ssrEnabled();
     s.sss = d.sssEnabled();
+    s.vfxDecals = d.decalsDrawn();
+    s.vfxSmokeInGi = d.smokeInGi();
+    if (const VfxRenderer* v = d.vfxRenderer()) {
+        s.vfxParticles = v->particlesEnabled();
+        s.vfxSoft = v->softEnabled();
+        s.vfxTracers = v->tracersEnabled();
+    }
     s.csmCascades = d.csmCascades();
     s.csmSize = d.csmSize();
     if (GpuCulling* c = d.culling()) {

@@ -83,7 +83,12 @@ bool methodVfxInfo(Session::Impl& s, const JsonDocument&, const JsonNode& params
         }
         out.endObject();
     }
-    out.key("particles"); out.null();   // the frame half (Task 2): live particles from the last frame
+    // The frame half: a host with a renderer (a window, a capture) reports the lit particle slots of the newest
+    // frame; headless, null.
+    const std::optional<RenderStats> frame = s.render ? s.render->renderStats(1) : std::nullopt;
+    out.key("particles");
+    if (frame && frame->vfx) out.uint64(frame->vfx->particles);
+    else out.null();
     uint64_t next = 0;
     const std::vector<ecs::VfxRecord> records =
         p.max ? sys->recordsSince(static_cast<uint64_t>(p.since), static_cast<std::size_t>(p.max), next) : std::vector<ecs::VfxRecord>{};

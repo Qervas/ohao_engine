@@ -35,6 +35,7 @@ struct VfxFrameStats {
     uint32_t particles{0};      // particle slots expanded
     uint32_t batches{0};
     uint32_t sortedBatches{0};  // alpha batches vfx.sort ordered
+    uint32_t particlesSortedMax{0};   // the most particles in one of those batches (<= kVfxSortMax)
     uint32_t meshes{0};         // blended draws
     uint32_t objects{0};        // objects the transparent pass drew, in its order
     uint32_t dropped{0};        // particles past the set's cap (caps.particles), not drawn
@@ -99,6 +100,15 @@ public:
     struct Object { uint32_t kind; uint64_t id; float distance; uint32_t index; };
     [[nodiscard]] const std::vector<Object>& objects() const noexcept { return m_objects; }
 
+    // render.settings vfx (presentation switches, all on by default): the lit particles, their soft
+    // fade and the tracers. Off, prepare builds none of them; the rest of the frame is the same.
+    void setParticlesEnabled(bool on) noexcept { m_particlesEnabled = on; }
+    void setSoftEnabled(bool on) noexcept { m_softEnabled = on; }
+    void setTracersEnabled(bool on) noexcept { m_tracersEnabled = on; }
+    [[nodiscard]] bool particlesEnabled() const noexcept { return m_particlesEnabled; }
+    [[nodiscard]] bool softEnabled() const noexcept { return m_softEnabled; }
+    [[nodiscard]] bool tracersEnabled() const noexcept { return m_tracersEnabled; }
+
 private:
     struct Batch {
         uint32_t emitter, seed, first, count;
@@ -127,6 +137,7 @@ private:
     uint32_t m_width{0}, m_height{0};
     VkImageView m_hdrView{VK_NULL_HANDLE}, m_depthView{VK_NULL_HANDLE};
 
+    bool m_particlesEnabled{true}, m_softEnabled{true}, m_tracersEnabled{true};   // render.settings vfx
     rtc::HostBuffer m_particles, m_order;   // kVfx caps: one set of slots, fenced by queue order
     uint32_t m_particleCapacity{0};
     rtc::Image m_mask;                      // R8_UNORM, the frame's size, cleared by each pass that draws

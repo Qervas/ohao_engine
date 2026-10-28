@@ -187,6 +187,14 @@ struct CsmSettings {
     int32_t cascades{4};
     int32_t size{2048};
 };
+// render.settings vfx (sub-project 12): presentation switches for A/B captures, never in the World.
+struct VfxSettings {
+    bool particles{true};
+    bool soft{true};
+    bool tracers{true};
+    bool decals{true};
+    bool smokeInGi{true};
+};
 struct RenderSettings {
     Quality quality{Quality::realtime};
     RtShadowsSettings rtShadows;
@@ -198,6 +206,7 @@ struct RenderSettings {
     bool occlusionCulling{true};
     CsmSettings csm;
     float exposure{0.6f};   // the renderer's own (VulkanRenderer::RenderSettings)
+    VfxSettings vfx;
 };
 
 // Without `set`: read. With it: the members given change, the rest keep their value.

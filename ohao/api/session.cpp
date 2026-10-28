@@ -59,8 +59,8 @@ std::vector<reflect::MethodDoc> buildMethods() {
          "Runtime state is not hashed."},
         {"world.diff", p.find<WorldDiffParams>(),
          "{changed: [{id, name?, fields: {path: [old, new]}}], created, destroyed, count, more?}",
-         "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\": a component added or removed) with old "
-         "and new values; created and destroyed ids; more: entries past limit."},
+         "Changes since a snapshot: per entity, \"/Type/field\" (\"/Type\" when added or removed) with old and new "
+         "values; created and destroyed ids; more: past limit."},
         {"input.inject", p.find<InputInjectParams>(), "{queued, firstStep, lastStep}",
          "Queues input events by simulation step (0: the next). Actions and axes act as one more device (an axis "
          "holds until changed; null releases it); keys go through the bindings; mouse entries are deltas."},
@@ -80,13 +80,13 @@ std::vector<reflect::MethodDoc> buildMethods() {
         {"render.capture", p.find<RenderCaptureParams>(),
          "{path?, width, height, imageSize?, frames, ms, readbackMs, encodeMs, gpuMs?, timings?: [[name, ms], ...], "
          "deterministic, validation?} (+ the inline image)",
-         "Renders through the Camera (frames from a reset, the last kept) to a PNG (path) and/or an inline preview "
-         "(long side maxSize; region zooms). A window captures at its own size; realtime: its next presented frame "
-         "(deterministic false). Left-out quality, post, exposure: render.settings'. Cancellable, with progress."},
+         "Renders through the Camera to a PNG (path) and/or an inline preview (maxSize; region zooms). A window "
+         "captures at its own size; realtime: its next presented frame (deterministic false). Left-out quality, "
+         "post, exposure: render.settings'. Cancellable, with progress."},
         {"render.settings", p.find<RenderSettingsParams>(), "the RenderSettings now in effect",
-         "Reads, or with set changes, the host's renderer settings; members left out keep their value. Host state, "
-         "never saved; captures default to them. E_STATE on a host that renders nothing."},
-        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, skinning?, latency?, pacing?, audio?}",
+         "Reads, or with set changes, the renderer's settings (members left out keep theirs). Host state, never "
+         "saved; captures default to them. E_STATE on a host that renders nothing."},
+        {"render.stats", p.find<RenderStatsParams>(), "{frame, frames, gpuMs, cpuMs, passes?: [[name, ms], ...], shadowLightsDropped?, lightsOverflow?, skinning?, vfx?, latency?, pacing?, audio?}",
          "Medians over the newest frames of the host's GPU time, per pass in frame order. A realtime window adds "
          "latency (look to present) and pacing; a window with sound, audio. E_STATE before a frame."},
         {"log.read", p.find<LogReadParams>(), "{lines: [{seq, t, level, channel, msg, repeat?}], next, dropped?}",
@@ -890,6 +890,17 @@ bool renderStats(Session::Impl& s, const JsonDocument&, const JsonNode& params, 
         out.key("mixMs"); out.float32(ms(a->mixMs));
         out.key("voices"); out.uint64(a->voices);
         out.key("late"); out.uint64(a->late);
+        out.endObject();
+    }
+    if (const auto& v = st->vfx) {
+        out.key("vfx");
+        out.beginObject();
+        out.key("particles"); out.uint64(v->particles);
+        out.key("objectsSorted"); out.uint64(v->objectsSorted);
+        out.key("decalsDrawn"); out.uint64(v->decalsDrawn);
+        out.key("tracers"); out.uint64(v->tracers);
+        out.key("proxies"); out.uint64(v->proxies);
+        out.key("particlesSortedMax"); out.uint64(v->particlesSortedMax);
         out.endObject();
     }
     out.endObject();
