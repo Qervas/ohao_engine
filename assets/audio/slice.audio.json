@@ -19,7 +19,7 @@
   },
   "sounds": {
     "fire":             {"files": "weapons/fire", "bus": "weapons", "priority": 250, "shape": "ear", "holdMs": 450, "volume": 0.85, "send": 0.15},
-    "enemy_fire":       {"files": "weapons/enemy_fire", "bus": "weapons", "priority": 220, "shape": "gunfire", "holdMs": 450, "volume": 0.7, "send": 0.35, "occlude": true},
+    "enemy_fire":       {"files": "weapons/enemy_fire", "bus": "weapons", "priority": 220, "shape": "gunfire", "holdMs": 600, "volume": 0.7, "send": 0.35, "occlude": true},
     "impact_concrete":  {"files": "weapons/impact_concrete", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_metal":     {"files": "weapons/impact_metal", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
     "impact_wood":      {"files": "weapons/impact_wood", "bus": "impacts", "priority": 120, "shape": "near", "holdMs": 250, "volume": 0.55, "send": 0.2},
@@ -32,10 +32,10 @@
     "mag_in":           {"files": "weapons/mag_in", "bus": "foley", "priority": 170, "shape": "near", "holdMs": 300, "volume": 0.6, "send": 0.1, "occlude": true},
     "bolt":             {"files": "weapons/bolt", "bus": "foley", "priority": 170, "shape": "near", "holdMs": 300, "volume": 0.6, "send": 0.1, "occlude": true},
     "body_fall":        {"files": "weapons/body_fall", "bus": "foley", "priority": 150, "shape": "near", "holdMs": 600, "volume": 0.8, "send": 0.15, "occlude": true},
-    "footstep_concrete": {"files": "footsteps/concrete_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 300, "send": 0.1, "occlude": true},
-    "footstep_metal":    {"files": "footsteps/metal_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 300, "send": 0.1, "occlude": true},
-    "footstep_wood":     {"files": "footsteps/wood_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 300, "send": 0.1, "occlude": true},
-    "footstep_default":  {"files": "footsteps/default_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 300, "send": 0.1, "occlude": true}
+    "footstep_concrete": {"files": "footsteps/concrete_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
+    "footstep_metal":    {"files": "footsteps/metal_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
+    "footstep_wood":     {"files": "footsteps/wood_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
+    "footstep_default":  {"files": "footsteps/default_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true}
   },
   "ducks": [
     {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
