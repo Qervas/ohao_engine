@@ -90,6 +90,9 @@ public:
     [[nodiscard]] float stepDt() const noexcept;
     // The set to use instead of the VfxSet's (tests, benches); a VfxSet change reads its file again.
     void setSet(vfx::VfxSet set);
+    // Writes a record as the step would (its seq and spawn step are the system's): the GPU tests place a
+    // decal at a spot they name, where no fight has put one. Not for hosts.
+    void addRecordForTest(VfxRecord record);
     [[nodiscard]] const std::vector<VfxWarning>& warnings() const noexcept;
     [[nodiscard]] uint64_t steps() const noexcept;
     [[nodiscard]] double lastStepMs() const noexcept;

@@ -182,6 +182,18 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         OHAO_LOG(Warn, render, "DeferredRenderer: no ray queries or bindless textures: no effects or blended surfaces drawn");
     }
 
+    // Decals (sub-project 12, step 3): boxes over the G-buffer's albedo and normal, after gbuffer.late.
+    // They sample the bindless textures; without them no decal is drawn.
+    if (m_textureManager) {
+        m_decals = std::make_unique<DecalPass>();
+        if (!m_decals->initialize(device, physicalDevice, textures) ||
+            !m_decals->resize(m_width, m_height, m_gbufferPass->getAlbedoView(), m_gbufferPass->getNormalView(),
+                              m_gbufferPass->getPositionView(), m_gbufferPass->getDepthView())) {
+            OHAO_LOG(Warn, render, "DeferredRenderer: DecalPass failed (no decals drawn)");
+            m_decals.reset();
+        }
+    }
+
     OHAO_LOG(Info, render, "DeferredRenderer: fully initialized");
     return true;
 }
@@ -196,6 +208,10 @@ void DeferredRenderer::cleanup() {
     if (m_vfx) {
         m_vfx->cleanup();
         m_vfx.reset();
+    }
+    if (m_decals) {
+        m_decals->cleanup();
+        m_decals.reset();
     }
 
     if (m_skyPass) {
@@ -328,6 +344,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             },
             [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); }, /*selfTimed=*/true);
+    }
+
+    // 2.4. decals — the frame's decal boxes projected onto the G-buffer's albedo and normal, over the
+    //      surfaces inside them (sub-project 12, step 3). After gbuffer.late: the clusters, SSAO and the
+    //      lighting read the targets it leaves. The records are this frame's (RenderScene::vfx()).
+    if (m_decals && m_decalsDrawn && m_renderScene && m_gbufferPass) {
+        m_decals->prepare(frameIndex, m_renderScene->vfx());
+        const DecalPass::View decalView{jitteredProj * m_view, m_cameraPos, 0.6f};   // the gun's reach: 0.6 m
+        m_renderGraph.addPass("decals",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.declareColorWrite(m_graphNormalHandle, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (m_graphAlbedoHandle.isValid())
+                    builder.declareColorWrite(m_graphAlbedoHandle, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            },
+            [&, decalView](VkCommandBuffer c) { m_decals->record(c, frameIndex, decalView, texturesSet); });
     }
 
     // 2.5. lights.cluster — every froxel's light list, for the camera lighting shades with (the
@@ -706,6 +738,10 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_vfx && m_lightingPass && m_gbufferPass &&
         !m_vfx->resize(width, height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView()))
         OHAO_LOG(Error, render, "DeferredRenderer: the transparent pass's targets failed at {}x{}", width, height);
+    if (m_decals && m_gbufferPass &&
+        !m_decals->resize(width, height, m_gbufferPass->getAlbedoView(), m_gbufferPass->getNormalView(),
+                          m_gbufferPass->getPositionView(), m_gbufferPass->getDepthView()))
+        OHAO_LOG(Error, render, "DeferredRenderer: the decals' targets failed at {}x{}", width, height);
 
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {

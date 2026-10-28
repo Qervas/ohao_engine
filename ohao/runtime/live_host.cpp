@@ -6,7 +6,6 @@
 #include "ecs/vfx.hpp"
 #include "ecs/combat.hpp"
 #include "ecs/combat_hud.hpp"
-#include "ecs/impact_marks.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/render_extract.hpp"
@@ -84,7 +83,6 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     // a window's with a headless host's).
     ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
     ecs::installVfx(*m_world, *m_assets);   // effects' spawn records (inserted before the schedule)
-    ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
     // The step's effect records into the frame (age at this frame's alpha), as every host draws them.
     ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types);

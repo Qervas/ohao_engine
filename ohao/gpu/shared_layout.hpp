@@ -480,6 +480,50 @@ static_assert(offsetof(VfxDrawPush, range) == 96);
 static_assert(offsetof(VfxDrawPush, screen) == 112);
 static_assert(sizeof(VfxDrawPush) == 128);
 
+// one decal record this frame (vfx::DecalDesc at a record's pose): a unit cube of decal space, [-0.5, 0.5]^3, scaled by its size and depth (decalToWorld carries the scale)
+struct alignas(16) DecalGpu {
+    alignas(16) std::array<float, 16> decalToWorld{};
+    alignas(16) std::array<float, 16> worldToDecal{};
+    alignas(16) std::array<float, 4> tint{};
+    alignas(16) std::array<float, 4> params{};
+    alignas(16) std::array<uint32_t, 4> textures{};
+};
+static_assert(offsetof(DecalGpu, decalToWorld) == 0);
+static_assert(offsetof(DecalGpu, worldToDecal) == 64);
+static_assert(offsetof(DecalGpu, tint) == 128);
+static_assert(offsetof(DecalGpu, params) == 144);
+static_assert(offsetof(DecalGpu, textures) == 160);
+static_assert(sizeof(DecalGpu) == 176);
+
+// decal pass (vfx/decal.slang) push constants (96 bytes)
+struct alignas(16) DecalPush {
+    alignas(16) std::array<float, 16> viewProj{};
+    alignas(16) std::array<float, 4> camera{};
+    alignas(16) std::array<float, 4> screen{};
+};
+static_assert(offsetof(DecalPush, viewProj) == 0);
+static_assert(offsetof(DecalPush, camera) == 64);
+static_assert(offsetof(DecalPush, screen) == 80);
+static_assert(sizeof(DecalPush) == 96);
+
+// one vertex of a tracer's quad (six a tracer, built on the host each frame)
+struct alignas(16) TracerVertexGpu {
+    alignas(16) std::array<float, 4> pos{};
+    alignas(16) std::array<float, 4> uv{};
+    alignas(16) std::array<float, 4> color{};
+};
+static_assert(offsetof(TracerVertexGpu, pos) == 0);
+static_assert(offsetof(TracerVertexGpu, uv) == 16);
+static_assert(offsetof(TracerVertexGpu, color) == 32);
+static_assert(sizeof(TracerVertexGpu) == 48);
+
+// tracer draws (vfx/tracer.slang) push constants
+struct alignas(16) TracerPush {
+    alignas(16) std::array<float, 16> viewProj{};
+};
+static_assert(offsetof(TracerPush, viewProj) == 0);
+static_assert(sizeof(TracerPush) == 64);
+
 // the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants
 struct alignas(16) ForwardPush {
     alignas(16) std::array<float, 16> view{};

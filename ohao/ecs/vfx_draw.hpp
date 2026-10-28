@@ -22,8 +22,8 @@ class AssetResolver;
 void installVfxDraw(World& world, render::RenderScene& scene, BindlessTextureManager* textures, AssetResolver& assets);
 
 // The frame `world` draws at its render alpha (the set left null when the world has no vfx system).
-// `textures` as the set's bindless indices (empty: none loaded). Tests and benches.
+// `textures` and `normals` as the set's bindless indices (empty: none loaded). Tests and benches.
 [[nodiscard]] render::VfxFrame vfxFrameOf(const World& world, std::shared_ptr<const vfx::VfxSet> set,
-                                          std::vector<uint32_t> textures);
+                                          std::vector<uint32_t> textures, std::vector<uint32_t> normals = {});
 
 } // namespace ohao::ecs

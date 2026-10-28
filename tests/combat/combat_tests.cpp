@@ -6,7 +6,6 @@
 #include "ecs/combat.hpp"
 #include "ecs/combat_hud.hpp"
 #include "ecs/components.hpp"
-#include "ecs/impact_marks.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
@@ -1121,122 +1120,6 @@ static void fx_muzzle_flash_on_for_flash_time() {
     CHECK(ohao::render::lightEmitter(d, std::nullopt).has_value(), "on, it does");
 }
 
-static void fx_impact_pool_caps_and_reuses_oldest() {
-    World w;
-    ImpactMarks marks;
-    for (int i = 0; i < 70; ++i)
-        marks.add(w, entt::null, glm::vec3(static_cast<float>(i), 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    const auto pool = marks.marks();
-    CHECK(pool.size() == ImpactMarks::kCapacity && marks.made() == 70, "64 marks at most; 70 made");
-    CHECK(pool[0].serial == 65 && pool[5].serial == 70 && pool[6].serial == 7 && pool[63].serial == 64,
-          "the 65th..70th took the oldest slots (0..5); the rest are the 7th..64th");
-    const glm::mat4& m = pool[5].world;
-    CHECK(nearVec(glm::vec3(m[3]), {69.0f, 1.0f, ImpactMarks::kLift}, 1e-5f), "at the point, 2 mm off along the normal");
-    CHECK(nearVec(glm::normalize(glm::vec3(m[2])), {0.0f, 0.0f, 1.0f}, 1e-5f), "facing the normal (its +Z)");
-    CHECK(near(glm::length(glm::vec3(m[0])), ImpactMarks::kSize, 1e-5f), "8 cm across");
-    marks.clear();
-    CHECK(marks.marks().empty(), "clear empties the pool");
-}
-
-static void fx_marks_from_hits_never_saved_or_hashed() {
-    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
-    ImpactMarks marks;
-    marks.observe(a.world);   // starts at the log's end
-    const uint64_t h0 = hashOf(a.world);
-    const std::size_t entities = a.world.registry().view<EntityId>().size();
-    const auto ev = a.oneRound();
-    marks.observe(a.world);
-    marks.follow(a.world);
-    const auto hits = only(ev, Kind::Hit);
-    CHECK(hits.size() == 1 && marks.marks().size() == 1, "one round, one hit, one mark");
-    if (hits.size() == 1 && marks.marks().size() == 1) {
-        const glm::vec3 at(marks.marks()[0].world[3]);
-        CHECK(nearVec(at, hits[0].point + hits[0].normal * ImpactMarks::kLift, 1e-4f), "where the round hit the wall");
-    }
-    CHECK(a.world.registry().view<EntityId>().size() == entities, "no entity made");
-    // Same world with no marks observing: the same hash.
-    Arena b({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
-    (void)b.oneRound();
-    CHECK(hashOf(a.world) == hashOf(b.world) && hashOf(a.world) != h0, "the marks are not in world.hash");
-}
-
-static void fx_marks_on_an_enemy_land_on_its_body_and_follow_it() {
-    // EnemyA straight ahead (it spawns at (-2.5, -2) facing +Z), with the play scene's body and head boxes.
-    const auto bodies = [](World& w) {
-        enemies()(w);
-        const entt::entity e = w.findById(kEnemyA);
-        const entt::entity head = w.createWithId(0xe1e1, "EnemyA Head");
-        w.registry().emplace<MeshSource>(head, MeshSource{BoxPrim{{-0.14f, 1.46f, -0.14f}, {0.14f, 1.78f, 0.14f}, glm::vec3(0.8f)}});
-        w.setParent(head, e);
-        const entt::entity body = w.createWithId(0xe1e2, "EnemyA Body");
-        w.registry().emplace<MeshSource>(body, MeshSource{BoxPrim{{-0.25f, 0.0f, -0.17f}, {0.25f, 1.42f, 0.17f}, glm::vec3(0.6f)}});
-        w.setParent(body, e);
-    };
-    Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, steadyRifle(), bodies);
-    toughen(a);
-    ImpactMarks marks;
-    marks.observe(a.world);
-    const auto ev = a.oneRound();
-    marks.observe(a.world);
-    marks.follow(a.world);
-    const auto hits = only(ev, Kind::Hit);
-    const entt::entity enemy = byId(a, kEnemyA);
-    CHECK(hits.size() == 1 && hits[0].targetId == kEnemyA, "the round hit EnemyA's capsule");
-    CHECK(marks.marks().size() == 1 && marks.marks()[0].on == enemy, "a mark, attached to EnemyA");
-    if (marks.marks().size() != 1) return;
-    // In the enemy's frame (its boxes are its children's, at its origin): the eye's height (1.62 above
-    // the player's feet, the enemy standing on the 0.3 m step) is the body box's, so the mark is on the
-    // body's face toward the player (the enemy faces the player: its -Z), 2 mm off it, not on the capsule.
-    const auto inEnemy = [&] {
-        const glm::mat4 toEnemy = glm::inverse(a.world.registry().get<WorldTransform>(enemy).world);
-        return glm::vec3(toEnemy * marks.marks()[0].world[3]);
-    };
-    const glm::vec3 p = inEnemy();
-    std::printf("\n      the mark in the enemy's frame: (%.4f, %.4f, %.4f)", p.x, p.y, p.z);
-    CHECK(near(std::fabs(p.z), 0.17f + ImpactMarks::kLift, 1e-3f) && std::fabs(p.x) <= 0.25f && p.y >= 0.0f &&
-              p.y <= 1.42f,
-          "on a face of the body box, 2 mm off it (not on the capsule, 0.3 m round)");
-    const glm::vec3 facing = glm::normalize(glm::vec3(marks.marks()[0].world[2]));
-    const glm::vec3 toPlayer = a.info().pos - glm::vec3(a.world.registry().get<WorldTransform>(enemy).world[3]);
-    CHECK(glm::dot(facing, toPlayer) > 0.0f, "the face toward the player, the mark facing out of it");
-    // Killed (its Transform stays upright: the death clip falls, sub-project 10 ruling 7): the mark
-    // stays where it is on the body.
-    a.combat->damage(enemy, 1000.0f, a.player, {});
-    (void)a.run(5);
-    marks.follow(a.world);
-    CHECK(nearVec(inEnemy(), p, 1e-4f), "the mark stays with the enemy after its death");
-}
-
-static void fx_no_marks_on_the_player() {
-    // An enemy's rounds hit the player: no mark hangs in front of the player's eyes.
-    Arena a({-2.5f, 0.0f, 2.0f}, 0.0f, Weapon{}, enemies());
-    toughen(a);
-    ImpactMarks marks;
-    marks.observe(a.world);
-    const auto ev = a.run(120);
-    marks.observe(a.world);
-    std::size_t onPlayer = 0;
-    for (const CombatEvent& e : only(ev, Kind::Hit)) onPlayer += e.target == a.player ? 1 : 0;
-    std::printf("\n      %zu enemy rounds hit the player", onPlayer);
-    CHECK(onPlayer > 0, "the enemies hit the player");
-    for (const ImpactMark& m : marks.marks()) CHECK(m.on != a.player, "no mark on the player");
-}
-
-static void fx_marks_cleared_on_restart() {
-    Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, steadyRifle());
-    (void)startRound(a);
-    ImpactMarks marks;
-    marks.observe(a.world);
-    (void)a.oneRound();
-    (void)a.run(10);   // past the 10 Hz cooldown
-    (void)a.oneRound();
-    marks.observe(a.world);
-    CHECK(marks.marks().size() == 2, "two rounds, two marks");
-    (void)a.run(1, {actionEvent("restart", true)});
-    marks.observe(a.world);
-    CHECK(marks.marks().empty(), "the restart clears them");
-}
-
 static void fx_hud_shows_health_ammo_and_a_crosshair() {
     Arena a({-2.0f, 0.0f, 2.0f}, 0.0f, Weapon{});
     CombatHud hud;
@@ -2029,11 +1912,6 @@ int main(int argc, char** argv) {
     RUN(t17_restart_after_win_replays_identically);
     RUN(t17_restart_after_kills_keeps_restored_rotations);
     RUN(fx_muzzle_flash_on_for_flash_time);
-    RUN(fx_impact_pool_caps_and_reuses_oldest);
-    RUN(fx_marks_from_hits_never_saved_or_hashed);
-    RUN(fx_marks_on_an_enemy_land_on_its_body_and_follow_it);
-    RUN(fx_no_marks_on_the_player);
-    RUN(fx_marks_cleared_on_restart);
     RUN(fx_hud_shows_health_ammo_and_a_crosshair);
     RUN(fx_hud_hit_marker_and_damage_vignette_timing);
     RUN(fx_hud_dead_and_cleared_screens);

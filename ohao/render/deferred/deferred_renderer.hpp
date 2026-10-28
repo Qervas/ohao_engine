@@ -11,6 +11,7 @@
 #include "render/hud/hud_pass.hpp"
 #include "sky_pass.hpp"
 #include "render/vfx/vfx_renderer.hpp"
+#include "render/vfx/decal_pass.hpp"
 #include "ssr_pass.hpp"
 #include "sss_pass.hpp"
 #include "render/rt/rt_shadow_technique.hpp"
@@ -177,6 +178,8 @@ public:
     // kDrawTransparent draws, expanded, sorted and drawn by the transparent pass. Null when its
     // pipelines could not be made (no ray queries or bindless textures). Tests read its stats.
     [[nodiscard]] VfxRenderer* vfxRenderer() noexcept { return m_vfx.get(); }
+    // Whether the decals pass draws (on by default; the GPU tests compare a frame with and without).
+    void setDecalsDrawn(bool on) noexcept { m_decalsDrawn = on; }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
     // Get final output for display/readback
@@ -281,6 +284,8 @@ private:
 
     // Effects and blended surfaces: vfx.expand, vfx.sort and the transparent pass.
     std::unique_ptr<VfxRenderer> m_vfx;
+    std::unique_ptr<DecalPass> m_decals;   // the decals pass, after gbuffer.late (sub-project 12, step 3)
+    bool m_decalsDrawn{true};
     VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
     VkImageView m_envIrradiance{VK_NULL_HANDLE};
     float m_deltaTime{0.016f};

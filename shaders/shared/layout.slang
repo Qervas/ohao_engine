@@ -380,6 +380,38 @@ struct VfxDrawPush
     float4 screen;   // x, y the frame's size; z the camera's near plane
 };
 
+// one decal record this frame (vfx::DecalDesc at a record's pose): a unit cube of decal space, [-0.5, 0.5]^3, scaled by its size and depth (decalToWorld carries the scale)
+struct DecalGpu
+{
+    column_major float4x4 decalToWorld;   // decal space to world: the record's pose scaled (size, size, depth); its -Z is the surface's normal, out of the surface
+    column_major float4x4 worldToDecal;   // its inverse
+    float4 tint;   // xyz the albedo tint (linear); w the fade (the last tenth of the decal's life: 0..1)
+    float4 params;   // x roughness; y the normal map's strength; z, w unused
+    uint4 textures;   // x the albedo texture (bindless index, kVfxNoTexture: none); y the normal map (kVfxNoTexture: none)
+};
+
+// decal pass (vfx/decal.slang) push constants (96 bytes)
+struct DecalPush
+{
+    column_major float4x4 viewProj;   // the jittered view-projection the G-buffer was drawn with
+    float4 camera;   // xyz the eye; w unused
+    float4 screen;   // x, y the frame's size; z the eye clearance in m (no decal nearer the eye: the first-person gun's reach); w unused
+};
+
+// one vertex of a tracer's quad (six a tracer, built on the host each frame)
+struct TracerVertexGpu
+{
+    float4 pos;   // xyz the world position; w unused
+    float4 uv;   // x across the tracer, -1 to 1; y along it, 0 at the tail and 1 at the head; z, w unused
+    float4 color;   // rgb the tracer's colour times its HDR intensity (linear); a unused
+};
+
+// tracer draws (vfx/tracer.slang) push constants
+struct TracerPush
+{
+    column_major float4x4 viewProj;   // the transparent pass's jittered view-projection
+};
+
 // the transparent pass's mesh shader (vfx/transparent_mesh.slang) push constants
 struct ForwardPush
 {

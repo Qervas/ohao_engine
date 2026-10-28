@@ -23,15 +23,40 @@ struct VfxFrameEffect {
     uint64_t id{0};
 };
 
+// One live decal record: its set index, its fade (the last tenth of its life), its world pose (the
+// record's pose, followed by what it is on at this frame's alpha) and its id (the sort's tie-break).
+struct VfxFrameDecal {
+    uint32_t decal{0};
+    float fade{1.0f};
+    glm::mat4 pose{1.0f};
+    uint64_t id{0};
+};
+
+// One live tracer record: its set index, the tracer's look (resolved from the set), the round's
+// ends and the record's age; the renderer places its head at speed * age, clamped to the end.
+struct VfxFrameTracer {
+    uint32_t tracer{0};
+    float speed{400.0f};
+    float length{1.5f};
+    float width{0.012f};
+    glm::vec3 color{1.0f};          // linear, times the tracer's HDR intensity
+    float age{0.0f};
+    glm::vec3 from{0.0f}, to{0.0f};
+    uint64_t id{0};
+};
+
 struct VfxFrame {
     // The set the records index (null: nothing to draw) and a version that changes with it (the
     // renderer rebuilds its emitter table only then).
     std::shared_ptr<const vfx::VfxSet> set;
     uint64_t setVersion{0};
     // The bindless index of each of the set's textures (vfx::VfxSet::textures; kNoTexture where it
-    // could not be loaded).
+    // could not be loaded), and of each texture's normal map (kNoTexture: none).
     std::vector<uint32_t> textures;
+    std::vector<uint32_t> normals;
     std::vector<VfxFrameEffect> effects;   // in record order
+    std::vector<VfxFrameDecal> decals;     // in record order
+    std::vector<VfxFrameTracer> tracers;   // in record order
 };
 
 } // namespace ohao::render

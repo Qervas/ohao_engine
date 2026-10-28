@@ -12,6 +12,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <set>
 #include <string_view>
@@ -35,6 +36,74 @@ glm::mat4 poseAlong(glm::vec3 at, glm::vec3 along) {
     m[2] = glm::vec4(z, 0.0f);
     m[3] = glm::vec4(at, 1.0f);
     return m;
+}
+
+// Where `e` stands at this step: its Transforms up the chain (WorldTransform can be a step behind
+// inside one). A decal is placed against this, so every host, made early or late, attaches alike.
+glm::mat4 stepWorld(const entt::registry& reg, entt::entity e) {
+    const auto* t = reg.try_get<Transform>(e);
+    glm::mat4 m = t ? t->matrix() : glm::mat4(1.0f);
+    int depth = 0;
+    for (const auto* p = reg.try_get<Parent>(e); p && reg.valid(p->entity) && depth < 64; p = reg.try_get<Parent>(p->entity), ++depth)
+        if (const auto* pt = reg.try_get<Transform>(p->entity)) m = pt->matrix() * m;
+    return m;
+}
+
+// The nearest hit of a ray `origin + t dir` (world) on a BoxPrim under `e` (and its descendants, in
+// their frames), with t >= 0: a character's round is decaled on the mesh box it crosses, or not at all.
+struct BoxHit {
+    float t{std::numeric_limits<float>::max()};
+    entt::entity box{entt::null};
+    glm::vec3 point{0.0f}, normal{0.0f};
+};
+
+void hitBoxes(const entt::registry& reg, entt::entity e, glm::vec3 origin, glm::vec3 dir, BoxHit& best, int depth) {
+    if (depth > 4 || !reg.valid(e)) return;
+    if (const auto* ms = reg.try_get<MeshSource>(e))
+        if (const auto* box = std::get_if<BoxPrim>(&ms->source)) {
+            const glm::mat4 world = stepWorld(reg, e);
+            const glm::mat4 toLocal = glm::inverse(world);
+            const glm::vec3 o(toLocal * glm::vec4(origin, 1.0f));
+            const glm::vec3 d(toLocal * glm::vec4(dir, 0.0f));
+            float t0 = -std::numeric_limits<float>::max(), t1 = std::numeric_limits<float>::max();
+            int axis = -1;
+            float sign = 0.0f;
+            bool miss = false;
+            for (int i = 0; i < 3 && !miss; ++i) {
+                if (std::fabs(d[i]) < 1e-12f) {
+                    miss = o[i] < box->lo[i] || o[i] > box->hi[i];
+                    continue;
+                }
+                float a = (box->lo[i] - o[i]) / d[i], b = (box->hi[i] - o[i]) / d[i];
+                float s = -1.0f;   // entering through the lo face: its normal is -axis
+                if (a > b) {
+                    std::swap(a, b);
+                    s = 1.0f;
+                }
+                if (a > t0) {
+                    t0 = a;
+                    axis = i;
+                    sign = s;
+                }
+                t1 = std::min(t1, b);
+                miss = t0 > t1;
+            }
+            if (!miss && axis >= 0 && t0 >= 0.0f) {
+                const glm::vec3 local = o + d * t0;
+                const glm::vec3 p(world * glm::vec4(local, 1.0f));
+                const float t = glm::length(p - origin);
+                if (t < best.t) {
+                    glm::vec3 n(0.0f);
+                    n[axis] = sign;
+                    best.t = t;
+                    best.box = e;
+                    best.point = p;
+                    best.normal = glm::normalize(glm::transpose(glm::mat3(toLocal)) * n);
+                }
+            }
+        }
+    if (const auto* ch = reg.try_get<Children>(e))
+        for (const entt::entity c : ch->entities) hitBoxes(reg, c, origin, dir, best, depth + 1);
 }
 
 struct VfxInstalled {
@@ -249,7 +318,7 @@ struct VfxSystem::Impl {
         add(r);
     }
 
-    void onHit(const CombatEvent& e, uint32_t index, entt::entity player) {
+    void onHit(const CombatEvent& e, uint32_t index, std::span<const CombatEvent> events, std::size_t at, entt::entity player) {
         const std::string surface = e.surface.empty() ? std::string("default") : e.surface;
         const glm::mat4 pose = poseAlong(e.point, e.normal);
         uint32_t part = 0;
@@ -262,20 +331,46 @@ struct VfxSystem::Impl {
         if (player != entt::null && under(e.target, player)) return;   // the player is never marked
         const int di = vfx::resolveDecal(set, set.hit.decal, surface, set.hit.fallback);
         if (di < 0) return;
+        const auto& reg = world.registry();
+        // What it hit, and where on it: a character's on the mesh box the round crossed (along the
+        // shooter's round this step, else nothing), anything else's on its own pose.
+        entt::entity on = entt::null;
+        glm::mat4 hitPose = pose;
+        if (e.target != entt::null && reg.valid(e.target)) {
+            // The character the target belongs to (the target itself, or the entity it is a part of).
+            entt::entity character = entt::null;
+            for (entt::entity up = e.target; up != entt::null && reg.valid(up);) {
+                if (reg.try_get<PlayerController>(up)) {
+                    character = up;
+                    break;
+                }
+                const auto* p = reg.try_get<Parent>(up);
+                up = p ? p->entity : entt::null;
+            }
+            if (character != entt::null) {
+                glm::vec3 dir = -e.normal;
+                for (std::size_t h = at; h-- > 0;)
+                    if (events[h].kind == CombatEvent::Kind::Shot && events[h].sourceId == e.sourceId) {
+                        if (glm::length(events[h].normal) > 1e-6f) dir = glm::normalize(events[h].normal);
+                        break;
+                    }
+                BoxHit best;
+                hitBoxes(reg, character, e.point - dir * 0.05f, dir, best, 0);
+                if (best.box == entt::null) return;
+                on = best.box;
+                hitPose = poseAlong(best.point, best.normal);
+            } else {
+                on = e.target;
+            }
+        }
         VfxRecord r;
         r.kind = VfxRecord::Kind::Decal;
         r.effect = static_cast<uint16_t>(di);
         r.seed = seedFor(index, 6);
         r.sourceSeq = e.seq;
         r.source = e.source;
-        r.pose = pose;
-        // Attached to what it hit by that body's pose at this step (the impact marks' rule).
-        const auto& reg = world.registry();
-        if (e.target != entt::null && reg.valid(e.target))
-            if (const auto* wt = reg.try_get<WorldTransform>(e.target)) {
-                r.on = e.target;
-                r.pose = glm::inverse(wt->world) * pose;
-            }
+        r.on = on;
+        r.pose = on != entt::null ? glm::inverse(stepWorld(reg, on)) * hitPose : hitPose;
         r.life = set.decals[static_cast<std::size_t>(di)].life;
         add(r);
     }
@@ -363,7 +458,7 @@ struct VfxSystem::Impl {
             const auto index = static_cast<uint32_t>(i - after);
             switch (e.kind) {
             case CombatEvent::Kind::Shot: onShot(e, index, events, i, player); break;
-            case CombatEvent::Kind::Hit: onHit(e, index, player); break;
+            case CombatEvent::Kind::Hit: onHit(e, index, events, i, player); break;
             case CombatEvent::Kind::Explode: onExplode(e, index); break;
             default: break;
             }
@@ -406,6 +501,8 @@ const vfx::VfxSet& VfxSystem::set() const { return m->set; }
 const std::string& VfxSystem::setPath() const { return m->setPath; }
 uint64_t VfxSystem::setVersion() const noexcept { return m->setVersion; }
 float VfxSystem::stepDt() const noexcept { return m->dt; }
+
+void VfxSystem::addRecordForTest(VfxRecord record) { m->add(record); }
 
 void VfxSystem::setSet(vfx::VfxSet set) {
     m->set = std::move(set);
