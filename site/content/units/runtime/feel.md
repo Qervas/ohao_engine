@@ -160,6 +160,18 @@ A frame with no presentation time (lockstep, headless, every capture) draws the 
 alone, and a round's restart resets the motion. The motion is written as `RenderPose` only and held
 in the registry's context, so it is never saved, hashed or snapshotted (`t21_view_model_never_in_world`).
 
+Since sub-project 10 the play scene's `ViewModel` root carries skinned arms and a rifle
+(`scene/animation`): `view_model` places the root, then the `pose` system poses the arms inside
+it. Their fire clip moves the hands, so the play scene sets the procedural kick to half the
+defaults (0.015 m, 1.25 degrees; provisional ruling 8). Aiming down the sights narrows the view
+the same way, at render rate and in realtime frames only. `view_model` follows the step's
+`WeaponState.aim` at the weapon's own rate and writes the narrowed field of view onto the
+camera, which the scene view prefers and the remap uses:
+
+{{cite ohao/ecs/view_model.cpp "reg.emplace_or_replace<DrawnFov>(camera, DrawnFov{fov});"}}
+
+Lockstep frames and every capture keep the camera's 75 degrees.
+
 ## No shadow, no bounce
 
 The gun is drawn shrunk toward the eye, so anything that sees it as world geometry sees it in the

@@ -168,6 +168,18 @@ KNOWLEDGE: dict[str, dict] = {
         "why": "Per-frame work scales with what changed, and no host write can race a frame in flight.",
         "contracts": ["Bind scene buffers after recordUpdates", "registerMesh is blocking, load time only", "Structural changes rebuild the TLAS; transforms alone refit"],
     },
+    "scene/animation": {
+        "what": [
+            "Skeletal animation: glTF skins and clips read by ohao/anim, graphs of states and layers, saved integer Animators stepped by drivers, poses at render rate, GPU skinning into a mesh per instance.",
+        ],
+        "how": [
+            "The animation simulate system runs the drivers, then each layer's transitions and clip events, in id order.",
+            "The pose sync system samples every layer at (steps - 1 + alpha), builds the palette and draws JointAttach children.",
+            "The render extract gives a SkinnedMesh entity its own mesh; skin, skin.bounds and rt.blas.refit run only for changed palettes.",
+        ],
+        "why": "Steps instead of time keep animation in world.hash and snapshots exactly; a mesh per instance keeps every consumer unchanged.",
+        "contracts": ["AnimPose is never saved or hashed", "Drivers read saved state only", "A skinned copy's boneWeights.xyz is last frame's position"],
+    },
     "scene/loaders": {
         "what": [
             "Asset loaders parse GLB/GLTF (Assimp, node transforms applied), FBX (ufbx then Assimp), OBJ (native) and procedural primitives into a Model: geometry plus per-material arrays.",

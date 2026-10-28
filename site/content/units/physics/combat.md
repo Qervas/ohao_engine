@@ -40,6 +40,29 @@ $r$ is a round's distance from the aim on that disc and $R = \tan(\text{cone})$;
 cones the angle is proportional to $r$, so the mean angle off the aim is two thirds of the
 cone (`t15_spread_cone_distribution` draws 10,000 rounds and checks it within 3 %).
 
+## Aiming down the sights tightens the cone
+
+Holding `aim` (the right mouse button) steps the saved `WeaponState.aim` from 0 toward 1 at
+$\Delta t / t_{ads}$ a step ($t_{ads}$ = `Weapon.adsTime`, 0.2 s), and back once released. It is
+updated before the step's round, and it drops for the dead and while the weapon reloads (the
+arms leave the sights for the reload clip):
+
+{{cite ohao/ecs/combat.cpp "aiming = aiming && !(s.reloading > 0.0f);"}}
+
+The cone narrows linearly with it, to half at full aim:
+
+{{cite ohao/ecs/combat.cpp "const float cone = (w.spreadDeg + s.bloomDeg) * (1.0f - 0.5f * s.aim);"}}
+
+$$\theta = (\theta_{spread} + \theta_{bloom})\,(1 - \tfrac{1}{2}\,a)$$
+
+Linear means the 0.2 s ramp is not a dead zone and there is no cliff on its last step; at
+$a = 0$ the cone is the old one bit for bit, so enemies, which never aim, fire as before. The
+drawn view narrows too, from the camera's 75° toward 55°, but only in a realtime window's frames
+(presentation; `runtime/feel`). Captures and lockstep frames keep 75°. Both values and the linear
+cone are provisional (ruling 11), as is the view kick: the play scene's first-person arms carry a
+fire clip of their own, so the procedural kick plays at half amplitude on top of it (`kickBack`
+0.015 m, `kickPitchDeg` 1.25°; ruling 8).
+
 ## Enemies are players without a keyboard
 
 An enemy is a character on the player's code: a `PlayerController` with `input: false`, moved

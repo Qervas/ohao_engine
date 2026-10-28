@@ -75,6 +75,11 @@ window.OHAO_NAV_TREE = [
         "href": "m/scene/render-scene.html"
       },
       {
+        "id": "scene/animation",
+        "title": "Animation: saved integers, a pose per frame, a mesh per instance",
+        "href": "m/scene/animation.html"
+      },
+      {
         "id": "scene/loaders",
         "title": "Asset loaders",
         "href": "m/scene/loaders.html"

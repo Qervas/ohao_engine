@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 · Scene · Animation: saved integers, a pose per frame, a mesh per instance — OHAO Monograph</title>
+  <meta name="description" content="Animators save steps, not time; drivers read saved state; a skinned instance is its own deformed mesh." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="scene/animation" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../scene.html">← Module hub</a> · Animation: saved integers, a pose per frame, a mesh per instance</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">scene</p>
+          <h1>Animation: saved integers, a pose per frame, a mesh per instance</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Animators save steps, not time; drivers read saved state; a skinned instance is its own deformed mesh.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#state-is-integers-a-pose-is-presentation">State is integers, a pose is presentation</a></li><li><a href="#drivers-write-parameters-from-saved-state">Drivers write parameters from saved state</a></li><li><a href="#a-skinned-instance-is-its-own-mesh">A skinned instance is its own mesh</a></li><li><a href="#attachments-follow-joints">Attachments follow joints</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="state-is-integers-a-pose-is-presentation">State is integers, a pose is presentation</h2></div>
+<div class="prose reveal">
+<p>An `Animator` holds no time and no pose. Each layer saves its state&#x27;s name, the steps spent in it, the state it fades from with that one&#x27;s steps, and the fade&#x27;s length and progress, all integers. The `animation` simulate system advances them once per fixed step, in id order:</p>
+<div class="citation-chip"><code class="citation-code">Animator&amp; a = reg.get&lt;Animator&gt;(e);   // the step&#x27;s own write: no signal, not a placement</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/animation.cpp#L131" target="_blank" rel="noopener">ohao/ecs/animation.cpp:131</a></div>
+<p>Clip time is never accumulated, so it never drifts, and a snapshot, a file and `world.hash` hold an animation exactly. The pose is derived at render rate by the `pose` sync system, from those integers and the frame&#x27;s interpolation alpha:</p>
+<div class="citation-chip"><code class="citation-code">const float steps = std::max(0.0f, static_cast&lt;float&gt;(st.steps) - 1.0f + alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/anim/anim_graph.cpp#L591" target="_blank" rel="noopener">ohao/anim/anim_graph.cpp:591</a></div>
+<p>With $n$ the steps in the state, $\alpha$ the render alpha, $\Delta t = 1/60$ s, $r$ the state&#x27;s and the clip&#x27;s rate and $t_0$ the state&#x27;s start offset, a frame samples its clip at</p>
+<div class="math-block">$$
+t = t_0 + (n - 1 + \alpha)\, \Delta t\, r
+$$</div>
+<p>so a lockstep frame ($\alpha = 1$) shows the newest step exactly and a realtime frame between steps shows the motion between them. The pose (`AnimPose`) is runtime: never saved, never hashed.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Saving a float clip time would put the sum of every step&#x27;s increment in the hash, and two hosts that reach the same step by different routes (a restore, a replay, a restart) would carry different roundings. Counting steps makes the step count the time; the pose is a function of it.</p></div>
+</div>
+<div class="section-rule"><h2 id="drivers-write-parameters-from-saved-state">Drivers write parameters from saved state</h2></div>
+<div class="prose reveal">
+<p>A graph&#x27;s parameters are written by named drivers in code, at the start of the step, from saved components only: the enemy&#x27;s from its AI state and the step&#x27;s combat events, the player&#x27;s arms&#x27; from the owner&#x27;s weapon and body. A restart restores the round&#x27;s start inside the combat step, before the animation step, so a driver reads only the events after the step&#x27;s last restart:</p>
+<div class="citation-chip"><code class="citation-code">if (stepEvents[i].kind == CombatEvent::Kind::Restart) first = i + 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/enemy_anim.cpp#L26" target="_blank" rel="noopener">ohao/ecs/enemy_anim.cpp:26</a></div>
+<p>The restart step then steps the restored Animators exactly as the round&#x27;s first step did, and `world.hash` after it is the round start&#x27;s.</p>
+<p>A clip can take its rate from a parameter. The arms&#x27; reload clip names `rateFrom: {param: reloadTime, at: mag_in}`: it plays so that the magazine goes home when the weapon finishes reloading, at any `reloadTime`. The anchor $a$ (the event&#x27;s time) lands $L$ seconds in:</p>
+<div class="citation-chip"><code class="citation-code">return state.startAt + c-&gt;rateAnchor * state.rate * (steps * kStepSeconds / len);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/anim/anim_graph.cpp#L478" target="_blank" rel="noopener">ohao/anim/anim_graph.cpp:478</a></div>
+<div class="math-block">$$
+t = t_0 + a \cdot r \cdot \frac{n\, \Delta t}{L}
+$$</div>
+<p>Written as a fraction of $L$, $t$ reaches $a$ exactly when $n\,\Delta t$ reaches $L$, not one rounding later.</p>
+</div>
+<div class="section-rule"><h2 id="a-skinned-instance-is-its-own-mesh">A skinned instance is its own mesh</h2></div>
+<div class="prose reveal">
+<p>When the render extract first meets an entity with `SkinnedMesh`, it gives the instance a mesh of its own: a vertex range the size of the base mesh&#x27;s, the base&#x27;s indices and material slots, copies of its meshlets, and an updatable BLAS:</p>
+<div class="citation-chip"><code class="citation-code">const render::MeshHandle own = m_rs.registerSkinnedInstance(mr.mesh);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/render_extract.cpp#L162" target="_blank" rel="noopener">ohao/ecs/render_extract.cpp:162</a></div>
+<p>Nothing downstream knows it is skinned. The G-buffer, culling, meshlets, shadows, the TLAS and the path tracer read the instance&#x27;s mesh like any other. Three passes run before the scene&#x27;s upload, and only for instances whose palette changed: `skin` deforms the vertices with the palette, `skin.bounds` recomputes each meshlet&#x27;s sphere, and `rt.blas.refit` refits the BLAS, rebuilding it every 120 refits:</p>
+<div class="citation-chip"><code class="citation-code">const bool rebuild = s.refits &gt;= kBlasRefitsPerRebuild;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/scene/render_scene.cpp#L591" target="_blank" rel="noopener">ohao/render/scene/render_scene.cpp:591</a></div>
+<p>Motion vectors need last frame&#x27;s deformed position. The copy&#x27;s vertices no longer need joints or weights (the skin pass reads those from the base mesh), so the skin pass writes last frame&#x27;s position into the copy&#x27;s `boneWeights.xyz` and the draw is flagged `kDrawSkinned`:</p>
+<div class="citation-chip"><code class="citation-code">const vec3 prevLocal = (d.info.y &amp; kDrawSkinned) != 0u ? inBoneWeights.xyz : inPosition;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L61" target="_blank" rel="noopener">shaders/core/gbuffer.vert:61</a></div>
+</div>
+<div class="section-rule"><h2 id="attachments-follow-joints">Attachments follow joints</h2></div>
+<div class="prose reveal">
+<p>A `JointAttach` child (an enemy&#x27;s rifle in the right hand, the muzzle light on the arms&#x27; gun joint) is drawn at its parent&#x27;s drawn pose, times the joint&#x27;s model matrix, times its own `Transform`, and its whole subtree with it:</p>
+<div class="citation-chip"><code class="citation-code">draw(draw, c, parentWorld * pose-&gt;model[static_cast&lt;std::size_t&gt;(joint)] * reg.get&lt;Transform&gt;(c).matrix(), 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/animation.cpp#L303" target="_blank" rel="noopener">ohao/ecs/animation.cpp:303</a></div>
+<p>The first-person arms are a `ViewModel`&#x27;s skinned child: `view_model` places the root in the view, then `pose` poses the arms inside it and draws the attachments, so the rifle&#x27;s muzzle light sits at the barrel&#x27;s tip in every frame.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>An Animator saves integers: states, steps and fades, advanced once per step by drivers that read saved state. The pose is sampled from them at render rate, never saved or hashed. A skinned instance gets its own mesh, deformed on the GPU only when its palette changes, with last frame&#x27;s position kept in place of its weights for motion vectors. Every consumer reads it as any mesh.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>A pose is presentation: `AnimPose` is runtime, and a lockstep frame shows the newest step&#x27;s pose.</li>
+<li>Drivers write parameters from saved state and the step&#x27;s combat events after its last restart.</li>
+<li>Nothing may read a skinned copy&#x27;s joints or weights; its `boneWeights.xyz` is last frame&#x27;s position.</li>
+<li>The previous palette is the previous sync&#x27;s: captures and `world.step` start without motion.</li>
+<li>Clip events fire in the step, in id order, into a log of 1,024 (`animation.info`).</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/ecs/animation.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/anim/anim_graph.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/enemy_anim.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/render_extract.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/anim/anim_graph.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/animation.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/arms_anim.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/skin/skin.slang</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="render-scene.html"><div class="label">← Prev</div><div class="title">RenderScene</div></a><a class="next" href="loaders.html"><div class="label">Next →</div><div class="title">Asset loaders</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

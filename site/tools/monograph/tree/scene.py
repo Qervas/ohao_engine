@@ -41,6 +41,14 @@ MODULE = {
             workflow=['registerMesh / registerMaterial at load time', 'create/update/destroyInstance, setLights', 'recordUpdates: staged copies, then TLAS build or refit', 'onFrameRetired after the fence wait'],
         ),
         page(
+            'animation',
+            'Animation: saved integers, a pose per frame, a mesh per instance',
+            'Animators save steps, not time; drivers read saved state; a skinned instance is its own deformed mesh.',
+            files=['ohao/anim/anim_graph.hpp', 'ohao/anim/anim_graph.cpp', 'ohao/ecs/animation.hpp', 'ohao/ecs/animation.cpp', 'ohao/ecs/enemy_anim.cpp', 'ohao/ecs/arms_anim.cpp', 'ohao/ecs/render_extract.cpp', 'ohao/render/scene/render_scene.cpp', 'shaders/skin/skin.slang'],
+            design=['An Animator saves integers (states, steps, fades); the pose is sampled at (steps - 1 + alpha).', 'Drivers write parameters from saved state and the step\'s combat events after its last restart.', 'A skinned instance owns a vertex range and an updatable BLAS; boneWeights.xyz keeps last frame\'s position.'],
+            workflow=['animation simulate system: drivers, transitions, clip events', 'pose sync system: sample layers, palette, attachments', 'render extract: registerSkinnedInstance', 'skin, skin.bounds, rt.blas.refit before scene.upload'],
+        ),
+        page(
             'loaders',
             'Asset loaders',
             'Assimp (GLB/GLTF, node transforms applied), ufbx + Assimp (FBX), native OBJ, procedural primitives.',

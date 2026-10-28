@@ -41,6 +41,7 @@
 <li><a href="scene/transform-system.html">Transform propagation</a> — Parent-first world matrices, prevWorld motion history, the patch rule and verifyTransforms.</li>
 <li><a href="scene/render-extract.html">Render extract</a> — Registry to RenderScene: slots in creation order, dirty uploads, lights, stale mesh handles.</li>
 <li><a href="scene/render-scene.html">RenderScene</a> — Mesh arenas with one BLAS per mesh, material/instance/light tables, per-slot staging, retire queue, TLAS build vs refit.</li>
+<li><a href="scene/animation.html">Animation: saved integers, a pose per frame, a mesh per instance</a> — Animators save steps, not time; drivers read saved state; a skinned instance is its own deformed mesh.</li>
 <li><a href="scene/loaders.html">Asset loaders</a> — Assimp (GLB/GLTF, node transforms applied), ufbx + Assimp (FBX), native OBJ, procedural primitives.</li>
 </ul>
 <h2 class="gloss-group">12 · Reflection &amp; agent API</h2><ul class="prose">
@@ -183,7 +184,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">104 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">105 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
