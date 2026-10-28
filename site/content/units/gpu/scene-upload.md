@@ -203,13 +203,22 @@ and into the path tracer's `GPULight` buffer as a sphere light.
 
 ## The HDRI is its own upload
 
-The environment map has nothing to do with lights except that its bindless index rides in
-the light buffer's 16-byte header, alongside the light count and an intensity scale. The
-upload does not run inside the light path: `render()` runs it once per requested path,
-before choosing a frame body, and drains the device first when a different panorama is
-about to join the bindless table.
+The environment map's bindless index rides in the light buffer's 16-byte header, alongside
+the light count and an intensity scale. The upload does not run inside the light path:
+`render()` runs it once per requested path, before choosing a frame body, and drains the
+device first when a different panorama is about to join the bindless table. It runs again
+when a directional light comes or goes, the one thing about lights the environment depends
+on: a directional light stands for the sun, so while there is one the map is uploaded with
+its own sun painted out, and the sun is counted once.
 
-{{cite ohao/gpu/vulkan/renderer.cpp "if (!m_envMapPath.empty() && m_envMapPath != m_envMapLoadedPath) vkDeviceWaitIdle(m_device);"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "if (!m_envMapPath.empty() && (m_envMapPath != m_envMapLoadedPath || sunless != m_envMapLoadedSunless))"}}
+
+The sun is the brightest texel's connected region over 64 times the median sky, when the
+peak is at least $10^4$ times it and the region at most 0.02 sr; its texels take the mean of
+the sky bordering it. RT GI's cosine rays met the outdoor HDRI's sun, half the map's power on
+0.003% of the sphere, about once in $10^4$ rays and brought back tens of thousands: fireflies.
+
+{{cite ohao/render/rt/env_sun.cpp "if (!(sun.median > 0.0f) || sun.peak < kSunPeakOverMedian * sun.median) return sun;"}}
 
 A scene with no lights and no emissive meshes therefore still gets its environment map:
 `env_demo --lighting=none` loads the HDR and creates no light at all, and the HDRI is

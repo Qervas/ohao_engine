@@ -221,7 +221,7 @@ Two ordering rules round out the set, and both are repaired in code rather than
 asserted. A new HDRI joins the one bindless texture table, so frames in flight must
 finish before it is registered:
 
-{{cite ohao/gpu/vulkan/renderer.cpp "new HDRI joins the bindless table, so frames in flight must finish"}}
+{{cite ohao/gpu/vulkan/renderer.cpp "new HDRI joins the bindless table, so frames in flight must"}}
 
 and the RT light buffer's 16-byte header — count, environment index, intensity
 scale — is rebuilt whole from the light table's own members on every upload, so the

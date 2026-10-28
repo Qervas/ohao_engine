@@ -87,7 +87,7 @@ $$</div>
 <p>A ray that commits nothing counts as escaped and samples the environment map in its direction, through the same equirect mapping the lighting pass uses, times `Environment.intensity` as the path tracer&#x27;s miss applies it, or brings back black when none is bound:</p>
 <div class="citation-chip"><code class="citation-code">return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w;   // times Environment.intensity</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L140" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:140</a></div>
 <p>The sample is level 0 of the source image, which has a single mip level, so a miss reads full-resolution texels and a bright spot in the HDRI is as noisy a target as it is for the path tracer. The prefiltered environment the lighting pass reads is a separate image; the trace keeps the source so its misses match the path tracer&#x27;s.</p>
-<div class="citation-chip"><code class="citation-code">imgInfo.mipLevels = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/env_upload.cpp#L64" target="_blank" rel="noopener">ohao/gpu/vulkan/env_upload.cpp:64</a></div>
+<div class="citation-chip"><code class="citation-code">imgInfo.mipLevels = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/env_upload.cpp#L85" target="_blank" rel="noopener">ohao/gpu/vulkan/env_upload.cpp:85</a></div>
 </div>
 <div class="section-rule"><h2 id="half-resolution-and-the-guide">Half resolution, and the guide</h2></div>
 <div class="prose reveal">
