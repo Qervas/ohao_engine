@@ -67,6 +67,20 @@ SCENES = [
     ("anim_rig rt_realtime nrd",
      ["build/Release/ohao.exe", "run", "assets/scenes/anim_rig.scene.json", "--render", "{out}",
       "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
+    # The play scene's two skinned enemies (sub-project 10 step 2) a second into the fight: attacking,
+    # their rifles and muzzle lights in hand, through every renderer.
+    ("play deferred",
+     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "deferred", "--frames", "4", "--size", "640x360", "--hud"]),
+    ("play rt_offline",
+     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_offline", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("play rt_realtime",
+     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "4", "--denoise", "none", "--size", "640x360"]),
+    ("play rt_realtime nrd",
+     ["build/Release/ohao.exe", "run", "assets/scenes/blockout_play.scene.json", "--steps", "60", "--render", "{out}",
+      "--mode", "rt_realtime", "--spp", "4", "--denoise", "nrd", "--size", "640x360"]),
 ]
 
 LINE = re.compile(r"^[TDIWE] validation: (.*?)\r?$", re.M)

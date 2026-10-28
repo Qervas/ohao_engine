@@ -253,6 +253,13 @@ def fight_the_round(c):
     kinds = [e.get("kind") for e in (events or {}).get("events", [])]
     check(bursts is not None and not err and "shot" in kinds and "hit" in kinds and "death" in kinds,
           "EnemyA shot down in %s bursts: combat_events has its shots, hits and death" % bursts)
+    # Sub-project 10: its body plays the death clip (its Transform stays upright) and lands.
+    c.tool("world_step", {"frames": 50})
+    anim, _, err = c.tool("animation_info", {"entity": ENEMY_A, "since": 0, "max": 64})
+    body = ((anim or {}).get("animators") or [{}])[0].get("layers", [{}])[0]
+    falls = [e for e in (anim or {}).get("events", []) if e.get("entity") == ENEMY_A and e.get("name") == "body_fall"]
+    check(not err and body.get("state") == "dead" and len(falls) == 1,
+          "animation_info: EnemyA's death clip played to its end (%s), body_fall once" % body.get("state"))
     _, hud, err = c.tool("render_capture", {"inline": True, "hud": True, "path": OUT + "/fight_hud.png"})
     check(not err and hud is not None, "render_capture with the HUD after the kill")
     killed, _, err = c.tool("combat_damage", {"entity": PLAYER, "amount": 1000, "source": ENEMY_B})
@@ -267,6 +274,16 @@ def fight_the_round(c):
     won, _, _ = c.tool("combat_info")
     check(a2 is not None and b is not None and won.get("round", {}).get("phase") == "won",
           "the room cleared (EnemyA in %s bursts, EnemyB in %s): the round is won" % (a2, b))
+    # An agent forces a state: an edit of the saved Animator through world_apply.
+    forced = {"op": "component.set", "id": ENEMY_B, "type": "Animator",
+              "value": {"graph": {"path": "assets/anim/enemy.animgraph.json"},
+                        "layers": [{"state": "death", "steps": 10}, {"state": "pitch"}, {"state": "still"},
+                                   {"state": "still"}, {"state": "still"}]}}
+    applied, _, err = c.tool("world_apply", {"commands": [forced]})
+    anim, _, _ = c.tool("animation_info", {"entity": ENEMY_B})
+    layer = ((anim or {}).get("animators") or [{}])[0].get("layers", [{}])[0]
+    check(not err and applied.get("applied") == 1 and layer.get("state") == "death",
+          "world_apply component.set on EnemyB's Animator: animation_info reads the forced state")
     # Refused params are a JSON-RPC error (-32602), not a tool result.
     refused = c.request("tools/call", {"name": "combat_damage", "arguments": {"entity": ENEMY_A, "amount": 20000}})
     check(refused is not None and refused.get("error", {}).get("code") == -32602 and "E_RANGE" in json.dumps(refused),

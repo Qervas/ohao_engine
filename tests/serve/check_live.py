@@ -604,6 +604,8 @@ def fight(call):
     out = {}
     call("world.step", {"frames": 1})
     out["killA"] = shoot_down(call, ENEMY_A)
+    call("world.step", {"frames": 50})   # sub-project 10: its death clip plays out
+    out["animA"] = call("animation.info", {"entity": ENEMY_A, "since": 0, "max": 64}) or {}
     out["hurt"] = combatant(call("combat.info", {}), PLAYER).get("health")
     out["killed"] = call("combat.damage", {"entity": PLAYER, "amount": 1000, "source": ENEMY_B}) or {}
     call("world.step", {"frames": 1})
@@ -623,6 +625,12 @@ def fight(call):
 def check_fight(f, where):
     check(f["killA"] is not None and isinstance(f["hurt"], (int, float)) and f["hurt"] <= 100,
           "%s: EnemyA shot down in %s bursts; the player at %s hp" % (where, f["killA"], f["hurt"]))
+    body = (f["animA"].get("animators") or [{}])[0].get("layers", [{}])[0]
+    falls = [e for e in f["animA"].get("events", []) if e.get("entity") == ENEMY_A and e.get("name") == "body_fall"]
+    kicks = [e for e in f["animA"].get("events", []) if e.get("entity") == ENEMY_A]
+    check(body.get("state") == "dead" and len(falls) == 1,
+          "%s: animation.info: EnemyA's death clip played to its end (%s), body_fall once (%d of its events)" %
+          (where, body.get("state"), len(kicks)))
     check(f["killed"].get("dead") is True and f["dead"].get("phase") == "dead" and f["dead"].get("restartIn", 0) > 2.9,
           "%s: combat.damage kills the player; the round is dead, restarting in %s s" % (where, f["dead"].get("restartIn")))
     r = f["restarted"]
@@ -646,8 +654,9 @@ def test_fight():
     check(shot.get("deterministic") is True, "a lockstep capture of the won round with its HUD")
     h = Server([OHAO, "serve", "--out", out, "--seed", SEED, scene], "fight_headless")
     g = fight(lambda m, p: result(h.call(m, p)))
-    check(f["hash"] is not None and f["hash"] == g["hash"] and f["final"] == g["final"] and f["kinds"] == g["kinds"],
-          "the same fight headless: the same world.hash (%s), combat.info and events" % f["hash"])
+    check(f["hash"] is not None and f["hash"] == g["hash"] and f["final"] == g["final"] and f["kinds"] == g["kinds"] and
+          f["animA"] == g["animA"],
+          "the same fight headless: the same world.hash (%s), combat.info, events and animation.info" % f["hash"])
     shot2 = result(h.call("render.capture", {"path": out + "/fight_headless.png", "post": [], "hud": True,
                                               "width": shot.get("width", 960), "height": shot.get("height", 540)})) or {}
     same = bool(shot2.get("path") and shot.get("path")) and pixels(out + "/fight_window.png") == pixels(out + "/fight_headless.png")
