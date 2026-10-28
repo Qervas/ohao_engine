@@ -134,3 +134,38 @@ build/Release/ohao_game.exe assets/scenes/blockout_play.scene.json
 ```
 
 In the game, press G, then turn or walk before it goes off (2.5 s).
+
+## 8. Follow-up: the grenade sampled in space
+
+Frank asked for the space to be sampled, not only listened to. `python tools/audio/grenade_spatial.py`
+runs `audio_bench --grenade-spatial DIR`, then measures and judges what it rendered:
+
+- **Setup:** the play scene's player stands outdoors at (0, −0.05, −20) facing north, with the
+  ambience bus muted.
+- **Booms:** the grenade goes off 4 m and 20 m to its left and right, and 4 m in front. Each is
+  thrown with G from where a level throw lands there, and the player is put back before it goes
+  off.
+- **Signal path:** everything goes through the schedule and the window's `AudioPlayer` on a mixer
+  without a device. The panning measured is therefore the window's own (the listener from the
+  frame's camera).
+- **Output:** each 3 s window's measurements go to `grenade_spatial.csv`/`.json` beside the WAV.
+  - By hand it writes `C:/Users/djmax/ohao_refs/listen/sp11_audio` (not committed).
+  - CTest `grenade_spatial` (label `quick`, 0.66 s in `check.py`) writes `build/grenade_spatial`.
+
+Measured (distance from the ears, 1.57 m above the ground; azimuth right of the facing):
+
+| Window | Azimuth | Distance | L RMS | R RMS | ILD dB | Peak | dBFS | Azimuth guess | |
+|---|---|---|---|---|---|---|---|---|---|
+| LEFT-near | −90.0 | 4.30 | 0.03456 | 0.00718 | +13.65 | L | −32.06 | −47.7 | PASS |
+| LEFT-far | −90.0 | 20.06 | 0.00766 | 0.00154 | +13.94 | L | −45.16 | −48.4 | PASS |
+| RIGHT-near | 90.0 | 4.30 | 0.00718 | 0.03455 | −13.65 | R | −32.06 | +47.7 | PASS |
+| RIGHT-far | 90.0 | 20.06 | 0.00154 | 0.00765 | −13.94 | R | −45.16 | +48.4 | PASS |
+| FRONT-near | 0.0 | 4.30 | 0.01791 | 0.01790 | +0.00 | L | −34.94 | −0.0 | PASS |
+
+- **Checks:** LEFT ILD ≥ +6 dB; RIGHT ≤ −6 dB; FRONT |ILD| ≤ 2 dB; no other sound starting in a
+  window. 20 m is 13.10 dB below 4 m on both sides, against the 6 dB required. All 12 checks pass.
+- **The gate can fail:** a copy of the render with its channels swapped fails all four side checks.
+- **The azimuth guess** inverts a full constant-power pan. miniaudio's spatializer gives about
+  13.7 dB at 90°, so the guess reads about ±48°. Its sign is the reliable part, not its size.
+- **The near-far drop** of 13.1 dB is close to the `blast` shape's inverse distance between the two
+  ear distances (20 log10(20.06/4.30) = 13.4 dB), with the outdoor reverb's tail in both windows.

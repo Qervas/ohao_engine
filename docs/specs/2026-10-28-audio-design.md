@@ -530,7 +530,10 @@ that it stays.
 direction and distance (U1), cover (U2) and room against outside (U3) press **G**: a grenade flies
 about 9 m along your look and goes off 2.5 s after the throw. Throw, then turn or walk before it
 sounds: in front, to one side, behind you, behind the pillar, through the doorway, from inside the
-room and from outside it.
+room and from outside it. The same placements are sampled automatically by
+`python tools/audio/grenade_spatial.py`: left and right at 4 and 20 m and 4 m in front of a fixed
+listener, rendered to `C:/Users/djmax/ohao_refs/listen/sp11_audio/grenade_spatial.wav` with each
+window's left/right balance and level measured (`grenade_spatial.csv`) and judged; CTest gates it.
 
 | # | Item | What to try | Frank's note | Status |
 |---|---|---|---|---|
