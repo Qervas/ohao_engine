@@ -165,6 +165,20 @@ def l1_blockout_scene_references_the_level():
 AUDIO_FIXTURE = os.path.join(ROOT, "tests", "level", "fixtures", "level_audio.gltf")
 
 
+def t35_vfx_hint_schema():
+    # Sub-project 12 step 4: the `vfx` hint (a placed effect's name) is in the extras schema; a name is a
+    # non-empty string of at most 32 characters, and anything else does not validate.
+    schema = json.load(open(SCHEMA))
+    assert "vfx" in schema.get("properties", {}), "the extras schema has no vfx"
+    jsonschema.validate({"vfx": "smoke_cloud"}, schema)
+    for bad in ({"vfx": 3}, {"vfx": ""}, {"vfx": "x" * 33}):
+        try:
+            jsonschema.validate(bad, schema)
+        except jsonschema.ValidationError:
+            continue
+        raise AssertionError(f"{bad} validates")
+
+
 def t27_verb_hint_schema():
     # Sub-project 11 step 2: the `verb` hint (a ReverbZone's preset) is in the extras schema; the
     # reverb-zone fixture's nodes validate; a verb that is not a non-empty string does not.
@@ -204,7 +218,8 @@ def t32_alpha_card_rebuilds_byte_identical():
 def main():
     for fn in (l1_every_checked_in_level_has_valid_hints, l1_blockout_hints_are_the_contract,
                l1_blockout_rebuilds_byte_identical, l1_blockout_scene_references_the_level,
-               a3_fps_arms_rebuild_byte_identical, t27_verb_hint_schema, t32_alpha_card_rebuilds_byte_identical):
+               a3_fps_arms_rebuild_byte_identical, t27_verb_hint_schema, t32_alpha_card_rebuilds_byte_identical,
+               t35_vfx_hint_schema):
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed, {len(skipped)} skipped")
     print(json.dumps({"suite": "check_level_assets", "passed": passed, "failed": failed,
