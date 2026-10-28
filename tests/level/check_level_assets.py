@@ -193,10 +193,18 @@ def t27_verb_hint_schema():
     assert rebuilt == checked_in, "level_audio.gltf differs from what make_audio_fixture.py writes: regenerate it"
 
 
+def t32_alpha_card_rebuilds_byte_identical():
+    # Sub-project 12 step 2: the transparency scene's MASK leaf card is generated (pure Python, fixed
+    # numbers): tools/vfx/make_alpha_card.py --check compares what it writes with the checked-in file.
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "vfx", "make_alpha_card.py"), "--check"],
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, f"assets/vfx/alpha_card.gltf differs from make_alpha_card.py's: {r.stdout[-300:]}"
+
+
 def main():
     for fn in (l1_every_checked_in_level_has_valid_hints, l1_blockout_hints_are_the_contract,
                l1_blockout_rebuilds_byte_identical, l1_blockout_scene_references_the_level,
-               a3_fps_arms_rebuild_byte_identical, t27_verb_hint_schema):
+               a3_fps_arms_rebuild_byte_identical, t27_verb_hint_schema, t32_alpha_card_rebuilds_byte_identical):
         run(fn)
     print(f"Results: {passed}/{passed + failed} passed, {len(skipped)} skipped")
     print(json.dumps({"suite": "check_level_assets", "passed": passed, "failed": failed,

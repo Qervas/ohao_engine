@@ -723,6 +723,21 @@ def test_fight():
                                               "width": shot.get("width", 960), "height": shot.get("height", 540)})) or {}
     same = bool(shot2.get("path") and shot.get("path")) and pixels(out + "/fight_window.png") == pixels(out + "/fight_headless.png")
     check(same, "and the same picture with the HUD, bit for bit")
+    # sub-project 12 test 32 (t32_window_equals_headless): a grenade thrown in both hosts and stepped to
+    # its boom; the lockstep captures, the boom and its smoke drawn, are the same picture.
+    effects = []
+    for host, tag in ((s, "window"), (h, "headless")):
+        result(host.call("input.inject", {"events": [{"action": "grenade", "down": True},
+                                                     {"step": 1, "action": "grenade", "down": False}]}))
+        result(host.call("world.step", {"frames": 152}))
+        info = result(host.call("vfx.info", {"since": 0, "max": 16})) or {}
+        effects.append(info.get("live", {}).get("effect", 0))
+        result(host.call("render.capture", {"path": out + "/boom_%s.png" % tag, "post": ["taa", "bloom"],
+                                            "width": shot.get("width", 960), "height": shot.get("height", 540)}))
+    check(effects[0] > 0 and effects[0] == effects[1] and
+          pixels(out + "/boom_window.png") == pixels(out + "/boom_headless.png"),
+          "t32_window_equals_headless: the boom and its smoke (%s live effects) drawn the same in the window "
+          "and headless, bit for bit" % effects[0])
     h.close()
     code = s.close()
     check(code == 0 and teardown_clean(s.stderr()), "exit 0; validation clean through teardown, no unasked readback")

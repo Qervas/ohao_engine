@@ -27,6 +27,9 @@
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
 #include "ecs/animation.hpp"
+#include "ecs/combat.hpp"
+#include "ecs/physics_scene.hpp"
+#include "ecs/vfx.hpp"
 #include "ecs/asset_resolver.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/world.hpp"
@@ -65,6 +68,7 @@ struct Config {
     const char* scene;
     const char* mode;
     const char* extra;   // render.capture params after mode/size
+    int steps{0};        // world.step frames before the capture (effects are a function of the step)
 };
 
 constexpr Config kConfigs[] = {
@@ -89,6 +93,14 @@ constexpr Config kConfigs[] = {
     {"anim_rig_plain", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":[])"},
     {"anim_rig_post", "assets/scenes/anim_rig.scene.json", "deferred", R"("post":["taa","ssao","bloom"],"frames":30,"exposure":1)"},
     {"anim_rig_rt_offline", "assets/scenes/anim_rig.scene.json", "rt_offline", R"("spp":16,"denoise":"none")"},
+    // Test 32 (sub-project 12, t32_determinism): the transparency scene (blended panes, an
+    // alpha-tested card, lit soft smoke and additive sparks at a fixed step), deferred with post and
+    // path traced, and the play scene 45 steps into its fight with its effects.
+    {"transparency_post", "assets/scenes/transparency.scene.json", "deferred",
+     R"("post":["taa","ssao","bloom"],"frames":10,"exposure":1)", 30},
+    {"transparency_rt_offline", "assets/scenes/transparency.scene.json", "rt_offline", R"("spp":16,"denoise":"none")", 30},
+    {"play_vfx_step45", "assets/scenes/blockout_play.scene.json", "deferred",
+     R"("post":["taa","ssao","bloom"],"frames":10,"exposure":1)", 45},
 };
 
 bool isRT(const Config& c) { return std::strcmp(c.mode, "deferred") != 0; }
@@ -163,13 +175,24 @@ Image renderFresh(const reflect::TypeRegistry& types, ecs::AssetResolver& assets
     ecs::World world;
     api::Session s(world, types);
     s.setAssetResolver(&assets);
-    ecs::installAnimation(world, assets);   // the skinned rig's pose, as the CLI context installs it
+    // As the CLI context installs them: the play scene's fight, the rig's pose, the effects' records.
+    ecs::installPhysics(world, assets);
+    ecs::installCombat(world);
+    ecs::installAnimation(world, assets);
+    ecs::installVfx(world, assets);
     h.bind(world);
     s.setHost(&h);
     const std::string loaded = s.call("scene.load", std::string("{\"path\":\"") + c.scene + "\"}");
     if (!ok(loaded)) {
         img.error = loaded;
         return img;
+    }
+    if (c.steps > 0) {
+        const std::string stepped = s.call("world.step", "{\"frames\":" + std::to_string(c.steps) + "}");
+        if (!ok(stepped)) {
+            img.error = stepped;
+            return img;
+        }
     }
     const std::string reply = s.call("render.capture", captureParams(png, c));
     if (!ok(reply) || !h.renderer()) {

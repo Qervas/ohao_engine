@@ -33,3 +33,5 @@ tests/level/extras_schema.json text eol=lf
 tests/anim/fixtures/** -text
 # Characters (sub-project 10): generated files, byte for byte (the arms' Blender rebuild compares).
 assets/characters/** -text
+# VFX content (sub-project 12): generated files, byte for byte (tools/vfx/make_alpha_card.py --check).
+assets/vfx/*.gltf -text

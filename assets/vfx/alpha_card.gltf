@@ -1,0 +1,136 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "max": [
+    1,
+    1,
+    0
+   ],
+   "min": [
+    -1,
+    -1,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "tools/vfx/make_alpha_card.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 0,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteLength": 32,
+   "byteOffset": 96,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteLength": 12,
+   "byteOffset": 128,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 140,
+   "uri": "data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAACAPwAAgD8AAAAAAACAvwAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwA="
+  }
+ ],
+ "images": [
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAB60lEQVR42u3QRbIcQRADUJ1Ea53OzMzMzIynlGft+O4uyMqxp7x4Eb3oSikT2kfMDNrPqUEHODXoIKcGHeLUoMOcGnSEU4OOcmr/D6Bj3AXeQ9Fb6DjXeAG2zL39oBNc4kJIFtYLOsklroTBwvtAp7jEjTDAkB7Qaa5xBwQZlg2d4Rp3QqehudBZlnAnNBqeB51jCQdApZQc6DxLOUBGVs1OmwNcYA0HGJlRu8/mABdZywFGzG/ZZXOAS2zhAFFz0QO6zFbuhN++0TijC3SFPRwIDf93Q9AgJ0Ik6CqjOAGiQdcYzcEwEnSdI7kSskE3mMkFUjtBN5nNK1L7QLeYzStS+0C3mc0rUvtAd5jNK1L7QHeZzStS+0D3mM2VhvaB7jObGw3pAz3gNrhDaBfoIbfBncK6QI+YwQOEdIMecxQn6er5Ny2ObRwBesIo7hA5owr0lBHcYeSsVdAz9nCn6JnVO0DP2cqdRs2u2gN6wRYOMDKjeBfoJWs5QEZWUQb0ijXcKTOvKAN6zVLuhEZDM6E3LOFO6DQsF3rLEm6EQEM6QO9YwpUwUGgX6D1LuBCSOKoT9IGl/AfYEhdanAN95L/OKxbfQ5+4K7yH1Xe7dIAm0GdODfrCqUFfOTXoG6cGfefUoB+cGvSTU/sFMC4k8Nyygx0AAAAASUVORK5CYII="
+  }
+ ],
+ "materials": [
+  {
+   "alphaCutoff": 0.5,
+   "alphaMode": "MASK",
+   "doubleSided": true,
+   "name": "Leaves",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 0
+    },
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.8
+   }
+  }
+ ],
+ "meshes": [
+  {
+   "name": "AlphaCard",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "AlphaCard"
+  }
+ ],
+ "samplers": [
+  {
+   "magFilter": 9728,
+   "minFilter": 9728
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "textures": [
+  {
+   "sampler": 0,
+   "source": 0
+  }
+ ]
+}

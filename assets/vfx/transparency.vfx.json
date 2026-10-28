@@ -1,0 +1,11 @@
+{
+  "effects": {
+    "wall_smoke": {"emitters": [
+      {"count": 12, "life": [60, 60], "speed": [0.05, 0.25], "spread": 70, "size": [1.4, 1.8],
+       "color": [[0.6, 0.6, 0.62], [0.55, 0.55, 0.57]], "alpha": [0.8, 0.7], "drag": 0.5,
+       "blend": "alpha", "lit": true, "soft": 0.6}]},
+    "sparks": {"emitters": [
+      {"count": 40, "life": [60, 60], "speed": [0.6, 1.6], "spread": 50, "size": [0.08, 0.08],
+       "color": [[1, 0.75, 0.35], [1, 0.75, 0.35]], "alpha": [1, 1], "drag": 3, "blend": "additive", "intensity": 4}]}
+  }
+}

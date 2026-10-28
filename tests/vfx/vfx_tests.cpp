@@ -215,7 +215,8 @@ void t31_set_parse() {
     }
 }
 
-// The default set is today's presets as data (render/particles' presets, runtime/combat_fx's dust).
+// The default set is the old particle presets as data (the particle system's presets and combat_fx's
+// dust, both deleted in step 2).
 void t31_default_set() {
     const vfx::VfxSet s = vfx::defaultVfxSet();
     const int m = s.effect("muzzle");
