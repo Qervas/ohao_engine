@@ -1,11 +1,11 @@
 {"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"the world has no player","data":{"code":"E_STATE","diagnostics":[{"code":"E_STATE","path":"","message":"the world has no player","expected":"a scene with a PlayerController, as assets/scenes/blockout_play.scene.json"}]}}}
-{"jsonrpc":"2.0","id":2,"result":{"entities":20}}
+{"jsonrpc":"2.0","id":2,"result":{"entities":21}}
 {"jsonrpc":"2.0","id":3,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,2.2],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Floor","surface":"concrete","footsteps":0}}
-{"jsonrpc":"2.0","id":4,"result":{"name":"spawn","entities":37,"bytes":9992}}
+{"jsonrpc":"2.0","id":4,"result":{"name":"spawn","entities":38,"bytes":10148}}
 {"jsonrpc":"2.0","id":5,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":6,"result":{"frame":30}}
 {"jsonrpc":"2.0","id":7,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[1.5,0,0.3667],"yawDeg":0,"pitchDeg":0,"velocity":[0,0,-4],"ground":true,"on":"Floor","surface":"concrete","footsteps":2}}
-{"jsonrpc":"2.0","id":8,"result":{"hash":"1dc2f18006c02374","frame":30}}
+{"jsonrpc":"2.0","id":8,"result":{"hash":"f1908bbaf49bd1eb","frame":30}}
 {"jsonrpc":"2.0","id":9,"result":{"queued":1,"firstStep":30,"lastStep":30}}
 {"jsonrpc":"2.0","id":10,"result":{"entity":"5c0b1a7e00000001","name":"Player","pos":[-2,0.3,-1.35],"yawDeg":90,"pitchDeg":0,"velocity":[0,0,0],"ground":true,"on":"Step","surface":"metal","footsteps":2}}
 {"jsonrpc":"2.0","id":11,"result":{"frame":35}}
@@ -14,8 +14,8 @@
 {"jsonrpc":"2.0","id":14,"result":{"created":0,"destroyed":0,"changed":20,"frame":0}}
 {"jsonrpc":"2.0","id":15,"result":{"queued":1,"firstStep":0,"lastStep":0}}
 {"jsonrpc":"2.0","id":16,"result":{"frame":30}}
-{"jsonrpc":"2.0","id":17,"result":{"hash":"1dc2f18006c02374","frame":30}}
+{"jsonrpc":"2.0","id":17,"result":{"hash":"f1908bbaf49bd1eb","frame":30}}
 {"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"PlayerTeleportParams.pos is outside its limits","data":[{"code":"E_RANGE","path":"/pos","message":"PlayerTeleportParams.pos is outside its limits","expected":"each component in [-1e+05, 1e+05]","got":"[0,0,200000]"}]}}
 {"jsonrpc":"2.0","id":19,"error":{"code":1,"message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","data":{"code":"E_NOT_FOUND","diagnostics":[{"code":"E_NOT_FOUND","path":"/entity","message":"entity 5c0b1a7e00000002 is not a player (no PlayerController)","expected":"the id of an entity with a PlayerController","got":"\"5c0b1a7e00000002\""}]}}}
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"PhysicsContactsParams.max is outside its limits","data":[{"code":"E_RANGE","path":"/max","message":"PhysicsContactsParams.max is outside its limits","expected":"in [1, 64]","got":"0"}]}}
-{"jsonrpc":"2.0","id":"end","result":{"entities":37,"frame":30,"schemaHash":"828291b3fb38a981","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":30,"fixedDt":0.016666668}}}
+{"jsonrpc":"2.0","id":"end","result":{"entities":38,"frame":30,"schemaHash":"9806972b70f2e94c","idCounter":0,"host":"headless","time":{"mode":"lockstep","paused":false,"frame":30,"fixedDt":0.016666668}}}
