@@ -113,6 +113,9 @@ const std::vector<SceneSpec>& sceneSpecs() {
         // 16 skinned rigs in the blockout, every pose changing every frame: skin, skin.bounds and
         // rt.blas.refit at full load (sub-project 10).
         {"anim16_1080p", "build/render_bench/anim16.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
+        // The play scene stepped before every frame: its two skinned enemies (sub-project 10 step 2)
+        // posed every frame, as in a window: the play scene's skin, skin.bounds and rt.blas.refit.
+        {"play_anim_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
     };
     return s;
 }

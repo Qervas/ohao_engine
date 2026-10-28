@@ -3,8 +3,10 @@
   "currentStep": 5,
   "combatStep": 3,
   "feelStep": 3,
-  "animStep": 1,
+  "animStep": 2,
   "budgets": {
+    "anim_step_ms": { "max": 0.01, "gatedFrom": 2 },
+    "pose_sync_ms": { "max": 0.02, "gatedFrom": 2 },
     "anim16_step_ms": { "max": 0.05, "gatedFrom": 1 },
     "pose16_sync_ms": { "max": 0.10, "gatedFrom": 1 },
     "occlusion_ray_us": { "max": 5, "gatedFrom": 3 },

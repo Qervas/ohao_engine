@@ -32,6 +32,7 @@
 #include "ecs/combat.hpp"
 #include "ecs/components.hpp"
 #include "ecs/physics_scene.hpp"
+#include "ecs/scene_io.hpp"
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/world.hpp"
@@ -557,6 +558,39 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 11. Animation in the play scene (sub-project 10 step 2, gated from `animStep` 2): its two
+    // skinned enemies fighting the player (who cannot die), as a window steps them.
+    // anim_step_ms: the `animation` simulate system; pose_sync_ms: the `pose` sync system (both
+    // enemies' poses, palettes, posed boxes, the rifles and muzzles they hold). N rounds of 300 steps.
+    std::vector<double> playAnimMs, playPoseMs;
+    for (int r = 0; r < rounds + 1; ++r) {
+        ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
+        ecs::World w;
+        w.seedIds(7);
+        level::installLevels(w, files, engineTypes());
+        ecs::installPhysics(w, files);
+        ecs::installCombat(w);
+        ecs::installRoundHook(w, engineTypes());
+        ecs::AnimationSystem& anim = ecs::installAnimation(w, files);
+        if (!ecs::loadSceneFile(w, std::filesystem::path(OHAO_SOURCE_DIR) / "assets/scenes/blockout_play.scene.json",
+                                engineTypes())) {
+            failures.push_back("play scene: blockout_play.scene.json did not load");
+            break;
+        }
+        auto& reg = w.registry();
+        for (auto [e, pc] : reg.view<const ecs::PlayerController>().each())
+            if (pc.input) reg.replace<ecs::Health>(e, ecs::Health{1e6f, 1e6f});
+        w.sync();
+        for (int step = 0; step < 300; ++step) {
+            w.simulate(kDt);
+            w.sync();
+            if (r > 0) {
+                playAnimMs.push_back(anim.lastStepMs());
+                playPoseMs.push_back(anim.lastPoseMs());
+            }
+        }
+    }
+
     const bool hunted = enemyRounds > 0 && chased > 0.5f;
     if (!hunted)
         failures.push_back("enemies: " + std::to_string(enemyRounds) + " enemy rounds, the 16 closed in " +
@@ -607,7 +641,14 @@ int main(int argc, char** argv) {
     const Verdict vas = judge(budgets, animStep, "anim16_step_ms", sas.median, failures);
     std::printf("  pose16_sync_ms          median %8.4f   p95 %8.4f   (%zu syncs)\n", sps.median, sps.p95, poseSyncMs.size());
     const Verdict vps = judge(budgets, animStep, "pose16_sync_ms", sps.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps})
+    const Stats spa = stats(playAnimMs), spp = stats(playPoseMs);
+    std::printf("  anim_step_ms            median %8.4f   p95 %8.4f   (%zu steps, the play scene)\n", spa.median, spa.p95,
+                playAnimMs.size());
+    const Verdict vpa = judge(budgets, animStep, "anim_step_ms", spa.median, failures);
+    std::printf("  pose_sync_ms            median %8.4f   p95 %8.4f   (%zu syncs, the play scene)\n", spp.median, spp.p95,
+                playPoseMs.size());
+    const Verdict vpp = judge(budgets, animStep, "pose_sync_ms", spp.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
                         v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
@@ -615,7 +656,7 @@ int main(int argc, char** argv) {
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
             name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
-            name != "pose16_sync_ms")
+            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -649,6 +690,10 @@ int main(int argc, char** argv) {
                              {"verdict", vas.verdict}};
     out["pose16_sync_ms"] = {{"median", sps.median}, {"p95", sps.p95}, {"min", sps.min}, {"syncs", poseSyncMs.size()},
                              {"verdict", vps.verdict}};
+    out["anim_step_ms"] = {{"median", spa.median}, {"p95", spa.p95}, {"min", spa.min}, {"steps", playAnimMs.size()},
+                           {"verdict", vpa.verdict}};
+    out["pose_sync_ms"] = {{"median", spp.median}, {"p95", spp.p95}, {"min", spp.min}, {"syncs", playPoseMs.size()},
+                           {"verdict", vpp.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},
