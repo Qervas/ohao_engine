@@ -14,7 +14,8 @@
 //                                    same place
 //   t24_refit_and_rebuild            a pose changing every frame refits its BLAS, and rebuilds it
 //                                    after kBlasRefitsPerRebuild refits
-//   t24_unchanged_pose_skips         a still pose runs no skin, bounds or refit work
+//   t24_refits_batched               a frame's BLAS refits (two rigs) in one build call
+//   t24_unchanged_pose_skips        a still pose runs no skin, bounds or refit work
 //
 // Exit code 0 = pass; the last line is a JSON summary.
 #include "api/session.hpp"
@@ -361,6 +362,38 @@ void t24_refit_and_rebuild() {
     check(reported, "t24: render.stats skinning: 1 instance, 96 vertices skinned, the refits and rebuilds");
 }
 
+// Every skinned BLAS a frame updates goes into one build call (a scratch slice each), so the GPU
+// builds them side by side instead of one after another behind a barrier each (sub-project 10
+// step 4: the play scene's three refits measured 0.101 ms serialised against a 0.1 ms budget).
+void t24_refits_batched() {
+    std::printf("t24: a frame's BLAS refits in one build call\n");
+    Rig rig(twoRigScene());
+    if (!rig.loaded || rig.capture("deferred", 1, 64, 36).empty() || !rig.scene()) {
+        check(false, "t24: the two-rig scene renders");
+        return;
+    }
+    if (!rig.scene()->rtSupported()) {
+        std::printf("  (no ray tracing -- skipped)\n");
+        return;
+    }
+    // Both rigs move every step: the second from `held` to the waving `wave`.
+    rig.setLayer0(0xa17a000000000005ull, "wave", 10);
+    (void)rig.capture("deferred", 1, 64, 36);
+    const auto start = rig.scene()->stats().skinning;
+    const uint32_t frames = 4;
+    for (uint32_t i = 0; i < frames; ++i) {
+        if (!rig.step(1)) break;
+        (void)rig.capture("deferred", 1, 64, 36);
+    }
+    const auto end = rig.scene()->stats().skinning;
+    const uint64_t updates = (end.blasRefits - start.blasRefits) + (end.blasRebuilds - start.blasRebuilds);
+    const uint64_t calls = end.blasUpdateCalls - start.blasUpdateCalls;
+    std::printf("  %u stepped frames of two moving rigs: %llu BLAS updates in %llu build calls\n", frames,
+                static_cast<unsigned long long>(updates), static_cast<unsigned long long>(calls));
+    check(updates == 2u * frames, "t24: both rigs' BLASes updated every frame");
+    check(calls == frames, "t24: one build call a frame for both");
+}
+
 void t24_unchanged_pose_skips() {
     std::printf("t24: a still pose runs no skin, bounds or refit work\n");
     Rig rig(kRigScene);
@@ -388,6 +421,7 @@ int main(int argc, char** argv) {
     t24_motion_vectors_of_a_limb();
     t24_rt_sees_the_pose();
     t24_refit_and_rebuild();
+    t24_refits_batched();
     t24_unchanged_pose_skips();
     return test::finish("skinning_gpu_test", g_passed, g_failed, g_failures);
 }

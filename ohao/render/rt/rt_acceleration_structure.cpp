@@ -50,10 +50,15 @@ bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDev
     m_rtPipelineProperties = {};
     m_rtPipelineProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
 
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps{};
+    asProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+    m_rtPipelineProperties.pNext = &asProps;
     VkPhysicalDeviceProperties2 props2{};
     props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     props2.pNext = &m_rtPipelineProperties;
     vkGetPhysicalDeviceProperties2(physicalDevice, &props2);
+    m_rtPipelineProperties.pNext = nullptr;
+    m_scratchAlignment = std::max<VkDeviceSize>(asProps.minAccelerationStructureScratchOffsetAlignment, 256);
 
     // ONCE, not per init. These are properties of the DEVICE, not of this
     // acceleration structure, so the second printing says nothing the first
@@ -340,70 +345,103 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     entry.deviceAddress = 0;
 }
 
-bool RTAccelerationStructure::recordBlasUpdate(VkCommandBuffer cmd, BlasHandle handle, VkBuffer vertexBuffer,
-                                               VkBuffer indexBuffer, bool rebuild) {
-    if (!m_supported || cmd == VK_NULL_HANDLE || handle >= m_blasEntries.size()) return false;
-    const BlasEntry& entry = m_blasEntries[handle];
-    if (!entry.updatable || entry.handle == VK_NULL_HANDLE) return false;
+uint32_t RTAccelerationStructure::recordBlasUpdates(VkCommandBuffer cmd, std::span<BlasUpdate> updates,
+                                                   VkBuffer vertexBuffer, VkBuffer indexBuffer) {
+    for (BlasUpdate& u : updates) u.recorded = false;
+    if (!m_supported || cmd == VK_NULL_HANDLE || updates.empty()) return 0;
 
-    if (m_refitScratchSize < entry.scratchSize) {
+    // Each BLAS its own slice of one scratch buffer, so one build call updates them all at once.
+    m_batchOffsets.clear();
+    VkDeviceSize total = 0;
+    for (const BlasUpdate& u : updates) {
+        const BlasEntry* entry = u.handle < m_blasEntries.size() ? &m_blasEntries[u.handle] : nullptr;
+        if (!entry || !entry->updatable || entry->handle == VK_NULL_HANDLE) {
+            m_batchOffsets.push_back(VkDeviceSize(-1));
+            continue;
+        }
+        m_batchOffsets.push_back(total);
+        total += (entry->scratchSize + m_scratchAlignment - 1) / m_scratchAlignment * m_scratchAlignment;
+    }
+    if (total == 0) return 0;
+    if (m_refitScratchSize < total) {
         if (m_refitScratchBuffer != VK_NULL_HANDLE)   // frames in flight may still use it
             m_retired.push_back(RetiredTlas{VK_NULL_HANDLE, m_refitScratchBuffer, m_refitScratchMemory});
         m_refitScratchBuffer = VK_NULL_HANDLE;
         m_refitScratchMemory = VK_NULL_HANDLE;
-        const VkDeviceSize size = (std::max(entry.scratchSize, m_refitScratchSize * 2) + 255) & ~VkDeviceSize{255};
+        // The buffer's own address is aligned for the base slice: allocate one alignment more.
+        const VkDeviceSize size = std::max(total, m_refitScratchSize * 2) + m_scratchAlignment;
         if (!createBuffer(size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_refitScratchBuffer, m_refitScratchMemory)) {
             m_refitScratchSize = 0;
             OHAO_LOG(Error, render, "RT: BLAS refit scratch allocation failed ({} bytes)", size);
-            return false;
+            return 0;
         }
-        m_refitScratchSize = size;
+        m_refitScratchSize = size - m_scratchAlignment;
+    }
+    const VkDeviceAddress scratchBase =
+        (getBufferDeviceAddress(m_refitScratchBuffer) + m_scratchAlignment - 1) / m_scratchAlignment * m_scratchAlignment;
+    const VkDeviceAddress vertices = getBufferDeviceAddress(vertexBuffer);
+    const VkDeviceAddress indices = getBufferDeviceAddress(indexBuffer);
+
+    m_batchGeometries.clear();
+    m_batchInfos.clear();
+    m_batchRanges.clear();
+    m_batchGeometries.reserve(updates.size());
+    m_batchRanges.reserve(updates.size());
+    for (std::size_t i = 0; i < updates.size(); ++i) {
+        if (m_batchOffsets[i] == VkDeviceSize(-1)) continue;
+        const BlasEntry& entry = m_blasEntries[updates[i].handle];
+        VkAccelerationStructureGeometryKHR geometry{};
+        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        geometry.geometry.triangles.vertexData.deviceAddress = vertices;
+        geometry.geometry.triangles.vertexStride = entry.vertexStride;
+        geometry.geometry.triangles.maxVertex = entry.maxVertex;
+        geometry.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
+        geometry.geometry.triangles.indexData.deviceAddress = indices;
+        m_batchGeometries.push_back(geometry);
+
+        VkAccelerationStructureBuildRangeInfoKHR range{};
+        range.primitiveCount = entry.indexCount / 3;
+        range.primitiveOffset = entry.primitiveOffset;
+        range.firstVertex = entry.firstVertex;
+        m_batchRanges.push_back(range);
+
+        const bool rebuild = updates[i].rebuild;
+        VkAccelerationStructureBuildGeometryInfoKHR info{};
+        info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+        info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        info.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                     VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+        info.geometryCount = 1;
+        info.mode = rebuild ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+        info.srcAccelerationStructure = rebuild ? VK_NULL_HANDLE : entry.handle;
+        info.dstAccelerationStructure = entry.handle;
+        info.scratchData.deviceAddress = scratchBase + m_batchOffsets[i];
+        m_batchInfos.push_back(info);
+        updates[i].recorded = true;
+    }
+    // Pointers into the vectors only once they stop growing.
+    m_batchRangePtrs.clear();
+    for (std::size_t k = 0; k < m_batchInfos.size(); ++k) {
+        m_batchInfos[k].pGeometries = &m_batchGeometries[k];
+        m_batchRangePtrs.push_back(&m_batchRanges[k]);
     }
 
-    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
-    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = getBufferDeviceAddress(vertexBuffer);
-    triangles.vertexStride = entry.vertexStride;
-    triangles.maxVertex = entry.maxVertex;
-    triangles.indexType = VK_INDEX_TYPE_UINT32;
-    triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);
-
-    VkAccelerationStructureGeometryKHR geometry{};
-    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-    geometry.geometry.triangles = triangles;
-
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
-                      VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
-    buildInfo.geometryCount = 1;
-    buildInfo.pGeometries = &geometry;
-    buildInfo.mode = rebuild ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-    buildInfo.srcAccelerationStructure = rebuild ? VK_NULL_HANDLE : entry.handle;
-    buildInfo.dstAccelerationStructure = entry.handle;
-    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_refitScratchBuffer);
-
-    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
-    rangeInfo.primitiveCount = entry.indexCount / 3;
-    rangeInfo.primitiveOffset = entry.primitiveOffset;
-    rangeInfo.firstVertex = entry.firstVertex;
-    const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
-
-    // The scratch and the structure: the previous build (this frame's or an earlier one) and the
-    // previous frames' traces finish with them first.
+    // The scratch and the structures: earlier builds (this frame's or an earlier one) and the
+    // previous frames' traces finish with them first. The BLASes in one call share nothing.
     VkMemoryBarrier before{};
     before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     before.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
     before.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | m_asConsumerStages,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &before, 0, nullptr, 0, nullptr);
-    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
-    return true;
+    vkCmdBuildAccelerationStructuresKHR(cmd, static_cast<uint32_t>(m_batchInfos.size()), m_batchInfos.data(),
+                                        m_batchRangePtrs.data());
+    return static_cast<uint32_t>(m_batchInfos.size());
 }
 
 // === TLAS ===

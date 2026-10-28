@@ -96,6 +96,8 @@ struct RenderScene::Impl {
     bool skinnedBlasChanged{false};   // a BLAS was refit or rebuilt this frame: the TLAS refits
     std::vector<SkinPass::Job> skinJobs;
     std::vector<uint32_t> skinJobMeshes;
+    std::vector<RTAccelerationStructure::BlasUpdate> blasUpdates;   // the frame's BLAS refit batch
+    std::vector<uint32_t> blasUpdateMeshes;                          // its skinned indices
 
     [[nodiscard]] bool rt() const noexcept { return rtAccel != nullptr && rtAccel->isSupported(); }
 
@@ -581,18 +583,25 @@ void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPas
 
     if (m->rt()) {
         if (timer) timer->begin(cmd, "rt.blas.refit");
-        bool any = false;
+        // Every BLAS the frame updates in one build call: side by side on the GPU, not one after
+        // another behind a barrier each.
+        m->blasUpdates.clear();
+        m->blasUpdateMeshes.clear();
         for (const uint32_t index : m->skinJobMeshes) {
-            Impl::Skinned& s = m->skinned[index];
+            const Impl::Skinned& s = m->skinned[index];
             const MeshInfo* mesh = m->meshes.info(s.mesh);
             if (!mesh || mesh->blas == INVALID_BLAS) continue;
             // A refit keeps the build's tree and moves its boxes: after many, the boxes of a
             // pose far from the built one overlap and traversal slows (OPEN ruling 12).
-            const bool rebuild = s.refits >= kBlasRefitsPerRebuild;
-            if (!m->rtAccel->recordBlasUpdate(cmd, mesh->blas, m->meshes.vertexArena(), m->meshes.indexArena(), rebuild))
-                continue;
-            any = true;
-            if (rebuild) {
+            m->blasUpdates.push_back({mesh->blas, s.refits >= kBlasRefitsPerRebuild, false});
+            m->blasUpdateMeshes.push_back(index);
+        }
+        const bool any = m->rtAccel->recordBlasUpdates(cmd, m->blasUpdates, m->meshes.vertexArena(),
+                                                       m->meshes.indexArena()) > 0;
+        for (std::size_t k = 0; k < m->blasUpdates.size(); ++k) {
+            if (!m->blasUpdates[k].recorded) continue;
+            Impl::Skinned& s = m->skinned[m->blasUpdateMeshes[k]];
+            if (m->blasUpdates[k].rebuild) {
                 s.refits = 0;
                 ++st.blasRebuilds;
             } else {
@@ -601,6 +610,7 @@ void RenderScene::recordSkinning(VkCommandBuffer cmd, uint32_t frameSlot, GpuPas
             }
         }
         if (any) {
+            ++st.blasUpdateCalls;
             // The BLASes to the TLAS build (recordUpdates) and the ray-query and trace readers.
             VkMemoryBarrier after{};
             after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;

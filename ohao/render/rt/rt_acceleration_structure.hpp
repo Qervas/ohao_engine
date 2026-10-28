@@ -20,6 +20,7 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include <span>
 
 namespace ohao {
 
@@ -108,14 +109,22 @@ public:
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);
 
-    // Records an updatable BLAS's refit (MODE_UPDATE, in place) or, `rebuild`, a full build in
-    // place, from its geometry in `vertexBuffer` / `indexBuffer` (the arenas as they are now: they
-    // may have grown since). Uses a refit scratch buffer of this object's, ordered by a barrier
-    // before each build (one queue); a scratch that must grow is retired (takeRetired). The
-    // caller makes the vertex writes visible to the build before, and the BLAS visible to its
-    // readers (the TLAS build, ray queries) after. False when nothing was recorded.
-    bool recordBlasUpdate(VkCommandBuffer cmd, BlasHandle handle, VkBuffer vertexBuffer, VkBuffer indexBuffer,
-                          bool rebuild);
+    // One updatable BLAS to update: a refit (MODE_UPDATE, in place) or, `rebuild`, a full build in
+    // place. `recorded` is set by recordBlasUpdates.
+    struct BlasUpdate {
+        BlasHandle handle = INVALID_BLAS;
+        bool rebuild = false;
+        bool recorded = false;
+    };
+    // Records every update in one build call, from the BLASes' geometry in `vertexBuffer` /
+    // `indexBuffer` (the arenas as they are now: they may have grown since): each gets its own
+    // slice of this object's refit scratch, so the GPU builds them side by side, after one barrier
+    // that orders them behind earlier builds and earlier frames' traces. A scratch that must grow is
+    // retired (takeRetired). The caller makes the vertex writes visible to the build before, and
+    // the BLASes visible to their readers (the TLAS build, ray queries) after. Returns how many
+    // were recorded (a handle that is not an updatable BLAS is skipped).
+    uint32_t recordBlasUpdates(VkCommandBuffer cmd, std::span<BlasUpdate> updates, VkBuffer vertexBuffer,
+                               VkBuffer indexBuffer);
 
     // === TLAS management ===
 
@@ -210,10 +219,17 @@ private:
     VkDeviceMemory m_tlasScratchMemory = VK_NULL_HANDLE;
     VkDeviceSize m_tlasScratchSize = 0;
     std::vector<RetiredTlas> m_retired;
-    // recordBlasUpdate's scratch (inside frames: retired, not destroyed, when it grows).
+    // recordBlasUpdates' scratch (inside frames: retired, not destroyed, when it grows), sliced
+    // per BLAS at the device's scratch offset alignment, and the batch's reused arrays.
     VkBuffer m_refitScratchBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_refitScratchMemory = VK_NULL_HANDLE;
     VkDeviceSize m_refitScratchSize = 0;
+    VkDeviceSize m_scratchAlignment = 256;
+    std::vector<VkDeviceSize> m_batchOffsets;
+    std::vector<VkAccelerationStructureGeometryKHR> m_batchGeometries;
+    std::vector<VkAccelerationStructureBuildGeometryInfoKHR> m_batchInfos;
+    std::vector<VkAccelerationStructureBuildRangeInfoKHR> m_batchRanges;
+    std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> m_batchRangePtrs;
 
     // Instance buffer (GPU-side VkAccelerationStructureInstanceKHR array)
     VkBuffer m_instanceBuffer = VK_NULL_HANDLE;

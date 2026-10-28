@@ -194,6 +194,7 @@ struct RenderSceneStats {
         uint64_t vertices{0};      // vertices skinned last recordSkinning
         uint64_t blasRefits{0};    // cumulative
         uint64_t blasRebuilds{0};  // cumulative
+        uint64_t blasUpdateCalls{0};   // cumulative: build calls recording them (one a frame, every BLAS in it)
     } skinning;
 };
 
