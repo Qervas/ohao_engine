@@ -36,6 +36,9 @@ struct GraphClip {
     std::string name, file, animation;
     bool loop = true;
     float rate = 1.0f;
+    // `rateFrom: {param, at}` (instead of `rate`): the clip plays so its event `at` (else its end)
+    // lands `param` seconds into the state; a parameter at 0 (unwritten) plays it at its own rate.
+    std::string rateParam, rateAt;
     std::vector<ClipEvent> events;   // added to the glTF clip's (glTF has no event channel)
 };
 
@@ -123,6 +126,8 @@ struct BoundClip {
     Clip clip;     // bound to the skeleton; events = the glTF's and the graph's, sorted
     bool loop = true;
     float rate = 1.0f;
+    int rateParam = -1;        // rateFrom's parameter, -1 for none
+    float rateAnchor = 0.0f;   // rateFrom's anchor: the `at` event's time, else the clip's duration (s)
 };
 struct BoundGraph {
     AnimGraph source;
@@ -177,11 +182,12 @@ struct FiredEvent {
 void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params,
                std::vector<FiredEvent>& fired);
 
-// The seconds into a state's clip at `steps` (fractional) steps since entry, before wrapping.
-[[nodiscard]] float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps);
+// The seconds into a state's clip at `steps` (fractional) steps since entry, before wrapping
+// (`params` for a clip whose rate comes from a parameter).
+[[nodiscard]] float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, const Params& params);
 
 // Whether a non-looping state's clip has reached its end at `steps` steps.
-[[nodiscard]] bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state);
+[[nodiscard]] bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params);
 
 struct PoseScratch {
     LocalPose rest, layer, partner, blendTmp;

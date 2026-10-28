@@ -470,6 +470,75 @@ void t23_events_once_per_crossing() {
     CHECK(at.size() == 3 && at[1] - at[0] == 120 && at[2] - at[1] == 120, "one loop (120 steps) apart, none twice");
 }
 
+// Step 3: a clip's rate from a parameter (`rateFrom`): its anchor (an event, else its end) lands
+// `param` seconds into the state, so the arms' mag_in lands on the weapon's reload time.
+void t23_rate_from_param() {
+    const auto skeleton = rigData()->skins[0];
+    const auto bind = [&](const std::string& rateFrom) -> std::shared_ptr<anim::BoundGraph> {
+        const std::string json =
+            R"({"skeleton":{"file":"tests/anim/fixtures/rig.glb","skin":"RigSkin"},)"
+            R"("clips":{"wave":{"file":"tests/anim/fixtures/rig.glb","animation":"wave","loop":true},)"
+            R"("raise":{"file":"tests/anim/fixtures/rig.glb","animation":"raise","loop":false,"rateFrom":)" +
+            rateFrom + R"(,"events":[{"t":0.25,"name":"early"},{"t":0.5,"name":"x"}]}},)"
+            R"("params":{"len":"float"},"layers":[{"name":"body","initial":"up",)"
+            R"("states":{"up":{"clip":"raise"},"wave":{"clip":"wave"}},)"
+            R"("transitions":[{"from":"up","to":"wave","when":{"clipEnd":true}}]}]})";
+        auto parsed = anim::parseAnimGraph(json);
+        if (!parsed) {
+            for (const auto& e : parsed.error()) std::printf("\n      %s: %s", e.path.c_str(), e.message.c_str());
+            return nullptr;
+        }
+        auto bound = anim::bindGraph(std::move(parsed.value()), skeleton, rigData()->clips);
+        if (!bound) {
+            for (const auto& e : bound.error()) std::printf("\n      %s: %s", e.path.c_str(), e.message.c_str());
+            return nullptr;
+        }
+        return std::make_shared<anim::BoundGraph>(std::move(bound.value()));
+    };
+    // The steps until `name` fires (or the state is left, for "" ), with len = `len` seconds.
+    const auto stepsTo = [](const anim::BoundGraph& g, float len, const std::string& name) {
+        anim::Params p;
+        p.values.assign(g.paramNames.size(), 0.0f);
+        p.values[static_cast<std::size_t>(g.param("len"))] = len;
+        auto layers = anim::initialLayers(g);
+        for (int step = 1; step <= 600; ++step) {
+            std::vector<anim::FiredEvent> fired;
+            anim::stepLayer(g, 0, layers[0], p, fired);
+            if (name.empty() && layers[0].state != g.state(0, "up")) return step;
+            for (const auto& e : fired)
+                if (e.name == name) return step;
+        }
+        return -1;
+    };
+    const auto atX = bind(R"({"param":"len","at":"x"})");
+    const auto atEnd = bind(R"({"param":"len"})");
+    CHECK(atX && atEnd, "rateFrom {param, at} and {param} bind");
+    if (!atX || !atEnd) return;
+    const int x15 = stepsTo(*atX, 1.5f, "x"), x20 = stepsTo(*atX, 2.0f, "x"), early = stepsTo(*atX, 2.0f, "early");
+    std::printf("\n      x (0.5 s) at step %d with len 1.5, %d with len 2.0; early (0.25 s) at %d", x15, x20, early);
+    CHECK(x15 == 90 && x20 == 120, "the anchor event lands len seconds in: 90 steps for 1.5 s, 120 for 2.0 s");
+    CHECK(early == 60, "the other events scale with it: 0.25 of 0.5 lands at half of 2.0 s");
+    const int end = stepsTo(*atEnd, 2.0f, "");
+    CHECK(end == 121, "no anchor: the clip's end lands len seconds in (left on the next step)");
+    CHECK(stepsTo(*atX, 0.0f, "x") == 30, "len 0 (no driver wrote it): the clip's own rate");
+    // Errors with their paths: an unknown parameter, an event the clip does not have.
+    auto noParam = anim::parseAnimGraph(std::string(R"({"skeleton":{"file":"tests/anim/fixtures/rig.glb"},)") +
+                                        R"("clips":{"raise":{"file":"tests/anim/fixtures/rig.glb","animation":"raise",)"
+                                        R"("rateFrom":{"param":"nope","at":"zz"}}},"layers":[{"initial":"up",)"
+                                        R"("states":{"up":{"clip":"raise"}},"transitions":[{"from":"up","to":"up",)"
+                                        R"("when":{"clipEnd":true}}]}]})");
+    bool param = false, event = false;
+    if (noParam) {
+        auto bound = anim::bindGraph(std::move(noParam.value()), skeleton, rigData()->clips);
+        if (!bound)
+            for (const auto& e : bound.error()) {
+                param |= e.path == "/clips/raise/rateFrom/param" && e.message.find("unknown parameter") != std::string::npos;
+                event |= e.path == "/clips/raise/rateFrom/at" && e.message.find("no event") != std::string::npos;
+            }
+    }
+    CHECK(param && event, "rateFrom's unknown parameter and missing event, each with its path");
+}
+
 void t23_events_in_step_order() {
     // Through the world: two animated entities, their events in id order within a step.
     ecs::World w;
@@ -569,6 +638,7 @@ int main() {
     RUN(t23_transition_on_clip_end);
     RUN(t23_fade_steps);
     RUN(t23_events_once_per_crossing);
+    RUN(t23_rate_from_param);
     RUN(t23_events_in_step_order);
     RUN(t23_restore_mid_clip);
     RUN(t23_pose_never_in_world);

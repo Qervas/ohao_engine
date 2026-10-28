@@ -39,7 +39,8 @@ std::string nameOf(const Session::Impl& s, entt::entity e) {
 
 // One layer: its state, the clip that times it and the time into that clip (the newest step's,
 // wrapped or clamped as the pose samples it), and the fade.
-void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState& a, JsonWriter& out) {
+void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState& a, const anim::Params& params,
+                JsonWriter& out) {
     const anim::BoundLayer& l = g.layers[static_cast<std::size_t>(index)];
     out.beginObject();
     out.key("state"); out.string(a.state.empty() ? l.stateNames[static_cast<std::size_t>(l.initial)] : a.state);
@@ -49,7 +50,7 @@ void writeLayer(const anim::BoundGraph& g, int index, const ecs::AnimLayerState&
         const int clip = st.clip >= 0 ? st.clip : (st.points.empty() ? -1 : st.points.front().first);
         if (clip >= 0) {
             const anim::BoundClip& c = g.clips[static_cast<std::size_t>(clip)];
-            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps));
+            const float t = anim::stateTime(g, st, clip, static_cast<float>(a.steps), params);
             out.key("clip"); out.string(c.name);
             out.key("t"); out.float32(r3(anim::clipTime(c.clip.duration, t, c.loop)));
         }
@@ -105,10 +106,16 @@ bool methodAnimationInfo(Session::Impl& s, const JsonDocument&, const JsonNode& 
         out.key("layers");
         out.beginArray();
         if (g) {
+            // The drivers' last values (a clip whose rate comes from a parameter is timed by it).
+            anim::Params values;
+            values.values.assign(g->paramNames.size(), 0.0f);
+            if (const auto* ap = reg.try_get<ecs::AnimParams>(e))
+                for (const auto& [name, v] : ap->values)
+                    if (const int k = g->param(name); k >= 0) values.values[static_cast<std::size_t>(k)] = v;
             for (std::size_t li = 0; li < g->layers.size(); ++li) {
                 // Before its first step an animator has no layers: each at its initial state.
                 const ecs::AnimLayerState st = li < a.layers.size() ? a.layers[li] : ecs::AnimLayerState{};
-                writeLayer(*g, static_cast<int>(li), st, out);
+                writeLayer(*g, static_cast<int>(li), st, values, out);
             }
         }
         out.endArray();

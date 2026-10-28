@@ -133,14 +133,28 @@ Result<AnimGraph, std::vector<GraphError>> parseAnimGraph(std::string_view json)
             c.name = name;
             object o;
             if (value.get_object().get(o) != simdjson::SUCCESS) { p.fail(path, "not an object"); continue; }
-            p.keys(o, {"file", "animation", "loop", "rate", "events"}, path);
+            p.keys(o, {"file", "animation", "loop", "rate", "rateFrom", "events"}, path);
             element e;
             if (o["file"].get(e) != simdjson::SUCCESS) p.fail(path + "/file", "missing");
             else p.str(e, c.file, path + "/file");
             if (o["animation"].get(e) != simdjson::SUCCESS) p.fail(path + "/animation", "missing");
             else p.str(e, c.animation, path + "/animation");
             if (o["loop"].get(e) == simdjson::SUCCESS && e.get_bool().get(c.loop) != simdjson::SUCCESS) p.fail(path + "/loop", "not a boolean");
-            if (o["rate"].get(e) == simdjson::SUCCESS) p.num(e, c.rate, path + "/rate");
+            const bool rate = o["rate"].get(e) == simdjson::SUCCESS;
+            if (rate) p.num(e, c.rate, path + "/rate");
+            if (o["rateFrom"].get(e) == simdjson::SUCCESS) {
+                object rf;
+                if (rate) p.fail(path + "/rateFrom", "rate and rateFrom: one or the other");
+                if (e.get_object().get(rf) != simdjson::SUCCESS) {
+                    p.fail(path + "/rateFrom", "not an object: {param, at}");
+                } else {
+                    p.keys(rf, {"param", "at"}, path + "/rateFrom");
+                    element x;
+                    if (rf["param"].get(x) != simdjson::SUCCESS) p.fail(path + "/rateFrom/param", "missing");
+                    else p.str(x, c.rateParam, path + "/rateFrom/param");
+                    if (rf["at"].get(x) == simdjson::SUCCESS) p.str(x, c.rateAt, path + "/rateFrom/at");
+                }
+            }
             array events;
             if (o["events"].get_array().get(events) == simdjson::SUCCESS) {
                 std::size_t i = 0;
@@ -340,6 +354,26 @@ Result<BoundGraph, std::vector<GraphError>> bindGraph(AnimGraph graph, Skeleton 
         b.paramNames.push_back(name);
         b.paramTypes.push_back(type);
     }
+    // rateFrom: a float parameter, and an anchor (the `at` event, else the clip's end) after 0.
+    for (std::size_t i = 0; i < graph.clips.size(); ++i) {
+        const GraphClip& gc = graph.clips[i];
+        if (gc.rateParam.empty()) continue;
+        const std::string path = "/clips/" + esc(gc.name) + "/rateFrom";
+        BoundClip& bc = b.clips[i];
+        bc.rateParam = b.param(gc.rateParam);
+        if (bc.rateParam < 0)
+            errors.push_back({path + "/param", "unknown parameter '" + gc.rateParam + "'"});
+        else if (b.paramTypes[static_cast<std::size_t>(bc.rateParam)] != ParamType::Float)
+            errors.push_back({path + "/param", "'" + gc.rateParam + "' is not a float"});
+        bc.rateAnchor = bc.clip.duration;
+        if (!gc.rateAt.empty()) {
+            const auto ev = std::find_if(bc.clip.events.begin(), bc.clip.events.end(),
+                                         [&](const ClipEvent& e) { return e.name == gc.rateAt; });
+            if (ev == bc.clip.events.end()) errors.push_back({path + "/at", "no event '" + gc.rateAt + "' in the clip"});
+            else bc.rateAnchor = ev->t;
+        }
+        if (!(bc.rateAnchor > 0.0f)) errors.push_back({path, "the anchor is at 0 s: nothing to scale"});
+    }
 
     for (std::size_t li = 0; li < graph.layers.size(); ++li) {
         const GraphLayer& gl = graph.layers[li];
@@ -435,20 +469,25 @@ std::vector<LayerState> initialLayers(const BoundGraph& graph) {
     return out;
 }
 
-float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps) {
+float stateTime(const BoundGraph& graph, const BoundState& state, int clip, float steps, const Params& params) {
     const BoundClip* c = clipOf(graph, clip);
+    // rateFrom: the anchor lands `len` seconds in, as a fraction of len so that steps * dt == len
+    // reaches the anchor exactly.
+    if (c && c->rateParam >= 0)
+        if (const float len = params.get(c->rateParam); len > 0.0f)
+            return state.startAt + c->rateAnchor * state.rate * (steps * kStepSeconds / len);
     const float rate = state.rate * (c ? c->rate : 1.0f);
     return state.startAt + steps * kStepSeconds * rate;
 }
 
-bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state) {
+bool clipEnded(const BoundGraph& graph, int layer, const LayerState& state, const Params& params) {
     const BoundLayer& l = graph.layers[static_cast<std::size_t>(layer)];
     if (state.state < 0 || state.state >= static_cast<int>(l.states.size())) return false;
     const BoundState& s = l.states[static_cast<std::size_t>(state.state)];
     const int clip = timingClip(s);
     const BoundClip* c = clipOf(graph, clip);
     if (!c || c->loop) return false;
-    return stateTime(graph, s, clip, static_cast<float>(state.steps)) >= c->clip.duration;
+    return stateTime(graph, s, clip, static_cast<float>(state.steps), params) >= c->clip.duration;
 }
 
 void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Params& params, std::vector<FiredEvent>& fired) {
@@ -466,7 +505,7 @@ void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Para
         switch (t.kind) {
         case Condition::Kind::Param: holds = compare(params.get(t.param), t.op, t.value); break;
         case Condition::Kind::Event: holds = params.fired(t.event); break;
-        case Condition::Kind::ClipEnd: holds = clipEnded(graph, layer, state); break;
+        case Condition::Kind::ClipEnd: holds = clipEnded(graph, layer, state, params); break;
         }
         if (!holds) continue;
         if (t.fade > 0) {
@@ -493,8 +532,8 @@ void stepLayer(const BoundGraph& graph, int layer, LayerState& state, const Para
     const int clip = heaviestClip(s, params);
     const BoundClip* c = clipOf(graph, clip);
     if (!c || c->clip.events.empty()) return;
-    const float prev = stateTime(graph, s, clip, static_cast<float>(state.steps - 1));
-    const float cur = stateTime(graph, s, clip, static_cast<float>(state.steps));
+    const float prev = stateTime(graph, s, clip, static_cast<float>(state.steps - 1), params);
+    const float cur = stateTime(graph, s, clip, static_cast<float>(state.steps), params);
     if (!(cur > prev)) return;
     const float d = c->clip.duration;
     std::vector<std::pair<float, const std::string*>> hits;
@@ -520,7 +559,7 @@ void sampleState(const BoundGraph& g, const BoundState& s, const Params& params,
     const auto one = [&](int clip, LocalPose& into) {
         const BoundClip* c = clipOf(g, clip);
         if (!c) return;
-        const float t = clipTime(c->clip.duration, stateTime(g, s, clip, steps), c->loop);
+        const float t = clipTime(c->clip.duration, stateTime(g, s, clip, steps, params), c->loop);
         sampleClip(c->clip, t, into);
     };
     restPose(g.skeleton, out);
