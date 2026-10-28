@@ -1,5 +1,6 @@
 #pragma once
 #include "render/scene/render_scene_types.hpp"
+#include "render/scene/vfx_frame.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
@@ -117,9 +118,14 @@ public:
     [[nodiscard]] VkBuffer rtLightBuffer() const;                    // header {count, envTexIdx} + GPULight[]
     [[nodiscard]] uint32_t rtLightCount() const;
 
-    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; bool emitter; bool viewModel; bool skinned{false}; };
+    struct Draw { uint32_t slot; uint32_t firstIndex; uint32_t indexCount; int32_t vertexOffset; uint32_t materialSlot; glm::vec3 aabbMin, aabbMax; const glm::mat4* world; bool oneSided; uint32_t firstMeshlet; uint32_t meshletCount; bool emitter; bool viewModel; bool skinned{false}; AlphaMode alpha{AlphaMode::Opaque}; };
     // Visible instance x submesh draws, in slot order; rebuilt only when instances change.
     [[nodiscard]] std::span<const Draw> draws() const;
+    // The draws (indices into draws() and the draw table) whose material is alpha-tested
+    // (AlphaMode::Mask: kDrawMask, drawn by the G-buffer's discard pipeline after the late phase)
+    // and blended (AlphaMode::Blend: kDrawTransparent, drawn by the forward pass), in draw order.
+    [[nodiscard]] std::span<const uint32_t> maskDraws() const;
+    [[nodiscard]] std::span<const uint32_t> transparentDraws() const;
     // The same list on the GPU (gpu::shared::DrawRecord each), uploaded by recordUpdates:
     // what GPU culling reads and the vertex shaders index with firstInstance. Its
     // version changes whenever the list does (draw i is then another draw).
@@ -134,6 +140,11 @@ public:
     [[nodiscard]] VkBuffer meshletArena() const;
     [[nodiscard]] VkBuffer meshletVertexArena() const;
     [[nodiscard]] VkBuffer meshletTriangleArena() const;
+
+    // The effects the next frames draw (sub-project 12: the ECS's vfx_draw sync system writes them,
+    // the deferred renderer's transparent pass draws them). Replaced whole each sync.
+    void setVfx(VfxFrame frame);
+    [[nodiscard]] const VfxFrame& vfx() const noexcept;
 
     [[nodiscard]] const RenderSceneStats& stats() const noexcept;
     // TLAS over every slot below the instance high-water mark (custom index = slot;

@@ -475,6 +475,8 @@ bool VulkanRenderer::createLogicalDevice() {
     deviceFeatures2.features.wideLines = VK_TRUE;
     deviceFeatures2.features.multiDrawIndirect = VK_TRUE;
     deviceFeatures2.features.drawIndirectFirstInstance = VK_TRUE;   // firstInstance = the draw record
+    // The transparent pass blends colour by the object's mode and its coverage mask by MAX.
+    deviceFeatures2.features.independentBlend = VK_TRUE;
     deviceFeatures2.features.shaderInt64 = VK_TRUE;
     deviceFeatures2.features.fragmentStoresAndAtomics = VK_TRUE;
     deviceFeatures2.features.vertexPipelineStoresAndAtomics = VK_TRUE;

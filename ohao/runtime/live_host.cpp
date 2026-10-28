@@ -10,6 +10,7 @@
 #include "ecs/instantiate.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/render_extract.hpp"
+#include "ecs/vfx_draw.hpp"
 #include "ecs/scene_view.hpp"
 #include "level/level_system.hpp"
 #include "render/deferred/deferred_renderer.hpp"
@@ -84,6 +85,8 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
     ecs::installAudio(*m_world, *m_assets).setTrace(audioTraceRequested());
     ecs::installVfx(*m_world, *m_assets);   // effects' spawn records (inserted before the schedule)
     ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // drawn after the render extract
+    // The step's effect records into the frame (age at this frame's alpha), as every host draws them.
+    ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), *m_assets);
     m_session = std::make_unique<api::Session>(*m_world, types);
     m_session->setAssetResolver(m_assets.get());
     m_session->setTimeline(m_time);
@@ -99,7 +102,6 @@ bool LiveHost::initialize(const LiveConfig& cfg, const reflect::TypeRegistry& ty
             m_audio.reset();
         }
     }
-    if (cfg.effects) m_combatFx = std::make_unique<CombatFx>();
     return true;
 }
 
@@ -204,8 +206,6 @@ RunReport LiveHost::run(const GameHooks& hooks, const RequestPump* pump) {
         }
         m_world->setPendingLook(pending);
         if (m_player) m_player->update(*m_world, m_time.running());   // what this frame's steps scheduled
-        if (m_combatFx)   // sparks and muzzle bursts: realtime only, at the poses this frame draws
-            if (auto* deferred = m_renderer->getDeferredRenderer()) m_combatFx->update(*m_world, *deferred, m_time.running());
         const float frameDt = std::chrono::duration<float>(tick.frameDt).count();
         // Realtime frames draw what the steps move between their last two poses; lockstep and
         // paused ones the last step's exactly (so a lockstep window matches a headless capture).
@@ -483,11 +483,7 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
         settings.reset = true;
         settings.defaultExposure = m_defaultExposure;
         // Every frame is presented: a path-traced capture's sample passes converge on screen.
-        // A window's particles are its presentation: a capture draws none (as headless).
-        auto* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) deferred->setParticlesDrawn(false);
         out = captureFrame(*m_renderer, *m_world, *m_assets, r, settings);
-        if (deferred) deferred->setParticlesDrawn(true);
         if (!out.cancelled) ++m_readbackRequests;   // its last frame was requested (at most one)
         m_rendered += static_cast<uint64_t>(std::max(0, out.frames));
         if (pp) {
@@ -523,7 +519,6 @@ uint64_t LiveHost::shutdown() {
     const uint64_t requested = m_renderer ? m_renderer->requestedReadbackCount() : 0;
     m_player.reset();
     m_audio.reset();
-    m_combatFx.reset();
     m_session.reset();
     m_world.reset();   // releases its RenderScene slots while the RenderScene exists
     if (m_renderer) {

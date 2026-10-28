@@ -10,11 +10,12 @@
 #include "gizmo_pass.hpp"
 #include "render/hud/hud_pass.hpp"
 #include "sky_pass.hpp"
-#include "render/particles/particle_system.hpp"
+#include "render/vfx/vfx_renderer.hpp"
 #include "ssr_pass.hpp"
 #include "sss_pass.hpp"
 #include "render/rt/rt_shadow_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
+#include "render/rt/rt_alpha_tables.hpp"
 #include "render/graph/render_graph.hpp"
 #include "render/scene/render_scene_types.hpp"
 #include "core/common_types.hpp"
@@ -172,15 +173,10 @@ public:
     void setSkyGroundColor(const glm::vec3& c);
 
 
-    // Particle system
-    void spawnParticles(const glm::vec3& position, ParticleType type,
-                        const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
-    // An emit as given (runtime/combat_fx.hpp builds them); emitted by the next drawn frame.
-    void emitParticles(const ParticleEmitterConfig& config);
-    // False: the frames rendered draw no particles, run none and drop the emits queued (a lockstep
-    // capture: a window's particles are its presentation, never in a capture). True by default.
-    void setParticlesDrawn(bool drawn);
-    [[nodiscard]] bool particlesDrawn() const noexcept { return m_particlesDrawn; }
+    // The effects and blended surfaces (sub-project 12): the RenderScene's VfxFrame and
+    // kDrawTransparent draws, expanded, sorted and drawn by the transparent pass. Null when its
+    // pipelines could not be made (no ray queries or bindless textures). Tests read its stats.
+    [[nodiscard]] VfxRenderer* vfxRenderer() noexcept { return m_vfx.get(); }
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
     // Get final output for display/readback
@@ -214,6 +210,9 @@ private:
     bool m_rayQuery{false};
     bool m_meshShader{false};
     std::unique_ptr<RTGITechnique> m_rtGI;
+    // RenderScene's tables for the RT traces' alpha tests (set 1; the bindless textures are set 2).
+    rtc::AlphaTables m_alphaTables;
+    bool m_alphaTablesReady{false};
     bool m_useRTGI{false};
     bool m_rtgiWanted{true};
     bool m_giFull{false};
@@ -280,25 +279,17 @@ private:
     glm::vec3 m_moonDirection{0.0f, 0.5f, 0.3f};
 
 
-    // Particle system
-    std::unique_ptr<ParticleSystem> m_particleSystem;
-    VkRenderPass m_particleRenderPass{VK_NULL_HANDLE};
-    VkFramebuffer m_particleFramebuffer{VK_NULL_HANDLE};
+    // Effects and blended surfaces: vfx.expand, vfx.sort and the transparent pass.
+    std::unique_ptr<VfxRenderer> m_vfx;
+    VkImageView m_envPrefiltered{VK_NULL_HANDLE};   // setEnvMap: the transparent pass's IBL
+    VkImageView m_envIrradiance{VK_NULL_HANDLE};
     float m_deltaTime{0.016f};
-    float m_totalTime{0.0f};
-    std::queue<ParticleEmitterConfig> m_pendingEmits;
-    // m_totalTime until which an emitted particle can still be alive (the particles pass
-    // runs only until then); below zero: nothing was ever emitted.
-    float m_particlesLiveUntil{-1.0f};
-    bool m_particlesDrawn{true};   // setParticlesDrawn
+    float m_totalTime{0.0f};   // the sky's star seed
     uint32_t m_renderSeed{0};
     uint32_t m_framesSinceReset{0};   // render() calls since the last resetTemporalState
     uint64_t m_frameNumber{0};
     RenderQuality m_quality{RenderQuality::Realtime};
     uint32_t m_shadowLightsPerPixel{4};
-
-    [[nodiscard]] bool createParticleRenderPass();
-    [[nodiscard]] bool createParticleFramebuffer();
 
     // Render graph for centralized barrier tracking
     RenderGraph m_renderGraph;

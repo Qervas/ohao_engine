@@ -56,10 +56,13 @@ struct RenderScene::Impl {
     uint32_t tlasCapacity{0};
     std::vector<VkAccelerationStructureInstanceKHR> tlasHost;
     std::set<uint32_t> tlasDirty;
+    std::set<uint32_t> alphaSlots;   // live, visible instances with an alpha material (FORCE_NO_OPAQUE)
     bool tlasStructural{false};
 
     RenderSceneStats stats;
+    VfxFrame vfx;   // setVfx
     std::vector<Draw> draws;
+    std::vector<uint32_t> maskDraws, transparentDraws;   // indices into draws
     bool drawsDirty{true};
     uint64_t drawsVersion{0};
     // The draw list on the GPU (gpu::shared::DrawRecord each), rewritten whole when the
@@ -143,17 +146,37 @@ struct RenderScene::Impl {
         const bool live = instances.live(slot);
         vi.accelerationStructureReference = mesh && live ? rtAccel->getBlasAddress(mesh->blas) : 0;
         const bool visible = live && (g.flags & kInstanceVisible) != 0;
+        // Its materials' alpha modes: an instance with an alpha-tested or blended material is
+        // non-opaque to every ray (the BLAS is per mesh and opaque), so ray queries see its
+        // triangles as candidates and test them by their own material (rt/alpha_test.slang,
+        // pt_anyhit); one whose every material is blended is seen by camera rays only.
+        bool anyAlpha = false, allBlend = g.materialRefCount > 0;
+        if ((g.flags & (kInstanceEmitter | kInstanceViewModel)) == 0)
+            for (uint32_t k = 0; k < g.materialRefCount; ++k) {
+                const AlphaMode a = materials.alphaMode(instances.materialIndexFor(slot, k));
+                anyAlpha = anyAlpha || a != AlphaMode::Opaque;
+                allBlend = allBlend && a == AlphaMode::Blend;
+            }
+        else
+            allBlend = false;
         // A light's emitter mesh and a first-person gun are seen by the path tracer's camera rays
         // and its near-mirrors' first specular rays only (kRayMaskCamera).
         vi.mask = !visible ? 0u
                 : (g.flags & kInstanceEmitter) != 0   ? gpu::shared::kTlasMaskEmitter
                 : (g.flags & kInstanceViewModel) != 0 ? gpu::shared::kTlasMaskViewModel
+                : allBlend                            ? gpu::shared::kTlasMaskTransparent
                                                       : gpu::shared::kTlasMaskScene;
         vi.instanceShaderBindingTableRecordOffset = 0;
-        vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        vi.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+                   (anyAlpha ? VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR : 0u);
+
+        // The path tracer forces opacity on its rays while no instance has an alpha material.
+        if (anyAlpha && visible) alphaSlots.insert(slot);
+        else alphaSlots.erase(slot);
+        lights.setAlphaRays(!alphaSlots.empty());
 
         VkAccelerationStructureInstanceKHR& cur = tlasHost[slot];
-        if (structural || cur.mask != vi.mask ||
+        if (structural || cur.mask != vi.mask || cur.flags != vi.flags ||
             cur.accelerationStructureReference != vi.accelerationStructureReference)
             tlasStructural = true;
         if (structural || std::memcmp(&cur, &vi, sizeof(vi)) != 0) {
@@ -241,6 +264,8 @@ struct RenderScene::Impl {
 
     void rebuildDraws() {
         draws.clear();
+        maskDraws.clear();
+        transparentDraws.clear();
         for (uint32_t slot = 0; slot < instances.highWater(); ++slot) {
             if (!instances.live(slot)) continue;
             const InstanceGpu& g = instances.gpu(slot);
@@ -249,14 +274,22 @@ struct RenderScene::Impl {
             if (!mesh) continue;
             for (std::size_t s = 0; s < mesh->submeshes.size(); ++s) {
                 const SubmeshDesc& sub = mesh->submeshes[s];
-                const bool oneSided = !materials.doubleSided(instances.materialIndexFor(slot, sub.materialSlot));
+                const uint32_t material = instances.materialIndexFor(slot, sub.materialSlot);
+                const bool oneSided = !materials.doubleSided(material);
+                // A light's emitter and a first-person gun stay opaque whatever their material.
+                const AlphaMode alpha = (g.flags & (kInstanceEmitter | kInstanceViewModel)) != 0
+                                            ? AlphaMode::Opaque
+                                            : materials.alphaMode(material);
                 const std::array<uint32_t, 2> ml = s < mesh->submeshMeshlets.size() ? mesh->submeshMeshlets[s]
                                                                                    : std::array<uint32_t, 2>{0u, 0u};
                 draws.push_back(Draw{slot, mesh->indexOffset + sub.firstIndex, sub.indexCount,
                                      static_cast<int32_t>(mesh->vertexOffset), sub.materialSlot,
                                      mesh->aabbMin, mesh->aabbMax, &g.world, oneSided, ml[0], ml[1],
                                      (g.flags & kInstanceEmitter) != 0, (g.flags & kInstanceViewModel) != 0,
-                                     mesh->skinned});
+                                     mesh->skinned, alpha});
+                const auto index = static_cast<uint32_t>(draws.size() - 1);
+                if (alpha == AlphaMode::Mask) maskDraws.push_back(index);
+                if (alpha == AlphaMode::Blend) transparentDraws.push_back(index);
             }
         }
         drawsDirty = false;
@@ -289,7 +322,9 @@ struct RenderScene::Impl {
             r.draw = {d.firstIndex, d.indexCount, static_cast<uint32_t>(d.vertexOffset), d.slot};
             r.info = {d.materialSlot,
                       (d.oneSided ? gpu::shared::kDrawOneSided : 0u) | (d.emitter ? gpu::shared::kDrawEmitter : 0u) |
-                          (d.viewModel ? gpu::shared::kDrawViewModel : 0u) | (d.skinned ? gpu::shared::kDrawSkinned : 0u),
+                          (d.viewModel ? gpu::shared::kDrawViewModel : 0u) | (d.skinned ? gpu::shared::kDrawSkinned : 0u) |
+                          (d.alpha == AlphaMode::Mask ? gpu::shared::kDrawMask : 0u) |
+                          (d.alpha == AlphaMode::Blend ? gpu::shared::kDrawTransparent : 0u),
                       d.firstMeshlet, d.meshletCount};
             r.aabbMin = {d.aabbMin.x, d.aabbMin.y, d.aabbMin.z, std::bit_cast<float>(entries)};
             r.aabbMax = {d.aabbMax.x, d.aabbMax.y, d.aabbMax.z, 0.0f};
@@ -810,9 +845,20 @@ std::span<const LightDesc> RenderScene::shadowLights() const { return m->lights.
 VkBuffer RenderScene::rtLightBuffer() const { return m->lights.rtBuffer(); }
 uint32_t RenderScene::rtLightCount() const { return m->lights.rtCount(); }
 
+void RenderScene::setVfx(VfxFrame frame) { m->vfx = std::move(frame); }
+const VfxFrame& RenderScene::vfx() const noexcept { return m->vfx; }
+
 std::span<const RenderScene::Draw> RenderScene::draws() const {
     if (m->instances.consumeDrawsDirty() || m->drawsDirty) m->rebuildDraws();
     return m->draws;
+}
+std::span<const uint32_t> RenderScene::maskDraws() const {
+    (void)draws();
+    return m->maskDraws;
+}
+std::span<const uint32_t> RenderScene::transparentDraws() const {
+    (void)draws();
+    return m->transparentDraws;
 }
 
 VkBuffer RenderScene::drawTable() const { return m->drawTable.buffer; }

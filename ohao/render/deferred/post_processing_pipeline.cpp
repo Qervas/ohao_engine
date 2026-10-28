@@ -203,6 +203,10 @@ void PostProcessingPipeline::setGBufferInputs(VkImageView depth, VkImageView, Vk
     if (m_taaPass) m_taaPass->setGBufferInputs(depth, velocity);
 }
 
+void PostProcessingPipeline::setTransparencyMask(VkImageView mask) {
+    if (m_taaPass) m_taaPass->setTransparencyMask(mask);
+}
+
 PostProcessingPipeline::BoundGBufferInputs PostProcessingPipeline::boundGBufferInputs() const {
     BoundGBufferInputs b;
     if (m_taaPass)  { b.taaDepth  = m_taaPass->depthInput();  b.taaVelocity = m_taaPass->velocityInput(); }

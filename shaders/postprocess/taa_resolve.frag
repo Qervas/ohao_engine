@@ -10,12 +10,15 @@ layout(set = 0, binding = 0) uniform sampler2D currentFrame;
 layout(set = 0, binding = 1) uniform sampler2D historyFrame;
 layout(set = 0, binding = 2) uniform sampler2D velocityBuffer;
 layout(set = 0, binding = 3) uniform sampler2D depthBuffer;
+// The transparent pass's coverage (R8, sub-project 12, OPEN ruling 15): no velocity is written for
+// transparents, so where they cover a pixel its history weighs less (a reactive mask).
+layout(set = 0, binding = 4) uniform sampler2D transparencyMask;
 
 layout(push_constant) uniform TAAParams {
     vec2 texelSize;
     float blendFactor;     // Base blend factor (higher = more history)
     float motionScale;     // Velocity influence on blend
-    uint flags;            // Bit 0: useMotionVectors, Bit 1: useVarianceClipping
+    uint flags;            // Bit 0: useMotionVectors, Bit 1: useVarianceClipping, Bit 2: transparency mask bound
 } params;
 
 // Convert RGB to YCoCg color space for neighborhood clamping
@@ -146,6 +149,10 @@ void main() {
 
     // Higher motion = trust current frame more
     float blend = mix(params.blendFactor, 0.5, motionWeight);
+    // Under a transparent (particles, tracers, a blended pane): toward the current frame. A pixel
+    // no transparent covers keeps its blend exactly.
+    const float transparency = (params.flags & 4u) != 0u ? texture(transparencyMask, uv).r : 0.0;
+    if (transparency > 0.0) blend = mix(blend, 0.2, transparency);
 
     // Blend current and history
     vec3 result = mix(currentColor, historyColor, blend);

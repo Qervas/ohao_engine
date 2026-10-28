@@ -38,6 +38,7 @@
 #include "ecs/scene_types.hpp"
 #include "ecs/snapshot.hpp"
 #include "ecs/vfx.hpp"
+#include "ecs/vfx_draw.hpp"
 #include "ecs/world.hpp"
 #include "level/level_system.hpp"
 #include "reflect/registry.hpp"
@@ -603,8 +604,10 @@ int main(int argc, char** argv) {
     // vfx_step_ms: the `vfx` simulate system's step (records from the step's shots, hits and the
     // explosion, placed emitters, caps and expiry), its own timing. N rounds of 300 steps; the run
     // must write effect records and the explosion's.
-    std::vector<double> vfxMs;
-    std::size_t vfxWritten = 0;
+    // vfx_sync_ms (step 2): the `vfx_draw` sync system's work on the same frames: the live records to the
+    // frame's effects (vfxFrameOf; the set copied once, as vfx_draw copies it on a change).
+    std::vector<double> vfxMs, vfxSyncMs;
+    std::size_t vfxWritten = 0, vfxDrawn = 0;
     bool vfxExploded = false;
     for (int r = 0; r < rounds + 1; ++r) {
         ecs::FileAssetResolver files{OHAO_SOURCE_DIR};
@@ -626,6 +629,7 @@ int main(int argc, char** argv) {
         for (auto [e, pc] : reg.view<const ecs::PlayerController>().each())
             if (pc.input) reg.replace<ecs::Health>(e, ecs::Health{1e6f, 1e6f});
         w.sync();
+        auto drawnSet = std::make_shared<const vfx::VfxSet>(vfx.set());
         const auto action = [](const char* name, bool down) {
             InputEvent e;
             e.type = down ? InputEvent::Type::ActionDown : InputEvent::Type::ActionUp;
@@ -643,6 +647,13 @@ int main(int argc, char** argv) {
             w.sync();
             for (const auto& e : ecs::combatEvents(w)) vfxExploded |= e.kind == ecs::CombatEvent::Kind::Explode;
             if (r > 0) vfxMs.push_back(vfx.lastStepMs());
+            const auto s0 = std::chrono::steady_clock::now();
+            const render::VfxFrame drawn = ecs::vfxFrameOf(w, drawnSet, {});
+            const auto s1 = std::chrono::steady_clock::now();
+            if (r > 0) {
+                vfxSyncMs.push_back(std::chrono::duration<double, std::milli>(s1 - s0).count());
+                vfxDrawn = std::max(vfxDrawn, drawn.effects.size());
+            }
         }
         if (r > 0) vfxWritten += vfx.stats().written;
     }
@@ -712,7 +723,11 @@ int main(int argc, char** argv) {
     std::printf("  vfx_step_ms             median %8.4f   p95 %8.4f   (%zu steps, %zu records written)\n", svx.median, svx.p95,
                 vfxMs.size(), vfxWritten);
     const Verdict vvx = judge(budgets, vfxStep, "vfx_step_ms", svx.median, failures);
-    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx})
+    const Stats svs = stats(vfxSyncMs);
+    std::printf("  vfx_sync_ms             median %8.4f   p95 %8.4f   (%zu frames, up to %zu effects drawn)\n", svs.median,
+                svs.p95, vfxSyncMs.size(), vfxDrawn);
+    const Verdict vvs = judge(budgets, vfxStep, "vfx_sync_ms", svs.median, failures);
+    for (const Verdict* v : {&vf, &vr, &ve, &vp, &vb, &vc, &vk, &v16, &vrs, &vo, &vas, &vps, &vpa, &vpp, &vvx, &vvs})
         if (v->verdict != "reported")
             std::printf("    %-22s budget %.4f %s, gated from step %d: %s\n", v->name.c_str(), v->max,
                         v->name.ends_with("_us") ? "us" : "ms", v->from, v->verdict.c_str());
@@ -720,7 +735,8 @@ int main(int argc, char** argv) {
         if (name != "blockout_step_ms" && name != "blockout_rest_step_ms" && name != "events_1k_ms" && name != "player_step_ms" &&
             name != "boxes1k_step_ms" && name != "combat_shot_ms" && name != "combat_step_ms" && name != "enemies16_step_ms" &&
             name != "round_restart_ms" && name != "occlusion_ray_us" && name != "anim16_step_ms" &&
-            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms" && name != "vfx_step_ms")
+            name != "pose16_sync_ms" && name != "anim_step_ms" && name != "pose_sync_ms" && name != "vfx_step_ms" &&
+            name != "vfx_sync_ms")
             std::printf("  %-22s not measured yet (gated from step %d)\n", name.c_str(), b.value("gatedFrom", 0));
 
     const double ref = bench::readReference(refPath);
@@ -760,6 +776,8 @@ int main(int argc, char** argv) {
                            {"verdict", vpp.verdict}};
     out["vfx_step_ms"] = {{"median", svx.median}, {"p95", svx.p95}, {"min", svx.min}, {"steps", vfxMs.size()},
                           {"written", vfxWritten}, {"verdict", vvx.verdict}};
+    out["vfx_sync_ms"] = {{"median", svs.median}, {"p95", svs.p95}, {"min", svs.min}, {"frames", vfxSyncMs.size()},
+                          {"drawn", vfxDrawn}, {"verdict", vvs.verdict}};
     nlohmann::json busyJson = nlohmann::json::array();
     for (const auto& p : busy) busyJson.push_back({{"name", p.name}, {"corePct", p.corePct}});
     out["machine"] = {{"calibrationBeforeMs", cal0}, {"calibrationAfterMs", cal1}, {"referenceMs", ref},

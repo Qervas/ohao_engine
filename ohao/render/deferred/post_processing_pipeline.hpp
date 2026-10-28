@@ -47,6 +47,8 @@ public:
     // recreated and before onResize(): every pass that rewrites a descriptor set
     // must already hold the new views when it does.
     void setGBufferInputs(VkImageView depth, VkImageView normal, VkImageView velocity);
+    // The transparent pass's coverage mask, which TAA's history weighs less under (null: none).
+    void setTransparencyMask(VkImageView mask);
 
     // The G-buffer views TAA currently references (null where the pass is absent).
     struct BoundGBufferInputs {

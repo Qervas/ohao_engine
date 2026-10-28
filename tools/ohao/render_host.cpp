@@ -3,6 +3,7 @@
 #include "ecs/impact_marks.hpp"
 #include "ecs/instantiate.hpp"
 #include "ecs/render_extract.hpp"
+#include "ecs/vfx_draw.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "runtime/frame_capture.hpp"
@@ -73,6 +74,7 @@ api::RenderOutcome RenderHost::capture(const api::RenderRequest& r) {
         ecs::installRenderExtract(*m_world, m_renderer->renderScene());
         ecs::installInstantiate(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);
         ecs::installImpactMarks(*m_world, m_renderer->renderScene());   // as a window draws them
+        ecs::installVfxDraw(*m_world, m_renderer->renderScene(), m_renderer->getTextureManager(), m_assets);   // likewise
         if (m_settingsSet) runtime::applyRenderSettings(*m_renderer, m_settings);
     } else {
         m_renderer->resize(width, height);   // a no-op at the same size

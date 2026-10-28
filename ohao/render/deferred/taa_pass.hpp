@@ -24,6 +24,9 @@ public:
     void setDepthBuffer(VkImageView depth);
     // Both G-buffer inputs at once, one descriptor rewrite (see SSAOPass).
     void setGBufferInputs(VkImageView depth, VkImageView velocity);
+    // The transparent pass's coverage (R8, SHADER_READ_ONLY when TAA runs): history weighs less
+    // where it is set (sub-project 12, OPEN ruling 15). Null: none bound.
+    void setTransparencyMask(VkImageView mask);
     [[nodiscard]] VkImageView depthInput() const noexcept { return m_depthView; }
     [[nodiscard]] VkImageView velocityInput() const noexcept { return m_velocityView; }
 
@@ -60,6 +63,7 @@ private:
     VkImageView m_currentFrameView{VK_NULL_HANDLE};
     VkImageView m_velocityView{VK_NULL_HANDLE};
     VkImageView m_depthView{VK_NULL_HANDLE};
+    VkImageView m_maskView{VK_NULL_HANDLE};
 
     // Double-buffered history
     static constexpr uint32_t HISTORY_COUNT = 2;

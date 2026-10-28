@@ -126,24 +126,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
     m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
 
-    // Initialize particle system
-    m_particleSystem = std::make_unique<ParticleSystem>();
-    if (!m_particleSystem->initialize(device, physicalDevice, 65536)) {
-        OHAO_LOG(Warn, render, "DeferredRenderer: ParticleSystem failed (non-fatal)");
-        m_particleSystem.reset();
-    } else {
-        // Create render pass, framebuffer, and render pipeline for particle rendering
-        if (createParticleRenderPass() && createParticleFramebuffer()) {
-            if (m_particleSystem->initRenderPipeline(m_particleRenderPass)) {
-                OHAO_LOG(Debug, render, "DeferredRenderer: ParticleSystem OK");
-            } else {
-                OHAO_LOG(Warn, render, "DeferredRenderer: Particle render pipeline failed (non-fatal)");
-            }
-        } else {
-            OHAO_LOG(Warn, render, "DeferredRenderer: Particle render pass/framebuffer failed (non-fatal)");
-        }
-    }
-
     // Initialize sky pass (Preetham analytical sky)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
@@ -159,8 +141,15 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
+    // The RT traces alpha-test candidates (sub-project 12): RenderScene's tables (set 1) and the
+    // bindless textures (set 2). Without them neither technique initializes.
+    m_alphaTablesReady = m_rayQuery && m_textureManager && m_alphaTables.init(device);
+    const VkDescriptorSetLayout alphaTables = m_alphaTablesReady ? m_alphaTables.layout() : VK_NULL_HANDLE;
+    const VkDescriptorSetLayout textures = m_textureManager ? m_textureManager->getDescriptorSetLayout() : VK_NULL_HANDLE;
+
     // Initialize RT shadow technique (inline ray queries)
     m_rtShadow = std::make_unique<RTShadowTechnique>();
+    m_rtShadow->setAlphaLayouts(alphaTables, textures);
     if (m_rayQuery && m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
         m_useRTShadows = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTShadow OK");
@@ -171,12 +160,26 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize RT GI technique (inline ray queries)
     m_rtGI = std::make_unique<RTGITechnique>();
+    m_rtGI->setAlphaLayouts(alphaTables, textures);
     if (m_rayQuery && m_rtGI->init(device, physicalDevice, m_width, m_height)) {
         m_useRTGI = true;
         OHAO_LOG(Debug, render, "DeferredRenderer: RTGI OK");
     } else {
         OHAO_LOG(Warn, render, "DeferredRenderer: RTGI not available");
         m_rtGI.reset();
+    }
+
+    // Effects and blended surfaces (sub-project 12): the sun's shadow ray needs ray queries, the
+    // flipbooks and materials the bindless textures.
+    if (m_rayQuery && m_textureManager) {
+        m_vfx = std::make_unique<VfxRenderer>();
+        if (!m_vfx->initialize(device, physicalDevice, textures, m_gbufferPass->sceneSetLayout()) ||
+            !m_vfx->resize(m_width, m_height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView())) {
+            OHAO_LOG(Warn, render, "DeferredRenderer: VfxRenderer failed (no effects or blended surfaces drawn)");
+            m_vfx.reset();
+        }
+    } else {
+        OHAO_LOG(Warn, render, "DeferredRenderer: no ray queries or bindless textures: no effects or blended surfaces drawn");
     }
 
     OHAO_LOG(Info, render, "DeferredRenderer: fully initialized");
@@ -190,17 +193,9 @@ void DeferredRenderer::cleanup() {
 
     m_renderGraph.shutdown();
 
-    if (m_particleSystem) {
-        m_particleSystem->cleanup();
-        m_particleSystem.reset();
-    }
-    if (m_particleFramebuffer != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(m_device, m_particleFramebuffer, nullptr);
-        m_particleFramebuffer = VK_NULL_HANDLE;
-    }
-    if (m_particleRenderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(m_device, m_particleRenderPass, nullptr);
-        m_particleRenderPass = VK_NULL_HANDLE;
+    if (m_vfx) {
+        m_vfx->cleanup();
+        m_vfx.reset();
     }
 
     if (m_skyPass) {
@@ -235,6 +230,8 @@ void DeferredRenderer::cleanup() {
         m_lightClusters->cleanup();
         m_lightClusters.reset();
     }
+    m_alphaTables.destroy();
+    m_alphaTablesReady = false;
     if (m_gbufferPass) {
         m_gbufferPass->cleanup();
         m_gbufferPass.reset();
@@ -294,6 +291,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // The RenderScene's TLAS, built or refit by recordUpdates earlier in this command
     // buffer. Null without RT or before anything was built.
     const VkAccelerationStructureKHR sceneTlas = m_renderScene ? m_renderScene->tlas() : VK_NULL_HANDLE;
+    // The RT traces' alpha tables for this slot (its fence was waited on), and the textures.
+    const bool alphaSets = m_alphaTablesReady && m_renderScene && m_alphaTables.update(frameIndex, *m_renderScene);
+    const VkDescriptorSet alphaTablesSet = alphaSets ? m_alphaTables.set(frameIndex) : VK_NULL_HANDLE;
+    const VkDescriptorSet texturesSet = m_textureManager ? m_textureManager->getDescriptorSet() : VK_NULL_HANDLE;
     // RT shadows replace CSM whenever they trace this frame; CSM is the fallback.
     const bool rtShadows = m_useRTShadows && m_rtShadow && sceneTlas != VK_NULL_HANDLE && m_gbufferPass &&
                            !m_shadowLights.empty();
@@ -409,6 +410,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 si.quality = m_quality;
                 si.maxLightsPerPixel = m_shadowLightsPerPixel;
                 si.tlas = sceneTlas;
+                si.alphaTables = alphaTablesSet;
+                si.textures = texturesSet;
                 m_rtShadow->render(c, si);
                 if (!m_rtShadow->filters()) shadowsToLighting();   // reference: the trace is the output
             });
@@ -428,7 +431,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_lightingPass && m_rtGI->rendered())
             m_lightingPass->setSSGITexture(m_rtGI->getOutput().indirectLightView, VK_NULL_HANDLE);
     };
-    if (m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass) {
+    const bool giTraced = m_useRTGI && m_rtgiWanted && m_rtGI && sceneTlas != VK_NULL_HANDLE && m_gbufferPass;
+    if (giTraced) {
         m_renderGraph.addComputePass("rt.gi",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
@@ -450,6 +454,8 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.frameSlot = frameIndex;
                 gi.quality = m_quality;
                 gi.tlas = sceneTlas;
+                gi.alphaTables = alphaTablesSet;
+                gi.textures = texturesSet;
                 gi.instances = m_renderScene->instanceBuffer();
                 gi.lights = m_renderScene->lights();
                 gi.envMap = m_envView;
@@ -512,7 +518,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (m_passTimer) m_passTimer->end(cmd);
     };
 
-    // Sky and particles draw into the lighting output before SSS blurs it in place and SSR
+    // Sky draws into the lighting output before SSS blurs it in place and SSR
     // and post read it.
 
     // 4.5. Sky pass — fills sky pixels with Preetham sky
@@ -535,61 +541,39 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         timerEnd();
     }
 
-    // 4.6. Particle system (forward pass over HDR, before SSS and post-processing)
-    // Only while a particle can be alive: since the last emit plus its longest lifetime.
     m_totalTime += m_deltaTime;
-    const bool particlesLive = !m_pendingEmits.empty() || m_totalTime <= m_particlesLiveUntil;
-    const bool particlesRun = m_particleSystem && m_lightingPass && particlesLive && m_particlesDrawn;
-    if (particlesRun) {
-        timerBegin("particles");
 
-        // Process pending emits
-        while (!m_pendingEmits.empty()) {
-            m_particleSystem->emit(cmd, m_pendingEmits.front(), m_totalTime);
-            m_particlesLiveUntil = std::max(m_particlesLiveUntil, m_totalTime + m_pendingEmits.front().maxLifetime);
-            m_pendingEmits.pop();
+    // 4.6. vfx.expand and vfx.sort (sub-project 12): the effect records' particles in closed
+    //      form, lit at their centres by this frame's clusters, sun ray and RT GI, then the
+    //      alpha-blended batches back to front. The transparent pass draws them after SSR.
+    const bool vfxOn = m_vfx && m_renderScene && m_lightingPass && m_gbufferPass;
+    VfxRenderer::Lighting vfxLighting{};
+    if (vfxOn) {
+        m_vfx->prepare(frameIndex, *m_renderScene, {m_view, jitteredProj, m_cameraPos, m_nearPlane});
+        vfxLighting.lights = m_lightClusters ? m_lightClusters->lightBuffer(frameIndex) : VK_NULL_HANDLE;
+        vfxLighting.lightCount = m_lightClusters ? m_lightClusters->lightCount(frameIndex) : 0u;
+        vfxLighting.clusters = clustered ? m_lightClusters->clusterBuffer() : VK_NULL_HANDLE;
+        vfxLighting.sliceScale = m_lightClusters ? m_lightClusters->sliceScale() : 0.0f;
+        vfxLighting.sliceBias = m_lightClusters ? m_lightClusters->sliceBias() : 0.0f;
+        vfxLighting.ambient = m_ambient;
+        vfxLighting.tlas = sceneTlas;
+        vfxLighting.giRadiance = giTraced && m_rtGI->rendered() ? m_rtGI->getOutput().indirectLightView : VK_NULL_HANDLE;
+        vfxLighting.envIrradiance = m_envIrradiance;
+        vfxLighting.envPrefiltered = m_envPrefiltered;
+        vfxLighting.envIntensity = m_envIntensity;
+        if (m_vfx->hasParticles()) {
+            timerBegin("vfx.expand");
+            m_vfx->expand(cmd, frameIndex, vfxLighting);
+            timerEnd();
+            timerBegin("vfx.sort");
+            m_vfx->sort(cmd, frameIndex);
+            timerEnd();
         }
-
-        // Update particles (compute shader)
-        m_particleSystem->update(cmd, m_deltaTime);
-
-        // Begin particle render pass (renders over HDR output with depth test)
-        if (m_particleRenderPass != VK_NULL_HANDLE && m_particleFramebuffer != VK_NULL_HANDLE) {
-            VkRenderPassBeginInfo rpInfo{};
-            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpInfo.renderPass = m_particleRenderPass;
-            rpInfo.framebuffer = m_particleFramebuffer;
-            rpInfo.renderArea.extent = {m_width > 0 ? m_width : 1920u, m_height > 0 ? m_height : 1080u};
-
-            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            // Set dynamic viewport and scissor
-            VkViewport viewport{};
-            viewport.width = static_cast<float>(rpInfo.renderArea.extent.width);
-            viewport.height = static_cast<float>(rpInfo.renderArea.extent.height);
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-            VkRect2D scissor{};
-            scissor.extent = rpInfo.renderArea.extent;
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-            // Render particles as billboards
-            glm::mat4 viewProj = m_proj * m_view;
-            glm::mat4 invView = glm::inverse(m_view);
-            glm::vec3 cameraRight = glm::vec3(invView[0]);
-            glm::vec3 cameraUp = glm::vec3(invView[1]);
-            m_particleSystem->render(cmd, viewProj, cameraRight, cameraUp);
-
-            vkCmdEndRenderPass(cmd);
-        }
-        timerEnd();  // particles
     }
 
-    // Sky and particles drew into the lit image as a color attachment; SSS (compute), SSR
-    // and post sample it. Neither render pass's dependencies reach a compute read.
-    if (m_lightingPass && ((m_skyPass && m_skyEnabled) || particlesRun)) {
+    // Sky drew into the lit image as a color attachment; SSS (compute), SSR and post sample
+    // it. Its render pass's dependencies reach no compute read.
+    if (m_lightingPass && m_skyPass && m_skyEnabled) {
         VkMemoryBarrier toRead{};
         toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         toRead.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -600,7 +584,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 4.7. SSS — separable subsurface scattering blur, in place on the lit image (with sky
-    // and particles in it), over the tiles the G-buffer pass flagged for subsurface materials
+    // in it), over the tiles the G-buffer pass flagged for subsurface materials
     const VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
     if (m_sssPass && m_sssWanted && litOutput) {
         timerBegin("sss");
@@ -621,6 +605,18 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_ssrPass->execute(cmd, frameIndex);
         timerEnd();
     }
+
+    // 4.9. transparent — the blended surfaces and the effects over the lit image, back to front,
+    // each with its own blend state, against the G-buffer's depth (sub-project 12); their
+    // coverage goes to a mask TAA lowers its history weight under. After SSR, so a reflection
+    // never shows what stands in front of the mirror; before bloom, so it glows.
+    if (vfxOn && m_vfx->hasObjects()) {
+        timerBegin("transparent");
+        m_vfx->drawTransparent(cmd, frameIndex, *m_renderScene, vfxLighting, texturesSet,
+                               m_gbufferPass->sceneSet(frameIndex));
+        timerEnd();
+    }
+    if (m_postProcessing) m_postProcessing->setTransparencyMask(vfxOn ? m_vfx->transparencyMask() : VK_NULL_HANDLE);
 
     // 5. Post-processing (bloom, TAA, tonemapping): it times its own sub-passes.
     if (m_postProcessing && m_lightingPass) {
@@ -706,14 +702,10 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         }
     }
 
-    // Recreate particle framebuffer (it references lighting output which was resized)
-    if (m_particleSystem && m_particleRenderPass != VK_NULL_HANDLE) {
-        if (m_particleFramebuffer != VK_NULL_HANDLE) {
-            vkDestroyFramebuffer(m_device, m_particleFramebuffer, nullptr);
-            m_particleFramebuffer = VK_NULL_HANDLE;
-        }
-        createParticleFramebuffer();
-    }
+    // The transparent pass draws into the new lit image against the new depth.
+    if (m_vfx && m_lightingPass && m_gbufferPass &&
+        !m_vfx->resize(width, height, m_lightingPass->getOutputView(), m_gbufferPass->getDepthView()))
+        OHAO_LOG(Error, render, "DeferredRenderer: the transparent pass's targets failed at {}x{}", width, height);
 
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {
@@ -729,7 +721,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
 }
 
 void DeferredRenderer::resetTemporalState() {
-    m_particlesLiveUntil -= m_totalTime;   // the same remaining lifetime on the restarted clock
     m_totalTime = 0.0f;
     m_framesSinceReset = 0;
     m_prevViewProjValid = false;   // the next frame uses its own view-projection: no motion into it
@@ -750,6 +741,8 @@ void DeferredRenderer::setEnvMap(VkImageView source, VkImageView prefiltered, Vk
                                  VkSampler iblSampler, float intensity) {
     m_envView = source;   // RT GI's misses read the environment itself
     m_envIntensity = intensity;
+    m_envPrefiltered = prefiltered;   // the transparent pass lights blended surfaces as lighting does
+    m_envIrradiance = irradiance;
     if (m_lightingPass) m_lightingPass->setEnvironment(prefiltered, irradiance, iblSampler, intensity);
 }
 
@@ -888,45 +881,6 @@ void DeferredRenderer::setGizmoHighlightedAxis(GizmoAxis axis) {
     }
 }
 
-void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType type,
-                                       const glm::vec3& direction) {
-    if (!m_particleSystem) return;
-
-    ParticleEmitterConfig config;
-    switch (type) {
-        case ParticleType::MUZZLE_FLASH:
-            config = ParticleSystem::presetMuzzleFlash(position, direction);
-            break;
-        case ParticleType::IMPACT_SPARK:
-            config = ParticleSystem::presetImpactSpark(position, direction);
-            break;
-        case ParticleType::EXPLOSION:
-            config = ParticleSystem::presetExplosion(position);
-            break;
-        case ParticleType::SMOKE:
-            config = ParticleSystem::presetSmoke(position);
-            break;
-        case ParticleType::WATER_SPLASH:
-            config = ParticleSystem::presetWaterSplash(position, direction);
-            break;
-        default:
-            config = ParticleSystem::presetImpactSpark(position, direction);
-            break;
-    }
-
-    m_pendingEmits.push(config);
-}
-
-void DeferredRenderer::emitParticles(const ParticleEmitterConfig& config) {
-    if (!m_particleSystem || !m_particlesDrawn) return;
-    m_pendingEmits.push(config);
-}
-
-void DeferredRenderer::setParticlesDrawn(bool drawn) {
-    m_particlesDrawn = drawn;
-    if (!drawn) m_pendingEmits = {};
-}
-
 void DeferredRenderer::setRTGIRealtime(bool fullResolution, uint32_t rays) {
     if (m_rtGI) m_rtGI->setRealtime(fullResolution, rays);
     m_giFull = fullResolution;
@@ -999,97 +953,6 @@ void DeferredRenderer::importGraphTextures() {
     }
 
     OHAO_LOG(Debug, render, "DeferredRenderer: RenderGraph re-imported textures ({}x{})", w, h);
-}
-
-bool DeferredRenderer::createParticleRenderPass() {
-    if (!m_lightingPass || !m_gbufferPass) return false;
-
-    // Color attachment: HDR output from lighting (load existing content)
-    // Lighting render pass finalLayout = SHADER_READ_ONLY_OPTIMAL, so we must match that
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT; // HDR format
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    // Depth attachment: the G-buffer's, tested but never written (particles have
-    // depthWriteEnable off). It stays DEPTH_STENCIL_READ_ONLY, the layout every
-    // post-G-buffer reader (SSAO, sky, SSR, TAA) samples it in.
-    VkAttachmentDescription depthAttachment{};
-    depthAttachment.format = VK_FORMAT_D32_SFLOAT;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-    subpass.pDepthStencilAttachment = &depthRef;
-
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    renderPassInfo.pAttachments = attachments.data();
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
-
-    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_particleRenderPass) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create particle render pass");
-        return false;
-    }
-
-    return true;
-}
-
-bool DeferredRenderer::createParticleFramebuffer() {
-    if (m_particleRenderPass == VK_NULL_HANDLE || !m_lightingPass || !m_gbufferPass) return false;
-
-    VkImageView hdrView = m_lightingPass->getOutputView();
-    VkImageView depthView = m_gbufferPass->getDepthView();
-
-    if (hdrView == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return false;
-
-    std::array<VkImageView, 2> attachments = {hdrView, depthView};
-
-    VkFramebufferCreateInfo fbInfo{};
-    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbInfo.renderPass = m_particleRenderPass;
-    fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    fbInfo.pAttachments = attachments.data();
-    fbInfo.width = m_width > 0 ? m_width : 1920;
-    fbInfo.height = m_height > 0 ? m_height : 1080;
-    fbInfo.layers = 1;
-
-    if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_particleFramebuffer) != VK_SUCCESS) {
-        OHAO_LOG(Error, render, "DeferredRenderer: Failed to create particle framebuffer");
-        return false;
-    }
-
-    return true;
 }
 
 // ---------------------------------------------------------------------------

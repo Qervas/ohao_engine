@@ -46,7 +46,9 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/deferred/gpu_culling.hpp"
 #include "render/frame/pass_registry.hpp"
-#include "render/particles/particle_system.hpp"
+#include "ecs/combat.hpp"
+#include "ecs/physics_scene.hpp"
+#include "ecs/vfx.hpp"
 #include "render/scene/meshlet_builder.hpp"
 
 #include <algorithm>
@@ -82,7 +84,9 @@ struct SceneSpec {
     std::vector<std::string> post;
     std::optional<float> exposure;
     bool hud{false};   // the combat HUD over the frame (sub-project 7: the hud pass)
-    bool fx{false};    // a burst of kFxParticles in front of the camera (sub-project 9: the particles pass)
+    // Sub-project 12: the scripted moment of play_vfx_1080p before the frames: a grenade thrown and
+    // the rifle held down, stepped until the boom; the frames then step with the trigger held.
+    bool vfx{false};
     // Sub-project 10: the world steps before every frame (one fixed step, then one sync and the
     // frame, as a window runs), so the skinned instances' poses change every frame.
     bool animate{false};
@@ -92,10 +96,8 @@ struct SceneSpec {
 // each running wave from another phase (7 steps apart).
 constexpr int kAnimRigs = 16;
 
-// play_fx_1080p's burst: alive through every warm-up and timed frame (the renderer's fixed
-// 1/60 s frame step: 105 frames are 1.75 s), so each timed frame updates and draws all of them.
-constexpr uint32_t kFxParticles = 2000;
-constexpr float kFxLifetime = 4.0f;
+// play_vfx_1080p's script: steps from the throw to the boom (combat::kGrenade's 2.5 s fuse).
+constexpr int kVfxScriptSteps = 151;
 
 // The spec's table. The bench scenes are built in code (bench_world.hpp) and written to
 // build/render_bench/ by writeBenchScenes before the run.
@@ -108,14 +110,16 @@ const std::vector<SceneSpec>& sceneSpecs() {
         {"bench100k_1080p", "build/render_bench/bench100k.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f},
         // The play scene through the player's eyes with its HUD (health, ammo, crosshair).
         {"play_hud_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, true},
-        // The same view with 2,000 sparks in front of the eye: the only capture drawing particles.
-        {"play_fx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true},
         // 16 skinned rigs in the blockout, every pose changing every frame: skin, skin.bounds and
         // rt.blas.refit at full load (sub-project 10).
         {"anim16_1080p", "build/render_bench/anim16.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
         // The play scene stepped before every frame: its two skinned enemies (sub-project 10 step 2)
         // posed every frame, as in a window: the play scene's skin, skin.bounds and rt.blas.refit.
         {"play_anim_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, false, true},
+        // The play scene's effects (sub-project 12): a grenade's boom and smoke, the rifle's muzzles
+        // and impacts, stepped before every frame: vfx.expand, vfx.sort and transparent. Last: it
+        // installs the combat systems (physics, combat, vfx) on the bench's world.
+        {"play_vfx_1080p", "assets/scenes/blockout_play.scene.json", 1920, 1080, {"taa", "ssao", "bloom"}, 1.0f, false, true, true},
     };
     return s;
 }
@@ -702,6 +706,7 @@ struct Gpu {
     std::unique_ptr<host::RenderHost> host;   // before the world: it must outlive it
     std::unique_ptr<ecs::World> world;
     std::unique_ptr<api::Session> session;
+    bool vfxInstalled{false};
     Gpu() {
         assets = std::make_unique<ecs::FileAssetResolver>(".");
         host = std::make_unique<host::RenderHost>(*assets, api::HostKind::Headless);
@@ -720,35 +725,25 @@ struct Gpu {
 
     // Loads the scene and renders `frames` frames of it; empty on success, else why not.
     std::string render(const SceneSpec& spec, int frames) {
+        if (spec.vfx && !vfxInstalled) {
+            // As the CLI context installs them (before the load: the play scene's bodies and records).
+            ecs::installPhysics(*world, *assets);
+            ecs::installCombat(*world);
+            ecs::installVfx(*world, *assets);
+            vfxInstalled = true;
+        }
         const std::string loaded =
             session->call("scene.load", std::string(R"({"replace":true,"path":")") + spec.path + "\"}");
         if (loaded.rfind("{\"result\"", 0) != 0) return "scene.load failed: " + loaded.substr(0, 300);
-        if (spec.fx) {
-            DeferredRenderer* deferred = host->renderer() ? host->renderer()->getDeferredRenderer() : nullptr;
-            if (!deferred) return "no deferred renderer for the particle burst";
-            world->sync();   // the head's WorldTransform after the load's spawn
-            glm::vec3 eye{0.0f}, forward{0.0f, 0.0f, -1.0f};
-            for (auto [e, cam, wt] : world->registry().view<ecs::Camera, ecs::WorldTransform>().each()) {
-                if (!cam.active) continue;
-                eye = glm::vec3(wt.world[3]);
-                forward = -glm::normalize(glm::vec3(wt.world[2]));
-                break;
-            }
-            ParticleEmitterConfig burst;
-            burst.position = eye + forward * 2.0f;
-            burst.direction = glm::vec3(0.0f, 1.0f, 0.0f);
-            burst.spreadAngle = 1.2f;
-            burst.minSpeed = 0.5f;
-            burst.maxSpeed = 2.0f;
-            burst.minLifetime = burst.maxLifetime = kFxLifetime;
-            burst.startSize = 0.03f;
-            burst.endSize = 0.01f;
-            burst.colorStart = glm::vec4(4.0f, 2.4f, 0.8f, 1.0f);
-            burst.colorEnd = glm::vec4(1.0f, 0.3f, 0.05f, 0.0f);
-            burst.gravity = 0.5f;
-            burst.drag = 0.5f;
-            burst.emitCount = kFxParticles;
-            deferred->emitParticles(burst);
+        if (spec.vfx) {
+            // The script: G throws, fire held; the steps up to the boom (the frames step on with it held).
+            const std::string inject = session->call(
+                "input.inject", R"({"events":[{"action":"grenade","down":true},{"action":"fire","down":true},)"
+                                R"({"step":1,"action":"grenade","down":false}]})");
+            if (inject.rfind("{\"result\"", 0) != 0) return "input.inject failed: " + inject.substr(0, 300);
+            const std::string stepped =
+                session->call("world.step", "{\"frames\":" + std::to_string(kVfxScriptSteps) + "}");
+            if (stepped.rfind("{\"result\"", 0) != 0) return "world.step failed: " + stepped.substr(0, 300);
         }
         api::RenderRequest r;
         r.mode = "deferred";

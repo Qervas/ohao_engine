@@ -84,6 +84,8 @@ struct VfxSystem::Impl {
     bool setRead{false};
     std::string namedPath;   // what the world's VfxSet names (read once per path)
     std::string setPath;     // where the set in use came from ("" for the default)
+    uint64_t setVersion{1};  // changes whenever the set does (the renderer copies it then)
+    float dt{1.0f / 60.0f};  // the last step's (records' ages are counted in it)
     State st;
     std::vector<VfxWarning> warnings;
     std::set<std::pair<std::string, std::string>> warned;   // (code, what): once each
@@ -115,6 +117,7 @@ struct VfxSystem::Impl {
         namedPath = path;
         setPath.clear();
         set = vfx::defaultVfxSet();
+        ++setVersion;
         if (!first) st.records.clear();
         if (path.empty()) return;
         const auto file = assets.absolutePath(AssetRef{path, {}});
@@ -348,6 +351,7 @@ struct VfxSystem::Impl {
     void step(float dt) {
         const auto t0 = std::chrono::steady_clock::now();
         refreshSet();
+        this->dt = dt;
         ++st.steps;
         const auto events = combatEvents(world);
         std::size_t after = 0;   // the step's events after its last restart
@@ -400,9 +404,12 @@ std::vector<VfxRecord> VfxSystem::recordsSince(uint64_t since, std::size_t max, 
 
 const vfx::VfxSet& VfxSystem::set() const { return m->set; }
 const std::string& VfxSystem::setPath() const { return m->setPath; }
+uint64_t VfxSystem::setVersion() const noexcept { return m->setVersion; }
+float VfxSystem::stepDt() const noexcept { return m->dt; }
 
 void VfxSystem::setSet(vfx::VfxSet set) {
     m->set = std::move(set);
+    ++m->setVersion;
     m->setForced = true;
     m->setPath.clear();
     m->st.records.clear();

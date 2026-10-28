@@ -502,7 +502,7 @@ Result<VfxSet, std::vector<VfxError>> parseVfxSet(std::string_view json) {
 }
 
 VfxSet defaultVfxSet() {
-    // render/particles/particle_system.cpp's presets and runtime/combat_fx.cpp's dustFor, as data (the
+    // The old particle system's presets and combat_fx's dustFor (both deleted in step 2), as data (the
     // presets' spread angles are radians; the set's degrees). Dust and smoke blend as alpha and lit,
     // as the spec has them (the old path drew every particle additive).
     VfxSet s;

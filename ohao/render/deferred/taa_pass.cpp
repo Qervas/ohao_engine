@@ -105,6 +105,7 @@ void TAAPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     params.flags = 0;
     if (m_velocityView != VK_NULL_HANDLE) params.flags |= 1;
     if (m_useVarianceClipping) params.flags |= 2;
+    if (m_maskView != VK_NULL_HANDLE) params.flags |= 4;   // the transparency mask is bound
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
 
@@ -194,6 +195,10 @@ void TAAPass::setDepthBuffer(VkImageView depth) {
     m_depthView = depth;
 }
 
+void TAAPass::setTransparencyMask(VkImageView mask) {
+    m_maskView = mask;
+}
+
 void TAAPass::setGBufferInputs(VkImageView depth, VkImageView velocity) {
     m_depthView = depth;
     m_velocityView = velocity;
@@ -207,9 +212,9 @@ void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
     if (fallbackView == VK_NULL_HANDLE) fallbackView = m_historyViews[historyIdx];
     if (fallbackView == VK_NULL_HANDLE) return;  // No valid view at all
 
-    // ALWAYS write all 4 bindings — uninitialized descriptors cause SEGV on NVIDIA
-    std::array<VkDescriptorImageInfo, 4> imageInfos{};
-    std::array<VkWriteDescriptorSet, 4> writes{};
+    // ALWAYS write all 5 bindings — uninitialized descriptors cause SEGV on NVIDIA
+    std::array<VkDescriptorImageInfo, 5> imageInfos{};
+    std::array<VkWriteDescriptorSet, 5> writes{};
 
     // Binding 0: Current frame
     imageInfos[0].sampler = m_sampler;
@@ -258,7 +263,18 @@ void TAAPass::writeDescriptorSet(uint32_t slot, uint32_t historyIdx) {
     writes[3].descriptorCount = 1;
     writes[3].pImageInfo = &imageInfos[3];
 
-    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
+    // Binding 4: the transparency mask (fallback to current frame; flag bit 2 says it is bound)
+    imageInfos[4].sampler = m_sampler;
+    imageInfos[4].imageView = m_maskView != VK_NULL_HANDLE ? m_maskView : fallbackView;
+    imageInfos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet = m_descriptorSets[slot];
+    writes[4].dstBinding = 4;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[4].descriptorCount = 1;
+    writes[4].pImageInfo = &imageInfos[4];
+
+    vkUpdateDescriptorSets(m_device, 5, writes.data(), 0, nullptr);
 }
 
 bool TAAPass::createHistoryBuffers() {
@@ -414,9 +430,9 @@ bool TAAPass::createRenderPass() {
 }
 
 bool TAAPass::createDescriptors() {
-    // Bindings: 0 = current frame, 1 = history frame, 2 = velocity, 3 = depth
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    // Bindings: 0 = current frame, 1 = history frame, 2 = velocity, 3 = depth, 4 = transparency mask
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    for (uint32_t i = 0; i < 5; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
@@ -436,7 +452,7 @@ bool TAAPass::createDescriptors() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT;
+    poolSize.descriptorCount = 5 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

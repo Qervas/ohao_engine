@@ -46,7 +46,7 @@ ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
 ohao serve    [SCENE] [--out DIR] [--allow-path DIR]... [--seed S] [--log-level L] [--max-message N]
               [--pipe NAME] [--window [WxH] [--lockstep | --realtime] [--vsync] [--hidden]
                              [--mode deferred|rt_realtime|rt_offline] [--spp N]
-                             [--present immediate|mailbox|fifo] [--fx]]
+                             [--present immediate|mailbox|fifo]]
 every scene command: [--root DIR]  the project root that asset paths resolve against (default .)
 ```
 
@@ -134,7 +134,7 @@ one output line; every line runs, and the exit code is the worst one seen.
 $ printf '%s\n' '{"method":"world.snapshot","params":{"name":"base"}}' '{"method":"world.step","params":{"frames":30,"dt":0.0333333}}' '{"method":"world.query","params":{"names":["MetalSphere 2"],"fields":["/Transform/rotation"]}}' '{"method":"world.restore","params":{"name":"base"}}' > build/doc_tmp/spin.jsonl
 $ build/Release/ohao run build/doc_tmp/edited.scene.json --script build/doc_tmp/spin.jsonl
 {"method":"scene.load","result":{"entities":22}}
-{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4352}}
+{"method":"world.snapshot","result":{"name":"base","entities":22,"bytes":4416}}
 {"method":"world.step","result":{"frame":30}}
 {"method":"world.query","result":{"entities":[{"id":"910a2dec89025cc1","Transform":{"rotation":[0,0.25881878,0,0.96592593]}}],"count":1}}
 {"method":"world.restore","result":{"created":0,"destroyed":0,"changed":1,"frame":0}}
@@ -273,9 +273,9 @@ lists. stdout carries protocol messages only; logs go to stderr, and to the clie
 - **`--window [WxH]`** (default 1280x720) serves from the live host: a window a human can
   watch, lockstep by default (`--realtime` to play; `time.set` switches), `--hidden` for
   tests, `--present immediate|mailbox|fifo` (how it presents, default mailbox; a surface without
-  the mode falls back down that list; `--vsync` is `--present fifo`), `--fx` (combat's sparks, dust
-  and muzzle bursts while the timeline runs, as `ohao_game` draws them; a lockstep capture draws
-  none). Requests run once per frame, and each reply is sent after the frame
+  the mode falls back down that list; `--vsync` is `--present fifo`). Effects (muzzles, impacts,
+  smoke) are the world's and draw in every host, a lockstep window's captures equal to headless
+  ones. Requests run once per frame, and each reply is sent after the frame
   it caused was presented. In lockstep the window renders only when the world changed;
   `render.capture` renders the world as a headless host would (the same pixels, deferred
   only, at the window's size), in realtime it returns the next presented frame

@@ -129,9 +129,6 @@ after the frame's steps (LiveHost):
                       a bus's level is the schedule's snapshot and ducks unless a
                       session's audio.mix overrides it (listening only: device-side,
                       never the world, the schedule or a snapshot)
-  runtime::CombatFx   (LiveConfig::effects) the combat log's shots and hits -> particle emits
-                      (a muzzle burst at the drawn muzzle, sparks and the surface's dust),
-                      realtime only; a lockstep capture draws none
 once per batch of steps and before each render:
 World::sync()
   instantiate     MeshSource/MaterialOverride -> MeshRenderer,        installed by a host with
@@ -240,9 +237,13 @@ rt.shadows.filter   5x5 filter + temporal (realtime quality)
 rt.gi               one-bounce GI, half res 2 rays by default   [rtGI.enabled, .resolution, .rays]
 rt.gi.denoise       reprojection, 2 a-trous, upsample (realtime quality)
 lighting            froxel list + IBL + shadows + GI into the HDR image (+ env specular, its weight)
-sky, particles      into the HDR image
+sky                 into the HDR image
+vfx.expand          the effect records' particles in closed form, lit at their centres (sub-project 12)
+vfx.sort            each alpha batch's particles back to front (integer keys)
 sss                 subsurface blur on classified tiles   [sss]
 ssr                 half-res trace; resolve replaces env specular in place   [ssr]
+transparent         blended meshes and effects back to front over the lit image, soft against
+                    depth, each with its blend state; coverage into the mask TAA reads
 post.bloom, post.taa, post.tonemap   HDR to RGBA8   [capture post; exposure]  (bloom's input clamped at luminance 4)
 gizmo               transform handles
 hud                 the HudList over the final image (only when the list has items:      [capture hud]
@@ -469,7 +470,7 @@ the fullscreen raster one.
 5. **Wire it into `DeferredRenderer`** (`deferred_renderer.{hpp,cpp}`): a
    `std::unique_ptr<…Pass>` member; create it in `initialize` (non-fatal: log a `Warn`
    and `reset()` on failure, as SSR does); record it in `render()` at its place in the
-   frame (after lighting: sky, particles, SSS, SSR, post, gizmo) inside
+   frame (after lighting: sky, vfx.expand, vfx.sort, SSS, SSR, transparent, post, gizmo) inside
    `timerBegin("name") … timerEnd()`; resize it in `onResize`, and hand it again any view
    of another pass that a resize recreates. A pass left at its creation size is invisible
    to validation and wrong on screen. A graph pass is timed under its `addPass` name.
@@ -529,7 +530,7 @@ it is measured under its name and gated by a budget.
 
 ```console
 $ python -c "import json, re, fnmatch; names = re.findall(r'\{\"([a-z.]+)\", PassKind', open('ohao/render/frame/pass_registry.hpp').read()); pats = [p for b in json.load(open('tests/bench/render_budgets.json'))['budgets'] for p in b.get('passes', [])]; print(len(names), 'passes registered; budget names matching none:', [p for p in pats if not fnmatch.filter(names, p)])"
-32 passes registered; budget names matching none: []
+34 passes registered; budget names matching none: []
 $ build/Release/render_bench.exe --check tests/bench/render_budgets.json > /dev/null   # slow
 ```
 
