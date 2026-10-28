@@ -35,7 +35,9 @@
     "footstep_concrete": {"files": "footsteps/concrete_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
     "footstep_metal":    {"files": "footsteps/metal_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
     "footstep_wood":     {"files": "footsteps/wood_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
-    "footstep_default":  {"files": "footsteps/default_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true}
+    "footstep_default":  {"files": "footsteps/default_{n}", "bus": "foley", "priority": 100, "shape": "near", "holdMs": 250, "send": 0.1, "occlude": true},
+    "bed_outdoor":       {"files": "ambience/outdoor", "bus": "ambience", "priority": 60, "shape": "ear", "holdMs": 8000, "volume": 0.5},
+    "bed_room":          {"files": "ambience/room", "bus": "ambience", "priority": 60, "shape": "ear", "holdMs": 8000, "volume": 0.4}
   },
   "ducks": [
     {"on": "fire", "bus": "ambience", "db": -6, "attackSteps": 1, "releaseSteps": 15},
@@ -48,9 +50,9 @@
     "won":  {"buses": {"world": {"db": -4}}, "inSteps": 60, "outSteps": 30}
   },
   "reverb": {
-    "outdoor":  {"room": 0.30, "damp": 0.60, "wet": 0.05},
-    "room":     {"room": 0.70, "damp": 0.40, "wet": 0.25},
-    "corridor": {"room": 0.80, "damp": 0.30, "wet": 0.30}
+    "outdoor":  {"room": 0.30, "damp": 0.60, "wet": 0.05, "bed": "bed_outdoor"},
+    "room":     {"room": 0.70, "damp": 0.40, "wet": 0.25, "bed": "bed_room"},
+    "corridor": {"room": 0.80, "damp": 0.30, "wet": 0.30, "bed": "bed_room"}
   },
   "defaultZone": "outdoor"
 }

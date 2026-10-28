@@ -142,11 +142,12 @@ void t27_zone_change_command() {
     const auto first = only(r.run(1), AudioCommand::Op::Zone);
     CHECK(first.size() == 1 && first[0].zone == "room", "the first step: the room's zone");
     CHECK(first[0].step == 1 && first[0].blendSteps == kZoneBlendSteps, "at step 1, blended over 30 steps");
-    CHECK(first[0].bed.empty(), "the slice's room preset has no bed yet (step 3 adds the beds)");
+    CHECK(first[0].bed == "bed_room", "with the room preset's bed (assets/audio/ambience/room.wav)");
     CHECK(only(r.run(5), AudioCommand::Op::Zone).empty(), "staying in the room writes nothing");
     r.move({1.5f, 1.6f, 6.0f});   // out through the doorway, into the open
     const auto out = only(r.run(1), AudioCommand::Op::Zone);
-    CHECK(out.size() == 1 && out[0].zone == "outdoor" && out[0].step == 7, "outside: the bank's default zone, at step 7");
+    CHECK(out.size() == 1 && out[0].zone == "outdoor" && out[0].step == 7 && out[0].bed == "bed_outdoor",
+          "outside: the bank's default zone and its bed, at step 7");
     CHECK(r.audio->zone() == "outdoor", "the schedule's zone");
 }
 
