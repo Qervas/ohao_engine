@@ -484,9 +484,21 @@ renderer, 25 the slice.
 Empty until Frank plays `build/Release/ohao_game.exe assets/scenes/blockout_play.scene.json
 --latency`. Each item is closed by his note, a fix with its test, or a ruling that it stays.
 
-| # | Item | Frank's note | Status |
-|---|---|---|---|
-| A1 | (Frank) | — | — |
+What to try is in the second column; the rows are open until Frank has played (Task 4 step 3).
+
+| # | Item | What to try | Frank's note | Status |
+|---|---|---|---|---|
+| A1 | Enemy bodies | Stand behind a pillar, then step out: idle, chase at a run, aim (pitched toward you), fire bursts, reload | | open |
+| A2 | Hit reactions | Shoot an enemy without killing it: a flinch per round that hurts | | open |
+| A3 | Death clip (ruling 7) | Kill both: the fall is the clip, the body stays where it fell, `body_fall` sounds once | | open |
+| A4 | Arms idle | Stand still: the breath; walk: the bob | | open |
+| A5 | Arms fire | Fire single rounds and bursts: the fire clip on the hands | | open |
+| A6 | Kick feel (ruling 8) | The procedural view kick at half amplitude on top of the clip: too much, too little? | | open |
+| A7 | Reload | Press R part-empty and run dry: the rifle rolls, the magazine comes out and goes home as the weapon reloads | | open |
+| A8 | Reload sounds at the ear | `mag_out` and `mag_in` from your own arms play at the ear, not from out in the room | | open |
+| A9 | ADS (ruling 11) | Hold the right mouse button: sights to the eye over 0.2 s, view 75° to 55°, cone halved; aim drops while reloading | | open |
+| A10 | Sprint | Sprint forward: the rifle carried across the body; aiming leaves the sprint pose | | open |
+| A11 | Latency and pacing | `--latency` readout while turning: look latency under 15 ms; pacing (SP9 ruling 21) as you feel it | | open |
 
 ## Done criteria
 
@@ -771,3 +783,71 @@ section holds.
   include the arms (three animators); every bench run in step 3 was noisy (`pose_sync_ms` 0.0271 ms
   median against 0.02), so their verdict waits for Task 4's quiet rerun.
 - **`tools/list` (OPEN ruling 13):** unchanged at 24,137 bytes (no tool changed in step 3).
+
+## As built (step 4)
+
+Task 4 of the plan (2026-10-28): the gate and the close. Change record:
+`docs/changes/2026-10-28-animation-step4.md`. Where the build differs from the text above, this
+section holds.
+
+- **Frank's direction (2026-10-28):** cartoon CC0 characters are fine for now; the technology
+  must be high quality and aim at photorealism, so that photoreal art dropped in later holds up.
+  No art changed for it. What it asks of the tech, as built: the skinning is exact (a CPU skin
+  matches to 1e-5), the deformed mesh is what every renderer sees (G-buffer, meshlets, RT
+  shadows and GI, the path tracer), motion vectors come from the previous pose, and nothing in
+  the pipeline assumes flat-shaded or low-poly content.
+- **One engine defect, found by the gate and fixed** (`perf(render)`, e10c52f1): the skinned
+  BLAS updates were recorded one build call each, behind a full barrier, sharing one scratch
+  buffer, so the GPU ran them one after another. With the arms the play scene refits three, and
+  `rt.blas.refit` measured 0.101 ms (p95 0.102) against 0.1 on a quiet run.
+  `RTAccelerationStructure::recordBlasUpdates` now records a frame's updates in one call, each
+  with a scratch slice at the device's scratch offset alignment, after one barrier:
+  `play_anim_1080p` 0.049 ms, `anim16_1080p` 0.136 → 0.013 ms. Test:
+  `skinning_gpu_test` `t24_refits_batched` (two moving rigs, one build call a frame).
+- **`pose_sync_ms`** (0.0271 noisy in step 3) measured 0.0098 ms median, 0.0115 p95, with the
+  three animators on a near-quiet machine (calibration ×1.02): the step 3 number was load, not
+  the arms.
+- **The gate** (`python tools/check.py --all` after e10c52f1): 46 of 51 tests passed. Two of
+  the failures were the monograph's animation unit, which still cited the old one-call refit;
+  ab7a0918 fixed the cite, and `check_docs` (124/124) and `monograph_structure` (16/16) passed
+  after it. The other three were benches, none SP10's:
+  - `scene_bench` was noisy in the gate and in one rerun (calibration 61.9–68.6 ms against a
+    reference of 23.2, other processes 173% of a core). It is not a verdict.
+  - `render_bench` was quiet; its only miss is `cornell_720p` lighting at 0.367 ms (p95 0.369)
+    against 0.32. That miss has stood since sub-project 5 step 4 and is parked by Frank.
+  - `feel_bench` was quiet; its only miss is pacing (below).
+
+  Every SP10 budget passed on quiet runs (median / p95, budget):
+  - `render_bench`:
+    - `anim16_1080p`: `skin` + `skin.bounds` 0.010 / –, against 0.25; `rt.blas.refit` 0.013 /
+      0.013, against 0.6.
+    - `play_anim_1080p`: `skin` + `skin.bounds` 0.0036 / –, against 0.05; `rt.blas.refit`
+      0.051 / 0.060, against 0.1.
+    - `play_hud_1080p`: frame 2.269 / 2.278, against 2.39.
+  - `physics_bench` (other processes 30% of a core):
+    - `anim16_step_ms` 0.0016 / 0.0018, against 0.05.
+    - `pose16_sync_ms` 0.0071 / 0.0073, against 0.1.
+    - `anim_step_ms` 0.0008 / 0.0011, against 0.01.
+    - `pose_sync_ms` 0.0099 / 0.0113, against 0.02.
+
+  The other gates:
+  - Validation: `check_validation.py` 14/14 with zero messages (the rig and the play scene;
+    deferred, `rt_offline`, `rt_realtime` and NRD).
+  - Goldens: 30/30 exact, none moved.
+  - `deferred_determinism_gpu_test` 80/80; `cull_parity_gpu_test` 49/49;
+    `skinning_gpu_test` 23/23.
+  - `feel_bench`, quiet:
+    - Look latency (median / p95): immediate 6.62 / 45.1 ms, the gated mode, against 15;
+      mailbox 4.94 / 10.5; fifo 33.7 / 265.
+    - Pacing: p99/median 2.62 in immediate, against 1.5. This is SP9 ruling 21's open gate,
+      awaiting Frank. Mailbox measured 1.83.
+- **The hand test** (Task 4 step 3) stays open: the table under "Hand-test acceptance" lists
+  what to try, with Frank's notes to come.
+- **Rulings that stay provisional until Frank rules:** 1 (CC0 or our own content), 2 (in place,
+  no root motion), 3 (compute skinning), 4 (deterministic poses from the step count), 5 (the
+  order), 6 (out of scope: face, cinematics, third-person, ragdoll); 7 (the death clip, the
+  `Transform` upright); 8 (the procedural kick at half amplitude over the fire clip); 11 (ADS:
+  0.2 s, the linear cone halving at 1, 75° → 55° in live frames only, aim dropping while
+  reloading); 13 (`tools/list` 24,137 of 24,576 bytes, no cap raised); 16 (the SP10 budgets at
+  their proposals, none moved). 10 is done (`Fox.glb` and `BrainStem.glb` deleted in step 2,
+  confirmed absent). 9, 12, 14, 15, 17 and 18 stand as built in steps 1–3.
