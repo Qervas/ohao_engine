@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ohao:scene:1",
   "title": "OHAO scene (*.scene.json), document version 1",
-  "description": "Generated from the engine type registry; schemaHash 5b3aa73f78559120. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
+  "description": "Generated from the engine type registry; schemaHash c7bf5b22cac98af4. Missing fields take their defaults. Unknown component blocks are preserved; unknown fields inside known components are errors. Ids, parents, cycles and singletons are checked by the engine.",
   "type": "object",
   "required": ["format", "version", "entities"],
   "properties": {
@@ -1129,6 +1129,17 @@
           "default": "reload",
           "allOf": [{ "type": "string" }],
           "maxLength": 64
+        },
+        "adsTime": {
+          "description": "Time from the hip to the sights (and back); aimed, the cone halves",
+          "default": 0.2,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 10 }]
+        },
+        "aim": {
+          "description": "Action that aims down the sights while held (a player's)",
+          "default": "aim",
+          "allOf": [{ "type": "string" }],
+          "maxLength": 64
         }
       },
       "additionalProperties": false
@@ -1176,6 +1187,11 @@
           "description": "Muzzle flash left (the Muzzle's light is on while above 0)",
           "default": 0,
           "allOf": [{ "type": "number", "minimum": 0 }]
+        },
+        "aim": {
+          "description": "0 from the hip, 1 down the sights; the cone narrows linearly to half",
+          "default": 0,
+          "allOf": [{ "type": "number", "minimum": 0, "maximum": 1 }]
         }
       },
       "additionalProperties": false
