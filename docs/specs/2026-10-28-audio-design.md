@@ -713,6 +713,53 @@ from the design above, and why:
 - **A sound's `send` is parsed but not yet applied per voice**: a bus sends at one level. Step 3's
   player sets it per voice.
 
+## As built (step 3)
+
+The schedule and the player (plan Task 3, `docs/changes/2026-10-28-audio-step3.md`). What differs
+from the design above, and why:
+
+- **The log is read with `commandsSince(since, max, dropped)`** (and `nextSeq()`, `steps()`), a log
+  of 4,096; `audioCommands(world)` is the step's own. `describeAudioCommand` prints one line per
+  command (`play step 41 enemy_fire#2 weapons prio 220 ... played`), what the tests and the trace
+  compare.
+- **What a snapshot carries:** the voice table, the next voice id, the round-robin counters, each
+  bus's duck target, release and hold, the zone, the snapshot and the schedule's step counter (so a
+  restart's step numbers are the round start's). The log's next `seq` is not restored: a replayed
+  step writes new `seq`s with the same content, as the design says.
+- **A restore resends the mix as `resync` commands.** After a restore (a restart is one) the step
+  writes `stop_world` (`resync` unless it is the restart's), then the zone, the snapshot and every
+  ducked bus as the restored state has them, marked `resync`, then exactly the commands a recording
+  wrote. A player already in that zone or snapshot ignores the command. The design said only that
+  the schedule resumes; without the resync the device kept the dead snapshot after a restart.
+  Tests compare schedules with `resync` lines left out.
+- **The snapshot's blend** is the entered snapshot's `inSteps`, and back to `default` the left
+  one's `outSteps` (the design gave only `inSteps`; `default` has none).
+- **Ducks hold `holdMs` of the ducking sound** past its start; the deepest active rule a bus has
+  wins; a `bus` command goes out when the target changes, over the rule's attack going down and the
+  release of the rule that set the level going up.
+- **Footsteps:** a character whose `Animator` graph has `foot_l`/`foot_r` events plays its steps
+  from them (`footstep_<surface>` from `PhysicsScene::playerInfo(character).surface`, at the entity,
+  scaled by its ground speed), and its physics footsteps are skipped; the player keeps physics'.
+  The enemy graph's walk and walk_aim clips plant at 0.08 s (`foot_r`) and 0.60 s (`foot_l`), run
+  and run_aim at 0.12 s and 0.49 s (each foot's plant, by forward kinematics over the glb).
+- **`trackVoice` stays** as the schedule's entry for a voice started outside a rule (tests).
+- **The player** (`runtime/audio_player.*`): `LiveConfig::sound` (renamed from `footsteps`);
+  `ohao_game --mute` leaves it off, and the schedule still runs. The clock is as designed. A bed is
+  its preset's bank sound (`bed_outdoor`, `bed_room`: the ambience bus, `shape: ear`, looped,
+  faded in over the zone's blend). `setVoiceOcclusion` ramps a voice's level; its low-pass moves at
+  once. A bus sends at the largest `send` of the sounds on it (a per-voice send would need a send
+  node per voice); in the slice that sends the player's `fire` at `enemy_fire`'s 0.35 (its own:
+  0.15) and the foley at `body_fall`'s 0.15 (the rest: 0.1 or none).
+- **`OHAO_AUDIO_TRACE=1`** makes hosts log every command at Info on the `audio` channel
+  (`schedule: ` + the line), so `check_live` compares a window's schedule with a headless session's
+  through `log.read` without Task 4's `audio.info`.
+- **Beds and folder notes:** `tools/audio/make_ambience.py` writes `assets/audio/ambience/outdoor.wav`
+  and `room.wav` (8 s seamless loops, 48 kHz, random-phase spectra, seeds 1101 and 1102); OPEN 19
+  stays generated.
+- **Budgets measured** (`audio_bench`, step 3): `schedule_step_ms` median 0.0006 ms (p95 0.0034),
+  `schedule16_step_ms` 0.0005–0.0027 ms (p95 0.013–0.019, 8 rays capped), `submit_frame_ms` 0.0009 ms
+  (p95 0.0035), `bank_load_ms` 8.5–11.4 ms; the proposals stand (OPEN 11).
+
 ## Rulings for Frank
 
 PROVISIONAL (recommended by the post-SP7 roadmap; Frank deferred them to this row; the spec is

@@ -41,6 +41,9 @@ C:/Users/djmax/scoop/shims/blender.exe -b --factory-startup --python tools/level
 - **Source:** `C:\Users\djmax\Desktop\games\somnabulate\assets\hub\audio\events\`,
   `move.footstep.<surface>.walk_NN.wav` (read only).
 - **Staged into:** `audio/footsteps/<surface>_<n>.wav`: Somnabulate's wood as `wood`, its tile
-  as `concrete`. The window host plays a surface from here when this folder has it, else
-  from `assets/audio/footsteps/` (`ohao/runtime/footsteps.hpp`).
+  as `concrete`. The bank (`assets/audio/slice.audio.json`, `folders`) takes a sound from the
+  first folder holding any of its variants, so a window's `AudioPlayer` plays a surface from here
+  when this folder has it, else from `assets/audio/footsteps/` (`resolveSoundFiles`,
+  `ohao/audio/audio_bank.hpp`). The folder may hold other staged sounds instead (see its
+  `audio/README.upstream.md`).
 - **Staged by:** `python tools/audio/stage_somnabulate_footsteps.py`.

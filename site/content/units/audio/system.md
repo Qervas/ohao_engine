@@ -126,8 +126,8 @@ A default `SoundShape` is 1 m, 50 m and rolloff 1. Against
 `ma_spatializer_config_init`, which already selects the inverse model, a minimum
 distance of 1 and rolloff 1, only the maximum changes miniaudio's behaviour (its
 default is `MA_FLT_MAX`); the rest are defaults written down. The shape makes
-them a choice per sound: the window host gives gunfire 1 to 60 m and footsteps,
-landings and impacts 0.5 to 20 m at rolloff 1.5 (`runtime/game_audio.cpp`). A
+them a choice per sound: the slice's bank gives gunfire 1 to 60 m and footsteps,
+landings and impacts 0.5 to 20 m at rolloff 1.5 (`assets/audio/slice.audio.json`). A
 shape marked `occluded` also routes the sound through a low-pass node at
 `kOccludedLowPassHz` (1,200 Hz) on its way to its bus's group, beside the −8 dB
 cut in the gain above, so muting the bus still silences it
@@ -264,10 +264,10 @@ Finished one-shots are not freed when they end; they are freed when someone asks
 Skip it and every fired one-shot stays in the map, attached to the endpoint,
 being mixed as silence. The voice cap reaps too, before it counts voices, but
 only when a capped SFX sound starts. The one caller that runs every frame is the
-window host, which owns the engine's single `AudioSystem` (footsteps and combat
-sounds play through it) and reaps after the frame's steps:
+window host, which owns the engine's single `AudioSystem`; its `AudioPlayer`
+plays the voice schedule through it and reaps after the frame's steps:
 
-{{cite ohao/runtime/live_host.cpp "if (m_audio) m_audio->update();   // finished sounds free their voices"}}
+{{cite ohao/runtime/audio_player.cpp "m_audio->update();   // finished sounds free their voices"}}
 
 `ohao_audio` is on the link line of every example —
 

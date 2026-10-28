@@ -123,7 +123,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 
 | Suite | Covers |
 |---|---|
-| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices (the present mode asked for, else the next one down: immediate, mailbox, fifo), the frame log (`sp9_t19_*`, `sp9_t20_*`: a look movement's latency from its poll to the present of the frame showing it, the stage medians, p95 by linear interpolation, the newest frames only, the ring; frame time percentiles and steps per frame), capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, which footstep sound plays (round robin, the local folder first, `default`), which weapon sound each combat event plays (by shooter and surface), the click that captures the cursor never reaching the input map; sub-project 9 step 3 (`sp9_t21_*`): combat's particles by event (a muzzle burst at the drawn muzzle along the round, sparks and the surface's dust per hit, nothing when not realtime), the voice cap (30 sounds started, 24 play, the 6 quietest at the listener lost and counted), the distance curves per kind, the occlusion ray (a wall between the listener and an enemy's round: occluded, 8 dB down through a 1.2 kHz low-pass; none for the player's own) — all on a mixer without a device; sub-project 10 (`sp10_t23_*`): the handling sounds an animation event plays (`mag_out`, `mag_in`, `bolt`, `body_fall`; an enemy's at it with a ray, the player's at the ear), the player's arms' events the player's own (step 3) |
+| `runtime_tests` | the runtime shell without a window: fixed-step clock, the timeline (lockstep, realtime, pause), the input map (actions, axes, the virtual device, key names), swapchain choices (the present mode asked for, else the next one down: immediate, mailbox, fifo), the frame log (`sp9_t19_*`, `sp9_t20_*`: a look movement's latency from its poll to the present of the frame showing it, the stage medians, p95 by linear interpolation, the newest frames only, the ring; frame time percentiles and steps per frame), capture images (the PNG writer round trips through stb_image, crop, the preview downscale, JPEG), `render.stats`' per-pass medians, the click that captures the cursor never reaching the input map; sub-project 9 step 3 (`sp9_t21_*`): combat's particles by event (a muzzle burst at the drawn muzzle along the round, sparks and the surface's dust per hit, nothing when not realtime); the audio player (sub-project 11 step 3, `t29_*`, on a mixer without a device): two steps of one frame start a step apart, the newest a step ahead; a command whose time has passed at once and counted late; paused or lockstep at once plus the horizon, then a new anchor; a step back (a restore) a new anchor; the play scene's bank decoded once, no file opened by 240 steps of fighting |
 | `log_tests` | the logger: level filter, ring wrap and `dropped`, repeat collapse, channel filter, paging, concurrent writers, sinks, the 1 KB cut, the stderr format |
 | `reflect_tests` | registry, schema export, JSON writer and reader, float formatting, the dependency rule, the source lints (nondeterminism, prints, literal light positions, float atomics in shaders) |
 | `scene_tests` | engine registrations, ids, the scene codec, error corpus, migration, snapshots, instantiate (fake backend) |
@@ -134,7 +134,7 @@ $ python tests/level/check_level_assets.py > /dev/null
 | `combat_tests` | combat (test 15): damage and death (the dead take none), 10 Hz exactly at 60 Hz steps, semi-automatic one round a press, the magazine and its reload (none during it, `reload` on a part-empty magazine only), a hit on a box with `Health` (point, normal, 25 damage), a round from inside the shooter's capsule through a trigger, a wall's surface and distance, the spread cone (10,000 draws, mean 2/3 of it), bloom growing and recovering, seeded patterns, recoil kicking and recovering, a turret hitting the player, the dead not firing (id order), two runs and a snapshot's replay bit for bit, the play scene's rifle; enemies (test 16): spawned at the enemy spawns, idle while the player is behind them, seeing and chasing, attacking after the reaction time (21 steps), bursts of 3 at 4 Hz with 0.8 s between, giving up 3 s after losing the line, woken by a hit, dead ones parked with no character, their Transform upright (the death clip falls), their fire killing the player, two runs and a mid-fight snapshot replaying bit for bit, the play scene's two enemies; the round (test 17): `round_start` once, a restart 180 steps after the player's death equal to the round's start (`world.hash`, poses, health, ammo, a knocked crate), the `restart` key, a dead player neither walking, turning nor firing, a win once both enemies die (waiting for `restart`, which brings both back), no round without `Round`, the same play after a restart, and after a won round's restart, bit for bit, and the play scene's won round restarting to the round start's `world.hash` (its enemies' yaw of exactly 180, rotations bit for bit); presentation (`fx_*`): the muzzle light on for its 3 steps then off, impact marks (64 at most, the oldest reused, never saved or hashed, on an enemy's body box and following it, none on the player, cleared by a restart), the HUD list (health, ammunition, the crosshair opened by bloom, the hit marker for 0.15 s and the vignette for 0.3 s, DEAD with the restart countdown, CLEARED, nothing without a player); the first-person gun (sub-project 9 test 21, `t21_*`): the rest pose (the remap only), the remap (every point within `depthScale` of its distance, projected through the scene's 75° where the original lands through 60°), sway lagging a 10° turn by 0.8° and returning, one bob cycle per 0.75 m walked (none standing or in the air), a kick of 3 cm and 2.5° per round returning, a restart resetting it, `world.hash`, saves and snapshots untouched by it; the won screen without crosshair or hit marker; the enemy's animation (sub-project 10, `t23_*`, `t25_*`): each AI mode and combat event giving its state in the same step (move at the chase speed, combat from the step it attacks, a kick per round, a flinch per round that hurt it, the death clip held at its end, the Transform upright, `body_fall` once), the reload clip's `mag_out`, `mag_in` and `bolt` 36, 78 and 105 steps in, the play scene's enemies skinned and posed before any step with the rifle and muzzle in the right hand, and a fight to the restart leaving both Animators and `world.hash` as at the round's start; the player's arms (sub-project 10 step 3): the arms' `mag_in` within one step of the weapon's `reloaded` at `reloadTime` 1.5 and 2.0, ADS (`WeaponState.aim` stepped over `adsTime`, exactly 1 after 12 steps, none for the dead; the cone linear in `aim`, half at 1; the drawn field of view 55° in live frames only, 75° in lockstep and captures, the arms remapped through it), the play scene's arms skinned under the ViewModel with the muzzle on the `gun` joint and the kick at half |
 | `anim_tests` | animation (sub-project 10, tests 22 and 23, on the generated rig `tests/anim/fixtures/`, `tools/anim/make_test_rig.py`): the glTF reader (skin joints, parents, inverse binds; every sampler kind and channel path to the bit; morph channels dropped with a warning), sampling (LINEAR nlerp, STEP, CUBICSPLINE; loop and clamp; a key exact at its time), the bind pose's identity palette, Assimp's bone order mapped to the skin's joints by name (and the rig's 96 vertices kept: no join across weights), 1-D blends, masked additive layers, graph errors with their JSON pointers; the step: transitions on a parameter, an event and the clip's end (61 steps for 1 s), fades counted in steps, events once per crossing and in id order within a step, a restore mid-fade replaying the same Animator and `world.hash`, the pose never in the hash; a clip's rate from a parameter (`rateFrom`: its anchor event lands the parameter's seconds in, errors with their paths) |
 | `audio_system_tests` | the audio facade (handles, volumes, categories) and sub-project 11's test 26 on a mixer without a device (`t26_*`): `.audio.json` parse errors at their JSON pointers, the slice's bank (Feel's curves, a file for every sound), the default bank's categories, a bus's gain on its subtree only, mute and solo, start times to the frame, a duck and the `dead` snapshot linear in dB (and its low-pass by band), a stop's 96-frame fade, two renders bit for bit, an occluded voice through its bus, the local folder first; test 27's mixer half (`t27_*`): an impulse through each of the slice's reverb presets decaying at its design RT60 within 20%, a bus's send scaling the return's tail (+6 dB for twice the send, none without one), 300 mixers with four senders each torn down cleanly |
-| `audio_schedule_tests` | test 27's schedule half (sub-project 11 step 2, the blockout and the play scene): `ReverbZone` containment (on a face is inside; priority, then the lower id), one `zone` command with its 30-step blend at the step the listener crosses an edge, a level node's `verb` hint (a trigger box with `ReverbZone`, `col mesh` kept, an unknown preset `W_AUDIO_PRESET` and the default), occlusion graded by walls (none; −8 dB, 1.2 kHz; −14 dB, 700 Hz), a held voice re-cast every 6 steps, 16 rays a step (the rest counted, unoccluded), and the play scene's enemy shot rendered in the open and behind the pillar (8.6 dB down, 25.9 dB above 2 kHz); `--listen DIR` writes `step2_zones.wav` and `step2_cover.wav` with their JSON schedules |
+| `audio_schedule_tests` | test 27's schedule half (sub-project 11 step 2, the blockout and the play scene): `ReverbZone` containment (on a face is inside; priority, then the lower id), one `zone` command with its 30-step blend at the step the listener crosses an edge, a level node's `verb` hint (a trigger box with `ReverbZone`, `col mesh` kept, an unknown preset `W_AUDIO_PRESET` and the default), occlusion graded by walls (none; −8 dB, 1.2 kHz; −14 dB, 700 Hz), a held voice re-cast every 6 steps, 16 rays a step (the rest counted, unoccluded), and the play scene's enemy shot rendered in the open and behind the pillar (8.6 dB down, 25.9 dB above 2 kHz); `--listen DIR` writes `step2_zones.wav` and `step2_cover.wav` with their JSON schedules; test 28 (step 3, `t28_*`): the rules moved from the window's players (footstep surfaces and round robin, combat sounds by shooter and surface, handling sounds at the enemy or at the ear, the voice cap's quietest lost, curves and the occlusion ray from the bank), priority and steal (lower priority first, then the quietest, then the oldest; a `stop` before its `play`; `dropped` when nothing is lower), `holdMs` from the bank, ducks (the deepest rule wins, attack and release), the snapshot from the round (`dead`, `won`, back to `default`), the same fight twice the same schedule, a restore mid-fight and a restart writing what a recording wrote (`stop_world`, `resync`), the world replaying the same with the schedule as without, the enemy's footsteps from its clips' `foot_l`/`foot_r` at its feet, `world.hash` unchanged by the schedule |
 | `env_sun_test` | the environment's sun (`render/rt/env_sun.hpp`): found and painted out with the sky around it (its irradiance, direction and share of the map's power), across the u seam, its dim halo with it and an unconnected bright cloud kept; studio softboxes and a wide bright patch are no sun and leave the map untouched |
 | `check_cli.py` | `ohao` CLI goldens: stdout, files and exit codes, each case run twice (a case's `mask` keys, timings such as `loadMs`, compare as 0) |
 | `check_scene_schema.py` | the generated JSON Schemas in a stock validator (needs `jsonschema`) |
@@ -240,7 +240,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   player killed by `combat.damage`, the restart 3 s later, the room cleared and won, and the same
   fight headless reaching the same `world.hash`, `combat.info`, events and HUD picture; a realtime
   window's `render.stats` reports `latency` and `pacing` after injected mouse movements, a lockstep
-  one neither (sp9 tests 19, 20). `e2e_mcp.py`: a
+  one neither (sp9 tests 19, 20); the fight's voice schedule from the window equal, command for
+  command, to a headless session's (`OHAO_AUDIO_TRACE=1` through `log.read`, sp11 test 28). `e2e_mcp.py`: a
   stdlib-only MCP client runs a whole session against a hidden window (load, edit, snapshot,
   record, a flight, step with watch, captures, logs, restore, replay to the same hash, a
   capture bit-identical to the first; the blockout's level and physics; the play scene walked,
@@ -347,8 +348,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `world` filtered and sending, the median of 300 periods of 480 frames (0.5 ms per 10 ms, gated
   from step 1; since step 2 it includes the reverb on the return), `reverb_10ms_ms` (the Freeverb
   alone, stereo, on noise, one preset: 0.15 ms, gated from step 2; `reverb_xfade_10ms_ms`, the same
-  mid-crossfade, reported), `bank_load_ms` (gated from step 3); the same noisy-run rules; `--listen DIR` writes
-  one burst with each bus soloed in turn (`step1_buses.wav`, its levels as CSV), for listening.
+  mid-crossfade, reported), `bank_load_ms` (gated from step 3); step 3's, gated from step 3:
+  `schedule_step_ms` (the schedule's step over the play scene's scripted fight, 0.02 ms),
+  `schedule16_step_ms` (16 enemies running in and firing in the blockout, their bursts coinciding past
+  the 16 rays a step: 0.1 ms; the run fails if no ray was capped) and `submit_frame_ms` (a window's
+  `AudioPlayer` reading and submitting a frame's commands over the same fight, 0.05 ms); the same
+  noisy-run rules; `--listen DIR` writes one burst with each bus soloed in turn (`step1_buses.wav`,
+  its levels as CSV) and the done demo's fight through the player (`step3_fight.wav`, its schedule
+  as JSON, every bus's driven level as CSV), for listening.
   A budget is met after five consecutive passes and changes only by Frank's ruling.
 - **Docs**: `check_docs.py` runs every command in this file, ARCHITECTURE.md, the CLI
   and serve guides and the skills (`build`, `verify`, `add-component`: `.claude/skills/`, or
@@ -655,10 +662,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   - Footsteps: the player's step logs a `footstep` event every 0.75 m walked (0.95 m
     sprinting) on the ground and a `land` after a fall of more than 0.3 m, in the physics
     event log (`physics.events`), with the ground's `Collider.surface` (hint `surf`; empty is
-    `default`). Only a window host with `LiveConfig::footsteps` (ohao_game; `--mute` off) plays
-    them (`runtime/footsteps.hpp`): `<surface>_<n>.wav` from git-ignored
-    `assets/local/audio/footsteps/` (Somnabulate's, staged for local listening only, never
-    committed) else `assets/audio/footsteps/` (ours, `tools/audio/make_footsteps.py`).
+    `default`). The voice schedule turns them into `footstep_<surface>` plays (a character whose
+    animation graph has `foot_l`/`foot_r` events steps from those instead; "Audio", below); a
+    window's `AudioPlayer` plays them from git-ignored `assets/local/audio/footsteps/` (staged
+    for local listening only, never committed) else `assets/audio/footsteps/` (ours,
+    `tools/audio/make_footsteps.py`).
 - **Combat** (sub-project 7, `docs/specs/2026-10-27-combat-design.md`). `ecs::installCombat`
   (the CLI context and `LiveHost` call it after `installPhysics`) adds a `combat` simulate system
   after `physics`: every `Weapon`, in id order, reads its trigger (a player's from the World's
@@ -718,9 +726,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     them. The HUD (`ecs/combat_hud.hpp` → `render::HudList` → the `hud` pass after the gizmo,
     `render/hud/`) is laid out from combat state and the log, read from its oldest event. A window always draws the HUD; `render.capture` and `ohao run --render` only with
     `hud: true`/`--hud`, and only on deferred frames; no crosshair or hit marker while dead or
-    once the round is won. Sounds (`runtime/combat_sounds.hpp`,
-    `assets/audio/weapons/`, ours: `tools/audio/make_weapons.py`) play beside the footsteps,
-    under the same `LiveConfig::footsteps`.
+    once the round is won. Its sounds (`assets/audio/weapons/`, ours:
+    `tools/audio/make_weapons.py`) are the voice schedule's plays ("Audio", below).
   - Agents (step 5) fight through `combat.info` (the round and every combatant: health, `pos`,
     weapon, enemy state), `combat.events` (the log, as `physics.events`) and `combat.damage`
     (hit points off an entity's `Health` or an ancestor's, as a round does), all in
@@ -779,13 +786,6 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     a muzzle burst at the drawn muzzle and, per hit, sparks plus the surface's dust, only while the
     timeline runs; a lockstep capture drops the queue and draws no live particle
     (`DeferredRenderer::setParticlesDrawn`), so window-against-headless comparisons stay bit for bit.
-  - **Audio** (`runtime/game_audio.hpp`): footsteps and combat share one `AudioSystem` (the
-    window's), capped at 24 SFX voices (`setVoiceLimit`: a new sound over the cap takes the
-    quietest's voice at the listener or is dropped if it would be the quietest; `voicesDropped`
-    counts both); gunfire on an inverse curve 1–60 m, rolloff 1, footsteps and impacts 0.5–20 m,
-    rolloff 1.5 (`SoundShape`); an enemy's round or footstep casts one ray from the listener
-    (`soundOccluded`: `raycastFrom`, passing through characters), blocked: 8 dB down through a
-    1.2 kHz low-pass node. `AudioSystem::initialize(true)` is a mixer without a device, for tests.
 - **Animation** (sub-project 10, `docs/specs/2026-10-28-animation-design.md`). `ohao/anim` (no ECS,
   no Vulkan) reads a glTF's skins and animations itself (`gltf_anim`, simdjson; Assimp's animation
   import is not used), binds clips to skeletons by joint name, and parses and validates
@@ -877,6 +877,29 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
     is graded by walls: none; −8 dB, 1.2 kHz; −14 dB, 700 Hz for two or more. At most 16 rays a
     step: past them a new voice counts as unoccluded, a re-cast keeps its answer, both counted. The
     listener is the input-driven player's head, else the first active camera.
+  - **The schedule decides every sound in the step** (step 3): footsteps and landings from the
+    physics log, combat sounds from the combat log after the step's last `restart`, `mag_out`,
+    `mag_in`, `bolt`, `body_fall` and `foot_l`/`foot_r` from the animation log (a character whose
+    graph has foot events steps from its clips, never from the physics footstep). Each `play` has
+    a voice id, a variant (round robin per sound), its occlusion and an outcome: over a bus's cap or
+    the bank's `voices`, the lowest priority, then the quietest at the listener, then the oldest is
+    stopped (`stop` first), or the new one is `dropped`. A sound holds its voice `holdMs` (the
+    bank's, OPEN 13). Ducks (`bus` commands, the deepest rule a bus wins, attack down, release up)
+    and the snapshot from the round (`default`/`dead`/`won`, OPEN 9) are commands too. A restart or
+    any restore writes `stop_world`; after a restore the schedule's state comes back with the
+    World's snapshot (its `SnapshotHook` chains in front of physics'), and it resends the mix as
+    `resync` commands, which a player ignores when it is already there. `world.hash` never sees any
+    of it: the schedule is runtime.
+  - **The player** (`runtime/audio_player.hpp`): a window's `LiveHost` owns one (`LiveConfig::sound`;
+    `ohao_game --mute` builds the schedule and creates no device) and plays the schedule's commands
+    once a frame, one step after their step (OPEN 7: every sound, the player's own shot too), from a
+    clock anchored to the device (late: at once, counted; re-anchored when not realtime, when the
+    step goes back, or past a step of drift). A bed is the zone preset's looped sound. Headless
+    hosts have no player; the schedule's commands are what they read. `OHAO_AUDIO_TRACE=1` logs every
+    command on the `audio` channel (`schedule: ...`), so `check_live` compares a window's schedule
+    with a headless host's through `log.read`.
+  - Sound shapes, curves and occlusion are the bank's (`shapes`, `occlude`), never code's: the
+    slice's gunfire is 1–60 m, rolloff 1; near sounds 0.5–20 m, rolloff 1.5.
 - `build/ohao` is the CMake binary directory of `ohao/`, not the CLI; the CLI is
   `build/Release/ohao.exe`.
 - After a crash the GPU can stay wedged (device lost `-4` everywhere, 30 s renders of

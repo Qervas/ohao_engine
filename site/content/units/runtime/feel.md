@@ -212,26 +212,30 @@ window capture equals a headless one:
 
 {{cite ohao/runtime/live_host.cpp "if (deferred) deferred->setParticlesDrawn(false);"}}
 
-Audio is one `AudioSystem` capped at 24 SFX voices. A sound over the cap replaces the quietest at the
-listener, or is dropped if it would be the quietest, and either way is counted in `voicesDropped`:
+What plays is decided in the step by the voice schedule (sub-project 11) from the slice's sound bank,
+which caps the voices; over the cap the quietest at the listener of the lowest priority loses its
+voice, or the new sound is dropped:
 
-{{cite ohao/runtime/game_audio.hpp "constexpr uint32_t kVoiceLimit = 24;"}}
+{{cite assets/audio/slice.audio.json ""voices": 32,"}}
 
-Each kind of sound has its own distance curve, rounds carrying to 60 m and footsteps and impacts to
+Each shape of sound has its own distance curve, rounds carrying to 60 m and footsteps and impacts to
 20 m:
 
-{{cite ohao/runtime/game_audio.cpp "case SoundKind::Gunfire: return {1.0f, 60.0f, 1.0f, false};"}}
+{{cite assets/audio/slice.audio.json ""gunfire": {"min": 1, "max": 60, "rolloff": 1},"}}
 
-A sound an enemy starts gets one occlusion ray from the listener, never one per frame and never for
-the player's own. Characters on the way are passed through; anything else is a wall, and the sound
-plays `kOccludedGainDb` (-8 dB) quieter through a low-pass at `kOccludedLowPassHz` (1,200 Hz):
+A sound an enemy starts gets one occlusion ray from the listener when it starts, never one per frame
+and never for the player's own. Characters on the way are passed through; anything else is a wall,
+and one wall plays the sound `kOccludedGainDb` (-8 dB) quieter through a low-pass at
+`kOccludedLowPassHz` (1,200 Hz):
 
-{{cite ohao/runtime/game_audio.cpp "if (character == entt::null) return true;"}}
+{{cite ohao/ecs/audio_schedule.cpp "const bool occlude = desc.occlude && !own && !ear;"}}
+
+{{cite ohao/ecs/audio_schedule.cpp "if (character != entt::null) {"}}
 
 {{cite ohao/audio/audio_system.hpp "constexpr float kOccludedGainDb = -8.0f;"}}
 
-`runtime_tests`' `sp9_t21_particles_from_events`, `sp9_t21_voice_cap`, `sp9_t21_distance_curves` and
-`sp9_t21_occlusion_ray` cover this half without a window or a device.
+`runtime_tests`' `sp9_t21_particles_from_events` covers the particles without a window, and
+`audio_schedule_tests`' `t28_rules_moved` the sounds without a device.
 
 :::why
 Each piece here changes what the player sees and nothing the world is. The lead, the gun's remap and

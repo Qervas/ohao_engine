@@ -26,7 +26,7 @@ globbed with `CONFIGURE_DEPENDS`: a new file is picked up by the next build.
 | `ohao_api` | `api/` | `ohao_ecs`, `ohao_level_world`, `ohao_reflect` | `Session`: the method table and its params structs, edit commands, queries, the path sandbox; `level.*` and `physics.*` through the hooks the World's installers leave (`level/level_system.hpp`, `ecs::physicsScene`). GPU-free. |
 | `ohao_rpc` | `rpc/` | `ohao_api`, `ohao_core` | JSON-RPC 2.0 over newline-delimited streams (stdio, or a local named pipe: `PipeTransport`) and the MCP adapter (`ohao serve`): reader and engine threads, the bounded queue, cancellation, progress, the log sink. CPU-only: no Vulkan, GLFW or renderer header (`reflect_tests`). |
 | `ohao_runtime` | `runtime/` | `ohao_api`, `ohao_core`, `ohao_ecs`, `ohao_gpu_vulkan`, glfw | `LiveHost`, the window host (window, renderer, World and Session, one loop for `ohao_game` and `ohao serve --window`); `captureFrame`, the one capture procedure both hosts run; capture images (crop, scale, a fast PNG writer, JPEG); `applySceneView`; frame statistics |
-| `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (the `IPhysicsBackend` the ECS's physics system builds bodies through; nothing steps them yet) and audio (not yet driven by the ECS) |
+| `ohao_physics`, `ohao_audio` | `physics/`, `audio/` | `ohao_core`; Jolt / miniaudio | physics (the `IPhysicsBackend` the ECS's physics system builds bodies through; nothing steps them yet) and audio (the mixer, the bank and the reverb; what plays is the ECS's voice schedule, played by a window's `runtime::AudioPlayer`) |
 | `ohao_host` | `tools/ohao/` | `ohao_runtime`, `ohao_api`, `ohao_ecs`, `ohao_renderer` | `RenderHost`, the headless `api::Host` behind `render.capture` |
 
 Programs: the examples (`examples/`: `cornell_box`, `model_viewer`, `turntable`,
@@ -113,16 +113,19 @@ for each step (api::Session::step: world.step, input.replay, a window's realtime
                     parameter, an event, its clip's end), advances its
                     integer steps and fade, and fires the clip events it
                     crossed (a log of 1,024: animation.info)
+    audio_schedule  last: the step's physics, combat and animation        installed by installAudio
+                    events -> voice commands (play with a voice, variant, (after installAnimation)
+                    occlusion and outcome; stop for a stolen voice; bus
+                    ducks; the round's snapshot; the listener's zone and
+                    bed; occlusion re-casts; stop_world on a restart or
+                    restore), by the bank's priorities, caps and holdMs;
+                    its state rides the World's snapshot; never hashed
   a game's fixedUpdate hook (LiveHost), reading the step's input        writes with patch/replace
-after the frame's steps (LiveHost with LiveConfig::footsteps, ohao_game), through one
-AudioSystem capped at 24 SFX voices (runtime/game_audio.hpp):
-  runtime::Footsteps  the log's footsteps and landings since the last frame -> AudioSystem,
-                      <surface>_<n>.wav (assets/local/audio/footsteps, then assets/audio/footsteps)
-  runtime::CombatSounds  the combat log's events since the last frame -> fire, enemy_fire,
-                      impact_<surface>, hurt, death, reload, empty (assets/audio/weapons)
-                      each with its kind's distance curve (SoundShape); an enemy's round or
-                      footstep casts one occlusion ray (soundOccluded): blocked, -8 dB and a
-                      1.2 kHz low-pass
+after the frame's steps (LiveHost):
+  runtime::AudioPlayer  (LiveConfig::sound, ohao_game without --mute) the schedule's commands
+                      since its cursor -> the AudioSystem, one step after their step on a
+                      clock anchored to the device (late: at once, counted); the bank's files
+                      decoded when the bank loads (assets/local/audio, then assets/audio)
   runtime::CombatFx   (LiveConfig::effects) the combat log's shots and hits -> particle emits
                       (a muzzle burst at the drawn muzzle, sparks and the surface's dust),
                       realtime only; a lockstep capture draws none
