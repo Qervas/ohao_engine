@@ -22,6 +22,7 @@
 //   // on window resize:
 //   pt.resize(newWidth, newHeight);
 
+#include "render/material/openpbr_tables_buffer.hpp"
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/rt_settings.hpp"
 #include "render/rt/rt_meta.hpp"
@@ -57,11 +58,18 @@ namespace ohao {
 // RTRenderProfile / RTRenderSettings / kRealtimeRTSettings / kOfflineRTSettings
 // live in render/rt/rt_settings.hpp (shared with rt_meta traits).
 
+// A profile's shaders: SPIR-V files and their entry points (GLSL's are main; a Slang file with
+// several stages names each).
+// The default is the reference path tracer (rt/path_tracer.slang, RTOfflineRenderer's).
 struct PathTracerShaderSet {
-    const char* raygenSpv{"bin/shaders/rt_pt_raygen.rgen.spv"};
-    const char* missSpv{"bin/shaders/rt_pt_miss.rmiss.spv"};
-    const char* closestHitSpv{"bin/shaders/rt_pt_closesthit.rchit.spv"};
-    const char* anyHitSpv{"bin/shaders/rt_pt_anyhit.rahit.spv"};
+    const char* raygenSpv{"bin/shaders/rt_path_tracer.slang.raygen.spv"};
+    const char* missSpv{"bin/shaders/rt_path_tracer.slang.miss.spv"};
+    const char* closestHitSpv{"bin/shaders/rt_path_tracer.slang.closestHit.spv"};
+    const char* anyHitSpv{"bin/shaders/rt_path_tracer.slang.anyHit.spv"};
+    const char* raygenEntry{"raygen"};
+    const char* missEntry{"miss"};
+    const char* closestHitEntry{"closestHit"};
+    const char* anyHitEntry{"anyHit"};
 };
 
 class PathTracer {
@@ -278,6 +286,8 @@ private:
 
     // Env CDF storage buffers (bindings 17, 18)
     VkBuffer m_envMarginalCDFBuffer   = VK_NULL_HANDLE;
+    // OpenPBR's energy tables, binding 38: written once at init.
+    render::OpenPBRTablesBuffer m_openpbrTables;
     VkBuffer m_envConditionalCDFBuffer = VK_NULL_HANDLE;
     uint32_t m_envCDFWidth   = 0;
     uint32_t m_envCDFHeight  = 0;

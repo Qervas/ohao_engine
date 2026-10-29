@@ -332,6 +332,13 @@ public:
     // settings reset (re-injected in applyRTRenderSettings).
     void        setRealtimeSamplesPerFrame(uint32_t n);
     [[nodiscard]] uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
+    // The path tracer's bounces in place of its profile's (a capture's `bounces`); nullopt: the
+    // profile's. Re-applied every frame, as the per-frame reset to the profile would drop it.
+    void setMaxBouncesOverride(std::optional<uint32_t> bounces) {
+        m_maxBouncesOverride = bounces;
+        applyRTRenderSettings();
+    }
+    [[nodiscard]] std::optional<uint32_t> maxBouncesOverride() const { return m_maxBouncesOverride; }
 
     // Returns the motion vector AOV image view from the active RT profile,
     // or VK_NULL_HANDLE if no RT profile is active.
@@ -556,6 +563,7 @@ private:
     // m_rtSettings each frame in applyRTRenderSettings so the per-frame reset in
     // prepareRTSceneForFrame doesn't clobber it (same pattern as aniso/SSS).
     uint32_t                     m_realtimeSamplesPerFrame{1};
+    std::optional<uint32_t>      m_maxBouncesOverride;   // setMaxBouncesOverride
     // The requested frame, denoised on the CPU (OIDN) or read from NRD's tonemapped
     // output: what readback() returns for those modes, until the next render().
     std::vector<uint8_t>         m_denoisedPixelBuffer;

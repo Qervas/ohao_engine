@@ -90,6 +90,7 @@ struct RenderRequest {
     std::string hdrPath;               // the frame's linear radiance as PFM; empty: none
     std::string mode{"deferred"};      // deferred | rt_realtime | rt_offline
     int spp{16};                       // path tracer samples
+    std::optional<int> bounces;        // path tracer bounces for this capture; absent: the profile's
     int frames{0};                     // frames rendered, the last one read back; 0: deferred 10, path tracer spp
     std::optional<uint32_t> width;     // absent: the host's size (headless 1920x1080; a window its own)
     std::optional<uint32_t> height;

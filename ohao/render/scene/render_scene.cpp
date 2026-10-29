@@ -411,15 +411,25 @@ struct RenderScene::Impl {
     void syncEmitters() {
         std::vector<LightEmitter> want;
         std::vector<glm::mat4> motion;   // each emitter's light's lastFrameMotion
+        std::vector<uint32_t> rtIndex;   // its light's index in the path tracer's light buffer
         spotEmitters = false;
+        uint32_t rt = 0;   // the RT light buffer holds every light but emissive proxies, in this order
         if (emittersEnabled)
-            for (const LightDesc& d : lights.descs())
+            for (const LightDesc& d : lights.descs()) {
+                if (d.kind == LightKind::EmissiveProxy) continue;
                 if (const auto e = lightEmitter(d, viewer)) {
                     want.push_back(*e);
                     motion.push_back(d.lastFrameMotion);
+                    rtIndex.push_back(rt);
                     spotEmitters = spotEmitters || d.kind == LightKind::Spot;
                 }
-        if (!want.empty() && !ensureEmitterAssets()) want.clear();
+                ++rt;
+            }
+        if (!want.empty() && !ensureEmitterAssets()) {
+            want.clear();
+            rtIndex.clear();
+        }
+        lights.setEmitterLights(rtIndex);
         const MaterialHandle mats[1] = {emitterMaterial};
         for (std::size_t i = 0; i < want.size(); ++i) {
             InstanceDesc d{};
@@ -428,7 +438,8 @@ struct RenderScene::Impl {
             d.world = want[i].world;
             d.prevWorld = motion[i] * want[i].world;   // where the light was: its motion vectors
             d.emitter = true;
-            d.giAlbedoPacked = glm::vec4(want[i].radiance, 1.0f);
+            // rgb its radiance (what the camera sees), w its light (rt/path_tracer.slang's MIS).
+            d.giAlbedoPacked = glm::vec4(want[i].radiance, static_cast<float>(rtIndex[i]));
             if (i < emitterSlots.size()) {
                 instances.update(emitterSlots[i], d, materials.count());
                 stageTlasInstance(emitterSlots[i], false);

@@ -159,6 +159,7 @@ struct RenderCaptureParams {
     std::optional<std::vector<int32_t>> region;
     CaptureMode mode{CaptureMode::deferred};
     int32_t spp{16};
+    std::optional<int32_t> bounces;   // the path tracer's bounces for this capture (absent: its profile's)
     int32_t frames{0};
     std::optional<int32_t> width;
     std::optional<int32_t> height;

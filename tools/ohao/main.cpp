@@ -568,16 +568,17 @@ int cmdLevel(const Args& a) {
 int cmdRun(const Args& a) {
     if (a.positional.size() != 1) return usage("run needs one scene file");
     // Everything is checked before the scene loads.
-    long long steps = 0, spp = 16, frames = 0;
+    long long steps = 0, spp = 16, frames = 0, bounces = 0;
     std::string err;
     if (!intOpt(a, "--steps", 0, 1'000'000, steps, err) || !intOpt(a, "--spp", 1, 65536, spp, err) ||
+        !intOpt(a, "--bounces", 0, 256, bounces, err) ||
         !intOpt(a, "--frames", 1, 100000, frames, err) || !numberOpt(a, "--dt", err) ||
         !numberOpt(a, "--exposure", err))
         return usage(err);
     if (has(a, "--dt") && !has(a, "--steps")) return usage("--dt needs --steps");
     const bool render = has(a, "--render");
-    for (const char* o : {"--mode", "--spp", "--frames", "--denoise", "--size", "--post", "--exposure", "--quality", "--hud",
-                          "--hdr"})
+    for (const char* o : {"--mode", "--spp", "--bounces", "--frames", "--denoise", "--size", "--post", "--exposure",
+                          "--quality", "--hud", "--hdr"})
         if (has(a, o) && !render) return usage(std::string(o) + " needs --render");
     std::string width = "1920", height = "1080";
     if (has(a, "--size")) {
@@ -666,6 +667,7 @@ int cmdRun(const Args& a) {
                                                            {"height", height}};
         if (has(a, "--mode")) p.emplace_back("mode", jsonString(opt(a, "--mode")));
         if (has(a, "--spp")) p.emplace_back("spp", std::to_string(spp));
+        if (has(a, "--bounces")) p.emplace_back("bounces", std::to_string(bounces));
         if (has(a, "--frames")) p.emplace_back("frames", std::to_string(frames));
         if (has(a, "--denoise")) p.emplace_back("denoise", jsonString(opt(a, "--denoise")));
         if (has(a, "--post")) p.emplace_back("post", jsonStrings(splitList(opt(a, "--post"))));
@@ -888,8 +890,9 @@ int run(int argc, char** argv) {
     }
     if (cmd == "run") {
         const Args a = parseArgs(argc, argv, 2, {"--hud"},
-                                 {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--frames",
-                                  "--denoise", "--size", "--post", "--exposure", "--quality", "--hdr", "--save", "--root"});
+                                 {"--seed", "--steps", "--dt", "--script", "--render", "--mode", "--spp", "--bounces",
+                                  "--frames", "--denoise", "--size", "--post", "--exposure", "--quality", "--hdr", "--save",
+                                  "--root"});
         return a.error.empty() ? cmdRun(a) : usage(a.error);
     }
     if (cmd == "doctor") {

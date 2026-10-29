@@ -734,6 +734,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     r.hdrPath = hdrFile;
     r.mode = kModes[static_cast<int>(p.mode)];
     r.spp = p.spp;
+    if (p.bounces) r.bounces = *p.bounces;
     r.frames = p.frames;
     if (p.width) r.width = static_cast<uint32_t>(*p.width);
     if (p.height) r.height = static_cast<uint32_t>(*p.height);

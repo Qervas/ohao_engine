@@ -129,6 +129,7 @@ bool VfxRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevice, V
                              VkDescriptorSetLayout gbufferScene) {
     m_device = device;
     m_physical = physicalDevice;
+    if (!m_openpbrTables.create(device, physicalDevice)) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -189,6 +190,7 @@ void VfxRenderer::cleanup() {
     rtc::destroyHostBuffer(m_device, m_order);
     m_particleCapacity = 0;
     rtc::destroyHostBuffer(m_device, m_dummyBuffer);
+    m_openpbrTables.destroy();
     rtc::destroyImage(m_device, m_dummy);
     if (m_sampler) vkDestroySampler(m_device, m_sampler, nullptr);
     m_sampler = VK_NULL_HANDLE;
@@ -223,11 +225,11 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
         rtc::layoutBinding(0, kStorage, kDraw), rtc::layoutBinding(1, kStorage, kDraw),
         rtc::layoutBinding(2, kStorage, kDraw), rtc::layoutBinding(3, kSampled, kDraw),
     }};
-    const std::array<VkDescriptorSetLayoutBinding, 7> forward{{
+    const std::array<VkDescriptorSetLayoutBinding, 8> forward{{
         rtc::layoutBinding(0, kStorage, kFrag), rtc::layoutBinding(1, kStorage, kFrag),
         rtc::layoutBinding(2, kSampled, kFrag), rtc::layoutBinding(3, kSampled, kFrag),
         rtc::layoutBinding(4, kSampler, kFrag), rtc::layoutBinding(5, kTlas, kFrag),
-        rtc::layoutBinding(6, kSampled, kFrag),
+        rtc::layoutBinding(6, kSampled, kFrag), rtc::layoutBinding(7, kStorage, kFrag),   // 7: OpenPBR's tables
     }};
     m_expandLayout = makeLayout(m_device, expand, 6);
     m_sortLayout = makeLayout(m_device, sort);
@@ -237,7 +239,7 @@ bool VfxRenderer::createLayouts(VkDescriptorSetLayout textures, VkDescriptorSetL
 
     constexpr uint32_t n = MAX_FRAMES_IN_FLIGHT;
     const std::array<VkDescriptorPoolSize, 4> sizes{{
-        {kStorage, 14 * n}, {kSampled, 6 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
+        {kStorage, 15 * n}, {kSampled, 6 * n}, {kSampler, 2 * n}, {kTlas, 2 * n},
     }};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -725,6 +727,7 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
         {lighting.lights ? lighting.lights : dummy, 0, VK_WHOLE_SIZE},
         {lighting.clusters ? lighting.clusters : dummy, 0, VK_WHOLE_SIZE},
     }};
+    const VkDescriptorBufferInfo tables{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
     const VkDescriptorImageInfo irradiance{VK_NULL_HANDLE, lighting.envIrradiance ? lighting.envIrradiance : m_dummy.view,
                                            kReadOnly};
     const VkDescriptorImageInfo prefiltered{VK_NULL_HANDLE,
@@ -753,6 +756,8 @@ void VfxRenderer::writeForwardSet(uint32_t slot, const Lighting& lighting) {
     }
     w.push_back(rtc::descriptorWrite(s.forwardSet, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE));
     w.back().pImageInfo = &gi;
+    w.push_back(rtc::descriptorWrite(s.forwardSet, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+    w.back().pBufferInfo = &tables;
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 }
 

@@ -452,36 +452,67 @@ struct OpenPBRBase
         return ess + msFresnel(metalFavg(), t.E1Avg(rough)) * (1.0 - e1);
     }
 
-    // BSDF x cos(wi).
-    float3 eval(float3 wo, float3 wi, OpenPBRTables t)
+    // The specular lobes (the metal's and the dielectric's, tinted) and the diffuse beneath them,
+    // each x cos(wi): eval() is their sum. The deferred frame lights a sphere or a rectangle from a
+    // different direction for each (core/deferred_lighting.slang).
+    void evalLobes(float3 wo, float3 wi, OpenPBRTables t, out float3 specular, out float3 diffuse)
     {
-        if (wo.z <= 0.0 || wi.z <= 0.0) return float3(0.0);
+        specular = float3(0.0);
+        diffuse = float3(0.0);
+        if (wo.z <= 0.0 || wi.z <= 0.0) return;
         const float3 m = normalize(wo + wi);
         const float c = dot(wo, m);
         const float ss = ggxSingle(wo, wi, alpha * alpha);
         const float ms = msLobe(wo, wi, t);
         const float e1Avg = t.E1Avg(rough);
-        float3 f = float3(0.0);
         if (metalness > 0.0)
         {
             const float3 F = metalWeight * fresnelF82(c, metalF0, metalB);
-            f += metalness * (F * ss + msFresnel(metalFavg(), e1Avg) * ms);
+            specular += metalness * (F * ss + msFresnel(metalFavg(), e1Avg) * ms);
         }
         if (metalness < 1.0)
         {
             const float spec = fresnelDielectric(c, eta) * ss + msFresnel(float3(t.FavgD(eta)), e1Avg).x * ms;
-            const float3 diffuse = (1.0 - dielectricAlbedo(wo.z, t)) * eonEval(rho, diffRough, wi, wo) * wi.z;
-            f += (1.0 - metalness) * (specColor * spec + diffuse);
+            specular += (1.0 - metalness) * specColor * spec;
+            diffuse = (1.0 - metalness) * (1.0 - dielectricAlbedo(wo.z, t)) * eonEval(rho, diffRough, wi, wo) * wi.z;
         }
-        return f;
+    }
+
+    // BSDF x cos(wi).
+    float3 eval(float3 wo, float3 wi, OpenPBRTables t)
+    {
+        float3 specular, diffuse;
+        evalLobes(wo, wi, t, specular, diffuse);
+        return specular + diffuse;
+    }
+
+    // This surface with its specular lobe as rough as `r` (a light's size widening it).
+    OpenPBRBase withRoughness(float r)
+    {
+        OpenPBRBase b = this;
+        b.rough = clamp(r, kMinSpecularRoughness, 1.0);
+        b.alpha = b.rough * b.rough;
+        return b;
+    }
+
+    // The specular lobes' directional albedo toward wo, and the diffuse's beneath them:
+    // albedo() is their sum. The deferred frame weighs the environment's reflection by the first
+    // (the split sum) and its diffuse light by the second.
+    float3 specularAlbedo(float3 wo, OpenPBRTables t)
+    {
+        if (wo.z <= 0.0) return float3(0.0);
+        return lerp(specColor * dielectricAlbedo(wo.z, t), metalAlbedo(wo.z, t), metalness);
+    }
+
+    float3 diffuseAlbedo(float3 wo, OpenPBRTables t)
+    {
+        if (wo.z <= 0.0) return float3(0.0);
+        return (1.0 - metalness) * (1.0 - dielectricAlbedo(wo.z, t)) * eonAlbedo(rho, diffRough, wo.z);
     }
 
     float3 albedo(float3 wo, OpenPBRTables t)
     {
-        if (wo.z <= 0.0) return float3(0.0);
-        const float ed = dielectricAlbedo(wo.z, t);
-        const float3 dielectric = specColor * ed + (1.0 - ed) * eonAlbedo(rho, diffRough, wo.z);
-        return lerp(dielectric, metalAlbedo(wo.z, t), metalness);
+        return specularAlbedo(wo, t) + diffuseAlbedo(wo, t);
     }
 
     // The chance of sampling the specular lobe (GGX, the metal and the dielectric's together):

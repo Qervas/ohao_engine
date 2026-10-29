@@ -201,6 +201,15 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     renderer.setRenderMode(mode);
     const DenoiseMode denoise = parseDenoiseMode(r.denoise);
     renderer.setDenoiseMode(denoise);
+    // bounces: the path tracer's for this capture only (the referee's one-bounce comparison), the
+    // profile's back when the capture returns.
+    struct RestoreBounces {
+        VulkanRenderer& renderer;
+        std::optional<uint32_t> before;
+        ~RestoreBounces() { renderer.setMaxBouncesOverride(before); }
+    } restoreBounces{renderer, renderer.maxBouncesOverride()};
+    if (r.bounces && mode != RenderMode::Deferred)
+        renderer.setMaxBouncesOverride(static_cast<uint32_t>(*r.bounces));
     renderer.setRenderQuality(r.quality == "reference" ? RenderQuality::Reference : RenderQuality::Realtime);
     if (mode == RenderMode::Deferred && renderer.getDeferredRenderer()) {
         if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {

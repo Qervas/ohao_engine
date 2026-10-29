@@ -15,6 +15,7 @@
 // (the forward copy of the deferred light loop). Nothing here reads a clock, a frame counter or the
 // frame-in-flight slot's history: the same records, camera and alpha give the same image.
 
+#include "render/material/openpbr_tables_buffer.hpp"
 #include "render/rt/rt_compute.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/shared_layout.hpp"
@@ -143,6 +144,7 @@ private:
     rtc::Image m_mask;                      // R8_UNORM, the frame's size, cleared by each pass that draws
     rtc::Image m_dummy;                     // 1x1 RGBA16F zero: missing GI / environment views
     rtc::HostBuffer m_dummyBuffer;          // missing lights / clusters
+    render::OpenPBRTablesBuffer m_openpbrTables;   // the transparent pass's set 2, binding 7
     VkSampler m_sampler{VK_NULL_HANDLE};
 
     VkDescriptorSetLayout m_expandLayout{VK_NULL_HANDLE}, m_sortLayout{VK_NULL_HANDLE}, m_drawLayout{VK_NULL_HANDLE},

@@ -111,13 +111,12 @@ Two pipelines, one scene. Both consume the same bindless texture array, the same
 
 Lives in `ohao/render/rt/`. Vulkan KHR ray tracing pipeline. Files are split: `path_tracer.cpp` for the orchestrator, `path_tracer_descriptors.cpp` for the 30-binding descriptor layout, `path_tracer_images.cpp` for the AOV images, `path_tracer_pipeline.cpp` for the SBT, `path_tracer_render.cpp` for dispatch.
 
-- Next-event estimation with multi-light sampling from a GPU light SSBO
-- MIS with both balance heuristic and power heuristic (beta=2), see `shaders/includes/rt/mis.glsl`
-- Environment map importance sampling: marginal + conditional CDF binary search in `shaders/includes/rt/env_sampling.glsl`, CDFs built CPU-side in `env_cdf.cpp`
-- Sobol QMC sequence with Owen scrambling (`owen_scramble.cpp`, `sobol_generator.cpp`)
-- Adaptive sampling: per-pixel variance estimated from a 3x3 neighborhood in `pt_raygen.rgen`, sample budget steered by noise level
-- Cook-Torrance GGX BRDF, bindless PBR textures (diffuse, normal, rough/metal, emissive)
-- Alpha transparency via any-hit shader for foliage and hair cards
+- The reference (offline) path tracer is `shaders/rt/path_tracer.slang`: a correct estimator of OpenPBR Surface's base (`shaders/material/openpbr.slang`: EON diffuse, GGX with bounded VNDF sampling, exact dielectric Fresnel, F82-tint metals, Kulla-Conty energy compensation), held to closed forms (`tests/renderer/check_material.py`, `check_analytic.py`)
+- Next-event estimation to lights and the environment, weighed against BSDF sampling by the power heuristic; Russian roulette
+- Environment map importance sampling: marginal + conditional CDFs built CPU-side in `env_cdf.cpp`
+- Bindless textures (base colour, normal in the vertex tangents' frame, rough/metal, emissive, KHR specular)
+- Alpha transparency via the any-hit shader for foliage and hair cards
+- The realtime profile keeps the GLSL tracer (`pt_raygen_realtime.rgen`)
 
 ### Denoising (four backends, runtime switchable)
 

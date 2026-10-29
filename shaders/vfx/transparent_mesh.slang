@@ -9,6 +9,7 @@
 // set 2: the forward set (lights, clusters, environment, TLAS, RT GI).
 import shared.layout;
 import includes.lighting.clustered_lights;
+import material.openpbr;
 
 // The bindless table at its size (BindlessTextureManager's 4096): Slang decorates an unsized
 // resource array with an ArrayStride that spirv-val rejects (VUID-StandaloneSpirv-None-10684).
@@ -23,6 +24,7 @@ import includes.lighting.clustered_lights;
 [[vk::binding(4, 2)]] SamplerState linearSampler;
 [[vk::binding(5, 2)]] RaytracingAccelerationStructure scene;
 [[vk::binding(6, 2)]] Texture2D<float4> giRadiance;
+[[vk::binding(7, 2)]] StructuredBuffer<float> openpbrTables;   // OpenPBR's energy tables
 [[vk::push_constant]] ConstantBuffer<ForwardPush> pc;
 
 struct FsIn
@@ -80,6 +82,9 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     const float4 row1 = matRows[m * kMaterialRows + 1u];
     const float4 row2 = matRows[m * kMaterialRows + 2u];
     const float4 row3 = matRows[m * kMaterialRows + 3u];
+    const float4 row4 = matRows[m * kMaterialRows + 4u];   // specular_color, specular_weight
+    const float4 row5 = matRows[m * kMaterialRows + 5u];   // specular_ior, base_diffuse_roughness, base_weight, specularTex
+    const float4 row6 = matRows[m * kMaterialRows + 6u];   // emission_color, specularColorTex
 
     float3 N = normalize(i.normal);
     if (!frontFacing) N = -N;   // a pane seen from behind is lit on that side
@@ -118,29 +123,46 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
     }
     const uint occTex = asuint(row2.w);
     if (occTex < 4096u) ao = textures[NonUniformResourceIndex(occTex)].Sample(i.uv).r;
-    roughness = max(roughness, 0.04);
-    float3 emissive = float3(0.0);
+    float3 emissive = row6.rgb * row2.y;
     const uint emTex = asuint(row1.w);
-    if (emTex < 4096u) emissive = textures[NonUniformResourceIndex(emTex)].Sample(i.uv).rgb * row2.y;
+    if (emTex < 4096u) emissive *= textures[NonUniformResourceIndex(emTex)].Sample(i.uv).rgb;
+    float specularWeight = row4.w;
+    float3 specularColor = row4.rgb;
+    const uint specTex = asuint(row5.w);
+    if (specTex < 4096u) specularWeight *= textures[NonUniformResourceIndex(specTex)].Sample(i.uv).a;
+    const uint specColorTex = asuint(row6.w);
+    if (specColorTex < 4096u) specularColor *= textures[NonUniformResourceIndex(specColorTex)].Sample(i.uv).rgb;
 
     const float3 P = i.worldPos;
     const float3 V = normalize(pc.camera.xyz - P);
     const float viewDepth = -mul(pc.view, float4(P, 1.0)).z;
-    const BRDFSurface surface = initBRDFSurface(P, N, V, albedo, metallic, roughness, ao);
+    MaterialInputs mi;
+    mi.baseColor = albedo;
+    mi.baseWeight = row5.z;
+    mi.baseMetalness = metallic;
+    mi.baseDiffuseRoughness = row5.y;
+    mi.specularWeight = specularWeight;
+    mi.specularColor = specularColor;
+    mi.specularRoughness = roughness;
+    mi.specularIor = row5.x;
+    const Surface surface = makeSurface(P, N, V, mi);
+    OpenPBRTables tables;
+    tables.data = openpbrTables;
     const bool clustered = (pc.config.y & 1u) != 0u;
     const uint2 list = lightList(clusters, clustered, pc.config.x, i.position.xy, pc.screen.xy, viewDepth, pc.screen.z,
                                  pc.screen.w);
-    const float3 Lo = directLight(surface, lights, clusters, list, clustered, sunVisibility(P, N));
+    const float3 Lo = directLight(surface, lights, clusters, list, clustered, directionalVisibility(sunVisibility(P, N)), tables);
+    const float3 diffuseAlbedo = surface.bsdf.diffuseAlbedo(surface.wo, tables);
+    const float3 specularAlbedo = surface.bsdf.specularAlbedo(surface.wo, tables);
 
     const bool rtGI = (pc.config.y & 2u) != 0u;
     const bool ibl = (pc.config.y & 4u) != 0u;
     const float4 gi = rtGI ? giRadiance.SampleLevel(linearSampler, i.position.xy / pc.screen.xy, 0.0) : float4(0.0, 0.0, 0.0, 1.0);
     float3 ambient = float3(0.0);
-    if (rtGI) ambient += gi.rgb * (albedo * (1.0 - metallic)) * ao;
-    else if (!ibl) ambient += float3(pc.camera.w) * albedo * (1.0 - metallic) * ao;
-    const float NdotV = max(dot(N, V), 1e-4);
-    const float2 ab = envBRDFApprox(NdotV, roughness);
-    const float3 specularWeight = (surface.F0 * ab.x + ab.y) * specularOcclusion(NdotV, ao, roughness);
+    if (rtGI) ambient += gi.rgb * diffuseAlbedo * ao;
+    else if (!ibl) ambient += float3(pc.camera.w) * diffuseAlbedo * ao;
+    const float NdotV = surface.wo.z;
+    const float3 reflectWeight = specularAlbedo * specularOcclusion(NdotV, ao, roughness);
     if (ibl)
     {
         const float3 R = reflect(-V, N);
@@ -148,12 +170,8 @@ FsOut fragmentMain(FsIn i, bool frontFacing : SV_IsFrontFace)
                                                                         roughness * float(kEnvPrefilterLevels - 1u)).rgb;
         const float3 irradiance = pc.env.x * envIrradiance.SampleLevel(linearSampler, equirectUV(N), 0.0).rgb;
         const float3 incoming = prefiltered * gi.a + (rtGI ? max(gi.rgb - irradiance * gi.a, float3(0.0)) : float3(0.0));
-        ambient += incoming * specularWeight;
-        if (!rtGI)
-        {
-            const float3 kD = (1.0 - fresnelSchlickRoughness(NdotV, surface.F0, roughness)) * (1.0 - metallic);
-            ambient += kD * albedo * irradiance * ao;
-        }
+        ambient += incoming * reflectWeight;
+        if (!rtGI) ambient += diffuseAlbedo * irradiance * ao;
     }
 
     FsOut o;

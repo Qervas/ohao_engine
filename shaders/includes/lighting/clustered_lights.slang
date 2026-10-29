@@ -1,141 +1,80 @@
-// The forward copy of the deferred lighting loop (sub-project 12, OPEN ruling 19): the clustered
-// light lookup, the attenuation and the Cook-Torrance BRDF of core/deferred_lighting.frag and
-// includes/brdf/brdf_ggx.glsl, the same expressions in Slang for vfx.expand (particles, one sample
-// at their centre) and the transparent pass's meshes (vfx/transparent_mesh.slang, per pixel). The
-// GLSL is untouched, so no deferred golden moves; a parity test (vfx_gpu_test) pins the two: a
-// forward-shaded opaque plane equals the deferred plane within 1 LSB with the RT terms off.
+// The clustered light loop of the deferred frame and the forward passes (core/deferred_lighting.slang,
+// vfx/transparent_mesh.slang, vfx/expand.slang): the froxel lists, each light's attenuation, and the
+// surface's response through OpenPBR's base (material/openpbr.slang), the BSDF the path tracer
+// samples. A sphere light's specular is its sphere's (the representative point, the GGX lobe widened
+// by its angular size) and its diffuse is the centre's; a rectangle's diffuse is its exact
+// irradiance and its specular the representative point's.
 //
-// The caller binds the light table and the froxel lists (LightGpu, kClusterCount counts then
-// kClusterMaxLights indices a froxel) and passes them in.
+// The caller binds the light table, the froxel lists (LightGpu, kClusterCount counts then
+// kClusterMaxLights indices a froxel) and OpenPBR's tables, and passes them in.
 // import includes.lighting.clustered_lights;
 import shared.layout;
+import material.openpbr;
 
 static const float kPi = 3.14159265359;
 static const float kInvPi = 0.31830988618;
 static const float kEpsilon = 1e-6;
 
-// ---- brdf_common.glsl ----------------------------------------------------------------------
-
-float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
-{
-    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
-float3 calculateF0(float3 albedo, float metallic)
-{
-    const float sharpened = smoothstep(0.35, 0.65, metallic);
-    return lerp(float3(0.04), albedo, sharpened);
-}
-
-float3 burleyDiffuse(float3 diffuseColor, float roughness, float NdotV, float NdotL, float LdotH)
-{
-    const float f90 = 0.5 + 2.0 * roughness * LdotH * LdotH;
-    const float lightScatter = 1.0 + (f90 - 1.0) * pow(1.0 - NdotL, 5.0);
-    const float viewScatter = 1.0 + (f90 - 1.0) * pow(1.0 - NdotV, 5.0);
-    return diffuseColor * kInvPi * lightScatter * viewScatter;
-}
-
-struct BRDFSurface
+// A shaded point: its frame (z the shading normal) and its BSDF.
+struct Surface
 {
     float3 position;
     float3 normal;
-    float3 viewDir;
-    float3 albedo;
-    float metallic;
-    float roughness;
-    float ao;
-    float3 F0;
+    float3 view;      // toward the viewer
+    float3 t, b;
+    float3 wo;        // the view in the local frame
+    OpenPBRBase bsdf;
+
+    float3 toLocal(float3 v) { return float3(dot(v, t), dot(v, b), dot(v, normal)); }
 };
 
-BRDFSurface initBRDFSurface(float3 position, float3 normal, float3 viewDir, float3 albedo, float metallic,
-                            float roughness, float ao)
+Surface makeSurface(float3 position, float3 normal, float3 view, MaterialInputs m)
 {
-    BRDFSurface s;
+    Surface s;
     s.position = position;
     s.normal = normalize(normal);
-    s.viewDir = normalize(viewDir);
-    s.albedo = albedo;
-    s.metallic = smoothstep(0.35, 0.65, metallic);
-    s.roughness = max(roughness, 0.04);
-    s.ao = ao;
-    s.F0 = calculateF0(albedo, metallic);
+    s.view = normalize(view);
+    const float sign = s.normal.z >= 0.0 ? 1.0 : -1.0;   // Duff et al. 2017
+    const float a = -1.0 / (sign + s.normal.z);
+    const float c = s.normal.x * s.normal.y * a;
+    s.t = float3(1.0 + sign * s.normal.x * s.normal.x * a, sign * c, -sign * s.normal.x);
+    s.b = float3(c, sign + s.normal.y * s.normal.y * a, -s.normal.y);
+    // A view below the shading normal (a normal map tilting away) is taken at the horizon.
+    float3 wo = s.toLocal(s.view);
+    wo.z = max(wo.z, 1e-4);
+    s.wo = normalize(wo);
+    s.bsdf = OpenPBRBase(m);
     return s;
 }
 
-// ---- brdf_ggx.glsl -------------------------------------------------------------------------
-
-float distributionGGX(float NdotH, float roughness)
+// What a light of `radiance` arriving along L gives toward the viewer.
+float3 evaluateLight(Surface s, float3 L, float3 radiance, OpenPBRTables t)
 {
-    const float a = roughness * roughness;
-    const float a2 = a * a;
-    const float NdotH2 = NdotH * NdotH;
-    float denom = NdotH2 * (a2 - 1.0) + 1.0;
-    denom = kPi * denom * denom;
-    return a2 / max(denom, kEpsilon);
+    return s.bsdf.eval(s.wo, s.toLocal(L), t) * radiance;
 }
 
-float geometrySmithCorrelated(float NdotV, float NdotL, float roughness)
+// A sphere of `radius` at `toLight` (from the point): the diffuse toward its centre, the specular
+// toward the point of the sphere nearest the reflection with the lobe widened by its angular size
+// (Karis 2013), so a mirror shows the sphere.
+float3 evaluateSphere(Surface s, float3 toLight, float radius, float3 radiance, OpenPBRTables t)
 {
-    const float a = roughness * roughness;
-    const float a2 = a * a;
-    const float lambdaV = NdotL * sqrt(a2 + (1.0 - a2) * NdotV * NdotV);
-    const float lambdaL = NdotV * sqrt(a2 + (1.0 - a2) * NdotL * NdotL);
-    return 0.5 / max(lambdaV + lambdaL, kEpsilon);
+    const float3 L = normalize(toLight);
+    const float3 R = reflect(-s.view, s.normal);
+    const float3 centerToRay = dot(toLight, R) * R - toLight;
+    const float3 closest = toLight + centerToRay * clamp(radius / max(length(centerToRay), kEpsilon), 0.0, 1.0);
+    const float aSphere = clamp(s.bsdf.alpha + radius / (2.0 * length(toLight)), 0.0, 1.0);
+    float3 specular, diffuse, unused;
+    s.bsdf.evalLobes(s.wo, s.toLocal(L), t, unused, diffuse);
+    s.bsdf.withRoughness(sqrt(aSphere)).evalLobes(s.wo, s.toLocal(normalize(closest)), t, specular, unused);
+    return (specular + diffuse) * radiance;
 }
 
-float3 evaluateSpecularBRDF(float3 N, float3 V, float3 L, float roughness, float3 F0, out float3 F)
+// A rectangle (centre, edges e1 and e2, one-sided toward e1 x e2) of radiance Le: the diffuse by
+// its exact irradiance (the polygon's vector form factor J, the edge integral), the specular by the
+// representative point with the lobe widened by the rectangle's size as a disc of equal area.
+float3 evaluateRect(Surface s, float3 center, float3 e1, float3 e2, float3 Le, OpenPBRTables t)
 {
-    const float3 H = normalize(V + L);
-    const float NdotV = max(dot(N, V), kEpsilon);
-    const float NdotL = max(dot(N, L), kEpsilon);
-    const float NdotH = max(dot(N, H), 0.0);
-    const float HdotV = max(dot(H, V), 0.0);
-    const float D = distributionGGX(NdotH, roughness);
-    const float Vt = geometrySmithCorrelated(NdotV, NdotL, roughness);
-    F = fresnelSchlickRoughness(HdotV, F0, roughness);
-    return D * Vt * F;
-}
-
-float GGX_E(float cosTheta, float roughness)
-{
-    const float a = roughness;
-    const float a2 = a * a;
-    const float mu = cosTheta;
-    const float e = 1.0 - (1.0 - mu) * (0.4022 * a2 + 0.7278 * a) - mu * (0.1412 * a2 + 0.1100 * a);
-    return clamp(e, 0.0, 1.0);
-}
-
-float3 evaluateBRDFCore(BRDFSurface surface, float3 L, float3 specular, float3 F, float3 lightColor)
-{
-    const float3 N = surface.normal;
-    const float3 V = surface.viewDir;
-    const float NdotL = max(dot(N, L), 0.0);
-    if (NdotL <= 0.0) return float3(0.0);
-    const float NdotV = max(dot(N, V), kEpsilon);
-    const float3 kD = (float3(1.0) - F) * (1.0 - surface.metallic);
-    const float3 H = normalize(V + L);
-    const float LdotH = max(dot(L, H), 0.0);
-    float3 diffuse = kD * burleyDiffuse(surface.albedo, surface.roughness, NdotV, NdotL, LdotH);
-    const float E_o = GGX_E(NdotV, surface.roughness);
-    const float E_i = GGX_E(NdotL, surface.roughness);
-    const float Ems = (1.0 - E_o) * (1.0 - E_i);
-    const float3 Favg = surface.F0 + (1.0 - surface.F0) / 21.0;
-    const float3 fms = Favg * Ems / max(float3(1.0) - Favg * (1.0 - E_o), float3(0.001));
-    diffuse += fms * kInvPi * (1.0 - surface.metallic) * surface.albedo;
-    specular += fms * surface.metallic;
-    return (diffuse + specular) * lightColor * NdotL;
-}
-
-float3 evaluateBRDF(BRDFSurface surface, float3 lightDir, float3 lightColor)
-{
-    const float3 L = normalize(lightDir);
-    float3 F;
-    const float3 specular = evaluateSpecularBRDF(surface.normal, surface.viewDir, L, surface.roughness, surface.F0, F);
-    return evaluateBRDFCore(surface, L, specular, F, lightColor);
-}
-
-float3 evaluateBRDFRect(BRDFSurface surface, float3 P, float3 center, float3 e1, float3 e2, float3 Le)
-{
+    const float3 P = s.position;
     const float3 nArea = cross(e1, e2);
     const float area = length(nArea);
     if (area <= 0.0) return float3(0.0);
@@ -151,15 +90,20 @@ float3 evaluateBRDFRect(BRDFSurface surface, float3 P, float3 center, float3 e1,
     for (int i = 0; i < 4; ++i)
     {
         const float3 c = cross(v[i], v[(i + 1) & 3]);
-        const float s = length(c);
-        if (s > 1e-7) J += acos(clamp(dot(v[i], v[(i + 1) & 3]), -1.0, 1.0)) * (c / s);
+        const float sc = length(c);
+        if (sc > 1e-7) J += acos(clamp(dot(v[i], v[(i + 1) & 3]), -1.0, 1.0)) * (c / sc);
     }
     J *= 0.5;
     if (dot(J, center - P) < 0.0) J = -J;
-    const float E = dot(surface.normal, J);
+    const float E = dot(s.normal, J);
     if (E <= 0.0) return float3(0.0);
-    const float3 N = surface.normal, V = surface.viewDir;
-    const float3 R = reflect(-V, N);
+    // Diffuse: the lobe toward J, per unit cosine, times the irradiance.
+    const float3 Lj = normalize(J);
+    float3 specular = float3(0.0), diffuse, unused;
+    s.bsdf.evalLobes(s.wo, s.toLocal(Lj), t, unused, diffuse);
+    diffuse *= E / max(dot(s.normal, Lj), kEpsilon);
+    // Specular: the representative point's direction, times the solid angle the rectangle covers.
+    const float3 R = reflect(-s.view, s.normal);
     const float rn = dot(R, n);
     float3 onPlane = center;
     if (rn < -1e-4) onPlane = P + R * (dot(center - P, n) / rn);
@@ -169,45 +113,14 @@ float3 evaluateBRDFRect(BRDFSurface surface, float3 P, float3 center, float3 e1,
     const float dist = length(rep);
     const float3 specL = rep / dist;
     const float cosLight = dot(-specL, n);
-    float3 F;
-    float3 specular = float3(0.0);
     if (cosLight > 0.0)
     {
-        const float a = surface.roughness * surface.roughness;
         const float rEq = sqrt(area * cosLight / kPi);
-        const float aRect = clamp(a + rEq / (2.0 * dist), 0.0, 1.0);
-        specular = evaluateSpecularBRDF(N, V, specL, sqrt(aRect), surface.F0, F)
-                 * (area * cosLight / (dist * dist)) * max(dot(N, specL), 0.0) / E;
+        const float aRect = clamp(s.bsdf.alpha + rEq / (2.0 * dist), 0.0, 1.0);
+        s.bsdf.withRoughness(sqrt(aRect)).evalLobes(s.wo, s.toLocal(specL), t, specular, unused);
+        specular *= area * cosLight / (dist * dist);
     }
-    else
-    {
-        evaluateSpecularBRDF(N, V, normalize(J), surface.roughness, surface.F0, F);
-    }
-    return evaluateBRDFCore(surface, normalize(J), specular, F, Le * length(J));
-}
-
-float3 evaluateBRDFSphere(BRDFSurface surface, float3 toLight, float radius, float3 lightColor)
-{
-    const float3 L = normalize(toLight);
-    const float3 R = reflect(-surface.viewDir, surface.normal);
-    const float3 centerToRay = dot(toLight, R) * R - toLight;
-    const float3 closest = toLight + centerToRay * clamp(radius / max(length(centerToRay), kEpsilon), 0.0, 1.0);
-    const float a = surface.roughness * surface.roughness;
-    const float aSphere = clamp(a + radius / (2.0 * length(toLight)), 0.0, 1.0);
-    const float3 specL = normalize(closest);
-    float3 F;
-    float3 specular = evaluateSpecularBRDF(surface.normal, surface.viewDir, specL, sqrt(aSphere), surface.F0, F);
-    specular *= max(dot(surface.normal, specL), 0.0) / max(dot(surface.normal, L), kEpsilon);
-    return evaluateBRDFCore(surface, L, specular, F, lightColor);
-}
-
-float2 envBRDFApprox(float NdotV, float roughness)
-{
-    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
-    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
-    const float4 r = roughness * c0 + c1;
-    const float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
-    return float2(-1.04, 1.04) * a004 + r.zw;
+    return (specular + diffuse) * Le;
 }
 
 float specularOcclusion(float NdotV, float ao, float roughness)
@@ -282,10 +195,28 @@ void lightAt(LightGpu light, float3 p, out float3 L, out float3 radiance, out in
     radiance = light.color.rgb * light.color.w * attenuation;
 }
 
-// The direct light a surface receives (the deferred loop without its shadow terms: `shadow` is the
-// visibility to apply to a directional light, the forward pass's one sun ray).
-float3 directLight(BRDFSurface surface, StructuredBuffer<LightGpu> lights, StructuredBuffer<uint> clusters, uint2 list,
-                   bool clustered, float sunVisibility)
+// What occludes each light: RT shadows' channels (a shadow-casting light's slot, params.w), or
+// else one visibility for every shadow-casting directional light (the deferred frame's CSM, the
+// forward pass's sun ray); other lights unshadowed.
+struct LightVisibility
+{
+    bool rt;
+    uint2 rtWords;      // 8 bits a channel, channels 0-3 then 4-7
+    float directional;
+};
+
+LightVisibility directionalVisibility(float v)
+{
+    LightVisibility vis;
+    vis.rt = false;
+    vis.rtWords = uint2(0u);
+    vis.directional = v;
+    return vis;
+}
+
+// The direct light a surface receives from its froxel's lights.
+float3 directLight(Surface s, StructuredBuffer<LightGpu> lights, StructuredBuffer<uint> clusters, uint2 list,
+                   bool clustered, LightVisibility vis, OpenPBRTables t)
 {
     float3 Lo = float3(0.0);
     for (uint k = 0u; k < list.y; ++k)
@@ -293,18 +224,29 @@ float3 directLight(BRDFSurface surface, StructuredBuffer<LightGpu> lights, Struc
         const LightGpu light = lights[clustered ? clusters[list.x + k] : k];
         float3 L, radiance;
         int type;
-        lightAt(light, surface.position, L, radiance, type);
-        if (all(radiance == float3(0.0)) && type != 3) continue;
+        lightAt(light, s.position, L, radiance, type);
+        if (all(radiance == float3(0.0)) && type != 3) continue;   // adds exactly zero: past its range or cone
         float shadow = 1.0;
-        if (type == 0 && int(round(light.params.w)) >= 0) shadow = sunVisibility;
-        if (shadow == 0.0) continue;
+        const int slot = int(round(light.params.w));
+        if (slot >= 0)
+        {
+            if (vis.rt)
+            {
+                const uint word = slot < 4 ? vis.rtWords.x : vis.rtWords.y;
+                shadow = float((word >> (8u * uint(slot & 3))) & 255u) * (1.0 / 255.0);
+            }
+            else if (type == 0)
+            {
+                shadow = vis.directional;
+            }
+        }
+        if (shadow == 0.0) continue;   // fully occluded: adds exactly zero
         if (type == 3)
-            Lo += evaluateBRDFRect(surface, surface.position, light.position.xyz, light.direction.xyz, light.params.xyz,
-                                   radiance) * shadow;
+            Lo += evaluateRect(s, light.position.xyz, light.direction.xyz, light.params.xyz, radiance, t) * shadow;
         else if (type != 0 && light.params.z > 0.0)
-            Lo += evaluateBRDFSphere(surface, light.position.xyz - surface.position, light.params.z, radiance) * shadow;
+            Lo += evaluateSphere(s, light.position.xyz - s.position, light.params.z, radiance, t) * shadow;
         else
-            Lo += evaluateBRDF(surface, L, radiance) * shadow;
+            Lo += evaluateLight(s, L, radiance, t) * shadow;
     }
     return Lo;
 }

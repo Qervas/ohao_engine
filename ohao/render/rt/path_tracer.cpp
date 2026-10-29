@@ -100,6 +100,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
 
+    if (!m_openpbrTables.create(m_device, m_physicalDevice)) {
+        OHAO_LOG(Error, render, "PathTracer: failed to upload OpenPBR's energy tables");
+        return false;
+    }
+
     if (!createDescriptorResources()) {
         OHAO_LOG(Error, render, "PathTracer: failed to create descriptor resources");
         return false;
@@ -399,6 +404,8 @@ void PathTracer::destroy() {
     m_envCDFWidth = 0;
     m_envCDFHeight = 0;
     m_envCDFIntegral = 0.0f;
+
+    m_openpbrTables.destroy();
 
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }

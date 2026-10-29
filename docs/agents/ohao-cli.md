@@ -36,7 +36,7 @@ ohao query    SCENE [--ids a,b] [--name N] [--name-contains S] [--has T,U] [--fi
                     [--limit N] [--offset N] [--defaults]
 ohao summary  SCENE [--depth D] [--max-children N] [--max-nodes N]
 ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
-                    [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N]
+                    [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N] [--bounces N]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
                      [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]
                      [--hud] [--hdr out.pfm]]
@@ -168,6 +168,10 @@ RT GI keeps a history, so give `--frames` (about 10) for converged indirect ligh
 `--hud` (`render.capture {hud: true}`) draws the combat HUD over a deferred frame: the
 player's health, ammunition and crosshair, the hit marker, the damage vignette, the round's
 end. Without it no capture has a HUD.
+
+`--bounces N` (`render.capture {bounces: N}`) sets the path tracer's bounces for this capture: 0
+is direct light only, 1 one bounce, and so on; without it, the profile's (the reference, 32). It is
+how a one-bounce renderer is compared with the path tracer.
 
 `--hdr out.pfm` (`render.capture {hdr: "out.pfm"}`) also writes the same frame's linear
 radiance, before exposure, post and tonemapping, as a Portable Float Map (RGB float32): the

@@ -68,7 +68,7 @@ bool PathTracer::createRTPipeline() {
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     stages[0].module = rgenModule;
-    stages[0].pName = "main";
+    stages[0].pName = m_shaderSet.raygenEntry;
 
     // Specialization constant: sampler type baked into the raygen SPIR-V
     // (see shaders/includes/rt/sampler_api.glsl, layout(constant_id=0)).
@@ -103,20 +103,20 @@ bool PathTracer::createRTPipeline() {
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
     stages[1].module = rmissModule;
-    stages[1].pName = "main";
+    stages[1].pName = m_shaderSet.missEntry;
     stages[1].pSpecializationInfo = &bindlessSpecInfo;
 
     stages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
     stages[2].module = rchitModule;
-    stages[2].pName = "main";
+    stages[2].pName = m_shaderSet.closestHitEntry;
     stages[2].pSpecializationInfo = &bindlessSpecInfo;
 
     if (hasAnyHit) {
         stages[3].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[3].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
         stages[3].module = rahitModule;
-        stages[3].pName = "main";
+        stages[3].pName = m_shaderSet.anyHitEntry;
         stages[3].pSpecializationInfo = &bindlessSpecInfo;
     }
 

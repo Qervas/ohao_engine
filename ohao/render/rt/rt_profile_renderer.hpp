@@ -184,7 +184,8 @@ public:
                 "bin/shaders/rt_pt_raygen_realtime.rgen.spv",
                 "bin/shaders/rt_pt_miss.rmiss.spv",
                 "bin/shaders/rt_pt_closesthit.rchit.spv",
-                "bin/shaders/rt_pt_anyhit.rahit.spv"}) {}
+                "bin/shaders/rt_pt_anyhit.rahit.spv",
+                "main", "main", "main", "main"}) {}   // GLSL: every stage's entry is main
     const char* getName() const override { return "RTRealtimeRenderer"; }
     RTRenderProfile getProfile() const override { return RTRenderProfile::Realtime; }
     RTRenderSettings getDefaultSettings() const override { return kRealtimeRTSettings; }
@@ -195,11 +196,7 @@ class RTOfflineRenderer final : public RTProfileRendererBase {
 public:
     RTOfflineRenderer()
         : RTProfileRendererBase(kOfflineRTSettings,
-            PathTracerShaderSet{
-                "bin/shaders/rt_pt_raygen_offline.rgen.spv",
-                "bin/shaders/rt_pt_miss.rmiss.spv",
-                "bin/shaders/rt_pt_closesthit.rchit.spv",
-                "bin/shaders/rt_pt_anyhit.rahit.spv"}) {}
+            PathTracerShaderSet{}) {}   // the reference path tracer (rt/path_tracer.slang)
     const char* getName() const override { return "RTOfflineRenderer"; }
     RTRenderProfile getProfile() const override { return RTRenderProfile::Offline; }
     RTRenderSettings getDefaultSettings() const override { return kOfflineRTSettings; }

@@ -41,6 +41,11 @@ bool DeferredLightingPass::initialize(VkDevice device, VkPhysicalDevice physical
     }
 
     // Create dummy resources for fallback descriptor bindings
+    if (!m_openpbrTables.create(device, physicalDevice)) {
+        OHAO_LOG(Error, render, "DeferredLightingPass: failed to upload OpenPBR's energy tables");
+        return false;
+    }
+
     if (!createDummyResources()) {
         return false;
     }
@@ -84,6 +89,7 @@ void DeferredLightingPass::cleanup() {
 
     destroyOutputImages();
     destroyDummyResources();
+    m_openpbrTables.destroy();
 }
 
 void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
@@ -264,8 +270,9 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 12> imageInfos{};
-    std::array<VkWriteDescriptorSet, 15> writes{};
+    std::array<VkDescriptorImageInfo, 14> imageInfos{};
+    std::array<VkWriteDescriptorSet, 18> writes{};
+    VkDescriptorBufferInfo tablesInfo{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
     VkDescriptorBufferInfo clusterInfo{};
@@ -370,6 +377,19 @@ void DeferredLightingPass::writeDescriptorSet(uint32_t slot) {
     // The G-buffer's emitted radiance (binding 17)
     const VkImageView emissive = m_gbufferPass->getEmissiveView();
     imageWrite(14, 17, 11, emissive != VK_NULL_HANDLE ? emissive : fallbackView, m_gbufferSampler);
+    // OpenPBR's per-pixel inputs (bindings 18, 19) and its energy tables (binding 20)
+    const VkImageView specular = m_gbufferPass->getSpecularView(), openpbr = m_gbufferPass->getOpenPBRView();
+    imageWrite(15, 18, 12, specular != VK_NULL_HANDLE ? specular : fallbackView, m_gbufferSampler);
+    imageWrite(16, 19, 13, openpbr != VK_NULL_HANDLE ? openpbr : fallbackView, m_gbufferSampler);
+    tablesInfo.buffer = m_openpbrTables.buffer() != VK_NULL_HANDLE ? m_openpbrTables.buffer() : m_dummyBuffer;
+    tablesInfo.offset = 0;
+    tablesInfo.range = VK_WHOLE_SIZE;
+    writes[17].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[17].dstSet = set;
+    writes[17].dstBinding = 20;
+    writes[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[17].descriptorCount = 1;
+    writes[17].pBufferInfo = &tablesInfo;
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -511,6 +531,8 @@ bool DeferredLightingPass::createDescriptors() {
     // 15: The GGX-prefiltered environment (EnvPrefilter, kEnvPrefilterLevels mips)
     // 16: The froxel light lists (SSBO, lights.cluster)
     // 17: The G-buffer's emitted radiance
+    // 18, 19: The G-buffer's OpenPBR inputs (specular colour and weight; diffuse roughness and IOR)
+    // 20: OpenPBR's energy tables (SSBO)
     constexpr struct { uint32_t binding; VkDescriptorType type; } kBindings[] = {
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},  {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
@@ -519,7 +541,8 @@ bool DeferredLightingPass::createDescriptors() {
         {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {12, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},         {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
         {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-        {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
     };
     std::array<VkDescriptorSetLayoutBinding, std::size(kBindings)> bindings{};
     for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -538,14 +561,14 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 12 image samplers, 1 UBO (cascade data), 2 SSBOs (lights, froxels)
+    // Descriptor pool — 14 image samplers, 1 UBO (cascade data), 3 SSBOs (lights, froxels, OpenPBR's tables)
     std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 12 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[0].descriptorCount = 14 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 1 * MAX_FRAMES_IN_FLIGHT;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[2].descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT;
+    poolSizes[2].descriptorCount = 3 * MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -572,7 +595,7 @@ bool DeferredLightingPass::createDescriptors() {
 bool DeferredLightingPass::createPipeline() {
     // Load shaders
     VkShaderModule vertShader = loadShaderModule("postprocess_fullscreen.vert.spv");
-    VkShaderModule fragShader = loadShaderModule("core_deferred_lighting.frag.spv");
+    VkShaderModule fragShader = loadShaderModule("core_deferred_lighting.slang.spv");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
 

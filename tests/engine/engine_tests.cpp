@@ -388,7 +388,7 @@ void runMetaTests() {
         constexpr auto rt = makeProfileSettings<RTRenderProfile::Realtime>();
         constexpr auto off = makeProfileSettings<RTRenderProfile::Offline>();
         EXPECT(rt.maxBounces == 2, "realtime max bounces");
-        EXPECT(off.maxBounces == 4, "offline max bounces");
+        EXPECT(off.maxBounces == 32, "offline max bounces");
         EXPECT(off.denoiseMode == DenoiseMode::OIDN, "offline default denoise OIDN");
         EXPECT(RTProfileTraits<RTRenderProfile::Realtime>::is_realtime, "realtime flag");
         EXPECT(RTProfileTraits<RTRenderProfile::Offline>::is_offline, "offline flag");

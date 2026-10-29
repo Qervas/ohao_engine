@@ -173,16 +173,8 @@ void LightTable::set(std::span<const LightDesc> lights) {
         }
         gpuLights.push_back(gl);
     }
-    for (const LightDesc& d : sorted) {
-        if (d.kind != LightKind::EmissiveProxy) continue;
-        GPULight gl{};
-        gl.positionAndType = glm::vec4(d.position, 0.0f);  // sphere type
-        gl.colorAndIntensity = glm::vec4(d.color, d.intensity);
-        gl.dirAndParam = glm::vec4(0, -1, 0, d.radius);
-        gl.extra = glm::vec4(0);
-        gl.extra2 = glm::vec4(d.radius * 10.0f, d.radius, 0.0f, 0.0f);   // the raster table's range
-        gpuLights.push_back(gl);
-    }
+    // Emissive proxies stand for emissive surfaces in the raster frame only: the path tracer
+    // meets the surfaces themselves, and a proxy light beside them would count their light twice.
     if (gpuLights.size() > MAX_GPU_LIGHTS) {
         static bool logged = false;
         if (!logged) {
@@ -205,6 +197,12 @@ void LightTable::set(std::span<const LightDesc> lights) {
 void LightTable::setEnvMapTextureIndex(uint32_t texIdx) {
     if (texIdx == m_envMapTexIdx) return;
     m_envMapTexIdx = texIdx;
+    m_dirty = true;
+}
+
+void LightTable::setEmitterLights(std::vector<uint32_t> rtIndices) {
+    if (rtIndices == m_emitterLights) return;
+    m_emitterLights = std::move(rtIndices);
     m_dirty = true;
 }
 
@@ -232,8 +230,15 @@ std::size_t LightTable::recordUploads(detail::StagingBatch& batch) {
     const uint32_t header[4] = {static_cast<uint32_t>(m_rt.size()), m_envMapTexIdx,
                                 std::bit_cast<uint32_t>(m_envIntensity), m_alphaRays ? 1u : 0u};
     std::memcpy(bytes.data(), header, sizeof(header));
-    if (!m_rt.empty())
-        std::memcpy(bytes.data() + kHeaderBytes, m_rt.data(), m_rt.size() * sizeof(GPULight));
+    if (!m_rt.empty()) {
+        std::vector<GPULight> rt = m_rt;
+        for (const uint32_t i : m_emitterLights) {
+            if (i >= rt.size()) continue;
+            if (rt[i].positionAndType.w > 2.5f) rt[i].extra.w = 1.0f;   // a rectangle
+            else rt[i].extra2.z = 1.0f;                                  // a point or spot's sphere
+        }
+        std::memcpy(bytes.data() + kHeaderBytes, rt.data(), rt.size() * sizeof(GPULight));
+    }
     batch.upload(m_rtBuffer.buffer, 0, bytes.data(), bytes.size());
     m_dirty = false;
     return bytes.size();

@@ -76,7 +76,7 @@ VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     };
 
     for (const auto& path : searchPaths) {
-        std::ifstream test(path + "core_deferred_lighting.frag.spv");
+        std::ifstream test(path + "core_deferred_lighting.slang.spv");
         if (test.good()) {
             m_shaderBasePath = path;
             break;
@@ -450,6 +450,7 @@ void VulkanRenderer::applyRTRenderSettings() {
     // resets m_rtSettings to the pipeline default (samplesPerFrame=1) each frame,
     // so restore the user's choice here (same pattern as aniso/SSS preservation).
     m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
+    if (m_maxBouncesOverride) m_rtSettings.maxBounces = *m_maxBouncesOverride;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }

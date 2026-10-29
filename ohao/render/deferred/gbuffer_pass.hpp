@@ -56,6 +56,9 @@ public:
     // Emitted radiance (rgb: the emissive texture times the material's emissive strength,
     // linear, RGBA16F; 0 where nothing emits): lighting adds it to the lit image.
     [[nodiscard]] VkImageView getEmissiveView() const { return m_gbuffer[kEmissive].view; }
+    // OpenPBR's per-pixel inputs beyond albedo, roughness and metalness (core/deferred_lighting.slang).
+    [[nodiscard]] VkImageView getSpecularView() const { return m_gbuffer[kSpecular].view; }
+    [[nodiscard]] VkImageView getOpenPBRView() const { return m_gbuffer[kOpenPBR].view; }
 
     // VkImage handles for render graph import
     [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }
@@ -123,10 +126,14 @@ private:
     void timerEnd(VkCommandBuffer cmd);
 
     // G-Buffer render targets: position, normal, albedo, velocity, depth (4, the depth
-    // attachment), emissive (5, the fragment shader's fifth color output)
-    static constexpr uint32_t GBUFFER_COUNT = 6;
+    // attachment), emissive (5, the fragment shader's output 4), OpenPBR's specular (6, output 5:
+    // specular_color, specular_weight / 1.5) and base (7, output 6: base_diffuse_roughness,
+    // (specular_ior - 1) / 2.55)
+    static constexpr uint32_t GBUFFER_COUNT = 8;
     static constexpr uint32_t kDepth = 4;
     static constexpr uint32_t kEmissive = 5;
+    static constexpr uint32_t kSpecular = 6;
+    static constexpr uint32_t kOpenPBR = 7;
     std::array<RenderTarget, GBUFFER_COUNT> m_gbuffer;
 
     // The early render pass clears and leaves the targets for the late one (depth readable by

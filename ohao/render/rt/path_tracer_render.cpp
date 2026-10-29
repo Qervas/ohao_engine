@@ -146,7 +146,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[40] = {};
+    VkWriteDescriptorSet writes[41] = {};
     uint32_t writeCount = 0;
     const auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info) {
         VkWriteDescriptorSet& w = writes[writeCount++];
@@ -177,6 +177,7 @@ void PathTracer::render(VkCommandBuffer cmd, uint32_t frameSlot, const glm::mat4
     const struct { uint32_t binding; VkBuffer buffer; } sceneBuffers[] = {
         {4, m_vertexArena}, {5, m_indexArena}, {8, m_meshTable}, {9, m_triangleSlots},
         {10, m_materialTable}, {11, m_lightBuffer}, {36, m_instances}, {37, m_materialRefs},
+        {38, m_openpbrTables.buffer()},
     };
     VkDescriptorBufferInfo sceneBufferInfos[std::size(sceneBuffers)]{};
     for (std::size_t b = 0; b < std::size(sceneBuffers); ++b) {

@@ -5,9 +5,11 @@
 //                   turning the emitters off removes them, the lights stay.
 //   out of view     the lights above a camera looking down at a floor, a box and a wall: the
 //                   image with emitters is the image without them (deferred with RT shadows and
-//                   GI, deferred with CSM, path traced), within the driver's BVH floor of 1 LSB
-//                   on a few pixels: no emitter shadows its light or another, no GI ray or bounce
-//                   adds a light twice, no cascade draws one.
+//                   GI, deferred with CSM), within the driver's BVH floor of 1 LSB on a few
+//                   pixels: no emitter shadows its light or another, no GI ray adds a light twice,
+//                   no cascade draws one. The path tracer's bounce rays meet emitters and weigh
+//                   them against light sampling (MIS), so its samples change everywhere and its
+//                   light does not: the mean, overall within 1% and per 32x32 block within 5%.
 //   in view         the same room seen with its lights: the point's and the area light's emitters'
 //                   centre pixels are bright, the downward spot's (the camera outside its cone) dark;
 //                   every pixel that changed by more than 1 lies on an emitter's footprint, and
@@ -295,6 +297,34 @@ Diff diffOutside(const Image& a, const Image& b, const std::vector<Footprint>& f
 // shared triangle edge may take the other triangle (AGENTS.md, the goldens' floor).
 bool withinBvhFloor(const Diff& d) { return d.maxAbs <= 1 && d.changed <= kWidth * kHeight / 2000; }
 
+// The path tracer weighs light sampling against a bounce ray meeting an emitter (multiple
+// importance sampling), so its emitters change its samples everywhere but not its light: the mean
+// outside the footprints, overall and in each 32x32 block (outside them), is the same within the
+// noise of 16 samples.
+struct SameLight { double whole{0.0}; double worstBlock{0.0}; };
+SameLight sameLight(const Image& a, const Image& b, const std::vector<Footprint>& fs) {
+    constexpr uint32_t kBlock = 32;
+    const uint32_t bw = kWidth / kBlock, bh = kHeight / kBlock;
+    std::vector<double> sa(bw * bh, 0.0), sb(bw * bh, 0.0);
+    double ta = 0.0, tb = 0.0;
+    for (uint32_t y = 0; y < bh * kBlock; ++y)
+        for (uint32_t x = 0; x < bw * kBlock; ++x) {
+            if (inside(fs, x + 0.5f, y + 0.5f)) continue;
+            const std::size_t i = (std::size_t{y} * kWidth + x) * 4;
+            const double la = a.rgba[i] + a.rgba[i + 1] + a.rgba[i + 2], lb = b.rgba[i] + b.rgba[i + 1] + b.rgba[i + 2];
+            sa[(y / kBlock) * bw + x / kBlock] += la;
+            sb[(y / kBlock) * bw + x / kBlock] += lb;
+            ta += la;
+            tb += lb;
+        }
+    SameLight r;
+    r.whole = std::abs(ta - tb) / std::max(tb, 1.0);
+    for (std::size_t k = 0; k < sa.size(); ++k)
+        if (sb[k] > 3.0 * 20.0 * kBlock * kBlock * 0.25)   // blocks with light in them (mean > 20 over a quarter)
+            r.worstBlock = std::max(r.worstBlock, std::abs(sa[k] - sb[k]) / sb[k]);
+    return r;
+}
+
 const char* modeName(Mode m) {
     return m == Mode::Deferred ? "deferred (RT shadows, RT GI)" : m == Mode::DeferredCsm ? "deferred (CSM)" : "path traced";
 }
@@ -324,7 +354,14 @@ void out_of_view_emitters_change_nothing() {
         mean /= 3.0 * kWidth * kHeight;
         std::printf("  %s: max_abs %d on %zu pixels (mean %.1f)\n", modeName(mode), d.maxAbs, d.changed, mean);
         check(mean > 10.0, std::string("out of view: ") + modeName(mode) + ": the floor is lit");
-        check(withinBvhFloor(d), std::string("out of view: ") + modeName(mode) + ": the same image, within the BVH floor");
+        if (mode == Mode::PathTraced) {
+            const SameLight l = sameLight(on, off, {});
+            std::printf("  %s: mean %.4f apart, the worst 32x32 block %.4f\n", modeName(mode), l.whole, l.worstBlock);
+            check(l.whole <= 0.01 && l.worstBlock <= 0.05,
+                  std::string("out of view: ") + modeName(mode) + ": the same light (mean within 1%, blocks within 5%)");
+        } else {
+            check(withinBvhFloor(d), std::string("out of view: ") + modeName(mode) + ": the same image, within the BVH floor");
+        }
         keep(on, std::string("out_on_") + std::to_string(int(mode)));
         keep(off, std::string("out_off_") + std::to_string(int(mode)));
     }
@@ -344,8 +381,16 @@ void in_view_emitters_change_only_their_pixels() {
         const Diff d = diffOutside(on, off, fs), far = diffOutside(on, off, footprints(kLightsInView, 24.0f));
         std::printf("  %s: outside the footprints max_abs %d on %zu pixels; past 24 px, max_abs %d on %zu\n",
                     modeName(mode), d.maxAbs, d.changed, far.maxAbs, far.changed);
-        check(d.maxAbs <= 1, std::string("in view: ") + modeName(mode) + ": only the emitters' own pixels changed by more than 1");
-        check(withinBvhFloor(far), std::string("in view: ") + modeName(mode) + ": nothing changed past 24 px of an emitter");
+        if (mode == Mode::PathTraced) {
+            const SameLight l = sameLight(on, off, footprints(kLightsInView, 24.0f));
+            std::printf("  %s: past 24 px, mean %.4f apart, the worst 32x32 block %.4f\n", modeName(mode), l.whole,
+                        l.worstBlock);
+            check(l.whole <= 0.01 && l.worstBlock <= 0.05,
+                  std::string("in view: ") + modeName(mode) + ": past 24 px of an emitter, the same light (mean within 1%, blocks within 5%)");
+        } else {
+            check(d.maxAbs <= 1, std::string("in view: ") + modeName(mode) + ": only the emitters' own pixels changed by more than 1");
+            check(withinBvhFloor(far), std::string("in view: ") + modeName(mode) + ": nothing changed past 24 px of an emitter");
+        }
         const auto centre = [&](const Image& im, const glm::vec3& p) {
             const glm::vec3 q = project(kLightsInView, p);
             const std::size_t i = (std::size_t(q.y) * kWidth + std::size_t(q.x)) * 4;

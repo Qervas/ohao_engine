@@ -43,6 +43,11 @@ public:
     // Whether a TLAS instance is non-opaque (an alpha material): the path tracer's rays then stop
     // forcing opacity (header word 3).
     void setAlphaRays(bool on);
+    // The RT lights (indices in the RT buffer) that have an emitter mesh a bounce ray can meet:
+    // rt/path_tracer.slang weighs their light sampling against BSDF sampling, and samples the rest
+    // at full weight. Flagged at upload (GPULight extra2.z for a point or spot, extra.w for a
+    // rectangle).
+    void setEmitterLights(std::vector<uint32_t> rtIndices);
     void setEnvIntensity(float scale);   // header word 2, read by pt_miss (<= 0 means 1)
 
     [[nodiscard]] std::span<const LightData> raster() const noexcept { return m_raster; }
@@ -73,6 +78,7 @@ private:
     uint32_t m_envMapTexIdx{kNoTexture};
     float m_envIntensity{1.0f};
     bool m_alphaRays{false};
+    std::vector<uint32_t> m_emitterLights;
     bool m_dirty{true};
 };
 

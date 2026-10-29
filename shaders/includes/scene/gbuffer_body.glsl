@@ -35,9 +35,19 @@ layout(location = 2) out vec4 outGBuffer2;
 // Velocity buffer for TAA - R16G16_SFLOAT
 layout(location = 3) out vec2 outVelocity;
 
-// Emitted radiance - R16G16B16A16_SFLOAT: the emissive texture (linear: the bindless table's
-// images are sRGB) times the material's emissive strength, as the path tracer's hit emits.
+// Emitted radiance - R16G16B16A16_SFLOAT: emission_color times emission_luminance, times the
+// emissive texture when there is one (linear: the bindless table's images are sRGB), as the path
+// tracer's hit emits.
 layout(location = 4) out vec4 outEmissive;
+
+// OpenPBR's specular (RGBA8_UNORM): specular_color (rgb, the KHR specular colour texture applied),
+// specular_weight / 1.5 (a, the KHR specular texture's alpha applied): 1, the default, is code 170
+// exactly (as weight / 2 it was 127.5, and read back 0.996: a white metal reflected 0.4% less).
+layout(location = 5) out vec4 outSpecular;
+
+// OpenPBR's base (RG8_UNORM): base_diffuse_roughness, (specular_ior - 1) / 2.55: steps of 0.01 in
+// the IOR, 1.5 (the default) code 50 exactly.
+layout(location = 6) out vec2 outOpenPBR;
 
 // Bindless texture array (set 0, binding 0)
 layout(set = 0, binding = 0) uniform sampler2D textures[];
@@ -94,6 +104,9 @@ void main() {
     vec4 row0 = matRows[m * kMaterialRows + 0u];   // baseColor, albedoTex
     vec4 row1 = matRows[m * kMaterialRows + 1u];   // roughness, metallic, normalTex, emissiveTex
     vec4 row2 = matRows[m * kMaterialRows + 2u];   // roughMetalTex, emissiveStrength, subsurface, occlusionTex
+    vec4 row4 = matRows[m * kMaterialRows + 4u];   // specular_color, specular_weight
+    vec4 row5 = matRows[m * kMaterialRows + 5u];   // specular_ior, base_diffuse_roughness, base_weight, specularTex
+    vec4 row6 = matRows[m * kMaterialRows + 6u];   // emission_color, specularColorTex
 
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
@@ -115,6 +128,8 @@ void main() {
         outGBuffer1 = vec4(encodeNormalOctahedron(N) * 0.5 + 0.5, 1.0, dot(radiance, vec3(0.2126, 0.7152, 0.0722)));
         outGBuffer2 = vec4(0.0, 0.0, 0.0, 1.0);
         outEmissive = vec4(radiance, 1.0);
+        outSpecular = vec4(0.0);
+        outOpenPBR = vec2(0.0);
         return;
     }
 
@@ -179,17 +194,17 @@ void main() {
     uint occlusionTexIdx = floatBitsToUint(row2.w);
     if (occlusionTexIdx < 4096u) ao = texture(textures[nonuniformEXT(occlusionTexIdx)], fragTexCoord).r;
 
-    // Safety: don't allow roughness to be absolute zero (causes mirror artifacts)
-    roughness = max(roughness, 0.04);
+    // The roughness as authored: OpenPBR's module holds it at its floor (kMinSpecularRoughness),
+    // as the path tracer's does.
 
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, metallic);
 
-    // Emitted radiance: the emissive texture's colour times the strength
-    vec3 emissive = vec3(0.0);
+    // Emitted radiance: emission_color x emission_luminance, times the emissive texture's colour
+    vec3 emissive = row6.rgb * row2.y;
     uint emissiveTexIdx = floatBitsToUint(row1.w);
     if (emissiveTexIdx < 4096u)
-        emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb * row2.y;
+        emissive *= texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb;
     outEmissive = vec4(emissive, 0.0);
     const float emissiveLuminance = dot(emissive, vec3(0.2126, 0.7152, 0.0722));
 
@@ -200,6 +215,16 @@ void main() {
     outGBuffer1 = vec4(encodedNormal, roughness, subsurface > 0.0 ? -subsurface : emissiveLuminance);
     if (subsurface > 0.0) flagSkin(uvec2(gl_FragCoord.xy));
 
-    // GBuffer2: Albedo + AO
-    outGBuffer2 = vec4(albedo, ao);
+    // GBuffer2: Albedo (base_weight x base_color: OpenPBR's diffuse albedo and a metal's F0) + AO
+    outGBuffer2 = vec4(albedo * row5.z, ao);
+
+    // OpenPBR's specular and base inputs (KHR_materials_specular's textures applied)
+    float specularWeight = row4.w;
+    vec3 specularColor = row4.rgb;
+    const uint specularTexIdx = floatBitsToUint(row5.w);
+    if (specularTexIdx < 4096u) specularWeight *= texture(textures[nonuniformEXT(specularTexIdx)], fragTexCoord).a;
+    const uint specularColorTexIdx = floatBitsToUint(row6.w);
+    if (specularColorTexIdx < 4096u) specularColor *= texture(textures[nonuniformEXT(specularColorTexIdx)], fragTexCoord).rgb;
+    outSpecular = vec4(clamp(specularColor, 0.0, 1.0), clamp(specularWeight / 1.5, 0.0, 1.0));
+    outOpenPBR = vec2(clamp(row5.y, 0.0, 1.0), clamp((row5.x - 1.0) / 2.55, 0.0, 1.0));
 }

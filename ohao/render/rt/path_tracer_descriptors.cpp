@@ -65,7 +65,7 @@ bool PathTracer::createDescriptorResources() {
     // Bindless textures (closest-hit, any-hit, miss for the env map), the table's whole
     // capacity. Not a variable count: that flag is only legal on a layout's highest binding
     // (VUID 03004), and every set is allocated at the full capacity anyway.
-    add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, HIT | MISS, m_bindlessCapacity,
+    add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, RGEN | HIT | MISS, m_bindlessCapacity,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
     add(13, IMAGE, RGEN);   // previous-frame surface history
     add(14, IMAGE, RGEN);   // current-frame surface history
@@ -88,6 +88,7 @@ bool PathTracer::createDescriptorResources() {
     add(35, IMAGE, RGEN);   // DLSS-RR specular hit-distance guide (R32F)
     add(36, BUFFER, HIT);   // instances (InstanceGpu, indexed by the TLAS custom index = slot)
     add(37, BUFFER, HIT);   // instance material refs
+    add(38, BUFFER, RGEN);  // OpenPBR's energy tables (rt/path_tracer.slang)
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -109,7 +110,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kSets},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 26 * kSets},  // 1-3,6,7,13-16,19-35
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * kSets}, // scene data 4,5,8,9,10,36,37 + lights 11 + env CDFs 17,18 + OpenPBR tables 38
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_bindlessCapacity * kSets},
     };
 

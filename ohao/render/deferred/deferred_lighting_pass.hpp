@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/material/openpbr_tables_buffer.hpp"
 #include "render_pass_base.hpp"
 #include "gbuffer_pass.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -137,6 +138,7 @@ private:
     VkDeviceMemory m_dummyUintMemory{VK_NULL_HANDLE};
     VkImageView m_dummyUintView{VK_NULL_HANDLE};
     VkBuffer m_dummyBuffer{VK_NULL_HANDLE};
+    render::OpenPBRTablesBuffer m_openpbrTables;   // binding 20
     VkDeviceMemory m_dummyBufferMemory{VK_NULL_HANDLE};
     bool m_dummyImageTransitioned{false};
     [[nodiscard]] bool createDummyResources();

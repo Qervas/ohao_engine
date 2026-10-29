@@ -49,7 +49,7 @@ inline constexpr RTRenderSettings kRealtimeRTSettings{
 
 inline constexpr RTRenderSettings kOfflineRTSettings{
     .profile = RTRenderProfile::Offline,
-    .maxBounces = 4,
+    .maxBounces = 32,
     .preferAccumulation = true,
     .enableAuxiliaryAOVs = true,
     .allowExternalDenoiser = true,

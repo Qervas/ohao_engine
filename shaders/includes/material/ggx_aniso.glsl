@@ -165,7 +165,7 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // VNDF sampler's pdf, and -- as of this fix -- the env-IS branch's
 // `pdfSpecMIS`), and NOTHING in the C++ test suite executes it.
 // tests/renderer/renderer_test.cpp selects RenderMode::RTOffline, i.e.
-// pt_raygen_offline.rgen, which contains no ggxDiso call at all; that test
+// rt/path_tracer.slang, which does not include this file; that test
 // also asserts nothing about pixels (it writes a PNG and returns 0
 // unconditionally) and falls back silently when RT is unavailable. The golden-image corpus (tests/golden/manifest.json) also
 // renders RTOffline only.

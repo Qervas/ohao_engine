@@ -55,7 +55,8 @@ struct RTProfileTraits<RTRenderProfile::Offline> {
     static constexpr bool is_realtime = false;
     static constexpr bool is_offline  = true;
 
-    static constexpr uint32_t default_max_bounces     = 4;
+    // The reference (rt/path_tracer.slang): Russian roulette ends most paths long before.
+    static constexpr uint32_t default_max_bounces     = 32;
     static constexpr bool     prefer_accumulation     = true;
     static constexpr bool     enable_auxiliary_aovs   = true;
     static constexpr bool     allow_external_denoiser = true;

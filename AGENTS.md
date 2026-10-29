@@ -173,6 +173,7 @@ $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
 $ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
 $ python tests/renderer/check_analytic.py > /dev/null   # gpu
+$ python tests/renderer/check_material.py > /dev/null   # gpu
 $ python tests/renderer/check_parity.py > /dev/null   # gpu # slow
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
@@ -218,9 +219,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   render unshadowed (`--keep` leaves the compared PNGs in `build/`).
   `light_emitter_gpu_test`: a point, a spot and an area light get one emitter mesh each, a
   sun none; with the lights out of view the image with emitters is the image without them
-  (deferred with RT shadows and GI, deferred with CSM, path traced: byte for byte), with
-  them in view each emitter is bright and every other pixel the same (deferred: 1 LSB within
-  24 px of an emitter, its denoisers' neighbourhoods); a moved light's emitter carries last
+  (deferred with RT shadows and GI, deferred with CSM: byte for byte; path traced, whose bounce
+  rays meet emitters and weigh them against light sampling: the same light, the mean within 1%
+  overall and 5% per 32x32 block), with them in view each emitter is bright and every other
+  pixel the same (deferred: 1 LSB within 24 px of an emitter, its denoisers' neighbourhoods;
+  path traced: the same light past 24 px); a moved light's emitter carries last
   frame's placement as its prevWorld, and under TAA a moving point light's mesh is as bright
   as the light held still; the first-person gun (`ViewModel`, sub-project 9): a capture with
   the gun against one without it differs only inside the gun's footprint (it shadows and
@@ -539,12 +542,24 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   ways and gives deferred's distance from the path tracer in stops, per scene and on a 4x4 grid,
   with `build/parity/<scene>.error.png`. Compare renderers in linear radiance (`--hdr`), never by
   PNG: the two tonemap differently (deferred at the capture's exposure, the path tracer at 0.5).
-  The path tracer is ground truth only where `check_analytic` holds it: until 2026-10-29 it lit a
-  sun 7.8x too bright (its intensity divided by an emitter area a directional light has not) and
-  every point or spot light under 5.6 cm too dark (the area floored at 0.01 m²). It is not yet
-  ground truth for indirect light: its specular bounce is a heuristic (a jittered mirror
-  direction, throughput 1), and its BRDF is not deferred's
-  (`docs/changes/2026-10-29-gi-every-light.md`, known gaps).
+  The path tracer is ground truth where closed forms hold it: `check_analytic` (one light, no
+  bounce) and `check_material.py`: a white furnace (white OpenPBR materials under a uniform sky
+  of radiance 1 render as 1, within 1%) and a closed box of emitting Lambertian walls
+  (`Le / (1 - rho)` with every bounce, `Le (1 - rho^(N+2)) / (1 - rho)` with `--bounces N`).
+- **The reference path tracer** is `shaders/rt/path_tracer.slang` (the offline profile,
+  `PathTracerShaderSet`'s default), a correct estimator of OpenPBR's base
+  (`shaders/material/openpbr.slang`): one path a sample, light and environment sampling weighed
+  against BSDF sampling by the power heuristic, Russian roulette from the third vertex, 32
+  bounces. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
+  weighs it by the light's index in `InstanceGpu.giAlbedoPacked.w`; a light without a mesh (a
+  point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
+  full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`
+  (`render.capture {bounces}`) for the referee: 0 direct light only. The realtime profile keeps
+  the GLSL tracer (`pt_raygen_realtime.rgen`) until the many-lights spec (ruling O5). Its floor
+  across hosts: a ray exactly on a shared triangle edge may take either triangle (the driver
+  builds BVHs per process), and the reference tests paths against the hit triangle's geometric
+  normal, so a few pixels may differ by any amount between a window and a headless host (one
+  process repeats itself bit for bit).
 - **RT GI's bounce sees every light** (`gi_trace.slang` `directAt`): up to `kGIWeighedLights`
   (16) each is weighed in one pass, past that `kGILightCandidates` (8) are drawn from an alias
   table in `GILight.cone.zw` and resampled; one shadow ray either way. `check_analytic.py` holds
@@ -568,11 +583,11 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - Every point, spot and area light is also a mesh the camera sees (`RenderScene::setLights`
   makes an emitter instance per light: a sphere of its radius, or its rectangle, with the
   light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its
-  TLAS mask (`kTlasMaskEmitter`) is in only the path tracer's camera ray's mask
-  (`kRayMaskCamera`) and a near-mirror first hit's specular ray's (`ptMirrorRoughness`, 0.05:
-  that hit's light samples drop their GGX term, so the reflection counts once), so no shadow,
-  GI, bounce or other specular ray hits it (else the light would shadow itself and be
-  counted twice); no CSM cascade draws it (`kDrawEmitter`); the
+  TLAS mask (`kTlasMaskEmitter`) is in the path tracer's camera and bounce rays' masks only (a
+  bounce ray that meets it is weighed against the light's sampling, so it counts once), so no
+  shadow or GI ray hits it (else the light would shadow itself or be counted twice); the
+  realtime GLSL tracer's camera ray and near-mirror ray see it too; no CSM cascade draws it
+  (`kDrawEmitter`); the
   G-buffer marks it with emissive alpha 1 and metallic −1, so lighting outputs its radiance
   alone, SSR treats it as a miss and RT shadows and GI skip it as sky. A new trace passes
   `kRayMaskScene`; a new screen-space pass that reads the lit image must decide what an
