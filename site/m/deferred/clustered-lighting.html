@@ -117,8 +117,8 @@ $$</div>
 </div>
 <div class="section-rule"><h2 id="what-does-not-read-the-lists">What does not read the lists</h2></div>
 <div class="prose reveal">
-<p>The deferred lighting pass is the lists&#x27; only reader. RT GI shades its bounce with its own selection, the four brightest lights by intensity, and the effects&#x27; expand pass lights each particle at its centre from the same lists:</p>
-<div class="citation-chip"><code class="citation-code">// The bounce&#x27;s lights: the brightest by intensity, ties by order, emissive proxies out.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_gi_technique.cpp#L267" target="_blank" rel="noopener">ohao/render/rt/rt_gi_technique.cpp:267</a></div>
+<p>The deferred lighting pass is the lists&#x27; only reader. RT GI shades its bounce with its own copy of every light, drawn by power (its hits lie outside the camera&#x27;s froxels), and the effects&#x27; expand pass lights each particle at its centre from the same lists:</p>
+<div class="citation-chip"><code class="citation-code">// The bounce&#x27;s lights: every light that gives any, emissive proxies out (the emissive surface</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_gi_technique.cpp#L305" target="_blank" rel="noopener">ohao/render/rt/rt_gi_technique.cpp:305</a></div>
 <p>Shadows are separate as well: only the first eight shadow-casting lights own an RT visibility channel (the shadow unit), however many lights the froxels hold.</p>
 </div>
 <div class="section-rule"><h2 id="cost">Cost</h2></div>
