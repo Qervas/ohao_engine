@@ -133,6 +133,14 @@ void main() {
         return;
     }
 
+    // A double-sided surface seen from behind is shaded on that side, as the path tracer's hit
+    // turns its normal toward the ray: the inside of a box, a curtain's back. Without it the normal
+    // pointed away and lights and GI's rays met the other side. The side is the rasterised
+    // surface's (the cross of the world position's screen derivatives), not the winding, which
+    // assets and primitives do not agree on.
+    const vec3 geometric = cross(dFdx(fragWorldPos), dFdy(fragWorldPos));
+    if (dot(geometric, N) > 0.0) N = -N;
+
     // Albedo: the material's base colour, times the albedo texture when there is one, as the
     // path tracer's hit computes it (rt/pt_closesthit.rchit). The vertex colour is not a
     // factor: primitives carry their colour as vertex colour and base colour both, and

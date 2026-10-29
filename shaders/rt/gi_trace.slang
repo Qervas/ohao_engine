@@ -13,8 +13,9 @@
 // Lighting multiplies the radiance by the diffuse albedo, and lights the specular IBL with the
 // environment where the rays escaped and with what they hit elsewhere.
 //
-// A ray that hits a surface brings back that surface's bounce albedo (the instance table's
-// giAlbedoPacked.rgb) over pi, times the direct light the hit receives from the frame's
+// A ray that hits a surface brings back that surface's emission and its OpenPBR albedo (its
+// material resolved at the hit's uv, rt/alpha_test.slang's hitMaterial) over pi, times the direct
+// light the hit receives from the frame's
 // lights (every raster light but emissive proxies), attenuated as the lighting pass attenuates
 // them, the hit's normal taken as facing the ray, and shadowed: one light, chosen in proportion to
 // what it would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
@@ -26,6 +27,7 @@
 // the accumulation converges and repeats exactly after a reset.
 import shared.layout;
 import rt.alpha_test;
+import material.openpbr;
 import rt.smoke_proxy;
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
@@ -39,6 +41,7 @@ import rt.smoke_proxy;
 [[vk::binding(8, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> radianceOut;
 [[vk::binding(9, 0)]] [[vk::image_format("r32ui")]] RWTexture2D<uint> guideOut;     // realtime
 [[vk::binding(10, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> refMean; // reference
+[[vk::binding(11, 0)]] StructuredBuffer<float> openpbrTables;                        // OpenPBR's energy tables
 [[vk::push_constant]] ConstantBuffer<GITracePush> pc;
 
 static const float kPi = 3.14159265;
@@ -258,10 +261,16 @@ float3 incoming(float3 origin, float3 dir, uint key, uint s, out float escaped)
     const float T = smokeTransmittance(origin, dir, tEnd);
     if (hit)
     {
-        const uint slot = q.CommittedInstanceID();   // the instance's custom index: its table slot
-        const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));
+        // The hit surface's material at its uv: what it reflects of the light it receives, by its
+        // OpenPBR directional albedo toward the ray (its normal taken as facing the ray), and what
+        // it emits.
+        const HitMaterial hm = hitMaterial(q.CommittedInstanceID(), q.CommittedPrimitiveIndex(),
+                                           q.CommittedTriangleBarycentrics());
+        OpenPBRTables tables;
+        tables.data = openpbrTables;
+        const float3 albedo = OpenPBRBase(hm.inputs).albedo(float3(0.0, 0.0, 1.0), tables);
         const float3 at = origin + dir * q.CommittedRayT();
-        return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;
+        return (albedo * (1.0 / kPi) * directAt(at, -dir, key, s) + hm.emission) * T;
     }
     escaped = 1.0;
     if (pc.flags.y == 0u) return float3(0.0);

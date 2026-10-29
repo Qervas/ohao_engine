@@ -11,7 +11,8 @@ The closed box: six walls of Lambertian albedo rho (specular_weight 0, diffuse r
 emitting Le, the camera inside, no lights. Every point's radiance is Le / (1 - rho) with every
 bounce. With N bounces (0: direct light only, which here is the walls' light reflected once) it is
 Le (1 - rho^(N+2)) / (1 - rho). Path traced: 2 within 1% (rho 0.5, Le 1, the reference's bounces),
-1.75 at --bounces 1, 1.5 at --bounces 0.
+1.75 at --bounces 1, 1.5 at --bounces 0. Deferred: RT GI's one bounce (its rays bring back what the
+walls emit, rt/gi_trace.slang) gives 1.5, the path tracer's --bounces 0, within 2% (32 frames)
 
   python tests/renderer/check_material.py   # exit 0 pass, 1 fail; last line the JSON summary
 """
@@ -35,6 +36,7 @@ CAM_D = 3.0
 SPHERE_R = 0.5
 FURNACE_TOLERANCE = 0.01
 BOX_TOLERANCE = 0.01
+BOX_DEFERRED_TOLERANCE = 0.02
 
 
 def quat_x(deg):
@@ -152,6 +154,19 @@ def closed_box(failures, results):
                                                                           "ok" if ok else "FAIL"))
         if not ok:
             failures.append("closed box, bounces %s: x%.4f of %.4f" % (tag, ratio, expected))
+    checks += 1
+    expected = le * (1 + rho)
+    img, err = capture("box_deferred", box_scene(rho, le), "deferred", ["--frames", "32"])
+    if err:
+        failures.append("closed box, deferred: %s" % err)
+        return checks
+    got = float((img @ np.array([0.2126, 0.7152, 0.0722])).mean())
+    ratio = got / expected
+    results["box_deferred"] = round(ratio, 4)
+    ok = abs(ratio - 1.0) <= BOX_DEFERRED_TOLERANCE
+    print("closed box  deferred     expected %.4f got %.4f (x%.4f) %s" % (expected, got, ratio, "ok" if ok else "FAIL"))
+    if not ok:
+        failures.append("closed box, deferred: x%.4f of %.4f" % (ratio, expected))
     return checks
 
 

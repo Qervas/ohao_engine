@@ -18,6 +18,7 @@
 // specular IBL with the environment where it is visible and with the bounce light elsewhere.
 
 #include "render_technique.hpp"
+#include "render/material/openpbr_tables_buffer.hpp"
 #include "rt_compute.hpp"
 #include "render/rt/rt_meta.hpp"
 #include "render/frame/frame_resources.hpp"
@@ -125,6 +126,7 @@ private:
     // The bounce's lights, a buffer per frame in flight, grown to the frame's count (in GILights).
     std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_lightCapacity{};
+    render::OpenPBRTablesBuffer m_openpbrTables;   // the trace's binding 11
 
     VkPipeline m_tracePipeline = VK_NULL_HANDLE, m_temporalPipeline = VK_NULL_HANDLE;
     VkPipeline m_atrousPipeline = VK_NULL_HANDLE, m_upsamplePipeline = VK_NULL_HANDLE;

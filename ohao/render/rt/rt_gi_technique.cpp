@@ -137,6 +137,10 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint3
         OHAO_LOG(Error, render, "RTGI: failed to create its images");
         return false;
     }
+    if (!m_openpbrTables.create(device, physicalDevice)) {
+        OHAO_LOG(Error, render, "RTGI: failed to upload OpenPBR's energy tables");
+        return false;
+    }
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         m_lightCapacity[i] = shared::kGIWeighedLights;
         if (!rtc::createHostBuffer(device, physicalDevice, sizeof(shared::GILight) * m_lightCapacity[i],
@@ -209,6 +213,7 @@ bool RTGITechnique::createDescriptorResources() {
         layoutBinding(5, buffer),                                                          // lights
         layoutBinding(6, sampled), layoutBinding(7, VK_DESCRIPTOR_TYPE_SAMPLER),           // environment
         layoutBinding(8, storage), layoutBinding(9, storage), layoutBinding(10, storage),  // radiance, guide, mean
+        layoutBinding(11, buffer),                                                         // OpenPBR's tables
     };
     const std::vector<VkDescriptorSetLayoutBinding> temporal = {
         layoutBinding(0, sampled), layoutBinding(1, sampled), layoutBinding(2, sampled),
@@ -236,7 +241,7 @@ bool RTGITechnique::createDescriptorResources() {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * MAX_FRAMES_IN_FLIGHT},
         {sampled, (4 + 6 + 2 * 2 + 5) * MAX_FRAMES_IN_FLIGHT},
         {storage, (3 + 2 + 2 * 1 + 1) * MAX_FRAMES_IN_FLIGHT},
-        {buffer, 2 * MAX_FRAMES_IN_FLIGHT},
+        {buffer, 3 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * MAX_FRAMES_IN_FLIGHT},
     };
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -375,7 +380,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, reference ? m_output.view : m_noisy.view, kGeneral};
     const VkDescriptorImageInfo guideInfo{VK_NULL_HANDLE, reference ? m_guideDummy.view : m_guide[m_cur].view, kGeneral};
     const VkDescriptorImageInfo meanInfo{VK_NULL_HANDLE, reference ? m_refMean.view : m_refDummy.view, kGeneral};
-    VkWriteDescriptorSet writes[11] = {
+    const VkDescriptorBufferInfo tablesInfo{m_openpbrTables.buffer(), 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet writes[12] = {
         descriptorWrite(set, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
         descriptorWrite(set, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
         descriptorWrite(set, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
@@ -383,6 +389,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
         descriptorWrite(set, 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE), descriptorWrite(set, 7, VK_DESCRIPTOR_TYPE_SAMPLER),
         descriptorWrite(set, 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE), descriptorWrite(set, 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
         descriptorWrite(set, 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        descriptorWrite(set, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
     };
     writes[0].pNext = &asWrite;
     for (uint32_t i = 0; i < 3; ++i) writes[1 + i].pImageInfo = &gbuf[i];
@@ -393,7 +400,8 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[8].pImageInfo = &outInfo;
     writes[9].pImageInfo = &guideInfo;
     writes[10].pImageInfo = &meanInfo;
-    vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
+    writes[11].pBufferInfo = &tablesInfo;
+    vkUpdateDescriptorSets(m_device, 12, writes, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
     const VkDescriptorSet traceSets[] = {set, input.alphaTables, input.textures};
@@ -530,6 +538,7 @@ void RTGITechnique::destroy() {
     destroyScreenImages();
     for (Image* d : {&m_guideDummy, &m_refDummy, &m_envDummy}) rtc::destroyImage(m_device, *d);
     for (rtc::HostBuffer& b : m_lights) rtc::destroyHostBuffer(m_device, b);
+    m_openpbrTables.destroy();
     m_traceSets = {};
     m_temporalSets = {};
     m_upsampleSets = {};
