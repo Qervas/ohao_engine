@@ -59,7 +59,7 @@
 <p>and `LightClusters` writes its records through an unguarded cast of that mapping:</p>
 <div class="citation-chip"><code class="citation-code">auto* dst = static_cast&lt;shared::LightGpu*&gt;(s.lights.mapped);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/light_clusters.cpp#L154" target="_blank" rel="noopener">ohao/render/deferred/light_clusters.cpp:154</a></div>
 <p>The shader-binding-table writers cast their mapped pointer to bytes the same way. The concept therefore holds on these paths only because the structs declared it themselves, and `LightGpu`, the type in that cast, does not. It is generated from `shaders/shared/layout.json` with a `static_assert` on every field&#x27;s offset and on its 64-byte size, which pins the layout the shaders read; nothing in the generated header names `GpuPod`.</p>
-<div class="citation-chip"><code class="citation-code">static_assert(sizeof(LightGpu) == 64);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/shared_layout.hpp#L360" target="_blank" rel="noopener">ohao/gpu/shared_layout.hpp:360</a></div>
+<div class="citation-chip"><code class="citation-code">static_assert(sizeof(LightGpu) == 64);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/shared_layout.hpp#L366" target="_blank" rel="noopener">ohao/gpu/shared_layout.hpp:366</a></div>
 </div>
 <div class="section-rule"><h2 id="why-a-concept-is-not-a-layout">Why a concept is not a layout</h2></div>
 <div class="prose reveal">

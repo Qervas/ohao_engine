@@ -39,15 +39,15 @@
 <div class="section-rule"><h2 id="a-round-is-a-ray-in-the-step">A round is a ray in the step</h2></div>
 <div class="prose reveal">
 <p>Combat is more simulation, not a separate loop. `installCombat` adds a `combat` simulate system after `physics`, so every `World::simulate(dt)` (the window&#x27;s fixed step, an agent&#x27;s `world.step`) runs it once. Every `Weapon`, in id order, reads its trigger, advances cooldown, reload, bloom and recoil, and fires at most one round. The cooldown carries its remainder, so a 10 Hz rifle fires on every sixth 60 Hz step without drift:</p>
-<div class="citation-chip"><code class="citation-code">s.cooldown += 1.0f / w.fireRate;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L255" target="_blank" rel="noopener">ohao/ecs/combat.cpp:255</a></div>
+<div class="citation-chip"><code class="citation-code">s.cooldown += 1.0f / w.fireRate;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L254" target="_blank" rel="noopener">ohao/ecs/combat.cpp:254</a></div>
 <p>A round is one ray from the shooter&#x27;s eye. It must not stop inside the shooter&#x27;s own capsule or in a trigger volume, so the physics scene casts it past both:</p>
-<div class="citation-chip"><code class="citation-code">if (const auto hit = physics.raycastFrom(eye, dir, w.range, e)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L187" target="_blank" rel="noopener">ohao/ecs/combat.cpp:187</a></div>
+<div class="citation-chip"><code class="citation-code">if (const auto hit = physics.raycastFrom(eye, dir, w.range, e)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L186" target="_blank" rel="noopener">ohao/ecs/combat.cpp:186</a></div>
 <p>What it hits, or that entity&#x27;s nearest ancestor with `Health`, takes the weapon&#x27;s damage; at 0 it is dead, takes no more and fires no more.</p>
 </div>
 <div class="section-rule"><h2 id="spread-without-a-generator">Spread without a generator</h2></div>
 <div class="prose reveal">
 <p>The round leaves within a cone that blooms with sustained fire. Its direction is drawn uniformly over the cone&#x27;s disc one unit ahead, from random numbers that are a hash of `(seed, shot, i)`:</p>
-<div class="citation-chip"><code class="citation-code">const glm::vec3 dir = combat::spreadDirection(aim, cone, w.seed, shot);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L179" target="_blank" rel="noopener">ohao/ecs/combat.cpp:179</a></div>
+<div class="citation-chip"><code class="citation-code">const glm::vec3 dir = combat::spreadDirection(aim, cone, w.seed, shot);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L178" target="_blank" rel="noopener">ohao/ecs/combat.cpp:178</a></div>
 <p>There is no generator state to save, so a snapshot mid-burst replays the same rounds. Uniform over a disc of radius $R$ means a radius drawn as $R\sqrt{u}$, whose density and mean are</p>
 <div class="math-block">$$
 p(r) = \frac{2r}{R^2}, \qquad \mathbb{E}[r] = \int_0^R r \, \frac{2r}{R^2} \, dr = \frac{2}{3} R
@@ -57,9 +57,9 @@ $$</div>
 <div class="section-rule"><h2 id="aiming-down-the-sights-tightens-the-cone">Aiming down the sights tightens the cone</h2></div>
 <div class="prose reveal">
 <p>Holding `aim` (the right mouse button) steps the saved `WeaponState.aim` from 0 toward 1 at $\Delta t / t_{ads}$ a step ($t_{ads}$ = `Weapon.adsTime`, 0.2 s), and back once released. It is updated before the step&#x27;s round, and it drops for the dead and while the weapon reloads (the arms leave the sights for the reload clip):</p>
-<div class="citation-chip"><code class="citation-code">aiming = aiming &amp;&amp; !(s.reloading &gt; 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L237" target="_blank" rel="noopener">ohao/ecs/combat.cpp:237</a></div>
+<div class="citation-chip"><code class="citation-code">aiming = aiming &amp;&amp; !(s.reloading &gt; 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L236" target="_blank" rel="noopener">ohao/ecs/combat.cpp:236</a></div>
 <p>The cone narrows linearly with it, to half at full aim:</p>
-<div class="citation-chip"><code class="citation-code">const float cone = (w.spreadDeg + s.bloomDeg) * (1.0f - 0.5f * s.aim);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L177" target="_blank" rel="noopener">ohao/ecs/combat.cpp:177</a></div>
+<div class="citation-chip"><code class="citation-code">const float cone = (w.spreadDeg + s.bloomDeg) * (1.0f - 0.5f * s.aim);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L176" target="_blank" rel="noopener">ohao/ecs/combat.cpp:176</a></div>
 <div class="math-block">$$
 \theta = (\theta_{spread} + \theta_{bloom})\,(1 - \tfrac{1}{2}\,a)
 $$</div>
@@ -75,15 +75,15 @@ $$</div>
 <div class="section-rule"><h2 id="the-round-goes-back-to-its-start-exactly">The round goes back to its start exactly</h2></div>
 <div class="prose reveal">
 <p>A world with a `Round` snapshots itself at the end of its first combat step. The player dead for `restartDelay` (3 s), or `restart` pressed, restores that snapshot at the end of the step, inside the combat system, so the sync systems after it see the restored world:</p>
-<div class="citation-chip"><code class="citation-code">hook-&gt;restore(roundStart);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L450" target="_blank" rel="noopener">ohao/ecs/combat.cpp:450</a></div>
+<div class="citation-chip"><code class="citation-code">hook-&gt;restore(roundStart);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L451" target="_blank" rel="noopener">ohao/ecs/combat.cpp:451</a></div>
 <p>The parked characters come back as the same characters, so the snapshot&#x27;s simulation (bodies, contact cache, characters) restores and the play after a restart is the play after the start. One more thing had to hold: `world.hash` after the restart step equal to the start&#x27;s. A returning character is placed where its restored entity stands, and placing it once wrote the rotation again from the yaw read back. The play scene&#x27;s enemies face exactly 180 degrees, and `atan2` reads a quaternion stored at -180 back as +180: the same rotation, another quaternion, another hash. A restored entity now keeps its rotation bit for bit:</p>
 <div class="citation-chip"><code class="citation-code">if (sameRotation(rotNow, p.writtenRot, 1e-4f) &amp;&amp; rotNow != p.writtenRot) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/physics_scene.cpp#L1079" target="_blank" rel="noopener">ohao/ecs/physics_scene.cpp:1079</a></div>
 <div class="why-callout reveal"><div class="why-label">Why</div><p>A restart could re-spawn everything from the scene file. It would be simpler and would lose what the round&#x27;s first step did (the enemies already turned toward the player, a crate already settled), and nothing would check it. Restoring a snapshot makes &quot;the round&#x27;s start&quot; one thing, a world with a hash, and every restart is tested against it.</p></div>
 </div>
 <div class="section-rule"><h2 id="what-the-player-sees-is-built-at-the-step">What the player sees is built at the step</h2></div>
 <div class="prose reveal">
-<p>The muzzle flash is a light the step turns on for `Muzzle.time`; the HUD is a list of rectangles and glyphs laid out from combat state; impact marks are 64 runtime quads attached to what was hit. Marks are taken from the log by a simulate system right after `combat`, against the step&#x27;s poses:</p>
-<div class="citation-chip"><code class="citation-code">world.addSimulate(&quot;impact_marks&quot;, [](World&amp; w, float) { impactMarksOf(w).observe(w); });</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/combat.cpp#L499" target="_blank" rel="noopener">ohao/ecs/combat.cpp:499</a></div>
+<p>The muzzle flash is a light the step turns on for `Muzzle.time`; the HUD is a list of rectangles and glyphs laid out from combat state; impact marks are 64 runtime quads attached to what was hit. A hit leaves a decal record, a projected box on the mesh box the round crosses (a character&#x27;s) or on what it hit. The `vfx` system takes the records from the log right after `combat`, against the step&#x27;s poses:</p>
+<div class="citation-chip"><code class="citation-code">hitBoxes(reg, character, e.point - dir * 0.05f, dir, best, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/ecs/vfx.cpp#L358" target="_blank" rel="noopener">ohao/ecs/vfx.cpp:358</a></div>
 <p>A headless host makes its renderer at its first capture. When marks were taken by the renderer, it read the whole log then and attached each mark by its target&#x27;s pose *then*: an enemy that had moved since carried its marks elsewhere, and a window and a headless capture of the same fight differed. Taken at the step, they are the same picture.</p>
 </div>
 <div class="section-rule"><h2 id="an-agent-s-fight">An agent&#x27;s fight</h2></div>
@@ -116,9 +116,9 @@ $$</div>
         <div class="row"><code>ohao/ecs/combat.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/enemy_ai.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/physics_scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/ecs/vfx.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/api/combat.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/ecs/combat.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/ecs/impact_marks.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
