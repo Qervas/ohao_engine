@@ -33,7 +33,7 @@
         <p>GPULight SSBO (64 lights) vs the deferred LightGpu table (65,536).</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-same-integer-means-two-different-lights">The same integer means two different lights</a></li><li><a href="#eighty-bytes-and-sixty-four">Eighty bytes and sixty-four</a></li><li><a href="#the-sixteen-bytes-std430-hands-over">The sixteen bytes std430 hands over</a></li><li><a href="#what-a-light-s-radiance-is">What a light&#x27;s radiance is</a></li><li><a href="#one-light-per-shadow-ray-and-the-density-that-pays-for-it">One light per shadow ray, and the density that pays for it</a></li><li><a href="#the-constants-that-name-only-one-table">The constants that name only one table</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-same-integer-means-two-different-lights">The same integer means two different lights</a></li><li><a href="#eighty-bytes-and-sixty-four">Eighty bytes and sixty-four</a></li><li><a href="#the-sixteen-bytes-std430-hands-over">The sixteen bytes std430 hands over</a></li><li><a href="#what-a-light-s-radiance-is">What a light&#x27;s radiance is</a></li><li><a href="#one-light-per-shadow-ray-and-the-density-that-pays-for-it">One light per shadow ray, and the density that pays for it</a></li><li><a href="#type-codes-without-names">Type codes without names</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-same-integer-means-two-different-lights">The same integer means two different lights</h2></div>
@@ -129,11 +129,11 @@ $$</div>
 <p>The reference&#x27;s shadow ray leaves from the hit point pushed 10⁻³ along the geometric normal, with `TMin` 10⁻⁴, and stops 10⁻³ short of the light: at the sphere&#x27;s near side along the sampled direction, at the sampled point of a rectangle, at 10⁴ for a sun.</p>
 <div class="citation-chip"><code class="citation-code">s.dist = max(dc - sqrt(max(r * r - d2 + dc * dc, 0.0)), 0.0) - 1e-3;   // to the sphere&#x27;s near side</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/path_tracer.slang#L289" target="_blank" rel="noopener">shaders/rt/path_tracer.slang:289</a></div>
 </div>
-<div class="section-rule"><h2 id="the-constants-that-name-only-one-table">The constants that name only one table</h2></div>
+<div class="section-rule"><h2 id="type-codes-without-names">Type codes without names</h2></div>
 <div class="prose reveal">
-<p>`constants.glsl` defines three light-type macros, and they are the raster codes: directional 0, point 1, spot 2. No shader that runs reaches the header: only `common.glsl` and `math.glsl` include it, and nothing includes those two. The raster readers (`clustered_lights.slang`&#x27;s `lightAt`, the cluster build) compare `position.w` against bare integers.</p>
-<div class="citation-chip"><code class="citation-code">#define LIGHT_TYPE_POINT       1</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L20" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:20</a></div>
-<p>The macros are not merely unused, they are a trap: `LIGHT_TYPE_POINT` is 1, and 1 is *directional* in the `GPULight` table this page opened with. Including the header into a ray-tracing stage to avoid retyping three constants inverts the two most common light types in the engine.</p>
+<p>No header names the light-type codes for either table. The raster readers compare `position.w` against bare integers — directional 0, point 1, spot 2, area 3:</p>
+<div class="citation-chip"><code class="citation-code">type = int(light.position.w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/clustered_lights.slang#L174" target="_blank" rel="noopener">shaders/includes/lighting/clustered_lights.slang:174</a></div>
+<p>The reference path tracer does the same against `GPULight`&#x27;s codes, where 1 is directional and 0 a point light. The two tables use the same small integers for different kinds, so a reader that borrows a constant from the other table inverts the two most common light types.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
@@ -163,7 +163,6 @@ $$</div>
         <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/rt/pt_lights.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

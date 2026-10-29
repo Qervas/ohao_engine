@@ -171,13 +171,12 @@ normals, meant for a subsurface term.
 No raygen reads it: the realtime raygen has no subsurface term, so the closest hit
 computes and ships a value nobody consumes.
 
-The `.x` / `.y` half goes through `unpackHitPbr` — the RT-local one of two
-byte-identical copies in the tree, which is what the quoted include resolves to.
-It still carries two dormant legacy branches: a negative-`.x` "binary metal" path,
+The `.x` / `.y` half goes through `unpackHitPbr` in `includes/pbr_unpack.glsl`.
+It carries two dormant legacy branches: a negative-`.x` "binary metal" path,
 and a subtract-10 shift for magnitudes at or above 10. Current closest-hit writes
 a positive roughness already floored at 0.04, so neither can fire.
 
-{{cite shaders/rt/includes/pbr_unpack.glsl "if (att.x < 0.0 && att.y < 1e-4) {"}}
+{{cite shaders/includes/pbr_unpack.glsl "if (att.x < 0.0 && att.y < 1e-4) {"}}
 
 The realtime raygen re-implements the same unpack inline for its secondary
 reservoir vertex, dormant branch included, instead of calling the helper:

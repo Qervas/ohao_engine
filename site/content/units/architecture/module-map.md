@@ -136,17 +136,6 @@ and exactly why the group exists.
 
 No other pair of archives forms a cycle. `ohao_scene` carries no undefined symbol
 that another engine archive defines, and physics reaches nobody.
-The `Material` header under `gpu/vulkan/` is still a Vulkan-free struct,
-
-{{cite ohao/gpu/vulkan/material.hpp "struct Material {"}}
-
-and `scene/asset/model.cpp` still includes it, but uses no `Material` member — the
-loaders produce `MaterialData` — so the include is unused and adds no edge:
-
-{{cite ohao/scene/asset/model.cpp "#include "gpu/vulkan/material.hpp""}}
-
-Directory name is not ownership in this tree. A header living under `gpu/vulkan/`
-that links to nothing is as easy to misread as one that does.
 
 ## The only Vulkan scene owns is a vertex layout
 

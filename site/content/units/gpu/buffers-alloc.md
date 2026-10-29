@@ -22,10 +22,6 @@ staging buffers — comes from it.
 
 {{cite ohao/render/scene/mesh_registry.cpp "a.buf = m_ctx.allocator->createBuffer(elemSize * capacity, usage, AllocationUsage::GpuOnly);"}}
 
-The other `GpuAllocator` in the tree is a smoke test:
-
-{{cite tests/renderer/renderer_pipeline_tests.cpp "GpuAllocator allocator;"}}
-
 The two other subsystems that hold a `GpuAllocator*` — `RenderGraph` and
 `BindlessTextureManager` — are handed a null pointer by the code that builds them
 (the render graph through a defaulted argument in `deferred_renderer.cpp`), and

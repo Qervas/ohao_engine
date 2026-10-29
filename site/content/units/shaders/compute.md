@@ -42,20 +42,19 @@ G-buffer's octahedral normal with its own copy of the decoder, which undoes the
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
-The shared GLSL encoder of the same name in `includes/common/encoding.glsl` returns
-[-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only
-because `gbuffer.frag` redefines it locally. "De-duplicating" it onto the shared
-helper breaks the pairing silently, for SSAO, SSR and lighting at once.
+The encoder returns [-1,1] and the G-buffer remaps it to [0,1] on write; every reader
+undoes the remap before decoding. Changing either side alone breaks the pairing
+silently, for SSAO, SSR and lighting at once.
 
 It is off unless asked for:
 
 {{cite ohao/render/deferred/post_processing_pipeline.hpp "bool m_ssaoEnabled{false};"}}
 
 The model viewer, the `ohao_game` host, a live window session and a capture whose
-`post` list names `ssao` ask; the Python bindings expose the setter by name.
+`post` list names `ssao` ask; render settings expose it as `ssao`.
 
 {{cite examples/model_viewer.cpp "pp->setSSAOEnabled(true);"}}
-{{cite tests/python/renderer_bindings.cpp "set_ssao_enabled"}}
+{{cite ohao/api/params.cpp "&RenderSettings::ssao).doc("}}
 
 The kernel — a horizon search in the surface's tangent plane, eight directions of four
 steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its

@@ -47,7 +47,7 @@ checked", never as "clean".
 
 :::why
 Presentation is an option on the renderer, not its default, so that one renderer runs
-identically headless (`cornell_box`, `turntable`, the smoke test, the golden corpus)
+identically headless (`cornell_box`, `turntable`, `renderer_test`, the golden corpus)
 and in a window. The window system stays outside `ohao/gpu`: `PresentTarget` carries
 a surface-creation callback rather than a window handle, so the renderer depends on
 `VkSurfaceKHR` and nothing else, and the GLFW-specific half lives in `ohao/runtime`.
@@ -87,10 +87,7 @@ already made them mandatory. The soft-fail path survives only for its other fail
 
 Exactly one queue is created, at index 0 of that graphics family, and everything
 runs on it: rasterization, RT dispatch, compute post-process, every staging
-copy, and presentation. An `AsyncComputeQueue` class exists in `ohao/render/async/` and is compiled
-into `ohao_renderer` by the source glob, but nothing constructs one — its only
-reference in the tree is `tests/renderer/renderer_pipeline_tests.cpp`, a file no
-CMake target builds. The device create info never asks for a second queue either.
+copy, and presentation. The device create info asks for no second queue.
 
 {{cite ohao/gpu/vulkan/device_setup.cpp "vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);"}}
 

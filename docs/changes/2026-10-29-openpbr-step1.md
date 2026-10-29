@@ -119,8 +119,7 @@ Deferred against the path tracer:
   (O5). Only the offline profile is OpenPBR.
 - **OpenPBR's layered whole is not reciprocal.** Its albedo scaling applies at wo alone, so `material_tests` checks
   reciprocity per lobe.
-- **`gpu/vulkan/material*.cpp` stay.** The plan deleted them "if unused", but `engine_tests`, `renderer_pipeline_tests`
-  and the model loader still use them.
+- **`gpu/vulkan/material*.cpp`** were left in place on the belief that the model loader still used them. It did not: the loader included `material.hpp` without using it. They were deleted on 2026-10-30 (`docs/specs/2026-10-30-frontier-renderer-design.md`, step F0).
 
 ## 5. Results
 

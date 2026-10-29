@@ -275,11 +275,11 @@ KNOWLEDGE: dict[str, dict] = {
     },
     "gpu/layout-meta": {
         "what": [
-            "layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL. Material and MaterialInstance are CPU authoring types that pack into SSBO rows.",
+            "layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with the shaders. MaterialGpuPack (7 rows, 112 bytes) is the row the material table uploads.",
         ],
         "how": [
             "OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree.",
-            "MaterialInstance holds texture indices and factors before pack.",
+            "MaterialTable packs each material's factors and bindless texture indices into MaterialGpuPack rows.",
         ],
         "why": "Silent layout drift is undebuggable; assert at compile time.",
     },
@@ -612,15 +612,10 @@ KNOWLEDGE: dict[str, dict] = {
         "how": ["PathTracer searches multiple relative SPIR-V paths; include root is shaders/."],
         "why": "Predictable layout beats hunting random .spv copies.",
     },
-    "shaders/includes-common": {
-        "what": ["Shared math, color, encoding, reconstruction, constants."],
-        "how": ["Used by both raster and RT; encoding holds octahedral pack conventions; constants shared with C++ live in shared/layout.json instead."],
-        "why": "One luminance/normalize definition everywhere.",
-    },
     "shaders/includes-lighting": {
-        "what": ["light_attenuation.glsl, which no stage includes, against the falloff, IBL and LightGpu record the deferred pass actually uses."],
+        "what": ["clustered_lights.slang: the falloff, light loop and LightGpu record the deferred and transparent passes share."],
         "how": ["clustered_lights.slang holds the windowed inverse square (exactly zero past the range) and the light loop; deferred_lighting.slang adds the split-sum IBL weighted by OpenPBR's specular albedo; LightGpu comes from shared/layout.json."],
-        "why": "The two falloff laws have different units; the deferred one's hard zero is what clustered lighting relies on.",
+        "why": "The falloff's hard zero past the range is what lets clustered lighting equal summing every light.",
     },
     "shaders/includes-shadow": {
         "what": ["How shadows reach deferred lighting: RT visibility channels, or the CSM fallback for directional lights."],
@@ -683,11 +678,6 @@ KNOWLEDGE: dict[str, dict] = {
         "what": ["Per-frame ring: fences, staging, UBOs with MAX_FRAMES_IN_FLIGHT=3."],
         "how": ["frame_resources.hpp/cpp; dispatch waits before reuse."],
         "why": "CPU/GPU overlap without resource hazard.",
-    },
-    "graph/async-compute": {
-        "what": ["Optional async compute queue path."],
-        "how": ["async_compute_queue.hpp for overlapping work."],
-        "why": "Headroom for culling/effects off the graphics queue.",
     },
     "graph/culling": {
         "what": ["GpuCulling: RenderScene's draw table to indirect draw lists on the GPU (early, late and cascade phases; four lists a G-buffer phase: instance and meshlet, one-sided and double-sided)."],

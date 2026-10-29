@@ -20,7 +20,6 @@ pybind11_add_module(ohao_physics_py physics_bindings.cpp)
 
 target_link_libraries(ohao_physics_py PRIVATE
     ohao_physics
-    ohao_renderer
     ohao_core
 )
 
@@ -35,26 +34,6 @@ set_target_properties(ohao_physics_py PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-# ===== Renderer Python Module =====
-pybind11_add_module(ohao_renderer_py renderer_bindings.cpp)
-
-target_link_libraries(ohao_renderer_py PRIVATE
-    ohao_renderer
-    ${Vulkan_LIBRARIES}
-)
-
-set_target_properties(ohao_renderer_py PROPERTIES OUTPUT_NAME "ohao_renderer")
-
-target_include_directories(ohao_renderer_py PRIVATE
-    ${CMAKE_SOURCE_DIR}/ohao
-    ${CMAKE_SOURCE_DIR}/external/glm
-    ${Vulkan_INCLUDE_DIRS}
-)
-
-set_target_properties(ohao_renderer_py PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-)
-
 # Copy test files to build directory
 file(COPY
     test_physics_invariants.py
@@ -64,4 +43,3 @@ file(COPY
 
 message(STATUS "Python bindings configured.")
 message(STATUS "  Physics module: make ohao_physics_py")
-message(STATUS "  Renderer module: make ohao_renderer_py")

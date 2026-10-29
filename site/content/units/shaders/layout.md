@@ -219,33 +219,33 @@ header rebuilds the world:
 
 {{cite shaders/CMakeLists.txt "DEPENDS ${SHADER} ${SHADER_INCLUDES}"}}
 
-Touching `includes/common/math.glsl` therefore recompiles all 26 GLSL modules,
+Touching `includes/scene/scene_data.glsl` therefore recompiles all 26 GLSL modules,
 including those whose include closure never reaches it — a deliberate over-approximation that avoids depfile plumbing. The
 under-approximation next to it is the dangerous half. `SHADER_INCLUDES` is built
 from a pattern with a directory component in the middle:
 
 {{cite shaders/CMakeLists.txt ""${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl""}}
 
-## Two files named pbr_unpack.glsl
+That pattern matches only headers at least one directory below `includes/`. The one
+header directly in it, `includes/pbr_unpack.glsl`, is outside the list.
 
-The tree contains `shaders/includes/pbr_unpack.glsl` and
-`shaders/rt/includes/pbr_unpack.glsl`, byte-identical today. The realtime raygen
-asks for the string both would answer:
+## pbr_unpack.glsl and the include roots
+
+The realtime raygen asks for it by a path relative to the include root:
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "includes/pbr_unpack.glsl"}}
 
-A quoted include is resolved relative to the *including file's* directory before
-any `-I` root is consulted, and `shaders/rt/` has an `includes/` of its own — so
-`glslc -M` reports that the realtime raygen compiles `shaders/rt/includes/pbr_unpack.glsl`
-and never touch the copy under `shaders/includes/`. Neither the include roots nor
-the flat naming rule are involved; the winner is decided by directory adjacency.
+A quoted include is resolved relative to the *including file's* directory before any
+`-I` root is consulted. `shaders/rt/` has no `includes/` directory, so the lookup falls
+through to the `-I` root `shaders/` and finds `shaders/includes/pbr_unpack.glsl`. A
+directory named `includes/` added under `shaders/rt/` with a file of that name would
+silently take its place for every raygen there.
 
 :::key
-Combine the two facts above and you get a silent-failure machine: edit the
-top-level `includes/pbr_unpack.glsl` and (a) it is the wrong copy — the raygen
-reads the `rt/includes/` one — and (b) even editing the right copy triggers no
-recompilation, because neither file is in the dependency glob. The build will
-report success and the SPIR-V will be unchanged.
+Edit `includes/pbr_unpack.glsl` and nothing recompiles: it is not in the dependency
+glob, so the build reports success and the SPIR-V is unchanged until a shader that
+includes it is rebuilt for another reason. Force the `shaders` target, or touch the
+realtime raygen, after changing it.
 :::
 
 ## Contracts

@@ -457,11 +457,6 @@ window.OHAO_NAV_TREE = [
         "href": "m/shaders/layout.html"
       },
       {
-        "id": "shaders/includes-common",
-        "title": "Common includes",
-        "href": "m/shaders/includes-common.html"
-      },
-      {
         "id": "shaders/includes-lighting",
         "title": "Lighting includes",
         "href": "m/shaders/includes-lighting.html"
@@ -534,11 +529,6 @@ window.OHAO_NAV_TREE = [
         "id": "graph/frame-resources",
         "title": "Frame resources ring",
         "href": "m/graph/frame-resources.html"
-      },
-      {
-        "id": "graph/async-compute",
-        "title": "Async compute queue",
-        "href": "m/graph/async-compute.html"
       },
       {
         "id": "graph/culling",

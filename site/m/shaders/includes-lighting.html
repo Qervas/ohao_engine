@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shaders · Lighting includes — OHAO Monograph</title>
-  <meta name="description" content="One uncompiled attenuation header; the falloff, IBL and light record that ship." />
+  <meta name="description" content="clustered_lights.slang: the falloff, the light loop and the light record." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
@@ -30,52 +30,36 @@
       </header>
       <div class="thesis-box reveal">
         <div class="label">Design unit</div>
-        <p>One uncompiled attenuation header; the falloff, IBL and light record that ship.</p>
+        <p>clustered_lights.slang: the falloff, the light loop and the light record.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what-the-include-graph-actually-says">What the include graph actually says</a></li><li><a href="#the-falloff-the-header-calls-its-default">The falloff the header calls its default</a></li><li><a href="#the-falloff-the-deferred-pipeline-evaluates">The falloff the deferred pipeline evaluates</a></li><li><a href="#the-ibl-the-deferred-pass-evaluates-instead">The IBL the deferred pass evaluates instead</a></li><li><a href="#where-the-light-record-lives">Where the light record lives</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#what-the-directory-holds">What the directory holds</a></li><li><a href="#the-falloff-the-light-loop-evaluates">The falloff the light loop evaluates</a></li><li><a href="#the-ibl-the-deferred-pass-evaluates-instead">The IBL the deferred pass evaluates instead</a></li><li><a href="#where-the-light-record-lives">Where the light record lives</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what-the-include-graph-actually-says">What the include graph actually says</h2></div>
+<div class="section-rule"><h2 id="what-the-directory-holds">What the directory holds</h2></div>
 <div class="prose reveal">
-<p>`shaders/includes/lighting/` holds two files that have nothing to do with each other. `light_attenuation.glsl` is a GLSL header no stage includes; the only `#include` it takes part in is its own pull of `math.glsl`.</p>
-<div class="citation-chip"><code class="citation-code">#include &quot;includes/common/math.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L12" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:12</a></div>
-<p>`clustered_lights.slang` is a Slang module, and it is what ships: the froxel lists, each light&#x27;s attenuation, and the surface&#x27;s response through OpenPBR&#x27;s base. Three passes import it — deferred lighting, the forward transparent pass and the particle expand — so a plane shaded forward and deferred runs the same loop.</p>
+<p>`shaders/includes/lighting/` holds one file, `clustered_lights.slang`, a Slang module: the froxel lists, each light&#x27;s attenuation, and the surface&#x27;s response through OpenPBR&#x27;s base. Three passes import it — deferred lighting, the forward transparent pass and the particle expand — so a plane shaded forward and deferred runs the same loop.</p>
 <div class="citation-chip"><code class="citation-code">// The clustered light loop of the deferred frame and the forward passes (core/deferred_lighting.slang,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/clustered_lights.slang#L1" target="_blank" rel="noopener">shaders/includes/lighting/clustered_lights.slang:1</a></div>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Treat `light_attenuation.glsl` as a proposal, not an implementation. No shader includes it, and the CMake source glob compiles only stages, so the header is not even parsed by a shader build. The module beside it re-derives the spot-cone ramp and the light direction and rejects the header&#x27;s distance law. The interesting failures are where the two disagree.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>There is one distance law for raster lights, and it lives here. Any pass that lights a surface or a particle from the light table imports this module rather than writing its own falloff; the exact zero at the range is what clustered lighting is built on.</p></div>
 </div>
-<div class="section-rule"><h2 id="the-falloff-the-header-calls-its-default">The falloff the header calls its default</h2></div>
+<div class="section-rule"><h2 id="the-falloff-the-light-loop-evaluates">The falloff the light loop evaluates</h2></div>
 <div class="prose reveal">
-<p>`attenuationSmooth` is commented in the header as &quot;current OHAO default&quot;. It has no callers, and neither does anything else in the file:</p>
+<p>`calculateAttenuation` is Karis-style windowed inverse-square:</p>
 <div class="math-block">$$
-a_{\text{hdr}}(d) \;=\; \frac{1}{1 + d^{2}/r^{2}}\;\Big(\mathrm{clamp}\big(1 - \tfrac{d}{r},\,0,\,1\big)\Big)^{2}
+a(d) \;=\; \frac{1}{\max(d^{2},\,0.01)}\;\Big(\mathrm{clamp}\big(1 - (d/r)^{4},\,0,\,1\big)\Big)^{2}
 $$</div>
-<p>$d$ is the surface-to-light distance and $r$ is the light&#x27;s range, which travels in the `w` channel of the packed direction vector. The first factor is an inverse-square-*shaped* core that stays finite at $d=0$, where it equals exactly 1. The second is a squared edge ramp, so both the value and its first derivative vanish at $d = r$: a light leaving its range fades out instead of popping.</p>
-<div class="citation-chip"><code class="citation-code">float attenuation = 1.0 / (1.0 + (distance * distance) / (range * range));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L52" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:52</a></div>
-<p>The header pairs it with a plain linear cone ramp between the inner and outer cosines, `attenuationSpotCone`, and a smoothstepped `attenuationSpotConeSmooth` variant.</p>
-<div class="citation-chip"><code class="citation-code">float attenuationSpotCone(float cosAngle, float innerCone, float outerCone) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L88" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:88</a></div>
-<p>The price of that bounded shape is that $r$ scales brightness everywhere, not just near the cutoff. Both factors rise monotonically with $r$ at fixed $d$, so widening a light&#x27;s range *brightens* it at every distance: at $d = 5$, taking $r$ from 10 to 20 moves the factor from $0.8 \times 0.25 = 0.200$ to $0.941 \times 0.5625 = 0.529$. Range is not a cutoff knob here; it is a second intensity knob.</p>
-</div>
-<div class="section-rule"><h2 id="the-falloff-the-deferred-pipeline-evaluates">The falloff the deferred pipeline evaluates</h2></div>
-<div class="prose reveal">
-<p>`clustered_lights.slang` declares its own `calculateAttenuation`, and picks a different law — Karis-style windowed inverse-square:</p>
-<div class="math-block">$$
-a_{\text{def}}(d) \;=\; \frac{1}{\max(d^{2},\,0.01)}\;\Big(\mathrm{clamp}\big(1 - (d/r)^{4},\,0,\,1\big)\Big)^{2}
-$$</div>
-<p>Same symbols. This one is correct in the far field and clamps the $1/d^{2}$ singularity at 100 rather than removing it, with a quartic window that reaches zero at $d = r$ while staying near 1 over most of the light&#x27;s useful volume.</p>
+<p>$d$ is the surface-to-light distance and $r$ the light&#x27;s range, which travels in the `w` channel of the light&#x27;s direction. The law is correct in the far field, clamps the $1/d^{2}$ singularity at 100 rather than removing it, and its quartic window reaches zero at $d = r$ while staying near 1 over most of the light&#x27;s useful volume, so range works as a cutoff and not as a second intensity knob.</p>
 <div class="citation-chip"><code class="citation-code">const float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/clustered_lights.slang#L145" target="_blank" rel="noopener">shaders/includes/lighting/clustered_lights.slang:145</a></div>
 <p>That exact zero is load-bearing. Clustered lighting lists, for each froxel, only the lights whose range sphere reaches it, and `directLight` skips a light whose attenuated radiance is exactly 0; both are exact only because past $d = r$ the clamp returns 0, not a small number.</p>
 <div class="citation-chip"><code class="citation-code">if (all(radiance == float3(0.0)) &amp;&amp; type != 3) continue;   // adds exactly zero: past its range or cone</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/clustered_lights.slang#L228" target="_blank" rel="noopener">shaders/includes/lighting/clustered_lights.slang:228</a></div>
 <p>The `LightGpu` record states the same contract in its field documentation:</p>
 <div class="citation-chip"><code class="citation-code">{&quot;name&quot;: &quot;direction&quot;, &quot;type&quot;: &quot;float4&quot;, &quot;doc&quot;: &quot;xyz direction (a rectangle&#x27;s first edge), w range: point and spot light contributes nothing past it (a rectangle has none)&quot;},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shared/layout.json#L277" target="_blank" rel="noopener">shaders/shared/layout.json:277</a></div>
-<p>The header already contains the near-match — `attenuationUE4` — with zero callers. It also differs from the deferred version in a way that changes units: it normalises distance by range *before* squaring, so its core is dimensionless and bounded by 1.</p>
-<div class="citation-chip"><code class="citation-code">float d = distance / range;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L38" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:38</a></div>
-<figure class="unit-figure reveal"><img src="../../assets/units/shaders-includes-lighting-falloff.svg" alt="Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and the deferred light loop (now clustered_lights.slang), each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range." loading="lazy" /><figcaption>Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and the deferred light loop (now clustered_lights.slang), each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range.</figcaption></figure>
-<div class="why-callout reveal"><div class="why-label">Why</div><p>One light record, two incompatible falloff laws. The header&#x27;s default is dimensionless and peaks at 1; the deferred law carries 1/length² units and peaks at 100. They are not related by any constant — the ratio between them varies with both distance and range — so an intensity tuned against one is simply wrong under the other. That is the reason not to &quot;tidy&quot; the light loop onto this header: including it is free, but switching the law re-authors every light intensity in every scene. If a shared include is wanted, the function to share is the deferred one, and the header&#x27;s `attenuationUE4` is the closest starting point. Any replacement must keep a hard zero at the range, or clustered lighting stops being exact.</p></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/shaders-includes-lighting-falloff.svg" alt="Conceptual, not measured: the windowed inverse-square law clustered_lights.slang evaluates, beside two other common falloff shapes drawn only for comparison (a bounded 1/(1 + d²/r²) core under a squared linear window, and a range-normalised windowed form), each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range." loading="lazy" /><figcaption>Conceptual, not measured: the windowed inverse-square law clustered_lights.slang evaluates, beside two other common falloff shapes drawn only for comparison (a bounded 1/(1 + d²/r²) core under a squared linear window, and a range-normalised windowed form), each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range.</figcaption></figure>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The law is physical: a light of intensity $I$ gives $I/d^{2}$ at distance $d$, which is also what the path tracer&#x27;s sphere emitter delivers, so deferred and the reference agree on direct light. Any bounded, range-normalised alternative would make range scale brightness at every distance and break that agreement. Any replacement must keep a hard zero at the range, or clustered lighting stops being exact.</p></div>
 </div>
 <div class="section-rule"><h2 id="the-ibl-the-deferred-pass-evaluates-instead">The IBL the deferred pass evaluates instead</h2></div>
 <div class="prose reveal">
-<p>The header directory has no image-based lighting of its own. The module keeps two helpers for it, `specularOcclusion` and `equirectUV` (the environment images&#x27; texel coordinate, row 0 the zenith); the split sum itself is in `deferred_lighting.slang`, fed by `EnvPrefilter`&#x27;s two equirectangular images (the environment GGX-prefiltered into one mip per roughness step, and its irradiance; the deferred lighting unit, &quot;Image-based lighting&quot;). Its weight is no analytic fit: it is the specular lobes&#x27; own directional albedo toward the viewer, read from OpenPBR&#x27;s energy tables.</p>
+<p>The split-sum image-based lighting is not in this module either. It keeps two helpers for it, `specularOcclusion` and `equirectUV` (the environment images&#x27; texel coordinate, row 0 the zenith); the split sum itself is in `deferred_lighting.slang`, fed by `EnvPrefilter`&#x27;s two equirectangular images (the environment GGX-prefiltered into one mip per roughness step, and its irradiance; the deferred lighting unit, &quot;Image-based lighting&quot;). Its weight is no analytic fit: it is the specular lobes&#x27; own directional albedo toward the viewer, read from OpenPBR&#x27;s energy tables.</p>
 <div class="citation-chip"><code class="citation-code">const float3 specularAlbedo = s.bsdf.specularAlbedo(s.wo, tables);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.slang#L240" target="_blank" rel="noopener">shaders/core/deferred_lighting.slang:240</a></div>
 <div class="citation-chip"><code class="citation-code">float specularOcclusion(float NdotV, float ao, float roughness)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/clustered_lights.slang#L126" target="_blank" rel="noopener">shaders/includes/lighting/clustered_lights.slang:126</a></div>
 </div>
@@ -91,14 +75,12 @@ $$</div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>`light_attenuation.glsl` is compiled by nothing; editing it changes no image. Its default falloff and `clustered_lights.slang`&#x27;s windowed inverse-square have different units, so intensities tuned against the deferred pass are not portable to anything that adopts the header law.</li>
 <li>Whatever attenuation law the lighting pass uses must be exactly 0 at and past `direction.w`: the froxel lists and `directLight`&#x27;s exact-zero skip both depend on it.</li>
 <li>`clustered_lights.slang` is shared by deferred lighting, the transparent pass and the particle expand; a change to it moves all three, which is what keeps a forward-shaded plane equal to the deferred one.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/includes/lighting/light_attenuation.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/lighting/clustered_lights.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shared/layout.json</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.slang</code><span class="desc"></span></div>
@@ -110,7 +92,7 @@ $$</div>
         <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
       </div>
 
-<nav class="pager"><a href="includes-common.html"><div class="label">← Prev</div><div class="title">Common includes</div></a><a class="next" href="includes-shadow.html"><div class="label">Next →</div><div class="title">Shadow sampling in lighting</div></a></nav>
+<nav class="pager"><a href="layout.html"><div class="label">← Prev</div><div class="title">Shader tree layout</div></a><a class="next" href="includes-shadow.html"><div class="label">Next →</div><div class="title">Shadow sampling in lighting</div></a></nav>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

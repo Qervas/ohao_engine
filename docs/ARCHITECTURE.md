@@ -433,7 +433,7 @@ the fullscreen raster one.
    compiles it with `glslc --target-env=vulkan1.3 -I shaders -I shaders/includes`; the
    SPIR-V is named by flattening the path: `postprocess/bloom_threshold.frag` →
    `postprocess_bloom_threshold.frag.spv`. Include shared code by its path under `shaders/`
-   (`#include "includes/common/color.glsl"`); every `.spv` is rebuilt when any file under
+   (`#include "includes/scene/scene_data.glsl"`); every `.spv` is rebuilt when any file under
    `shaders/includes/` changes, and `ohao doctor`'s `shaders.fresh` follows includes
    transitively. Fullscreen raster passes reuse `postprocess/fullscreen.vert` (no vertex
    input, `vkCmdDraw(cmd, 3, 1, 0, 0)`). **New shaders are Slang** (`.slang`; GLSL only

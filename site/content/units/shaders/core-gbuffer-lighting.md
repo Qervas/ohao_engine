@@ -43,7 +43,7 @@ environment.
 Storing position buys simplicity — no matrix, no NDC bookkeeping, no near/far
 dependence — for 6 bytes per pixel plus the precision above. Every other reader made
 the same call: SSAO, SSR, SSS and both RT techniques read the stored position too,
-and `reconstruction.glsl`, the depth-to-position helper, has no includer at all.
+and no shader reconstructs position from depth.
 :::
 
 ## What the fragment shader packs
@@ -52,23 +52,16 @@ Normals are octahedron-encoded to two channels and then remapped into $[0,1]$.
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;"}}
 
-That remap is a UNORM convention, left from when the target was
-`R10G10B10A2_UNORM` and could not hold negatives. The image is half-float now; the
-remap survives only because every reader undoes it symmetrically. Each reader
+That remap is a UNORM convention: the image is half-float and could hold negatives,
+and the remap stays correct only because every reader undoes it symmetrically. Each reader
 carries its own decoder: the lighting pass its `decodeNormalOctahedron`, and SSAO,
 SSR and GI's denoiser a `decodeOctahedron` with the same remap.
 
 {{cite shaders/core/deferred_lighting.slang "const float2 f = e * 2.0 - 1.0;"}}
 
-`includes/common/encoding.glsl` still holds a GLSL decoder and an
-`encodeNormalOctahedron` with the same math as the one `gbuffer_body.glsl` defines
-locally, but no shader includes it any more: the lighting pass that was its last
-consumer is Slang now.
-
-{{cite shaders/includes/common/encoding.glsl "vec2 f = encoded * 2.0 - 1.0;"}}
-
-The pair that must stay in lockstep is the G-buffer's encoder against each reader's
-decoder; the header is dead weight.
+There is no shared encoding header: the encoder lives in `gbuffer_body.glsl` and each
+reader's decoder in its own file. The pair that must stay in lockstep is the
+G-buffer's encoder against each reader's decoder.
 
 Where the material comes from is part of the same story. The draws are indirect, and a
 command's `firstInstance` is the draw's index in `RenderScene`'s draw table, so
@@ -323,7 +316,7 @@ what differs is how light reaches it.
 ## Contracts
 
 - Background is detected by exact float equality — all four channels of `gBuffer0` zero, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is drawn as sky.
-- `gbuffer_body.glsl`'s `encodeNormalOctahedron` and each reader's decoder are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. `encoding.glsl` is not part of that contract — nothing includes it.
+- `gbuffer_body.glsl`'s `encodeNormalOctahedron` and each reader's decoder are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates.
 - The `kSpecular` and `kOpenPBR` encodings (`/ 1.5`, `(ior - 1) / 2.55`) are written in `gbuffer_body.glsl` and undone in `deferred_lighting.slang`; change one without the other and every dielectric's reflectance moves.
 - `LightingParams` (C++) and the Slang push-constant block must stay byte-identical at 184 bytes, field for field.
 - Double-sided materials rasterise with `VK_CULL_MODE_NONE` (one-sided ones cull back faces) and the shader has no `gl_FrontFacing` flip, so the visible back faces of a double-sided material store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.

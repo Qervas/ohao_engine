@@ -453,21 +453,11 @@ writes a heatmap and an expected | actual | heat crop of the worst region into
 
 ## What only looks wired up
 
-Two things under `tests/` look like tests and are not.
-
-- `tests/renderer/renderer_pipeline_tests.cpp`, 939 lines advertising "Phase 1–5"
-  coverage of the deferred pipeline, is in no `CMakeLists.txt` and could not
-  compile if it were: five of its eighteen project includes name headers no longer
-  in the tree — `volumetric_pass.hpp`, `motion_blur_pass.hpp`, `dof_pass.hpp`,
-  `ssgi_pass.hpp`, `indirect_draw_buffer.hpp`. The other thirteen resolve.
-
-{{cite tests/renderer/renderer_pipeline_tests.cpp "render/deferred/ssgi_pass.hpp"}}
-
-- `tests/shadow_system/` is the same defect one step further along: the root
-  `CMakeLists.txt` declares its option `OFF` with the reason written inline — it
-  references `unified_light.hpp`, `shader_bindings.hpp` and
-  `ohao_vk_descriptor_builder.hpp`, none of which exist under `ohao/`. It at least
-  fails honestly, by never being configured.
+One thing under `tests/` looks like a test and is not. `tests/shadow_system/` is
+behind a root `CMakeLists.txt` option declared `OFF` with the reason written inline: it
+references `unified_light.hpp`, `shader_bindings.hpp` and
+`ohao_vk_descriptor_builder.hpp`, none of which exist under `ohao/`. It fails honestly,
+by never being configured.
 
 {{cite CMakeLists.txt "# Shadow system tests — OFF until renderer/lighting/ headers are implemented"}}
 

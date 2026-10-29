@@ -178,49 +178,27 @@ actually bound.
 
 ## What reaches the GPU from a material
 
-The GPU-facing description of a material is `render::MaterialDesc`: a base colour,
-roughness, metallic, five bindless texture indices (albedo, normal, roughness-metallic,
-emissive, occlusion), an emissive strength, a subsurface strength, the alpha mode, its cutoff, an opacity and
-the base colour's alpha — fourteen members packed into sixteen floats, every lane used.
+The GPU-facing description of a material is `render::MaterialDesc`: OpenPBR's base
+inputs (base colour and weight, metalness, diffuse roughness, specular weight, colour,
+roughness and IOR, emission colour and strength), seven bindless texture indices
+(albedo, normal, roughness-metallic, emissive, occlusion, specular, specular colour),
+a subsurface strength, the alpha mode, its cutoff, an opacity and the base colour's
+alpha. `MaterialTable::pack` writes them into seven `vec4` rows, every lane used:
 
 {{cite ohao/render/scene/material_table.cpp "bits(d.roughMetalTex), d.emissiveStrength, d.subsurface, bits(d.occlusionTex),"}}
 
-The authoring struct in `material.hpp` is a different thing. `Material` carries
-thirty-one members — index of refraction, transmission, clear coat, subsurface colour
-and radius, normal intensity, height scale, nine texture paths and the seven `use*`
-flags gating them, and a thirteen-value preset enum whose `Custom` case is an
-explicit no-op, leaving twelve presets. None of them reach a GPU buffer: nothing
-outside `material.cpp` constructs a `Material`, and the render world takes a
-`MaterialDesc` instead. The preset constructors still run if called — `Type::Glass`
-sets a transmission of 0.9 — but no pipeline has a field to receive it. Nothing
-checks that gap, because there is nothing to check against: `Material` is not a GPU
-struct and carries no layout assertion.
+{{cite ohao/render/scene/material_table.cpp "d.specularIor, d.diffuseRoughness, d.baseWeight, bits(d.specularTex),"}}
 
-## A material system that was finished and never connected
-
-`material_instance.hpp` holds a second, complete material stack: a 176-byte
-`PBRMaterialParams` with eight bindless texture indices and a thirteen-flag
-feature mask, a `MaterialInstance` with clamped setters and dirty tracking, and a
-`MaterialManager` that allocates a persistently mapped storage buffer for 1024
-materials, builds its own descriptor set layout and flushes only the dirty rows.
-Outside `tests/renderer/renderer_pipeline_tests.cpp` nothing in `ohao/` or
-`examples/` constructs a `MaterialManager`, and no block in `shaders/` declares a
-matching layout. The render world's `MaterialTable` is a separate, smaller design
-that is wired in. Its guard reflects that — not the engine macro but a weaker pair,
-`GpuPod` plus a modulo:
-
-{{cite ohao/gpu/vulkan/material_instance.hpp "static_assert(sizeof(PBRMaterialParams) % 16 == 0"}}
-
-An alignment check pins the struct to no particular size: any edit adding or
-removing a multiple of 16 bytes passes. Right strength with no shader on the other
-end, wrong strength the day one appears.
+Nothing else in the engine is a GPU material: the scene's `Material` component is
+resolved into a `MaterialDesc` on its way to the render world, and the table is the
+only buffer a shader reads materials from.
 
 :::why
 Sizes are pinned from a constants header rather than derived from the shaders. The
 alternative — one declaration shared by both sides, either a header the GLSL
 `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable,
 not just totals. The toolchain already supports the include half, and the render
-world uses it: `scene_data.glsl` is included by five shaders. A third route goes
+world uses it: `scene_data.glsl` is included by five shader sources. A third route goes
 further: `shaders/shared/layout.json` describes a struct once and `tools/gen_layout.py`
 generates its GLSL, Slang and C++ copies, the C++ one with an assert on every
 field's offset. The deferred light record, `LightGpu`, is declared there, and both
@@ -245,8 +223,7 @@ changed meaning, a shader block written against an older struct — passes it.
 - `PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended. `params.w` carries `samplesPerFrame` in its high 16 bits and `maxBounces` in its low 16; the realtime raygen unpacks the high half, base and offline mask it off.
 - Nothing queries `maxPushConstantsSize`, and the path tracer's block exceeds Vulkan's guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.
 - Three structs carry `OHAO_ASSERT_GPU_LAYOUT` (`LightData`, `GPULight`, `PTPushConstants`); `InstanceGpu`, `MeshGpu`, `Vertex`, `CameraUBO` and `DrawPushConstant` are size-checked with a bare `static_assert`. A layout edit must update the C++ struct, its GLSL twin and the assert together.
-- `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; six shaders read the GLSL copy. Only the C++ side is size-checked.
+- `InstanceGpu` exists once in C++ and once in `scene_data.glsl`; five shader sources read the GLSL copy. Only the C++ side is size-checked.
 - `MaterialTable::pack` is the only writer of the seven-`vec4` material row; `gbuffer_body.glsl`, `pt_closesthit.rchit`, `rt/path_tracer.slang` and the transparent pass each decode it by hand. The row size is asserted, the lane order is not.
 - `gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `< 4096u` for roughness-metallic and emissive. That literal must track the texture manager's `maxTextures` by hand; the path tracer's equivalent is a specialisation constant.
-- `Material` in `material.hpp` has no GPU consumer; add a field to `MaterialDesc`, not to `Material`, to reach a shader.
-- `PBRMaterialParams` is guarded only by `sizeof % 16 == 0`. If a shader ever binds it, replace that with an exact-byte `OHAO_ASSERT_GPU_LAYOUT` first.
+- A new material input reaches a shader only through `MaterialDesc`, `MaterialTable::pack` and `kMaterialRows`; every hand decoder of the rows must change with it.

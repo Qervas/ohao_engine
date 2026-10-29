@@ -799,18 +799,15 @@ void DeferredRenderer::setCameraData(const glm::mat4& view, const glm::mat4& pro
     m_farPlane = farPlane;
 }
 
-void DeferredRenderer::setDirectionalLight(const glm::vec3& direction,
-                                           const glm::vec3& /*color*/, float /*intensity*/) {
-    m_lightDirection = glm::normalize(direction);
-    if (m_csmPass) {
-        m_csmPass->setLightDirection(m_lightDirection);
-    }
-}
-
 void DeferredRenderer::setLights(std::span<const LightData> lights, uint64_t version, float ambient) {
     m_lights = lights;
     m_lightsVersion = version;
     m_ambient = ambient;
+    for (const LightData& l : lights) {
+        if (l.position.w != 0.0f || glm::dot(glm::vec3(l.direction), glm::vec3(l.direction)) == 0.0f) continue;
+        setSunDirection(-glm::vec3(l.direction));   // direction is where the light travels
+        break;
+    }
 }
 
 VkImageView DeferredRenderer::getFinalOutput() const {

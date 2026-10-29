@@ -32,7 +32,7 @@ roughness never reaches 1, so a magnitude of 10 or more can only be the flag. Th
 rule is gated on `.y` being near zero, the signature of a producer that never filled
 the metallic channel:
 
-{{cite shaders/rt/includes/pbr_unpack.glsl "if (att.x < 0.0 && att.y < 1e-4) {"}}
+{{cite shaders/includes/pbr_unpack.glsl "if (att.x < 0.0 && att.y < 1e-4) {"}}
 
 Nothing in the tree writes either encoding. `payload.attenuation` is written in
 exactly one place, from the per-material table at binding 10, and roughness is
@@ -92,46 +92,37 @@ metallic actually lives. The dependency runs one way only: the block never calls
 `unpackHitPbr`, so deleting the legacy branches inside the function would
 neither break it nor repair it.
 
-## Two identical files, one of which never compiles
+## How the raygen finds it
 
-`shaders/rt/includes/pbr_unpack.glsl` and `shaders/includes/pbr_unpack.glsl` are
-byte-identical, and only the first is ever compiled. The realtime raygen writes
-`#include "includes/pbr_unpack.glsl"`; glslc resolves a quoted include relative
-to the including file before consulting `-I`, so from `shaders/rt/` the sibling
-`includes/` wins. The root copy is reachable only via the `-I <shaders>` search
-path — that is, only if the `rt/` copy were deleted:
+The realtime raygen writes `#include "includes/pbr_unpack.glsl"`. glslc resolves a
+quoted include relative to the including file before consulting `-I`; `shaders/rt/`
+has no `includes/` directory, so the name falls through to the `-I <shaders>` root and
+resolves to `shaders/includes/pbr_unpack.glsl`:
 
 {{cite shaders/CMakeLists.txt "COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR}"}}
 
 {{cite shaders/rt/pt_raygen_realtime.rgen "#include "includes/pbr_unpack.glsl""}}
 
-The same raygen reaches `shaders/includes/` for its other headers —
-`rt/mis.glsl`, `rt/env_sampling.glsl`, `rt/sampler_api.glsl`,
-`rt/nrd_frontend.glsl`, `material/ggx_aniso.glsl` and `rt/pt_lights.glsl` directly,
-plus the two sampler files `sampler_api.glsl` pulls in and the generated
-`shared/layout.glsl` that `pt_lights.glsl` does — all resolved through the
-`-I <shaders>` root, because `shaders/rt/includes/` has no `rt/` or `material/`
-subdirectory to shadow them. `pbr_unpack.glsl` is the one name that exists in both
-places, and the sibling copy takes it every time. Editing the root copy changes no
-binary and warns about nothing.
+The same raygen reaches its other headers the same way — `rt/mis.glsl`,
+`rt/env_sampling.glsl`, `rt/sampler_api.glsl`, `rt/nrd_frontend.glsl`,
+`material/ggx_aniso.glsl` and `rt/pt_lights.glsl` directly, plus the two sampler files
+`sampler_api.glsl` pulls in and the generated `shared/layout.glsl` that `pt_lights.glsl`
+does — all through the `-I <shaders>` root.
 
-## The build does not track either copy
+## The build does not track it
 
 The list that decides when a shader is recompiled is globbed from one directory:
 
 {{cite shaders/CMakeLists.txt "includes/**/*.glsl"}}
 
-That glob roots at `shaders/includes/` and matches only files one level deeper:
-evaluated standalone it yields thirty `.glsl` files, all in a
-`shaders/includes/<subdir>/`. Neither `shaders/rt/includes/*.glsl` nor the two
-`.glsl` files directly in `shaders/includes/` appear, so they are absent from the
-`DEPENDS` list of every compile command. Editing `pbr_unpack.glsl` alone rebuilds
-nothing.
+That glob roots at `shaders/includes/` and matches only files at least one level
+deeper: it yields the eleven `.glsl` files in a `shaders/includes/<subdir>/`.
+`pbr_unpack.glsl` sits directly in `shaders/includes/`, so it is absent from the
+`DEPENDS` list of every compile command. Editing it alone rebuilds nothing.
 
 :::key
-Both hazards here are silent. Edit the wrong copy and the compiler never sees
-the change; edit the right copy and the build system never notices. Touch a
-`.rgen` — or clear `build/shaders/` — after changing either file.
+The hazard is silent: edit `pbr_unpack.glsl` and the build system never notices. Touch
+the realtime raygen — or clear `build/shaders/` — after changing it.
 :::
 
 ## Normalising a hit distance so REBLUR can decode it
@@ -243,6 +234,6 @@ sampling (hybrid/visibility has the scheme).
 ## Contracts
 
 - `pt_closesthit.rchit` must write `attenuation` as (roughness, metallic, curvature) in that order. `pt_miss.rmiss` declares the same payload and writes `hitDist = -1.0`, `color` and `envPdf`, but never `attenuation` — so `unpackHitPbr` is valid only inside the `payload.hitDist >= 0` branch.
-- Edit `shaders/rt/includes/pbr_unpack.glsl`; the `shaders/includes/` copy is shadowed by include-resolution order and never compiled. Neither file is in the CMake `DEPENDS` list, so force a shader rebuild after touching it.
+- `shaders/includes/pbr_unpack.glsl` is not in the CMake `DEPENDS` list, so force a shader rebuild after touching it.
 - `NRD_HIT_DIST_PARAMS` in GLSL, the literals in `path_tracer.slang`'s `nrdPackRadianceHitDist` and `nrd::ReblurSettings::hitDistanceParameters` in C++ must hold the same A, B, C. Only A is exposed through `NrdReblurProfile`; B and C must therefore stay at NRD's defaults of 0.1 and 20.
 - The legacy branches in `unpackHitPbr` are unreachable on the shipping payload, and removing them changes nothing at any of its four call sites. What must not be skipped is the reverse: the ReSTIR-GI block in `pt_raygen_realtime.rgen` open-codes the sign rule and does *not* call `unpackHitPbr`, so deleting the branches will not repair it. Route that block through the function first.

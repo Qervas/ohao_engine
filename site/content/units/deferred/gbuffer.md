@@ -27,16 +27,13 @@ normal target is `R16G16B16A16_SFLOAT`, not a packed 10-bit format.
 
 {{cite ohao/render/deferred/gbuffer_pass.cpp "VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface"}}
 
-Two comments still name a packed 10-bit format for this attachment: the G-buffer
-shader's own output declaration ("or R10G10B10A2_UNORM") and the header of the shared
-octahedral decoder, which no shader includes any more (deferred lighting decodes the normal
-itself):
+The G-buffer shader's own output declaration still names a packed 10-bit format as an
+alternative ("or R10G10B10A2_UNORM"); no code creates one:
 
 {{cite shaders/includes/scene/gbuffer_body.glsl "// GBuffer1: Encoded Normal (rgb) + Roughness (a) - R16G16B16A16_SFLOAT or R10G10B10A2_UNORM"}}
-{{cite shaders/includes/common/encoding.glsl "Octahedron normal encoding/decoding (A2R10G10B10 GBuffer format)"}}
 
-The octahedral encoding is a leftover from the 10-bit format. It is not
-vestigial — it is now paying for something else.
+In a 16-bit float target the octahedral encoding is not needed for precision; it pays
+for something else.
 
 ## The packing that buys a channel
 

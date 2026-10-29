@@ -55,8 +55,7 @@ d_i \;=\; \lambda\, n\!\left(\frac{f}{n}\right)^{i/N} \;+\; (1-\lambda)\!\left(n
 $$</div>
 <p>Here $n$ and $f$ are the camera near and far planes, $N = 4$ is the cascade count, $i \in [1, N]$ indexes the split, and $\lambda$ weights logarithmic against uniform. The logarithmic term is what the projective mapping actually wants; the uniform term exists because pure log placement collapses the first split onto the near plane whenever $n$ is small.</p>
 <div class="citation-chip"><code class="citation-code">float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L534" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:534</a></div>
-<p>`setSplitLambda`&#x27;s only caller is a smoke test in `renderer_pipeline_tests.cpp` — a file no `CMakeLists.txt` builds — and it re-sets the value the constructor already holds, so $\lambda$ is 0.95 in every frame the engine renders.</p>
-<div class="citation-chip"><code class="citation-code">csm.setSplitLambda(0.95f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/renderer_pipeline_tests.cpp#L324" target="_blank" rel="noopener">tests/renderer/renderer_pipeline_tests.cpp:324</a></div>
+<p>`setSplitLambda` has no caller in the tree, so $\lambda$ is the constructor&#x27;s 0.95 in every frame the engine renders.</p>
 <div class="citation-chip"><code class="citation-code">float m_splitLambda{0.95f}; // 0.95 = mostly logarithmic</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.hpp#L108" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.hpp:108</a></div>
 <p>With the renderer&#x27;s defaults of $n = 0.1$, $f = 1000$ the log term alone puts the first split at 1 m. Evaluating the full formula gives splits near 13.5, 34.5, 132.5 and 1000 units — the 5 % uniform share does all the work at the near end, which is why $\lambda$ is not 1.</p>
 </div>
@@ -132,7 +131,6 @@ $$</div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>tests/renderer/renderer_pipeline_tests.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/shadow/shadow_csm.vert</code><span class="desc"></span></div>
       </div>

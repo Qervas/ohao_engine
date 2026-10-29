@@ -94,8 +94,8 @@
 <p>Its payload&#x27;s third slot is not what its name suggests: `attenuation.z` carries a curvature proxy, the summed pairwise divergence of the triangle&#x27;s three vertex normals, meant for a subsurface term.</p>
 <div class="citation-chip"><code class="citation-code">payload.attenuation = vec3(roughness, clamp(metallic, 0.0, 1.0), curv);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L186" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:186</a></div>
 <p>No raygen reads it: the realtime raygen has no subsurface term, so the closest hit computes and ships a value nobody consumes.</p>
-<p>The `.x` / `.y` half goes through `unpackHitPbr` — the RT-local one of two byte-identical copies in the tree, which is what the quoted include resolves to. It still carries two dormant legacy branches: a negative-`.x` &quot;binary metal&quot; path, and a subtract-10 shift for magnitudes at or above 10. Current closest-hit writes a positive roughness already floored at 0.04, so neither can fire.</p>
-<div class="citation-chip"><code class="citation-code">if (att.x &lt; 0.0 &amp;&amp; att.y &lt; 1e-4) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/includes/pbr_unpack.glsl#L9" target="_blank" rel="noopener">shaders/rt/includes/pbr_unpack.glsl:9</a></div>
+<p>The `.x` / `.y` half goes through `unpackHitPbr` in `includes/pbr_unpack.glsl`. It carries two dormant legacy branches: a negative-`.x` &quot;binary metal&quot; path, and a subtract-10 shift for magnitudes at or above 10. Current closest-hit writes a positive roughness already floored at 0.04, so neither can fire.</p>
+<div class="citation-chip"><code class="citation-code">if (att.x &lt; 0.0 &amp;&amp; att.y &lt; 1e-4) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/pbr_unpack.glsl#L9" target="_blank" rel="noopener">shaders/includes/pbr_unpack.glsl:9</a></div>
 <p>The realtime raygen re-implements the same unpack inline for its secondary reservoir vertex, dormant branch included, instead of calling the helper:</p>
 <div class="citation-chip"><code class="citation-code">if (sRough &gt;= 10.0) sRough -= 10.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1412" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1412</a></div>
 </div>
@@ -191,7 +191,7 @@
         <div class="row"><code>shaders/rt/shadow_trace.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/render_scene.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/scene/light_table.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/nrd_compose.comp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>

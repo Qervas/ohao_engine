@@ -66,8 +66,8 @@ MODULE = {
             'layout-meta',
             'Layout contracts',
             'OHAO_ASSERT_GPU_LAYOUT, MaterialGpuPack, push-constant sizes.',
-            files=['ohao/gpu/layout_meta.hpp', 'ohao/gpu/vulkan/material.hpp', 'ohao/gpu/vulkan/material.cpp', 'ohao/gpu/vulkan/material_instance.hpp', 'ohao/gpu/vulkan/material_instance.cpp'],
-            design=['layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL.', 'Material + MaterialInstance are CPU-side authoring; packed rows feed bindless + PT material SSBO.', 'OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree — silent pink is worse.'],
+            files=['ohao/gpu/layout_meta.hpp', 'ohao/render/scene/material_table.hpp', 'ohao/render/scene/material_table.cpp'],
+            design=['layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL.', 'MaterialGpuPack (7 rows, 112 bytes) is what the material table uploads; its rows feed the G-buffer, the transparent pass and both path tracers.', 'OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree — silent pink is worse.'],
         ),
     ],
 }

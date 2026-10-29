@@ -24,7 +24,6 @@
 #include "render/frame/pass_registry.hpp"
 #include "gpu/layout_meta.hpp"
 #include "gpu/vulkan/vk_utils.hpp"
-#include "gpu/vulkan/material_instance.hpp"
 #include "gpu/vulkan/renderer.hpp"
 #include "render/camera/camera.hpp"
 #include "physics/backend/physics_backend.hpp"
@@ -509,15 +508,13 @@ void runMetaTests() {
         TEST_PASS();
     }
 
-    TEST_BEGIN("GPU vk_utils + MaterialFeatures + RenderMode");
+    TEST_BEGIN("GPU vk_utils + RenderMode");
     {
         EXPECT(vk_ok(VK_SUCCESS), "vk_ok");
         EXPECT(vk_failed(VK_ERROR_DEVICE_LOST), "vk_failed");
         EXPECT(vk_result_name(VK_SUCCESS) == "VK_SUCCESS", "result name");
         EXPECT(mip_levels_for(1, 1) == 1u, "1x1 mips");
         EXPECT(mip_levels_for(256, 128) == 9u, "256 mips"); // 256→1 = 9 levels
-        auto flags = MaterialFeatures::CastShadows | MaterialFeatures::UseNormalMap;
-        EXPECT(hasFlag(flags, MaterialFeatures::CastShadows), "has cast");
         EXPECT(isRTRenderMode(RenderMode::RTOffline), "RT offline");
         EXPECT(isRasterRenderMode(RenderMode::Deferred), "deferred raster");
         TEST_PASS();
@@ -3022,7 +3019,7 @@ static void runRenderSceneTests() {
     }
 
     // params.z is a point or spot light's sphere radius: its specular is the reflection of its
-    // emitter mesh (core/deferred_lighting.frag's evaluateBRDFSphere).
+    // emitter mesh (clustered_lights.slang's evaluateSphere).
     TEST_BEGIN("raster lights carry their sphere radius, sorted by order");
     {
         ohao::VulkanRenderer r(64, 64);
@@ -3038,6 +3035,23 @@ static void runRenderSceneTests() {
         EXPECT(raster[0].position.w == 1.0f && raster[0].params.z == 0.25f, "the point light's sphere radius");
         EXPECT(raster[1].position.w == 0.0f && raster[1].params.z == 0.0f, "the directional light has none");
         EXPECT(raster[2].position.w == 1.0f && raster[2].params.z == 0.0f, "a point light of radius 0 stays a point");
+        TEST_PASS();
+    }
+
+    // The CSM fallback and the procedural sky light from the scene's sun: they were left at a
+    // straight-down default that nothing outside the deferred renderer ever changed.
+    TEST_BEGIN("the scene's directional light is the CSM fallback's and the sky's sun");
+    {
+        ohao::VulkanRenderer r(64, 64);
+        if (!r.initialize()) { std::cout << "(no Vulkan device -- skipped) "; TEST_PASS(); return; }
+        r.setRenderMode(ohao::RenderMode::Deferred);
+        const glm::vec3 travel = glm::normalize(glm::vec3(0.6f, -0.5f, -0.2f));
+        LightDesc sun{}; sun.kind = LightKind::Directional; sun.direction = travel; sun.intensity = 3.0f;
+        const LightDesc lights[] = {sun};
+        r.renderScene().setLights(lights);
+        r.render();
+        const auto* d = r.getDeferredRenderer();
+        EXPECT(d && glm::length(d->getLightDirection() - travel) < 1e-5f, "the deferred sun travels as the scene's light");
         TEST_PASS();
     }
 

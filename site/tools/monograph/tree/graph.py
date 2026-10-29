@@ -22,12 +22,6 @@ MODULE = {
             files=['ohao/render/frame/frame_resources.hpp', 'ohao/render/frame/frame_resources.cpp'],
         ),
         page(
-            'async-compute',
-            'Async compute queue',
-            'Optional async compute path.',
-            files=['ohao/render/async/async_compute_queue.hpp', 'ohao/render/async/async_compute_queue.cpp'],
-        ),
-        page(
             'culling',
             'GPU culling',
             'The draw table to indirect lists: early/late two-pass occlusion, four lists a G-buffer phase, Hi-Z, cascades.',

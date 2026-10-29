@@ -218,13 +218,9 @@ in a comment — "disabled by default for stability". The callers that want the 
 stack switch bloom, TAA and SSAO on themselves: `model_viewer`'s deferred branch, the
 `ohao_game` windowed host, and the engine test that resizes a deferred renderer under
 the validation layer. The shared capture procedure behind `ohao run --render` and
-`render.capture` sets each of the three on or off per request, from its `post` list. Two other call sites exist and neither is compiled:
-`renderer_pipeline_tests.cpp` is named by no `CMakeLists.txt` in the tree, and the
-pybind11 module sits behind an option that defaults off.
+`render.capture` sets each of the three on or off per request, from its `post` list.
 
 {{cite examples/ohao_game.cpp "pp->setTAAEnabled(true);"}}
-
-{{cite CMakeLists.txt "option(BUILD_PYTHON_BINDINGS"}}
 
 ## What the resolve shader does when the plumbing is right
 

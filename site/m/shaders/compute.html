@@ -39,11 +39,11 @@
 <div class="section-rule"><h2 id="compute-shaders-and-the-target-that-builds-them">Compute shaders, and the target that builds them</h2></div>
 <div class="prose reveal">
 <p>`add_custom_target(shaders ...)` is declared without `ALL`, so building some other target alone compiles no SPIR-V. Every target that loads SPIR-V depends on it — the `ohao` CLI, the examples, `render_bench` and the rendering tests — so building any of those builds the shaders first.</p>
-<div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L122" target="_blank" rel="noopener">shaders/CMakeLists.txt:122</a></div>
+<div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L121" target="_blank" rel="noopener">shaders/CMakeLists.txt:121</a></div>
 <div class="citation-chip"><code class="citation-code">add_dependencies(${name} shaders)   # every example renders: never with stale SPIR-V</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/CMakeLists.txt#L25" target="_blank" rel="noopener">examples/CMakeLists.txt:25</a></div>
 <p>GLSL compute files are compiled by a glob; Slang files by a second one, one SPIR-V per `[shader(...)]` entry point:</p>
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/*.comp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L12" target="_blank" rel="noopener">shaders/CMakeLists.txt:12</a></div>
-<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS &quot;${CMAKE_CURRENT_SOURCE_DIR}/*.slang&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L83" target="_blank" rel="noopener">shaders/CMakeLists.txt:83</a></div>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SLANG_SOURCES CONFIGURE_DEPENDS &quot;${CMAKE_CURRENT_SOURCE_DIR}/*.slang&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L82" target="_blank" rel="noopener">shaders/CMakeLists.txt:82</a></div>
 </div>
 <div class="section-rule"><h2 id="ssao-on-the-raster-path">SSAO on the raster path</h2></div>
 <div class="prose reveal">
@@ -52,12 +52,12 @@
 <p>Both run 8×8 workgroups over the half-resolution image, and the host&#x27;s `(N + 7) / 8` group count agrees. Its push block is `SSAOPush`, generated from `shaders/shared/layout.json` into Slang and C++ alike, and its sixteen noise rotations travel in that block rather than in a texture. The occlusion entry decodes the G-buffer&#x27;s octahedral normal with its own copy of the decoder, which undoes the `* 0.5 + 0.5` remap `gbuffer.frag` applies at its call site:</p>
 <div class="citation-chip"><code class="citation-code">const float2 f = e * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/ssao.slang#L27" target="_blank" rel="noopener">shaders/compute/ssao.slang:27</a></div>
 <div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L221" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:221</a></div>
-<p>The shared GLSL encoder of the same name in `includes/common/encoding.glsl` returns [-1,1] — its doc comment claiming [0,1] is wrong — so the round trip survives only because `gbuffer.frag` redefines it locally. &quot;De-duplicating&quot; it onto the shared helper breaks the pairing silently, for SSAO, SSR and lighting at once.</p>
+<p>The encoder returns [-1,1] and the G-buffer remaps it to [0,1] on write; every reader undoes the remap before decoding. Changing either side alone breaks the pairing silently, for SSAO, SSR and lighting at once.</p>
 <p>It is off unless asked for:</p>
 <div class="citation-chip"><code class="citation-code">bool m_ssaoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.hpp#L153" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.hpp:153</a></div>
-<p>The model viewer, the `ohao_game` host, a live window session and a capture whose `post` list names `ssao` ask; the Python bindings expose the setter by name.</p>
+<p>The model viewer, the `ohao_game` host, a live window session and a capture whose `post` list names `ssao` ask; render settings expose it as `ssao`.</p>
 <div class="citation-chip"><code class="citation-code">pp-&gt;setSSAOEnabled(true);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L186" target="_blank" rel="noopener">examples/model_viewer.cpp:186</a></div>
-<div class="citation-chip"><code class="citation-code">.def(&quot;set_ssao_enabled&quot;, &amp;PostProcessingPipeline::setSSAOEnabled)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/python/renderer_bindings.cpp#L304" target="_blank" rel="noopener">tests/python/renderer_bindings.cpp:304</a></div>
+<div class="citation-chip"><code class="citation-code">.field(&quot;ssao&quot;, &amp;RenderSettings::ssao).doc(&quot;Screen-space ambient occlusion&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/api/params.cpp#L213" target="_blank" rel="noopener">ohao/api/params.cpp:213</a></div>
 <p>The kernel — a horizon search in the surface&#x27;s tangent plane, eight directions of four steps from world-space G-buffer positions, then a 4×4 depth-aware blur — and its effect on the frame are the deferred SSAO unit&#x27;s subject.</p>
 </div>
 <div class="section-rule"><h2 id="light-cluster-the-froxel-light-lists">light_cluster: the froxel light lists</h2></div>
@@ -106,7 +106,7 @@
         <div class="row"><code>shaders/includes/scene/gbuffer_body.glsl</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>tests/python/renderer_bindings.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/api/params.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/light_clusters.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/compute/light_cluster.slang</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gpu_culling.cpp</code><span class="desc"></span></div>

@@ -56,11 +56,8 @@ whenever $n$ is small.
 
 {{cite ohao/render/deferred/csm_pass.cpp "float d = m_splitLambda * log + (1.0f - m_splitLambda) * linear;"}}
 
-`setSplitLambda`'s only caller is a smoke test in `renderer_pipeline_tests.cpp` — a file no `CMakeLists.txt` builds — and it re-sets the
-value the constructor already holds, so $\lambda$ is 0.95 in every frame the engine
-renders.
-
-{{cite tests/renderer/renderer_pipeline_tests.cpp "csm.setSplitLambda(0.95f);"}}
+`setSplitLambda` has no caller in the tree, so $\lambda$ is the constructor's 0.95
+in every frame the engine renders.
 
 {{cite ohao/render/deferred/csm_pass.hpp "float m_splitLambda{0.95f}; // 0.95 = mostly logarithmic"}}
 

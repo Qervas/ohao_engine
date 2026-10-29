@@ -236,19 +236,17 @@ along the sampled direction, at the sampled point of a rectangle, at 10⁴ for a
 
 {{cite shaders/rt/path_tracer.slang "s.dist = max(dc - sqrt(max(r * r - d2 + dc * dc, 0.0)), 0.0) - 1e-3;   // to the sphere's near side"}}
 
-## The constants that name only one table
+## Type codes without names
 
-`constants.glsl` defines three light-type macros, and they are the raster codes:
-directional 0, point 1, spot 2. No shader that runs reaches the header: only
-`common.glsl` and `math.glsl` include it, and nothing includes those two. The raster readers (`clustered_lights.slang`'s `lightAt`, the cluster build)
-compare `position.w` against bare integers.
+No header names the light-type codes for either table. The raster readers compare
+`position.w` against bare integers — directional 0, point 1, spot 2, area 3:
 
-{{cite shaders/includes/common/constants.glsl "#define LIGHT_TYPE_POINT       1"}}
+{{cite shaders/includes/lighting/clustered_lights.slang "type = int(light.position.w);"}}
 
-The macros are not merely unused, they are a trap: `LIGHT_TYPE_POINT` is 1, and 1 is
-*directional* in the `GPULight` table this page opened with. Including the header into a
-ray-tracing stage to avoid retyping three constants inverts the two most common light
-types in the engine.
+The reference path tracer does the same against `GPULight`'s codes, where 1 is
+directional and 0 a point light. The two tables use the same small integers for
+different kinds, so a reader that borrows a constant from the other table inverts the
+two most common light types.
 
 ## Contracts
 

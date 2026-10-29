@@ -43,10 +43,9 @@
 <figure class="unit-figure reveal"><img src="../../assets/units/deferred-gbuffer-channels.svg" alt="Conceptual layout, not a captured render, of the first six targets. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer_body.glsl. The OpenPBR targets (6, RGBA8; 7, RG8) are not drawn." loading="lazy" /><figcaption>Conceptual layout, not a captured render, of the first six targets. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer_body.glsl. The OpenPBR targets (6, RGBA8; 7, RG8) are not drawn.</figcaption></figure>
 <p>Check one thing before trusting anything else written about this buffer: the normal target is `R16G16B16A16_SFLOAT`, not a packed 10-bit format.</p>
 <div class="citation-chip"><code class="citation-code">VK_FORMAT_R16G16B16A16_SFLOAT,   // octahedral normal + roughness + emissive / -subsurface</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L532" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:532</a></div>
-<p>Two comments still name a packed 10-bit format for this attachment: the G-buffer shader&#x27;s own output declaration (&quot;or R10G10B10A2_UNORM&quot;) and the header of the shared octahedral decoder, which no shader includes any more (deferred lighting decodes the normal itself):</p>
+<p>The G-buffer shader&#x27;s own output declaration still names a packed 10-bit format as an alternative (&quot;or R10G10B10A2_UNORM&quot;); no code creates one:</p>
 <div class="citation-chip"><code class="citation-code">// GBuffer1: Encoded Normal (rgb) + Roughness (a) - R16G16B16A16_SFLOAT or R10G10B10A2_UNORM</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/scene/gbuffer_body.glsl#L29" target="_blank" rel="noopener">shaders/includes/scene/gbuffer_body.glsl:29</a></div>
-<div class="citation-chip"><code class="citation-code">// Octahedron normal encoding/decoding (A2R10G10B10 GBuffer format)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L11" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:11</a></div>
-<p>The octahedral encoding is a leftover from the 10-bit format. It is not vestigial — it is now paying for something else.</p>
+<p>In a 16-bit float target the octahedral encoding is not needed for precision; it pays for something else.</p>
 </div>
 <div class="section-rule"><h2 id="the-packing-that-buys-a-channel">The packing that buys a channel</h2></div>
 <div class="prose reveal">
@@ -187,7 +186,6 @@ $$</div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/scene/gbuffer_body.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/material/openpbr.slang</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/ssr.slang</code><span class="desc"></span></div>

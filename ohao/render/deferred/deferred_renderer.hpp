@@ -103,11 +103,10 @@ public:
     void setCameraData(const glm::mat4& view, const glm::mat4& proj,
                        const glm::vec3& position, float nearPlane, float farPlane);
 
-    // Light configuration
-    void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     // This frame's raster lights (the light table, in order; the caller keeps them alive until
     // render() returns), their version (unchanged lights are not uploaded again; 0: always) and
-    // the ambient intensity.
+    // the ambient intensity. The first directional light is the sun: the CSM fallback's light and
+    // the procedural sky's sun follow it.
     void setLights(std::span<const LightData> lights, uint64_t version, float ambient);
     // Clustered lighting on (the default) or every pixel summing every light (tests: the same
     // image when no froxel overflows).

@@ -30,7 +30,6 @@ add_custom_command(
 # Find include files for dependency tracking (all subdirectories)
 file(GLOB_RECURSE SHADER_INCLUDES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl"
-    "${CMAKE_CURRENT_SOURCE_DIR}/includes/water/*.glsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/shared/*.glsl"
 )
 

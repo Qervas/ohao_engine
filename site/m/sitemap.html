@@ -135,8 +135,7 @@
 <h2 class="gloss-group">Shaders</h2><ul class="prose">
 <li><a href="shaders/index.html"><strong>Hub</strong></a></li>
 <li><a href="shaders/layout.html">Shader tree layout</a> — core / rt / postprocess / compute / includes / shadow / vfx.</li>
-<li><a href="shaders/includes-common.html">Common includes</a> — math, color, encoding, reconstruction, constants.</li>
-<li><a href="shaders/includes-lighting.html">Lighting includes</a> — One uncompiled attenuation header; the falloff, IBL and light record that ship.</li>
+<li><a href="shaders/includes-lighting.html">Lighting includes</a> — clustered_lights.slang: the falloff, the light loop and the light record.</li>
 <li><a href="shaders/includes-shadow.html">Shadow sampling in lighting</a> — RT visibility channels, the CSM fallback, the cascade depth write.</li>
 <li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
 <li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack and the NRD frontend used by raygen.</li>
@@ -154,7 +153,6 @@
 <li><a href="graph/index.html"><strong>Hub</strong></a></li>
 <li><a href="graph/render-graph.html">RenderGraph</a> — Declare passes, barriers, compile order.</li>
 <li><a href="graph/frame-resources.html">Frame resources ring</a> — MAX_FRAMES_IN_FLIGHT=3, fences, staging, per-frame UBOs.</li>
-<li><a href="graph/async-compute.html">Async compute queue</a> — Optional async compute path.</li>
 <li><a href="graph/culling.html">GPU culling</a> — The draw table to indirect lists: early/late two-pass occlusion, four lists a G-buffer phase, Hi-Z, cascades.</li>
 <li><a href="graph/meshlets.html">Meshlets and mesh shaders</a> — The greedy meshlet builder, its arenas, task/mesh shaders and the vertex-pulling fallback.</li>
 <li><a href="graph/frame-and-settings.html">The frame, measured and set</a> — The pass registry in frame order, per-pass GPU timings in captures, and render.settings.</li>
@@ -183,7 +181,7 @@
 <li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
 <li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
 </ul>
-<p class="prose" style="color:var(--ivory-mute)">104 design units generated.</p>
+<p class="prose" style="color:var(--ivory-mute)">102 design units generated.</p>
     </article>
   </main>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

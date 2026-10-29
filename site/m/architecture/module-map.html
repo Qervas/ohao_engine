@@ -73,11 +73,7 @@
 <p>It is not. `renderer.hpp` includes `rt_profile_renderer.hpp` to declare those types, and their shared base holds a `PathTracer` *by value*, so every `ohao_gpu_vulkan` translation unit that sees `renderer.hpp` instantiates a complete `PathTracer` layout:</p>
 <div class="citation-chip"><code class="citation-code">PathTracer m_pathTracer;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L174" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:174</a></div>
 <p>That is not a header-only relationship. `render_dispatch.cpp` calls `DeferredRenderer::setRenderScene`, `setCameraData` and friends, and the RT path hands the `RenderScene` buffers to the profile through `setSceneBuffers`; their definitions live in `libohao_renderer.a`. So `ohao_gpu_vulkan.a` carries 50 distinct undefined `ohao::` symbols that only `ohao_renderer.a` provides — while `ohao_renderer` is listed *before* it on the link line and itself needs nine of the GPU archive&#x27;s symbols. That is precisely the shape a single pass cannot resolve, and exactly why the group exists.</p>
-<p>No other pair of archives forms a cycle. `ohao_scene` carries no undefined symbol that another engine archive defines, and physics reaches nobody. The `Material` header under `gpu/vulkan/` is still a Vulkan-free struct,</p>
-<div class="citation-chip"><code class="citation-code">struct Material {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/material.hpp#L11" target="_blank" rel="noopener">ohao/gpu/vulkan/material.hpp:11</a></div>
-<p>and `scene/asset/model.cpp` still includes it, but uses no `Material` member — the loaders produce `MaterialData` — so the include is unused and adds no edge:</p>
-<div class="citation-chip"><code class="citation-code">#include &quot;gpu/vulkan/material.hpp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L13" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:13</a></div>
-<p>Directory name is not ownership in this tree. A header living under `gpu/vulkan/` that links to nothing is as easy to misread as one that does.</p>
+<p>No other pair of archives forms a cycle. `ohao_scene` carries no undefined symbol that another engine archive defines, and physics reaches nobody.</p>
 </div>
 <div class="section-rule"><h2 id="the-only-vulkan-scene-owns-is-a-vertex-layout">The only Vulkan scene owns is a vertex layout</h2></div>
 <div class="prose reveal">
@@ -113,7 +109,7 @@
 <div class="section-rule"><h2 id="shaders-is-a-build-target-not-a-module">shaders/ is a build target, not a module</h2></div>
 <div class="prose reveal">
 <p>`shaders/` owns no library and no include relationship with C++; it is a custom target that flattens each source path into one SPIR-V file, mangling the directory separator into an underscore, so `shaders/rt/pt_raygen_realtime.rgen` becomes `rt_pt_raygen_realtime.rgen.spv`, and a Slang file with several entry points adds the entry&#x27;s name (`rt/path_tracer.slang`&#x27;s `raygen` is `rt_path_tracer.slang.raygen.spv`):</p>
-<div class="citation-chip"><code class="citation-code">string(REPLACE &quot;/&quot; &quot;_&quot; SHADER_FLAT_NAME ${SHADER_REL})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L43" target="_blank" rel="noopener">shaders/CMakeLists.txt:43</a></div>
+<div class="citation-chip"><code class="citation-code">string(REPLACE &quot;/&quot; &quot;_&quot; SHADER_FLAT_NAME ${SHADER_REL})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L42" target="_blank" rel="noopener">shaders/CMakeLists.txt:42</a></div>
 <p>Two properties of that seam are worth knowing before editing a shader. First, the `DEPENDS` list that marks SPIR-V stale globs `includes/**/*.glsl`, and CMake&#x27;s glob does not match `.glsl` files sitting *directly* in `shaders/includes/`:</p>
 <div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L32" target="_blank" rel="noopener">shaders/CMakeLists.txt:32</a></div>
 <p>Second, there are two independent answers to &quot;where are the SPIR-V files&quot;. Raster passes probe a candidate list at `VulkanRenderer` construction, using `core_deferred_lighting.slang.spv` as the sentinel and then broadcasting the winner to `RenderPassBase`:</p>
@@ -146,8 +142,6 @@
         <div class="row"><code>ohao/gpu/vulkan/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/gpu/vulkan/material.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/asset/model.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/model.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/concepts.hpp</code><span class="desc"></span></div>
