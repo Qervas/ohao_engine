@@ -49,6 +49,7 @@
 #include "ecs/combat.hpp"
 #include "ecs/physics_scene.hpp"
 #include "ecs/vfx.hpp"
+#include "level/level_system.hpp"
 #include "render/scene/meshlet_builder.hpp"
 
 #include <algorithm>
@@ -96,8 +97,11 @@ struct SceneSpec {
 // each running wave from another phase (7 steps apart).
 constexpr int kAnimRigs = 16;
 
-// play_vfx_1080p's script: steps from the throw to the boom (combat::kGrenade's 2.5 s fuse).
-constexpr int kVfxScriptSteps = 151;
+// play_vfx_1080p's script (sub-project 12, step 4): fire held at the room's north wall and lintel from
+// 12 m south of the doorway (reloads at steps 180 and 450, released at 660; the decals in view stop at
+// about 62, as the recoil lifts later rounds out of frame), a grenade thrown at 680 whose boom
+// (combat::kGrenade's 2.5 s fuse, 151 steps) lands inside the room.
+constexpr int kVfxScriptSteps = 840;
 
 // The spec's table. The bench scenes are built in code (bench_world.hpp) and written to
 // build/render_bench/ by writeBenchScenes before the run.
@@ -726,7 +730,10 @@ struct Gpu {
     // Loads the scene and renders `frames` frames of it; empty on success, else why not.
     std::string render(const SceneSpec& spec, int frames) {
         if (spec.vfx && !vfxInstalled) {
-            // As the CLI context installs them (before the load: the play scene's bodies and records).
+            // As the CLI context installs them (before the load: the level's nodes and colliders, the play
+            // scene's bodies and records). Without the level the blockout renders empty, with no spawns: the
+            // other blockout scenes (play_hud, play_anim) still measure that, as their budgets were set.
+            level::installLevels(*world, *assets, engineTypes());
             ecs::installPhysics(*world, *assets);
             ecs::installCombat(*world);
             ecs::installVfx(*world, *assets);
@@ -736,10 +743,19 @@ struct Gpu {
             session->call("scene.load", std::string(R"({"replace":true,"path":")") + spec.path + "\"}");
         if (loaded.rfind("{\"result\"", 0) != 0) return "scene.load failed: " + loaded.substr(0, 300);
         if (spec.vfx) {
-            // The script: G throws, fire held; the steps up to the boom (the frames step on with it held).
+            // The player stands outside the south doorway (its feet at z 4.5, behind the wall the enemies look
+            // through), facing north through the opening: the room's north wall and crates are in view, and
+            // the enemies, who would kill the player inside a few seconds, do not see it at the start.
+            const std::string placed = session->call("player.teleport", R"({"pos":[1.5,0.0,12.0],"yawDeg":0.0})");
+            if (placed.rfind("{\"result\"", 0) != 0) return "player.teleport failed: " + placed.substr(0, 300);
+            // The script, one inject (each event's step counts from the next step): fire held, the reloads,
+            // the grenade, then the steps up to its boom. The frames render the scene as it stands.
             const std::string inject = session->call(
-                "input.inject", R"({"events":[{"action":"grenade","down":true},{"action":"fire","down":true},)"
-                                R"({"step":1,"action":"grenade","down":false}]})");
+                "input.inject", R"({"events":[{"action":"fire","down":true},)"
+                                R"({"step":180,"action":"reload","down":true},{"step":181,"action":"reload","down":false},)"
+                                R"({"step":450,"action":"reload","down":true},{"step":451,"action":"reload","down":false},)"
+                                R"({"step":660,"action":"fire","down":false},)"
+                                R"({"step":680,"action":"grenade","down":true},{"step":681,"action":"grenade","down":false}]})");
             if (inject.rfind("{\"result\"", 0) != 0) return "input.inject failed: " + inject.substr(0, 300);
             const std::string stepped =
                 session->call("world.step", "{\"frames\":" + std::to_string(kVfxScriptSteps) + "}");
