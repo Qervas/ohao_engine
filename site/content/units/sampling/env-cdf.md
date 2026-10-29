@@ -3,7 +3,6 @@ module: sampling
 id: env-cdf
 title: Environment CDF
 standard: v2
-figures: [sampling-env-cdf-vflip]
 ---
 
 ## The light you cannot sample uniformly
@@ -158,7 +157,7 @@ binning by hand:
 
 {{cite shaders/includes/rt/env_sampling.glsl "float pdfEnvMapTexel(vec3 dir, uint W, uint H) {"}}
 
-## The flip between the sampler and the sky
+## One latitude convention: the file's
 
 `sampleEnvMap` returns a direction, never a radiance. The raygen fires an
 occlusion ray along it and takes whatever colour the miss shader hands back:
@@ -168,45 +167,33 @@ occlusion ray along it and takes whatever colour the miss shader hands back:
 That leaves two functions responsible for one texel↔direction map:
 `equirectPixelToDir` and its inverse `envTexelPdfUV` — the shared binning behind
 both `pdfEnvMap` and `pdfEnvMapTexel` — in `env_sampling.glsl`, and
-`dirToEquirect` in `pt_miss.rmiss`. They agree on longitude. On latitude one uses
-arccosine of the up axis, the other arcsine:
+`dirToEquirect` in `pt_miss.rmiss`. They must agree, or the CDF steers samples at
+one row and the miss shader shades them from another. The sampler measures
+latitude from the zenith, so row 0 is straight up, as `stbi_loadf` hands the file's
+first row over:
 
 {{cite shaders/includes/rt/env_sampling.glsl "float theta = acos(clamp(dir.y, -1.0, 1.0));"}}
-{{cite shaders/rt/pt_miss.rmiss "float theta = asin(clamp(dir.y, -1.0, 1.0));"}}
 
-Since acos(y)/π = ½ − asin(y)/π, the two v coordinates satisfy v_env = 1 − v_miss:
-they are vertical mirrors. The importance sampler finds a bright texel in row y
-and emits the direction whose radiance the miss shader then fetches from row
-H−1−y. For any environment that is not symmetric about the horizon — which is
-every real capture — the CDF steers samples at the mirror image of the bright
-region.
+The miss shader, and every other lookup of the environment (deferred lighting, the
+prefiltered and irradiance images, RT GI's escaped rays, the forward and particle
+passes, the cinematic composite), takes arcsine and writes v = ½ − asin(y)/π, which is
+the same number, since acos(y)/π = ½ − asin(y)/π:
 
-{{figure sampling-env-cdf-vflip "Conceptual: the same texture row, resolved to opposite poles by the two latitude conventions in the tree. Derived by reading the two functions, not from a captured render."}}
-
-Only `cinematic_composite.comp` lands on the sampler's side, and it gets there
-from an `asin` as well: its θ is arcsine, and `0.5 - theta / PI` is algebraically
-acos(y)/π. So the split is real rather than one stray function — but it is three
-files to two, against the sampler:
-
+{{cite shaders/rt/pt_miss.rmiss "return vec2(phi / 6.2831853 + 0.5, 0.5 - theta / 3.1415926);"}}
 {{cite shaders/rt/cinematic_composite.comp "vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);"}}
 
-Nothing in the build catches it. The sinθ weight is flip-invariant
-(sin θ = sin(π − θ)), so the integral is unchanged, and the unit tests only assert
-that the CDFs are monotone, normalised, and concentrate around a hot texel — all
-true of a mirrored table:
+The unit tests cannot see a mismatch here: the sinθ weight is mirror-invariant
+(sin θ = sin(π − θ)), and they assert only that the CDFs are monotone, normalised,
+and concentrate around a hot texel, all true of a mirrored table. The convention is
+held by a frame instead: `check_env_orientation.py` lights a white floor with an
+environment blue above the horizon and orange below, and every renderer must light
+it blue.
 
 {{cite tests/renderer/env_cdf_test.cpp "TEST(EnvCDF, HotSpotConcentratesCDF) {"}}
+{{cite tests/renderer/check_env_orientation.py "MIN_RATIO = 1.5"}}
 
 :::key
-The flip costs variance, not correctness: radiance always comes from the traced
-ray, never from the PDF, and MIS covers the gap — where the environment PDF is
-small or zero the balance weight on the BSDF strategy goes to one, and the raygen
-defaults that weight to 1.0 outright when `payload.envPdf` is zero. The sun is
-still found — by BSDF sampling, at BSDF-sampling variance, which is exactly the
-cost the CDF exists to avoid paying.
-
-What the flip does not excuse is that env-IS is not an unbiased estimator to
-begin with. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified —
+Env-IS is not an unbiased estimator. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified —
 the exact texel centre, with no intra-texel jitter — so the strategy draws from
 W·H fixed directions and the expectation of its NEE term is a texel-by-texel
 midpoint quadrature of L·f·cosθ·w rather than the integral. That error is set by

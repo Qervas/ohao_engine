@@ -211,15 +211,21 @@ a sealed room. Indoor scenes are lit only by their own lights.
 {{cite shaders/rt/pt_miss.rmiss "payload.color = vec3(0.0);"}}
 :::
 
-## Two equirectangular conventions, one texture
+## One equirectangular convention, one texture
 
 The miss shader and the environment importance sampler both map directions to
-equirectangular UVs, and they do not agree. For a unit direction $d$ the miss
-shader uses
+equirectangular UVs, and they must agree, because the sampler picks a texel and the
+miss shader shades the ray it becomes. `EnvCDF::build` consumes the same `stbi_loadf`
+array that is memcpy'd unflipped into the image, so row 0 of both is the file's first
+row, the zenith:
 
-$$v_{\text{miss}} = \frac{\arcsin d_y}{\pi} + \frac{1}{2}$$
+{{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
 
-{{cite shaders/rt/pt_miss.rmiss "return vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);"}}
+For a unit direction $d$ the miss shader uses
+
+$$v_{\text{miss}} = \frac{1}{2} - \frac{\arcsin d_y}{\pi}$$
+
+{{cite shaders/rt/pt_miss.rmiss "return vec2(phi / 6.2831853 + 0.5, 0.5 - theta / 3.1415926);"}}
 
 while `env_sampling.glsl`, which turns CDF texels into directions and inverts the
 map for MIS, uses
@@ -228,27 +234,14 @@ $$v_{\text{cdf}} = \frac{\arccos d_y}{\pi}$$
 
 {{cite shaders/includes/rt/env_sampling.glsl "float theta = v * OHAO_PI;"}}
 
-Since $\arccos x = \tfrac{\pi}{2} - \arcsin x$, the two are related by
-$v_{\text{miss}} = 1 - v_{\text{cdf}}$ — an exact vertical mirror. The horizontal
-axis agrees; both derive $u$ from $\operatorname{atan2}(d_z, d_x)$. They would still
-be consistent if the CDF's rows ran opposite to the texture's, but `EnvCDF::build`
-consumes the same `stbi_loadf` array that is memcpy'd unflipped into the image.
+Since $\arccos x = \tfrac{\pi}{2} - \arcsin x$, the two are the same number; both
+derive $u$ from $\operatorname{atan2}(d_z, d_x)$. Every other lookup of the
+environment in the engine writes the miss shader's expression, the deferred lighting
+pass's among them:
 
-{{cite ohao/gpu/vulkan/env_upload.cpp "envCDF.build(hdrPixels, ew, eh);"}}
+{{cite shaders/core/deferred_lighting.frag "return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.1415926);"}}
 
-A direction drawn from the brightest row of the CDF is therefore looked up by the
-miss shader in the mirrored row. Engine-wide the convention splits two against two,
-not one outlier against the rest: the miss shader and `deferred_lighting.frag` both
-build $0.5 + \theta/\pi$ from $\theta = \arcsin d_y$, while `env_sampling.glsl` and
-the cinematic composite both land on $0.5 - \theta/\pi$. What matters is not the
-census but which pair shares a texture — and the two that disagree here are the
-sampler that picks the direction and the miss shader that shades it.
-
-{{cite shaders/core/deferred_lighting.frag "return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415926 + 0.5);"}}
-{{cite shaders/rt/cinematic_composite.comp "vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);"}}
-
-MIS still combines two well-formed weights, but the estimator underneath is not
-unbiased either. `sampleEnvMap` throws away the residual of $u_1,u_2$ after the two
+The estimator underneath is still not unbiased. `sampleEnvMap` throws away the residual of $u_1,u_2$ after the two
 searches and returns `equirectPixelToDir`, which resolves the texel *centre* — so
 the procedure draws from a discrete set of $W \times H$ directions while reporting
 a continuous solid-angle density.

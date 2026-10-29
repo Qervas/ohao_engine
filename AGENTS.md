@@ -167,6 +167,7 @@ $ build/Release/vfx_gpu_test.exe > /dev/null   # gpu
 $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
+$ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/serve/check_live.py > /dev/null   # gpu
@@ -274,7 +275,10 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
 - **Fireflies** (`check_fireflies.py`): the play scene from the spawn looking west, 4 frames after
   a reset (a moving camera's GI history), RT GI on against off: pixels where what GI adds spikes
   over its 5x5 median by more than 12 levels, at most 150 (441 with the HDRI's sun in GI's rays,
-  88 without, along silhouettes); and the log saying the environment's sun was taken out.
+  88 without, along silhouettes); and the log saying the environment's sun was taken out. **Red
+  since the HDRI was turned the right way up (2026-10-29): 357**, 96% within 3 px of a silhouette:
+  the brighter sky GI now sees makes the half-resolution upsample's bleed across edges cross the
+  threshold. The gate stays at 150; the GI upsample at edges is the next step.
 - **Render goldens** (`tests/golden/manifest.json`, 32 scenes; two the transparency scene,
   `transparency.scene.json` (blended panes, the MASK leaf card, lit soft smoke, sparks; deferred exact
   and path traced); 8 examples, 22 through
@@ -490,10 +494,14 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   HDRI's sun (60,450, 51% of its power on 0.003% of the sphere) about once in 10^4 rays: the
   outdoor fireflies (`docs/changes/2026-10-28-rt-gi-fireflies.md`). The log says what was taken
   out (`gpu` channel). A directional light added or removed reloads the map.
-- **Every equirect lookup reads the HDRI upside down**: `v = asin(y) / pi + 0.5` with row 0 at
-  v = 0 puts +Y on the file's last row, so a standard HDRI's sky lights from below; the path
-  tracer's CDF (`env_sampling.glsl`) puts +Y on row 0, so its importance sampling and its lookups
-  disagree. Open for Frank (ROADMAP row 16): the fix moves every HDRI-lit golden.
+- **An equirectangular environment's row 0 is the zenith**, as the file stores it and `stbi_loadf`
+  loads it: every lookup is `u = atan2(z, x) / 2pi + 0.5`, `v = 0.5 - asin(y) / pi` (deferred
+  lighting, `equirectUV` in `clustered_lights.slang`, the prefilter's both ways, `gi_trace`,
+  `pt_miss`, the cinematic composite, `env_sun.cpp`), the same number as the path tracer's CDF
+  (`env_sampling.glsl`, `acos(y) / pi`). A new lookup writes that expression; `asin(y) / pi + 0.5`
+  turns the sky upside down (it did, everywhere, until 2026-10-29) and the unit tests cannot see
+  it. `check_env_orientation.py` can: a sky blue above the horizon and orange below must light a
+  floor blue in deferred (RT GI and IBL) and the path tracer.
 - Reflected light is counted once. Lighting writes, beside the lit image, the
   environment/GI specular it added (`envSpecular`, E) and its weight (`specularWeight`,
   W: split sum times specular occlusion, computed for every pixel, environment or not);
