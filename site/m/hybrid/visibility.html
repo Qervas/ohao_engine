@@ -64,7 +64,7 @@ $$</div>
 <div class="section-rule"><h2 id="a-trace-that-trusts-the-traversal">A trace that trusts the traversal</h2></div>
 <div class="prose reveal">
 <p>The GI trace does not second-guess the cull mask. Its query is forced opaque, so no candidate is ever handed back to the shader to accept or reject; once traversal ends, it reads the committed instance&#x27;s custom index (the instance slot) and loads that instance&#x27;s bounce albedo from the `RenderScene` instance table at binding 4:</p>
-<div class="citation-chip"><code class="citation-code">const uint slot = q.CommittedInstanceID();   // the instance&#x27;s custom index: its table slot</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L144" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:144</a></div>
+<div class="citation-chip"><code class="citation-code">const uint slot = q.CommittedInstanceID();   // the instance&#x27;s custom index: its table slot</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/gi_trace.slang#L198" target="_blank" rel="noopener">shaders/rt/gi_trace.slang:198</a></div>
 <p>There is no software re-implementation of the visibility test in it. Whether a ray may reach an instance is decided entirely in traversal — an `AND` of the trace&#x27;s `kRayMaskScene` against the instance&#x27;s mask — at no per-hit shader cost, and a hit the traversal commits is always counted.</p>
 <p>The consequence is that the mask is the only switch. A hidden instance is removed by its zero mask alone; there is no second, per-instance flag in the albedo data that could contradict it.</p>
 </div>
