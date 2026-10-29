@@ -6,14 +6,11 @@
 // smokeTransmittance is the product of exp(-density * chord) over the spheres the segment
 // [0, tMax] of a unit direction crosses: 1 with no smoke, so a frame without any is unchanged bit
 // for bit. The shadow trace draws its visibility from it stochastically (a sample is lit with that
-// probability), the GI trace multiplies its radiance by it and adds in-scatter by 1 - T.
+// probability), the GI trace multiplies its radiance by it. No in-scatter (OPEN ruling 29: a flat
+// in-scatter lit a filled doorway brighter, not darker).
 import shared.layout;
 
 [[vk::binding(7, 1)]] ByteAddressBuffer smokeProxies;   // SmokeProxyHeaderGpu, then SmokeSphereGpu[]
-
-// The flat in-scatter a GI ray through a cloud adds, weighted by 1 - T (linear radiance, a constant
-// ambient of the cloud rather than a light's).
-static const float kSmokeInscatter = 0.12;
 
 // Transmittance over [0, tMax] of the ray from `o` along the unit direction `d`.
 float smokeTransmittance(float3 o, float3 d, float tMax)

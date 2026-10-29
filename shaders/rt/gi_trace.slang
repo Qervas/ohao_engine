@@ -135,24 +135,23 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
             q.CommitNonOpaqueTriangleHit();
     }
     // Smoke (rt/smoke_proxy.slang) on the ray up to what it hit: the radiance behind it is attenuated
-    // by its transmittance T, and a ray through a cloud gains the cloud's in-scatter by 1 - T.
+    // by its transmittance T and nothing is added (OPEN ruling 29: no in-scatter in 12).
     const bool hit = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
     const float tEnd = hit ? q.CommittedRayT() : kRayLength;
     const float T = smokeTransmittance(origin, dir, tEnd);
-    const float3 inscatter = (1.0 - T) * kSmokeInscatter;
     if (hit)
     {
         const uint slot = q.CommittedInstanceID();   // the instance's custom index: its table slot
         const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));
         const float3 at = origin + dir * q.CommittedRayT();
-        return albedo * (1.0 / kPi) * directAt(at, -dir) * T + inscatter;
+        return albedo * (1.0 / kPi) * directAt(at, -dir) * T;
     }
     escaped = 1.0;
-    if (pc.flags.y == 0u) return inscatter;
+    if (pc.flags.y == 0u) return float3(0.0);
     // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
     // full-resolution texels.
     const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, asin(clamp(dir.y, -1.0, 1.0)) / kPi + 0.5);
-    return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T + inscatter;   // times Environment.intensity
+    return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T;   // times Environment.intensity
 }
 
 [shader("compute")]

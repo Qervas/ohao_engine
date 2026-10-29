@@ -980,8 +980,9 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   - **Smoke in RT** (step 4): a smoke record publishes closed-form proxy spheres (`ohao/vfx/smoke_math.hpp`,
     `caps.proxies` at most, 256 uploaded). They reach the RT traces through set 1 binding 7
     (`rt/smoke_proxy.slang`; the header's flag is `render.settings vfx.smokeInGi`): `shadow_trace` draws
-    its visibility stochastically with `T`, `gi_trace` multiplies radiance by `T` and adds 0.12 in-scatter
-    by `1 - T`. With no spheres `T` is exactly 1, so a scene without smoke is bit-identical. A sphere is
+    its visibility stochastically with `T`, `gi_trace` multiplies radiance by `T` and adds nothing (OPEN
+    ruling 29: a flat in-scatter lit a filled doorway brighter, not darker). With no spheres `T` is exactly 1,
+    so a scene without smoke is bit-identical. A sphere is
     the emitter's pose plus up to 0.6 R of offset: a cloud placed on a wall plane is half outside it.
   - **Decals are raster only** (no RT decal); tracers and particles are sorted back to front by integer
     keys (distance bits, then id); the transparent pass runs after SSR, so SSR never sees a particle.
