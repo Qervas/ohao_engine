@@ -135,7 +135,7 @@ float2 equirectUV(float3 d)
     return float2(atan2(d.z, d.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.1415926);
 }
 
-// ---- deferred_lighting.frag's light loop ---------------------------------------------------
+// ---- the light loop (core/deferred_lighting.slang, vfx/transparent_mesh.slang) --------------
 
 float calculateAttenuation(float3 lightPos, float3 fragPos, float range)
 {

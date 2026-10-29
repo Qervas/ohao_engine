@@ -75,17 +75,17 @@ const uint kSmokeSpheresOffset = 16u;
 const uint kSkinGroupSize = 64u;
 // InstanceGpu.flags bit: a first-person gun's mesh (ViewModel): lit like any surface, but in no shadow, GI or bounce ray's mask (kTlasMaskViewModel)
 const uint kInstanceViewModel = 4u;
-// InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.giAlbedoPacked.rgb its radiance, lit by nothing
+// InstanceGpu.flags bit: a light's emitter mesh (RenderScene makes one for each point, spot and area light): pure emission, InstanceGpu.emitterLight.rgb its radiance, lit by nothing
 const uint kInstanceEmitter = 2u;
 // TLAS instance mask of every scene instance
 const uint kTlasMaskScene = 1u;
-// TLAS instance mask of a light's emitter mesh: only camera rays and a near-mirror's first specular ray see it, so it shadows nothing and no bounce counts the light twice
+// TLAS instance mask of a light's emitter mesh: the path tracer's camera and bounce rays (a bounce that meets it is weighed against its light's sampling, by InstanceGpu.emitterLight.w) and the realtime tracer's camera and near-mirror rays see it; no shadow or GI ray, so it shadows nothing and lights nothing twice
 const uint kTlasMaskEmitter = 2u;
 // TLAS instance mask of a first-person gun's mesh (ViewModel): only camera rays and a near-mirror's first specular ray see it, so its shrunk pose shadows nothing and no bounce meets it
 const uint kTlasMaskViewModel = 4u;
 // TLAS instance mask of an instance whose every material is blended (glTF BLEND): only the path tracer's camera rays see it, so in the hybrid frame it casts no shadow and bounces no GI
 const uint kTlasMaskTransparent = 8u;
-// ray mask of every ray but the path tracer's camera rays (shadow, GI, bounce, specular): scene instances only
+// ray mask of shadow and GI rays and the realtime tracer's bounces: scene instances only (the reference path tracer's bounces add kTlasMaskEmitter)
 const uint kRayMaskScene = 1u;
 // ray mask of the path tracer's camera rays, and of a near-mirror first hit's specular ray (ptMirrorRoughness): scene instances, light emitters, first-person guns and blended instances
 const uint kRayMaskCamera = 15u;
@@ -157,10 +157,8 @@ const uint kSSSMaxTiles = 262144u;
 const uint kSSSHeaderWords = 8u;
 // SSS: the tile rows above and below a skin tile the horizontal blur also covers (the vertical kernel reaches 3 x width <= 32 px)
 const uint kSSSRadiusTiles = 2u;
-// render::InstanceGpu's size in bytes (the instance table RT GI reads its bounce albedo from)
+// render::InstanceGpu's size in bytes (the instance table RT GI's hitMaterial reads a hit's mesh and materials from)
 const uint kInstanceGpuStride = 160u;
-// the byte offset of InstanceGpu::giAlbedoPacked (rgb: the bounce albedo)
-const uint kInstanceGpuGiAlbedoOffset = 144u;
 // the prefiltered environment (ibl/env_prefilter.slang): mip levels, level i GGX-convolved at roughness i / (kEnvPrefilterLevels - 1); level 0 is the environment itself
 const uint kEnvPrefilterLevels = 6u;
 // the cosine-convolved environment (mean incoming radiance, diffuse irradiance over pi), equirectangular, this wide and half as tall
@@ -282,7 +280,7 @@ struct HiZPush {
     uvec4 size;   // x, y the level written; z, w the level (or depth buffer) read
 };
 
-// one raster light of the light table (core/deferred_lighting.frag, compute/light_cluster.slang)
+// one raster light of the light table (core/deferred_lighting.slang, compute/light_cluster.slang)
 struct LightGpu {
     vec4 position;   // xyz position (world; a rectangle's centre), w type: 0 directional, 1 point, 2 spot, 3 rectangle (area light)
     vec4 direction;   // xyz direction (a rectangle's first edge), w range: point and spot light contributes nothing past it (a rectangle has none)

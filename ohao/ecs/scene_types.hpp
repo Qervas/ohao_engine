@@ -104,7 +104,7 @@ template <class T>
 //     FlyController, Level, SpawnPoint, Socket. MeshSource's alternatives ModelAsset and
 //     the *Prim structs, and ActionBinding/AxisBinding, are nested types.
 //   runtime (catalogue only): Children, WorldTransform, MeshRenderer, RenderSlot,
-//     EmissiveProxyLight, GiMaterialLegacy, CreationOrder, PreservedComponents,
+//     EmissiveProxyLight, CreationOrder, PreservedComponents,
 //     InstantiateError, LevelNode and the dirty tags.
 // EntityId is not registered: it is the entity's key ("id" in scene files).
 void registerSceneTypes(reflect::TypeRegistry& r);

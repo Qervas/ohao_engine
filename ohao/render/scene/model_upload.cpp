@@ -146,41 +146,6 @@ std::optional<EmissiveProxy> emissiveProxy(const Model& model) {
     return std::nullopt;
 }
 
-GiModelInputs giModelInputs(const Model& model) {
-    GiModelInputs in;
-    in.hasMaterials = !model.materialColors.empty();
-    if (in.hasMaterials) {
-        in.roughness0 = model.materialColors[0].w;
-        in.metallic0 = !model.materialMetallic.empty() ? model.materialMetallic[0] : 0.0f;
-    }
-    in.manyVertices = model.vertices.size() > 100;
-    return in;
-}
-
-glm::vec4 giMaterialLegacyPacked(const GiModelInputs& model, const MaterialDesc* overrideMaterial) {
-    glm::vec3 albedo(0.73f);
-    float roughness = 0.95f;
-    float metallic = 0.0f;
-    if (overrideMaterial) {
-        albedo = overrideMaterial->baseColor;
-        roughness = overrideMaterial->roughness;
-        metallic = overrideMaterial->metallic;
-    }
-    // Roughness/metallic come from model material 0 whenever the model has materials,
-    // even with an override material (the override sets only the albedo).
-    if (model.hasMaterials) {
-        roughness = model.roughness0;
-        metallic = model.metallic0;
-    }
-    float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;
-    if (model.manyVertices) packed += (packed >= 0 ? 10.0f : -10.0f);
-    return glm::vec4(albedo, packed);
-}
-
-glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial) {
-    return giMaterialLegacyPacked(giModelInputs(model), overrideMaterial);
-}
-
 MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_view debugName) {
     const uint32_t triangleCount = static_cast<uint32_t>(model.indices.size() / 3);
 

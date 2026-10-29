@@ -101,12 +101,12 @@ struct InstanceDesc {
     glm::mat4 prevWorld{1.0f};
     bool visible{true};
     // A light's emitter mesh (RenderScene makes them from the lights; kInstanceEmitter):
-    // giAlbedoPacked.rgb is then its radiance.
+    // emitterLight is then its radiance and light.
     bool emitter{false};
     // A first-person gun's mesh (ecs ViewModel; kInstanceViewModel): drawn and lit as any mesh, but
     // in no CSM cascade and no shadow, GI or bounce ray (its pose is shrunk toward the eye).
     bool viewModel{false};
-    glm::vec4 giAlbedoPacked{0.73f, 0.73f, 0.73f, 0.95f};   // see InstanceGpu
+    glm::vec4 emitterLight{0.0f};   // see InstanceGpu
 };
 
 enum class LightKind : uint32_t { Point, Directional, Spot, AreaRect, EmissiveProxy };
@@ -160,11 +160,10 @@ struct InstanceGpu {
     uint32_t materialRefOffset;
     uint32_t materialRefCount;
     uint32_t flags;          // kInstanceVisible, kInstanceEmitter, kInstanceViewModel
-    // RT GI's bounce albedo: rgb, read by rt/gi_trace.slang at a hit (kInstanceGpuGiAlbedoOffset
-    // in shaders/shared/layout.json). a = the legacy packed word: metallic>0.5 ?
-    // -(roughness+0.001) : roughness, then +/-10 when the mesh has > 100 vertices; nothing
-    // reads it. An emitter's rgb is its emitted radiance instead (no GI ray reaches one).
-    glm::vec4 giAlbedoPacked;
+    // A light's emitter mesh (kInstanceEmitter): rgb its radiance (the G-buffer and both closest
+    // hits), w its light's index in the RT light list (the reference path tracer weighs a bounce
+    // ray that meets it against that light's sampling). Zero on every other instance.
+    glm::vec4 emitterLight;
 };
 static_assert(sizeof(InstanceGpu) == 160);
 

@@ -1,7 +1,7 @@
 {
   "format": "ohao.schema",
   "version": 1,
-  "schemaHash": "7b6d190cd6efb22f",
+  "schemaHash": "91ffdb3d83ba57a6",
   "units": [
     "m",
     "m/s",
@@ -4661,36 +4661,6 @@
           "type": "f32",
           "default": 0,
           "doc": "Brightness multiplier",
-          "unit": "1",
-          "min": null,
-          "max": null,
-          "uiRange": null,
-          "step": null,
-          "tooltip": "",
-          "color": false,
-          "angle": false,
-          "hidden": false,
-          "readOnly": false,
-          "aliases": []
-        }
-      ],
-      "skipped": []
-    },
-    {
-      "name": "GiMaterialLegacy",
-      "doc": "LEGACY: the RT GI per-instance material word (albedo rgb, packed roughness/metallic in a).",
-      "role": "component",
-      "serialized": false,
-      "singleton": false,
-      "alwaysPresent": false,
-      "version": 1,
-      "readsVersions": [1],
-      "fields": [
-        {
-          "name": "packed",
-          "type": "vec4",
-          "default": [0.73, 0.73, 0.73, 0.95],
-          "doc": "rgb = albedo, a = packed roughness/metallic/vertex-count rule",
           "unit": "1",
           "min": null,
           "max": null,

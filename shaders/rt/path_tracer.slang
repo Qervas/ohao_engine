@@ -19,7 +19,7 @@
 // sphere of its radius r (at least 1 cm) of radiance I / (pi r^2), windowed by its range; a spot
 // the same sphere times its cone toward the shaded point; an area light a one-sided rectangle of
 // radiance I / (4 pi r^2); a directional light irradiance I. The emitter meshes RenderScene makes
-// for them carry their light's index (InstanceGpu.giAlbedoPacked.w).
+// for them carry their light's index (InstanceGpu.emitterLight.w).
 //
 // Outputs as before: the running mean (bindings 1 and 3), the tonemapped image (2, ACES at 0.5),
 // OIDN's albedo and normal (6, 7), NRD's and DLSS's guides (19-26).

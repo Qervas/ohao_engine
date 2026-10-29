@@ -43,7 +43,7 @@ struct Parent { entt::entity entity{entt::null}; };
 struct Children { std::vector<entt::entity> entities; };
 
 // Change tracking: like Transform, MeshRenderer, Light, EmissiveProxyLight and
-// GiMaterialLegacy are picked up by the render extract only when written through
+// are picked up by the render extract only when written through
 // registry.patch<T>() or registry.replace<T>() (or emplaced/removed). A plain
 // get<T>() write fires no signal and never reaches the renderer.
 
@@ -84,9 +84,6 @@ struct EmissiveProxyLight {
 // recycled, so it orders lights (and new instances) deterministically.
 struct CreationOrder { uint64_t seq{0}; };
 
-// LEGACY: RT GI's per-instance material word (see render::InstanceGpu::giAlbedoPacked).
-// rgb = albedo, a = packed roughness/metallic/vertex-count rule. Set by spawnModel.
-struct GiMaterialLegacy { glm::vec4 packed{0.73f, 0.73f, 0.73f, 0.95f}; };
 
 // Components a scene file carried that this build does not know (newer engine, other
 // tool). Kept as canonical compact JSON and written back on save, sorted by name.
@@ -124,7 +121,7 @@ struct QuadPrim {
 struct BoxPrim { glm::vec3 lo{-0.5f}; glm::vec3 hi{0.5f}; glm::vec3 color{1.0f}; };
 
 // Where an entity's mesh comes from. Instantiate builds MeshRenderer (and the derived
-// GiMaterialLegacy / EmissiveProxyLight) from it; meshes are shared per distinct value.
+// EmissiveProxyLight) from it; meshes are shared per distinct value.
 struct MeshSource {
     std::variant<ModelAsset, SpherePrim, CubePrim, PlatformPrim, CylinderPrim, ConePrim, QuadPrim, BoxPrim> source;
 };

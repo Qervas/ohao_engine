@@ -103,7 +103,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
             }
         }
         // z: the sphere's radius for a point or spot light with an emitter mesh (lightEmitter's,
-        // so its specular is the reflection of that mesh: core/deferred_lighting.frag); 0 a point.
+        // so its specular is the reflection of that mesh: evaluateSphere in includes/lighting/clustered_lights.slang); 0 a point.
         const float sphereRadius =
             (d.kind == LightKind::Point || d.kind == LightKind::Spot) && d.radius > 0.0f ? std::max(d.radius, 0.01f) : 0.0f;
         light.params = glm::vec4(
@@ -114,7 +114,7 @@ void LightTable::set(std::span<const LightDesc> lights) {
         );
         if (d.kind == LightKind::AreaRect) {
             // The path tracer's rectangle (light type 3): centre, edges, and its radiance
-            // I / (4 pi r^2) in color.w (deferred_lighting.frag's evaluateBRDFRect).
+            // I / (4 pi r^2) in color.w (clustered_lights.slang's evaluateRect).
             const float r = std::max(d.radius, 0.01f);
             light.position = glm::vec4(d.position + 0.5f * (d.areaEdge1 + d.areaEdge2), 3.0f);
             light.direction = glm::vec4(d.areaEdge1, d.range);

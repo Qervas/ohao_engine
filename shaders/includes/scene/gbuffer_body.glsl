@@ -119,11 +119,11 @@ void main() {
     outVelocity = (currentNDC - prevNDC) * 0.5;
 
     // A light's emitter mesh (kInstanceEmitter): pure emission, its radiance in
-    // InstanceGpu.giAlbedoPacked.rgb, on the front side (black behind, as the path tracer's
+    // InstanceGpu.emitterLight.rgb, on the front side (black behind, as the path tracer's
     // hit). Emissive alpha 1 tells lighting to add nothing and SSR to reflect nothing of it:
     // the analytic light already lights and reflects.
     if ((inst.flags & kInstanceEmitter) != 0u) {
-        const vec3 radiance = gl_FrontFacing ? inst.giAlbedoPacked.rgb : vec3(0.0);
+        const vec3 radiance = gl_FrontFacing ? inst.emitterLight.rgb : vec3(0.0);
         outGBuffer0 = vec4(fragWorldPos, -1.0);   // metallic -1: RT shadows and GI skip it as sky
         outGBuffer1 = vec4(encodeNormalOctahedron(N) * 0.5 + 0.5, 1.0, dot(radiance, vec3(0.2126, 0.7152, 0.0722)));
         outGBuffer2 = vec4(0.0, 0.0, 0.0, 1.0);

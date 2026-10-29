@@ -44,8 +44,6 @@ public:
         reg.on_update<MeshRenderer>().connect<&ExtractState::markRenderDirty>(this);
         reg.on_destroy<MeshRenderer>().connect<&ExtractState::onMeshRendererDestroy>(this);
         reg.on_destroy<RenderSlot>().connect<&ExtractState::onRenderSlotDestroy>(this);
-        reg.on_construct<GiMaterialLegacy>().connect<&ExtractState::markRenderDirty>(this);
-        reg.on_update<GiMaterialLegacy>().connect<&ExtractState::markRenderDirty>(this);
         reg.on_construct<Light>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_update<Light>().connect<&ExtractState::markLightsDirty>(this);
         reg.on_destroy<Light>().connect<&ExtractState::markLightsDirty>(this);
@@ -63,8 +61,6 @@ public:
         m_reg.on_update<MeshRenderer>().disconnect(this);
         m_reg.on_destroy<MeshRenderer>().disconnect(this);
         m_reg.on_destroy<RenderSlot>().disconnect(this);
-        m_reg.on_construct<GiMaterialLegacy>().disconnect(this);
-        m_reg.on_update<GiMaterialLegacy>().disconnect(this);
         m_reg.on_construct<Light>().disconnect(this);
         m_reg.on_update<Light>().disconnect(this);
         m_reg.on_destroy<Light>().disconnect(this);
@@ -189,7 +185,6 @@ private:
         }
         d.visible = mr.visible;
         d.viewModel = inViewModel(e);
-        if (const auto* gi = m_reg.try_get<GiMaterialLegacy>(e)) d.giAlbedoPacked = gi->packed;
         return d;
     }
 

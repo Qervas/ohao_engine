@@ -521,9 +521,6 @@ void registerSceneTypes(reflect::TypeRegistry& r) {
         .field("radius", &EmissiveProxyLight::radius).doc("Emitter radius").unit("m")
         .field("color", &EmissiveProxyLight::color).doc("Emitted color").unit("linear-rgb").color()
         .field("intensity", &EmissiveProxyLight::intensity).doc("Brightness multiplier").unitless();
-    r.type<GiMaterialLegacy>("GiMaterialLegacy").component().runtime().host(makeComponentOps<GiMaterialLegacy>())
-        .doc("LEGACY: the RT GI per-instance material word (albedo rgb, packed roughness/metallic in a).")
-        .field("packed", &GiMaterialLegacy::packed).doc("rgb = albedo, a = packed roughness/metallic/vertex-count rule").unitless();
     r.type<CreationOrder>("CreationOrder").component().runtime().host(makeComponentOps<CreationOrder>())
         .doc("Monotonic creation sequence. Orders draws, lights and file entities deterministically.")
         .field("seq", &CreationOrder::seq).doc("Sequence number, never recycled");

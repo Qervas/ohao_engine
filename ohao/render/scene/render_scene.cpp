@@ -439,7 +439,7 @@ struct RenderScene::Impl {
             d.prevWorld = motion[i] * want[i].world;   // where the light was: its motion vectors
             d.emitter = true;
             // rgb its radiance (what the camera sees), w its light (rt/path_tracer.slang's MIS).
-            d.giAlbedoPacked = glm::vec4(want[i].radiance, static_cast<float>(rtIndex[i]));
+            d.emitterLight = glm::vec4(want[i].radiance, static_cast<float>(rtIndex[i]));
             if (i < emitterSlots.size()) {
                 instances.update(emitterSlots[i], d, materials.count());
                 stageTlasInstance(emitterSlots[i], false);

@@ -26,7 +26,6 @@ void attachModel(World& world, entt::entity e, render::RenderScene& scene, Bindl
                  const Model& model, std::string_view debugName, const render::MaterialDesc* overrideMaterial) {
     SpawnedModel up = ecs::uploadModel(scene, textures, model, debugName, overrideMaterial);
     auto& reg = world.registry();
-    reg.emplace_or_replace<GiMaterialLegacy>(e, GiMaterialLegacy{render::giMaterialLegacyPacked(model, overrideMaterial)});
     reg.emplace_or_replace<MeshRenderer>(e, MeshRenderer{up.mesh, std::move(up.materials), true});
     if (up.emissive) reg.emplace_or_replace<EmissiveProxyLight>(e, *up.emissive);
 }

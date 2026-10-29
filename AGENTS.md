@@ -425,8 +425,8 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `BodyInterface`. `PhysicsWorld(cfg)`, `stepOnce()` not `step(dt)`; bodies need a shape.
 - `ohao::physics::math::AABB` is (center, halfExtents); render bounds (`MeshInfo`,
   `DrawRecord`) are (min, max). A box passed between them needs converting.
-- ECS writes: `Transform`, `MeshRenderer`, `Light`, `EmissiveProxyLight` and
-  `GiMaterialLegacy` reach the renderer only through `registry.patch<T>()` /
+- ECS writes: `Transform`, `MeshRenderer`, `Light` and `EmissiveProxyLight` reach the
+  renderer only through `registry.patch<T>()` /
   `replace<T>()` (or emplace/remove). A write through `get<T>()` is never seen.
 - World systems have a phase: `addSimulate` (behaviour, once per fixed step, gets dt) or
   `addSync` (derived state, no dt). Before a `render()` call `world.sync()`, never
@@ -529,12 +529,25 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   constant ambient (`ambientIntensity`, 0.35; `setAmbientIntensity` overrides it). With RT GI the constant does nothing, so walls are lit by direct light
   and one bounce, darker than the multi-bounce path tracer, and RT GI's denoiser noise
   shows on them. A test that wants ambient light must turn RT GI off. All three are
-  diffuse only (`albedo·(1−metallic)`).
-- Emission is the G-buffer's sixth attachment (`GBufferPass::kEmissive`, RGBA16F, the
-  fragment shader's output 4; depth stays attachment 4): emissive texture × emissive
-  strength, the same radiance `pt_closesthit` emits, added by lighting unlit. The normal
-  target's alpha keeps only its luminance, to keep emitters out of SSS. A pipeline drawn
-  in the G-buffer render pass needs `GBUFFER_COUNT - 1` blend states.
+  diffuse only, weighed by OpenPBR's diffuse directional albedo beneath the specular layer
+  (`diffuseAlbedo`; the split sum's weight is `specularAlbedo`, both from
+  `shaders/material/openpbr.slang` and its energy tables). RT GI's rays bounce off the hit
+  triangle's own material: `rt/alpha_test.slang`'s `hitMaterial` resolves it at the hit's uv
+  (textures included) and the hit returns its OpenPBR albedo at normal incidence over π times
+  the direct light it receives, plus its emission.
+- **The G-buffer has 8 attachments** (`GBufferPass::GBUFFER_COUNT`; depth is attachment 4,
+  so the fragment shader writes 7 outputs and a pipeline drawn in its render pass needs
+  `GBUFFER_COUNT - 1` blend states). Emission is `kEmissive` (5, RGBA16F, output 4):
+  `emission_color × emission_luminance × the emissive texture` (engine units, ruling O4), the
+  same radiance the path tracer's closest hit emits, added by lighting unlit; the normal
+  target's alpha keeps only its luminance, to keep emitters out of SSS. `kSpecular` (6, RGBA8:
+  `specular_color`, `specular_weight / 1.5`, so 1.0 is code 170) and `kOpenPBR` (7, RG8:
+  `base_diffuse_roughness`, `(specular_ior − 1) / 2.55`, so 1.5 is code 50) carry the rest of
+  OpenPBR's base to `core/deferred_lighting.slang`; albedo is `base_color × base_weight`, and
+  roughness is stored as authored (OpenPBR floors it at 0.01, nothing at 0.04). A back face is
+  shaded on its own side: the G-buffer flips the normal when it faces away from the triangle's
+  side the camera sees (`cross(dFdx(pos), dFdy(pos))`; `gl_FrontFacing` disagreed with the
+  generated sphere's winding).
 - **The referee.** A renderer is judged against the closed form first, then the path tracer:
   `check_analytic.py` renders a white floor under one sun, point or spot light (no other surface,
   so no bounce) in both renderers through `ohao run --hdr` and holds each within 5% of
@@ -551,7 +564,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   (`shaders/material/openpbr.slang`): one path a sample, light and environment sampling weighed
   against BSDF sampling by the power heuristic, Russian roulette from the third vertex, 32
   bounces. A bounce ray (`kRayMaskScene | kTlasMaskEmitter`) that meets a light's emitter mesh
-  weighs it by the light's index in `InstanceGpu.giAlbedoPacked.w`; a light without a mesh (a
+  weighs it by the light's index in `InstanceGpu.emitterLight.w`; a light without a mesh (a
   point of radius 0, emitters off) is flagged by `LightTable::setEmitterLights` and sampled at
   full weight. Emissive proxies are not path tracer lights (the surfaces are). `--bounces N`
   (`render.capture {bounces}`) for the referee: 0 direct light only. The realtime profile keeps
@@ -575,11 +588,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   in both, never the vertex colour (primitives carry their colour as both). An area light
   is the same rectangle in both (Frank's ruling): uniform radiance `I/(4πr²)`, one-sided
   toward `edge1 × edge2`, no range and no `1/d²`; deferred lights it as light type 3
-  (`evaluateBRDFRect`: the exact polygon irradiance, the representative point for specular),
-  clustered lighting lists it in every froxel, RT GI's bounce sees a cosine-profile point at
-  its centre. What stays between the renderers: one GI bounce against many, Burley against
-  Lambert and the roughness-limited Fresnel at grazing angles
-  (`docs/changes/2026-10-26-visible-lights.md`, `2026-10-26-area-light-align.md`).
+  (`evaluateRect` in `includes/lighting/clustered_lights.slang`: the exact polygon irradiance,
+  the representative point for specular), clustered lighting lists it in every froxel, RT GI's
+  bounce sees a cosine-profile point at its centre. Both renderers shade with the same BSDF,
+  OpenPBR's base (`shaders/material/openpbr.slang`); what stays between them is one GI bounce
+  against many and the representative-point specular of sphere and area lights
+  (`docs/changes/2026-10-29-openpbr-step1.md`).
 - Every point, spot and area light is also a mesh the camera sees (`RenderScene::setLights`
   makes an emitter instance per light: a sphere of its radius, or its rectangle, with the
   light's radiance, `kInstanceEmitter`). It is pure emission and changes no other pixel: its
@@ -596,7 +610,7 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   the light entity's `prevWorld * inverse(world)` as `LightDesc::lastFrameMotion`, and the
   emitter's prevWorld is that times its world (identity, so prevWorld = world, when still).
   Mirrors reflect it: in deferred a point or spot light's specular is its sphere's
-  (`LightGpu.params.z` = the mesh's radius, `evaluateBRDFSphere`: the representative point,
+  (`LightGpu.params.z` = the mesh's radius, `evaluateSphere`: the representative point,
   the lobe widened to `a + r/(2d)`), on screen or off, SSR or not; SSR treats an emitter pixel
   as a miss, the analytic reflection stands in. A spot's mesh shines toward the camera by
   its cone (`RenderScene::setViewerPosition`, each frame): dark from outside it, in both

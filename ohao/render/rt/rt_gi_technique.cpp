@@ -13,9 +13,8 @@ namespace ohao {
 
 namespace shared = gpu::shared;
 
-// The trace reads a hit's bounce albedo straight from the instance table.
+// The trace reads a hit's instance row (its mesh and materials) straight from the instance table.
 static_assert(sizeof(render::InstanceGpu) == shared::kInstanceGpuStride);
-static_assert(offsetof(render::InstanceGpu, giAlbedoPacked) == shared::kInstanceGpuGiAlbedoOffset);
 
 namespace {
 

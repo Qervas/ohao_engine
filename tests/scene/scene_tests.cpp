@@ -274,7 +274,6 @@ static void t01_every_component_member_is_registered() {
     ok &= complete<MeshRenderer>(r, checked);
     ok &= complete<RenderSlot>(r, checked);
     ok &= complete<EmissiveProxyLight>(r, checked);
-    ok &= complete<GiMaterialLegacy>(r, checked);
     ok &= complete<CreationOrder>(r, checked);
     ok &= complete<PreservedComponent>(r, checked);
     ok &= complete<PreservedComponents>(r, checked);
@@ -357,7 +356,7 @@ static void t01_authoring_and_runtime_split() {
         CHECK(t && t->serialized && t->role == reflect::TypeRole::Component, "authoring components are saved");
     }
     for (const char* derived : {"Children", "WorldTransform", "MeshRenderer", "RenderSlot",
-                                "EmissiveProxyLight", "GiMaterialLegacy", "CreationOrder", "LevelNode",
+                                "EmissiveProxyLight", "CreationOrder", "LevelNode",
                                 "ColliderPart", "CollisionMesh", "PhysicsBody", "PlayerState", "BodyMotion"}) {
         const auto* t = r.find(derived);
         CHECK(t && !t->serialized, "runtime components are never saved");
@@ -1421,13 +1420,6 @@ static void t11_primitive_becomes_a_mesh_renderer() {
     CHECK(f.backend->lastMaterial.baseColor == mo.baseColor && f.backend->lastMaterial.roughness == mo.specularRoughness &&
               f.backend->lastMaterial.metallic == mo.baseMetalness,
           "the material is the entity's");
-    render::MaterialDesc desc;
-    desc.baseColor = mo.baseColor;
-    desc.roughness = mo.specularRoughness;
-    desc.metallic = mo.baseMetalness;
-    CHECK(reg.get<GiMaterialLegacy>(e).packed ==
-              render::giMaterialLegacyPacked(*PrimitiveMeshGenerator::makeSphere(), &desc),
-          "and the legacy GI word is spawnModel's");
     CHECK(!reg.all_of<InstantiateDirty>(e) && !reg.all_of<InstantiateError>(e), "no tag or error left behind");
     f.step();
     CHECK(f.backend->uploads == 1 && f.backend->materials == 1, "an unchanged entity is not instantiated again");
@@ -1468,13 +1460,6 @@ static void t11_model_asset_uses_its_own_materials() {
     CHECK(reg.get<MeshRenderer>(a).materials.size() == 2 &&
               reg.get<MeshRenderer>(a).materials == reg.get<MeshRenderer>(b).materials && f.backend->materials == 0,
           "a model with materials uses them, override or not");
-    const auto model = twoMaterialModel();
-    render::MaterialDesc desc;
-    desc.baseColor = {0.5f, 0.6f, 0.7f};
-    desc.roughness = 0.9f;
-    CHECK(reg.get<GiMaterialLegacy>(a).packed == render::giMaterialLegacyPacked(*model, nullptr) &&
-              reg.get<GiMaterialLegacy>(b).packed == render::giMaterialLegacyPacked(*model, &desc),
-          "the override only feeds the legacy GI albedo, as in spawnModel");
 }
 
 static void t11_meshes_are_shared_and_released_with_their_last_user() {
@@ -1499,7 +1484,7 @@ static void t11_meshes_are_shared_and_released_with_their_last_user() {
     CHECK(f.backend->releases == 1 && f.backend->live.size() == 1, "the last sphere user gone: its mesh is released");
     reg.remove<MeshSource>(c1);
     f.step();
-    CHECK(!reg.all_of<MeshRenderer>(c1) && !reg.all_of<GiMaterialLegacy>(c1) && f.backend->releases == 1,
+    CHECK(!reg.all_of<MeshRenderer>(c1) && f.backend->releases == 1,
           "removing MeshSource takes the mesh renderer away; the cube still has a user");
     f.world.destroy(s2);
     f.step();

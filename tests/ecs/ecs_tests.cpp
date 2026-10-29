@@ -399,10 +399,6 @@ static void model_materials_become_submeshes_and_materials() {
     CHECK(info && info->submeshes.size() == 2, "two contiguous material runs");
     CHECK(info->submeshes[0].materialSlot == 1 && info->submeshes[0].indexCount == 6, "run 1: material 1, 2 tris");
     CHECK(info->submeshes[1].materialSlot == 0 && info->submeshes[1].firstIndex == 6, "run 2: material 0");
-    const glm::vec4 gi = w.registry().get<GiMaterialLegacy>(e).packed;
-    // GI legacy: roughness/metallic come from material 0 (the old texture upload wrote
-    // them over the override material before the GI pack read it).
-    CHECK(std::fabs(gi.w - 0.25f) < 1e-6f && std::fabs(gi.r - 0.73f) < 1e-6f, "GI legacy pack");
     w.update(0.0f); r.render();
     CHECK(r.renderScene().draws().size() == 2, "one draw per submesh");
 }
@@ -435,26 +431,6 @@ static void emissive_texture_yields_a_proxy_light() {
     CHECK(lights.size() == 1 && std::fabs(lights[0].position.y - 5.0f) < 1e-5f &&
               std::fabs(lights[0].direction.w - up.emissive->radius * 10.0f) < 1e-5f,
           "the proxy is placed by the entity's world matrix, range = radius * 10");
-}
-
-// GiMaterialLegacy, like MeshRenderer, reaches the instance table when patched.
-static void patched_gi_material_reuploads_the_instance() {
-    ohao::VulkanRenderer r(64, 64);
-    if (!r.initialize()) { std::printf("(no Vulkan -- skipped) "); return; }
-    r.setRenderMode(ohao::RenderMode::Deferred);
-    World w;
-    installRenderExtract(w, r.renderScene());
-    ohao::Model tri; tri.vertices.assign(3, ohao::Vertex{}); tri.vertices[1].position = {1,0,0}; tri.vertices[2].position = {0,0,1}; tri.indices = {0,1,2};
-    auto e = spawnModel(w, r.renderScene(), r.getTextureManager(), tri, "t", Transform{});
-    w.update(0.0f); r.render();
-    w.update(0.0f); r.render();
-    CHECK(r.renderScene().stats().instanceBytesUploaded == 0, "precondition: a still entity uploads nothing");
-    w.registry().emplace_or_replace<GiMaterialLegacy>(e);
-    w.update(0.0f); r.render();
-    w.registry().patch<GiMaterialLegacy>(e, [](GiMaterialLegacy& g) { g.packed = {0.1f, 0.2f, 0.3f, 0.5f}; });
-    w.update(0.0f); r.render();
-    CHECK(r.renderScene().stats().instanceBytesUploaded == sizeof(ohao::render::InstanceGpu),
-          "a patched GiMaterialLegacy re-uploads its instance");
 }
 
 // The renderer's shutdown() keeps the RenderScene object alive (inert) until the
@@ -913,7 +889,6 @@ int main(int argc, char** argv) {
     RUN(model_materials_become_submeshes_and_materials);
     RUN(emissive_texture_yields_a_proxy_light);
     RUN(unknown_mesh_handles_are_skipped_not_fatal);
-    RUN(patched_gi_material_reuploads_the_instance);
     RUN(world_outlives_an_explicit_renderer_shutdown);
     return ohao::test::finish("ecs_tests");
 }

@@ -43,18 +43,4 @@ MeshHandle uploadModelMesh(RenderScene& scene, const Model& model, std::string_v
 // with an emissive texture index decides; nullopt unless its bright-pixel power > 0.1.
 [[nodiscard]] std::optional<EmissiveProxy> emissiveProxy(const Model& model);
 
-// LEGACY RT GI material word (InstanceGpu::giAlbedoPacked), ported from
-// VulkanRenderer::buildBLASTLAS. `overrideMaterial` is the entity's override material, if any.
-[[nodiscard]] glm::vec4 giMaterialLegacyPacked(const Model& model, const MaterialDesc* overrideMaterial);
-// What that word needs from the model, kept by callers that cache a model's mesh but
-// not the model itself.
-struct GiModelInputs {
-    bool hasMaterials{false};
-    float roughness0{0.0f};   // material 0, when hasMaterials
-    float metallic0{0.0f};
-    bool manyVertices{false};   // > 100 vertices
-};
-[[nodiscard]] GiModelInputs giModelInputs(const Model& model);
-[[nodiscard]] glm::vec4 giMaterialLegacyPacked(const GiModelInputs& model, const MaterialDesc* overrideMaterial);
-
 } // namespace ohao::render
