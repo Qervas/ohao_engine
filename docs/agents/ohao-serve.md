@@ -348,7 +348,9 @@ $ build/Release/ohao.exe run assets/scenes/helmet_game.scene.json --seed 0000000
 `render_capture {inline: true}` returns the frame as an image beside the result (over MCP
 an `image` content block): a JPEG at most 768 px on its long side (`maxSize`); the
 helmet room at 768x432 is about 57 KB. `region: [x, y, w, h]` zooms before scaling,
-`format: "png"` gives exact pixels, `path` writes the full-resolution PNG under `--out`.
+`format: "png"` gives exact pixels, `path` writes the full-resolution PNG under `--out`, and
+`hdr` the same frame's linear radiance as a PFM (before exposure, post and tonemapping; a
+lockstep capture only, `ohao-cli.md`, "Render").
 In lockstep a capture renders the world from a reset (1 deferred frame, 10 with TAA in
 `post`, or `frames`) and is deterministic: the same world gives the same pixels, in a
 window or headless. A window host captures at its own size; minimized it cannot capture

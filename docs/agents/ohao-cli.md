@@ -39,7 +39,7 @@ ohao run      SCENE [--seed S] [--steps N [--dt S]] [--script OPS.jsonl]
                     [--render OUT.png [--mode deferred|rt_realtime|rt_offline] [--spp N]
                      [--frames N] [--denoise none|oidn|nrd|atrous|dlss] [--size WxH]
                      [--post bloom,taa,ssao] [--exposure E] [--quality realtime|reference]
-                     [--hud]]
+                     [--hud] [--hdr out.pfm]]
                     [--save OUT.scene.json]
 ohao level    LEVEL.glb   level.info for a level file: nodes, spawns, colliders, bodies (no GPU, no scene)
 ohao doctor   [--cpu-only] [--shader-dir DIR] [--spirv-dir DIR]
@@ -169,6 +169,13 @@ RT GI keeps a history, so give `--frames` (about 10) for converged indirect ligh
 player's health, ammunition and crosshair, the hit marker, the damage vignette, the round's
 end. Without it no capture has a HUD.
 
+`--hdr out.pfm` (`render.capture {hdr: "out.pfm"}`) also writes the same frame's linear
+radiance, before exposure, post and tonemapping, as a Portable Float Map (RGB float32): the
+deferred frame's lit image (lighting, sky, transparents, SSR; before bloom and TAA) or the path
+tracer's accumulation (before any denoiser). Put through the renderer's tonemap it is the PNG to
+within 1 LSB. It is what renderers are compared by (`tests/renderer/check_parity.py`,
+`check_analytic.py`): a PNG has been through two different tonemappers by then.
+
 The deferred frame has two qualities. `realtime` (the default) is the budgeted frame: RT
 shadows trace one ray to each of a pixel's 4 most important lights, and RT GI 2 rays a
 pixel at half resolution, both denoised and averaged over the frames since the reset.
@@ -181,6 +188,7 @@ the ground truth for light transport). Give it `--frames` too.
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell.png --mode deferred --size 960x540   # gpu
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell_ref.png --mode deferred --frames 10 --quality reference --size 960x540   # gpu
 $ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell_rt.png --mode rt_offline --spp 16 --denoise none   # gpu
+$ build/Release/ohao run assets/scenes/cornell_box.scene.json --render build/doc_tmp/cornell_hdr.png --hdr build/doc_tmp/cornell.pfm --mode deferred --size 640x360   # gpu
 ```
 
 A model that cannot be built is an error with exit code 2, before any frame:

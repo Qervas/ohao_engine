@@ -168,6 +168,8 @@ $ python tests/cli/check_cli.py > /dev/null   # gpu
 $ python tests/validation/check_validation.py > /dev/null   # gpu
 $ python tests/renderer/check_fireflies.py > /dev/null   # gpu
 $ python tests/renderer/check_env_orientation.py > /dev/null   # gpu
+$ python tests/renderer/check_analytic.py > /dev/null   # gpu
+$ python tests/renderer/check_parity.py > /dev/null   # gpu # slow
 $ python tests/doctor/check_doctor.py --gpu > /dev/null   # gpu
 $ OHAO_VALIDATION=1 build/Release/ohao_game.exe --frames 600 --resize-at 200 > /dev/null   # gpu
 $ python tests/serve/check_live.py > /dev/null   # gpu
@@ -526,9 +528,20 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   strength, the same radiance `pt_closesthit` emits, added by lighting unlit. The normal
   target's alpha keeps only its luminance, to keep emitters out of SSS. A pipeline drawn
   in the G-buffer render pass needs `GBUFFER_COUNT - 1` blend states.
+- **The referee.** A renderer is judged against the closed form first, then the path tracer:
+  `check_analytic.py` renders a white floor under one sun, point or spot light (no other surface,
+  so no bounce) in both renderers through `ohao run --hdr` and holds each within 5% of
+  `albedo/π × irradiance`; `check_parity.py` (slow, a report) renders the reference scenes both
+  ways and gives deferred's distance from the path tracer in stops, per scene and on a 4x4 grid,
+  with `build/parity/<scene>.error.png`. Compare renderers in linear radiance (`--hdr`), never by
+  PNG: the two tonemap differently (deferred at the capture's exposure, the path tracer at 0.5).
+  The path tracer is ground truth only where `check_analytic` holds it: until 2026-10-29 it lit a
+  sun 7.8x too bright (its intensity divided by an emitter area a directional light has not) and
+  every point or spot light under 5.6 cm too dark (the area floored at 0.01 m²).
 - Point and spot lights mean the same in both renderers (Frank's ruling, 2026-10-26): a
   light of intensity `I` lights a surface `d` away with `I/d²`, windowed to exactly 0 at
-  its `range` (default 10 m) by `(1-(d/range)⁴)²`. The path tracer's sphere emitter has
+  its `range` (default 10 m) by `(1-(d/range)⁴)²`; a directional light of intensity `I` gives a
+  surface facing it irradiance `I`. The path tracer's sphere emitter has
   radiance `I/(πr²)` (`includes/rt/pt_lights.glsl`); albedo is base colour × albedo texture
   in both, never the vertex colour (primitives carry their colour as both). An area light
   is the same rectangle in both (Frank's ruling): uniform radiance `I/(4πr²)`, one-sided
