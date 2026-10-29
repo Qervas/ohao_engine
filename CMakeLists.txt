@@ -204,6 +204,12 @@ option(BUILD_VFX_TESTS "Build VFX tests (the effect set, the closed form, spawn 
 if(BUILD_VFX_TESTS)
     add_subdirectory(tests/vfx)
 endif()
+# OpenPBR on the CPU: the energy-table generator and the module's tests (tests/material).
+add_subdirectory(tools/material)
+option(BUILD_MATERIAL_TESTS "Build material tests (OpenPBR's module on the CPU)" ON)
+if(BUILD_MATERIAL_TESTS)
+    add_subdirectory(tests/material)
+endif()
 option(BUILD_LOG_TESTS "Build logger tests (levels, ring, sinks; CPU only)" ON)
 if(BUILD_LOG_TESTS)
     add_subdirectory(tests/log)
