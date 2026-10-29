@@ -150,7 +150,7 @@ float3 incoming(float3 origin, float3 dir, out float escaped)
     if (pc.flags.y == 0u) return float3(0.0);
     // The environment is uploaded with one mip level (gpu/vulkan/env_upload.cpp): a miss reads
     // full-resolution texels.
-    const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, asin(clamp(dir.y, -1.0, 1.0)) / kPi + 0.5);
+    const float2 uv = float2(atan2(dir.z, dir.x) / kTwoPi + 0.5, 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / kPi);   // row 0 the zenith
     return envMap.SampleLevel(envSampler, uv, 0.0).rgb * pc.cameraPos.w * T;   // times Environment.intensity
 }
 

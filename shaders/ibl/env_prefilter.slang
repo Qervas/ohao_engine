@@ -1,7 +1,7 @@
 // The environment for the deferred frame's image-based lighting (render/deferred/env_prefilter):
 // built once per environment map, four compute entry points over one descriptor set layout.
 // Every image is equirectangular, mapped as the lighting pass maps a direction:
-// u = atan2(d.z, d.x) / 2pi + 0.5, v = asin(d.y) / pi + 0.5.
+// u = atan2(d.z, d.x) / 2pi + 0.5, v = 0.5 - asin(d.y) / pi (row 0 is the zenith, as the file stores it).
 //
 // copySource  The HDR environment (RGBA32F) into level 0 of the source chain (RGBA16F).
 // downsample  Each further chain level: the 2x2 mean of the level above.
@@ -27,13 +27,13 @@ static const float kTwoPi = 6.2831853;
 
 float2 dirToUv(float3 d)
 {
-    return float2(atan2(d.z, d.x) / kTwoPi + 0.5, asin(clamp(d.y, -1.0, 1.0)) / kPi + 0.5);
+    return float2(atan2(d.z, d.x) / kTwoPi + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / kPi);
 }
 
 float3 uvToDir(float2 uv)
 {
     const float phi = (uv.x - 0.5) * kTwoPi;
-    const float theta = (uv.y - 0.5) * kPi;
+    const float theta = (0.5 - uv.y) * kPi;   // elevation: +pi/2 on row 0
     return float3(cos(theta) * cos(phi), sin(theta), cos(theta) * sin(phi));
 }
 

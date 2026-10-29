@@ -27,7 +27,7 @@ void put(std::vector<float>& px, int w, int x, int y, float v) {
 }
 
 float texelSolidAngle(int w, int h, int y) {
-    const float elevation = ((static_cast<float>(y) + 0.5f) / static_cast<float>(h) - 0.5f) * kPi;
+    const float elevation = (0.5f - (static_cast<float>(y) + 0.5f) / static_cast<float>(h)) * kPi;   // row 0 the zenith
     return (2.0f * kPi / static_cast<float>(w)) * (kPi / static_cast<float>(h)) * std::cos(elevation);
 }
 
@@ -38,7 +38,7 @@ float texelSolidAngle(int w, int h, int y) {
 TEST(EnvSun, SunIsFoundAndPaintedOut) {
     const int W = 256, H = 128;   // a texel about 6e-4 sr: three are a sun-sized 1.7e-3
     auto px = sky(W, H, 0.4f, 0.5f, 0.6f);
-    const int sy = 80;   // below the middle row: elevation > 0 under v = asin(y)/pi + 0.5
+    const int sy = 40;   // above the middle row: elevation > 0 (row 0 is the zenith)
     put(px, W, 10, sy, 5.0e4f);
     put(px, W, 11, sy, 5.0e4f);
     put(px, W, 10, sy + 1, 2.0e4f);
@@ -54,11 +54,12 @@ TEST(EnvSun, SunIsFoundAndPaintedOut) {
     const float expectedR = (5.0e4f - 0.4f) * (2.0f * texelSolidAngle(W, H, sy)) + (2.0e4f - 0.4f) * texelSolidAngle(W, H, sy + 1);
     EXPECT_NEAR(sun.irradiance.r, expectedR, expectedR * 1e-4f);
     EXPECT_GT(sun.powerShare, 0.9f);
-    // The engine's lookup: u = atan2(z, x) / 2pi + 0.5, v = asin(y) / pi + 0.5 (row 0 at v = 0).
+    // The engine's lookup: u = atan2(z, x) / 2pi + 0.5, v = 0.5 - asin(y) / pi (row 0, v = 0, the zenith).
     const float u = 11.0f / W, v = (sy + 0.5f) / H;   // the three texels' weighted centre, nearly
     const glm::vec3 d = sun.direction;
+    EXPECT_GT(d.y, 0.0f);   // a sun in the file's upper half is above the horizon
     EXPECT_NEAR(std::atan2(d.z, d.x) / (2.0f * kPi) + 0.5f, u, 0.6f / W);
-    EXPECT_NEAR(std::asin(d.y) / kPi + 0.5f, v, 0.6f / H);
+    EXPECT_NEAR(0.5f - std::asin(d.y) / kPi, v, 0.6f / H);
     EXPECT_NEAR(glm::length(d), 1.0f, 1e-5f);
 }
 

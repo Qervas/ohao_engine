@@ -215,9 +215,11 @@ float specularOcclusion(float NdotV, float ao, float roughness)
     return clamp(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
+// A direction's texel coordinate in the equirectangular environment images: row 0 (v = 0) is the
+// zenith, as the file stores it.
 float2 equirectUV(float3 d)
 {
-    return float2(atan2(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415926 + 0.5);
+    return float2(atan2(d.z, d.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.1415926);
 }
 
 // ---- deferred_lighting.frag's light loop ---------------------------------------------------

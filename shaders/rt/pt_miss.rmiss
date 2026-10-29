@@ -50,11 +50,12 @@ layout(push_constant) uniform PushConstants {
 
 #include "includes/rt/env_sampling.glsl"
 
-// Convert ray direction to equirectangular UV
+// Convert ray direction to equirectangular UV: row 0 (v = 0) is the zenith, as the file stores it
+// and as env_sampling.glsl's importance sampling maps it.
 vec2 dirToEquirect(vec3 dir) {
     float phi = atan(dir.z, dir.x);         // [-pi, pi]
     float theta = asin(clamp(dir.y, -1.0, 1.0));  // [-pi/2, pi/2]
-    return vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
+    return vec2(phi / 6.2831853 + 0.5, 0.5 - theta / 3.1415926);
 }
 
 void main() {

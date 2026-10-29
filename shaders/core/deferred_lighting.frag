@@ -124,9 +124,10 @@ float ssaoAt(ivec2 pixel, float dist) {
     return wsum > 1e-3 ? sum / wsum : best;
 }
 
-// A direction's texel coordinate in the equirectangular environment images.
+// A direction's texel coordinate in the equirectangular environment images: row 0 (v = 0) is the
+// zenith, as the file stores it.
 vec2 equirectUV(vec3 d) {
-    return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415926 + 0.5);
+    return vec2(atan(d.z, d.x) / 6.2831853 + 0.5, 0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.1415926);
 }
 
 // How much of the environment's specular reflection survives the occlusion `ao` of the

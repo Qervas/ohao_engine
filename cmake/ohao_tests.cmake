@@ -112,6 +112,9 @@ function(ohao_register_harness_tests)
     # RT GI under an outdoor sky: the HDRI's sun, which a directional light stands for, never
     # reaches GI's rays as fireflies (docs/changes/2026-10-28-rt-gi-fireflies.md).
     ohao_add_python_test(check_fireflies LABEL gpu GPU SCRIPT tests/renderer/check_fireflies.py)
+    # The environment map the right way up in deferred (RT GI and IBL) and the path tracer: a sky
+    # blue above, orange below, lights a floor blue (ROADMAP row 16's upside-down HDRI).
+    ohao_add_python_test(check_env_orientation LABEL gpu GPU SCRIPT tests/renderer/check_env_orientation.py)
     if(TARGET ohao_game)
         ohao_add_test(ohao_game_presentation LABEL gpu GPU ENV OHAO_VALIDATION=1
             COMMAND ohao_game --frames 600 --resize-at 200)

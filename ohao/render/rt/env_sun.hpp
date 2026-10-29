@@ -22,7 +22,8 @@
 // Its texels are set to the mean of the texels bordering it: the sky around the sun.
 //
 // Directions use the engine's lookup (gi_trace.slang, deferred_lighting.frag, pt_miss.rmiss):
-// u = atan2(z, x) / 2pi + 0.5, v = asin(y) / pi + 0.5, row 0 at v = 0.
+// u = atan2(z, x) / 2pi + 0.5, v = 0.5 - asin(y) / pi, row 0 at v = 0 (the zenith, as the file
+// stores it).
 
 #include <glm/glm.hpp>
 

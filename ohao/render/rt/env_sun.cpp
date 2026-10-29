@@ -31,14 +31,16 @@ EnvSun separateEnvSun(std::span<float> rgba, int width, int height) {
     sun.peak = lum[peakIdx];
     if (!(sun.median > 0.0f) || sun.peak < kSunPeakOverMedian * sun.median) return sun;
 
-    // Solid angle of a texel in row y, and its direction.
+    // Solid angle of a texel in row y, and its direction (row 0 is the zenith: elevation +pi/2).
+    const auto rowElevation = [&](int y) {
+        return (0.5f - (static_cast<float>(y) + 0.5f) / static_cast<float>(height)) * kPi;
+    };
     const auto rowSolidAngle = [&](int y) {
-        const float elevation = ((static_cast<float>(y) + 0.5f) / static_cast<float>(height) - 0.5f) * kPi;
-        return (2.0f * kPi / static_cast<float>(width)) * (kPi / static_cast<float>(height)) * std::cos(elevation);
+        return (2.0f * kPi / static_cast<float>(width)) * (kPi / static_cast<float>(height)) * std::cos(rowElevation(y));
     };
     const auto texelDir = [&](int x, int y) {
         const float phi = ((static_cast<float>(x) + 0.5f) / static_cast<float>(width) - 0.5f) * 2.0f * kPi;
-        const float elevation = ((static_cast<float>(y) + 0.5f) / static_cast<float>(height) - 0.5f) * kPi;
+        const float elevation = rowElevation(y);
         return glm::vec3(std::cos(elevation) * std::cos(phi), std::sin(elevation), std::cos(elevation) * std::sin(phi));
     };
 
