@@ -139,7 +139,7 @@ Two modes do their work after the frame. On a path-traced frame under NRD or OID
 
 NRD reads back its own tonemapped RGBA8 image. OIDN waits for the device to go idle, copies the RGBA32F accumulation image plus the albedo and normal AOVs, filters them on the host and caches the result until the next `render()`. The filter is created on `oidn::DeviceType::Default`: OIDN picks the device, and nothing here pins it to the CPU, but the round trip through host memory and `vkDeviceWaitIdle` is unconditional. If either fails, the log says so and `readback()` returns the noisy frame from the staging buffer.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 {{cite ohao/render/rt/denoise/oidn_denoise.cpp "oidn::newDevice(oidn::DeviceType::Default)"}}
 
 Below that sits the bulk of the translation unit, more than half of `renderer.cpp`: eleven near-identical readback helpers, seven pulling debug AOVs and four pulling NRD outputs. Each open-codes a staging buffer, a one-shot command buffer, a pair of layout transitions and a `vkQueueWaitIdle`. Ten are instrumentation, reachable only from env_demo's dump flags. The eleventh is not: `readbackNrdTonemapped` is how `--denoise=nrd` gets its picture, a full queue stall per read frame.

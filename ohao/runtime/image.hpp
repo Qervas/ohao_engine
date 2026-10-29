@@ -28,5 +28,8 @@ struct Rgba8Image {
 [[nodiscard]] std::string encodeJpeg(const Rgba8Image& image, int quality);
 // False when the file cannot be written.
 [[nodiscard]] bool writePng(const std::string& path, std::span<const uint8_t> pixels, uint32_t width, uint32_t height);
+// Linear RGB as a Portable Float Map (PF, little-endian, rows bottom to top as the format has
+// them) from RGBA32F rows top to bottom; alpha is dropped. False when the file cannot be written.
+[[nodiscard]] bool writePfm(const std::string& path, std::span<const float> rgba, uint32_t width, uint32_t height);
 
 } // namespace ohao::runtime

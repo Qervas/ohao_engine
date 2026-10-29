@@ -827,6 +827,10 @@ bool DeferredRenderer::finalOutputIsRGBA8() const {
     return m_postProcessing && m_postProcessing->didExecute();
 }
 
+VkImage DeferredRenderer::getLitImage() const {
+    return m_lightingPass ? m_lightingPass->getOutputImage() : VK_NULL_HANDLE;
+}
+
 VkImage DeferredRenderer::getFinalOutputImage() const {
     if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputImage();

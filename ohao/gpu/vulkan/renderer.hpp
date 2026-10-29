@@ -301,6 +301,11 @@ public:
     // Read back HDR buffers for OIDN denoising
     [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
                             std::vector<float>& normal, uint32_t& w, uint32_t& h);
+    // The last rendered frame's linear radiance, RGBA32F, row 0 the top: deferred, the lit image
+    // (lighting, sky, transparents, SSR) before bloom, TAA, exposure and tonemapping; the path
+    // tracer, its accumulation before any denoiser. What the referee compares renderers by.
+    // Waits for the device; empty without a frame. Call after the frame (a capture's last).
+    [[nodiscard]] std::vector<float> readbackLinear();
 
     // Deferred renderer access (for configuration)
     [[nodiscard]] DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
@@ -400,6 +405,10 @@ public:
     // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
     // Returns false if no procedural terrain exists. outRes = square resolution.
     [[nodiscard]] bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
+    // Copies a whole RGBA32F (half: RGBA16F) image, left in `layout` by shaders of `stage`, to the
+    // CPU as RGBA32F, and puts it back in that layout. Submits and waits; for readbacks only.
+    [[nodiscard]] bool readImageRGBA(VkImage image, bool half, VkImageLayout layout, VkPipelineStageFlags stage,
+                                     std::vector<float>& out);
 
 private:
     // Vulkan setup (no window required)

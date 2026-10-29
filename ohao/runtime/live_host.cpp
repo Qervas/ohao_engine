@@ -426,6 +426,11 @@ api::RenderOutcome LiveHost::capture(const api::RenderRequest& r) {
                                                     "capture in lockstep (time.set) for a denoised frame"));
             return out;
         }
+        if (!r.hdrPath.empty()) {
+            out.errors.push_back(error("E_COMMAND", "a realtime window's frame is captured as presented, tonemapped; "
+                                                    "capture in lockstep (time.set) for its linear radiance (hdr)"));
+            return out;
+        }
         const auto start = Clock::now();
         m_world->sync();
         for (const auto& w : applySceneView(*m_renderer, ecs::resolveSceneView(*m_world), *m_assets).warnings)

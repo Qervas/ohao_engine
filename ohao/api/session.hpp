@@ -87,6 +87,7 @@ struct CallOutcome {
 // touches the GPU.
 struct RenderRequest {
     std::string path;                  // the PNG to write; empty: no file
+    std::string hdrPath;               // the frame's linear radiance as PFM; empty: none
     std::string mode{"deferred"};      // deferred | rt_realtime | rt_offline
     int spp{16};                       // path tracer samples
     int frames{0};                     // frames rendered, the last one read back; 0: deferred 10, path tracer spp

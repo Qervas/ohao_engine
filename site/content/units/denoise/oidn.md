@@ -12,7 +12,7 @@ is which image leaves the GPU. It is not the tonemapped RGBA8 frame the viewer
 blits; it is the path tracer's accumulation image (binding 1, `RGBA32F`), copied
 back through a staging buffer along with the albedo and normal AOVs.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 
 Which raygen wrote that image is not readable off `PathTracer`, whose default
 shader set names `rt_pt_raygen.rgen.spv`. Nothing ever runs it: the only code

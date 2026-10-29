@@ -1,6 +1,7 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>
 #include "render/deferred/capture_preview_pass.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/frame/preview_extent.hpp"
@@ -574,90 +575,106 @@ bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<
     if (!rtRenderer) return false;
     w = m_width; h = m_height;
 
-    auto readbackImage = [&](VkImage image, std::vector<float>& outBuf) -> bool {
-        if (image == VK_NULL_HANDLE) return false;
-        VkDeviceSize size = m_width * m_height * 4 * sizeof(float);  // RGBA32F
-
-        // Create staging buffer
-        VkBuffer staging; VkDeviceMemory stagingMem;
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = size;
-        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        vkCreateBuffer(m_device, &bci, nullptr, &staging);
-        VkMemoryRequirements mr;
-        vkGetBufferMemoryRequirements(m_device, staging, &mr);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mr.size;
-        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(m_device, &ai, nullptr, &stagingMem);
-        vkBindBufferMemory(m_device, staging, stagingMem, 0);
-
-        // Command buffer
-        VkCommandBuffer cmd;
-        VkCommandBufferAllocateInfo cmdInfo{};
-        cmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cmdInfo.commandPool = m_commandPool;
-        cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cmdInfo.commandBufferCount = 1;
-        vkAllocateCommandBuffers(m_device, &cmdInfo, &cmd);
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &beginInfo);
-
-        // Barrier: GENERAL → TRANSFER_SRC
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.image = image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-        // Copy
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {m_width, m_height, 1};
-        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
-
-        // Barrier back: TRANSFER_SRC → GENERAL
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-        vkEndCommandBuffer(cmd);
-        VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
-        vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_graphicsQueue);
-
-        // Map and copy
-        outBuf.resize(m_width * m_height * 4);
-        void* mapped;
-        vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
-        memcpy(outBuf.data(), mapped, size);
-        vkUnmapMemory(m_device, stagingMem);
-
-        vkDestroyBuffer(m_device, staging, nullptr);
-        vkFreeMemory(m_device, stagingMem, nullptr);
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
-        return true;
-    };
-
     vkDeviceWaitIdle(m_device);
-    bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);
-    ok &= readbackImage(rtRenderer->getAlbedoAOV(), albedo);
-    ok &= readbackImage(rtRenderer->getNormalAOV(), normal);
+    constexpr VkPipelineStageFlags kRT = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+    bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);
+    ok &= readImageRGBA(rtRenderer->getAlbedoAOV(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, albedo);
+    ok &= readImageRGBA(rtRenderer->getNormalAOV(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, normal);
     return ok;
+}
+
+std::vector<float> VulkanRenderer::readbackLinear() {
+    std::vector<float> out;
+    vkDeviceWaitIdle(m_device);
+    if (isRTRenderMode(m_renderMode)) {
+        const auto* rt = getRTRenderer(m_renderMode);
+        if (!rt || !readImageRGBA(rt->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL,
+                                  VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, out))
+            out.clear();
+    } else if (m_deferredRenderer) {
+        // The lit image is left for its readers (SSR, post) in SHADER_READ_ONLY_OPTIMAL.
+        if (!readImageRGBA(m_deferredRenderer->getLitImage(), true, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, out))
+            out.clear();
+    }
+    return out;
+}
+
+bool VulkanRenderer::readImageRGBA(VkImage image, bool half, VkImageLayout layout, VkPipelineStageFlags stage,
+                                   std::vector<float>& out) {
+    if (image == VK_NULL_HANDLE || m_width == 0 || m_height == 0) return false;
+    const std::size_t texels = static_cast<std::size_t>(m_width) * m_height;
+    const VkDeviceSize size = texels * 4 * (half ? sizeof(uint16_t) : sizeof(float));
+
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &staging) != VK_SUCCESS) return false;
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, staging, &mr);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, staging, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, staging, stagingMem, 0);
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cmdInfo.commandPool = m_commandPool;
+    cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdInfo.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cmdInfo, &cmd);
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.oldLayout = layout;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, stage | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &barrier);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {m_width, m_height, 1};
+    vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1, &region);
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = layout;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
+    out.resize(texels * 4);
+    if (half) {
+        const auto* h = static_cast<const uint16_t*>(mapped);
+        for (std::size_t i = 0; i < texels * 4; ++i) out[i] = glm::unpackHalf1x16(h[i]);
+    } else {
+        std::memcpy(out.data(), mapped, size);
+    }
+    vkUnmapMemory(m_device, stagingMem);
+    vkDestroyBuffer(m_device, staging, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    return true;
 }
 
 

@@ -152,6 +152,7 @@ enum class ImageFormat : uint8_t { jpeg, png };
 
 struct RenderCaptureParams {
     std::optional<std::string> path;
+    std::optional<std::string> hdr;
     bool inlineImage{false};   // "inline"
     ImageFormat format{ImageFormat::jpeg};
     int32_t maxSize{768};

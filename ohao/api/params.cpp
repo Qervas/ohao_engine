@@ -153,6 +153,9 @@ void registerParams(reflect::TypeRegistry& r) {
         .value("png", ImageFormat::png, "PNG: exact pixels");
     r.type<RenderCaptureParams>("RenderCaptureParams").doc("render.capture params")
         .field("path", &RenderCaptureParams::path).doc("PNG to write (full resolution), under the output directory")
+        .field("hdr", &RenderCaptureParams::hdr)
+            .doc("PFM of the frame's linear radiance, before exposure, post and tonemapping (deferred: the lit image; "
+                 "path tracer: its accumulation, before any denoiser), under the output directory")
         .field("inline", &RenderCaptureParams::inlineImage).doc("Return a preview image (an MCP image block)")
         .field("format", &RenderCaptureParams::format).doc("The preview's format")
         .field("maxSize", &RenderCaptureParams::maxSize).doc("The preview's long side, at most").unit("px").min(16)

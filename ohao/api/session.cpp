@@ -686,14 +686,21 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
                    JsonWriter& out) {
     RenderCaptureParams p;
     if (!decodeParams(s, params, ctx, p)) return false;
-    if (!p.path && !p.inlineImage) {
-        ctx.error("E_COMMAND", params, "render.capture needs a \"path\" for the PNG, or \"inline\": true for a preview",
+    if (!p.path && !p.inlineImage && !p.hdr) {
+        ctx.error("E_COMMAND", params,
+                  "render.capture needs a \"path\" for the PNG, an \"hdr\" for the linear PFM, or \"inline\": true",
                   "{\"path\": \"out.png\"} or {\"inline\": true}");
         return badParams(s);
     }
     if (p.path && p.path->empty()) {
         ctx.push("path");
         ctx.error("E_COMMAND", *ctx.doc.member(params, "path"), "the path is empty", "a file name such as \"out.png\"");
+        ctx.pop();
+        return badParams(s);
+    }
+    if (p.hdr && p.hdr->empty()) {
+        ctx.push("hdr");
+        ctx.error("E_COMMAND", *ctx.doc.member(params, "hdr"), "the path is empty", "a file name such as \"out.pfm\"");
         ctx.pop();
         return badParams(s);
     }
@@ -717,11 +724,14 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     }
     std::string file;
     if (p.path && !usePath(s, params, "path", *p.path, PathUse::Write, ctx, file)) return false;
+    std::string hdrFile;
+    if (p.hdr && !usePath(s, params, "hdr", *p.hdr, PathUse::Write, ctx, hdrFile)) return false;
     static constexpr const char* kModes[] = {"deferred", "rt_realtime", "rt_offline"};
     static constexpr const char* kDenoisers[] = {"none", "oidn", "nrd", "atrous", "dlss"};
     static constexpr const char* kEffects[] = {"bloom", "taa", "ssao"};
     RenderRequest r;
     r.path = file;
+    r.hdrPath = hdrFile;
     r.mode = kModes[static_cast<int>(p.mode)];
     r.spp = p.spp;
     r.frames = p.frames;
@@ -756,6 +766,7 @@ bool renderCapture(Session::Impl& s, const JsonDocument&, const JsonNode& params
     }
     out.beginObject();
     if (p.path) { out.key("path"); out.string(*p.path); }
+    if (p.hdr) { out.key("hdr"); out.string(*p.hdr); }
     out.key("width"); out.uint64(o.width);
     out.key("height"); out.uint64(o.height);
     if (p.inlineImage) {

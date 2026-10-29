@@ -193,6 +193,8 @@ public:
     // True when the final image is the post stack's RGBA8 output; false when it is the
     // lighting pass's RGBA16F HDR image (tonemapping off), which a byte copy cannot read back.
     [[nodiscard]] bool finalOutputIsRGBA8() const;
+    // The lighting pass's RGBA16F image: the lit scene (sky, transparents, SSR) before post.
+    [[nodiscard]] VkImage getLitImage() const;
 
     // Get SSAO output for deferred lighting
     [[nodiscard]] VkImageView getSSAOOutput() const;

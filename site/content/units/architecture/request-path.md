@@ -207,7 +207,7 @@ OIDN takes the third: a full `vkDeviceWaitIdle`, then three float readbacks — 
 accumulation image plus the albedo and normal AOVs — into host memory, where the
 CPU denoiser runs over them.
 
-{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);"}}
+{{cite ohao/gpu/vulkan/render_dispatch.cpp "bool ok = readImageRGBA(rtRenderer->getAccumImage(), false, VK_IMAGE_LAYOUT_GENERAL, kRT, beauty);"}}
 
 That third path matters because the offline profile denoises by default:
 

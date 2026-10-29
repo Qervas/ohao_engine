@@ -253,6 +253,15 @@ api::RenderOutcome captureFrame(VulkanRenderer& renderer, ecs::World& world, con
     // The last frame, exactly.
     readCaptureOutputs(renderer, r, previewOnly, framesBefore, out, settings.keepPixels);
     if (!out.errors.empty()) return out;
+    // Its linear radiance (the same frame: nothing has been rendered since).
+    if (!r.hdrPath.empty()) {
+        const std::vector<float> linear = renderer.readbackLinear();
+        if (linear.empty() || !writePfm(r.hdrPath, linear, out.width, out.height)) {
+            out.errors.push_back(error("E_RENDER", linear.empty() ? "the renderer produced no linear image"
+                                                                   : "cannot write " + r.hdrPath));
+            return out;
+        }
+    }
     out.frames = frames;
     out.ms = msSince(start);
     OHAO_LOG(Debug, render, "capture: setup {:.2f} ms, reset {:.2f} ms, {} frames submitted and the frames ahead of the last "

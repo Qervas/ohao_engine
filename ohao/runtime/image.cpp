@@ -404,4 +404,23 @@ bool writePng(const std::string& path, std::span<const uint8_t> pixels, uint32_t
     return !f.fail();
 }
 
+bool writePfm(const std::string& path, std::span<const float> rgba, uint32_t width, uint32_t height) {
+    if (rgba.size() != static_cast<std::size_t>(width) * height * 4) return false;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    const std::string header = "PF\n" + std::to_string(width) + " " + std::to_string(height) + "\n-1.0\n";
+    f.write(header.data(), static_cast<std::streamsize>(header.size()));
+    std::vector<float> row(static_cast<std::size_t>(width) * 3);
+    for (uint32_t y = height; y-- > 0;) {
+        const float* src = rgba.data() + static_cast<std::size_t>(y) * width * 4;
+        for (uint32_t x = 0; x < width; ++x) {
+            row[x * 3 + 0] = src[x * 4 + 0];
+            row[x * 3 + 1] = src[x * 4 + 1];
+            row[x * 3 + 2] = src[x * 4 + 2];
+        }
+        f.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(row.size() * sizeof(float)));
+    }
+    f.close();
+    return !f.fail();
+}
+
 } // namespace ohao::runtime
