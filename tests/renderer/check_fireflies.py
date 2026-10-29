@@ -3,9 +3,15 @@
 The play scene from the player's spawn, looking west: the walls lit by the sun and the open sky,
 the gun in view. `ohao serve` (headless) captures it with RT GI on and with RT GI off, both 4 frames
 after a reset (what a moving camera shows: GI's history is that young after every move). The
-difference of the two is what GI adds. GI's light is smooth, so a pixel of that difference more
-than 12 levels (8-bit luma) above its 5x5 neighbourhood's median is a firefly: a GI sample far
-brighter than its neighbours'. Edges and texture common to both images cancel.
+difference of the two is what GI adds. A firefly is a pixel GI made a bright speck: its difference
+more than 12 levels (8-bit luma) above the difference's 5x5 median (GI raised it, not its
+neighbours), and the GI-on image itself more than 12 levels above its own 5x5 median (a speck, not
+a thin feature GI lights differently from what is behind it, nor a dark speck of the GI-off
+image). Edges and texture common to both images cancel.
+
+With the HDRI the right way up (2026-10-29), the first test alone counted 363 on this view: 34 GI
+specks, 76 dark specks of the GI-off image and 253 thin features (the rifle, fingers, the gun's
+edge) lit by the real sky's bounce; Frank's ruling that day made the second test part of it.
 
 With the HDRI's sun in the environment GI's rays read, this view had 441 of them, in clusters on
 the sunward enemy, its rifle and the gun; with the sun separated (render/rt/env_sun.hpp: the
@@ -95,8 +101,11 @@ def median5(a):
 
 
 def fireflies(on, off):
-    d = luma(on) - luma(off)
-    return int(((d - median5(d)) > SPIKE_LEVELS).sum())
+    a = luma(on)
+    d = a - luma(off)
+    raised = (d - median5(d)) > SPIKE_LEVELS
+    speck = (a - median5(a)) > SPIKE_LEVELS
+    return int((raised & speck).sum())
 
 
 def main():

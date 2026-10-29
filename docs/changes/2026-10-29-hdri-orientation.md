@@ -2,8 +2,8 @@
 
 **Spec:** none (a defect fix); `docs/ROADMAP.md` row 16, "every HDRI looked up upside down" (found 2026-10-28);
 AGENTS.md gotcha "An equirectangular environment's row 0 is the zenith".
-**Status:** fixed. Gate: 49 of 50 (`python tools/check.py`, labels quick, gpu, docs): `check_fireflies` is red at 357 against
-150, a pre-existing defect the fix exposes (section 4), owned by the next step. Goldens 32 of 32, 13 images moved and looked at.
+**Status:** fixed. Goldens 32 of 32, 13 images moved and looked at. `check_fireflies` went red at the fix (357 against 150) and
+passes at 32 after section 8's diagnosis and Frank's ruling on what it counts.
 
 ## 1. Summary
 
@@ -96,7 +96,26 @@ ROADMAP row 16, and the monograph: `sampling/env-cdf` ("One latitude convention:
 equirectangular convention, one texture") describe the single convention; the `sampling-env-cdf-vflip` figure is deleted. Citations
 resolve (`test_monograph_structure.py` 16 of 16).
 
-## 7. How to run
+## 7. The fireflies gate, diagnosed (follow-up the same day)
+
+Section 4's reading (the half-resolution upsample bleeding across silhouettes) was tested and is **not** the cause:
+
+- **An upsample change made no difference.** A search of the 4x4 half-resolution samples for the pixel's own surface where the
+  bilinear taps hold too little of it moved the count from 357 to 363. It was reverted.
+- **History and TAA, not GI's output, set the count.** The same view: TAA at 4 frames 363, without post at 4 frames 717, without
+  post at 32 frames 653, TAA at 32 frames 64.
+- **The metric counted more than fireflies.** Of the 363 pixels where what GI adds rose 12 levels over its 5x5 median:
+  - 34 were bright specks in the GI-on image (over its own 5x5 median by 12): fireflies.
+  - 76 were dark specks of the GI-off image that GI-on does not have.
+  - 253 were neither: thin features (the rifle, fingers, the gun's edge) that GI lights differently from what is behind them. A
+    thin feature fills less of its 5x5 than its surroundings, so any lighting difference between the two counts. Under the sky
+    upside down the bounce was dim and these stayed under 12.
+
+**Ruling (Frank, 2026-10-29):** count only GI's specks, both tests at 12 levels, the gate unchanged at 150. Result: **32**.
+**The gate still catches its purpose:** with the sun separation disabled for one run (`env_upload.cpp`, restored and rebuilt
+after), the same metric counted **524**, a fail.
+
+## 8. How to run
 
 ```console
 $ python tests/renderer/check_env_orientation.py

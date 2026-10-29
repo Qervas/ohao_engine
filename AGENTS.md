@@ -273,12 +273,12 @@ $ python tests/docs/check_docs.py --cpu-only > /dev/null   # slow
   `OHAO_VALIDATION=sync` adds the layer's synchronization validation (hazards between
   commands, as `SYNC-HAZARD-*` messages): slower, for chasing a missing barrier.
 - **Fireflies** (`check_fireflies.py`): the play scene from the spawn looking west, 4 frames after
-  a reset (a moving camera's GI history), RT GI on against off: pixels where what GI adds spikes
-  over its 5x5 median by more than 12 levels, at most 150 (441 with the HDRI's sun in GI's rays,
-  88 without, along silhouettes); and the log saying the environment's sun was taken out. **Red
-  since the HDRI was turned the right way up (2026-10-29): 357**, 96% within 3 px of a silhouette:
-  the brighter sky GI now sees makes the half-resolution upsample's bleed across edges cross the
-  threshold. The gate stays at 150; the GI upsample at edges is the next step.
+  a reset (a moving camera's GI history), RT GI on against off: pixels GI made a bright speck (what
+  GI adds over its 5x5 median by more than 12 levels, and the GI-on image over its own 5x5 median
+  by more than 12), at most 150: 32 with the HDRI's sun taken out, 524 with it left in GI's rays;
+  and the log saying the environment's sun was taken out. The speck test is Frank's ruling of
+  2026-10-29: with the sky the right way up, what GI adds alone counted 363, mostly thin features
+  (the rifle, fingers) that the real sky's bounce lights differently from what is behind them.
 - **Render goldens** (`tests/golden/manifest.json`, 32 scenes; two the transparency scene,
   `transparency.scene.json` (blended panes, the MASK leaf card, lit soft smoke, sparks; deferred exact
   and path traced); 8 examples, 22 through
