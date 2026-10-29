@@ -15,9 +15,9 @@
 //
 // A ray that hits a surface brings back that surface's bounce albedo (the instance table's
 // giAlbedoPacked.rgb) over pi, times the direct light the hit receives from the frame's
-// brightest lights (kGIMaxLights), attenuated as the lighting pass attenuates them, the hit's
-// normal taken as facing the ray, and shadowed: one light, chosen in proportion to what it
-// would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
+// lights (every raster light but emissive proxies), attenuated as the lighting pass attenuates
+// them, the hit's normal taken as facing the ray, and shadowed: one light, chosen in proportion to
+// what it would give, gets a shadow ray (directAt). Without it a hit in shadow bounced full light, and
 // every surface facing a shadowed floor (an underside, a rim) glowed. A ray that leaves the scene
 // brings back the environment map in its direction (black without one). Cosine sampling
 // makes the mean of those radiances the diffuse irradiance over pi.
@@ -101,76 +101,139 @@ bool visible(float3 p, float3 L, float tMax)
     return q.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
 }
 
-// The direct light a bounce point at `p` with normal `n` receives, the lighting pass's
-// attenuation (inverse square windowed by the range, a spot's cone), only where `p` sees the
-// light. One shadow ray: a light is chosen by `xi` with probability proportional to the
-// luminance it would give unshadowed, and its light divided by that probability, so the mean is
-// every light's shadowed sum at the cost of one ray.
-float3 directAt(float3 p, float3 n, float xi)
+float luminance(float3 c)
 {
-    float3 lit[kGIMaxLights];
-    float3 toLight[kGIMaxLights];
-    float reach[kGIMaxLights];
-    float weight[kGIMaxLights];
-    float total = 0.0;
-    [unroll]
-    for (uint l = 0u; l < kGIMaxLights; ++l)
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+// What `light` gives a bounce point at `p` with normal `n`, unshadowed: the lighting pass's
+// attenuation (inverse square windowed by the range, a spot's cone) and the cosine. `L` and `tMax`
+// are the direction to it and how far a shadow ray goes.
+float3 lightAt(GILight light, float3 p, float3 n, out float3 L, out float tMax)
+{
+    const uint type = uint(light.positionAndType.w + 0.5);
+    float atten = 1.0;
+    tMax = kRayLength;
+    if (type == 0u)
     {
-        lit[l] = float3(0.0);
-        toLight[l] = float3(0.0, 1.0, 0.0);
-        reach[l] = 0.0;
-        weight[l] = 0.0;
-        if (l >= pc.seed.w) continue;
-        const GILight light = lights[l];
-        const uint type = uint(light.positionAndType.w + 0.5);
-        float3 L;
-        float atten = 1.0;
-        float tMax = kRayLength;
-        if (type == 0u)
-        {
-            L = -light.directionAndRange.xyz;
-        }
-        else
-        {
-            const float3 d = light.positionAndType.xyz - p;
-            const float d2 = max(dot(d, d), 1e-8);
-            const float dist = sqrt(d2);
-            L = d / dist;
-            tMax = dist;
-            const float range = light.directionAndRange.w;
-            const float x = range > 0.0 ? dist / range : 0.0;
-            const float window = saturate(1.0 - x * x * x * x);
-            atten = window * window / max(d2, 0.01);
-            if (type == 2u)
-                atten *= saturate((dot(L, -light.directionAndRange.xyz) - light.cone.y) / max(light.cone.x - light.cone.y, 1e-4));
-        }
-        lit[l] = light.radiance.xyz * (atten * max(dot(n, L), 0.0));
-        toLight[l] = L;
-        reach[l] = tMax;
-        weight[l] = dot(lit[l], float3(0.2126, 0.7152, 0.0722));
-        total += weight[l];
+        L = -light.directionAndRange.xyz;
     }
-    if (!(total > 0.0)) return float3(0.0);
-    // The light xi lands in, cumulatively; lights in table order, so the choice is a function of xi.
-    float target = xi * total;
-    uint pick = 0u;
-    [unroll]
-    for (uint l = 0u; l < kGIMaxLights; ++l)
+    else
     {
-        if (weight[l] > 0.0)
-        {
-            pick = l;
-            if (target < weight[l]) break;
-            target -= weight[l];
-        }
+        const float3 d = light.positionAndType.xyz - p;
+        const float d2 = max(dot(d, d), 1e-8);
+        const float dist = sqrt(d2);
+        L = d / dist;
+        tMax = dist;
+        const float range = light.directionAndRange.w;
+        const float x = range > 0.0 ? dist / range : 0.0;
+        const float window = saturate(1.0 - x * x * x * x);
+        atten = window * window / max(d2, 0.01);
+        if (type == 2u)
+            atten *= saturate((dot(L, -light.directionAndRange.xyz) - light.cone.y) / max(light.cone.x - light.cone.y, 1e-4));
     }
-    if (!visible(p + n * 0.01, toLight[pick], reach[pick])) return float3(0.0);
-    return lit[pick] * (total / weight[pick]);
+    return light.radiance.xyz * (atten * max(dot(n, L), 0.0));
+}
+
+// A light drawn in proportion to its power from the alias table (Vose): `u` picks a slot and its
+// remainder keeps it or takes its alias. Returns the light and its probability.
+uint drawByPower(float u, out float pdf)
+{
+    const uint count = pc.seed.w;
+    const float x = u * float(count);
+    const uint slot = min(uint(x), count - 1u);
+    const float4 entry = lights[slot].cone;
+    const uint pick = (x - float(slot)) < entry.z ? slot : asuint(entry.w);
+    pdf = lights[pick].radiance.w;
+    return pick;
+}
+
+// The direct light a bounce point at `p` with normal `n` receives from every light, only where
+// `p` sees the light, at the cost of one shadow ray: one light is chosen with probability
+// proportional to the luminance it would give unshadowed, and its light divided by that
+// probability. Up to kGIWeighedLights lights are each weighed; past that, kGILightCandidates
+// candidates are drawn by power and one chosen among them by what it would give (resampled importance
+// sampling: the estimate is unbiased for any number of lights). Random dimensions: 2 the choice,
+// 3 seeds the candidates' sequence.
+float3 directAt(float3 p, float3 n, uint key, uint s)
+{
+    const uint count = pc.seed.w;
+    if (count == 0u) return float3(0.0);
+    float3 L, lit;
+    float tMax, scale;
+    if (count <= kGIWeighedLights)
+    {
+        // One pass, a weighted reservoir: light l replaces the choice with probability w_l over the
+        // total so far, and the one number u is rescaled to stay uniform for the next test.
+        float u = rand01(key, s, 2u);
+        float total = 0.0, w = 0.0;
+        for (uint l = 0u; l < count; ++l)
+        {
+            float3 Ll;
+            float tl;
+            const float3 c = lightAt(lights[l], p, n, Ll, tl);
+            const float wl = luminance(c);
+            if (!(wl > 0.0)) continue;
+            total += wl;
+            // The first light that gives any always takes the choice (wl / wl may round below 1,
+            // and u may lie above it), as does a share that rounds to 1 (so 1 - share never
+            // divides); u stays below 1 through the rescaling's rounding.
+            const float share = wl / total;
+            if (w == 0.0 || u < share || share >= 1.0)
+            {
+                lit = c;
+                L = Ll;
+                tMax = tl;
+                w = wl;
+                u = min(u / share, 0.99999994);
+            }
+            else
+            {
+                u = min((u - share) / (1.0 - share), 0.99999994);
+            }
+        }
+        if (!(total > 0.0)) return float3(0.0);
+        scale = total / w;
+    }
+    else
+    {
+        const uint stream = pcg(key ^ pcg((s << 4u) ^ 3u));   // the candidates' own sequence
+        uint pick[kGILightCandidates];
+        float ris[kGILightCandidates];
+        float sum = 0.0;
+        [unroll]
+        for (uint i = 0u; i < kGILightCandidates; ++i)
+        {
+            float pdf;
+            pick[i] = drawByPower(float(pcg(stream + i) >> 8u) * (1.0 / 16777216.0), pdf);
+            float3 Li;
+            float ti;
+            ris[i] = pdf > 0.0 ? luminance(lightAt(lights[pick[i]], p, n, Li, ti)) / pdf : 0.0;
+            sum += ris[i];
+        }
+        if (!(sum > 0.0)) return float3(0.0);
+        float target = rand01(key, s, 2u) * sum;
+        uint chosen = 0u;
+        [unroll]
+        for (uint i = 0u; i < kGILightCandidates; ++i)
+        {
+            if (ris[i] > 0.0)
+            {
+                chosen = i;
+                if (target < ris[i]) break;
+                target -= ris[i];
+            }
+        }
+        lit = lightAt(lights[pick[chosen]], p, n, L, tMax);
+        scale = sum / (float(kGILightCandidates) * luminance(lit));
+    }
+    if (!visible(p + n * 0.01, L, tMax)) return float3(0.0);
+    return lit * scale;
 }
 
 // The radiance arriving at `origin` from direction `dir`; `escaped` is 1 when the ray left the
 // scene (it then brings back the environment).
-float3 incoming(float3 origin, float3 dir, float xi, out float escaped)
+float3 incoming(float3 origin, float3 dir, uint key, uint s, out float escaped)
 {
     escaped = 0.0;
     RayDesc ray;
@@ -198,7 +261,7 @@ float3 incoming(float3 origin, float3 dir, float xi, out float escaped)
         const uint slot = q.CommittedInstanceID();   // the instance's custom index: its table slot
         const float3 albedo = asfloat(instances.Load3(slot * kInstanceGpuStride + kInstanceGpuGiAlbedoOffset));
         const float3 at = origin + dir * q.CommittedRayT();
-        return albedo * (1.0 / kPi) * directAt(at, -dir, xi) * T;
+        return albedo * (1.0 / kPi) * directAt(at, -dir, key, s) * T;
     }
     escaped = 1.0;
     if (pc.flags.y == 0u) return float3(0.0);
@@ -245,7 +308,7 @@ void trace(uint3 id : SV_DispatchThreadID)
         const float r = sqrt(u);
         const float3 dir = normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
         float escaped;
-        sum += incoming(origin, dir, rand01(key, s, 2u), escaped);
+        sum += incoming(origin, dir, key, s, escaped);
         escapedSum += escaped;
     }
     // The mean incoming radiance, and the environment's visibility: the share of the

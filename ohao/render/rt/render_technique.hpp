@@ -104,8 +104,8 @@ struct GIInput {
     VkDescriptorSet textures = VK_NULL_HANDLE;
     VkBuffer instances = VK_NULL_HANDLE;                // RenderScene instance table (InstanceGpu[])
 
-    // The scene's lights; a bounce is lit by the kGIMaxLights brightest (emissive proxies
-    // excluded). None: hits bring back no light.
+    // The scene's lights; a bounce is lit by every one of them (emissive proxies excluded).
+    // None: hits bring back no light.
     std::span<const render::LightDesc> lights;
     // The environment a ray that leaves the scene sees (equirectangular, in
     // SHADER_READ_ONLY_OPTIMAL); null: black.

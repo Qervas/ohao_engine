@@ -139,8 +139,10 @@ inline constexpr uint32_t kShadowHistoryFrames = 16u;
 inline constexpr uint32_t kShadowFilterTile = 16u;
 // RT shadows' filter: the spatial kernel's radius (5x5)
 inline constexpr uint32_t kShadowFilterRadius = 2u;
-// RT GI: the lights a bounce is lit by, the frame's brightest by intensity
-inline constexpr uint32_t kGIMaxLights = 4u;
+// RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer
+inline constexpr uint32_t kGIWeighedLights = 16u;
+// RT GI: past kGIWeighedLights, the candidates a bounce draws by power (an alias table) and resamples by what they give
+inline constexpr uint32_t kGILightCandidates = 8u;
 // RT GI, realtime: cosine rays a half-resolution pixel a frame
 inline constexpr uint32_t kGIRealtimeRays = 2u;
 // RT GI, reference quality: cosine rays a full-resolution pixel a frame
@@ -210,7 +212,7 @@ static_assert(offsetof(ShadowFilterPush, extent) == 0);
 static_assert(offsetof(ShadowFilterPush, seed) == 16);
 static_assert(sizeof(ShadowFilterPush) == 32);
 
-// one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it
+// one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it
 struct alignas(16) GILight {
     alignas(16) std::array<float, 4> positionAndType{};
     alignas(16) std::array<float, 4> directionAndRange{};

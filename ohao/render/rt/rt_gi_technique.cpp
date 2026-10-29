@@ -82,6 +82,42 @@ void barrier(VkCommandBuffer cmd, VkPipelineStageFlags src) {
     vkCmdPipelineBarrier(cmd, src, kCompute, 0, 1, &b, 0, nullptr, 0, nullptr);
 }
 
+// Vose's alias table over the lights' power, in GILight.cone.zw (slot i keeps itself with
+// probability z, else takes light w), and each light's probability in radiance.w. Deterministic:
+// the small and large lists are filled and taken in index order.
+void buildAliasTable(std::vector<shared::GILight>& lights, const std::vector<double>& power) {
+    const size_t n = lights.size();
+    if (n == 0) return;
+    const double total = std::accumulate(power.begin(), power.end(), 0.0);
+    std::vector<double> scaled(n);
+    std::vector<uint32_t> small, large;
+    for (size_t i = 0; i < n; ++i) {
+        lights[i].radiance[3] = static_cast<float>(power[i] / total);
+        scaled[i] = power[i] / total * static_cast<double>(n);
+        (scaled[i] < 1.0 ? small : large).push_back(static_cast<uint32_t>(i));
+    }
+    size_t s = 0, l = 0;
+    while (s < small.size() && l < large.size()) {
+        const uint32_t a = small[s++], b = large[l];
+        lights[a].cone[2] = static_cast<float>(scaled[a]);
+        std::memcpy(&lights[a].cone[3], &b, sizeof(b));
+        scaled[b] -= 1.0 - scaled[a];
+        if (scaled[b] < 1.0) {
+            ++l;
+            small.push_back(b);
+        }
+    }
+    // What is left keeps itself (rounding leaves some just under or over 1).
+    for (; s < small.size(); ++s) {
+        lights[small[s]].cone[2] = 1.0f;
+        std::memcpy(&lights[small[s]].cone[3], &small[s], sizeof(uint32_t));
+    }
+    for (; l < large.size(); ++l) {
+        lights[large[l]].cone[2] = 1.0f;
+        std::memcpy(&lights[large[l]].cone[3], &large[l], sizeof(uint32_t));
+    }
+}
+
 } // namespace
 
 RTGITechnique::~RTGITechnique() {
@@ -101,8 +137,10 @@ bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice, uint3
         OHAO_LOG(Error, render, "RTGI: failed to create its images");
         return false;
     }
-    for (rtc::HostBuffer& b : m_lights) {
-        if (!rtc::createHostBuffer(device, physicalDevice, kLightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, b)) {
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        m_lightCapacity[i] = shared::kGIWeighedLights;
+        if (!rtc::createHostBuffer(device, physicalDevice, sizeof(shared::GILight) * m_lightCapacity[i],
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_lights[i])) {
             OHAO_LOG(Error, render, "RTGI: failed to create its light buffers");
             return false;
         }
@@ -264,16 +302,36 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     m_cameraPos = input.cameraPos;
     if (input.frameIndex == 0) resetHistory();   // a temporal reset: no history
 
-    // The bounce's lights: the brightest by intensity, ties by order, emissive proxies out.
-    std::vector<uint32_t> order;
-    for (uint32_t i = 0; i < input.lights.size(); ++i)
-        if (input.lights[i].kind != render::LightKind::EmissiveProxy && input.lights[i].intensity > 0.0f)
-            order.push_back(i);
-    std::stable_sort(order.begin(), order.end(),
-                     [&](uint32_t a, uint32_t b) { return input.lights[a].intensity > input.lights[b].intensity; });
-    const uint32_t lightCount = std::min<uint32_t>(static_cast<uint32_t>(order.size()), shared::kGIMaxLights);
-    auto* lights = static_cast<shared::GILight*>(m_lights[m_slot].mapped);
-    for (uint32_t i = 0; i < lightCount; ++i) lights[i] = toGpu(input.lights[order[i]]);
+    // The bounce's lights: every light that gives any, emissive proxies out (the emissive surface
+    // they stand for is not in the bounce), in scene order, each with its share of power (the
+    // luminance of colour times intensity) and the alias table the trace draws candidates by.
+    std::vector<shared::GILight> bounce;
+    std::vector<double> power;
+    for (const render::LightDesc& d : input.lights) {
+        if (d.kind == render::LightKind::EmissiveProxy) continue;
+        const shared::GILight g = toGpu(d);
+        const double p = 0.2126 * g.radiance[0] + 0.7152 * g.radiance[1] + 0.0722 * g.radiance[2];
+        if (!(p > 0.0)) continue;
+        bounce.push_back(g);
+        power.push_back(p);
+    }
+    buildAliasTable(bounce, power);
+    const uint32_t lightCount = static_cast<uint32_t>(bounce.size());
+    if (lightCount > m_lightCapacity[m_slot]) {
+        // This slot's previous frame has finished: its buffer can go.
+        uint32_t capacity = m_lightCapacity[m_slot];
+        while (capacity < lightCount) capacity *= 2;
+        rtc::destroyHostBuffer(m_device, m_lights[m_slot]);
+        if (!rtc::createHostBuffer(m_device, m_physicalDevice, sizeof(shared::GILight) * capacity,
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, m_lights[m_slot])) {
+            OHAO_LOG(Error, render, "RTGI: failed to grow its light buffer to {} lights", capacity);
+            m_lightCapacity[m_slot] = 0;
+            return;
+        }
+        m_lightCapacity[m_slot] = capacity;
+    }
+    if (lightCount > 0)
+        std::memcpy(m_lights[m_slot].mapped, bounce.data(), sizeof(shared::GILight) * lightCount);
 
     // Earlier frames' readers of these images (the denoiser, lighting) finish first.
     barrier(cmd, kCompute | kFragment);
@@ -311,7 +369,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
                                            {VK_NULL_HANDLE, input.normalBuffer, kReadOnly},
                                            {VK_NULL_HANDLE, input.albedoBuffer, kReadOnly}};
     const VkDescriptorBufferInfo instancesInfo{input.instances, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo lightsInfo{m_lights[m_slot].buffer, 0, kLightBytes};
+    const VkDescriptorBufferInfo lightsInfo{m_lights[m_slot].buffer, 0, VK_WHOLE_SIZE};
     const VkDescriptorImageInfo envInfo{VK_NULL_HANDLE, input.envMap ? input.envMap : m_envDummy.view, kReadOnly};
     const VkDescriptorImageInfo samplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     const VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, reference ? m_output.view : m_noisy.view, kGeneral};

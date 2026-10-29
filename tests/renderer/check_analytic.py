@@ -16,6 +16,15 @@ Lambert, the path tracer's (1 - F) on the diffuse lobe (a dielectric's 4% at nor
 A point light's radius must not change what it delivers (its emitter is a sphere of that radius,
 I / (pi r^2), sampled by the path tracer): the point case runs at 1 cm and 20 cm.
 
+The bounce sees every light: a spot aimed at a wall lights the floor in front of it only by RT GI's
+bounce, so in the deferred frame n spots of intensity I/n at one place must light the floor as one
+spot of I does, and twenty spots of twenty strengths spread along the wall as the twenty do alone,
+each within 1%. These run at reference quality (full resolution, the running mean, no denoiser):
+the realtime denoiser's neighbourhood clamp is not linear, and twenty lights together came out 1.5%
+over the sum of each alone. With 6 and 12 the trace weighs every light (kGIWeighedLights is 16); with 20
+it draws candidates by power and resamples them. Until 2026-10-29 the bounce saw the 4 brightest:
+12 spots bounced a third of the light.
+
   python tests/renderer/check_analytic.py   # exit 0 pass, 1 fail; last line the JSON summary
 """
 import json
@@ -36,6 +45,8 @@ CAMERA_H = 3.0
 FOV = 30.0
 W, H = 320, 180
 TOLERANCE = 0.05
+BOUNCE_TOLERANCE = 0.01
+BOUNCE_I = 60.0
 
 
 def quat_x(deg):
@@ -85,6 +96,69 @@ def cases():
            lam * 10.0 / 4.0)
 
 
+def spot(i, x, intensity):
+    # A spot 1.5 m up, aimed north at the wall (a spot shines along -Z unrotated): its cone (40
+    # degrees) meets the wall above 0.2 m and never the floor.
+    return {"id": "a0a00000000001%02x" % i, "Name": {"value": "Spot%d" % i}, "Transform": {"position": [x, 1.5, 0]},
+            "Light": {"type": "Spot", "color": [1, 1, 1], "intensity": intensity, "range": 1000, "radius": 0.05,
+                      "innerConeDeg": 30, "outerConeDeg": 40}}
+
+
+def bounce_floor(name, spots, failures):
+    # A floor, a wall 2 m north (-Z) facing it, the spots; the camera looks straight down at the floor
+    # between them, which only the bounce off the wall lights. The mean of the frame's middle 60x60
+    # pixels, or None when the capture failed.
+    s = scene(spots[0])
+    s["entities"][0]["Transform"]["position"] = [0, CAMERA_H, -0.6]
+    s["entities"][1:] = [s["entities"][1],
+                         {"id": "a0a0000000000004", "Name": {"value": "Wall"},
+                          "MeshSource": {"source": {"BoxPrim": {"lo": [-50, 0, -2.1], "hi": [50, 10, -2],
+                                                                 "color": [0.8, 0.8, 0.8]}}},
+                          "MaterialOverride": {"baseColor": [0.8, 0.8, 0.8], "roughness": 1.0, "metallic": 0.0}}] + spots
+    rel = "%s/%s" % (OUT, name)
+    with open(os.path.join(ROOT, rel + ".scene.json"), "w", newline="\n") as f:
+        json.dump(s, f, indent=1)
+    cmd = [OHAO, "run", rel + ".scene.json", "--render", rel + ".png", "--hdr", rel + ".pfm", "--mode", "deferred",
+           "--size", "%dx%d" % (W, H), "--frames", "32", "--quality", "reference"]
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        failures.append("%s: exit %d" % (name, r.returncode))
+        return None
+    img = read_pfm(os.path.join(ROOT, rel + ".pfm"))
+    return float(img[H // 2 - 30:H // 2 + 30, W // 2 - 30:W // 2 + 30].mean())
+
+
+def bounce_check(name, got, expected, tolerance, what, failures, results):
+    ratio = got / expected
+    results[name] = round(ratio, 4)
+    ok = abs(ratio - 1.0) <= tolerance
+    print("%-18s floor %.4f, x%.4f of %s %s" % (name, got, ratio, what, "ok" if ok else "FAIL"))
+    if not ok:
+        failures.append("%s: the floor x%.4f of %s (tolerance %g%%)" % (name, ratio, what, tolerance * 100))
+
+
+def bounce_checks(failures, results):
+    checks = 0
+    one = bounce_floor("bounce_1", [spot(0, 0.0, BOUNCE_I)], failures)
+    if one is not None and not (one > 1e-3):
+        failures.append("bounce_1: the floor got no bounce light (%.5f)" % one)
+        one = None
+    # n spots at one place, BOUNCE_I / n each, against one of BOUNCE_I.
+    for n in (6, 12, 20):
+        checks += 1
+        got = bounce_floor("bounce_%d" % n, [spot(i, 0.0, BOUNCE_I / n) for i in range(n)], failures)
+        if one is not None and got is not None:
+            bounce_check("bounce_%d" % n, got, one, BOUNCE_TOLERANCE, "one spot of their sum", failures, results)
+    # Twenty spots of twenty strengths spread along the wall, against the sum of each alone.
+    spread = [spot(i, -2.375 + 0.25 * i, 1.0 + i) for i in range(20)]
+    alone = [bounce_floor("bounce_spread_%d" % i, [sp], failures) for i, sp in enumerate(spread)]
+    checks += 1
+    together = bounce_floor("bounce_spread", spread, failures)
+    if together is not None and None not in alone:
+        bounce_check("bounce_spread", together, sum(alone), BOUNCE_TOLERANCE, "the twenty alone", failures, results)
+    return checks
+
+
 def main():
     os.makedirs(os.path.join(ROOT, OUT), exist_ok=True)
     failures, results, checks = [], {}, 0
@@ -110,6 +184,7 @@ def main():
             if not ok:
                 failures.append("%s %s: x%.3f of the closed form (tolerance %d%%)" % (name, mode, ratio,
                                                                                     TOLERANCE * 100))
+    checks += bounce_checks(failures, results)
     with open(os.path.join(ROOT, OUT, "analytic.json"), "w", newline="\n") as f:
         json.dump(results, f, indent=2)
     print(json.dumps({"suite": "check_analytic", "passed": checks - len(failures), "failed": len(failures),

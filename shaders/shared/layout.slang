@@ -133,8 +133,10 @@ static const uint kShadowHistoryFrames = 16u;
 static const uint kShadowFilterTile = 16u;
 // RT shadows' filter: the spatial kernel's radius (5x5)
 static const uint kShadowFilterRadius = 2u;
-// RT GI: the lights a bounce is lit by, the frame's brightest by intensity
-static const uint kGIMaxLights = 4u;
+// RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer
+static const uint kGIWeighedLights = 16u;
+// RT GI: past kGIWeighedLights, the candidates a bounce draws by power (an alias table) and resamples by what they give
+static const uint kGILightCandidates = 8u;
 // RT GI, realtime: cosine rays a half-resolution pixel a frame
 static const uint kGIRealtimeRays = 2u;
 // RT GI, reference quality: cosine rays a full-resolution pixel a frame
@@ -193,13 +195,13 @@ struct ShadowFilterPush
     uint4 seed;   // x render seed, y frame index since the last temporal reset: the output's dither
 };
 
-// one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it
+// one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it
 struct GILight
 {
     float4 positionAndType;   // xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot
     float4 directionAndRange;   // xyz the unit direction the light travels (directional, spot); w the range
-    float4 radiance;   // xyz colour times intensity; w 0
-    float4 cone;   // x a spot's inner-cone cosine, y its outer-cone cosine
+    float4 radiance;   // xyz colour times intensity; w this light's share of the lights' power (its probability when candidates are drawn)
+    float4 cone;   // x a spot's inner-cone cosine, y its outer-cone cosine; z, w the alias table's entry for this slot: the probability of keeping it, and the alias (a uint's bits)
 };
 
 // RT GI's trace (rt/gi_trace.slang) push constants

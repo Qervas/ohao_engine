@@ -75,7 +75,6 @@ public:
 
 private:
     using Image = rtc::Image;
-    static constexpr VkDeviceSize kLightBytes = sizeof(gpu::shared::GILight) * gpu::shared::kGIMaxLights;
 
     bool createScreenImages();
     void destroyScreenImages();
@@ -123,7 +122,9 @@ private:
     uint32_t m_shift = 1;   // realtime: the trace is the frame >> m_shift (1 half, 0 full)
     uint32_t m_realtimeRays = gpu::shared::kGIRealtimeRays;
 
+    // The bounce's lights, a buffer per frame in flight, grown to the frame's count (in GILights).
     std::array<rtc::HostBuffer, MAX_FRAMES_IN_FLIGHT> m_lights{};
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> m_lightCapacity{};
 
     VkPipeline m_tracePipeline = VK_NULL_HANDLE, m_temporalPipeline = VK_NULL_HANDLE;
     VkPipeline m_atrousPipeline = VK_NULL_HANDLE, m_upsamplePipeline = VK_NULL_HANDLE;

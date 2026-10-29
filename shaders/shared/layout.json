@@ -141,8 +141,10 @@
      "doc": "RT shadows' filter: the pixels a workgroup filters, this many on a side"},
     {"name": "kShadowFilterRadius", "type": "uint", "value": 2,
      "doc": "RT shadows' filter: the spatial kernel's radius (5x5)"},
-    {"name": "kGIMaxLights", "type": "uint", "value": 4,
-     "doc": "RT GI: the lights a bounce is lit by, the frame's brightest by intensity"},
+    {"name": "kGIWeighedLights", "type": "uint", "value": 16,
+     "doc": "RT GI: a bounce weighs every light by what it gives when the frame has this many or fewer"},
+    {"name": "kGILightCandidates", "type": "uint", "value": 8,
+     "doc": "RT GI: past kGIWeighedLights, the candidates a bounce draws by power (an alias table) and resamples by what they give"},
     {"name": "kGIRealtimeRays", "type": "uint", "value": 2,
      "doc": "RT GI, realtime: cosine rays a half-resolution pixel a frame"},
     {"name": "kGIReferenceRays", "type": "uint", "value": 32,
@@ -194,12 +196,12 @@
        {"name": "extent", "type": "uint4", "doc": "x width, y height, z lights, w history frames (0: none)"},
        {"name": "seed", "type": "uint4", "doc": "x render seed, y frame index since the last temporal reset: the output's dither"}
      ]},
-    {"name": "GILight", "doc": "one light as RT GI's bounce sees it (a storage buffer of kGIMaxLights), attenuated as the lighting pass attenuates it",
+    {"name": "GILight", "doc": "one light as RT GI's bounce sees it (a storage buffer of every raster light but emissive proxies), attenuated as the lighting pass attenuates it",
      "fields": [
        {"name": "positionAndType", "type": "float4", "doc": "xyz position (a rect: its centre); w type: 0 directional, 1 point, 2 spot"},
        {"name": "directionAndRange", "type": "float4", "doc": "xyz the unit direction the light travels (directional, spot); w the range"},
-       {"name": "radiance", "type": "float4", "doc": "xyz colour times intensity; w 0"},
-       {"name": "cone", "type": "float4", "doc": "x a spot's inner-cone cosine, y its outer-cone cosine"}
+       {"name": "radiance", "type": "float4", "doc": "xyz colour times intensity; w this light's share of the lights' power (its probability when candidates are drawn)"},
+       {"name": "cone", "type": "float4", "doc": "x a spot's inner-cone cosine, y its outer-cone cosine; z, w the alias table's entry for this slot: the probability of keeping it, and the alias (a uint's bits)"}
      ]},
     {"name": "GITracePush", "doc": "RT GI's trace (rt/gi_trace.slang) push constants",
      "fields": [
